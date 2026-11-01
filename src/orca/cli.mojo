@@ -12,6 +12,13 @@ resumed; without it, `run` runs in memory and `resume` and `status` aren't
 available. `ORCA_STALE_SECONDS` (default 30) is how old a run's heartbeat must
 be before another process may resume it.
 
+A pipeline with dista tasks gets a runtime per run, started before anything
+else so its forked processes inherit no connection or thread; run with
+`DISTA_ROLE` set, the binary is a dista head or worker instead (see
+`orca.tasks`). With `ORCA_LOGS` set, attempts log to files there, the run's
+dista timeline is written beside them, and `status <run>` shows each step's
+latest log.
+
 `run` and `resume` print one line per step and partition, then the run's
 status. Exit codes: 0 when the run succeeded, 1 when a step didn't, 2 for a
 usage error, 3 for any other error (the database, a run that can't be
@@ -24,6 +31,8 @@ from std.sys import argv, exit
 from threads import TypedPool
 
 from orca.heartbeat import Beat, beat, heartbeat_interval
+from orca.logs import run_dir
+from orca.tasks import workers
 from orca.month import Month, parse_months
 from orca.pipeline import FAILED, SUCCEEDED, Pipeline, RunResult
 from orca.state import PgStore, State, process_owner
@@ -44,6 +53,9 @@ def _usage(msg: String = ""):
 
 def orca_main[P: type_of(Pipeline)]() raises:
     """Parses the command line and runs the command on `P`."""
+    comptime if P.tasks.HAS_RUNTIME:
+        if getenv("DISTA_ROLE"):
+            _ = P.tasks.start(1)  # serves as a head or worker, then exits
     var args = List[String]()
     for a in argv():
         args.append(String(a))
@@ -86,6 +98,7 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
             var res = P.run(months)
             report(res)
             return 0 if res.succeeded() else 1
+        var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
         var db = State(url)
         db.migrate()
         var hash = hex(P.registry_hash())
@@ -96,7 +109,7 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
             key.write("," if j > 0 else "", months[j])
         var run = db.create_run(P.name, hash, key, "manual", owner)
         print("run", run)
-        return _execute[P](db^, url, run, owner, months, RunResult())
+        return _execute[P](rt, db^, url, run, owner, months, RunResult())
     if cmd == "resume":
         if not url:
             _usage("resume needs ORCA_DATABASE_URL")
@@ -114,6 +127,7 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
                 _usage(String("unknown argument: ", args[i]))
         if run < 0:
             _usage("resume needs a run")
+        var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
         var db = State(url)
         db.migrate()
         var info = db.run_info(run)
@@ -151,7 +165,7 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
             "interrupted",
         )
         return _execute[P](
-            db^, url, run, owner, parse_months(info.partitions), prior^
+            rt, db^, url, run, owner, parse_months(info.partitions), prior^
         )
     if cmd == "status":
         if not url:
@@ -171,7 +185,7 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
                 return 2
             var info = db.run_info(run)
             print("run", run, info.pipeline, info.status, info.partitions)
-            _print_steps(db, run)
+            _print_steps(db, run, show_logs=True)
             return 0
     _usage()
     return 2
@@ -188,6 +202,7 @@ def _stale_seconds() raises -> Float64:
 def _execute[
     P: type_of(Pipeline)
 ](
+    mut rt: P.tasks.RT,
     var db: State,
     url: String,
     run: Int,
@@ -204,8 +219,15 @@ def _execute[
     var b = Beat(url, run, owner, heartbeat_interval(_stale_seconds()))
     var pool = TypedPool.start[beat](1, b)
     var store = PgStore(db^, url, run, owner, hex(P.registry_hash()))
-    var res = P.execute(store, prior^, months, run)
+    var res = P.execute(store, prior^, months, run, Int(Pointer(to=rt)))
     pool.shutdown()
+    var dir = run_dir(P.name, run)
+    comptime if P.tasks.HAS_RUNTIME:
+        if dir:
+            try:
+                _ = P.tasks.timeline(rt, String(dir, "/timeline.json"))
+            except e:
+                print("orca: no timeline:", e)
     var ok = res.succeeded()
     store.db.finish_run(run, owner, SUCCEEDED if ok else FAILED)
     _print_steps(store.db, run)
@@ -213,7 +235,7 @@ def _execute[
     return 0 if ok else 1
 
 
-def _print_steps(mut db: State, run: Int) raises:
+def _print_steps(mut db: State, run: Int, show_logs: Bool = False) raises:
     """The run's steps in run order, as recorded."""
     for s in db.steps(run):
         var line = String(s.step)
@@ -224,6 +246,8 @@ def _print_steps(mut db: State, run: Int) raises:
             line.write(" after ", s.attempts, " attempts")
         if s.error:
             line.write(": ", s.error)
+        if show_logs and s.log:
+            line.write(" [", s.log, "]")
         print(line)
 
 

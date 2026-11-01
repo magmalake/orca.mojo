@@ -29,6 +29,8 @@ from orca.json import quote
 from orca.month import Month
 from orca.step import Gather, Mapped, StepLike
 from orca.store import MemoryStore, Store
+from orca.logs import attempt_log
+from orca.tasks import NoTasks, TaskSet, task_list, workers
 
 comptime SUCCEEDED = "succeeded"
 comptime FAILED = "failed"
@@ -109,8 +111,9 @@ struct RunResult(Movable):
         return decode[T](Span(s.output), pos)
 
 
-struct Pipeline[name: StaticString, *Ts: StepLike]:
-    """A pipeline named `name` of the steps `Ts`, in run order."""
+struct Pipeline[name: StaticString, *Ts: StepLike, tasks: TaskSet = NoTasks]:
+    """A pipeline named `name` of the steps `Ts`, in run order, whose steps
+    call the dista `tasks`."""
 
     @staticmethod
     def _find(step: StaticString) -> Int:
@@ -143,8 +146,9 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
 
     @staticmethod
     def registry_hash() -> UInt64:
-        """A hash over the pipeline's name and its steps' names, kinds, edges
-        and functions: two binaries with the same hash run the same DAG."""
+        """A hash over the pipeline's name, its steps' names, kinds, edges and
+        functions, and its dista tasks: two binaries with the same hash run
+        the same DAG."""
         Self.check()
         var all = String(Self.name, "\n")
         comptime for i in range(Self.Ts.length):
@@ -158,6 +162,8 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
                 Self.Ts[i].function(),
                 "\n",
             )
+        for t in Self.tasks.names():
+            all.write("task\t", t, "\n")
         return fnv1a64(all)
 
     @staticmethod
@@ -184,20 +190,34 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
             out.write('"input": ', quote(S.input_type()), ", ")
             out.write('"output": ', quote(S.output_type()))
             out.write("}")
+        out.write('], "tasks": [')
+        var names = Self.tasks.names()
+        for i in range(len(names)):
+            out.write(", " if i > 0 else "", quote(names[i]))
         out.write("]}")
         return out^
 
     @staticmethod
     def run(partitions: List[Month], run: Int = 0) raises -> RunResult:
-        """Runs every step over `partitions`, in order, recording nothing."""
+        """Runs every step over `partitions`, in order, recording nothing,
+        with a dista runtime of its own if the pipeline has tasks."""
         var store = MemoryStore()
-        return Self.execute(store, RunResult(), partitions, run)
+        var rt = Self.tasks.start(workers() if Self.tasks.HAS_RUNTIME else 0)
+        var res = Self.execute(
+            store, RunResult(), partitions, run, Int(Pointer(to=rt))
+        )
+        _ = rt^  # alive until the steps are done
+        return res^
 
     @staticmethod
     def execute[
         S: Store
     ](
-        mut store: S, var prior: RunResult, partitions: List[Month], run: Int
+        mut store: S,
+        var prior: RunResult,
+        partitions: List[Month],
+        run: Int,
+        runtime: Int = 0,
     ) raises -> RunResult:
         """Runs the steps over `partitions` that haven't succeeded in `prior`,
         in order, reporting each attempt to `store`.
@@ -206,7 +226,8 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
         with their outputs; they aren't run again. A step that raises is
         retried up to its `retries`, then fails its partition. An error from
         the store itself is raised: the run stops where it is, and can be
-        resumed from there.
+        resumed from there. `runtime` is the address of the run's
+        `tasks.RT`, which steps reach through `Ctx.runtime`.
         """
         Self.check()
         var res = prior^
@@ -227,7 +248,9 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
                             blocked = String(T.upstream(), " ", key)
                         else:
                             input = res.steps[j].output.copy()
-                    Self._step[T](store, res, i, run, key, input, blocked)
+                    Self._step[T](
+                        store, res, i, run, runtime, key, input, blocked
+                    )
             else:
                 if Self._done(res, T.step_name(), ""):
                     continue
@@ -254,7 +277,7 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
                             blocked.write(T.upstream(), " ", p)
                         else:
                             input.extend(Span(res.steps[j].output))
-                Self._step[T](store, res, i, run, "", input, blocked)
+                Self._step[T](store, res, i, run, runtime, "", input, blocked)
         return res^
 
     @staticmethod
@@ -272,6 +295,7 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
         mut res: RunResult,
         ord: Int,
         run: Int,
+        runtime: Int,
         partition: String,
         input: List[UInt8],
         blocked: String,
@@ -296,6 +320,11 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
                 var attempt = store.start_attempt(
                     T.step_name(), partition, ord, Span(input)
                 )
+                var log = attempt_log(
+                    Self.name, run, T.step_name(), partition, attempt
+                )
+                if log:
+                    store.set_log(T.step_name(), partition, attempt, log)
                 var ctx = Ctx(
                     Self.name,
                     run,
@@ -305,13 +334,19 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
                     code,
                     pinned.copy(),
                     store.recorder(),
+                    log,
+                    runtime if Self.tasks.HAS_RUNTIME else 0,
+                    task_list[Self.tasks](),
                 )
+                ctx.log_to_file(String("attempt ", attempt, " started"))
                 var out = List[UInt8]()
                 var error = String()
                 try:
                     T.run(ctx, Span(input), out)
+                    ctx.log_to_file(String("attempt ", attempt, " succeeded"))
                 except e:
                     error = String(e)
+                    ctx.log(String("attempt ", attempt, " failed: ", error))
                 for r in ctx.reads:
                     if r.table not in pinned:
                         pinned[r.table] = r.snapshot_id

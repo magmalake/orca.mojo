@@ -4,11 +4,18 @@ The step's identity (pipeline, run, step, partition, attempt, the code's
 registry hash), a logger, and what makes reruns safe: the table snapshots
 the step's first attempt read, which every later attempt reads again, and
 the record of what each attempt read and committed. `orca.tables` reads and
-commits Iceberg tables through it; the dista runtime joins it in a later PR
-(see DESIGN.md).
+commits Iceberg tables through it. `runtime` is the run's dista runtime, for a
+pipeline with `tasks=`.
+
+`log` writes to stdout and, when `ORCA_LOGS` is set, appends to the attempt's
+log file as well (`orca.logs.attempt_log`).
 """
 
+
 from postgres import Connection, Params
+
+from orca.logs import utc_now
+from orca.tasks import TaskSet, task_list
 
 
 @fieldwise_init
@@ -73,6 +80,13 @@ struct Ctx(Movable):
     var reads: List[TableSnapshot]
     var commits: List[TableSnapshot]
     var recorder: Recorder
+    var log_path: String
+    """The attempt's log file; empty when logs go to stdout only."""
+    var _runtime: Int
+    """The run's dista runtime, by address; 0 if it has none."""
+    var _runtime_tasks: String
+    """The runtime's task names, one per line: what `runtime` checks a
+    requested task set against (dista runtimes all reflect to one name)."""
 
     def __init__(
         out self,
@@ -84,6 +98,9 @@ struct Ctx(Movable):
         code: String = "",
         var pinned: Dict[String, Int64] = Dict[String, Int64](),
         var recorder: Recorder = Recorder(),
+        log_path: String = "",
+        runtime: Int = 0,
+        runtime_tasks: String = "",
     ):
         self.pipeline = pipeline
         self.run = run
@@ -95,13 +112,47 @@ struct Ctx(Movable):
         self.reads = List[TableSnapshot]()
         self.commits = List[TableSnapshot]()
         self.recorder = recorder^
+        self.log_path = log_path
+        self._runtime = runtime
+        self._runtime_tasks = runtime_tasks
 
     def log(self, msg: String):
-        """Writes a line tagged with the step and partition."""
+        """Writes a line tagged with the step and partition to stdout, and
+        with a timestamp to the attempt's log file."""
+        var tag = String("[", self.step)
         if self.partition:
-            print("[", self.step, " ", self.partition, "] ", msg, sep="")
-        else:
-            print("[", self.step, "] ", msg, sep="")
+            tag.write(" ", self.partition)
+        tag.write("] ")
+        print(tag, msg, sep="")
+        self.log_to_file(msg)
+
+    def log_to_file(self, msg: String):
+        """Writes a line to the attempt's log file only, if it has one."""
+        if not self.log_path:
+            return
+        var tag = String("[", self.step)
+        if self.partition:
+            tag.write(" ", self.partition)
+        tag.write("] ")
+        try:
+            with open(self.log_path, "a") as f:
+                f.write(utc_now(), " ", tag, msg, "\n")
+        except e:
+            print("orca: can't write ", self.log_path, ": ", e, sep="")
+
+    def runtime[T: TaskSet](self) raises -> ref[MutAnyOrigin] T.RT:
+        """The run's dista runtime, for a pipeline declared with `tasks=T`."""
+        if self._runtime == 0:
+            raise Error("orca: this run has no dista runtime (no tasks=)")
+        var asked = task_list[T]()
+        if self._runtime_tasks != asked:
+            raise Error(
+                "orca: the run's runtime has tasks\n",
+                self._runtime_tasks,
+                "not\n",
+                asked,
+            )
+        return Pointer[T.RT, MutAnyOrigin](unsafe_from_address=self._runtime)[]
 
     def pin(mut self, table: String, current: Int64) raises -> Int64:
         """The snapshot of `table` this step reads: the one an earlier attempt
