@@ -144,11 +144,11 @@ Stacked PRs of at most about 2,000 lines, each with its own gate:
 | 5 | **dista inside steps, and logs.** `tasks=` on the pipeline, the run's `Runtime` in `Ctx`, `max_parallel`, per-attempt logs and the run's timeline. | A step fans 100 dista tasks over 4 workers; each attempt's log is where `status` says. | ~600 |
 | 6 | **The taxi pipeline.** `examples/taxi.mojo`: download each month's TLC file over HTTPS, load it (the two schemas cast onto one and out-of-month rows dropped, as taxibench's `load_table.py` does), append it to a month-partitioned table, then compact. | Phase 1's gate: 2023–2024 loads to 79,478,796 rows, the same as taxibench's table, and a run killed during the load resumes at the failed month. | ~700 |
 
-What PR 6 may need from the tins, found out at PR 2 rather than at PR 6:
+What PR 6 needs from the tins, checked at PR 2:
 
-- **Casting columns** (float64 to int32, the 2023 schema to the 2024 one) in arrow-mlake or in the step. If arrow-mlake has no cast kernel, the step does it by hand for the five columns.
-- **A compaction commit** in iceberg: replace a partition's small files with one, as one `replace` snapshot. `prepare_commit` handles removals; whether `Table` has a method for it, or orca builds the commit itself, is checked first.
-- **An HTTPS download to a file** through objectstore, streamed rather than held in memory: a month is about 50 MB, so holding it is fine for phase 1.
+- **Casting columns** (float64 to int32, the 2023 schema to the 2024 one). arrow-mlake has no cast kernel, so the load step casts the five columns itself, building new arrays from the old.
+- **A compaction commit.** iceberg's `prepare_commit` takes the operation, a `FileChanges` of files added and removed, and `extra_summary`, so the compaction step builds a `replace` commit (`OP_REPLACE`) itself and commits it with `Table.commit_metadata`. No change to iceberg.
+- **An HTTPS download to a file** through objectstore. A month is about 50 MB, so holding it in memory is fine for phase 1.
 
 ## Phase 2: schedules and partitions
 
