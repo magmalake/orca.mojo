@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.env == 'default' && 'stable' || matrix.env }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        env: [default, nightly]
+    defaults:
+      run:
+        working-directory: orca.mojo
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: orca.mojo
+
+      # dista compiles from source next door, at the revision orca builds on.
+      - uses: actions/checkout@v4
+        with:
+          repository: magmalake/dista.mojo
+          ref: 0d85d47697cbc90e99a902ea0eb7f87eb685b0b0
+          path: dista.mojo
+
+      # The nightly compiles dista's dependencies from source too, because
+      # their packages are precompiled by 1.2.0. The refs match the pins in
+      # pixi.toml.
+      - if: matrix.env == 'nightly'
+        uses: actions/checkout@v4
+        with:
+          repository: magmalake/memory-region.mojo
+          ref: 91ff4418b44a89f9354e7d32633e9b11ad365dfd
+          path: memory-region.mojo
+      - if: matrix.env == 'nightly'
+        uses: actions/checkout@v4
+        with:
+          repository: magmalake/arrow-mlake.mojo
+          ref: 928a2435371c82395879779225df284e581dfb21
+          path: arrow-mlake.mojo
+
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          # Pinned: pixi.lock is written by this version, and a newer pixi
+          # rejects the committed lock with "lock file not up-to-date".
+          pixi-version: v0.78.0
+          environments: ${{ matrix.env }}
+          manifest-path: orca.mojo/pixi.toml
+
+      - name: Tests
+        run: pixi run -e ${{ matrix.env }} test
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: v0.78.0
+          environments: fmt
+      - name: mojo format leaves the tree unchanged
+        run: pixi run -e fmt format-check

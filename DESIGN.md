@@ -2,7 +2,7 @@
 
 November 1, 2026 · targets stable Mojo 1.2.0
 
-This turns [VISION.md](VISION.md) into a buildable plan. It covers phase 1 in detail, sketches phases 2 to 5, and proposes answers to the vision's open questions. Nothing here is *verified* yet: each claim about what Mojo 1.2 accepts is checked in the PR that first needs it, and this file is corrected when one turns out wrong.
+This turns [VISION.md](VISION.md) into a buildable plan. It covers phase 1 in detail, sketches phases 2 to 5, and proposes answers to the vision's open questions. Everything marked *verified* was compiled and run on Mojo 1.2.0; every other claim about what Mojo accepts is checked in the PR that first needs it, and this file is corrected when one turns out wrong.
 
 ## What orca builds on
 
@@ -49,8 +49,9 @@ def main() raises:
     orca_main[Taxi]()
 ```
 
-- **An edge is a type check.** `after=Download` means `load` takes `Download`'s output. A `Mapped` step after a `Mapped` step takes one partition's output; a `Gather` step takes a `Seq` of all of them. `Step` asserts at compile time that its input type matches what its `after` produces, so `Load` declared with `Int` as input doesn't compile. This is the vision's first principle. To verify: a `Step` parameterised on another `Step` type, and comparing two types at compile time, as dista's `Method[Counter, ...]` does.
+- **An edge is a type check.** `after=Download` means `load` takes `Download`'s output. A `Mapped` step after a `Mapped` step takes one partition's output; a `Gather` step takes a `Seq` of all of them. `Step` asserts at compile time that its input type matches what its `after` produces, so `Load` declared with `Int` as input doesn't compile. This is the vision's first principle. *Verified:* `Step` takes `after` as a keyword parameter of a `StepLike` type, and its `check` compares reflected type names in `comptime assert`s, which fail the build with the assert's message. `tests/compile_fail/` holds one pipeline per rule.
 - **Partitions from the start, kept simple.** A run is over a list of partition keys (months in phase 1). A `Mapped` step runs once per key; a `Gather` step once per run. The first step of a pipeline takes the key itself. Phase 2 adds partition definitions, schedules and backfills on top of the same two kinds.
+- **Steps are listed in run order.** A step comes after the step it follows, so the declared order is a valid order and there's no sort to do. `Pipeline.check` asserts it, along with unique names and that a step's `after` is the pipeline's own step of that name (compared by function, so another step with the same name doesn't pass). *Verified.*
 - **One input per step, as in dista.** Several upstreams arrive later as `after=(A, B)` and a struct input; the taxi load doesn't need it.
 - **Step outputs are small values**: paths, snapshot IDs, counts. They're stored in Postgres through dista's codec, so a resumed run hands a step the same input the first attempt had. The data itself goes in tables.
 - **`Ctx`** is what a step gets besides its input: the run and step IDs, the partition key, a logger, the catalog, and the run's dista runtime. Its table methods are where pinning and lineage happen (below).
@@ -143,11 +144,11 @@ Stacked PRs of at most about 2,000 lines, each with its own gate:
 | 5 | **dista inside steps, and logs.** `tasks=` on the pipeline, the run's `Runtime` in `Ctx`, `max_parallel`, per-attempt logs and the run's timeline. | A step fans 100 dista tasks over 4 workers; each attempt's log is where `status` says. | ~600 |
 | 6 | **The taxi pipeline.** `examples/taxi.mojo`: download each month's TLC file over HTTPS, load it (the two schemas cast onto one and out-of-month rows dropped, as taxibench's `load_table.py` does), append it to a month-partitioned table, then compact. | Phase 1's gate: 2023–2024 loads to 79,478,796 rows, the same as taxibench's table, and a run killed during the load resumes at the failed month. | ~700 |
 
-What PR 6 may need from the tins, found out at PR 2 rather than at PR 6:
+What PR 6 needs from the tins, checked at PR 2:
 
-- **Casting columns** (float64 to int32, the 2023 schema to the 2024 one) in arrow-mlake or in the step. If arrow-mlake has no cast kernel, the step does it by hand for the five columns.
-- **A compaction commit** in iceberg: replace a partition's small files with one, as one `replace` snapshot. `prepare_commit` handles removals; whether `Table` has a method for it, or orca builds the commit itself, is checked first.
-- **An HTTPS download to a file** through objectstore, streamed rather than held in memory: a month is about 50 MB, so holding it is fine for phase 1.
+- **Casting columns** (float64 to int32, the 2023 schema to the 2024 one). arrow-mlake has no cast kernel, so the load step casts the five columns itself, building new arrays from the old.
+- **A compaction commit.** iceberg's `prepare_commit` takes the operation, a `FileChanges` of files added and removed, and `extra_summary`, so the compaction step builds a `replace` commit (`OP_REPLACE`) itself and commits it with `Table.commit_metadata`. No change to iceberg.
+- **An HTTPS download to a file** through objectstore. A month is about 50 MB, so holding it in memory is fine for phase 1.
 
 ## Phase 2: schedules and partitions
 
