@@ -78,6 +78,8 @@ and `Ctx` carries a `Runtime` of exactly those tasks. To verify: a step's `Ctx` 
 | `taxi resume <run>` | Continues a run at its unfinished steps |
 | `taxi status [<run>]` | Runs, or one run's steps and attempts |
 
+Without `ORCA_DATABASE_URL`, `run` runs in memory and nothing is recorded. Exit codes: 0 for a run that succeeded, 1 for one with a step that didn't, 2 for a usage error, 3 for anything else (the database, a run that can't be resumed).
+
 Connection settings come from the environment: `ORCA_DATABASE_URL`, `ORCA_WAREHOUSE`, `ORCA_LOGS` (a directory or `s3://`), and dista's own variables.
 
 **The scheduler, from phase 2, is a separate generic `orca` binary** that depends on orca's core, postgres and flare, and on no pipeline. It knows a pipeline by its `describe` output and starts runs by executing the pipeline binary: a subprocess locally, a Kubernetes Job in phase 5. That answers the vision's "where step code runs": the scheduler never links a pipeline's dependencies, which is the same split dista is making between its generic head and the user's driver. It also means a scheduler restart doesn't kill running runs; they're separate processes writing to Postgres themselves.
@@ -98,7 +100,7 @@ One schema, `orca`, created and migrated by the binary at start-up (a `schema_ve
 `reads` and `commits` are the lineage table the vision puts in phase 4; they're written from phase 1 because resuming needs them. Phase 4 adds the queries and the UI over them.
 
 - **Statuses.** A run is `queued`, `running`, `succeeded`, `failed` or `cancelled`. A step is `pending`, `running`, `succeeded`, `failed` or `skipped` (its upstream failed).
-- **One writer per run.** A process that runs a run holds it by its heartbeat: it updates `runs.heartbeat` every few seconds, and `resume` refuses a run whose heartbeat is fresh. A run whose process died has a stale heartbeat and can be resumed. No advisory locks, so a pooled connection is fine.
+- **One writer per run.** A process that runs a run is its `owner` (`host:pid`) and holds it by its heartbeat: a thread with a connection of its own (threads.mojo's `TypedPool`) updates `runs.heartbeat` five times per `ORCA_STALE_SECONDS` (default 30), and `resume` refuses a run whose heartbeat is younger than that. A run whose process died has a stale heartbeat and can be resumed; a run that ended clears its heartbeat, so a failed run can be resumed at once. Every attempt's first transaction also checks that this process still owns the run, so a process that lost its run to a resume (it was paused, or the database was unreachable) stops at its next step instead of racing the new owner. No advisory locks for this, so a pooled connection is fine; migrations take a transaction-scoped one. *Verified* by `tests/kill.sh`.
 - **Each state change is one transaction.** Starting an attempt inserts it and marks the step running; finishing it records the output, reads and commits, and marks the step. A kill between the two leaves an attempt `running` with a stale heartbeat, which resume marks `failed` before retrying.
 
 ## Snapshots: pinned reads, recognisable commits
@@ -113,7 +115,7 @@ This is what makes reruns safe (the vision's fourth principle).
 ## Failure and resume
 
 - **A failed step** fails its run once its retries are used up. Its downstream steps are `skipped`; other partitions' steps that don't depend on it carry on, so one bad month doesn't stop the other eleven.
-- **Retries** are per step: `retries=2` in the `Step` declaration, immediate in phase 1, with backoff in phase 2.
+- **Retries** are per step: `retries=2` in the `Step` declaration, immediate in phase 1, with backoff in phase 2. `ctx.attempt` tells a step which attempt it is. Every attempt is a row in `attempts`, retries and resumes alike.
 - **Resume** reruns every step that hasn't `succeeded`, in dependency order, with the recorded inputs and pinned reads. Steps that succeeded aren't run again; their outputs are read back from Postgres. A resume after a code change is refused unless `--allow-new-code`, which records the new hash on the attempts it makes.
 - **Order within a run.** Steps run in dependency order; independent partitions of a `Mapped` step run one after another in the driver in phase 1, each free to use dista for parallelism inside. Running several partitions' steps at once is `max_parallel=` on the pipeline, from PR 5.
 

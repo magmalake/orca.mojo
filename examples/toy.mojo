@@ -5,13 +5,21 @@
     ./build/toy run --partitions 2024-01..2024-03
 
 A partition whose month is in ORCA_TOY_FAIL (e.g. `2024-02`) fails its
-`measure` step, to show the rest of the run carrying on.
+`measure` step, to show the rest of the run carrying on. ORCA_TOY_SLEEP makes
+every step take that many seconds, so tests/kill.sh has time to kill it.
 """
 
 from std.os import getenv
+from std.time import sleep
 
 from dista import Seq
 from orca import Ctx, Gather, Mapped, Month, Pipeline, Step, orca_main
+
+
+def _nap() raises:
+    var s = getenv("ORCA_TOY_SLEEP")
+    if s:
+        sleep(Float64(s))
 
 
 @fieldwise_init
@@ -22,6 +30,7 @@ struct Measured(Copyable, Movable):
 
 def days(mut ctx: Ctx, m: Month) raises -> Measured:
     """The number of days in the month."""
+    _nap()
     var n = 31
     if m.month == 2:
         var leap = (m.year % 4 == 0 and m.year % 100 != 0) or m.year % 400 == 0
@@ -33,6 +42,7 @@ def days(mut ctx: Ctx, m: Month) raises -> Measured:
 
 def measure(mut ctx: Ctx, m: Measured) raises -> Measured:
     """Hours in the month; fails for the months in ORCA_TOY_FAIL."""
+    _nap()
     if String(m.month) in getenv("ORCA_TOY_FAIL"):
         raise Error("failing ", m.month, " as asked")
     ctx.log(String(m.month, " has ", m.days, " days"))
@@ -40,6 +50,7 @@ def measure(mut ctx: Ctx, m: Measured) raises -> Measured:
 
 
 def total(mut ctx: Ctx, ms: Seq[Measured]) raises -> Int:
+    _nap()
     var t = 0
     for i in range(len(ms)):
         t += ms[i].days

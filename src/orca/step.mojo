@@ -79,6 +79,11 @@ trait StepLike:
         ...
 
     @staticmethod
+    def max_retries() -> Int:
+        """How many times a failed attempt is retried, in the same run."""
+        ...
+
+    @staticmethod
     def upstream_function() -> StaticString:
         """The function of the step this one follows; empty for a first step."""
         ...
@@ -126,6 +131,10 @@ struct NoStep(StepLike):
         return ""
 
     @staticmethod
+    def max_retries() -> Int:
+        return 0
+
+    @staticmethod
     def upstream_function() -> StaticString:
         return ""
 
@@ -158,6 +167,7 @@ struct Step[
     kind_: StepKind,
     *,
     after: StepLike = NoStep,
+    retries: Int = 0,
 ](StepLike):
     """A step named `name` running `f` on an `A_` to make an `R_`."""
 
@@ -175,6 +185,10 @@ struct Step[
     @staticmethod
     def upstream() -> StaticString:
         return Self.after.step_name()
+
+    @staticmethod
+    def max_retries() -> Int:
+        return Self.retries
 
     @staticmethod
     def upstream_function() -> StaticString:
@@ -195,6 +209,7 @@ struct Step[
     @staticmethod
     def check():
         comptime assert Self.name != "", "a step needs a name"
+        comptime assert Self.retries >= 0, "retries can't be negative"
         comptime a = reflect[Self.A_].name()
         comptime if Self.after.step_name() == "":
             comptime if Self.kind_ == Gather:

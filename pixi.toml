@@ -7,11 +7,19 @@ description = "Orchestration for Mojo data pipelines: DAGs in Mojo, cron schedul
 preview = ["pixi-build"]
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 
+# libpq is what postgres.mojo dlopens; the server (initdb, pg_ctl, psql) is
+# for the tests, which start a throwaway one (scripts/with-postgres.sh).
+[dependencies]
+libpq = ">=16,<19"
+postgresql = ">=16,<19"
+
 [tasks]
 test-steps = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_steps.mojo -o build/test-steps && ./build/test-steps" }
 test-cli = { cmd = "tests/cli.sh" }
 test-compile-fail = { cmd = "tests/compile_fail.sh" }
-test = { depends-on = ["test-steps", "test-cli", "test-compile-fail"] }
+test-state = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_state.mojo -o build/test-state && scripts/with-postgres.sh ./build/test-state" }
+test-kill = { cmd = "scripts/with-postgres.sh tests/kill.sh" }
+test = { depends-on = ["test-steps", "test-cli", "test-compile-fail", "test-state", "test-kill"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 
 # Stable is the default: orca targets Mojo 1.2.0. dista compiles from a
@@ -22,6 +30,11 @@ toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o
 mojo-compiler = "==1.2.0"
 memory-region-mojo = { git = "https://github.com/magmalake/memory-region.mojo", rev = "91ff4418b44a89f9354e7d32633e9b11ad365dfd" }
 arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "928a2435371c82395879779225df284e581dfb21" }
+# orca's state. Pinned at the revision mojoshelf published as
+# postgres-mojo 0.3.2, and threads-mojo at the revision it pins: the
+# heartbeat runs on a thread of its own.
+postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "bfe9b94ae97e3e184dc6d118b0684818927a5da8" }
+threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e780a8de77278c140cee36904e46e93e0ca1c" }
 
 [feature.stable.activation.env]
 DEP_INC = "-I ../dista.mojo/src"
@@ -32,7 +45,7 @@ DEP_INC = "-I ../dista.mojo/src"
 modular = ">=26.8.0.dev2026102305,<28"
 
 [feature.nightly.activation.env]
-DEP_INC = "-I ../dista.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src"
+DEP_INC = "-I ../dista.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src -I ../postgres.mojo/src -I ../threads.mojo/src -I ../threads.mojo/compat"
 
 # `mojo-compiler` ships no formatter; the nightly `modular` package does.
 # `mojo format` has no check mode, so format-check formats and then asserts

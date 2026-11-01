@@ -44,6 +44,18 @@ jobs:
           repository: magmalake/arrow-mlake.mojo
           ref: 928a2435371c82395879779225df284e581dfb21
           path: arrow-mlake.mojo
+      - if: matrix.env == 'nightly'
+        uses: actions/checkout@v4
+        with:
+          repository: magmalake/postgres.mojo
+          ref: bfe9b94ae97e3e184dc6d118b0684818927a5da8
+          path: postgres.mojo
+      - if: matrix.env == 'nightly'
+        uses: actions/checkout@v4
+        with:
+          repository: magmalake/threads.mojo
+          ref: f45e780a8de77278c140cee36904e46e93e0ca1c
+          path: threads.mojo
 
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
@@ -53,6 +65,8 @@ jobs:
           environments: ${{ matrix.env }}
           manifest-path: orca.mojo/pixi.toml
 
+      # The state and kill tests start a throwaway PostgreSQL server from
+      # conda-forge's postgresql, on a Unix socket: no service container.
       - name: Tests
         run: pixi run -e ${{ matrix.env }} test
 
