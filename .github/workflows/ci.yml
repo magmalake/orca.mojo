@@ -80,3 +80,60 @@ jobs:
           environments: fmt
       - name: mojo format leaves the tree unchanged
         run: pixi run -e fmt format-check
+
+  # orca.tables over local Iceberg tables. iceberg, parquet and their
+  # siblings compile from source at the revisions iceberg-mojo 0.8.2 was
+  # published with (dista's data job uses the same set); memory-region at the
+  # fix that lets it share a binary with the standard library's file seek.
+  data:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: orca.mojo
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: orca.mojo
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/dista.mojo, ref: 0d85d47697cbc90e99a902ea0eb7f87eb685b0b0, path: dista.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/memory-region.mojo, ref: 9e299b82e3a866073a30ff9450c27f823513046f, path: memory-region.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/arrow-mlake.mojo, ref: 928a2435371c82395879779225df284e581dfb21, path: arrow-mlake.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/parquet.mojo, ref: 9a596283d3612d1ebeca199f9e48f1c1a7eaab51, path: parquet.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/iceberg.mojo, ref: 7e69e18afdaa1811efcdc178458023d914da6d12, path: iceberg.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/threads.mojo, ref: f45e780a8de77278c140cee36904e46e93e0ca1c, path: threads.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/thrift.mojo, ref: 21cdbce67d22d72e88e88a60e2f168b05b4ef9fa, path: thrift.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/hashes.mojo, ref: 395aca597f9410bd0511df44d972f14b10a8b01d, path: hashes.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/snappy.mojo, ref: b8172ed0a4ef13911cc225d46e26676a5b8f1ccd, path: snappy.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/deflate.mojo, ref: aeb571e54ac736b97c826a23f44501715fddc656, path: deflate.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/avro.mojo, ref: 479c9d390b5c12c2497e05f84b64bf690a8cfea3, path: avro.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/roaring.mojo, ref: a90a7bd30cf1c21403a29059282072e93fbeeee2, path: roaring.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/objectstore.mojo, ref: 748e2d31450a7793592e439d6c69d8c6598d2129, path: objectstore.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/zstd.mojo, ref: 53655623ca8585fd5b36b1239842913ec308ae69, path: zstd.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/lz4.mojo, ref: 64502eeeabed37515cd479bc421fc2920504cac5, path: lz4.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/brotli.mojo, ref: aa6d14985baf82ad4b934f14136b95a291b55faf, path: brotli.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/sqlite.mojo, ref: 53b819cd395b1b0afe8772dfbb43489da6ce939e, path: sqlite.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/postgres.mojo, ref: bfe9b94ae97e3e184dc6d118b0684818927a5da8, path: postgres.mojo}
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: v0.78.0
+          environments: data
+          manifest-path: orca.mojo/pixi.toml
+      - name: Pinned reads and recognised commits
+        run: pixi run -e data test-tables

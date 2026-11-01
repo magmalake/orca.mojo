@@ -110,7 +110,11 @@ This is what makes reruns safe (the vision's fourth principle).
 - **`ctx.scan(table)`** returns a `TableScan` pinned to a snapshot. On a step's first attempt that's the table's current snapshot, recorded in `reads`. A retry or resume of the same step gets the snapshot the first attempt read, so it sees the same data whatever was committed in between.
 - **`ctx.append(table)`** and **`ctx.commit(table, ...)`** add summary properties to the snapshot they commit: `orca.pipeline`, `orca.run`, `orca.step`, `orca.partition`, `orca.attempt`, `orca.code` (the registry hash) and `orca.reads` (the `table@snapshot` pairs the attempt read). iceberg's `prepare_append` and `prepare_commit` already take `extra_summary`.
 - **A commit is recognised on retry.** If an attempt committed and was killed before Postgres heard of it, the retry looks through the table's snapshots for one whose `orca.run`, `orca.step` and `orca.partition` match, and treats it as the step's commit instead of appending again. So a crash between the commit and the record doesn't load a month twice. Snapshots are walked newest first and only back to the run's start.
-- **A step that commits to several tables** records each; one recognised commit doesn't imply the others happened, so each is checked.
+- **A step that commits to several tables** records each; one recognised commit doesn't imply the others happened, so each is checked. A step that commits to one table more than once numbers its commits (`orca.commit`), and each is recognised by its number.
+- **Reads and commits are recorded as they happen**, each by its own insert from the attempt (`Ctx.recorder`), not when the attempt ends, so a process killed between its commit and its end still leaves both on record.
+- **An in-memory run** (no database) has run 0: it pins reads across its own retries but recognises no commits, since every in-memory run would share that number.
+- **A table read while it had no snapshot** stays empty for the step, even if a commit lands before a retry.
+- **Where it lives.** `orca.tables` (`scan`, `append`, `commit`) imports iceberg, so only pipelines with tables build it. Its tests run in the `data` environment, with iceberg and its siblings from source as in dista. *Verified* by `tests/test_tables.mojo`.
 
 ## Failure and resume
 

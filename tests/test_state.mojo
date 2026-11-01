@@ -112,7 +112,7 @@ def test_execute_records_attempts_and_retries() raises:
     var db = _db()
     db.register("retrying", hex(Retrying.registry_hash()), Retrying.describe())
     var run = db.create_run("retrying", "h", "x", "manual", "a:1")
-    var store = PgStore(db^, run, "a:1", "h")
+    var store = PgStore(db^, getenv("ORCA_DATABASE_URL"), run, "a:1", "h")
     var res = Retrying.execute(
         store, RunResult(), parse_months("2024-01..2024-03"), run
     )
@@ -140,7 +140,7 @@ def test_execute_records_attempts_and_retries() raises:
 def test_resume_skips_what_succeeded() raises:
     var db = _db()
     var run = db.create_run("retrying", "h", "x", "manual", "a:1")
-    var store = PgStore(db^, run, "a:1", "h")
+    var store = PgStore(db^, getenv("ORCA_DATABASE_URL"), run, "a:1", "h")
     var months = parse_months("2024-01..2024-02")
     _ = Retrying.execute(store, RunResult(), months, run)
     # Pretend the process died during `add`: its attempt is left running.
@@ -180,7 +180,7 @@ def test_a_store_that_lost_its_run_stops() raises:
         "UPDATE orca.runs SET owner = 'b:2' WHERE id = $1",
         Params().int64(Int64(run)),
     )
-    var store = PgStore(db^, run, "a:1", "h")
+    var store = PgStore(db^, getenv("ORCA_DATABASE_URL"), run, "a:1", "h")
     with assert_raises(contains="lost run"):
         _ = Retrying.execute(store, RunResult(), parse_months("2024-01"), run)
     assert_equal(

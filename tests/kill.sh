@@ -39,7 +39,9 @@ while [ "$i" -lt "$runs" ]; do
         echo "kill $i: before the run started (${delay}s)"
         continue
     fi
-    if ! grep -q '^run succeeded$' "$log"; then
+    # The database, not the log: a kill can land after the run is recorded
+    # as succeeded and before it says so.
+    if [ "$(q "SELECT status FROM orca.runs WHERE id = $run")" != succeeded ]; then
         killed=$((killed + 1))
         # Wait out the dead process's heartbeat, then resume.
         tries=0
