@@ -56,9 +56,14 @@ def scan(mut ctx: Ctx, table: Table) raises -> TableScan:
     return table.scan().use_snapshot(id)
 
 
-def _made(ctx: Ctx, table: Table) -> Int64:
+def find_commit(ctx: Ctx, table: Table) -> Int64:
     """The snapshot this step already committed as its next commit to
-    `table` in this run, or -1."""
+    `table` in this run, or -1.
+
+    `append` and `commit` check this themselves. A step that writes files
+    before committing them, such as a compaction, checks it first, so a retry
+    of an attempt that committed doesn't write the files again.
+    """
     var loc = table.metadata.location
     for s in table.metadata.snapshots:
         if ctx.made(loc, s.summary):
@@ -73,7 +78,7 @@ def append(
     or returns the snapshot an earlier attempt of this step committed."""
     table.refresh()
     var loc = table.metadata.location
-    var found = _made(ctx, table)
+    var found = find_commit(ctx, table)
     if found >= 0:
         ctx.log(String("found its commit ", found, " to ", loc))
         ctx.committed(loc, found)
@@ -117,7 +122,7 @@ def commit(
     step committed."""
     table.refresh()
     var loc = table.metadata.location
-    var found = _made(ctx, table)
+    var found = find_commit(ctx, table)
     if found >= 0:
         ctx.log(String("found its commit ", found, " to ", loc))
         ctx.committed(loc, found)

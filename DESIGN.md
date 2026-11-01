@@ -144,7 +144,7 @@ With `ORCA_LOGS` set to a directory, each attempt writes its log to `$ORCA_LOGS/
 - **Fuzzing** with mozz, as dista does (`pixi run -e fuzz fuzz`, 20,000 inputs per harness in CI): `parse_months`; step inputs decoded from arbitrary bytes, as resume reads them back, where accepted bytes must be one canonical encoding; `quote`, whose output must unescape to its input; and `Ctx.made`, against a reference predicate. The last one found that a summary *missing* a key matched an empty value, such as a gather step's partition; `made` now requires every key.
 - **Chaos** (`tests/chaos.sh`): per seed, one run driven to the end through random `kill -9`s of the process running it (its dista head and workers go with it), Postgres restarts under it (`pg_ctl -m immediate`), two resumes racing to claim it, and steps failing at random. It must end with every step succeeded by exactly one attempt, none left running, no two attempts by different processes overlapping in time, the same total as an uninterrupted run, and no process left behind. Three seeds in CI, `CHAOS_SEEDS` for more (25 pass locally). `test-chaos-tables`, in the data environment, does the same to a pipeline that appends to Iceberg and fails right after committing, and checks one snapshot per month.
 - **Postgres must keep `synchronous_commit` on.** The chaos test's restarts found that with it off, a crashed server loses transactions it had acknowledged, such as a run's creation, and the run vanishes. The test server keeps it on; a deployment must too.
-- **The taxi gate** runs by hand: it downloads gigabytes.
+- **The taxi gate** runs by hand: it downloads 1.2 GB. CI runs the pipeline on two real months sliced to about 500 rows each (`tests/fixtures/taxi`, written by `tests/taxi_fixtures.mojo`): a run, and a run whose download fails, resumed.
 
 ## Phase 1: DAGs and runs
 
@@ -159,13 +159,13 @@ Stacked PRs of at most about 2,000 lines, each with its own gate:
 | 3 | **State in Postgres.** The schema and migrations; runs, steps and attempts; heartbeats; `run`, `resume`, `status`; step outputs through dista's codec. | `tests/kill.sh` on the toy pipeline: killed at a random step, resumed, every step ran to success exactly once. | ~1,200 |
 | 4 | **Pinned reads and recognised commits.** `ctx.scan`, `ctx.append`, `ctx.commit`; `reads` and `commits`; snapshot summary properties; finding a commit on retry. | A step that's killed right after its commit, then resumed, leaves one snapshot, not two; a resumed step reads its pinned snapshot after another commit lands. | ~800 |
 | 5 | **dista inside steps, and logs.** `tasks=` on the pipeline, the run's `Runtime` in `Ctx`, per-attempt logs and the run's timeline. (`max_parallel` moved to phase 2; see "Failure and resume".) | A step fans 100 dista tasks over 4 workers; each attempt's log is where `status` says. | ~600 |
-| 6 | **The taxi pipeline.** `examples/taxi.mojo`: download each month's TLC file over HTTPS, load it (the two schemas cast onto one and out-of-month rows dropped, as taxibench's `load_table.py` does), append it to a month-partitioned table, then compact. | Phase 1's gate: 2023–2024 loads to 79,478,796 rows, the same as taxibench's table, and a run killed during the load resumes at the failed month. | ~700 |
+| 6 | **The taxi pipeline.** `examples/taxi/`: download each month's TLC file over HTTPS, load it (the two schemas cast onto one and out-of-month rows dropped, as taxibench's `load_table.py` does), append it to a month-partitioned table, then compact. | Phase 1's gate: 2023–2024 loads to 79,478,796 rows, the same as taxibench's table, and a run killed during the load resumes at the failed month. | ~700 |
 
-What PR 6 needs from the tins, checked at PR 2:
+What PR 6 needs from the tins, checked at PR 2, and what it turned out to need:
 
-- **Casting columns** (float64 to int32, the 2023 schema to the 2024 one). arrow-mlake has no cast kernel, so the load step casts the five columns itself, building new arrays from the old.
-- **A compaction commit.** iceberg's `prepare_commit` takes the operation, a `FileChanges` of files added and removed, and `extra_summary`, so the compaction step builds a `replace` commit (`OP_REPLACE`) itself and commits it with `Table.commit_metadata`. No change to iceberg.
-- **An HTTPS download to a file** through objectstore. A month is about 50 MB, so holding it in memory is fine for phase 1.
+- **Casting columns** (float64 to int32, the 2023 schema to the 2024 one). arrow-mlake has no cast kernel, but none was needed: iceberg's writer casts every column to the table's type as it writes (`align_batch`, through `cast_column`), truncating a double to an int as taxibench's `safe=False` cast does. The load step only renames `Airport_fee` to `airport_fee` and drops the out-of-month rows.
+- **A compaction commit.** iceberg's `prepare_commit` takes the operation, a `FileChanges` of files added and removed, and `extra_summary`, so the compaction step builds a `replace` commit (`OP_REPLACE`) through `orca.tables.commit`. No change to iceberg. iceberg has no compaction of its own, so the step reads each month's files, concatenates them and writes one. `orca.tables.find_commit` lets it check for an earlier attempt's commit before writing anything.
+- **An HTTPS download to a file** through objectstore's `HttpClient`. A month is about 50 MB, so holding it in memory is fine for phase 1.
 
 ## Phase 2: schedules and partitions
 
