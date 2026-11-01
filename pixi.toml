@@ -85,6 +85,8 @@ DEP_INC = "-I ../dista.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.m
 [feature.data.tasks]
 test-tables = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_tables.mojo -o build/test-tables && scripts/with-postgres.sh ./build/test-tables" }
 test-chaos-tables = { cmd = "CHAOS_SRC=tests/chaos_tables.mojo CHAOS_CHECK=1 scripts/with-postgres.sh tests/chaos.sh" }
+test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh" }
+taxi = { cmd = "mkdir -p build && mojo build -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi" }
 
 # Fuzzing with mozz (packaged for magmalake as mozz_mlake), as dista does: one
 # harness per parser or decoder under fuzz/, built with every bounds check

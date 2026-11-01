@@ -110,10 +110,11 @@ jobs:
       - name: mojo format leaves the tree unchanged
         run: pixi run -e fmt format-check
 
-  # orca.tables over local Iceberg tables. iceberg, parquet and their
-  # siblings compile from source at the revisions iceberg-mojo 0.8.2 was
-  # published with (dista's data job uses the same set); memory-region at the
-  # fix that lets it share a binary with the standard library's file seek.
+  # orca.tables over local Iceberg tables, and the taxi example. iceberg,
+  # parquet and their siblings compile from source at the revisions
+  # iceberg-mojo 0.8.2 was published with (dista's data job uses the same
+  # set); memory-region at the fix that lets it share a binary with the
+  # standard library's file seek.
   data:
     runs-on: ubuntu-latest
     defaults:
@@ -168,3 +169,7 @@ jobs:
         run: pixi run -e data test-tables
       - name: Chaos over Iceberg (one snapshot per month, however often killed)
         run: pixi run -e data test-chaos-tables
+      # examples/taxi over two sliced TLC months in tests/fixtures/taxi; the
+      # full 24-month load is run by hand.
+      - name: The taxi pipeline, on fixtures
+        run: pixi run -e data test-taxi
