@@ -11,9 +11,11 @@ valid run order; `check` asserts it at compile time, along with every edge's
 types and unique names. Every function that runs a pipeline calls `check`,
 so a pipeline that breaks a rule doesn't compile.
 
-`run` is the in-memory executor: nothing is recorded, and a run lives as long
-as the process. Each step's output is kept encoded by dista's codec, which is
-also how the state in Postgres will hold it. A step that raises fails its
+`execute` is the executor: it runs the steps that haven't succeeded yet and
+reports each attempt to a `Store`, either `MemoryStore` (what `run` uses: a
+run lives as long as the process) or `orca.state.PgStore`, which makes a run
+resumable. Each step's output is kept encoded by dista's codec, as Postgres
+holds it. A step that raises is retried up to its `retries`, then fails its
 partition: the steps after it for that partition, and any gather step over
 it, are skipped, while other partitions carry on.
 """
@@ -26,6 +28,7 @@ from orca.ctx import Ctx
 from orca.json import quote
 from orca.month import Month
 from orca.step import Gather, Mapped, StepLike
+from orca.store import MemoryStore, Store
 
 comptime SUCCEEDED = "succeeded"
 comptime FAILED = "failed"
@@ -42,6 +45,8 @@ struct StepRun(Copyable, Movable):
     var output: List[UInt8]
     """The encoded output, when the step succeeded."""
     var error: String
+    var attempt: Int
+    """The number of the attempt that settled it; 0 for a skipped step."""
 
     def __init__(
         out self,
@@ -50,12 +55,14 @@ struct StepRun(Copyable, Movable):
         status: String,
         var output: List[UInt8],
         error: String,
+        attempt: Int = 0,
     ):
         self.step = step
         self.partition = partition
         self.status = status
         self.output = output^
         self.error = error
+        self.attempt = attempt
 
 
 struct RunResult(Movable):
@@ -181,35 +188,57 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
         return out^
 
     @staticmethod
-    def run(partitions: List[Month], run: Int = 0) -> RunResult:
-        """Runs every step over `partitions`, in order, in this process."""
+    def run(partitions: List[Month], run: Int = 0) raises -> RunResult:
+        """Runs every step over `partitions`, in order, recording nothing."""
+        var store = MemoryStore()
+        return Self.execute(store, RunResult(), partitions, run)
+
+    @staticmethod
+    def execute[
+        S: Store
+    ](
+        mut store: S, var prior: RunResult, partitions: List[Month], run: Int
+    ) raises -> RunResult:
+        """Runs the steps over `partitions` that haven't succeeded in `prior`,
+        in order, reporting each attempt to `store`.
+
+        `prior` holds the steps a run had already finished when it's resumed,
+        with their outputs; they aren't run again. A step that raises is
+        retried up to its `retries`, then fails its partition. An error from
+        the store itself is raised: the run stops where it is, and can be
+        resumed from there.
+        """
         Self.check()
-        var res = RunResult()
+        var res = prior^
         comptime for i in range(Self.Ts.length):
-            comptime S = Self.Ts[i]
-            comptime if S.kind() == Mapped:
+            comptime T = Self.Ts[i]
+            comptime if T.kind() == Mapped:
                 for p in partitions:
                     var key = String(p)
+                    if Self._done(res, T.step_name(), key):
+                        continue
                     var input = List[UInt8]()
                     var blocked = String()
-                    comptime if S.upstream() == "":
+                    comptime if T.upstream() == "":
                         encode(p, input)
                     else:
-                        var j = res.find(S.upstream(), key)
-                        if res.steps[j].status != SUCCEEDED:
-                            blocked = String(S.upstream(), " ", key)
+                        var j = res.find(T.upstream(), key)
+                        if j < 0 or res.steps[j].status != SUCCEEDED:
+                            blocked = String(T.upstream(), " ", key)
                         else:
                             input = res.steps[j].output.copy()
-                    res.steps.append(Self._attempt[S](run, key, input, blocked))
+                    Self._step[T](store, res, i, run, key, input, blocked)
             else:
+                if Self._done(res, T.step_name(), ""):
+                    continue
                 var input = List[UInt8]()
                 var blocked = String()
-                comptime if S.upstream() == "":
+                comptime if T.upstream() == "":
                     encode(Seq[Month](partitions.copy()), input)
-                elif Self.Ts[Self._find(S.upstream())].kind() == Gather:
-                    var j = res.find(S.upstream(), "")
-                    if res.steps[j].status != SUCCEEDED:
-                        blocked = String(S.upstream())
+                elif Self.Ts[Self._find(T.upstream())].kind() == Gather:
+                    var j = res.find(T.upstream(), "")
+                    if j < 0 or res.steps[j].status != SUCCEEDED:
+                        blocked = String(T.upstream())
                     else:
                         input = res.steps[j].output.copy()
                 else:
@@ -218,36 +247,80 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
                     # as they are.
                     put_scalar[DType.int64](input, Int64(len(partitions)))
                     for p in partitions:
-                        var j = res.find(S.upstream(), String(p))
-                        if res.steps[j].status != SUCCEEDED:
+                        var j = res.find(T.upstream(), String(p))
+                        if j < 0 or res.steps[j].status != SUCCEEDED:
                             if blocked:
                                 blocked.write(", ")
-                            blocked.write(S.upstream(), " ", p)
+                            blocked.write(T.upstream(), " ", p)
                         else:
                             input.extend(Span(res.steps[j].output))
-                res.steps.append(Self._attempt[S](run, "", input, blocked))
+                Self._step[T](store, res, i, run, "", input, blocked)
         return res^
 
     @staticmethod
-    def _attempt[
-        S: StepLike
+    def _done(
+        res: RunResult, step: StringSlice, partition: StringSlice
+    ) -> Bool:
+        var j = res.find(step, partition)
+        return j >= 0 and res.steps[j].status == SUCCEEDED
+
+    @staticmethod
+    def _step[
+        T: StepLike, S: Store
     ](
-        run: Int, partition: String, input: List[UInt8], blocked: String
-    ) -> StepRun:
+        mut store: S,
+        mut res: RunResult,
+        ord: Int,
+        run: Int,
+        partition: String,
+        input: List[UInt8],
+        blocked: String,
+    ) raises:
+        """Runs one step for one partition, with its retries, and records the
+        outcome in `res` (replacing an earlier one) and in `store`."""
+        var outcome: StepRun
         if blocked:
-            return StepRun(
-                S.step_name(),
-                partition,
-                SKIPPED,
-                List[UInt8](),
-                String("not run: ", blocked, " didn't succeed"),
+            var reason = String("not run: ", blocked, " didn't succeed")
+            store.skip(T.step_name(), partition, ord, reason)
+            outcome = StepRun(
+                T.step_name(), partition, SKIPPED, List[UInt8](), reason
             )
-        var ctx = Ctx(Self.name, run, S.step_name(), partition)
-        var out = List[UInt8]()
-        try:
-            S.run(ctx, Span(input), out)
-        except e:
-            return StepRun(
-                S.step_name(), partition, FAILED, List[UInt8](), String(e)
+        else:
+            outcome = StepRun(
+                T.step_name(), partition, FAILED, List[UInt8](), ""
             )
-        return StepRun(S.step_name(), partition, SUCCEEDED, out^, "")
+            for _ in range(T.max_retries() + 1):
+                var attempt = store.start_attempt(
+                    T.step_name(), partition, ord, Span(input)
+                )
+                var ctx = Ctx(Self.name, run, T.step_name(), partition, attempt)
+                var out = List[UInt8]()
+                var error = String()
+                try:
+                    T.run(ctx, Span(input), out)
+                except e:
+                    error = String(e)
+                if error:
+                    store.finish_attempt(
+                        T.step_name(),
+                        partition,
+                        attempt,
+                        FAILED,
+                        Span(out),
+                        error,
+                    )
+                    outcome.error = error
+                    outcome.attempt = attempt
+                    continue
+                store.finish_attempt(
+                    T.step_name(), partition, attempt, SUCCEEDED, Span(out), ""
+                )
+                outcome = StepRun(
+                    T.step_name(), partition, SUCCEEDED, out^, "", attempt
+                )
+                break
+        var j = res.find(T.step_name(), partition)
+        if j >= 0:
+            res.steps[j] = outcome^
+        else:
+            res.steps.append(outcome^)
