@@ -6,6 +6,6 @@ reruns and backfills. Steps run on [dista](https://github.com/magmalake/dista.mo
 clusters over Iceberg tables in object storage.
 
 Nothing is built yet. [VISION.md](VISION.md) says what orca is for and how it
-gets there.
+gets there; [DESIGN.md](DESIGN.md) is the plan for building it.
 
 Part of [magmalake](https://magmalake.dev).
