@@ -9,7 +9,8 @@ Early days: steps and pipelines are declared and checked at compile time, and
 runs are recorded in Postgres and resume where they stopped, with Iceberg
 reads pinned and commits recognised on retry (`orca.tables`).
 [VISION.md](VISION.md) says what orca is for and how it gets there;
-[DESIGN.md](DESIGN.md) is the plan for building it.
+[DESIGN.md](DESIGN.md) is the plan for building it; [K8S.md](K8S.md) is how
+it will run on Kubernetes and AWS.
 
 ```
 pixi run test                  # unit, CLI, compile-fail, state, kill, tasks, logs
