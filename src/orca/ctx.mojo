@@ -206,13 +206,22 @@ struct Ctx(Movable):
     def made(self, table: String, summary: Dict[String, String]) -> Bool:
         """Whether a snapshot with `summary` is this step's next commit to
         `table`, made by any attempt of this run: the same pipeline, run,
-        step, partition and commit number. Never for an in-memory run."""
+        step, partition and commit number. Never for an in-memory run.
+
+        Every key must be there: a missing one doesn't match an empty value,
+        such as a gather step's partition (found by fuzz/fuzz_summary.mojo).
+        """
         if self.run <= 0:
             return False
         return (
-            summary.get("orca.pipeline", "") == self.pipeline
-            and summary.get("orca.run", "") == String(self.run)
-            and summary.get("orca.step", "") == self.step
-            and summary.get("orca.partition", "") == self.partition
-            and summary.get("orca.commit", "") == String(self.commits_to(table))
+            _has(summary, "orca.pipeline", self.pipeline)
+            and _has(summary, "orca.run", String(self.run))
+            and _has(summary, "orca.step", self.step)
+            and _has(summary, "orca.partition", self.partition)
+            and _has(summary, "orca.commit", String(self.commits_to(table)))
         )
+
+
+def _has(summary: Dict[String, String], key: String, value: String) -> Bool:
+    var v = summary.get(key)
+    return Bool(v) and v.value() == value
