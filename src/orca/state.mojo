@@ -117,6 +117,8 @@ struct StepInfo(Copyable, Movable):
     var status: String
     var attempts: Int
     var error: String
+    var log: String
+    """The latest attempt's log file, or empty."""
 
 
 struct State(Movable):
@@ -344,8 +346,10 @@ struct State(Movable):
             (
                 "SELECT s.step, s.partition, s.status, coalesce(s.error, '') AS"
                 " error, (SELECT count(*) FROM orca.attempts a WHERE a.step ="
-                " s.id) AS attempts FROM orca.steps s WHERE s.run = $1 ORDER BY"
-                " s.ord, s.id"
+                " s.id) AS attempts, coalesce((SELECT a.log FROM orca.attempts"
+                " a WHERE a.step = s.id ORDER BY a.attempt DESC LIMIT 1), '')"
+                " AS log FROM orca.steps s WHERE s.run = $1 ORDER BY s.ord,"
+                " s.id"
             ),
             Params().int64(Int64(run)),
         )
@@ -357,6 +361,7 @@ struct State(Movable):
                     r.text("status"),
                     Int(r.int64("attempts")),
                     r.text("error"),
+                    r.text("log"),
                 )
             )
         return out^
@@ -477,6 +482,14 @@ struct PgStore(Movable, Store):
 
     def recorder(mut self) raises -> Recorder:
         return Recorder(self.url, self._attempt_id)
+
+    def set_log(
+        mut self, step: String, partition: String, attempt: Int, path: String
+    ) raises:
+        _ = self.db.conn.execute(
+            "UPDATE orca.attempts SET log = $2 WHERE id = $1",
+            Params().int64(self._attempt_id).text(path),
+        )
 
     def finish_attempt(
         mut self,

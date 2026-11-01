@@ -12,9 +12,10 @@ reads pinned and commits recognised on retry (`orca.tables`).
 [DESIGN.md](DESIGN.md) is the plan for building it.
 
 ```
-pixi run test                  # unit, CLI, compile-fail, state and kill tests
+pixi run test                  # unit, CLI, compile-fail, state, kill, tasks, logs
 pixi run -e data test-tables   # Iceberg; needs the sibling checkouts (see CI)
 pixi run toy && ./build/toy run --partitions 2024-01..2024-03
+pixi run fanout && ./build/fanout run --partitions 2024-01   # steps calling dista
 ORCA_DATABASE_URL=postgresql:///orca ./build/toy run --partitions 2024-01..2024-03
 ./build/toy status
 ```

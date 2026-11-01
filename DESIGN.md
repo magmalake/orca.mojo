@@ -59,13 +59,21 @@ def main() raises:
 
 ### Heavy work inside a step
 
-A step runs in the run's driver process and calls dista for anything distributed: `ctx.rt.remote[LoadFile](...)`. dista's `Runtime[*Ts]` is parameterised by its tasks, so the pipeline names them:
+A step runs in the run's driver process and calls dista for anything distributed. dista's `Runtime[*Ts]` is parameterised by its tasks, so the pipeline names them, as a keyword parameter after its steps:
 
 ```mojo
-comptime Taxi = Pipeline["taxi", Download, Load, Compact, tasks=(ReadMonth, WriteFile)]
+comptime TaxiTasks = Tasks[ReadMonth, WriteFile]
+comptime Taxi = Pipeline["taxi", Download, Load, Compact, tasks=TaxiTasks]
+
+def load(mut ctx: Ctx, raw: RawFile) raises -> Loaded:
+    ref rt = ctx.runtime[TaxiTasks]()
+    var r = rt.remote[ReadMonth](raw.month)
 ```
 
-and `Ctx` carries a `Runtime` of exactly those tasks. To verify: a step's `Ctx` type can name the pipeline's runtime type without a cycle, i.e. a module-level `comptime` used by a function declared above it. If it can't, `Ctx` is parameterised by the task list and the steps take `Ctx[TaxiTasks]`.
+- **`Ctx` stays one type.** It holds the runtime by address, and `ctx.runtime[T]()` returns it as `T.RT` (`Runtime[*Ts]`) after checking that `T`'s tasks are the run's. The check compares task linkage names, because every `Runtime` reflects to the same type name. *Verified.*
+- **One runtime per run**, started before the first step and kept to the end: in local mode it forks a head and `ORCA_WORKERS` workers (default 4); with `DISTA_HEAD` set it joins that cluster. It starts before orca opens a database connection or its heartbeat thread, so the forked processes inherit neither. A pipeline without `tasks=` starts none.
+- **The same binary is dista's head and worker.** With `DISTA_ROLE` set, `orca_main` hands the process to dista before reading its arguments, so `DISTA_ROLE=worker DISTA_HEAD=... taxi` is a worker. *Verified* by hand: a head, three workers and a driver, each a separate process of the fanout example.
+- **The tasks are part of the DAG**: their names are in `describe` and in the registry hash.
 
 ## Processes
 
@@ -121,11 +129,11 @@ This is what makes reruns safe (the vision's fourth principle).
 - **A failed step** fails its run once its retries are used up. Its downstream steps are `skipped`; other partitions' steps that don't depend on it carry on, so one bad month doesn't stop the other eleven.
 - **Retries** are per step: `retries=2` in the `Step` declaration, immediate in phase 1, with backoff in phase 2. `ctx.attempt` tells a step which attempt it is. Every attempt is a row in `attempts`, retries and resumes alike.
 - **Resume** reruns every step that hasn't `succeeded`, in dependency order, with the recorded inputs and pinned reads. Steps that succeeded aren't run again; their outputs are read back from Postgres. A resume after a code change is refused unless `--allow-new-code`, which records the new hash on the attempts it makes.
-- **Order within a run.** Steps run in dependency order; independent partitions of a `Mapped` step run one after another in the driver in phase 1, each free to use dista for parallelism inside. Running several partitions' steps at once is `max_parallel=` on the pipeline, from PR 5.
+- **Order within a run.** Steps run in dependency order; independent partitions of a `Mapped` step run one after another in the driver in phase 1, each free to use dista for parallelism inside. Running several partitions' steps at once moved to phase 2, with backfills: in one driver it would need a thread per partition, each with its own database connection, and dista's `Runtime` isn't safe to share between threads. Phase 2 gets the same effect with one run per partition, started `max_runs` at a time, each in its own process.
 
 ## Logs
 
-Each attempt writes its log to `$ORCA_LOGS/<pipeline>/<run>/<step>/<partition>/<attempt>.log`, through objectstore when it's `s3://`, and records the location. `ctx.log` writes lines with a timestamp; the step's stdout and stderr aren't captured in phase 1, since steps run in the driver process. The dista timeline of a run goes beside its logs as `timeline.json`.
+With `ORCA_LOGS` set to a directory, each attempt writes its log to `$ORCA_LOGS/<pipeline>/<run>/<step>/<partition>/<attempt>.log` (`_run` for a gather step) and records the location in `attempts.log`, which `status <run>` shows. The file always exists: orca writes the attempt's start, its end, and its error if it failed; `ctx.log` adds the step's lines, each with a UTC timestamp, and prints them to stdout too. The step's own stdout and stderr aren't captured in phase 1, since steps run in the driver process. A run of a pipeline with tasks writes its dista timeline (Chrome's trace format) beside its logs as `timeline.json`. Logs in object storage (`s3://`) come with phase 5, where pods don't share a disk. *Verified* by `tests/logs.sh`.
 
 ## Testing
 
@@ -147,7 +155,7 @@ Stacked PRs of at most about 2,000 lines, each with its own gate:
 | 2 | **Scaffold, steps and pipelines.** `pixi.toml` (stable and nightly envs, CI on ubuntu and macOS, format check), `Step`, `Mapped`, `Gather`, `Pipeline`, compile-time edge checks, the order, `describe`, and an in-memory executor with no state. | A three-step pipeline runs over three partitions in order; the compile-fail tests are rejected. | ~900 |
 | 3 | **State in Postgres.** The schema and migrations; runs, steps and attempts; heartbeats; `run`, `resume`, `status`; step outputs through dista's codec. | `tests/kill.sh` on the toy pipeline: killed at a random step, resumed, every step ran to success exactly once. | ~1,200 |
 | 4 | **Pinned reads and recognised commits.** `ctx.scan`, `ctx.append`, `ctx.commit`; `reads` and `commits`; snapshot summary properties; finding a commit on retry. | A step that's killed right after its commit, then resumed, leaves one snapshot, not two; a resumed step reads its pinned snapshot after another commit lands. | ~800 |
-| 5 | **dista inside steps, and logs.** `tasks=` on the pipeline, the run's `Runtime` in `Ctx`, `max_parallel`, per-attempt logs and the run's timeline. | A step fans 100 dista tasks over 4 workers; each attempt's log is where `status` says. | ~600 |
+| 5 | **dista inside steps, and logs.** `tasks=` on the pipeline, the run's `Runtime` in `Ctx`, per-attempt logs and the run's timeline. (`max_parallel` moved to phase 2; see "Failure and resume".) | A step fans 100 dista tasks over 4 workers; each attempt's log is where `status` says. | ~600 |
 | 6 | **The taxi pipeline.** `examples/taxi.mojo`: download each month's TLC file over HTTPS, load it (the two schemas cast onto one and out-of-month rows dropped, as taxibench's `load_table.py` does), append it to a month-partitioned table, then compact. | Phase 1's gate: 2023–2024 loads to 79,478,796 rows, the same as taxibench's table, and a run killed during the load resumes at the failed month. | ~700 |
 
 What PR 6 needs from the tins, checked at PR 2:
@@ -163,7 +171,7 @@ Gate: a schedule fills each month's partition as it falls due, and a backfill ov
 - **Partition definitions** on the pipeline: `partitions=Monthly(start="2011-01")` or `Daily(...)`, so the scheduler knows the set of keys and which are due.
 - **Cron**: five-field expressions with ranges, steps and lists, and a time zone. Time zones are read from the system's TZif files (`/usr/share/zoneinfo`), which is a small, documented format. A schedule says which partition a fire fills, e.g. "at 03:00 on the 2nd, the previous month".
 - **The `orca` scheduler binary**: registers pipelines from their `describe`, ticks once a second, creates runs that are due, starts them as subprocesses, retries failed steps with exponential backoff and jitter, and enforces `max_runs` per pipeline by counting `running` rows in the same transaction that starts one.
-- **Backfills**: one run per partition over a range, queued, started `max_runs` at a time.
+- **Backfills**: one run per partition over a range, queued, started `max_runs` at a time. This is also how partitions run in parallel, in place of phase 1's `max_parallel`.
 - **Missed fires** after the scheduler was down are caught up once each, not dropped and not fired many times; a pipeline can say `catchup=False`.
 
 ## Phase 3: the UI

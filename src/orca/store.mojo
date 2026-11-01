@@ -53,6 +53,12 @@ trait Store:
         """What records the reads and commits of the attempt just started."""
         ...
 
+    def set_log(
+        mut self, step: String, partition: String, attempt: Int, path: String
+    ) raises:
+        """Records where attempt `attempt` writes its log."""
+        ...
+
 
 struct MemoryStore(Movable, Store):
     """Keeps nothing but the attempt counts."""
@@ -99,3 +105,8 @@ struct MemoryStore(Movable, Store):
 
     def recorder(mut self) raises -> Recorder:
         return Recorder()
+
+    def set_log(
+        mut self, step: String, partition: String, attempt: Int, path: String
+    ) raises:
+        pass
