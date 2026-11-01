@@ -289,17 +289,32 @@ struct Pipeline[name: StaticString, *Ts: StepLike]:
             outcome = StepRun(
                 T.step_name(), partition, FAILED, List[UInt8](), ""
             )
+            # Every attempt reads the snapshots the first one read.
+            var pinned = store.pinned_reads(T.step_name(), partition)
+            var code = hex(Self.registry_hash())
             for _ in range(T.max_retries() + 1):
                 var attempt = store.start_attempt(
                     T.step_name(), partition, ord, Span(input)
                 )
-                var ctx = Ctx(Self.name, run, T.step_name(), partition, attempt)
+                var ctx = Ctx(
+                    Self.name,
+                    run,
+                    T.step_name(),
+                    partition,
+                    attempt,
+                    code,
+                    pinned.copy(),
+                    store.recorder(),
+                )
                 var out = List[UInt8]()
                 var error = String()
                 try:
                     T.run(ctx, Span(input), out)
                 except e:
                     error = String(e)
+                for r in ctx.reads:
+                    if r.table not in pinned:
+                        pinned[r.table] = r.snapshot_id
                 if error:
                     store.finish_attempt(
                         T.step_name(),

@@ -22,6 +22,7 @@ from std.ffi import external_call
 
 from postgres import Connection, Params, Transaction
 
+from orca.ctx import Recorder
 from orca.pipeline import FAILED, SUCCEEDED, SKIPPED, RunResult, StepRun
 from orca.store import Store
 
@@ -365,17 +366,27 @@ struct PgStore(Movable, Store):
     """Records a run's attempts in Postgres, as its owner."""
 
     var db: State
+    var url: String
     var run: Int
     var owner: String
     var registry_hash: String
+    var _attempt_id: Int64
+    """The `attempts` row of the attempt last started."""
 
     def __init__(
-        out self, var db: State, run: Int, owner: String, registry_hash: String
+        out self,
+        var db: State,
+        url: String,
+        run: Int,
+        owner: String,
+        registry_hash: String,
     ):
         self.db = db^
+        self.url = url
         self.run = run
         self.owner = owner
         self.registry_hash = registry_hash
+        self._attempt_id = 0
 
     @staticmethod
     def _still_owner(mut tx: Transaction, run: Int, owner: String) raises:
@@ -427,19 +438,45 @@ struct PgStore(Movable, Store):
             .row(0)
             .int64("n")
         )
-        _ = tx.execute(
-            (
-                "INSERT INTO orca.attempts (step, attempt, status, host,"
-                " registry_hash) VALUES ($1, $2, 'running', $3, $4)"
-            ),
-            Params()
-            .int64(id)
-            .int64(n)
-            .text(self.owner)
-            .text(self.registry_hash),
+        self._attempt_id = (
+            tx.query(
+                (
+                    "INSERT INTO orca.attempts (step, attempt, status, host,"
+                    " registry_hash) VALUES ($1, $2, 'running', $3, $4)"
+                    " RETURNING id"
+                ),
+                Params()
+                .int64(id)
+                .int64(n)
+                .text(self.owner)
+                .text(self.registry_hash),
+            )
+            .row(0)
+            .int64("id")
         )
         tx.commit()
         return Int(n)
+
+    def pinned_reads(
+        mut self, step: String, partition: String
+    ) raises -> Dict[String, Int64]:
+        var out = Dict[String, Int64]()
+        var rows = self.db.conn.query(
+            (
+                "SELECT r.table_name, r.snapshot_id FROM orca.reads r JOIN"
+                " orca.attempts a ON a.id = r.attempt JOIN orca.steps s ON s.id"
+                " = a.step WHERE s.run = $1 AND s.step = $2 AND s.partition ="
+                " $3 ORDER BY a.attempt DESC"
+            ),
+            Params().int64(Int64(self.run)).text(step).text(partition),
+        )
+        # Newest first, so the first attempt's snapshot is the one left.
+        for r in rows:
+            out[r.text("table_name")] = r.int64("snapshot_id")
+        return out^
+
+    def recorder(mut self) raises -> Recorder:
+        return Recorder(self.url, self._attempt_id)
 
     def finish_attempt(
         mut self,

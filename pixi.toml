@@ -57,7 +57,32 @@ modular = ">=26.8.0.dev2026102305,<28"
 fmt = { cmd = "mojo format src tests examples" }
 format-check = { cmd = "mojo format src tests examples && git diff --exit-code -- src tests examples" }
 
+# The data environment adds orca.tables, which reads and commits Iceberg
+# tables. iceberg, parquet and their siblings compile from checkouts next to
+# this one, at the revisions iceberg-mojo 0.8.2 was published with, as in
+# dista's data environment (CI lays them out); the FFI tins are packages as
+# well, for the C shims they install.
+[feature.data.dependencies]
+mojo-compiler = "==1.2.0"
+objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "748e2d31450a7793592e439d6c69d8c6598d2129" }
+zstd-mojo = { git = "https://github.com/magmalake/zstd.mojo", rev = "53655623ca8585fd5b36b1239842913ec308ae69" }
+lz4-mojo = { git = "https://github.com/magmalake/lz4.mojo", rev = "64502eeeabed37515cd479bc421fc2920504cac5" }
+brotli-mojo = { git = "https://github.com/magmalake/brotli.mojo", rev = "aa6d14985baf82ad4b934f14136b95a291b55faf" }
+sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "53b819cd395b1b0afe8772dfbb43489da6ce939e" }
+postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "bfe9b94ae97e3e184dc6d118b0684818927a5da8" }
+libcurl = ">=8,<9"
+libsqlite = ">=3.45,<4"
+libpq = ">=16,<19"
+postgresql = ">=16,<19"
+
+[feature.data.activation.env]
+DEP_INC = "-I ../dista.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src -I ../parquet.mojo/src -I ../parquet.mojo/full/src -I ../threads.mojo/src -I ../threads.mojo/compat -I ../thrift.mojo/src -I ../hashes.mojo/src -I ../snappy.mojo/src -I ../deflate.mojo/src -I ../avro.mojo/src -I ../roaring.mojo/src -I ../objectstore.mojo/src -I ../zstd.mojo/src -I ../lz4.mojo/src -I ../brotli.mojo/src -I ../sqlite.mojo -I ../postgres.mojo/src -I ../iceberg.mojo/src"
+
+[feature.data.tasks]
+test-tables = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_tables.mojo -o build/test-tables && scripts/with-postgres.sh ./build/test-tables" }
+
 [environments]
 default = ["stable"]
 nightly = ["nightly"]
 fmt = { features = ["fmt"], no-default-feature = true }
+data = { features = ["data"], no-default-feature = true }

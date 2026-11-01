@@ -203,7 +203,7 @@ def _execute[
     """
     var b = Beat(url, run, owner, heartbeat_interval(_stale_seconds()))
     var pool = TypedPool.start[beat](1, b)
-    var store = PgStore(db^, run, owner, hex(P.registry_hash()))
+    var store = PgStore(db^, url, run, owner, hex(P.registry_hash()))
     var res = P.execute(store, prior^, months, run)
     pool.shutdown()
     var ok = res.succeeded()

@@ -7,6 +7,9 @@ Postgres, so a run can be resumed by another process.
 """
 
 
+from orca.ctx import Recorder
+
+
 trait Store:
     def start_attempt(
         mut self,
@@ -37,6 +40,17 @@ trait Store:
         mut self, step: String, partition: String, ord: Int, reason: String
     ) raises:
         """Records that `step` for `partition` didn't run, and why."""
+        ...
+
+    def pinned_reads(
+        mut self, step: String, partition: String
+    ) raises -> Dict[String, Int64]:
+        """The table snapshots earlier attempts of `step` for `partition`
+        read, each table at its first attempt's snapshot."""
+        ...
+
+    def recorder(mut self) raises -> Recorder:
+        """What records the reads and commits of the attempt just started."""
         ...
 
 
@@ -75,3 +89,13 @@ struct MemoryStore(Movable, Store):
         mut self, step: String, partition: String, ord: Int, reason: String
     ) raises:
         pass
+
+    def pinned_reads(
+        mut self, step: String, partition: String
+    ) raises -> Dict[String, Int64]:
+        # Within one process the executor carries reads from attempt to
+        # attempt itself; there are no earlier processes to ask.
+        return Dict[String, Int64]()
+
+    def recorder(mut self) raises -> Recorder:
+        return Recorder()
