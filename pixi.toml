@@ -21,7 +21,8 @@ test-state = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_st
 test-kill = { cmd = "scripts/with-postgres.sh tests/kill.sh" }
 test-tasks = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_tasks.mojo -o build/test-tasks && ./build/test-tasks" }
 test-logs = { cmd = "scripts/with-postgres.sh tests/logs.sh" }
-test = { depends-on = ["test-steps", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs"] }
+test-chaos = { cmd = "scripts/with-postgres.sh tests/chaos.sh" }
+test = { depends-on = ["test-steps", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-chaos"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
 
@@ -57,8 +58,8 @@ DEP_INC = "-I ../dista.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.m
 modular = ">=26.8.0.dev2026102305,<28"
 
 [feature.fmt.tasks]
-fmt = { cmd = "mojo format src tests examples" }
-format-check = { cmd = "mojo format src tests examples && git diff --exit-code -- src tests examples" }
+fmt = { cmd = "mojo format src tests examples fuzz" }
+format-check = { cmd = "mojo format src tests examples fuzz && git diff --exit-code -- src tests examples fuzz" }
 
 # The data environment adds orca.tables, which reads and commits Iceberg
 # tables. iceberg, parquet and their siblings compile from checkouts next to
@@ -83,9 +84,24 @@ DEP_INC = "-I ../dista.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.m
 
 [feature.data.tasks]
 test-tables = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_tables.mojo -o build/test-tables && scripts/with-postgres.sh ./build/test-tables" }
+test-chaos-tables = { cmd = "CHAOS_SRC=tests/chaos_tables.mojo CHAOS_CHECK=1 scripts/with-postgres.sh tests/chaos.sh" }
+
+# Fuzzing with mozz (packaged for magmalake as mozz_mlake), as dista does: one
+# harness per parser or decoder under fuzz/, built with every bounds check
+# on. See fuzz/harness.mojo for FUZZ_RUNS and FUZZ_REPLAY.
+[feature.fuzz.dependencies]
+mozz_mlake = { git = "https://github.com/magmalake/mozz_mlake.git", rev = "bd84a1f1e376912414a3ddcf0f4151ed65435a44" }
+
+[feature.fuzz.tasks]
+fuzz-months = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_months.mojo -o build/fuzz-months && ./build/fuzz-months" }
+fuzz-inputs = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_inputs.mojo -o build/fuzz-inputs && ./build/fuzz-inputs" }
+fuzz-json = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_json.mojo -o build/fuzz-json && ./build/fuzz-json" }
+fuzz-summary = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_summary.mojo -o build/fuzz-summary && ./build/fuzz-summary" }
+fuzz = { depends-on = ["fuzz-months", "fuzz-inputs", "fuzz-json", "fuzz-summary"] }
 
 [environments]
 default = ["stable"]
 nightly = ["nightly"]
+fuzz = ["stable", "fuzz"]
 fmt = { features = ["fmt"], no-default-feature = true }
 data = { features = ["data"], no-default-feature = true }

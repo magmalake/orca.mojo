@@ -70,6 +70,35 @@ jobs:
       - name: Tests
         run: pixi run -e ${{ matrix.env }} test
 
+  # Every fuzz harness under fuzz/, for a short session each, with all bounds
+  # checks on. Longer sessions are a FUZZ_RUNS away locally.
+  fuzz:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: orca.mojo
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: orca.mojo
+      - uses: actions/checkout@v4
+        with:
+          repository: magmalake/dista.mojo
+          ref: 0d85d47697cbc90e99a902ea0eb7f87eb685b0b0
+          path: dista.mojo
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: v0.78.0
+          environments: fuzz
+          manifest-path: orca.mojo/pixi.toml
+      - name: Fuzz
+        run: FUZZ_RUNS=20000 pixi run -e fuzz fuzz
+      - if: failure()
+        name: Show the inputs that found something
+        run: |
+          for f in build/fuzz-*-last.bin; do echo "$f"; xxd "$f" | head -20; done
+          ls -R build/fuzz-crashes || true
+
   format:
     runs-on: ubuntu-latest
     steps:
@@ -137,3 +166,5 @@ jobs:
           manifest-path: orca.mojo/pixi.toml
       - name: Pinned reads and recognised commits
         run: pixi run -e data test-tables
+      - name: Chaos over Iceberg (one snapshot per month, however often killed)
+        run: pixi run -e data test-chaos-tables
