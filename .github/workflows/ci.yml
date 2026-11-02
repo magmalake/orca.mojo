@@ -189,6 +189,10 @@ jobs:
         run: pixi run -e data test-tables
       - name: Chaos over Iceberg (one snapshot per month, however often killed)
         run: pixi run -e data test-chaos-tables
+      - name: Lineage over three pipelines' tables, back and forward
+        run: pixi run -e data test-lineage
+      - name: Six writers committing to one table at once
+        run: pixi run -e data test-commits
       # examples/taxi over two sliced TLC months in tests/fixtures/taxi; the
       # full 24-month load is run by hand.
       - name: The taxi pipeline, on fixtures

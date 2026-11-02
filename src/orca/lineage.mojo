@@ -1,0 +1,309 @@
+"""Lineage: which snapshots a dataset's snapshot was made from, and what was
+made from it, from the reads and commits every attempt records.
+
+```
+orca lineage lake.report            the latest snapshot's, back and forward
+orca lineage lake.report 4417...    one snapshot's
+```
+
+A snapshot that an orca attempt committed is **made** by that attempt: its
+run, pipeline, step, partition and code, and the snapshots it read, its
+**inputs**. The walks go over those edges in SQL (recursive CTEs):
+
+- **`back`** from a snapshot: the attempt that made it, then the attempts
+  that made each of its inputs, and so on, to inputs no orca attempt made
+  (sources: a table written by something else, or a read of a dataset
+  before it had any snapshot, which isn't listed).
+- **`forward`** from a snapshot: every snapshot made by an attempt that read
+  it, then what was made from those, and so on.
+
+Both stop at `depth` steps (default 20), so a deep graph is cut rather than
+slow. A snapshot recorded by two attempts (a retry that recognised its
+earlier attempt's commit) is listed once, as the nearer and earlier. Only
+datasets take part: a table outside the warehouse has no name to follow.
+The same edges are in the snapshots' own summaries, as `orca.reads`.
+"""
+
+from postgres import Params
+
+from orca.state import State
+
+comptime DEPTH = 20
+
+
+@fieldwise_init
+struct SnapshotRef(Copyable, Equatable, Movable, Writable):
+    var dataset: String
+    var snapshot: Int64
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.dataset == other.dataset and self.snapshot == other.snapshot
+
+    def write_to(self, mut writer: Some[Writer]):
+        writer.write(self.dataset, "@", self.snapshot)
+
+
+@fieldwise_init
+struct Made(Copyable, Movable):
+    """A snapshot, the attempt that made it, and what that attempt read."""
+
+    var at: SnapshotRef
+    var depth: Int
+    """Steps from the snapshot the walk started at: 0 for it, 1 for its
+    inputs' (back) or for what was made from it (forward)."""
+    var pipeline: String
+    var run: Int
+    var step: String
+    var partition: String
+    var attempt: Int
+    var code: String
+    var ended: String
+    var inputs: List[SnapshotRef]
+
+
+comptime _MADE_COLUMNS = (
+    "m.dataset, m.snapshot_id, m.depth, m.attempt, r.pipeline, r.id AS run,"
+    " s.step, s.partition, a.attempt AS attempt_no, a.registry_hash AS code,"
+    " coalesce(to_char(a.ended AT TIME ZONE 'UTC',"
+    " 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') AS ended, coalesce((SELECT"
+    " string_agg(i.dataset || '@' || i.snapshot_id, ',' ORDER BY i.dataset,"
+    " i.snapshot_id) FROM orca.reads i WHERE i.attempt = m.attempt AND"
+    " i.dataset IS NOT NULL AND i.snapshot_id >= 0), '') AS inputs"
+)
+"""What `_made` reads of each row of a walk `m` (dataset, snapshot_id,
+depth, attempt): the attempt's run and step, and its inputs."""
+
+
+def _made(mut db: State, walk: String, start: SnapshotRef) raises -> List[Made]:
+    """Each snapshot of `walk`, a recursive CTE named `m`, once: at its
+    smallest depth, by its earliest attempt."""
+    # Nearest first, then by name, so a listing reads outward.
+    var rows = db.conn.query(
+        String(
+            walk,
+            " SELECT * FROM (SELECT DISTINCT ON (m.dataset, m.snapshot_id) ",
+            _MADE_COLUMNS,
+            " FROM m JOIN orca.attempts a ON a.id = m.attempt JOIN orca.steps",
+            " s ON s.id = a.step JOIN orca.runs r ON r.id = s.run ORDER BY",
+            " m.dataset, m.snapshot_id, m.depth, m.attempt) x ORDER BY depth,",
+            " dataset, snapshot_id",
+        ),
+        Params().text(start.dataset).int64(start.snapshot).int64(DEPTH),
+    )
+    var out = List[Made]()
+    for r in rows:
+        var inputs = List[SnapshotRef]()
+        var text = r.text("inputs")
+        if text:
+            for part in text.split(","):
+                var at = part.rfind("@")
+                inputs.append(
+                    SnapshotRef(
+                        String(part[byte=:at]),
+                        Int64(Int(part[byte = at + 1 :])),
+                    )
+                )
+        out.append(
+            Made(
+                SnapshotRef(r.text("dataset"), r.int64("snapshot_id")),
+                Int(r.int64("depth")),
+                r.text("pipeline"),
+                Int(r.int64("run")),
+                r.text("step"),
+                r.text("partition"),
+                Int(r.int64("attempt_no")),
+                r.text("code"),
+                r.text("ended"),
+                inputs^,
+            )
+        )
+    return out^
+
+
+def back(mut db: State, start: SnapshotRef) raises -> List[Made]:
+    """The snapshot, if an orca attempt made it, and everything it was made
+    from: one `Made` per snapshot an orca attempt made."""
+    return _made(
+        db,
+        (
+            "WITH RECURSIVE m (dataset, snapshot_id, attempt, depth) AS"
+            " (SELECT c.dataset, c.snapshot_id, c.attempt, 0 FROM"
+            " orca.commits c WHERE c.dataset = $1 AND c.snapshot_id = $2"
+            " UNION SELECT c.dataset, c.snapshot_id, c.attempt, m.depth + 1"
+            " FROM m JOIN orca.reads i ON i.attempt = m.attempt JOIN"
+            " orca.commits c ON c.dataset = i.dataset AND c.snapshot_id ="
+            " i.snapshot_id WHERE m.depth < $3)"
+        ),
+        start,
+    )
+
+
+def forward(mut db: State, start: SnapshotRef) raises -> List[Made]:
+    """Every snapshot made from `start`, directly or not."""
+    return _made(
+        db,
+        (
+            "WITH RECURSIVE m (dataset, snapshot_id, attempt, depth) AS"
+            " (SELECT c.dataset, c.snapshot_id, c.attempt, 1 FROM orca.reads"
+            " i JOIN orca.commits c ON c.attempt = i.attempt WHERE i.dataset"
+            " = $1 AND i.snapshot_id = $2 AND c.dataset IS NOT NULL AND NOT"
+            " (c.dataset = $1 AND c.snapshot_id = $2) UNION SELECT"
+            " c.dataset, c.snapshot_id, c.attempt, m.depth + 1 FROM m JOIN"
+            " orca.reads i ON i.dataset = m.dataset AND i.snapshot_id ="
+            " m.snapshot_id JOIN orca.commits c ON c.attempt = i.attempt"
+            " WHERE c.dataset IS NOT NULL AND m.depth < $3 AND NOT"
+            " (c.dataset = m.dataset AND c.snapshot_id = m.snapshot_id))"
+        ),
+        start,
+    )
+
+
+def latest(mut db: State, dataset: String) raises -> Int64:
+    """The dataset's newest snapshot orca knows of, committed or read, or
+    -1 if it knows of none."""
+    var rows = db.conn.query(
+        (
+            "SELECT snapshot_id FROM (SELECT snapshot_id, attempt FROM"
+            " orca.commits WHERE dataset = $1 UNION ALL SELECT snapshot_id,"
+            " attempt FROM orca.reads WHERE dataset = $1 AND snapshot_id >= 0)"
+            " x ORDER BY attempt DESC LIMIT 1"
+        ),
+        Params().text(dataset),
+    )
+    return rows.row(0).int64("snapshot_id") if len(rows) == 1 else -1
+
+
+@fieldwise_init
+struct Dataset(Copyable, Movable):
+    var name: String
+    var writers: List[String]
+    """The pipelines whose steps declare it in `writes=`."""
+    var readers: List[String]
+    var commits: Int
+    var latest: Int64
+    """The newest snapshot an orca attempt committed, or -1."""
+    var latest_run: Int
+
+
+comptime _DECLARED = (
+    "SELECT DISTINCT p.name AS pipeline, k.kind, x.ds FROM orca.pipelines p,"
+    " jsonb_array_elements(p.describe->'steps') AS s(st), (VALUES ('reads'),"
+    " ('writes')) AS k(kind), jsonb_array_elements_text(coalesce(s.st->k.kind,"
+    " '[]')) AS x(ds)"
+)
+"""Every (pipeline, `reads` or `writes`, dataset) the registered pipelines
+declare."""
+
+
+def _split(s: String) -> List[String]:
+    var out = List[String]()
+    if s:
+        for p in s.split(","):
+            out.append(String(p))
+    return out^
+
+
+def datasets(mut db: State, only: String = "") raises -> List[Dataset]:
+    """Every dataset a pipeline declares or an attempt touched, or the one
+    named, by name."""
+    var rows = db.conn.query(
+        String(
+            "WITH d AS (",
+            _DECLARED,
+            "), names AS (SELECT ds FROM d UNION SELECT dataset FROM",
+            " orca.commits WHERE dataset IS NOT NULL UNION SELECT dataset",
+            " FROM orca.reads WHERE dataset IS NOT NULL) SELECT n.ds,",
+            " coalesce((SELECT string_agg(DISTINCT d.pipeline, ',') FROM d",
+            " WHERE d.ds = n.ds AND d.kind = 'writes'), '') AS writers,",
+            " coalesce((SELECT string_agg(DISTINCT d.pipeline, ',') FROM d",
+            " WHERE d.ds = n.ds AND d.kind = 'reads'), '') AS readers,",
+            " (SELECT count(DISTINCT c.snapshot_id) FROM orca.commits c WHERE",
+            " c.dataset = n.ds) AS commits, coalesce(l.snapshot_id, -1) AS",
+            " latest, coalesce(l.run, 0) AS latest_run FROM names n LEFT JOIN",
+            " LATERAL (SELECT c.snapshot_id, s.run FROM orca.commits c JOIN",
+            " orca.attempts a ON a.id = c.attempt JOIN orca.steps s ON s.id =",
+            " a.step WHERE c.dataset = n.ds ORDER BY c.attempt DESC LIMIT 1) l",
+            " ON true WHERE $1 = '' OR n.ds = $1 ORDER BY n.ds",
+        ),
+        Params().text(only),
+    )
+    var out = List[Dataset]()
+    for r in rows:
+        out.append(
+            Dataset(
+                r.text("ds"),
+                _split(r.text("writers")),
+                _split(r.text("readers")),
+                Int(r.int64("commits")),
+                r.int64("latest"),
+                Int(r.int64("latest_run")),
+            )
+        )
+    return out^
+
+
+@fieldwise_init
+struct Flow(Copyable, Movable):
+    """An edge of the graph of pipelines and datasets: a pipeline reads a
+    dataset, or writes one."""
+
+    var pipeline: String
+    var dataset: String
+    var writes: Bool
+
+
+def flows(mut db: State) raises -> List[Flow]:
+    """Every pipeline's declared reads and writes."""
+    var rows = db.conn.query(
+        String(_DECLARED, " ORDER BY pipeline, kind DESC, ds"), Params()
+    )
+    var out = List[Flow]()
+    for r in rows:
+        out.append(
+            Flow(r.text("pipeline"), r.text("ds"), r.text("kind") == "writes")
+        )
+    return out^
+
+
+@fieldwise_init
+struct Commit(Copyable, Movable):
+    """A snapshot of a dataset an orca attempt committed."""
+
+    var snapshot: Int64
+    var pipeline: String
+    var run: Int
+    var step: String
+    var partition: String
+    var ended: String
+
+
+def commits(
+    mut db: State, dataset: String, limit: Int = 50
+) raises -> List[Commit]:
+    """The dataset's snapshots orca committed, newest first."""
+    var rows = db.conn.query(
+        (
+            "SELECT * FROM (SELECT DISTINCT ON (c.snapshot_id) c.snapshot_id,"
+            " r.pipeline, r.id AS run, s.step, s.partition,"
+            " coalesce(to_char(a.ended AT TIME ZONE 'UTC',"
+            " 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') AS ended, c.attempt FROM"
+            " orca.commits c JOIN orca.attempts a ON a.id = c.attempt JOIN"
+            " orca.steps s ON s.id = a.step JOIN orca.runs r ON r.id = s.run"
+            " WHERE c.dataset = $1 ORDER BY c.snapshot_id, c.attempt) x ORDER"
+            " BY attempt DESC LIMIT $2"
+        ),
+        Params().text(dataset).int64(Int64(limit)),
+    )
+    var out = List[Commit]()
+    for r in rows:
+        out.append(
+            Commit(
+                r.int64("snapshot_id"),
+                r.text("pipeline"),
+                Int(r.int64("run")),
+                r.text("step"),
+                r.text("partition"),
+                r.text("ended"),
+            )
+        )
+    return out^

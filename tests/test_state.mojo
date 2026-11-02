@@ -74,8 +74,8 @@ comptime Retrying = Pipeline["retrying", MonthNo, Flaky, Add]
 def test_migrate_is_idempotent() raises:
     var db = _db()
     db.migrate()
-    assert_equal(_count("SELECT max(version) AS n FROM orca.schema_version"), 4)
-    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 4)
+    assert_equal(_count("SELECT max(version) AS n FROM orca.schema_version"), 5)
+    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 5)
 
 
 def test_claim_needs_a_stale_heartbeat() raises:

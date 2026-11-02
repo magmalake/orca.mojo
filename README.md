@@ -18,6 +18,7 @@ it will run on Kubernetes and AWS.
 pixi run test                  # unit, CLI, compile-fail, state, kill, tasks, logs
 pixi run -e data test-tables   # Iceberg; needs the sibling checkouts (see CI)
 pixi run -e data test-taxi     # examples/taxi on two sliced TLC months
+pixi run -e data test-lineage  # lineage over three pipelines' tables
 pixi run toy && ./build/toy run --partitions 2024-01..2024-03
 pixi run fanout && ./build/fanout run --partitions 2024-01   # steps calling dista
 pixi run daily && ./build/daily run --partitions 2024-02-27..2024-03-02   # by day
@@ -26,7 +27,8 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/toy run --partitions 2024-01..2024-
 pixi run -e data taxi && pixi run -e data ./build/taxi run --partitions 2023-01..2024-12
 pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   # needs ORCA_DATABASE_URL
 ./build/orca register ./build/taxi && ./build/orca backfill taxi 2011-01..2024-12   # 19 GB of TLC files
-./build/orca ui                # http://127.0.0.1:8270: pipelines and runs, also as JSON; start, resume, rerun, backfill, cancel
+./build/orca ui                # http://127.0.0.1:8270: pipelines, runs and datasets, also as JSON; start, resume, rerun, backfill, cancel
+./build/orca lineage lake.report   # what a dataset's latest snapshot was made from, and what was made from it
 ```
 
 Part of [magmalake](https://magmalake.dev).

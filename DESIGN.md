@@ -123,6 +123,7 @@ This is what makes reruns safe (the vision's fourth principle).
 - **Reads and commits are recorded as they happen**, each by its own insert from the attempt (`Ctx.recorder`), not when the attempt ends, so a process killed between its commit and its end still leaves both on record.
 - **An in-memory run** (no database) has run 0: it pins reads across its own retries but recognises no commits, since every in-memory run would share that number.
 - **A table read while it had no snapshot** stays empty for the step, even if a commit lands before a retry.
+- **Writers racing on one table.** Two commits on the same metadata version both back out (iceberg's filesystem catalog deletes both files), so `append` and `commit` reload and retry after a random wait that grows with each try, up to 8 times; retrying at once, writers kept clashing in step. *Verified* by `tests/concurrent_commits.sh`: six processes appending to a new table at once, five times, all commit.
 - **Where it lives.** `orca.tables` (`scan`, `append`, `commit`) imports iceberg, so only pipelines with tables build it. Its tests run in the `data` environment, with iceberg and its siblings from source as in dista. *Verified* by `tests/test_tables.mojo`.
 
 ## Failure and resume

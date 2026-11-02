@@ -126,6 +126,17 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.reads ADD COLUMN dataset text",
             "ALTER TABLE orca.commits ADD COLUMN dataset text",
         ],
+        # Lineage walks: a snapshot to the attempts that read or made it,
+        # and an attempt to what it read and made.
+        [
+            "CREATE INDEX reads_snapshot ON orca.reads (dataset, snapshot_id)",
+            (
+                "CREATE INDEX commits_snapshot ON orca.commits (dataset,"
+                " snapshot_id)"
+            ),
+            "CREATE INDEX reads_attempt ON orca.reads (attempt)",
+            "CREATE INDEX commits_attempt ON orca.commits (attempt)",
+        ],
     ]
 
 

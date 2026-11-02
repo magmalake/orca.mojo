@@ -12,6 +12,9 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/runs/<id>` | a run's DAG, steps and partitions, attempts, errors, reads and commits |
 | `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error |
 | `/runs/<id>/timeline.json` | the run's Dista timeline, for Perfetto |
+| `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
+| `/datasets/<name>` | a dataset's place in that graph and its snapshots |
+| `/datasets/<name>/snapshots/<id>` | a snapshot's lineage, back and forward (`orca.lineage`) |
 
 And the actions, each a `POST` of a form (see `orca.actions`):
 
@@ -60,7 +63,17 @@ from orca.civil import Civil, now
 from orca.logs import run_dir
 from orca.cron import CronExpr
 from orca.dag import DagStep, aggregate, dag_svg
+from orca.graph import Edge, Node, graph_svg
 from orca.html import Html, url_decode, url_encode
+from orca.lineage import (
+    Made,
+    SnapshotRef,
+    back,
+    commits,
+    datasets as dataset_rows,
+    flows,
+    forward,
+)
 from orca.json import quote
 from orca.scheduler import fill_key
 from orca.schedule import Schedule
@@ -131,6 +144,8 @@ struct StepDef(Copyable, Movable):
     var name: String
     var kind: String
     var after: String
+    var reads: List[String]
+    var writes: List[String]
 
 
 @fieldwise_init
@@ -166,6 +181,31 @@ struct Touch(Copyable, Movable):
     """`read` or `commit`."""
     var table: String
     var snapshot: String
+    var dataset: String
+    """Empty for a table outside the warehouse."""
+
+
+def _list(s: String) -> List[String]:
+    """A comma-separated list, empty for an empty string."""
+    var out = List[String]()
+    if s:
+        for p in s.split(","):
+            out.append(String(p))
+    return out^
+
+
+def _json_strings(mut out: String, names: List[String]):
+    out.write("[")
+    for i in range(len(names)):
+        out.write(", " if i else "", quote(names[i]))
+    out.write("]")
+
+
+def _dataset_links(mut h: Html, names: List[String]):
+    for i in range(len(names)):
+        if i:
+            h.raw(", ")
+        h.link(String("/datasets/", url_encode(names[i])), names[i])
 
 
 def _int(s: String) -> Int:
@@ -295,7 +335,11 @@ def _step_defs(mut db: State, name: String) raises -> List[StepDef]:
     var rows = db.conn.query(
         (
             "SELECT s->>'name' AS name, s->>'kind' AS kind,"
-            " coalesce(s->>'after', '') AS after FROM orca.pipelines p,"
+            " coalesce(s->>'after', '') AS after, coalesce((SELECT"
+            " string_agg(v, ',') FROM jsonb_array_elements_text(coalesce(s->"
+            "'reads', '[]')) AS v), '') AS reads, coalesce((SELECT"
+            " string_agg(v, ',') FROM jsonb_array_elements_text(coalesce(s->"
+            "'writes', '[]')) AS v), '') AS writes FROM orca.pipelines p,"
             " jsonb_array_elements(p.describe->'steps') WITH ORDINALITY AS x(s,"
             " n) WHERE p.name = $1 ORDER BY n"
         ),
@@ -303,7 +347,15 @@ def _step_defs(mut db: State, name: String) raises -> List[StepDef]:
     )
     var out = List[StepDef]()
     for r in rows:
-        out.append(StepDef(r.text("name"), r.text("kind"), r.text("after")))
+        out.append(
+            StepDef(
+                r.text("name"),
+                r.text("kind"),
+                r.text("after"),
+                _list(r.text("reads")),
+                _list(r.text("writes")),
+            )
+        )
     return out^
 
 
@@ -356,9 +408,10 @@ def _touches(mut db: State, run: Int) raises -> List[Touch]:
     var rows = db.conn.query(
         (
             "SELECT st.step, st.partition, x.kind, x.table_name,"
-            " x.snapshot_id::text AS snapshot FROM (SELECT attempt, 'read' AS"
-            " kind, table_name, snapshot_id FROM orca.reads UNION ALL SELECT"
-            " attempt, 'commit', table_name, snapshot_id FROM orca.commits) x"
+            " x.snapshot_id::text AS snapshot, coalesce(x.dataset, '') AS"
+            " dataset FROM (SELECT attempt, 'read' AS kind, table_name,"
+            " snapshot_id, dataset FROM orca.reads UNION ALL SELECT attempt,"
+            " 'commit', table_name, snapshot_id, dataset FROM orca.commits) x"
             " JOIN orca.attempts a ON a.id = x.attempt JOIN orca.steps st ON"
             " st.id = a.step WHERE st.run = $1 ORDER BY st.ord, st.id, a.id"
         ),
@@ -373,6 +426,7 @@ def _touches(mut db: State, run: Int) raises -> List[Touch]:
                 r.text("kind"),
                 r.text("table_name"),
                 r.text("snapshot"),
+                r.text("dataset"),
             )
         )
     return out^
@@ -512,7 +566,11 @@ def _page(title: String, active: StaticString, body: Html) -> String:
         '</title><link rel="stylesheet" href="/static/orca.css"></head><body>',
         '<header class="top"><a class="top__brand" href="/">orca</a><nav>',
     )
-    for item in [("/", "Pipelines"), ("/runs", "Runs")]:
+    for item in [
+        ("/", "Pipelines"),
+        ("/runs", "Runs"),
+        ("/datasets", "Datasets"),
+    ]:
         h.raw('<a href="', item[0], '"')
         if item[0] == active:
             h.raw(' aria-current="page"')
@@ -668,8 +726,12 @@ def pipeline(mut db: State, name: String) raises -> Page:
             quote(steps[i].kind),
             ', "after": ',
             quote(steps[i].after) if steps[i].after else String("null"),
-            "}",
+            ', "reads": ',
         )
+        _json_strings(j, steps[i].reads)
+        j.write(', "writes": ')
+        _json_strings(j, steps[i].writes)
+        j.write("}")
     j.write('], "fires": [')
     for i in range(len(fires)):
         if i:
@@ -715,14 +777,18 @@ def pipeline(mut db: State, name: String) raises -> Page:
     h.raw('<div class="scroll">', dag_svg(dag), "</div><h2>Steps</h2>")
     h.raw(
         '<div class="scroll"><table><thead><tr><th>Step</th><th>Kind</th>',
-        "<th>After</th></tr></thead><tbody>",
+        "<th>After</th><th>Reads</th><th>Writes</th></tr></thead><tbody>",
     )
     for s in steps:
         h.raw("<tr>")
         h.cell(s.name)
         h.cell(s.kind)
         h.cell(s.after)
-        h.raw("</tr>")
+        h.raw("<td>")
+        _dataset_links(h, s.reads)
+        h.raw("</td><td>")
+        _dataset_links(h, s.writes)
+        h.raw("</td></tr>")
     h.raw("</tbody></table></div>")
     if p.binary:
         var base = String("/pipelines/", url_encode(p.name))
@@ -866,6 +932,8 @@ def run(mut db: State, id: Int) raises -> Page:
             quote(t.table),
             ', "snapshot": ',
             quote(t.snapshot),
+            ', "dataset": ',
+            quote(t.dataset) if t.dataset else String("null"),
             "}",
         )
     j.write("]}")
@@ -933,11 +1001,27 @@ def run(mut db: State, id: Int) raises -> Page:
             h.cell(t.step)
             h.cell(t.partition)
             h.cell(t.kind)
-            h.raw("<td><code>")
-            h.text(t.table)
-            h.raw("</code></td>")
-            h.cell(t.snapshot)
-            h.raw("</tr>")
+            h.raw("<td>")
+            if t.dataset:
+                h.link(String("/datasets/", url_encode(t.dataset)), t.dataset)
+            else:
+                h.raw("<code>")
+                h.text(t.table)
+                h.raw("</code>")
+            h.raw("</td><td>")
+            if t.dataset and t.snapshot != "-1":
+                h.link(
+                    String(
+                        "/datasets/",
+                        url_encode(t.dataset),
+                        "/snapshots/",
+                        t.snapshot,
+                    ),
+                    t.snapshot,
+                )
+            else:
+                h.text(t.snapshot)
+            h.raw("</td></tr>")
         h.raw("</tbody></table></div>")
     return Page(200, j^, _page(String("Run ", r.id), "/runs", h))
 
@@ -1341,6 +1425,384 @@ def not_found(what: String) -> Page:
     )
 
 
+# ── datasets and lineage ─────────────────────────────────────────────────────
+
+
+def _dataset_href(name: String) -> String:
+    return String("/datasets/", url_encode(name))
+
+
+def _snapshot_href(at: SnapshotRef) -> String:
+    return String(_dataset_href(at.dataset), "/snapshots/", at.snapshot)
+
+
+def _flow_graph(mut db: State, mark: String) raises -> String:
+    """The graph of every pipeline and the datasets it reads and writes,
+    with the dataset `mark` (if any) marked."""
+    var fs = flows(db)
+    var nodes = List[Node]()
+    var keys = List[String]()
+    var edges = List[Edge]()
+    for f in fs:
+        var ends = List[Int]()
+        for kind, name in [("pipeline", f.pipeline), ("dataset", f.dataset)]:
+            var key = String(kind, ":", name)
+            var at = -1
+            for i in range(len(keys)):
+                if keys[i] == key:
+                    at = i
+            if at < 0:
+                at = len(nodes)
+                keys.append(key)
+                var is_pipeline = kind == "pipeline"
+                nodes.append(
+                    Node(
+                        name,
+                        String(kind),
+                        String(kind),
+                        String(
+                            "/pipelines/", url_encode(name)
+                        ) if is_pipeline else _dataset_href(name),
+                        "start" if (not is_pipeline and name == mark) else "",
+                    )
+                )
+            ends.append(at)
+        if f.writes:
+            edges.append(Edge(ends[0], ends[1]))
+        else:
+            edges.append(Edge(ends[1], ends[0]))
+    if len(nodes) == 0:
+        return String()
+    return graph_svg(
+        nodes, edges, "Pipelines and the datasets they read and write"
+    )
+
+
+def datasets_page(mut db: State) raises -> Page:
+    var ds = dataset_rows(db)
+    var j = String('{"datasets": [')
+    for i in range(len(ds)):
+        ref d = ds[i]
+        j.write(", " if i else "", '{"name": ', quote(d.name), ', "writers": ')
+        _json_strings(j, d.writers)
+        j.write(', "readers": ')
+        _json_strings(j, d.readers)
+        j.write(
+            ', "snapshots": ',
+            d.commits,
+            ', "latest": ',
+            String(d.latest) if d.latest >= 0 else String("null"),
+            ', "latest_run": ',
+            d.latest_run,
+            "}",
+        )
+    j.write("]}")
+
+    var h = Html()
+    h.raw("<h1>Datasets</h1>")
+    if len(ds) == 0:
+        h.raw(
+            '<p class="empty">No datasets: no registered pipeline declares',
+            " <code>reads=</code> or <code>writes=</code>.</p>",
+        )
+        return Page(200, j^, _page("Datasets", "/datasets", h))
+    h.raw('<div class="scroll">', _flow_graph(db, ""), "</div>")
+    h.raw(
+        '<div class="scroll"><table><thead><tr><th>Dataset</th>',
+        "<th>Written by</th><th>Read by</th><th>Snapshots</th>",
+        "<th>Latest</th><th>By run</th></tr></thead><tbody>",
+    )
+    for d in ds:
+        h.raw("<tr><td>")
+        h.link(_dataset_href(d.name), d.name)
+        h.raw("</td><td>")
+        _pipeline_links(h, d.writers)
+        h.raw("</td><td>")
+        _pipeline_links(h, d.readers)
+        h.raw("</td>")
+        h.cell(d.commits)
+        h.raw("<td>")
+        if d.latest >= 0:
+            h.link(
+                _snapshot_href(SnapshotRef(d.name, d.latest)), String(d.latest)
+            )
+        h.raw("</td><td>")
+        if d.latest_run:
+            h.link(String("/runs/", d.latest_run), String(d.latest_run))
+        h.raw("</td></tr>")
+    h.raw("</tbody></table></div>")
+    return Page(200, j^, _page("Datasets", "/datasets", h))
+
+
+def _pipeline_links(mut h: Html, names: List[String]):
+    for i in range(len(names)):
+        if i:
+            h.raw(", ")
+        h.link(String("/pipelines/", url_encode(names[i])), names[i])
+
+
+def dataset_page(mut db: State, name: String) raises -> Page:
+    var ds = dataset_rows(db, name)
+    if len(ds) == 0:
+        return not_found(String("no dataset ", name))
+    ref d = ds[0]
+    var cs = commits(db, name)
+    var j = String('{"dataset": ', quote(d.name), ', "writers": ')
+    _json_strings(j, d.writers)
+    j.write(', "readers": ')
+    _json_strings(j, d.readers)
+    j.write(', "snapshots": [')
+    for i in range(len(cs)):
+        ref c = cs[i]
+        j.write(
+            ", " if i else "",
+            '{"snapshot": ',
+            c.snapshot,
+            ', "pipeline": ',
+            quote(c.pipeline),
+            ', "run": ',
+            c.run,
+            ', "step": ',
+            quote(c.step),
+            ', "partition": ',
+            quote(c.partition),
+            ', "ended": ',
+            quote(c.ended),
+            "}",
+        )
+    j.write("]}")
+
+    var h = Html()
+    h.raw('<p class="crumb"><a href="/datasets">Datasets</a></p><h1>')
+    h.text(d.name)
+    h.raw('</h1><dl class="facts"><dt>Written by</dt><dd>')
+    _pipeline_links(h, d.writers)
+    h.raw("</dd><dt>Read by</dt><dd>")
+    _pipeline_links(h, d.readers)
+    h.raw("</dd></dl>")
+    h.raw('<div class="scroll">', _flow_graph(db, d.name), "</div>")
+    h.raw("<h2>Snapshots</h2>")
+    if len(cs) == 0:
+        h.raw('<p class="empty">No orca run has committed to it.</p>')
+    else:
+        h.raw(
+            '<div class="scroll"><table><thead><tr><th>Snapshot</th>',
+            "<th>Pipeline</th><th>Run</th><th>Step</th><th>Partition</th>",
+            "<th>Committed</th></tr></thead><tbody>",
+        )
+        for c in cs:
+            h.raw("<tr><td>")
+            h.link(
+                _snapshot_href(SnapshotRef(d.name, c.snapshot)),
+                String(c.snapshot),
+            )
+            h.raw("</td><td>")
+            h.link(String("/pipelines/", url_encode(c.pipeline)), c.pipeline)
+            h.raw("</td><td>")
+            h.link(String("/runs/", c.run), String(c.run))
+            h.raw("</td>")
+            h.cell(c.step)
+            h.cell(c.partition)
+            h.cell(c.ended)
+            h.raw("</tr>")
+        h.raw("</tbody></table></div>")
+    return Page(200, j^, _page(d.name, "/datasets", h))
+
+
+def _json_made(mut out: String, ms: List[Made]):
+    out.write("[")
+    for i in range(len(ms)):
+        ref m = ms[i]
+        out.write(
+            ", " if i else "",
+            '{"dataset": ',
+            quote(m.at.dataset),
+            ', "snapshot": ',
+            m.at.snapshot,
+            ', "depth": ',
+            m.depth,
+            ', "pipeline": ',
+            quote(m.pipeline),
+            ', "run": ',
+            m.run,
+            ', "step": ',
+            quote(m.step),
+            ', "partition": ',
+            quote(m.partition),
+            ', "attempt": ',
+            m.attempt,
+            ', "code": ',
+            quote(m.code),
+            ', "ended": ',
+            quote(m.ended),
+            ', "inputs": [',
+        )
+        for k in range(len(m.inputs)):
+            out.write(
+                ", " if k else "",
+                '{"dataset": ',
+                quote(m.inputs[k].dataset),
+                ', "snapshot": ',
+                m.inputs[k].snapshot,
+                "}",
+            )
+        out.write("]}")
+    out.write("]")
+
+
+def _made_table(mut h: Html, ms: List[Made]):
+    h.raw(
+        '<div class="scroll"><table><thead><tr><th>Snapshot</th>',
+        "<th>Made by</th><th>Run</th><th>Step</th><th>Partition</th>",
+        "<th>Code</th><th>Committed</th><th>From</th></tr></thead><tbody>",
+    )
+    for m in ms:
+        h.raw("<tr><td>")
+        h.link(_snapshot_href(m.at), String(m.at))
+        h.raw("</td><td>")
+        h.link(String("/pipelines/", url_encode(m.pipeline)), m.pipeline)
+        h.raw("</td><td>")
+        h.link(String("/runs/", m.run), String(m.run))
+        h.raw("</td>")
+        h.cell(m.step)
+        h.cell(m.partition)
+        h.raw("<td><code>")
+        h.text(m.code)
+        h.raw("</code></td>")
+        h.cell(m.ended)
+        h.raw("<td>")
+        for k in range(len(m.inputs)):
+            if k:
+                h.raw(", ")
+            h.link(_snapshot_href(m.inputs[k]), String(m.inputs[k]))
+        h.raw("</td></tr>")
+    h.raw("</tbody></table></div>")
+
+
+def _index_of(refs: List[SnapshotRef], at: SnapshotRef) -> Int:
+    for i in range(len(refs)):
+        if refs[i] == at:
+            return i
+    return -1
+
+
+def _lineage_graph(start: SnapshotRef, b: List[Made], f: List[Made]) -> String:
+    """The snapshots of both walks, each from the inputs it was made of."""
+    var nodes = List[Node]()
+    var refs = List[SnapshotRef]()
+    var edges = List[Edge]()
+
+    var all = List[Made]()
+    for m in b:
+        all.append(m.copy())
+    for m in f:
+        all.append(m.copy())
+    # Sources first (inputs nobody here made), then the made, back to front.
+    for m in all:
+        for i in m.inputs:
+            var made = False
+            for o in all:
+                made = made or o.at == i
+            if not made and _index_of(refs, i) < 0:
+                refs.append(i.copy())
+                nodes.append(
+                    Node(
+                        i.dataset,
+                        String(i.snapshot, " · source"),
+                        "snapshot",
+                        _snapshot_href(i),
+                        "start" if i == start else "source",
+                    )
+                )
+    if _index_of(refs, start) < 0:
+        var made_here = False
+        for m in all:
+            made_here = made_here or m.at == start
+        if not made_here:
+            refs.append(start.copy())
+            nodes.append(
+                Node(
+                    start.dataset,
+                    String(start.snapshot, " · source"),
+                    "snapshot",
+                    _snapshot_href(start),
+                    "start",
+                )
+            )
+    for m in all:
+        if _index_of(refs, m.at) >= 0:
+            continue
+        refs.append(m.at.copy())
+        var sub = String(m.at.snapshot, " · ", m.pipeline)
+        if m.partition:
+            sub.write(" ", m.partition)
+        nodes.append(
+            Node(
+                m.at.dataset,
+                sub^,
+                "snapshot",
+                _snapshot_href(m.at),
+                "start" if m.at == start else "",
+            )
+        )
+    for m in all:
+        var dst = _index_of(refs, m.at)
+        for i in m.inputs:
+            var src = _index_of(refs, i)
+            if src >= 0 and dst >= 0:
+                var dup = False
+                for e in edges:
+                    dup = dup or (e.src == src and e.dst == dst)
+                if not dup:
+                    edges.append(Edge(src, dst))
+    return graph_svg(nodes, edges, String("The lineage of ", start))
+
+
+def snapshot_page(mut db: State, name: String, id: Int64) raises -> Page:
+    var start = SnapshotRef(name, id)
+    var known = db.conn.query(
+        (
+            "SELECT 1 FROM orca.commits WHERE dataset = $1 AND snapshot_id = $2"
+            " UNION ALL SELECT 1 FROM orca.reads WHERE dataset = $1 AND"
+            " snapshot_id = $2 LIMIT 1"
+        ),
+        Params().text(name).int64(id),
+    )
+    if len(known) == 0:
+        return not_found(String("no snapshot ", start, " that orca knows of"))
+    var b = back(db, start)
+    var f = forward(db, start)
+    var j = String(
+        '{"dataset": ', quote(name), ', "snapshot": ', id, ', "back": '
+    )
+    _json_made(j, b)
+    j.write(', "forward": ')
+    _json_made(j, f)
+    j.write("}")
+
+    var h = Html()
+    h.raw('<p class="crumb"><a href="/datasets">Datasets</a> · ')
+    h.link(_dataset_href(name), name)
+    h.raw("</p><h1>")
+    h.text(name, " @ ", id)
+    h.raw("</h1>")
+    h.raw('<div class="scroll">', _lineage_graph(start, b, f), "</div>")
+    h.raw("<h2>Made from</h2>")
+    if len(b) == 0:
+        h.raw(
+            '<p class="empty">No orca run made this snapshot: it is a'
+            " source.</p>"
+        )
+    else:
+        _made_table(h, b)
+    h.raw("<h2>Made from it</h2>")
+    if len(f) == 0:
+        h.raw('<p class="empty">Nothing orca made has read it yet.</p>')
+    else:
+        _made_table(h, f)
+    return Page(200, j^, _page(String(name, " @ ", id), "/datasets", h))
+
+
 # ── actions ──────────────────────────────────────────────────────────────────
 
 
@@ -1606,6 +2068,20 @@ struct Ui(Copyable, Handler):
                     return attempt(db, id, aid)
                 if parts[3] == "log":
                     return attempt_log(db, id, aid)
+        if path == "/datasets":
+            return datasets_page(db)
+        if path.startswith("/datasets/"):
+            var parts = path[byte=10:].split("/")
+            var name = url_decode(parts[0])
+            if len(parts) == 1 and name:
+                return dataset_page(db, name)
+            if len(parts) == 3 and parts[1] == "snapshots":
+                var id: Int64
+                try:
+                    id = Int64(Int(parts[2]))
+                except:
+                    return not_found(String("no snapshot ", parts[2]))
+                return snapshot_page(db, name, id)
         if path.startswith("/pipelines/"):
             var name = url_decode(path[byte=11:])
             if name and "/" not in name:
