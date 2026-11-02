@@ -138,10 +138,13 @@ struct Pipeline[
     catchup: Bool = True,
     max_runs: Int = 1,
     run_retries: Int = 3,
+    sensor: Bool = False,
 ]:
     """A pipeline named `name` of the steps `Ts`, in run order, whose steps
     call the dista `tasks`, over the keys of `partitions`; run by
-    `schedule` for the partition its fires `fills` (`orca.schedule`).
+    `schedule` for the partition its fires `fills` (`orca.schedule`), and,
+    with `sensor`, when a dataset it reads gets a new snapshot
+    (`orca.sensors`).
 
     The scheduler runs at most `max_runs` of its runs at once, and starts a
     failed scheduled or backfilled run again up to `run_retries` times, with
@@ -246,6 +249,7 @@ struct Pipeline[
             out.write('"schedule": null, ')
         out.write('"max_runs": ', Self.max_runs, ", ")
         out.write('"run_retries": ', Self.run_retries, ", ")
+        out.write('"sensor": ', "true" if Self.sensor else "false", ", ")
         out.write('"steps": [')
         comptime for i in range(Self.Ts.length):
             comptime S = Self.Ts[i]
@@ -269,6 +273,21 @@ struct Pipeline[
         for i in range(len(names)):
             out.write(", " if i > 0 else "", quote(names[i]))
         out.write("]}")
+        return out^
+
+    @staticmethod
+    def sensed_datasets() -> List[String]:
+        """The datasets its steps read and none of them writes, once each, in
+        step order: what a sensor watches."""
+        var writes = List[String]()
+        comptime for i in range(Self.Ts.length):
+            for d in Self.Ts[i].dataset_writes():
+                writes.append(d)
+        var out = List[String]()
+        comptime for i in range(Self.Ts.length):
+            for d in Self.Ts[i].dataset_reads():
+                if d not in writes and d not in out:
+                    out.append(d)
         return out^
 
     @staticmethod

@@ -196,7 +196,8 @@ def test_a_daily_pipeline() raises:
     var d = Days.describe()
     assert_true(
         '"partitions": {"kind": "daily", "start": "2024-01-01"},'
-        ' "schedule": null, "max_runs": 1, "run_retries": 3, "steps"'
+        ' "schedule": null, "max_runs": 1, "run_retries": 3, "sensor": false,'
+        ' "steps"'
         in d
     )
     assert_true('"input": "orca.day.Day"' in d)

@@ -15,6 +15,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph and its snapshots |
 | `/datasets/<name>/snapshots/<id>` | a snapshot's lineage, back and forward (`orca.lineage`) |
+| `/rebuilds/<id>` | a rebuild's pipelines by level, with their runs (`orca.sensors`) |
 
 And the actions, each a `POST` of a form (see `orca.actions`):
 
@@ -25,6 +26,7 @@ And the actions, each a `POST` of a form (see `orca.actions`):
 | `/runs/<id>/resume` | queue a failed, cancelled or stalled run again; `allow_new_code=1` confirms new code |
 | `/runs/<id>/rerun` | a new run from `step` on, the steps before it copied |
 | `/runs/<id>/cancel` | cancel a run, before its next attempt if it's running |
+| `/datasets/<name>/rebuild` | rebuild every pipeline downstream over `partitions` |
 
 A page of something still going on (a queued or running run, a running
 attempt) refreshes its live part every two seconds from a fragment path,
@@ -54,6 +56,7 @@ from orca.actions import (
     Outcome,
     backfill_runs,
     cancel_run,
+    rebuild_downstream,
     rerun_from,
     resume_run,
     start_run,
@@ -76,6 +79,7 @@ from orca.lineage import (
 )
 from orca.json import quote
 from orca.scheduler import fill_key
+from orca.sensors import Rebuild, rebuilds
 from orca.schedule import Schedule
 from orca.state import State
 from orca.tz import Zone
@@ -871,14 +875,25 @@ def run(mut db: State, id: Int) raises -> Page:
         .row(0)
         .text("registry_hash")
     )
-    var hash = (
-        db.conn.query(
-            "SELECT registry_hash FROM orca.runs WHERE id = $1",
-            Params().int64(Int64(id)),
-        )
-        .row(0)
-        .text("registry_hash")
-    )
+    var row = db.conn.query(
+        (
+            "SELECT registry_hash, coalesce(rebuild, 0) AS rebuild FROM"
+            " orca.runs WHERE id = $1"
+        ),
+        Params().int64(Int64(id)),
+    ).row(0)
+    var hash = row.text("registry_hash")
+    var rebuild = Int(row.int64("rebuild"))
+    # The snapshots that started it, for a sensor's run.
+    var sensed = List[SnapshotRef]()
+    for x in db.conn.query(
+        (
+            "SELECT dataset, snapshot_id FROM orca.sensed WHERE run = $1"
+            " ORDER BY dataset, snapshot_id"
+        ),
+        Params().int64(Int64(id)),
+    ):
+        sensed.append(SnapshotRef(x.text("dataset"), x.int64("snapshot_id")))
 
     var j = String('{"run": ')
     _json_run(j, r)
@@ -887,8 +902,13 @@ def run(mut db: State, id: Int) raises -> Page:
         quote(hash),
         ', "current_code": ',
         "true" if hash == current else "false",
-        ', "steps": [',
+        ', "rebuild": ',
+        String(rebuild) if rebuild else String("null"),
+        ', "sensed": [',
     )
+    for i in range(len(sensed)):
+        j.write(", " if i else "", quote(String(sensed[i])))
+    j.write('], "steps": [')
     for i in range(len(steps)):
         ref s = steps[i]
         if i:
@@ -949,6 +969,15 @@ def run(mut db: State, id: Int) raises -> Page:
     h.text(r.partitions)
     h.raw("</dd><dt>Trigger</dt><dd>")
     h.text(r.trigger)
+    if rebuild:
+        h.raw(" ")
+        h.link(String("/rebuilds/", rebuild), String("rebuild ", rebuild))
+    if len(sensed) > 0:
+        h.raw(" of ")
+        for i in range(len(sensed)):
+            if i:
+                h.raw(", ")
+            h.link(_snapshot_href(sensed[i]), String(sensed[i]))
     h.raw("</dd><dt>Created</dt><dd>")
     h.text(r.created)
     h.raw("</dd><dt>Started</dt><dd>")
@@ -1547,11 +1576,17 @@ def dataset_page(mut db: State, name: String) raises -> Page:
         return not_found(String("no dataset ", name))
     ref d = ds[0]
     var cs = commits(db, name)
+    var rbs = rebuilds(db, dataset=name, limit=10)
     var j = String('{"dataset": ', quote(d.name), ', "writers": ')
     _json_strings(j, d.writers)
     j.write(', "readers": ')
     _json_strings(j, d.readers)
-    j.write(', "snapshots": [')
+    j.write(', "rebuilds": [')
+    for i in range(len(rbs)):
+        if i:
+            j.write(", ")
+        _json_rebuild(j, rbs[i])
+    j.write('], "snapshots": [')
     for i in range(len(cs)):
         ref c = cs[i]
         j.write(
@@ -1581,6 +1616,19 @@ def dataset_page(mut db: State, name: String) raises -> Page:
     _pipeline_links(h, d.readers)
     h.raw("</dd></dl>")
     h.raw('<div class="scroll">', _flow_graph(db, d.name), "</div>")
+    if len(d.readers) > 0:
+        h.raw('<div class="actions"><form class="action" method="post"')
+        h.raw(' action="', _dataset_href(d.name), '/rebuild">')
+        h.raw(
+            '<label>Rebuild downstream over <input name="partitions"',
+            ' placeholder="2024-01..2024-03" required></label>',
+            '<button type="submit">Rebuild</button><span class="muted">',
+            " every pipeline that reads it, and what reads theirs, in",
+            " order</span></form></div>",
+        )
+    if len(rbs) > 0:
+        h.raw("<h2>Rebuilds</h2>")
+        _rebuilds_table(h, rbs)
     h.raw("<h2>Snapshots</h2>")
     if len(cs) == 0:
         h.raw('<p class="empty">No orca run has committed to it.</p>')
@@ -1607,6 +1655,122 @@ def dataset_page(mut db: State, name: String) raises -> Page:
             h.raw("</tr>")
         h.raw("</tbody></table></div>")
     return Page(200, j^, _page(d.name, "/datasets", h))
+
+
+def _json_rebuild(mut out: String, r: Rebuild):
+    out.write(
+        '{"id": ',
+        r.id,
+        ', "dataset": ',
+        quote(r.dataset),
+        ', "partitions": ',
+        quote(r.partitions),
+        ', "status": ',
+        quote(r.status),
+        ', "created": ',
+        quote(r.created),
+        ', "ended": ',
+        quote(r.ended),
+        ', "plan": [',
+    )
+    for i in range(len(r.plan)):
+        ref p = r.plan[i]
+        out.write(
+            ", " if i else "",
+            '{"pipeline": ',
+            quote(p.pipeline),
+            ', "level": ',
+            p.level,
+            ', "partitions": ',
+            quote(p.partitions),
+            ', "run": ',
+            String(p.run) if p.run else String("null"),
+            ', "status": ',
+            quote(p.status),
+            "}",
+        )
+    out.write("]}")
+
+
+def _rebuilds_table(mut h: Html, rbs: List[Rebuild]):
+    h.raw(
+        '<div class="scroll"><table><thead><tr><th>Rebuild</th>',
+        "<th>Partitions</th><th>Status</th><th>Pipelines</th>",
+        "<th>Created</th></tr></thead><tbody>",
+    )
+    for r in rbs:
+        h.raw("<tr><td>")
+        h.link(String("/rebuilds/", r.id), String(r.id))
+        h.raw("</td>")
+        h.cell(r.partitions)
+        h.raw("<td>")
+        h.status(r.status)
+        h.raw("</td><td>")
+        for i in range(len(r.plan)):
+            if i:
+                h.raw(", ")
+            h.link(
+                String("/pipelines/", url_encode(r.plan[i].pipeline)),
+                r.plan[i].pipeline,
+            )
+        h.raw("</td>")
+        h.cell(r.created)
+        h.raw("</tr>")
+    h.raw("</tbody></table></div>")
+
+
+def rebuild_page(mut db: State, id: Int) raises -> Page:
+    var rbs = rebuilds(db, id=id)
+    if len(rbs) == 0:
+        return not_found(String("no rebuild ", id))
+    ref r = rbs[0]
+    var j = String('{"rebuild": ')
+    _json_rebuild(j, r)
+    j.write("}")
+
+    var h = Html()
+    h.raw('<p class="crumb"><a href="/datasets">Datasets</a> · ')
+    h.link(_dataset_href(r.dataset), r.dataset)
+    h.raw("</p><h1>Rebuild ")
+    h.text(r.id)
+    h.raw(" ")
+    h.status(r.status)
+    h.raw('</h1><dl class="facts"><dt>Downstream of</dt><dd>')
+    h.link(_dataset_href(r.dataset), r.dataset)
+    h.raw("</dd><dt>Partitions</dt><dd>")
+    h.text(r.partitions)
+    h.raw("</dd><dt>Created</dt><dd>")
+    h.text(r.created)
+    h.raw("</dd><dt>Ended</dt><dd>")
+    h.text(r.ended)
+    h.raw(
+        '</dd></dl><p class="muted">Each level runs once every run before it',
+        " has succeeded. A run that fails stops the rebuild; resuming it",
+        " carries on.</p>",
+    )
+    h.raw(
+        '<div class="scroll"><table><thead><tr><th>Level</th>',
+        "<th>Pipeline</th><th>Partitions</th><th>Run</th><th>Status</th>",
+        "</tr></thead><tbody>",
+    )
+    for p in r.plan:
+        h.raw("<tr>")
+        h.cell(p.level)
+        h.raw("<td>")
+        h.link(String("/pipelines/", url_encode(p.pipeline)), p.pipeline)
+        h.raw("</td>")
+        h.cell(p.partitions)
+        h.raw("<td>")
+        if p.run:
+            h.link(String("/runs/", p.run), String(p.run))
+        h.raw("</td><td>")
+        if p.status:
+            h.status(p.status)
+        else:
+            h.raw('<span class="muted">waiting</span>')
+        h.raw("</td></tr>")
+    h.raw("</tbody></table></div>")
+    return Page(200, j^, _page(String("Rebuild ", r.id), "/datasets", h))
 
 
 def _json_made(mut out: String, ms: List[Made]):
@@ -1860,6 +2024,13 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
             var o = backfill_runs(db, name, keys)
             var to = String("/runs?pipeline=", url_encode(name))
             return _acted(o, back, String('{"queued": ', o.queued, "}"), to)
+    if len(parts) == 4 and parts[1] == "datasets" and parts[3] == "rebuild":
+        var name = url_decode(parts[2])
+        var o = rebuild_downstream(db, name, _form(body, "partitions"))
+        var to = String("/rebuilds/", o.run)
+        return _acted(
+            o, _dataset_href(name), String('{"rebuild": ', o.run, "}"), to
+        )
     if len(parts) == 4 and parts[1] == "runs":
         var id: Int
         try:
@@ -1957,6 +2128,8 @@ def _is_action(path: String) -> Bool:
         return False
     if parts[1] == "pipelines":
         return parts[3] == "runs" or parts[3] == "backfill"
+    if parts[1] == "datasets":
+        return parts[3] == "rebuild"
     return parts[1] == "runs" and (
         parts[3] == "resume" or parts[3] == "rerun" or parts[3] == "cancel"
     )
@@ -2082,6 +2255,13 @@ struct Ui(Copyable, Handler):
                 except:
                     return not_found(String("no snapshot ", parts[2]))
                 return snapshot_page(db, name, id)
+        if path.startswith("/rebuilds/"):
+            var id: Int
+            try:
+                id = Int(path[byte=10:])
+            except:
+                return not_found(String("no rebuild ", path[byte=10:]))
+            return rebuild_page(db, id)
         if path.startswith("/pipelines/"):
             var name = url_decode(path[byte=11:])
             if name and "/" not in name:

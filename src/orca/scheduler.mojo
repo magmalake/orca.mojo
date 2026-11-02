@@ -1,8 +1,10 @@
-"""The scheduler: fires schedules, queues backfills, and starts runs.
+"""The scheduler: fires schedules, senses datasets, queues backfills and
+rebuilds, and starts runs.
 
 ```
 orca register ./build/taxi             runs `taxi describe`, records the binary
 orca backfill taxi 2011-01..2024-12    one queued run per partition
+orca rebuild taxi.trips 2024-01        the pipelines downstream, in order
 orca tick                              one pass, then exits
 orca scheduler                         a pass every second
 ```
@@ -27,7 +29,12 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
 - **`max_runs`.** Under a lock on the pipeline's row, the runs that are live
   (a fresh heartbeat, or started by the scheduler less than the stale limit
   ago) are counted, and only that many fewer than `max_runs` are started.
-- **Retries.** A scheduled or backfilled run that failed is started again
+- **Sensors and rebuilds** (`orca.sensors`). A sensor pipeline's pass
+  looks for snapshots of the datasets it reads, in `orca.commits` on every
+  tick and from `<binary> sense` every `ORCA_SENSE_SECONDS`, and queues a
+  run, trigger `sensor`, for those it hasn't seen. Each rebuild queues its
+  next level once the one before has succeeded.
+- **Retries.** A scheduled, backfilled or sensed run that failed is started again
   after `ORCA_RETRY_SECONDS` (default 60) doubling with each start, plus up
   to a tenth more as jitter, up to `run_retries` times. One whose process
   died (its heartbeat went stale) is started again at once, within the same
@@ -41,6 +48,7 @@ A run's output goes to `<ORCA_LOGS>/<pipeline>/<run>/driver.log` when
 """
 
 from std.os import getenv, makedirs
+from std.time import perf_counter_ns
 
 from postgres import Params
 
@@ -51,10 +59,17 @@ from orca.key import parse_keys
 from orca.month import Month
 from orca.proc import absolute, capture, reap, spawn
 from orca.schedule import Schedule
+from orca.sensors import (
+    advance_rebuilds,
+    join_keys,
+    map_keys,
+    parse_sense,
+    split_keys,
+)
 from orca.state import State
 from orca.tz import Zone
 
-comptime _RETRIED = "trigger IN ('schedule', 'backfill')"
+comptime _RETRIED = "trigger IN ('schedule', 'backfill', 'sensor')"
 """The runs the scheduler retries."""
 
 
@@ -74,6 +89,7 @@ struct Registered(Copyable, Movable):
     var start: String
     var max_runs: Int
     var run_retries: Int
+    var sensor: Bool
 
 
 def fill_key(kind: String, fills: String, local: Civil) raises -> String:
@@ -102,7 +118,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " 'monthly') AS kind, coalesce(describe->'partitions'->>"
             "'start', '') AS start, coalesce((describe->>'max_runs')"
             "::bigint, 1) AS max_runs, coalesce((describe->>"
-            "'run_retries')::bigint, 3) AS run_retries FROM"
+            "'run_retries')::bigint, 3) AS run_retries,"
+            " coalesce((describe->>'sensor')::boolean, false) AS sensor FROM"
             " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
             " name = $1) ORDER BY name"
         ),
@@ -123,6 +140,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 r.text("start"),
                 Int(r.int64("max_runs")),
                 Int(r.int64("run_retries")),
+                r.bool("sensor"),
             )
         )
     return out^
@@ -230,19 +248,26 @@ struct Scheduler(Movable):
     var db: State
     var stale: Float64
     var retry_seconds: Int64
+    var sense_seconds: Float64
     var logs: String
+    var _polled: Dict[String, Int]
+    """When each sensor's binary was last asked to `sense`, on the monotonic
+    clock in nanoseconds."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
         self.db.migrate()
         self.stale = Float64(getenv("ORCA_STALE_SECONDS", "30"))
         self.retry_seconds = Int64(Int(getenv("ORCA_RETRY_SECONDS", "60")))
+        self.sense_seconds = Float64(getenv("ORCA_SENSE_SECONDS", "60"))
         self.logs = getenv("ORCA_LOGS")
+        self._polled = Dict[String, Int]()
 
     def register(mut self, binary: String, now: Int64) raises -> String:
         """Records the pipeline `binary` describes, with its path; its
-        schedule counts from `now` the first time. Queued runs move to the
-        new code. Returns the pipeline's name."""
+        schedule counts from `now` the first time, and a sensor from now the
+        first time it's one, with the snapshots its datasets have now seen.
+        Queued runs move to the new code. Returns the pipeline's name."""
         var path = absolute(binary)
         var got = capture([path, "describe"])
         if got[0] != 0 or not got[1].startswith('{"pipeline": '):
@@ -252,20 +277,58 @@ struct Scheduler(Movable):
         var cycle = dataset_cycle(self.db, got[1])
         if cycle:
             raise Error("orca: ", path, " can't be registered: ", cycle)
+        var info = self.db.conn.query(
+            (
+                "SELECT coalesce(($1::jsonb->>'sensor')::boolean, false) AS"
+                " sensor, NOT EXISTS (SELECT 1 FROM orca.pipelines WHERE name"
+                " = $1::jsonb->>'pipeline' AND sensing_since IS NOT NULL) AS"
+                " new_sensor"
+            ),
+            Params().text(got[1]),
+        ).row(0)
+        var sensor = info.bool("sensor")
+        var seen = String()
+        if sensor:
+            var sensed = capture([path, "sense"])
+            if sensed[0] != 0:
+                raise Error(
+                    "orca: ", path, " sense exited ", sensed[0], ": ", sensed[1]
+                )
+            if len(parse_sense(sensed[1])) == 0:
+                raise Error(
+                    "orca: ",
+                    path,
+                    " is a sensor, but reads no dataset it doesn't write",
+                )
+            if info.bool("new_sensor"):
+                seen = sensed[1]
         var res = self.db.conn.query(
             (
                 "INSERT INTO orca.pipelines (name, registry_hash, describe,"
-                " binary_path, since) SELECT d->>'pipeline',"
-                " d->>'registry_hash', d, $2, $3 FROM (SELECT $1::jsonb AS d)"
-                " AS x ON CONFLICT (name) DO UPDATE SET registry_hash ="
-                " EXCLUDED.registry_hash, describe = EXCLUDED.describe,"
-                " binary_path = EXCLUDED.binary_path, since ="
-                " coalesce(orca.pipelines.since, EXCLUDED.since), last_seen ="
-                " now() RETURNING name, registry_hash"
+                " binary_path, since, sensing_since) SELECT d->>'pipeline',"
+                " d->>'registry_hash', d, $2, $3, CASE WHEN $4 THEN now() END"
+                " FROM (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO"
+                " UPDATE SET registry_hash = EXCLUDED.registry_hash, describe ="
+                " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
+                " = coalesce(orca.pipelines.since, EXCLUDED.since),"
+                " sensing_since = CASE WHEN $4 THEN"
+                " coalesce(orca.pipelines.sensing_since, now()) END, last_seen"
+                " = now() RETURNING name, registry_hash"
             ),
-            Params().text(got[1]).text(path).int64(now),
+            Params().text(got[1]).text(path).int64(now).bool(sensor),
         )
         var name = res.row(0).text("name")
+        # What its datasets hold now isn't new to it.
+        for c in parse_sense(seen):
+            if c.snapshot >= 0:
+                _ = self.db.conn.execute(
+                    (
+                        "INSERT INTO orca.sensed (pipeline, dataset,"
+                        " snapshot_id) VALUES ($1, $2, $3) ON CONFLICT DO"
+                        " NOTHING"
+                    ),
+                    Params().text(name).text(c.dataset).int64(c.snapshot),
+                )
         _ = self.db.conn.execute(
             (
                 "UPDATE orca.runs SET registry_hash = $2 WHERE pipeline = $1"
@@ -276,18 +339,141 @@ struct Scheduler(Movable):
         return name^
 
     def tick(mut self, now: Int64) raises:
-        """One pass: reap ended runs, make due fires, schedule retries, and
-        start what may start."""
+        """One pass: reap ended runs, advance rebuilds, make due fires,
+        sense new snapshots, schedule retries, and start what may start."""
         for done in reap():
             print("reaped pid", done[0], "exit", done[1])
+        advance_rebuilds(self.db)
         for p in registered(self.db):
             if p.cron:
                 try:
                     self._fire(p, now)
                 except e:
                     print("orca: pipeline", p.name, "can't fire:", e)
+            if p.sensor:
+                try:
+                    self._sense(p, now)
+                except e:
+                    print("orca: pipeline", p.name, "can't sense:", e)
             self._schedule_retries(p, now)
             self._start(p, now)
+
+    def _sense(mut self, p: Registered, now: Int64) raises:
+        """Queues a run for the snapshots of `p`'s datasets it hasn't seen:
+        those other pipelines' succeeded runs committed since it became a
+        sensor, and, when its binary is due to be asked, the current ones
+        something other than orca committed. A snapshot with no partitions
+        stands for the one `p` would fill now."""
+        var datasets = List[String]()
+        var snapshots = List[Int64]()
+        var keys = List[String]()
+        for r in self.db.conn.query(
+            (
+                "WITH io AS (SELECT k.kind, x.ds FROM orca.pipelines p,"
+                " jsonb_array_elements(p.describe->'steps') AS s(st), (VALUES"
+                " ('reads'), ('writes')) AS k(kind),"
+                " jsonb_array_elements_text(coalesce(s.st->k.kind, '[]')) AS"
+                " x(ds) WHERE p.name = $1) SELECT DISTINCT ON (c.dataset,"
+                " c.snapshot_id) c.dataset, c.snapshot_id,"
+                " coalesce(nullif(s.partition, ''), r.partitions) AS keys FROM"
+                " orca.commits c JOIN orca.attempts a ON a.id = c.attempt JOIN"
+                " orca.steps s ON s.id = a.step JOIN orca.runs r ON r.id ="
+                " s.run JOIN orca.pipelines me ON me.name = $1 WHERE"
+                " r.pipeline <> $1 AND r.status = 'succeeded' AND a.status ="
+                " 'succeeded' AND a.ended >= me.sensing_since AND c.dataset IN"
+                " (SELECT ds FROM io WHERE kind = 'reads' EXCEPT SELECT ds FROM"
+                " io WHERE kind = 'writes') AND NOT EXISTS (SELECT 1 FROM"
+                " orca.sensed x WHERE x.pipeline = $1 AND x.dataset ="
+                " c.dataset AND x.snapshot_id = c.snapshot_id) AND NOT EXISTS"
+                " (SELECT 1 FROM orca.rebuild_pipelines rp WHERE rp.rebuild ="
+                " r.rebuild AND rp.pipeline = $1) ORDER BY c.dataset,"
+                " c.snapshot_id, c.attempt"
+            ),
+            Params().text(p.name),
+        ):
+            datasets.append(r.text("dataset"))
+            snapshots.append(r.int64("snapshot_id"))
+            keys.append(r.text("keys"))
+        var t = Int(perf_counter_ns())
+        var last = self._polled.get(p.name)
+        if not last or Float64(t - last.value()) >= self.sense_seconds * 1e9:
+            self._polled[p.name] = t
+            var got = capture([p.binary, "sense"])
+            if got[0] != 0:
+                raise Error("sense exited ", got[0], ": ", got[1])
+            for c in parse_sense(got[1]):
+                if c.snapshot >= 0 and not c.by_orca:
+                    datasets.append(c.dataset)
+                    snapshots.append(c.snapshot)
+                    keys.append(c.partitions)
+        if len(datasets) == 0:
+            return
+        var fallback: String
+        if p.cron:
+            var z = Zone.load(p.tz)
+            fallback = fill_key(p.kind, p.fills, Civil.of(z.to_local(now)))
+        else:
+            fallback = fill_key(p.kind, "current", Civil.of(now))
+        var tx = self.db.conn.begin()
+        var taken = List[Int]()
+        var all = List[String]()
+        for i in range(len(datasets)):
+            # Seen by another tick already, or twice in this one.
+            var new = tx.query(
+                (
+                    "INSERT INTO orca.sensed (pipeline, dataset, snapshot_id)"
+                    " VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING"
+                    " snapshot_id"
+                ),
+                Params().text(p.name).text(datasets[i]).int64(snapshots[i]),
+            )
+            if len(new) == 0:
+                continue
+            taken.append(i)
+            var ks = split_keys(keys[i])
+            if len(ks) == 0:
+                ks.append(fallback)
+            all.extend(ks^)
+        var run = Int64(-1)
+        var mapped = map_keys(all, p.kind, p.start)
+        if len(mapped) > 0:
+            run = (
+                tx.query(
+                    (
+                        "INSERT INTO orca.runs (pipeline, registry_hash,"
+                        " partitions, trigger, status) VALUES ($1, $2, $3,"
+                        " 'sensor', 'queued') RETURNING id"
+                    ),
+                    Params()
+                    .text(p.name)
+                    .text(p.registry_hash)
+                    .text(join_keys(mapped)),
+                )
+                .row(0)
+                .int64("id")
+            )
+            for i in taken:
+                _ = tx.execute(
+                    (
+                        "UPDATE orca.sensed SET run = $4 WHERE pipeline = $1"
+                        " AND dataset = $2 AND snapshot_id = $3"
+                    ),
+                    Params()
+                    .text(p.name)
+                    .text(datasets[i])
+                    .int64(snapshots[i])
+                    .int64(run),
+                )
+        tx.commit()
+        for i in taken:
+            print(
+                "sensed",
+                String(datasets[i], "@", snapshots[i]),
+                "for",
+                p.name,
+                String("run ", run, " for ", join_keys(mapped)) if run
+                >= 0 else "before its first partition",
+            )
 
     def _fire(mut self, p: Registered, now: Int64) raises:
         var s = Schedule(CronExpr.parse(p.cron), Zone.load(p.tz))

@@ -7,9 +7,11 @@
     ./build/orca scheduler
     ./build/orca ui                 # http://127.0.0.1:8270, or ORCA_UI_ADDR
     ./build/orca lineage lake.report [<snapshot>]
+    ./build/orca rebuild raw.events 2024-03
 
 Needs `ORCA_DATABASE_URL`. See `orca.scheduler` for what a tick does, and
-`orca.ui` for the pages, `orca.lineage` for what `lineage` prints.
+`orca.ui` for the pages, `orca.lineage` for what `lineage` prints, and
+`orca.sensors` for what `rebuild` plans.
 Exit codes: 0, 2 for a usage error, 3 for any other error.
 """
 
@@ -20,6 +22,7 @@ from std.time import sleep
 from orca.civil import now
 from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.scheduler import Scheduler
+from orca.sensors import rebuild, rebuilds
 from orca.state import State
 from orca.ui import DEFAULT_ADDR, serve_ui
 
@@ -29,7 +32,8 @@ comptime USAGE = """usage:
   orca tick
   orca scheduler
   orca ui
-  orca lineage <dataset> [<snapshot>]"""
+  orca lineage <dataset> [<snapshot>]
+  orca rebuild <dataset> KEY[..KEY][,...]"""
 
 
 def _usage(msg: String = ""):
@@ -91,6 +95,14 @@ def _command(args: List[String]) raises -> Int:
         _print_made(back(db, start))
         print("made from it:")
         _print_made(forward(db, start))
+        return 0
+    if cmd == "rebuild" and len(args) == 4:
+        var db = State(url)
+        db.migrate()
+        var id = rebuild(db, args[2], args[3])
+        print("rebuild", id)
+        for p in rebuilds(db, id)[0].plan:
+            print("  level", p.level, p.pipeline, p.partitions)
         return 0
     if cmd == "ui" and len(args) == 2:
         var db = State(url)
