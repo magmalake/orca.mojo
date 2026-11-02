@@ -6,9 +6,10 @@
     ./build/orca tick
     ./build/orca scheduler
     ./build/orca ui                 # http://127.0.0.1:8270, or ORCA_UI_ADDR
+    ./build/orca lineage lake.report [<snapshot>]
 
 Needs `ORCA_DATABASE_URL`. See `orca.scheduler` for what a tick does, and
-`orca.ui` for the pages.
+`orca.ui` for the pages, `orca.lineage` for what `lineage` prints.
 Exit codes: 0, 2 for a usage error, 3 for any other error.
 """
 
@@ -17,6 +18,7 @@ from std.sys import argv, exit
 from std.time import sleep
 
 from orca.civil import now
+from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.scheduler import Scheduler
 from orca.state import State
 from orca.ui import DEFAULT_ADDR, serve_ui
@@ -26,7 +28,8 @@ comptime USAGE = """usage:
   orca backfill <pipeline> KEY[..KEY][,...]
   orca tick
   orca scheduler
-  orca ui"""
+  orca ui
+  orca lineage <dataset> [<snapshot>]"""
 
 
 def _usage(msg: String = ""):
@@ -68,6 +71,27 @@ def _command(args: List[String]) raises -> Int:
                 except:
                     pass
             sleep(1.0)
+    if cmd == "lineage" and (len(args) == 3 or len(args) == 4):
+        var db = State(url)
+        db.migrate()
+        var id: Int64
+        if len(args) == 4:
+            try:
+                id = Int64(Int(args[3]))
+            except:
+                _usage(String("not a snapshot: ", args[3]))
+                return 2
+        else:
+            id = latest(db, args[2])
+            if id < 0:
+                raise Error("orca: no snapshot of ", args[2], " is recorded")
+        var start = SnapshotRef(args[2], id)
+        print(start)
+        print("made from:")
+        _print_made(back(db, start))
+        print("made from it:")
+        _print_made(forward(db, start))
+        return 0
     if cmd == "ui" and len(args) == 2:
         var db = State(url)
         db.migrate()
@@ -75,6 +99,23 @@ def _command(args: List[String]) raises -> Int:
         return 0
     _usage()
     return 2
+
+
+def _print_made(ms: List[Made]):
+    """One line per snapshot: how far it is, what made it, and from what."""
+    if len(ms) == 0:
+        print("  nothing")
+    for m in ms:
+        var line = String("  ", m.depth, " ", m.at, " by ", m.pipeline, " run ")
+        line.write(m.run, " ", m.step)
+        if m.partition:
+            line.write(" ", m.partition)
+        line.write(" code ", m.code)
+        if len(m.inputs) > 0:
+            line.write(" from")
+            for i in m.inputs:
+                line.write(" ", i)
+        print(line)
 
 
 def main() raises:

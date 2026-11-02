@@ -78,4 +78,15 @@ pre.error { color: var(--bad); background: var(--surface); border: 1px solid var
 .dag__box--skipped rect, .dag__box--pending rect, .dag__box--queued rect,
 .dag__box--cancelled rect { stroke-dasharray: 4 3; }
 h2 .status { vertical-align: middle; margin-left: 0.4rem; }
+.graph { display: block; margin: 0.5rem 0; font-family: var(--mono); }
+.graph rect { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+.graph a:hover rect { stroke: var(--lake); }
+.graph__edge { fill: none; stroke: var(--faint); stroke-width: 1.5; }
+.graph__head { fill: var(--faint); }
+.graph__label { font-size: 13px; font-weight: 600; fill: var(--text); }
+.graph__sub { font-size: 11px; fill: var(--muted); }
+.graph__node--dataset rect { stroke: var(--lake); }
+.graph__node--pipeline rect { stroke: var(--ember); }
+.graph__node--source rect { stroke-dasharray: 4 3; }
+.graph__node--start rect { stroke: var(--ember); stroke-width: 2.5; }
 """

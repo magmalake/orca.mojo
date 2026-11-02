@@ -38,6 +38,8 @@ This module imports iceberg, so only pipelines that use tables build it;
 """
 
 from std.os import getenv
+from std.random import random_float64
+from std.time import sleep
 
 from iceberg.append import prepare_append
 from iceberg.catalog.filesystem import FilesystemCatalog, Table
@@ -51,8 +53,19 @@ from parquet import RecordBatch
 from orca.ctx import Ctx
 from orca.proc import absolute
 
-comptime _COMMIT_RETRIES = 4
+comptime _COMMIT_RETRIES = 8
 """How many times to reload and retry when another writer got there first."""
+
+
+def _backoff(attempt: Int):
+    """Waits before retry `attempt` (1, 2, ...) of a commit that clashed:
+    10 ms doubling with each, to 640 ms, times a random half to one and a
+    half. Two writers that both wrote the same metadata version both back
+    out (iceberg's filesystem catalog deletes both files), so retrying at
+    once can clash again and again; the random wait lets one get ahead.
+    Each process seeds `std.random` itself (`orca.cli.seed_random`)."""
+    var base = 0.01 * Float64(1 << min(attempt - 1, 6))
+    sleep(base * random_float64(0.5, 1.5))
 
 
 def warehouse() -> String:
@@ -199,6 +212,7 @@ def append(
             attempt += 1
             if attempt > _COMMIT_RETRIES:
                 raise e^
+            _backoff(attempt)
             table.refresh()
             continue
         ctx.committed(loc, result.snapshot_id, dataset)
@@ -236,6 +250,7 @@ def commit(
             attempt += 1
             if attempt > _COMMIT_RETRIES:
                 raise e^
+            _backoff(attempt)
             table.refresh()
             continue
         ctx.committed(loc, result.snapshot_id, dataset)
