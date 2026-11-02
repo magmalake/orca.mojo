@@ -27,7 +27,8 @@ test-chaos = { cmd = "scripts/with-postgres.sh tests/chaos.sh" }
 test-ui = { cmd = "scripts/with-postgres.sh tests/ui.sh" }
 test-actions = { cmd = "scripts/with-postgres.sh tests/actions.sh" }
 test-lost-workers = { cmd = "scripts/with-postgres.sh tests/lost_workers.sh" }
-test = { depends-on = ["test-steps", "test-cron", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-lost-workers", "test-chaos"] }
+test-datasets = { cmd = "scripts/with-postgres.sh tests/datasets.sh" }
+test = { depends-on = ["test-steps", "test-cron", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-lost-workers", "test-datasets", "test-chaos"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
 orca = { cmd = "mkdir -p build && mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca" }

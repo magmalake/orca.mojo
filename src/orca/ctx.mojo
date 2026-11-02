@@ -4,7 +4,8 @@ The step's identity (pipeline, run, step, partition, attempt, the code's
 registry hash), a logger, and what makes reruns safe: the table snapshots
 the step's first attempt read, which every later attempt reads again, and
 the record of what each attempt read and committed. `orca.tables` reads and
-commits Iceberg tables through it. `runtime` is the run's dista runtime, for a
+commits Iceberg tables through it, and checks the datasets a step touches
+against the ones it declared (`reads=` and `writes=` on its `Step`). `runtime` is the run's dista runtime, for a
 pipeline with `tasks=`.
 
 `log` writes to stdout and, when `ORCA_LOGS` is set, appends to the attempt's
@@ -25,6 +26,9 @@ struct TableSnapshot(Copyable, Movable):
     var table: String
     var snapshot_id: Int64
     """-1 for a table that had no snapshot yet."""
+    var dataset: String
+    """The table's dataset name, `namespace.table`, or empty for a table
+    outside the warehouse."""
 
 
 struct Recorder(Movable):
@@ -50,9 +54,14 @@ struct Recorder(Movable):
             String(
                 "INSERT INTO orca.",
                 into,
-                " (attempt, table_name, snapshot_id) VALUES ($1, $2, $3)",
+                " (attempt, table_name, snapshot_id, dataset) VALUES ($1, $2,",
+                " $3, nullif($4, ''))",
             ),
-            Params().int64(self.attempt_id).text(t.table).int64(t.snapshot_id),
+            Params()
+            .int64(self.attempt_id)
+            .text(t.table)
+            .int64(t.snapshot_id)
+            .text(t.dataset),
         )
 
     def read(mut self, t: TableSnapshot) raises:
@@ -72,6 +81,12 @@ struct Ctx(Movable):
     var step: String
     var partition: String
     """The partition key, e.g. `2024-01`; empty for a gather step."""
+    var partitions: String
+    """The keys this step's commits hold, comma-separated: its partition
+    for a mapped step, the run's keys for a gather step."""
+    var declared_reads: List[String]
+    """The datasets the step declared it reads."""
+    var declared_writes: List[String]
     var attempt: Int
     var code: String
     """The pipeline's registry hash, in hex."""
@@ -101,11 +116,17 @@ struct Ctx(Movable):
         log_path: String = "",
         runtime: Int = 0,
         runtime_tasks: String = "",
+        partitions: String = "",
+        var declared_reads: List[String] = List[String](),
+        var declared_writes: List[String] = List[String](),
     ):
         self.pipeline = pipeline
         self.run = run
         self.step = step
         self.partition = partition
+        self.partitions = partitions if partitions else partition
+        self.declared_reads = declared_reads^
+        self.declared_writes = declared_writes^
         self.attempt = attempt
         self.code = code
         self.pinned = pinned^
@@ -154,22 +175,26 @@ struct Ctx(Movable):
             )
         return Pointer[T.RT, MutAnyOrigin](unsafe_from_address=self._runtime)[]
 
-    def pin(mut self, table: String, current: Int64) raises -> Int64:
+    def pin(
+        mut self, table: String, current: Int64, dataset: String = ""
+    ) raises -> Int64:
         """The snapshot of `table` this step reads: the one an earlier attempt
         read, or else `current`, which is then recorded as read."""
         for r in self.reads:
             if r.table == table:
                 return r.snapshot_id
         var id = self.pinned.get(table, current)
-        var t = TableSnapshot(table, id)
+        var t = TableSnapshot(table, id, dataset)
         self.recorder.read(t)
         self.reads.append(t^)
         return id
 
-    def committed(mut self, table: String, snapshot_id: Int64) raises:
+    def committed(
+        mut self, table: String, snapshot_id: Int64, dataset: String = ""
+    ) raises:
         """Records that this attempt committed (or found it had committed)
         `snapshot_id` to `table`."""
-        var t = TableSnapshot(table, snapshot_id)
+        var t = TableSnapshot(table, snapshot_id, dataset)
         self.recorder.commit(t)
         self.commits.append(t^)
 
@@ -181,9 +206,28 @@ struct Ctx(Movable):
                 n += 1
         return n
 
+    def check_declared(self, dataset: String, write: Bool) raises:
+        """Raises unless the step declared it reads (or writes) `dataset`;
+        a table outside the warehouse (`dataset` empty) needs nothing."""
+        if not dataset:
+            return
+        if dataset in (self.declared_writes if write else self.declared_reads):
+            return
+        raise Error(
+            "orca: step ",
+            self.step,
+            " of ",
+            self.pipeline,
+            " writes " if write else " reads ",
+            dataset,
+            ", which it doesn't declare in ",
+            "writes=" if write else "reads=",
+        )
+
     def summary(self, table: String) -> Dict[String, String]:
         """The snapshot summary properties of this step's next commit to
-        `table`: who made it, from which code, having read what."""
+        `table`: who made it, from which code, over which partitions, having
+        read what."""
         var reads = String()
         for i in range(len(self.reads)):
             reads.write(
@@ -197,6 +241,7 @@ struct Ctx(Movable):
         s["orca.run"] = String(self.run)
         s["orca.step"] = self.step
         s["orca.partition"] = self.partition
+        s["orca.partitions"] = self.partitions
         s["orca.attempt"] = String(self.attempt)
         s["orca.commit"] = String(self.commits_to(table))
         s["orca.code"] = self.code

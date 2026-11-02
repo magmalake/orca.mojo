@@ -128,6 +128,72 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
     return out^
 
 
+def dataset_cycle(mut db: State, describe: String) raises -> String:
+    """How the pipeline `describe` gives would close a cycle across
+    pipelines, through the datasets they write and read, or empty if it
+    wouldn't. A pipeline reading a dataset it writes itself isn't one."""
+    var rows = db.conn.query(
+        (
+            "WITH d AS (SELECT name, describe FROM orca.pipelines WHERE name"
+            " <> $1::jsonb->>'pipeline' UNION ALL SELECT $1::jsonb->>"
+            "'pipeline', $1::jsonb), io AS (SELECT DISTINCT d.name, k.kind,"
+            " x.ds FROM d, jsonb_array_elements(d.describe->'steps') AS s(st),"
+            " (VALUES ('reads'), ('writes')) AS k(kind),"
+            " jsonb_array_elements_text(coalesce(s.st->k.kind, '[]')) AS"
+            " x(ds)) SELECT w.name AS src, r.name AS dst, w.ds, $1::jsonb->>"
+            "'pipeline' AS me FROM io w JOIN io r ON r.ds = w.ds AND r.kind ="
+            " 'reads' WHERE w.kind = 'writes' AND w.name <> r.name ORDER BY"
+            " 1, 2, 3"
+        ),
+        Params().text(describe),
+    )
+    if len(rows) == 0:
+        return ""
+    var me = rows.row(0).text("me")
+    var src = List[String]()
+    var dst = List[String]()
+    var via = List[String]()
+    for r in rows:
+        src.append(r.text("src"))
+        dst.append(r.text("dst"))
+        via.append(r.text("ds"))
+    # A path from `me` back to `me`, breadth first, by the edge taken.
+    var came = List[Int](length=len(src), fill=-2)
+    var frontier = List[Int]()
+    for i in range(len(src)):
+        if src[i] == me:
+            came[i] = -1
+            frontier.append(i)
+    while len(frontier) > 0:
+        var next = List[Int]()
+        for e in frontier:
+            if dst[e] == me:
+                var path = List[Int]()
+                var at = e
+                while at >= 0:
+                    path.append(at)
+                    at = came[at]
+                var out = String()
+                for k in range(len(path) - 1, -1, -1):
+                    var i = path[k]
+                    out.write(
+                        src[i],
+                        " writes ",
+                        via[i],
+                        ", which ",
+                        dst[i],
+                        " reads",
+                        "; " if k > 0 else "",
+                    )
+                return out^
+            for i in range(len(src)):
+                if src[i] == dst[e] and came[i] == -2:
+                    came[i] = e
+                    next.append(i)
+        frontier = next^
+    return ""
+
+
 def partition_keys(p: Registered, keys: String) raises -> List[String]:
     """`keys` (`KEY[..KEY][,...]`) as the pipeline's partition keys, each
     checked and from its first partition on."""
@@ -183,6 +249,9 @@ struct Scheduler(Movable):
             raise Error(
                 "orca: ", path, " describe exited ", got[0], ": ", got[1]
             )
+        var cycle = dataset_cycle(self.db, got[1])
+        if cycle:
+            raise Error("orca: ", path, " can't be registered: ", cycle)
         var res = self.db.conn.query(
             (
                 "INSERT INTO orca.pipelines (name, registry_hash, describe,"

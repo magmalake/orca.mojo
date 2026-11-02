@@ -23,21 +23,113 @@ def load(mut ctx: Ctx, raw: RawFile) raises -> Loaded:
   killed before Postgres heard of it, the retry finds that snapshot and
   returns it instead of committing the data a second time.
 
-A table is known by its location, `metadata.location`. This module imports
-iceberg, so only pipelines that use tables build it; `orca` itself doesn't.
+A table is known by its location, `metadata.location`, and, when it's in
+the warehouse, by its dataset name. `ORCA_WAREHOUSE` is the root of a
+filesystem catalog: dataset `nyc.trips` is the table at
+`<warehouse>/nyc/trips`. **`table`** loads a dataset the step declared, and
+**`ensure_table`** creates one it writes if it's missing. `scan` refuses a
+dataset the step didn't declare in `reads=`, and `append` and `commit` one it
+didn't declare in `writes=`. A table outside the warehouse (or with
+`ORCA_WAREHOUSE` unset) is used by location as before, and belongs to no
+dataset.
+
+This module imports iceberg, so only pipelines that use tables build it;
+`orca` itself doesn't.
 """
 
+from std.os import getenv
+
 from iceberg.append import prepare_append
-from iceberg.catalog.filesystem import Table
+from iceberg.catalog.filesystem import FilesystemCatalog, Table
 from iceberg.commit import FileChanges, prepare_commit
 from iceberg.scan import TableScan
+from iceberg.schema import Schema
+from iceberg.transforms import PartitionSpec
 from iceberg.write import WriteOptions, write_data_files
 from parquet import RecordBatch
 
 from orca.ctx import Ctx
+from orca.proc import absolute
 
 comptime _COMMIT_RETRIES = 4
 """How many times to reload and retry when another writer got there first."""
+
+
+def warehouse() -> String:
+    """`ORCA_WAREHOUSE`: the root datasets are found under, or empty."""
+    return getenv("ORCA_WAREHOUSE")
+
+
+def _norm(path: String) raises -> String:
+    var p = path.removeprefix("file://")
+    while p.endswith("/") and p.byte_length() > 1:
+        p = p[byte = : p.byte_length() - 1]
+    return absolute(String(p))
+
+
+def dataset_of(location: String) raises -> String:
+    """The dataset a table at `location` is, `namespace.table`, or empty if
+    it isn't directly under a namespace in the warehouse."""
+    var root = warehouse()
+    if not root:
+        return ""
+    var base = String(_norm(root), "/")
+    var loc = _norm(location)
+    if not loc.startswith(base):
+        return ""
+    var rel = loc[byte = base.byte_length() :]
+    var parts = rel.split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return ""
+    return String(parts[0], ".", parts[1])
+
+
+def _split(dataset: String) raises -> Tuple[String, String]:
+    var dot = dataset.rfind(".")
+    if dot <= 0 or dot == dataset.byte_length() - 1:
+        raise Error("orca: a dataset is named namespace.table, not ", dataset)
+    return (
+        String(dataset[byte=:dot]),
+        String(dataset[byte = dot + 1 :]),
+    )
+
+
+def _catalog() raises -> FilesystemCatalog:
+    var root = warehouse()
+    if not root:
+        raise Error(
+            "orca: ORCA_WAREHOUSE isn't set, so datasets can't be found"
+        )
+    return FilesystemCatalog.local(root)
+
+
+def table(mut ctx: Ctx, dataset: String) raises -> Table:
+    """The table of a dataset the step declared it reads or writes."""
+    if dataset not in ctx.declared_writes:
+        ctx.check_declared(dataset, write=False)
+    var name = _split(dataset)
+    return _catalog().load_table(name[0], name[1])
+
+
+def ensure_table(
+    mut ctx: Ctx,
+    dataset: String,
+    schema: Schema,
+    spec: PartitionSpec = PartitionSpec.unpartitioned(),
+) raises -> Table:
+    """The table of a dataset the step writes, created empty with `schema`
+    and `spec` if the warehouse doesn't have it yet."""
+    ctx.check_declared(dataset, write=True)
+    var name = _split(dataset)
+    var cat = _catalog()
+    if not cat.table_exists(name[0], name[1]):
+        try:
+            _ = cat.create_table(name[0], name[1], schema, spec)
+        except e:
+            # Another run, started at the same time, created it first.
+            if not cat.table_exists(name[0], name[1]):
+                raise e^
+    return cat.load_table(name[0], name[1])
 
 
 def scan(mut ctx: Ctx, table: Table) raises -> TableScan:
@@ -47,8 +139,10 @@ def scan(mut ctx: Ctx, table: Table) raises -> TableScan:
     step: the scan sees no files even if some were committed since.
     """
     var m = table.metadata.copy()
+    var dataset = dataset_of(m.location)
+    ctx.check_declared(dataset, write=False)
     var current = m.current_snapshot_id if m.has_current_snapshot else -1
-    var id = ctx.pin(m.location, current)
+    var id = ctx.pin(m.location, current, dataset)
     if id < 0:
         m.has_current_snapshot = False
         m.current_snapshot_id = -1
@@ -78,10 +172,12 @@ def append(
     or returns the snapshot an earlier attempt of this step committed."""
     table.refresh()
     var loc = table.metadata.location
+    var dataset = dataset_of(loc)
+    ctx.check_declared(dataset, write=True)
     var found = find_commit(ctx, table)
     if found >= 0:
         ctx.log(String("found its commit ", found, " to ", loc))
-        ctx.committed(loc, found)
+        ctx.committed(loc, found, dataset)
         return found
     var files = write_data_files(
         table.io,
@@ -105,7 +201,7 @@ def append(
                 raise e^
             table.refresh()
             continue
-        ctx.committed(loc, result.snapshot_id)
+        ctx.committed(loc, result.snapshot_id, dataset)
         table.refresh()
         return result.snapshot_id
 
@@ -122,10 +218,12 @@ def commit(
     step committed."""
     table.refresh()
     var loc = table.metadata.location
+    var dataset = dataset_of(loc)
+    ctx.check_declared(dataset, write=True)
     var found = find_commit(ctx, table)
     if found >= 0:
         ctx.log(String("found its commit ", found, " to ", loc))
-        ctx.committed(loc, found)
+        ctx.committed(loc, found, dataset)
         return found
     var attempt = 0
     while True:
@@ -140,6 +238,6 @@ def commit(
                 raise e^
             table.refresh()
             continue
-        ctx.committed(loc, result.snapshot_id)
+        ctx.committed(loc, result.snapshot_id, dataset)
         table.refresh()
         return result.snapshot_id
