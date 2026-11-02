@@ -7,7 +7,8 @@
 
 Each day's step makes a number from the date; the gather step sums them. It's
 scheduled at 02:30 New York time for the day before; on 2024-03-10 the clocks
-skip 02:30, so that day's fire is at 03:00.
+skip 02:30, so that day's fire is at 03:00. With `catchup=False`, a
+scheduler that was down starts only the latest fire it missed.
 """
 
 from dista import Seq
@@ -45,6 +46,7 @@ comptime DailyTrips = Pipeline[
     Total,
     partitions=Daily["2024-01-01"],
     schedule=Cron["30 2 * * *", "America/New_York"],
+    catchup=False,
 ]
 
 

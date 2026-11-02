@@ -83,6 +83,23 @@ def _migrations() -> List[List[String]]:
             table_name text NOT NULL,
             snapshot_id bigint NOT NULL)""",
         ],
+        # The scheduler: a pipeline's binary and since when it's scheduled
+        # (both on the scheduler's clock, which ORCA_NOW can fix), how often
+        # the scheduler started a run and when it retries it, and fires.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN binary_path text",
+            "ALTER TABLE orca.pipelines ADD COLUMN since bigint",
+            "ALTER TABLE orca.runs ADD COLUMN starts int NOT NULL DEFAULT 0",
+            "ALTER TABLE orca.runs ADD COLUMN retry_at bigint",
+            "CREATE INDEX runs_pipeline_status ON orca.runs (pipeline, status)",
+            """CREATE TABLE orca.fires (
+            pipeline text NOT NULL REFERENCES orca.pipelines (name),
+            fire_at bigint NOT NULL,
+            partition text NOT NULL,
+            run bigint REFERENCES orca.runs (id),
+            created timestamptz NOT NULL DEFAULT now(),
+            PRIMARY KEY (pipeline, fire_at))""",
+        ],
     ]
 
 
@@ -232,22 +249,27 @@ struct State(Movable):
     def claim(mut self, run: Int, owner: String, stale_seconds: Float64) raises:
         """Makes `owner` the run's writer, if no live process holds it.
 
-        A run can be claimed while it's unfinished (`running` with a stale or
-        cleared heartbeat) or `failed`. Raises otherwise, saying why.
+        A run can be claimed while it's `queued`, unfinished (`running` with
+        a stale or cleared heartbeat; the scheduler starts a run with none)
+        or `failed`. Raises otherwise, saying why.
         """
         var res = self.conn.query(
             (
                 "UPDATE orca.runs SET status = 'running', owner = $2, heartbeat"
-                " = now(), ended = NULL WHERE id = $1 AND status IN ('running',"
-                " 'failed') AND (heartbeat IS NULL OR heartbeat < now() -"
-                " make_interval(secs => $3)) RETURNING id"
+                " = now(), ended = NULL WHERE id = $1 AND status IN ('queued',"
+                " 'running', 'failed') AND (heartbeat IS NULL OR heartbeat <"
+                " now() - make_interval(secs => $3)) RETURNING id"
             ),
             Params().int64(Int64(run)).text(owner).float64(stale_seconds),
         )
         if len(res) == 1:
             return
         var info = self.run_info(run)
-        if info.status != RUNNING and info.status != FAILED:
+        if (
+            info.status != RUNNING
+            and info.status != FAILED
+            and info.status != "queued"
+        ):
             raise Error("orca: run ", run, " is ", info.status)
         raise Error(
             "orca: run ",

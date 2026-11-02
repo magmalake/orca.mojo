@@ -47,11 +47,8 @@ out=$(./build/daily fires 2 --after 2024-03-09T12:00Z) || fail "fires exited $?"
 out=$(ORCA_NOW=2024-11-02T12:00Z ./build/daily fires 1) || fail "fires exited $?"
 [ "$out" = "2024-11-03T07:30:00Z 2024-11-03T02:30:00 2024-11-02" ] \
     || fail "ORCA_NOW wasn't used: $out"
-set +e
-./build/toy fires > /dev/null 2>&1
-code=$?
-set -e
-[ "$code" -eq 2 ] || fail "fires without a schedule exited $code, not 2"
+./build/toy fires 1 --after 2024-01-15T00:00Z | grep -q '^2024-02-02T03:00:00Z 2024-02-02T03:00:00 2024-01$' \
+    || fail "toy fires"
 
 for args in "" "run" "run --partitions 2024-03..2024-01" "nope"; do
     set +e
