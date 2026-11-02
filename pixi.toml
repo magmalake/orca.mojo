@@ -22,10 +22,12 @@ test-state = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_st
 test-kill = { cmd = "scripts/with-postgres.sh tests/kill.sh" }
 test-tasks = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_tasks.mojo -o build/test-tasks && ./build/test-tasks" }
 test-logs = { cmd = "scripts/with-postgres.sh tests/logs.sh" }
+test-scheduler = { cmd = "scripts/with-postgres.sh tests/scheduler.sh" }
 test-chaos = { cmd = "scripts/with-postgres.sh tests/chaos.sh" }
-test = { depends-on = ["test-steps", "test-cron", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-chaos"] }
+test = { depends-on = ["test-steps", "test-cron", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-chaos"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
+orca = { cmd = "mkdir -p build && mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca" }
 daily = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/daily.mojo -o build/daily" }
 
 # Stable is the default: orca targets Mojo 1.2.0. dista compiles from a
@@ -60,8 +62,8 @@ DEP_INC = "-I ../dista.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.m
 modular = ">=26.8.0.dev2026102305,<28"
 
 [feature.fmt.tasks]
-fmt = { cmd = "mojo format src tests examples fuzz" }
-format-check = { cmd = "mojo format src tests examples fuzz && git diff --exit-code -- src tests examples fuzz" }
+fmt = { cmd = "mojo format src tests examples fuzz bin" }
+format-check = { cmd = "mojo format src tests examples fuzz bin && git diff --exit-code -- src tests examples fuzz bin" }
 
 # The data environment adds orca.tables, which reads and commits Iceberg
 # tables. iceberg, parquet and their siblings compile from checkouts next to

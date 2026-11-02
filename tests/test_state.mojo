@@ -74,8 +74,8 @@ comptime Retrying = Pipeline["retrying", MonthNo, Flaky, Add]
 def test_migrate_is_idempotent() raises:
     var db = _db()
     db.migrate()
-    assert_equal(_count("SELECT max(version) AS n FROM orca.schema_version"), 1)
-    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 1)
+    assert_equal(_count("SELECT max(version) AS n FROM orca.schema_version"), 2)
+    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 2)
 
 
 def test_claim_needs_a_stale_heartbeat() raises:
@@ -92,6 +92,21 @@ def test_claim_needs_a_stale_heartbeat() raises:
         Params().int64(Int64(run)),
     )
     db.claim(run, "b:2", 30.0)
+    assert_equal(db.run_info(run).owner, "b:2")
+
+
+def test_a_queued_run_can_be_claimed() raises:
+    var db = _db()
+    var run = _new_run(db, "a:1")
+    _ = db.conn.execute(
+        (
+            "UPDATE orca.runs SET status = 'queued', owner = NULL, heartbeat ="
+            " NULL WHERE id = $1"
+        ),
+        Params().int64(Int64(run)),
+    )
+    db.claim(run, "b:2", 30.0)
+    assert_equal(db.run_info(run).status, "running")
     assert_equal(db.run_info(run).owner, "b:2")
 
 

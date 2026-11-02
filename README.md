@@ -22,6 +22,7 @@ pixi run daily && ./build/daily run --partitions 2024-02-27..2024-03-02   # by d
 ORCA_DATABASE_URL=postgresql:///orca ./build/toy run --partitions 2024-01..2024-03
 ./build/toy status
 pixi run -e data taxi && pixi run -e data ./build/taxi run --partitions 2023-01..2024-12
+pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   # needs ORCA_DATABASE_URL
 ```
 
 Part of [magmalake](https://magmalake.dev).

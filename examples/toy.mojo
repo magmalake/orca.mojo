@@ -4,6 +4,10 @@
     ./build/toy describe
     ./build/toy run --partitions 2024-01..2024-03
 
+It's scheduled at 03:00 UTC on the 2nd of each month, for the month before,
+from 2024-01, with at most two runs at once: tests/scheduler.sh drives it
+through the `orca` scheduler.
+
 A partition whose month is in ORCA_TOY_FAIL (e.g. `2024-02`) fails its
 `measure` step, to show the rest of the run carrying on. ORCA_TOY_SLEEP makes
 every step take that many seconds, so tests/kill.sh has time to kill it.
@@ -13,7 +17,17 @@ from std.os import getenv
 from std.time import sleep
 
 from dista import Seq
-from orca import Ctx, Gather, Mapped, Month, Pipeline, Step, orca_main
+from orca import (
+    Cron,
+    Ctx,
+    Gather,
+    Mapped,
+    Month,
+    Monthly,
+    Pipeline,
+    Step,
+    orca_main,
+)
 
 
 def _nap() raises:
@@ -63,7 +77,15 @@ comptime Measure = Step[
     "measure", Measured, Measured, measure, Mapped, after=Days
 ]
 comptime Total = Step["total", Seq[Measured], Int, total, Gather, after=Measure]
-comptime Toy = Pipeline["toy", Days, Measure, Total]
+comptime Toy = Pipeline[
+    "toy",
+    Days,
+    Measure,
+    Total,
+    partitions=Monthly["2024-01"],
+    schedule=Cron["0 3 2 * *"],
+    max_runs=2,
+]
 
 
 def main() raises:

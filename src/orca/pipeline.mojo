@@ -126,10 +126,16 @@ struct Pipeline[
     schedule: ScheduleLike = NoSchedule,
     fills: Fill = Previous,
     catchup: Bool = True,
+    max_runs: Int = 1,
+    run_retries: Int = 3,
 ]:
     """A pipeline named `name` of the steps `Ts`, in run order, whose steps
     call the dista `tasks`, over the keys of `partitions`; run by
-    `schedule` for the partition its fires `fills` (`orca.schedule`)."""
+    `schedule` for the partition its fires `fills` (`orca.schedule`).
+
+    The scheduler runs at most `max_runs` of its runs at once, and starts a
+    failed scheduled or backfilled run again up to `run_retries` times, with
+    backoff (`orca.scheduler`)."""
 
     comptime K = Self.partitions.K
     """The partition key."""
@@ -146,6 +152,8 @@ struct Pipeline[
         """Asserts at compile time that the pipeline is well formed."""
         comptime assert Self.name != "", "a pipeline needs a name"
         comptime assert Self.Ts.length > 0, "a pipeline needs a step"
+        comptime assert Self.max_runs >= 1, "max_runs must be at least 1"
+        comptime assert Self.run_retries >= 0, "run_retries can't be negative"
         comptime for i in range(Self.Ts.length):
             Self.Ts[i].check()
             comptime assert (
@@ -220,6 +228,8 @@ struct Pipeline[
             out.write("}, ")
         else:
             out.write('"schedule": null, ')
+        out.write('"max_runs": ', Self.max_runs, ", ")
+        out.write('"run_retries": ', Self.run_retries, ", ")
         out.write('"steps": [')
         comptime for i in range(Self.Ts.length):
             comptime S = Self.Ts[i]
