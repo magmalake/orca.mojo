@@ -29,7 +29,10 @@ See DESIGN.md for how it works and where it's going.
 
 from orca.cli import orca_main, report
 from orca.ctx import Ctx
-from orca.month import Month, parse_months
+from orca.day import Day
+from orca.key import Key, parse_keys
+from orca.month import Month, days_in, parse_months
+from orca.partitions import Daily, Monthly, Partitions, parse_partitions
 from orca.pipeline import (
     FAILED,
     SKIPPED,

@@ -5,9 +5,11 @@ ends included. A run is over a list of months; a mapped step runs once for
 each.
 """
 
+from orca.key import Key, parse_keys
+
 
 @fieldwise_init
-struct Month(Copyable, Equatable, Movable, Writable):
+struct Month(Key):
     """A calendar month, `month` from 1 to 12."""
 
     var year: Int
@@ -53,28 +55,17 @@ struct Month(Copyable, Equatable, Movable, Writable):
         writer.write(self.month)
 
 
+def days_in(year: Int, month: Int) -> Int:
+    """The number of days in a month of the Gregorian calendar."""
+    if month == 2:
+        var leap = (year % 4 == 0 and year % 100 != 0) or year % 400 == 0
+        return 29 if leap else 28
+    if month == 4 or month == 6 or month == 9 or month == 11:
+        return 30
+    return 31
+
+
 def parse_months(s: StringSlice) raises -> List[Month]:
     """Reads `YYYY-MM`, `YYYY-MM..YYYY-MM` (both ends included), or a
     comma-separated list of either, in the order given."""
-    var out = List[Month]()
-    for part in s.split(","):
-        var ends = part.split("..")
-        if len(ends) == 1:
-            out.append(Month.parse(ends[0]))
-        elif len(ends) == 2:
-            var m = Month.parse(ends[0])
-            var last = Month.parse(ends[1])
-            if last < m:
-                raise Error("month range runs backwards: '", part, "'")
-            while True:
-                out.append(m.copy())
-                if m == last:
-                    break
-                m = m.next()
-        else:
-            raise Error("not a month range: '", part, "'")
-    for i in range(len(out)):
-        for j in range(i + 1, len(out)):
-            if out[i] == out[j]:
-                raise Error("month ", out[i], " given twice")
-    return out^
+    return parse_keys[Month](s)

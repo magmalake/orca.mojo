@@ -1,4 +1,4 @@
-# expect: a first gather step takes Seq[Month]
+# expect: a first gather step takes a Seq of the partition key
 from dista import Seq
 from orca import Ctx, Gather, Mapped, Month, Pipeline, Step
 

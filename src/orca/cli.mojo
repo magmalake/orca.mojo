@@ -33,13 +33,13 @@ from threads import TypedPool
 from orca.heartbeat import Beat, beat, heartbeat_interval
 from orca.logs import run_dir
 from orca.tasks import workers
-from orca.month import Month, parse_months
+from orca.partitions import parse_partitions
 from orca.pipeline import FAILED, SUCCEEDED, Pipeline, RunResult
 from orca.state import PgStore, State, process_owner
 
 comptime USAGE = """usage:
   <pipeline> describe
-  <pipeline> run --partitions YYYY-MM[..YYYY-MM][,...]
+  <pipeline> run --partitions KEY[..KEY][,...]   (YYYY-MM, or YYYY-MM-DD daily)
   <pipeline> resume <run> [--allow-new-code]
   <pipeline> status [<run>]"""
 
@@ -88,14 +88,14 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
                 _usage(String("unknown argument: ", args[i]))
         if not partitions:
             _usage("run needs --partitions")
-        var months: List[Month]
+        var keys: List[P.K]
         try:
-            months = parse_months(partitions)
+            keys = parse_partitions[P.partitions](partitions)
         except e:
             _usage(String(e))
             return 2
         if not url:
-            var res = P.run(months)
+            var res = P.run(keys)
             report(res)
             return 0 if res.succeeded() else 1
         var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
@@ -105,11 +105,11 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         db.register(P.name, hash, P.describe())
         var owner = process_owner()
         var key = String()
-        for j in range(len(months)):
-            key.write("," if j > 0 else "", months[j])
+        for j in range(len(keys)):
+            key.write("," if j > 0 else "", keys[j])
         var run = db.create_run(P.name, hash, key, "manual", owner)
         print("run", run)
-        return _execute[P](rt, db^, url, run, owner, months, RunResult())
+        return _execute[P](rt, db^, url, run, owner, keys, RunResult())
     if cmd == "resume":
         if not url:
             _usage("resume needs ORCA_DATABASE_URL")
@@ -165,7 +165,13 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
             "interrupted",
         )
         return _execute[P](
-            rt, db^, url, run, owner, parse_months(info.partitions), prior^
+            rt,
+            db^,
+            url,
+            run,
+            owner,
+            parse_partitions[P.partitions](info.partitions),
+            prior^,
         )
     if cmd == "status":
         if not url:
@@ -207,7 +213,7 @@ def _execute[
     url: String,
     run: Int,
     owner: String,
-    months: List[Month],
+    keys: List[P.K],
     var prior: RunResult,
 ) raises -> Int:
     """Runs what's left of `run` as its owner, with a heartbeat, then ends it.
@@ -219,7 +225,7 @@ def _execute[
     var b = Beat(url, run, owner, heartbeat_interval(_stale_seconds()))
     var pool = TypedPool.start[beat](1, b)
     var store = PgStore(db^, url, run, owner, hex(P.registry_hash()))
-    var res = P.execute(store, prior^, months, run, Int(Pointer(to=rt)))
+    var res = P.execute(store, prior^, keys, run, Int(Pointer(to=rt)))
     pool.shutdown()
     var dir = run_dir(P.name, run)
     comptime if P.tasks.HAS_RUNTIME:

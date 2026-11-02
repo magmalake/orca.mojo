@@ -18,14 +18,15 @@ The edge is checked when the pipeline is compiled:
 
 | Step | Its input must be |
 |---|---|
-| first, mapped | `Month`, the partition key |
-| first, gather | `Seq[Month]`, every partition of the run |
+| first, mapped | the pipeline's partition key, such as `Month` |
+| first, gather | a `Seq` of the key, every partition of the run |
 | mapped, after a mapped step | that step's output |
 | gather, after a mapped step | `Seq` of that step's output, one per partition in run order |
 | gather, after a gather step | that step's output |
 
 A mapped step can't follow a gather step. Types are compared by their
-reflected names, which include their module.
+reflected names, which include their module; the first step's input is
+checked by `Pipeline.check`, which knows the key.
 """
 
 from std.reflection import reflect, reflect_fn
@@ -34,7 +35,6 @@ from dista.codec import decode, encode
 from dista.seq import Seq
 
 from orca.ctx import Ctx
-from orca.month import Month
 
 
 @fieldwise_init
@@ -212,14 +212,9 @@ struct Step[
         comptime assert Self.retries >= 0, "retries can't be negative"
         comptime a = reflect[Self.A_].name()
         comptime if Self.after.step_name() == "":
-            comptime if Self.kind_ == Gather:
-                comptime assert (
-                    a == reflect[Seq[Month]].name()
-                ), "a first gather step takes Seq[Month], the run's partitions"
-            else:
-                comptime assert (
-                    a == reflect[Month].name()
-                ), "a first mapped step takes Month, the partition key"
+            # A first step takes the pipeline's partition key, which the
+            # pipeline checks: a step doesn't know it.
+            pass
         elif Self.kind_ == Gather:
             comptime if Self.after.kind() == Gather:
                 comptime assert (

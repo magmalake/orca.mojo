@@ -27,6 +27,20 @@ echo "$out" | grep -q '^measure 2024-03 succeeded$' \
     || fail "other partitions didn't carry on"
 echo "$out" | grep -q '^total skipped' || fail "total wasn't skipped"
 
+# A daily pipeline: days are keys, and days before its start are refused.
+# shellcheck disable=SC2086
+mojo build -I src $DEP_INC examples/daily.mojo -o build/daily
+./build/daily describe | grep -q '"partitions": {"kind": "daily", "start": "2024-01-01"}' \
+    || fail "daily describe"
+out=$(./build/daily run --partitions 2024-02-27..2024-03-02) || fail "daily run exited $?"
+echo "$out" | grep -q '^trips 2024-02-29 succeeded$' || fail "no 2024-02-29"
+echo "$out" | grep -q '5 days, 1287 trips' || fail "wrong daily total"
+set +e
+./build/daily run --partitions 2023-12-31..2024-01-01 > /dev/null 2>&1
+code=$?
+set -e
+[ "$code" -eq 2 ] || fail "a day before the start exited $code, not 2"
+
 for args in "" "run" "run --partitions 2024-03..2024-01" "nope"; do
     set +e
     # shellcheck disable=SC2086

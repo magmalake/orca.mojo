@@ -1,4 +1,4 @@
-"""Months, pipelines, describe and the in-memory executor."""
+"""Months, days, pipelines, describe and the in-memory executor."""
 
 from std.testing import (
     TestSuite,
@@ -14,12 +14,16 @@ from orca import (
     SKIPPED,
     SUCCEEDED,
     Ctx,
+    Daily,
+    Day,
     Gather,
     Mapped,
     Month,
+    Monthly,
     Pipeline,
     Step,
     parse_months,
+    parse_partitions,
 )
 
 
@@ -54,6 +58,52 @@ def test_month_ranges() raises:
         _ = parse_months("2024-03..2024-01")
     with assert_raises(contains="given twice"):
         _ = parse_months("2024-01..2024-03,2024-02")
+
+
+# --- days ---
+
+
+def test_day_parse_and_write() raises:
+    var d = Day.parse("2024-02-29")
+    assert_equal(d.year, 2024)
+    assert_equal(d.month, 2)
+    assert_equal(d.day, 29)
+    assert_equal(String(d), "2024-02-29")
+    assert_equal(String(d.next()), "2024-03-01")
+    assert_equal(String(Day(2023, 12, 31).next()), "2024-01-01")
+    assert_equal(String(Day(2023, 2, 28).next()), "2023-03-01")
+    assert_equal(String(Day(2000, 2, 28).next()), "2000-02-29")
+    assert_equal(String(Day(1900, 2, 28).next()), "1900-03-01")
+    for bad in [
+        "2023-02-29",
+        "2024-04-31",
+        "2024-01-00",
+        "2024-1-01",
+        "2024-01",
+    ]:
+        with assert_raises(contains="not a day"):
+            _ = Day.parse(bad)
+
+
+def test_day_ranges() raises:
+    var ds = parse_partitions[Daily[]]("2024-02-27..2024-03-02")
+    assert_equal(len(ds), 5)
+    assert_equal(String(ds[2]), "2024-02-29")
+    assert_equal(len(parse_partitions[Daily[]]("2011-01-01..2024-12-31")), 5114)
+    with assert_raises(contains="given twice"):
+        _ = parse_partitions[Daily[]]("2024-01-01..2024-01-03,2024-01-02")
+
+
+def test_keys_before_the_start_are_refused() raises:
+    assert_equal(
+        len(parse_partitions[Monthly["2011-01"]]("2011-01..2011-03")), 3
+    )
+    with assert_raises(
+        contains="before the pipeline's first partition, 2011-01"
+    ):
+        _ = parse_partitions[Monthly["2011-01"]]("2010-12..2011-01")
+    with assert_raises(contains="before the pipeline's first partition"):
+        _ = parse_partitions[Daily["2024-01-02"]]("2024-01-01")
 
 
 # --- a pipeline: key -> label -> total, plus a gather over the gather ---
@@ -98,6 +148,59 @@ comptime Labels = Pipeline["labels", Key, Label, Total, Twice]
 
 comptime Count = Step["count", Seq[Month], Int, count, Gather]
 comptime Counts = Pipeline["counts", Count]
+
+
+# A daily pipeline: per-day sizes, then their sum.
+
+
+def day_size(mut ctx: Ctx, d: Day) raises -> Int:
+    return d.day
+
+
+def day_total(mut ctx: Ctx, sizes: Seq[Int]) raises -> Int:
+    var t = 0
+    for i in range(len(sizes)):
+        t += sizes[i]
+    return t
+
+
+comptime DaySize = Step["size", Day, Int, day_size, Mapped]
+comptime DayTotal = Step[
+    "total", Seq[Int], Int, day_total, Gather, after=DaySize
+]
+comptime Days = Pipeline[
+    "days", DaySize, DayTotal, partitions=Daily["2024-01-01"]
+]
+
+comptime DayCount = Step["count", Seq[Day], Int, count_days, Gather]
+comptime DayCounts = Pipeline["day_counts", DayCount, partitions=Daily[]]
+
+
+def count_days(mut ctx: Ctx, days: Seq[Day]) raises -> Int:
+    return len(days)
+
+
+def test_a_daily_pipeline() raises:
+    var ds = parse_partitions[Days.partitions]("2024-02-27..2024-03-02")
+    var res = Days.run(ds)
+    assert_true(res.succeeded())
+    assert_equal(res.steps[0].partition, "2024-02-27")
+    assert_equal(res.output[Int]("size", "2024-02-29"), 29)
+    assert_equal(res.output[Int]("total"), 27 + 28 + 29 + 1 + 2)
+    assert_equal(
+        DayCounts.run(
+            parse_partitions[Daily[]]("2024-01-01..2024-12-31")
+        ).output[Int]("count"),
+        366,
+    )
+    var d = Days.describe()
+    assert_true(
+        '"partitions": {"kind": "daily", "start": "2024-01-01"}, "steps"' in d
+    )
+    assert_true('"input": "orca.day.Day"' in d)
+    assert_true(
+        '"partitions": {"kind": "monthly", "start": null}' in Labels.describe()
+    )
 
 
 def test_runs_in_order() raises:

@@ -6,6 +6,10 @@ comptime Taxi = Pipeline["taxi", Download, Load, Compact]
 var result = Taxi.run(parse_months("2024-01..2024-03"))
 ```
 
+A pipeline is partitioned by month unless it says otherwise with
+`partitions=` (`orca.partitions`): its first step takes the partition key,
+or a `Seq` of them for a gather step.
+
 Steps are listed after the step they follow, so the declared order is a
 valid run order; `check` asserts it at compile time, along with every edge's
 types and unique names. Every function that runs a pipeline calls `check`,
@@ -23,10 +27,11 @@ it, are skipped, while other partitions carry on.
 from dista.codec import decode, encode, put_scalar
 from dista.seq import Seq
 from dista.task import fnv1a64
+from std.reflection import reflect
 
 from orca.ctx import Ctx
 from orca.json import quote
-from orca.month import Month
+from orca.partitions import Monthly, Partitions
 from orca.step import Gather, Mapped, StepLike
 from orca.store import MemoryStore, Store
 from orca.logs import attempt_log
@@ -111,9 +116,17 @@ struct RunResult(Movable):
         return decode[T](Span(s.output), pos)
 
 
-struct Pipeline[name: StaticString, *Ts: StepLike, tasks: TaskSet = NoTasks]:
+struct Pipeline[
+    name: StaticString,
+    *Ts: StepLike,
+    tasks: TaskSet = NoTasks,
+    partitions: Partitions = Monthly[],
+]:
     """A pipeline named `name` of the steps `Ts`, in run order, whose steps
-    call the dista `tasks`."""
+    call the dista `tasks`, over the keys of `partitions`."""
+
+    comptime K = Self.partitions.K
+    """The partition key."""
 
     @staticmethod
     def _find(step: StaticString) -> Int:
@@ -132,7 +145,19 @@ struct Pipeline[name: StaticString, *Ts: StepLike, tasks: TaskSet = NoTasks]:
             comptime assert (
                 Self._find(Self.Ts[i].step_name()) == i
             ), "two steps share a name"
-            comptime if Self.Ts[i].upstream() != "":
+            comptime if Self.Ts[i].upstream() == "":
+                comptime if Self.Ts[i].kind() == Gather:
+                    comptime assert (
+                        Self.Ts[i].input_type() == reflect[Seq[Self.K]].name()
+                    ), (
+                        "a first gather step takes a Seq of the partition key,"
+                        " the run's partitions"
+                    )
+                else:
+                    comptime assert (
+                        Self.Ts[i].input_type() == reflect[Self.K].name()
+                    ), "a first mapped step takes the pipeline's partition key"
+            else:
                 comptime j = Self._find(Self.Ts[i].upstream())
                 comptime assert (
                     j >= 0
@@ -164,16 +189,23 @@ struct Pipeline[name: StaticString, *Ts: StepLike, tasks: TaskSet = NoTasks]:
             )
         for t in Self.tasks.names():
             all.write("task\t", t, "\n")
+        all.write("partitions\t", Self.partitions.kind(), "\n")
         return fnv1a64(all)
 
     @staticmethod
     def describe() -> String:
-        """The DAG as JSON: the pipeline's name, its registry hash, and each
-        step's name, kind, upstream, function and types, in run order."""
+        """The DAG as JSON: the pipeline's name, its registry hash, its
+        partitions, each step's name, kind, upstream, function and types in
+        run order, and its dista tasks."""
         Self.check()
         var out = String("{")
         out.write('"pipeline": ', quote(Self.name), ", ")
         out.write('"registry_hash": ', quote(hex(Self.registry_hash())), ", ")
+        out.write('"partitions": {"kind": ', quote(Self.partitions.kind()))
+        if Self.partitions.start():
+            out.write(', "start": ', quote(Self.partitions.start()), "}, ")
+        else:
+            out.write(', "start": null}, ')
         out.write('"steps": [')
         comptime for i in range(Self.Ts.length):
             comptime S = Self.Ts[i]
@@ -198,13 +230,13 @@ struct Pipeline[name: StaticString, *Ts: StepLike, tasks: TaskSet = NoTasks]:
         return out^
 
     @staticmethod
-    def run(partitions: List[Month], run: Int = 0) raises -> RunResult:
-        """Runs every step over `partitions`, in order, recording nothing,
+    def run(keys: List[Self.K], run: Int = 0) raises -> RunResult:
+        """Runs every step over `keys`, in order, recording nothing,
         with a dista runtime of its own if the pipeline has tasks."""
         var store = MemoryStore()
         var rt = Self.tasks.start(workers() if Self.tasks.HAS_RUNTIME else 0)
         var res = Self.execute(
-            store, RunResult(), partitions, run, Int(Pointer(to=rt))
+            store, RunResult(), keys, run, Int(Pointer(to=rt))
         )
         _ = rt^  # alive until the steps are done
         return res^
@@ -215,11 +247,11 @@ struct Pipeline[name: StaticString, *Ts: StepLike, tasks: TaskSet = NoTasks]:
     ](
         mut store: S,
         var prior: RunResult,
-        partitions: List[Month],
+        keys: List[Self.K],
         run: Int,
         runtime: Int = 0,
     ) raises -> RunResult:
-        """Runs the steps over `partitions` that haven't succeeded in `prior`,
+        """Runs the steps over `keys` that haven't succeeded in `prior`,
         in order, reporting each attempt to `store`.
 
         `prior` holds the steps a run had already finished when it's resumed,
@@ -234,7 +266,7 @@ struct Pipeline[name: StaticString, *Ts: StepLike, tasks: TaskSet = NoTasks]:
         comptime for i in range(Self.Ts.length):
             comptime T = Self.Ts[i]
             comptime if T.kind() == Mapped:
-                for p in partitions:
+                for p in keys:
                     var key = String(p)
                     if Self._done(res, T.step_name(), key):
                         continue
@@ -257,7 +289,7 @@ struct Pipeline[name: StaticString, *Ts: StepLike, tasks: TaskSet = NoTasks]:
                 var input = List[UInt8]()
                 var blocked = String()
                 comptime if T.upstream() == "":
-                    encode(Seq[Month](partitions.copy()), input)
+                    encode(Seq[Self.K](keys.copy()), input)
                 elif Self.Ts[Self._find(T.upstream())].kind() == Gather:
                     var j = res.find(T.upstream(), "")
                     if j < 0 or res.steps[j].status != SUCCEEDED:
@@ -268,8 +300,8 @@ struct Pipeline[name: StaticString, *Ts: StepLike, tasks: TaskSet = NoTasks]:
                     # A Seq on the wire is a count, then each element's
                     # encoding, so the upstream outputs are concatenated
                     # as they are.
-                    put_scalar[DType.int64](input, Int64(len(partitions)))
-                    for p in partitions:
+                    put_scalar[DType.int64](input, Int64(len(keys)))
+                    for p in keys:
                         var j = res.find(T.upstream(), String(p))
                         if j < 0 or res.steps[j].status != SUCCEEDED:
                             if blocked:

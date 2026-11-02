@@ -1,4 +1,4 @@
-# expect: a first mapped step takes Month
+# expect: a first mapped step takes the pipeline's partition key
 from dista import Seq
 from orca import Ctx, Gather, Mapped, Month, Pipeline, Step
 
