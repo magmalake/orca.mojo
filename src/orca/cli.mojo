@@ -33,6 +33,7 @@ from threads import TypedPool
 from orca.heartbeat import Beat, beat, heartbeat_interval
 from orca.logs import run_dir
 from orca.tasks import workers
+from orca.civil import Civil, now, parse_time
 from orca.partitions import parse_partitions
 from orca.pipeline import FAILED, SUCCEEDED, Pipeline, RunResult
 from orca.state import PgStore, State, process_owner
@@ -41,7 +42,8 @@ comptime USAGE = """usage:
   <pipeline> describe
   <pipeline> run --partitions KEY[..KEY][,...]   (YYYY-MM, or YYYY-MM-DD daily)
   <pipeline> resume <run> [--allow-new-code]
-  <pipeline> status [<run>]"""
+  <pipeline> status [<run>]
+  <pipeline> fires [<count>] [--after YYYY-MM-DDTHH:MM[:SS]Z]"""
 
 
 def _usage(msg: String = ""):
@@ -74,6 +76,12 @@ def orca_main[P: type_of(Pipeline)]() raises:
 def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
     var cmd = args[1]
     var url = getenv("ORCA_DATABASE_URL")
+    # A schedule is checked on every command, so a binary whose cron
+    # expression or zone is bad can't be registered or run.
+    comptime if P.scheduled():
+        _ = P.load_schedule()
+    if cmd == "fires":
+        return _fires[P](args)
     if cmd == "describe" and len(args) == 2:
         print(P.describe())
         return 0
@@ -195,6 +203,40 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
             return 0
     _usage()
     return 2
+
+
+def _fires[P: type_of(Pipeline)](args: List[String]) raises -> Int:
+    """The schedule's next fires after now (or `--after`), each with the
+    partition it fills: UTC time, wall-clock time, partition."""
+    comptime if not P.scheduled():
+        _usage(String("pipeline ", P.name, " has no schedule"))
+        return 2
+    var count = 5
+    var after = now()
+    var i = 2
+    while i < len(args):
+        if args[i] == "--after" and i + 1 < len(args):
+            try:
+                after = parse_time(args[i + 1])
+            except e:
+                _usage(String(e))
+            i += 2
+        else:
+            try:
+                count = Int(args[i])
+            except:
+                _usage(String("not a count: ", args[i]))
+            i += 1
+    var s = P.load_schedule()
+    var t = after
+    for _ in range(count):
+        t = s.next_fire(t)
+        print(
+            String(Civil.of(t), "Z"),
+            String(Civil.of(s.zone.to_local(t))),
+            P.fills_for(t, s),
+        )
+    return 0
 
 
 def _stale_seconds() raises -> Float64:

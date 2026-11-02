@@ -15,6 +15,7 @@ postgresql = ">=16,<19"
 
 [tasks]
 test-steps = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_steps.mojo -o build/test-steps && ./build/test-steps" }
+test-cron = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_cron.mojo -o build/test-cron && ./build/test-cron" }
 test-cli = { cmd = "tests/cli.sh" }
 test-compile-fail = { cmd = "tests/compile_fail.sh" }
 test-state = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_state.mojo -o build/test-state && scripts/with-postgres.sh ./build/test-state" }
@@ -22,7 +23,7 @@ test-kill = { cmd = "scripts/with-postgres.sh tests/kill.sh" }
 test-tasks = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_tasks.mojo -o build/test-tasks && ./build/test-tasks" }
 test-logs = { cmd = "scripts/with-postgres.sh tests/logs.sh" }
 test-chaos = { cmd = "scripts/with-postgres.sh tests/chaos.sh" }
-test = { depends-on = ["test-steps", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-chaos"] }
+test = { depends-on = ["test-steps", "test-cron", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-chaos"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
 daily = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/daily.mojo -o build/daily" }
@@ -99,9 +100,11 @@ mozz_mlake = { git = "https://github.com/magmalake/mozz_mlake.git", rev = "bd84a
 fuzz-months = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_months.mojo -o build/fuzz-months && ./build/fuzz-months" }
 fuzz-inputs = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_inputs.mojo -o build/fuzz-inputs && ./build/fuzz-inputs" }
 fuzz-days = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_days.mojo -o build/fuzz-days && ./build/fuzz-days" }
+fuzz-cron = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_cron.mojo -o build/fuzz-cron && ./build/fuzz-cron" }
+fuzz-tz = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_tz.mojo -o build/fuzz-tz && ./build/fuzz-tz" }
 fuzz-json = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_json.mojo -o build/fuzz-json && ./build/fuzz-json" }
 fuzz-summary = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_summary.mojo -o build/fuzz-summary && ./build/fuzz-summary" }
-fuzz = { depends-on = ["fuzz-months", "fuzz-days", "fuzz-inputs", "fuzz-json", "fuzz-summary"] }
+fuzz = { depends-on = ["fuzz-months", "fuzz-days", "fuzz-cron", "fuzz-tz", "fuzz-inputs", "fuzz-json", "fuzz-summary"] }
 
 [environments]
 default = ["stable"]
