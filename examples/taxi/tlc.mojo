@@ -5,15 +5,22 @@ The table is taxibench's, field for field: the same schema, with the same
 field IDs, partitioned by `month(tpep_pickup_datetime)` as `pickup_month`, so
 the two loads can be compared row for row.
 
-The files aren't consistent with each other. The 2023 months type
-`VendorID`, `passenger_count`, `RatecodeID`, `PULocationID` and
-`DOLocationID` as int64 or double and spell the airport fee `airport_fee`;
-the 2024 months narrow them to int32 and int64 and spell it `Airport_fee`.
+The files aren't consistent with each other. All of 2011 to 2024 have the
+same 19 columns, but not the same types:
+
+- 2011 to mid-2018 type `VendorID`, `passenger_count`, `RatecodeID` and the
+  location IDs as int64; mid-2018 to 2023-01 make `passenger_count` and
+  `RatecodeID` doubles; 2023-02 on narrow `VendorID` and the location IDs
+  to int32 and spell the airport fee `Airport_fee`.
+- `congestion_surcharge` (charged from 2019) and `airport_fee` (from 2021)
+  are null before then, and a file whose column is all null types it as
+  int32 rather than double, as does 2014-08's `improvement_surcharge`.
+
 `read_month` renames a column to the table's spelling, and iceberg's writer
 casts every column to the table's type (a double to an int truncates, as
-taxibench's `safe=False` cast does). Every file also has a handful of rows
-dated outside its month, anywhere from 2001 to 2098; `read_month` drops them,
-as taxibench does, and counts them.
+taxibench's `safe=False` cast does; an all-null int32 stays null). Every
+file also has a handful of rows dated outside its month, anywhere from 2001
+to 2098; `read_month` drops them, as taxibench does, and counts them.
 """
 
 from iceberg.io import FileIO, join_path

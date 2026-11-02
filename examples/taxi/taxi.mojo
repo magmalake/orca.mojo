@@ -1,6 +1,6 @@
 """The NYC yellow-taxi load as an orca pipeline: download each month's TLC
-file, load it into a month-partitioned Iceberg table, then compact the table
-to one file per month.
+file, load it into a month-partitioned Iceberg table, then compact the months
+the run loaded to one file each.
 
     pixi run -e data taxi
     pixi run -e data ./build/taxi run --partitions 2023-01..2024-12
@@ -10,6 +10,19 @@ table does, and a run killed during the load resumes at the month it was on.
 With ORCA_DATABASE_URL set the run is recorded, so `taxi resume <run>` can
 finish it.
 
+Phase 2's gate schedules it. The partitions are the months from 2011-01, the
+first the TLC publishes in this form, and it fires at 06:00 UTC on the 2nd
+for the month before, four runs at most at once:
+
+    pixi run -e data orca
+    ./build/orca register ./build/taxi
+    ./build/orca backfill taxi 2011-01..2024-12
+    ./build/orca scheduler
+
+The TLC publishes a month about two months after it ends, so a fire for the
+month just ended fails its download, is retried with backoff and then fails;
+a backfill of the month once it's out loads it.
+
 - `TAXI_WAREHOUSE` (default `build/taxi-data/warehouse`): the warehouse that holds
   `taxi.trips`, created by the first load.
 - `TAXI_TLC` (default `build/taxi-data/tlc`): where the downloads go. A month whose
@@ -18,8 +31,9 @@ finish it.
   local directory of the same files.
 
 The load appends a month in the reader's batches, which leaves about 46 files
-per month; the compaction rewrites each month as one file, in one `replace`
-snapshot. Data files written by an attempt killed before it committed aren't
+per month (220 for 2011's); the compaction rewrites each month the run loaded
+as one file, in one `replace` snapshot. It leaves other months alone, so runs
+loading different months at once don't rewrite each other's files. Data files written by an attempt killed before it committed aren't
 in any snapshot and are left behind; expiring and removing orphans is for
 later.
 """
@@ -34,7 +48,17 @@ from iceberg.scan import FileScanTask, TableScan
 from iceberg.write import WriteOptions, write_data_files
 from parquet import RecordBatch
 
-from orca import Ctx, Gather, Mapped, Month, Pipeline, Step, orca_main
+from orca import (
+    Cron,
+    Ctx,
+    Gather,
+    Mapped,
+    Month,
+    Monthly,
+    Pipeline,
+    Step,
+    orca_main,
+)
 from orca.tables import append, commit, find_commit, scan
 from tlc import TLC_URL, download, read_month, schema, spec
 
@@ -45,7 +69,12 @@ def _trips() raises -> Table:
         getenv("TAXI_WAREHOUSE", "build/taxi-data/warehouse")
     )
     if not cat.table_exists("taxi", "trips"):
-        _ = cat.create_table("taxi", "trips", schema(), spec())
+        try:
+            _ = cat.create_table("taxi", "trips", schema(), spec())
+        except e:
+            # Another run, started at the same time, created it first.
+            if not cat.table_exists("taxi", "trips"):
+                raise e^
     return cat.load_table("taxi", "trips")
 
 
@@ -106,13 +135,22 @@ def _partition(path: String) -> String:
     return String(path[byte=0:at]) if at >= 0 else String()
 
 
-def _concat(var batches: List[RecordBatch]) raises -> RecordBatch:
-    var out = batches.pop(0)
-    for k in range(len(batches)):
-        ref b = batches[k]
-        for c in range(out.num_columns()):
-            concat_tree(out.arena, out.roots[c], b.arena, b.roots[c])
-        out.num_rows += b.num_rows
+def _read_one(s: TableScan, tasks: List[FileScanTask]) raises -> RecordBatch:
+    """The rows of `tasks`' files as one batch, read a file at a time so only
+    the batch and one file's rows are held at once."""
+    var out = RecordBatch()
+    var first = True
+    for t in tasks:
+        var batches = s.to_batches_for_tasks([t.copy()])
+        while len(batches) > 0:
+            var b = batches.pop(0)
+            if first:
+                out = b^
+                first = False
+                continue
+            for c in range(out.num_columns()):
+                concat_tree(out.arena, out.roots[c], b.arena, b.roots[c])
+            out.num_rows += b.num_rows
     return out^
 
 
@@ -127,15 +165,21 @@ def _files(s: TableScan) raises -> Tuple[Int, Int]:
 
 
 def compact(mut ctx: Ctx, loads: Seq[Loaded]) raises -> Compacted:
-    """Rewrites every month that has more than one file as one file, all in
-    one `replace` snapshot."""
+    """Rewrites each month this run loaded that has more than one file as one
+    file, all in one `replace` snapshot. Months other runs load are theirs to
+    compact, so runs at once don't rewrite each other's files."""
     var table = _trips()
     var s = scan(ctx, table)
     var tasks = s.plan_files()
+    var mine = List[String]()
+    for i in range(len(loads)):
+        mine.append(String("pickup_month=", loads[i].month))
     var parts = List[String]()
     var groups = List[List[FileScanTask]]()
     for t in tasks:
         var p = _partition(t.data_file.file_path)
+        if String(p[byte = p.rfind("/") + 1 :]) not in mine:
+            continue
         var g = -1
         for k in range(len(parts)):
             if parts[k] == p:
@@ -155,7 +199,7 @@ def compact(mut ctx: Ctx, loads: Seq[Loaded]) raises -> Compacted:
         for g in range(len(groups)):
             if len(groups[g]) < 2:
                 continue
-            var one = _concat(s.to_batches_for_tasks(groups[g].copy()))
+            var one = _read_one(s, groups[g])
             changes.added_data.extend(
                 write_data_files(
                     table.io,
@@ -192,7 +236,15 @@ comptime Load = Step["load", RawFile, Loaded, load, Mapped, after=Fetch]
 comptime Compact = Step[
     "compact", Seq[Loaded], Compacted, compact, Gather, after=Load
 ]
-comptime Taxi = Pipeline["taxi", Fetch, Load, Compact]
+comptime Taxi = Pipeline[
+    "taxi",
+    Fetch,
+    Load,
+    Compact,
+    partitions=Monthly["2011-01"],
+    schedule=Cron["0 6 2 * *"],
+    max_runs=4,
+]
 
 
 def main() raises:

@@ -25,7 +25,9 @@ usage error, 3 for any other error (the database, a run that can't be
 resumed).
 """
 
+from std.ffi import external_call
 from std.os import getenv
+from std.random import seed
 from std.sys import argv, exit
 
 from threads import TypedPool
@@ -53,8 +55,23 @@ def _usage(msg: String = ""):
     exit(2)
 
 
+def seed_random():
+    """Seeds `std.random` from the clock and the process ID.
+
+    Unseeded, every process starts from the same state, so pipeline
+    processes committing to one table at once draw the same Iceberg snapshot
+    IDs and file UUIDs (iceberg takes both from `std.random` and doesn't
+    seed it), and overwrite each other's manifest lists.
+    """
+    var ts = List[Int64](length=2, fill=0)
+    _ = external_call["clock_gettime", Int32](Int32(0), ts.unsafe_ptr())
+    var pid = Int(external_call["getpid", Int32]())
+    seed(Int(ts[0]) * 1_000_000_000 + Int(ts[1]) ^ (pid << 40))
+
+
 def orca_main[P: type_of(Pipeline)]() raises:
     """Parses the command line and runs the command on `P`."""
+    seed_random()
     comptime if P.tasks.HAS_RUNTIME:
         if getenv("DISTA_ROLE"):
             _ = P.tasks.start(1)  # serves as a head or worker, then exits

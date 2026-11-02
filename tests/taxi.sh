@@ -64,4 +64,35 @@ echo "$out" | grep -q '^run succeeded$' || fail "resumed run didn't succeed"
 [ "$(q "SELECT count(*) FROM orca.commits c JOIN orca.attempts a ON a.id = c.attempt
         JOIN orca.steps s ON s.id = a.step WHERE s.run = $run")" -eq 3 ] \
     || fail "the run didn't commit exactly 3 snapshots"
+
+# Two runs at once into one table, as a backfill starts them: each process
+# seeds its own snapshot IDs and file names, so neither overwrites the other's
+# commits, and each compacts only its own month.
+rm -rf "$root"
+TAXI_SOURCE=tests/fixtures/taxi ./build/taxi run --partitions 2023-01 > "$root.a" 2>&1 &
+a=$!
+TAXI_SOURCE=tests/fixtures/taxi ./build/taxi run --partitions 2024-01 > "$root.b" 2>&1 &
+b=$!
+set +e
+wait $a
+code_a=$?
+wait $b
+code_b=$?
+set -e
+out=$(cat "$root.a")
+[ "$code_a" -eq 0 ] || fail "the 2023-01 run exited $code_a"
+out=$(cat "$root.b")
+[ "$code_b" -eq 0 ] || fail "the 2024-01 run exited $code_b"
+out=$(cat "$root.a" "$root.b")
+meta=$(ls "$root"/wh/taxi/trips/metadata/*.metadata.json | tail -1)
+ids=$(jq -r '.snapshots[]["snapshot-id"]' "$meta")
+[ "$(echo "$ids" | wc -l)" -eq 4 ] || fail "not 4 snapshots: $ids"
+[ "$(echo "$ids" | sort -u | wc -l)" -eq 4 ] || fail "two runs drew the same snapshot ID: $ids"
+[ "$(jq -r '.snapshots[]["manifest-list"]' "$meta" | sort -u | wc -l)" -eq 4 ] \
+    || fail "two snapshots share a manifest list"
+grep -q 'pickup_month=2023-01: 4 files to 1$' "$root.a" && ! grep -q 2024-01 "$root.a" \
+    || fail "the 2023-01 run didn't compact just its month"
+grep -q 'pickup_month=2024-01: 4 files to 1$' "$root.b" && ! grep -q 2023-01 "$root.b" \
+    || fail "the 2024-01 run didn't compact just its month"
+rm -f "$root.a" "$root.b"
 echo "ok   taxi"
