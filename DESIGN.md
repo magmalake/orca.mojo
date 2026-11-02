@@ -302,6 +302,13 @@ Phases 1 to 3 already record every table read and commit: `reads` and `commits` 
 
 These tests need iceberg, so they run in the `data` environment, as the table tests do.
 
+As built (`orca.sensors`, `orca.warehouse`):
+
+- **`sense` reads metadata JSON itself.** A pipeline imports iceberg only if it uses tables, but every binary answers `sense`, so `orca.warehouse` finds the current metadata file as iceberg's filesystem catalog does and reads just the current snapshot's ID and its summary's `orca.run` and `orca.partitions`. It prints `<dataset> <snapshot> <orca|other> <partitions|->`; the scheduler polls it only for snapshots something other than orca made. A dataset the pipeline also writes isn't sensed, so the taxi compaction doesn't start its own pipeline.
+- **"Registered" is when it became a sensor.** `orca register` asks a sensor's binary to `sense` and records what its datasets hold then as seen, with no run, and `pipelines.sensing_since` dates the commits it counts from. Registering it again keeps both; one registered as no longer a sensor loses `sensing_since`, so if it becomes one again it starts afresh. A sensor that reads no dataset is refused.
+- **One run per tick per sensor.** `orca.sensed` has a row per pipeline and snapshot, inserted in the transaction that queues the run, so the snapshots one tick sees start one run over all their partitions, and none starts a second. A sensor's run is retried like a scheduled one.
+- **A rebuild's plan is a table**, `orca.rebuild_pipelines`: each pipeline downstream, its level, its partitions (the keys given, moved to its kind) and its run. Commits made by a rebuild's runs don't start a sensor in a pipeline the rebuild runs itself, so `report` runs once, after `clean`, not also as a sensor. The scheduler doesn't retry a rebuild's runs: one that fails stops the rebuild (`failed`), and resuming it from the UI carries it on. `/rebuilds/<id>` shows the plan and its runs.
+
 ## Phase 5: on Kubernetes
 
 Gate: the taxi pipeline runs on a schedule on EC2, each run on its own cluster.

@@ -137,6 +137,38 @@ def _migrations() -> List[List[String]]:
             "CREATE INDEX reads_attempt ON orca.reads (attempt)",
             "CREATE INDEX commits_attempt ON orca.commits (attempt)",
         ],
+        # Sensors and rebuilds (orca.sensors): since when a pipeline is a
+        # sensor, the snapshots each sensor has seen and the run each
+        # started, and rebuilds with their plans and runs.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN sensing_since timestamptz",
+            """CREATE TABLE orca.sensed (
+            pipeline text NOT NULL REFERENCES orca.pipelines (name),
+            dataset text NOT NULL,
+            snapshot_id bigint NOT NULL,
+            run bigint REFERENCES orca.runs (id),
+            created timestamptz NOT NULL DEFAULT now(),
+            PRIMARY KEY (pipeline, dataset, snapshot_id))""",
+            "CREATE INDEX sensed_run ON orca.sensed (run)",
+            """CREATE TABLE orca.rebuilds (
+            id bigserial PRIMARY KEY,
+            dataset text NOT NULL,
+            partitions text NOT NULL,
+            status text NOT NULL,
+            created timestamptz NOT NULL DEFAULT now(),
+            ended timestamptz)""",
+            """CREATE TABLE orca.rebuild_pipelines (
+            rebuild bigint NOT NULL REFERENCES orca.rebuilds (id),
+            pipeline text NOT NULL REFERENCES orca.pipelines (name),
+            level int NOT NULL,
+            partitions text NOT NULL,
+            run bigint REFERENCES orca.runs (id),
+            PRIMARY KEY (rebuild, pipeline))""",
+            (
+                "ALTER TABLE orca.runs ADD COLUMN rebuild bigint REFERENCES"
+                " orca.rebuilds (id)"
+            ),
+        ],
     ]
 
 

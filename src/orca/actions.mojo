@@ -18,6 +18,7 @@ from std.os import getenv
 from postgres import Params
 
 from orca.scheduler import Registered, backfill, partition_keys, registered
+from orca.sensors import rebuild
 from orca.state import State
 
 
@@ -269,6 +270,18 @@ def cancel_run(mut db: State, run: Int) raises -> Outcome:
     return Outcome.no(
         String("run ", run, " is ", st.row(0).text("status"), " already")
     )
+
+
+def rebuild_downstream(
+    mut db: State, dataset: String, keys: String
+) raises -> Outcome:
+    """What `orca rebuild` does: plans runs of every pipeline downstream of
+    `dataset` over `keys`, which the scheduler queues a level at a time.
+    The outcome's `run` is the rebuild's ID."""
+    try:
+        return Outcome.done(rebuild(db, dataset, keys))
+    except e:
+        return Outcome.no(String(e))
 
 
 def _unregistered(pipeline: String) -> String:

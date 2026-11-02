@@ -5,6 +5,7 @@ taxi describe                              the DAG as JSON
 taxi run --partitions 2024-01..2024-03     starts a run and runs it
 taxi resume <run> [--allow-new-code]       continues a run at what's unfinished
 taxi status [<run>]                        the latest runs, or one run's steps
+taxi sense                                 the current snapshot of each dataset it reads
 ```
 
 With `ORCA_DATABASE_URL` set, runs are recorded in Postgres and can be
@@ -18,6 +19,12 @@ else so its forked processes inherit no connection or thread; run with
 `orca.tasks`). With `ORCA_LOGS` set, attempts log to files there, the run's
 dista timeline is written beside them, and `status <run>` shows each step's
 latest log.
+
+`sense` prints a line per dataset the pipeline reads and doesn't write,
+`<dataset> <snapshot> <orca|other> <partitions|->`: its table's current
+snapshot in `ORCA_WAREHOUSE` (-1 for none), whether an orca step made it,
+and the partition keys its summary says it holds. The scheduler polls it for
+a sensor pipeline (`orca.sensors`).
 
 `run` and `resume` print one line per step and partition, then the run's
 status. Exit codes: 0 when the run succeeded, 1 when a step didn't or the run
@@ -40,12 +47,14 @@ from orca.civil import Civil, now, parse_time
 from orca.partitions import parse_partitions
 from orca.pipeline import FAILED, SUCCEEDED, Pipeline, RunResult
 from orca.state import CANCELLED, PgStore, State, process_owner
+from orca.warehouse import current_snapshot
 
 comptime USAGE = """usage:
   <pipeline> describe
   <pipeline> run --partitions KEY[..KEY][,...]   (YYYY-MM, or YYYY-MM-DD daily)
   <pipeline> resume <run> [--allow-new-code]
   <pipeline> status [<run>]
+  <pipeline> sense
   <pipeline> fires [<count>] [--after YYYY-MM-DDTHH:MM[:SS]Z]"""
 
 
@@ -102,6 +111,20 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         return _fires[P](args)
     if cmd == "describe" and len(args) == 2:
         print(P.describe())
+        return 0
+    if cmd == "sense" and len(args) == 2:
+        var wh = getenv("ORCA_WAREHOUSE")
+        var names = P.sensed_datasets()
+        if len(names) > 0 and not wh:
+            raise Error("orca: sense needs ORCA_WAREHOUSE")
+        for d in names:
+            var c = current_snapshot(wh, d)
+            print(
+                c.dataset,
+                c.snapshot,
+                "orca" if c.by_orca else "other",
+                c.partitions if c.partitions else String("-"),
+            )
         return 0
     if cmd == "run":
         var partitions = String()
