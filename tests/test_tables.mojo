@@ -3,6 +3,7 @@ Iceberg tables in a warehouse (`ORCA_WAREHOUSE`). Run under
 scripts/with-postgres.sh, in the data environment."""
 
 from std.os import getenv, setenv
+from std.os.path import exists
 from std.testing import TestSuite, assert_equal, assert_true
 
 from iceberg.batch import ColumnBuilder, batch_of
@@ -141,7 +142,13 @@ comptime Sums = Pipeline["sums", Key, SumAll]
 
 
 def _warehouse() raises -> FilesystemCatalog:
+    # A root of its own for each test: two tests can start in one
+    # millisecond (they did on CI), so the time alone isn't enough.
     var root = String("build/wh-", now_ms())
+    var n = 0
+    while exists(root):
+        n += 1
+        root = String("build/wh-", now_ms(), "-", n)
     _ = setenv("ORCA_TEST_WH", root)
     _ = setenv("ORCA_WAREHOUSE", root)
     var cat = FilesystemCatalog.local(root)
