@@ -5,8 +5,10 @@
     ./build/orca backfill taxi 2011-01..2024-12
     ./build/orca tick
     ./build/orca scheduler
+    ./build/orca ui                 # http://127.0.0.1:8270, or ORCA_UI_ADDR
 
-Needs `ORCA_DATABASE_URL`. See `orca.scheduler` for what a tick does.
+Needs `ORCA_DATABASE_URL`. See `orca.scheduler` for what a tick does, and
+`orca.ui` for the pages.
 Exit codes: 0, 2 for a usage error, 3 for any other error.
 """
 
@@ -16,12 +18,15 @@ from std.time import sleep
 
 from orca.civil import now
 from orca.scheduler import Scheduler
+from orca.state import State
+from orca.ui import DEFAULT_ADDR, serve_ui
 
 comptime USAGE = """usage:
   orca register <pipeline binary> [...]
   orca backfill <pipeline> KEY[..KEY][,...]
   orca tick
-  orca scheduler"""
+  orca scheduler
+  orca ui"""
 
 
 def _usage(msg: String = ""):
@@ -63,6 +68,11 @@ def _command(args: List[String]) raises -> Int:
                 except:
                     pass
             sleep(1.0)
+    if cmd == "ui" and len(args) == 2:
+        var db = State(url)
+        db.migrate()
+        serve_ui(url, getenv("ORCA_UI_ADDR", DEFAULT_ADDR))
+        return 0
     _usage()
     return 2
 
