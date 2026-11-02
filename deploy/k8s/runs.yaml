@@ -1,0 +1,46 @@
+# Where runs' clusters go, from phase 5's third PR on (K8S.md): the
+# `orca-runs` namespace, what the scheduler may do there and nothing else,
+# and a hard cap on what all run pods together can ask for.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: orca-runs
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: orca-scheduler
+  namespace: orca-runs
+rules:
+  - apiGroups: [""]
+    resources: [pods, services]
+    verbs: [create, get, list, watch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, get, list, watch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: orca-scheduler
+  namespace: orca-runs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: orca-scheduler
+subjects:
+  - kind: ServiceAccount
+    name: orca-scheduler
+    namespace: orca
+---
+# If orca asks for more than this, the extra pods wait rather than run.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: orca-runs
+  namespace: orca-runs
+spec:
+  hard:
+    requests.cpu: "16"
+    requests.memory: 64Gi
+    pods: "40"

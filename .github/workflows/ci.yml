@@ -90,6 +90,18 @@ jobs:
       - name: Tests
         run: pixi run -e ${{ matrix.env }} test
 
+  # orca on a kind cluster (deploy/): the image, built with pixi inside
+  # docker, the manifests, and the toy pipeline run by the scheduler's pod.
+  kind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: helm/kind-action@v1.15.1
+        with:
+          install_only: true
+      - name: The scheduler, Postgres and the UI on kind
+        run: tests/kind.sh
+
   # Every fuzz harness under fuzz/, for a short session each, with all bounds
   # checks on. Longer sessions are a FUZZ_RUNS away locally.
   fuzz:
