@@ -56,6 +56,20 @@ jobs:
           repository: magmalake/threads.mojo
           ref: f45e780a8de77278c140cee36904e46e93e0ca1c
           path: threads.mojo
+      # orca ui's server, and the JSON library it imports, at the revisions
+      # mojoshelf published as flare_mlake 0.13.0 and json_mlake 0.4.2.
+      - if: matrix.env == 'nightly'
+        uses: actions/checkout@v4
+        with:
+          repository: magmalake/flare_mlake
+          ref: 0cb5005489bb1af57ca0421b8f0fcd206bbacf42
+          path: flare_mlake
+      - if: matrix.env == 'nightly'
+        uses: actions/checkout@v4
+        with:
+          repository: magmalake/json_mlake
+          ref: d850b1c90487e1e9a88ac87d1c1d7f53ffba7276
+          path: json_mlake
 
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:

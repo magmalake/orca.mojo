@@ -24,6 +24,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/toy run --partitions 2024-01..2024-
 pixi run -e data taxi && pixi run -e data ./build/taxi run --partitions 2023-01..2024-12
 pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   # needs ORCA_DATABASE_URL
 ./build/orca register ./build/taxi && ./build/orca backfill taxi 2011-01..2024-12   # 19 GB of TLC files
+./build/orca ui                # pipelines and runs at http://127.0.0.1:8270, each page also JSON
 ```
 
 Part of [magmalake](https://magmalake.dev).

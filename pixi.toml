@@ -24,7 +24,8 @@ test-tasks = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_ta
 test-logs = { cmd = "scripts/with-postgres.sh tests/logs.sh" }
 test-scheduler = { cmd = "scripts/with-postgres.sh tests/scheduler.sh" }
 test-chaos = { cmd = "scripts/with-postgres.sh tests/chaos.sh" }
-test = { depends-on = ["test-steps", "test-cron", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-chaos"] }
+test-ui = { cmd = "scripts/with-postgres.sh tests/ui.sh" }
+test = { depends-on = ["test-steps", "test-cron", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-chaos"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
 orca = { cmd = "mkdir -p build && mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca" }
@@ -43,17 +44,39 @@ arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev 
 # heartbeat runs on a thread of its own.
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "bfe9b94ae97e3e184dc6d118b0684818927a5da8" }
 threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e780a8de77278c140cee36904e46e93e0ca1c" }
+# `orca ui` serves its pages with flare. Pinned at the revision mojoshelf
+# published as flare_mlake 0.13.0, which pins threads at the revision above
+# and json_mlake at 0.4.2's revision; it builds its own native shims.
+flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "0cb5005489bb1af57ca0421b8f0fcd206bbacf42" }
+json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "d850b1c90487e1e9a88ac87d1c1d7f53ffba7276" }
 
 [feature.stable.activation.env]
 DEP_INC = "-I ../dista.mojo/src"
 
 # A precompiled package only loads in the compiler that built it, so the
-# nightly compiles dista's dependencies from checkouts too.
+# nightly compiles dista's dependencies, and flare and json, from checkouts
+# too. flare's server loads its native shims (TLS, zlib) when it starts, even
+# for plain HTTP, so the nightly builds them as flare's own environment does:
+# from its activation scripts, against conda-forge's OpenSSL and zlib, with
+# g++ on Linux and the system clang on macOS.
 [feature.nightly.dependencies]
 modular = ">=26.8.0.dev2026102305,<28"
+openssl = ">=3.0,<4"
+zlib = ">=1.3.1,<2"
+libdeflate = ">=1.22,<2"
+
+[feature.nightly.target.linux-64.dependencies]
+gxx = ">=13"
+sysroot_linux-64 = ">=2.34"
+
+[feature.nightly.target.linux-aarch64.dependencies]
+gxx = ">=13"
+
+[feature.nightly.activation]
+scripts = ["../flare_mlake/flare/tls/ffi/build.sh", "../flare_mlake/flare/http/ffi/build.sh"]
 
 [feature.nightly.activation.env]
-DEP_INC = "-I ../dista.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src -I ../postgres.mojo/src -I ../threads.mojo/src -I ../threads.mojo/compat"
+DEP_INC = "-I ../dista.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src -I ../postgres.mojo/src -I ../threads.mojo/src -I ../threads.mojo/compat -I ../flare_mlake -I ../json_mlake"
 
 # `mojo-compiler` ships no formatter; the nightly `modular` package does.
 # `mojo format` has no check mode, so format-check formats and then asserts
