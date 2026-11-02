@@ -25,6 +25,7 @@ test-chaos = { cmd = "scripts/with-postgres.sh tests/chaos.sh" }
 test = { depends-on = ["test-steps", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-chaos"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
+daily = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/daily.mojo -o build/daily" }
 
 # Stable is the default: orca targets Mojo 1.2.0. dista compiles from a
 # checkout next to this one (CI lays it out at the revision below), since it
@@ -97,9 +98,10 @@ mozz_mlake = { git = "https://github.com/magmalake/mozz_mlake.git", rev = "bd84a
 [feature.fuzz.tasks]
 fuzz-months = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_months.mojo -o build/fuzz-months && ./build/fuzz-months" }
 fuzz-inputs = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_inputs.mojo -o build/fuzz-inputs && ./build/fuzz-inputs" }
+fuzz-days = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_days.mojo -o build/fuzz-days && ./build/fuzz-days" }
 fuzz-json = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_json.mojo -o build/fuzz-json && ./build/fuzz-json" }
 fuzz-summary = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_summary.mojo -o build/fuzz-summary && ./build/fuzz-summary" }
-fuzz = { depends-on = ["fuzz-months", "fuzz-inputs", "fuzz-json", "fuzz-summary"] }
+fuzz = { depends-on = ["fuzz-months", "fuzz-days", "fuzz-inputs", "fuzz-json", "fuzz-summary"] }
 
 [environments]
 default = ["stable"]
