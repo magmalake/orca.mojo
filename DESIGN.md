@@ -106,7 +106,7 @@ One schema, `orca`, created and migrated by the binary at start-up (a `schema_ve
 | `reads` | attempt, table, snapshot ID: what each attempt read |
 | `commits` | attempt, table, snapshot ID: what each attempt committed |
 
-`reads` and `commits` are the lineage table the vision puts in phase 4; they're written from phase 1 because resuming needs them. Phase 4 adds the queries and the UI over them.
+`reads` and `commits` are the lineage table the vision puts in phase 4; they're written from phase 1 because resuming needs them. Phase 4 adds dataset names, the queries and the UI over them.
 
 - **Statuses.** A run is `queued`, `running`, `succeeded`, `failed` or `cancelled`. A step is `pending`, `running`, `succeeded`, `failed` or `skipped` (its upstream failed).
 - **One writer per run.** A process that runs a run is its `owner` (`host:pid`) and holds it by its heartbeat: a thread with a connection of its own (threads.mojo's `TypedPool`) updates `runs.heartbeat` five times per `ORCA_STALE_SECONDS` (default 30), and `resume` refuses a run whose heartbeat is younger than that. A run whose process died has a stale heartbeat and can be resumed; a run that ended clears its heartbeat, so a failed run can be resumed at once. Every attempt's first transaction also checks that this process still owns the run, so a process that lost its run to a resume (it was paused, or the database was unreachable) stops at its next step instead of racing the new owner. No advisory locks for this, so a pooled connection is fine; migrations take a transaction-scoped one. *Verified* by `tests/kill.sh`.
@@ -262,10 +262,42 @@ The actions are `POST`s of forms: `/pipelines/<name>/runs` and `/pipelines/<name
 
 Gate: committing a new snapshot to a source table rebuilds exactly the tables downstream of it.
 
-- **Datasets declared on steps**: `reads=("raw.trips",)`, `writes=("nyc.trips",)`, so the graph across pipelines is known before anything runs. `ctx.scan` and `ctx.append` check that a step only touches what it declared.
-- **Lineage queries** over `reads` and `commits`: from a table snapshot back to the run, the code and the inputs; from a table forward to everything built from it. In the UI as a graph.
-- **Sensors**: the scheduler polls declared source tables' current snapshot (metadata only, a few requests per table) and starts the pipelines that read them when it changes.
-- **"Rebuild downstream of this table"**: the set of pipelines and partitions reachable from it, run in dependency order.
+Phases 1 to 3 already record every table read and commit: `reads` and `commits` in Postgres, and `orca.*` properties in each committed snapshot's summary. What's missing is a name for a table that means the same thing in every pipeline, the graph across pipelines that those names make, queries over it, and runs started by it. A pipeline in phase 4 still runs by itself; what changes is that orca knows which pipelines feed which.
+
+### How it fits together
+
+- **A dataset is a name, `namespace.table`**, such as `nyc.trips`. Today a table is known by its location, which depends on where the warehouse is (a local path, later `s3://`). A name doesn't, so two pipelines that name `nyc.trips` mean the same table in every deployment. `ORCA_WAREHOUSE` is the root of a filesystem catalog (iceberg's `catalog.filesystem`): `nyc.trips` is `<warehouse>/nyc/trips`. Phase 5 points it at S3; a REST catalog can come later behind the same names.
+- **A step declares what it reads and writes**: `Step[..., reads=["raw.trips"], writes=["nyc.trips"]]`. `ctx.table("nyc.trips")` loads a declared dataset from the warehouse. `scan` raises for a dataset the step didn't declare in `reads`, and `append` and `commit` for one it didn't declare in `writes`, naming the step and the dataset. So the graph is known before anything runs, and it can't drift from what the steps do. A step may read and write one dataset (the taxi compaction does). A table that isn't in the warehouse, such as a test's temporary table, can still be scanned and appended to by location, as now, and isn't part of the graph.
+- **`describe` lists each step's `reads` and `writes`**, so `orca register` knows every pipeline's datasets without linking it. Registration refuses a pipeline that would close a cycle across pipelines: A writes X, B reads X and writes Y, and A reads Y. A pipeline that reads and writes one dataset is not a cycle.
+- **`reads` and `commits` gain a `dataset` column** (a migration), null for a table outside the warehouse. Lineage queries join on it; the location stays, as it says where the snapshot is.
+- **Lineage is two walks** over `commits` and `reads`, in SQL (recursive CTEs):
+  - **Back** from a snapshot: the attempt that committed it, its step, run, partition and code, the snapshots that attempt read, and, for each of those, the attempt that committed it, back to snapshots no orca run made (a source).
+  - **Forward** from a snapshot: every attempt that read it, what each committed, and so on.
+  
+  Both are bounded by a depth (default 20) and return edges, so a deep graph is cut, not slow. They're checked against the snapshots' own `orca.reads` summaries, which carry the same edges in the tables themselves.
+- **Partitions across pipelines.** A sensor or a rebuild has to say which partitions of the downstream pipeline to run. A snapshot an orca run committed says which partitions it holds: a mapped step's commit has `orca.partition`, and a gather step's commit gains `orca.partitions`, the run's keys. A snapshot committed by something else carries no keys; its writer can set `orca.partitions` in its summary, and without it the downstream pipeline runs the partition its schedule would fill now (its `fills` partition), or, unscheduled, its latest partition by the clock. Keys move between partition kinds as they contain each other: a day upstream is the month that contains it downstream, and a month upstream is each of its days downstream.
+- **Sensors are opt-in per pipeline**: `Pipeline[..., sensor=True]` runs it when a dataset it reads gets a new snapshot. There are two ways the scheduler learns of one:
+  - **From Postgres, for snapshots orca made.** A succeeded run's commits are in `commits`, so the scheduler sees them on its next tick, without reading any table.
+  - **By polling, for snapshots something else made.** The scheduler links no iceberg, so it runs `<binary> sense`, a new command of every pipeline binary, every `ORCA_SENSE_SECONDS` (default 60). It prints the current snapshot ID of each dataset the pipeline reads: one metadata read per dataset.
+  
+  `orca.sensed` records, per pipeline and dataset, the last snapshot that started a run, so each new snapshot starts one run once, as a fire does. The run's trigger is `sensor`, and it records the snapshot that started it. A run is started only for a snapshot committed after the pipeline was registered, so registering doesn't rebuild history; a backfill does that.
+- **"Rebuild downstream of this table"** queues runs for every pipeline reachable from a dataset in the graph, over the partitions given, in dependency order. Each pipeline is placed at its longest distance from the dataset, so one that reads two rebuilt datasets runs after both. A rebuild is a row (`orca.rebuilds`), and its runs carry its ID. The scheduler queues the pipelines at the next distance once every run at the ones before has succeeded, and stops if one fails, so it can be resumed from the UI as a run is. It's in the UI on a dataset's page and on the command line as `orca rebuild <dataset> KEYS`.
+- **In the UI:**
+  - **`/datasets`** lists every dataset with its writers, readers and latest snapshot.
+  - **`/datasets/<name>`** shows the graph of pipelines and datasets around it (drawn server-side as SVG, like the DAG), its snapshots, newest first, with the run that made each, and the rebuild form.
+  - **`/datasets/<name>/snapshots/<id>`** shows the lineage back and forward, as a graph and as a table.
+  
+  A run's page links the datasets it read and committed.
+
+### PRs
+
+| # | PR | Gate | Size |
+|---|---|---|---|
+| 1 | **Datasets on steps.** `reads=` and `writes=` on `Step`; `ORCA_WAREHOUSE` and `ctx.table`; the checks in `scan`, `append` and `commit`; `dataset` on `reads` and `commits`; `orca.partitions` on a gather step's commits; datasets in `describe`; the cycle check at registration; the taxi pipeline moved to `nyc.trips`. | A step that scans a dataset it didn't declare fails its attempt with an error naming both; `describe` lists each step's datasets; registering a pipeline that closes a cycle is refused; the table tests and the taxi test pass with datasets. | ~700 |
+| 2 | **Lineage.** The two walks in SQL; `orca lineage <dataset> [<snapshot>]`; the dataset pages and the dataset graph; run pages linking their datasets. | Three small pipelines over warehouse tables, `ingest` → `clean` → `report`: the lineage back from a `report` snapshot names its run, its code and the `clean` snapshot it read, and that one's `ingest` snapshot, and agrees with the snapshots' `orca.reads` summaries; forward from the `ingest` snapshot reaches the `report` snapshot. | ~900 |
+| 3 | **Sensors and rebuild.** `sensor=True`; `<binary> sense`; the scheduler's sensor pass, from `commits` and by polling; `orca.sensed`; partition mapping; `orca.rebuilds` and its levels; `orca rebuild`, and the rebuild form in the UI. | Phase 4's gate: with the scheduler running, a snapshot committed to `raw.events` by a program that isn't an orca pipeline starts `clean`, whose commit starts `report`, and nothing else runs; `orca rebuild raw.events` reruns both, `report` after `clean`; a pipeline reading an unrelated dataset never runs; each snapshot starts one run however many ticks see it. | ~1,000 |
+
+These tests need iceberg, so they run in the `data` environment, as the table tests do.
 
 ## Phase 5: on Kubernetes
 
