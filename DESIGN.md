@@ -217,9 +217,43 @@ What it took:
 
 Gate: a failed step is found, its logs read and the run resumed, without a terminal.
 
-**Proposed: server-rendered HTML from flare, with a little JavaScript** for refreshing a running run's status. It keeps the footprint at one process with nothing to build, and every page is also the HTTP API's JSON at the same path with `Accept: application/json`, so the command line and the UI can't drift. The DAG is drawn server-side as SVG, laid out by layer from the order. The dista timeline is linked as `timeline.json` for Perfetto rather than drawn by orca.
+**Decided: server-rendered HTML from flare, with htmx for the live parts.** It keeps the footprint at one process with nothing to build: no Node toolchain, no bundler, no client-side state. Every page is also the API: the same path answers JSON to `Accept: application/json` (or `?format=json`), so the command line, scripts and the UI read one thing and can't drift. A single-page app can be evaluated later, if a view needs more than this gives it (a zoomable DAG, a live Gantt chart); the JSON paths are what it would be built on.
 
-Pages: pipelines; a pipeline with its DAG, schedule, next fires and recent runs; a run with each step and partition, status, timing and attempts; an attempt's log. Actions: start a run, resume, rerun from a step, backfill a range, cancel. No authentication in phase 3 (one team, trusted network); it binds to localhost unless told otherwise.
+### How it fits together
+
+- **`orca ui`** is a command of the `orca` binary, not a new binary: it needs `ORCA_DATABASE_URL` like the others, reads the tables the scheduler and the runs write, and binds `127.0.0.1:8270` unless `ORCA_UI_ADDR` says otherwise. It holds no state of its own, so it can run beside the scheduler, or several of it at once.
+- **flare serves it**: its `Router` for paths, one reactor thread (`num_workers=1`) to start with. A request runs a few short queries against indexed columns, so it doesn't hold the loop for long; idle and write timeouts are set for the work rather than left at flare's web defaults (see flare's silent-reap history). Postgres is reached through one connection per request at first, measured, and pooled only if that shows.
+- **HTML is written in Mojo**, through a small `orca.html` writer that escapes every value it's given and only writes raw markup it's told is markup. flare's template engine was looked at and isn't used: its context is strings and lists of strings, and a run page is a table of records.
+- **The page skeleton**: one layout with a header (pipelines, runs), one stylesheet with magmalake.dev's colours and type, light and dark, and htmx 2 vendored as a static file (it's served by `orca ui`, so the UI works without the internet). No other JavaScript.
+- **Live parts are polled fragments**: a running run's step table and a log's tail are `hx-get` with `hx-trigger="every 2s"` on a fragment path that returns only that piece of HTML, and stops once the run has ended. Server-sent events are left for later; flare has them, but polling a few fragments is simpler and plenty for one team.
+- **The DAG is drawn server-side as SVG**: steps laid out left to right by their order, mapped steps drawn as a stack, edges from `after`, each box coloured by the status of its partitions in the run being shown. A pipeline is a chain today, so the layout is a row; it's written for a DAG, as phase 4's datasets may branch.
+- **The Dista timeline** is served from the run's log directory as `timeline.json`, with a link that opens it in Perfetto, rather than drawn by orca.
+- **Actions go through Postgres, never through the UI's process.** The UI doesn't start pipeline binaries: it writes a row and the scheduler, which already starts and limits runs, acts on it. So `max_runs`, retries and ownership stay in one place, and the UI works the same whether the scheduler is on this machine or not.
+  - **Start a run**: a queued run over the partitions entered, trigger `ui`.
+  - **Resume** a failed or interrupted run: it's queued again (`retry_at` cleared), and the scheduler resumes it as it does a retry. A resume of a run whose code has changed asks for confirmation, which passes `--allow-new-code`.
+  - **Rerun from a step**: a new run, trigger `rerun`, over the same partitions, with the steps before the chosen one copied from the old run as succeeded (their outputs and their pinned reads), so `resume` runs the chosen step and what follows. The old run is left as it was.
+  - **Backfill a range**: what `orca backfill` does.
+  - **Cancel**: sets `cancel_requested` on the run. The run checks it where it already checks its ownership, before each attempt, and ends `cancelled`; the scheduler doesn't start or retry a cancelled run. A step already running finishes its attempt: cancelling doesn't kill it mid-commit.
+- **No authentication in phase 3** (one team, a trusted network). Because the UI is on localhost and its actions change state, every `POST` checks that `Origin` (or, without it, `Referer`) is the UI's own, so a page on another site can't make the browser post to it. Nothing changes state on a `GET`.
+
+### Pages
+
+| Path | What it shows |
+|---|---|
+| `/` | Pipelines: each with its schedule, next fire, last run and its status, and runs live now against `max_runs`. |
+| `/pipelines/<name>` | The DAG, partitions and schedule, the next fires, the latest runs, and the forms to start a run and backfill a range. |
+| `/runs` | Runs across pipelines, newest first, filterable by pipeline, status and trigger. |
+| `/runs/<id>` | The run: each step and partition with status, timing and attempts, the error of a failed one, its reads and commits, the DAG in this run's colours, and resume, rerun from a step and cancel. |
+| `/runs/<id>/attempts/<attempt>` | An attempt's log, its tail followed while it's running, with its error at the top when it failed. |
+| `/runs/<id>/timeline.json` | The run's Dista timeline, for Perfetto. |
+
+### PRs
+
+| # | PR | Gate | Size |
+|---|---|---|---|
+| 1 | **Read-only pages and their JSON.** `orca ui` on flare; `orca.html`; the layout and stylesheet; `/`, `/pipelines/<name>`, `/runs` and `/runs/<id>` as HTML and JSON. The first commit builds flare into the `orca` binary, which shares `fork`, `waitpid`, `getpid`, `clock_gettime` and `_exit` with it: Mojo refuses two bindings of one symbol with different signatures, so orca's are matched to flare's. | `tests/ui.sh`: with the toy's runs in Postgres, every page answers HTML and JSON; the JSON of a run agrees with `toy status <run>`; every value written into a page is escaped (a pipeline step's error with `<script>` in it comes out as text). | ~1,100 |
+| 2 | **Logs, the DAG and live updates.** The attempt page and its followed tail, the SVG DAG on the pipeline and run pages, the fragments a running run polls, `timeline.json` and the Perfetto link. | A running toy run's page, fetched as its fragment while the run goes on, shows the steps move from running to succeeded and stops polling at the end; an attempt's log page shows lines as the step writes them; the SVG of the daily and toy pipelines has a box per step and an edge per `after`. | ~800 |
+| 3 | **Actions.** Start, resume, rerun from a step, backfill and cancel, as rows the scheduler acts on; `cancel_requested` and the `cancelled` status (a migration); the `Origin` check. | Phase 3's gate, as a test that only speaks HTTP: a toy run fails a step (`ORCA_TOY_FAIL`), the test finds it on `/runs`, reads the failed attempt's log, posts resume, and with the scheduler running the run succeeds. Also: rerun from `measure` reruns `measure` and `total` and not `days`; a cancelled run ends `cancelled` before its next step; a cross-origin `POST` is refused. | ~900 |
 
 ## Phase 4: lineage and sensors
 
