@@ -9,7 +9,15 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/` | pipelines, with their schedules, next fires and last runs |
 | `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next fires and runs |
 | `/runs` | runs, newest first; `?pipeline=`, `?status=`, `?trigger=` |
-| `/runs/<id>` | a run's steps and partitions, attempts, errors, reads and commits |
+| `/runs/<id>` | a run's DAG, steps and partitions, attempts, errors, reads and commits |
+| `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error |
+| `/runs/<id>/timeline.json` | the run's Dista timeline, for Perfetto |
+
+A page of something still going on (a queued or running run, a running
+attempt) refreshes its live part every two seconds from a fragment path,
+`/runs/<id>/steps` or `/runs/<id>/attempts/<attempt>/log`, which answers
+286 once there's nothing more to show, and the page stops asking. That's
+the only JavaScript.
 
 Every path answers HTML, or JSON to `Accept: application/json` or
 `?format=json`, built from the same rows, so a script and a person see the
@@ -26,7 +34,9 @@ from flare.net import SocketAddr
 from postgres import Params
 
 from orca.civil import Civil, now
+from orca.logs import run_dir
 from orca.cron import CronExpr
+from orca.dag import DagStep, aggregate, dag_svg
 from orca.html import Html, url_decode, url_encode
 from orca.json import quote
 from orca.scheduler import fill_key
@@ -114,6 +124,8 @@ struct StepRow(Copyable, Movable):
     var log: String
     var started: String
     var ended: String
+    var attempt_id: Int
+    """The latest attempt's ID, 0 before the first."""
 
 
 @fieldwise_init
@@ -280,7 +292,10 @@ def _steps(mut db: State, run: Int) raises -> List[StepRow]:
             _ts(
                 "(SELECT max(a.ended) FROM orca.attempts a WHERE a.step = s.id)"
             ),
-            " AS ended FROM orca.steps s WHERE s.run = $1 ORDER BY s.ord, s.id",
+            " AS ended, coalesce((SELECT a.id FROM orca.attempts a WHERE",
+            " a.step = s.id ORDER BY a.attempt DESC LIMIT 1), 0)::text AS",
+            " attempt_id FROM orca.steps s WHERE s.run = $1 ORDER BY s.ord,",
+            " s.id",
         ),
         Params().int64(Int64(run)),
     )
@@ -296,6 +311,7 @@ def _steps(mut db: State, run: Int) raises -> List[StepRow]:
                 r.text("log"),
                 r.text("started"),
                 r.text("ended"),
+                _int(r.text("attempt_id")),
             )
         )
     return out^
@@ -429,6 +445,22 @@ def _json_runs(mut out: String, runs: List[RunRow]):
 # ── HTML ─────────────────────────────────────────────────────────────────────
 
 
+comptime _POLL = """
+for (const el of document.querySelectorAll("[data-poll]")) {
+  const tick = async () => {
+    let r;
+    try { r = await fetch(el.dataset.poll); } catch (e) { setTimeout(tick, 5000); return; }
+    if (r.ok) el.innerHTML = await r.text();
+    if (r.status !== 286) setTimeout(tick, 2000);
+  };
+  setTimeout(tick, 2000);
+}
+"""
+"""What makes a page live: each element with `data-poll` is replaced every
+two seconds by what its path returns, until that answers 286 (htmx's "stop
+polling"), which a fragment does once what it shows has ended."""
+
+
 def _page(title: String, active: StaticString, body: Html) -> String:
     var h = Html()
     h.raw(
@@ -448,7 +480,7 @@ def _page(title: String, active: StaticString, body: Html) -> String:
         h.raw(">", item[1], "</a>")
     h.raw("</nav></header><main>")
     h.raw(body.out)
-    h.raw("</main></body></html>")
+    h.raw("</main><script>", _POLL, "</script></body></html>")
     return h^.finish()
 
 
@@ -486,11 +518,25 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
 # ── the pages ────────────────────────────────────────────────────────────────
 
 
-@fieldwise_init
 struct Page(Movable):
     var status: Int
     var json: String
     var html: String
+    var content_type: String
+    """Set for what isn't a page or its JSON (a fragment, a file): `html` is
+    sent as this, whatever was asked for."""
+
+    def __init__(
+        out self,
+        status: Int,
+        var json: String,
+        var html: String,
+        content_type: String = "",
+    ):
+        self.status = status
+        self.json = json^
+        self.html = html^
+        self.content_type = content_type
 
 
 def home(mut db: State) raises -> Page:
@@ -618,7 +664,11 @@ def pipeline(mut db: State, name: String) raises -> Page:
     h.text(p.binary)
     h.raw("</code></dd><dt>Code</dt><dd><code>")
     h.text(p.registry_hash)
-    h.raw("</code></dd></dl><h2>Steps</h2>")
+    h.raw("</code></dd></dl>")
+    var dag = List[DagStep]()
+    for d in steps:
+        dag.append(DagStep(d.name, d.kind, d.after, ""))
+    h.raw('<div class="scroll">', dag_svg(dag), "</div><h2>Steps</h2>")
     h.raw(
         '<div class="scroll"><table><thead><tr><th>Step</th><th>Kind</th>',
         "<th>After</th></tr></thead><tbody>",
@@ -724,6 +774,8 @@ def run(mut db: State, id: Int) raises -> Page:
             quote(s.started),
             ', "ended": ',
             quote(s.ended),
+            ', "attempt_id": ',
+            s.attempt_id,
             "}",
         )
     j.write('], "tables": [')
@@ -770,26 +822,24 @@ def run(mut db: State, id: Int) raises -> Page:
     h.raw("</code>")
     if hash != current:
         h.raw(' <span class="muted">(the pipeline has newer code)</span>')
-    h.raw("</dd></dl><h2>Steps</h2>")
-    h.raw(
-        '<div class="scroll"><table><thead><tr><th>Step</th><th>Partition</th>',
-        "<th>Status</th><th>Attempts</th><th>Started</th><th>Ended</th>",
-        "<th>Error</th></tr></thead><tbody>",
-    )
-    for s in steps:
-        h.raw("<tr>")
-        h.cell(s.step)
-        h.cell(s.partition)
-        h.raw("<td>")
-        h.status(s.status)
-        h.raw("</td>")
-        h.cell(s.attempts)
-        h.cell(s.started)
-        h.cell(s.ended)
-        h.raw('<td class="error">')
-        h.text(s.error)
-        h.raw("</td></tr>")
-    h.raw("</tbody></table></div>")
+    h.raw("</dd>")
+    var timeline = _timeline_path(db, r)
+    if timeline:
+        h.raw("<dt>Timeline</dt><dd>")
+        h.link(String("/runs/", r.id, "/timeline.json"), "timeline.json")
+        h.raw(
+            ' <span class="muted">(Dista tasks; open it in',
+            ' <a href="https://ui.perfetto.dev">Perfetto</a>)</span></dd>',
+        )
+    h.raw("</dl>")
+    if _live(r.status):
+        h.raw('<div data-poll="/runs/')
+        h.text(r.id)
+        h.raw('/steps">')
+    else:
+        h.raw("<div>")
+    _run_live(h, db, r, steps)
+    h.raw("</div>")
     if len(touches) > 0:
         h.raw(
             '<h2>Tables</h2><div class="scroll"><table><thead><tr>',
@@ -808,6 +858,316 @@ def run(mut db: State, id: Int) raises -> Page:
             h.raw("</tr>")
         h.raw("</tbody></table></div>")
     return Page(200, j^, _page(String("Run ", r.id), "/runs", h))
+
+
+def _live(status: String) -> Bool:
+    """Whether a run or attempt with this status can still change."""
+    return status == "queued" or status == "running"
+
+
+def _run_live(
+    mut h: Html, mut db: State, r: RunRow, steps: List[StepRow]
+) raises:
+    """What changes while a run goes on: its DAG in its steps' colours, its
+    status, and its steps."""
+    var dag = List[DagStep]()
+    for d in _step_defs(db, r.pipeline):
+        var st = List[String]()
+        for s in steps:
+            if s.step == d.name:
+                st.append(s.status)
+        dag.append(DagStep(d.name, d.kind, d.after, aggregate(st)))
+    h.raw('<div class="scroll">', dag_svg(dag), "</div><h2>Steps ")
+    h.status(r.status)
+    h.raw(
+        '</h2><div class="scroll"><table><thead><tr><th>Step</th>',
+        "<th>Partition</th><th>Status</th><th>Attempts</th><th>Started</th>",
+        "<th>Ended</th><th>Log</th><th>Error</th></tr></thead><tbody>",
+    )
+    for s in steps:
+        h.raw("<tr>")
+        h.cell(s.step)
+        h.cell(s.partition)
+        h.raw("<td>")
+        h.status(s.status)
+        h.raw("</td>")
+        h.cell(s.attempts)
+        h.cell(s.started)
+        h.cell(s.ended)
+        h.raw("<td>")
+        if s.attempt_id:
+            h.link(
+                String("/runs/", r.id, "/attempts/", s.attempt_id),
+                String("attempt ", s.attempts),
+            )
+        h.raw('</td><td class="error">')
+        h.text(s.error)
+        h.raw("</td></tr>")
+    h.raw("</tbody></table></div>")
+
+
+def run_steps(mut db: State, id: Int) raises -> Page:
+    """The live part of a run's page, as a fragment; 286 once it's ended."""
+    var found = _runs_one(db, id)
+    if not found:
+        return not_found(String("no run ", id))
+    var r = found.take()
+    var h = Html()
+    _run_live(h, db, r, _steps(db, id))
+    return Page(
+        200 if _live(r.status) else 286,
+        String(),
+        h^.finish(),
+        "text/html; charset=utf-8",
+    )
+
+
+def _timeline_path(mut db: State, r: RunRow) raises -> String:
+    """The run's Dista timeline, if it left one: beside its attempts' logs,
+    or in its directory under this process's ORCA_LOGS."""
+    var dirs = List[String]()
+    var rows = db.conn.query(
+        (
+            "SELECT a.log FROM orca.attempts a JOIN orca.steps s ON s.id ="
+            " a.step WHERE s.run = $1 AND a.log IS NOT NULL AND a.log <> ''"
+            " LIMIT 1"
+        ),
+        Params().int64(Int64(r.id)),
+    )
+    if len(rows) > 0:
+        # <dir>/<step>/<partition>/<attempt>.log
+        var log = rows.row(0).text("log")
+        var d = log
+        for _ in range(3):
+            var at = d.rfind("/")
+            if at < 0:
+                break
+            var up = String(d[byte=:at])
+            d = up^
+        dirs.append(d)
+    var own = run_dir(r.pipeline, r.id)
+    if own:
+        dirs.append(own)
+    for d in dirs:
+        var path = String(d, "/timeline.json")
+        try:
+            with open(path, "r") as f:
+                _ = f.read_bytes(1)
+            return path
+        except:
+            pass
+    return ""
+
+
+def timeline(mut db: State, id: Int) raises -> Page:
+    var found = _runs_one(db, id)
+    if not found:
+        return not_found(String("no run ", id))
+    var path = _timeline_path(db, found.value())
+    if not path:
+        return not_found(String("run ", id, " has no timeline"))
+    var body: String
+    with open(path, "r") as f:
+        body = f.read()
+    return Page(200, String(), body^, "application/json")
+
+
+comptime _LOG_LIMIT = 1 << 20
+"""The most of a log a page shows: its last MiB."""
+
+
+def _read_log(path: String) -> Tuple[String, Bool]:
+    """The log's text, its last MiB if it's longer, and whether it was cut;
+    empty if it can't be read."""
+    if not path:
+        return (String(), False)
+    try:
+        with open(path, "r") as f:
+            var b = f.read_bytes()
+            if len(b) <= _LOG_LIMIT:
+                return (String(from_utf8_lossy=Span(b)), False)
+            var start = len(b) - _LOG_LIMIT
+            return (String(from_utf8_lossy=Span(b)[start:]), True)
+    except:
+        return (String(), False)
+
+
+@fieldwise_init
+struct AttemptRow(Copyable, Movable):
+    var id: Int
+    var run: Int
+    var pipeline: String
+    var step: String
+    var partition: String
+    var attempt: Int
+    var status: String
+    var host: String
+    var started: String
+    var ended: String
+    var error: String
+    var log: String
+
+
+def _attempts(
+    mut db: State, run: Int, cond: String, arg: Int
+) raises -> List[AttemptRow]:
+    var rows = db.conn.query(
+        String(
+            "SELECT a.id::text AS id, r.pipeline, s.step, s.partition,",
+            " a.attempt::text AS attempt, a.status, a.host, ",
+            _ts("a.started"),
+            " AS started, ",
+            _ts("a.ended"),
+            " AS ended, coalesce(a.error, '') AS error, coalesce(a.log, '')",
+            " AS log FROM orca.attempts a JOIN orca.steps s ON s.id = a.step",
+            " JOIN orca.runs r ON r.id = s.run WHERE s.run = $1 AND ",
+            cond,
+            " ORDER BY a.attempt",
+        ),
+        Params().int64(Int64(run)).int64(Int64(arg)),
+    )
+    var out = List[AttemptRow]()
+    for r in rows:
+        out.append(
+            AttemptRow(
+                _int(r.text("id")),
+                run,
+                r.text("pipeline"),
+                r.text("step"),
+                r.text("partition"),
+                _int(r.text("attempt")),
+                r.text("status"),
+                r.text("host"),
+                r.text("started"),
+                r.text("ended"),
+                r.text("error"),
+                r.text("log"),
+            )
+        )
+    return out^
+
+
+def _log_html(mut h: Html, a: AttemptRow):
+    var got = _read_log(a.log)
+    if got[1]:
+        h.raw('<p class="muted">Its last MiB:</p>')
+    h.raw('<pre class="log">')
+    if got[0]:
+        h.text(got[0])
+    elif a.log:
+        h.raw('<span class="muted">Nothing logged yet.</span>')
+    else:
+        h.raw('<span class="muted">No log file: ORCA_LOGS wasn\'t set.</span>')
+    h.raw("</pre>")
+
+
+def attempt(mut db: State, run: Int, id: Int) raises -> Page:
+    var found = _attempts(db, run, "a.id = $2", id)
+    if len(found) == 0:
+        return not_found(String("no attempt ", id, " in run ", run))
+    ref a = found[0]
+    var siblings = _attempts(
+        db,
+        run,
+        "a.step = (SELECT step FROM orca.attempts WHERE id = $2)",
+        id,
+    )
+    var log = _read_log(a.log)
+
+    var j = String(
+        '{"attempt": {"id": ',
+        a.id,
+        ', "run": ',
+        a.run,
+        ', "step": ',
+        quote(a.step),
+        ', "partition": ',
+        quote(a.partition),
+        ', "attempt": ',
+        a.attempt,
+        ', "status": ',
+        quote(a.status),
+        ', "host": ',
+        quote(a.host),
+        ', "started": ',
+        quote(a.started),
+        ', "ended": ',
+        quote(a.ended),
+        ', "error": ',
+        quote(a.error),
+        ', "log": ',
+        quote(a.log),
+        '}, "text": ',
+        quote(log[0]),
+        ', "truncated": ',
+        "true" if log[1] else "false",
+        "}",
+    )
+
+    var h = Html()
+    h.raw('<p class="crumb"><a href="/runs">Runs</a> · ')
+    h.link(String("/runs/", a.run), String("run ", a.run))
+    h.raw("</p><h1>")
+    h.text(a.step)
+    if a.partition:
+        h.text(" ", a.partition)
+    h.text(", attempt ", a.attempt, " ")
+    h.status(a.status)
+    h.raw("</h1>")
+    if a.error:
+        h.raw('<pre class="error">')
+        h.text(a.error)
+        h.raw("</pre>")
+    h.raw('<dl class="facts"><dt>Host</dt><dd>')
+    h.text(a.host)
+    h.raw("</dd><dt>Started</dt><dd>")
+    h.text(a.started)
+    h.raw("</dd><dt>Ended</dt><dd>")
+    h.text(a.ended)
+    h.raw("</dd><dt>Log file</dt><dd><code>")
+    h.text(a.log)
+    h.raw("</code></dd>")
+    if len(siblings) > 1:
+        h.raw("<dt>Attempts</dt><dd>")
+        for i in range(len(siblings)):
+            if i:
+                h.raw(" · ")
+            ref s = siblings[i]
+            if s.id == a.id:
+                h.text(s.attempt)
+            else:
+                h.link(
+                    String("/runs/", run, "/attempts/", s.id), String(s.attempt)
+                )
+            h.raw(" ")
+            h.status(s.status)
+        h.raw("</dd>")
+    h.raw("</dl><h2>Log</h2>")
+    if _live(a.status):
+        h.raw('<div data-poll="/runs/')
+        h.text(run, "/attempts/", a.id, "/log")
+        h.raw('">')
+    else:
+        h.raw("<div>")
+    _log_html(h, a)
+    h.raw("</div>")
+    var title = String(a.step, " ", a.partition, " attempt ", a.attempt)
+    return Page(200, j^, _page(title, "/runs", h))
+
+
+def attempt_log(mut db: State, run: Int, id: Int) raises -> Page:
+    """An attempt's log, as a fragment; 286 once the attempt has ended."""
+    var found = _attempts(db, run, "a.id = $2", id)
+    if len(found) == 0:
+        return not_found(String("no attempt ", id, " in run ", run))
+    var h = Html()
+    _log_html(h, found[0])
+    return Page(
+        200 if _live(found[0].status) else 286,
+        String(),
+        h^.finish(),
+        "text/html; charset=utf-8",
+    )
 
 
 def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
@@ -855,17 +1215,30 @@ def not_found(what: String) -> Page:
 # ── serving ──────────────────────────────────────────────────────────────────
 
 
+def _reason(status: Int) -> String:
+    if status == 200:
+        return "OK"
+    if status == 286:
+        return "Done"
+    if status == 404:
+        return "Not Found"
+    return "Internal Server Error"
+
+
 def _respond(page: Page, json: Bool) -> Response:
-    var body = page.json if json else page.html
+    var raw = page.content_type != ""
+    var body = page.json if json and not raw else page.html
     var resp = Response(
         status=page.status,
-        reason="OK" if page.status == 200 else "Not Found",
+        reason=_reason(page.status),
         body=List[UInt8](body.as_bytes()),
     )
     try:
         resp.headers.set(
             "Content-Type",
-            "application/json" if json else "text/html; charset=utf-8",
+            page.content_type if raw else (
+                "application/json" if json else "text/html; charset=utf-8"
+            ),
         )
         resp.headers.set("Cache-Control", "no-store")
     except:
@@ -939,11 +1312,28 @@ struct Ui(Copyable, Handler):
                 _query(url, "trigger"),
             )
         if path.startswith("/runs/"):
-            var rest = String(path[byte=6:])
+            var parts = path[byte=6:].split("/")
+            var id: Int
             try:
-                return run(db, Int(rest))
+                id = Int(parts[0])
             except:
-                return not_found(String("no run ", rest))
+                return not_found(String("no run ", parts[0]))
+            if len(parts) == 1:
+                return run(db, id)
+            if len(parts) == 2 and parts[1] == "steps":
+                return run_steps(db, id)
+            if len(parts) == 2 and parts[1] == "timeline.json":
+                return timeline(db, id)
+            if len(parts) >= 3 and len(parts) <= 4 and parts[1] == "attempts":
+                var aid: Int
+                try:
+                    aid = Int(parts[2])
+                except:
+                    return not_found(String("no attempt ", parts[2]))
+                if len(parts) == 3:
+                    return attempt(db, id, aid)
+                if parts[3] == "log":
+                    return attempt_log(db, id, aid)
         if path.startswith("/pipelines/"):
             var name = url_decode(path[byte=11:])
             if name and "/" not in name:

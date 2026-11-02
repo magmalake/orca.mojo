@@ -1,8 +1,10 @@
 #!/bin/sh
 # orca ui over the toy pipeline's runs: every page answers HTML and JSON, a
 # run's JSON says what `toy status <run>` says, values from the database are
-# escaped, and unknown paths and methods are refused. Needs
-# ORCA_DATABASE_URL (pixi run test-ui starts a throwaway server), curl and jq.
+# escaped, and unknown paths and methods are refused; attempts' logs, the
+# DAG, a running run's page following it to the end, and a Dista timeline.
+# Needs ORCA_DATABASE_URL (pixi run test-ui starts a throwaway server), curl
+# and jq.
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
@@ -10,6 +12,10 @@ mkdir -p build
 mojo build -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
 mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
+# shellcheck disable=SC2086
+mojo build -I src $DEP_INC examples/daily.mojo -o build/daily
+# shellcheck disable=SC2086
+mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout
 
 log=build/ui.log
 : > "$log"
@@ -75,7 +81,7 @@ done
 
 # Escaped in HTML, as it is in JSON.
 page=$(html "/runs/$bad_run")
-echo "$page" | grep -q '<script>' && fail "a value's markup reached the page"
+echo "$page" | grep -q '<script>alert' && fail "a value's markup reached the page"
 echo "$page" | grep -q '&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;so&quot;' \
     || fail "the error isn't on the page, escaped"
 [ "$(json "/runs/$bad_run" | jq -r '[.steps[] | select(.status == "failed")][0].error')" \
@@ -91,6 +97,68 @@ done
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/runs")
 [ "$code" = 405 ] || fail "POST answered $code, not 405"
 curl -fsS "$base/static/orca.css" | grep -q -- '--ember' || fail "the stylesheet"
+
+# An attempt's page: its error, its log, the step's other attempts.
+failed=$(json "/runs/$bad_run" | jq -r '[.steps[] | select(.status == "failed")][0].attempt_id')
+[ "$failed" -gt 0 ] || fail "no attempt id for the failed step"
+page=$(html "/runs/$bad_run/attempts/$failed")
+echo "$page" | grep -q '&lt;script&gt;' && fail "the attempt page has the step's error, not the attempt's"
+echo "$page" | grep -q 'failing 2024-02 as asked' || fail "the attempt's error isn't on its page"
+[ "$(json "/runs/$bad_run/attempts/$failed" | jq -r .attempt.status)" = failed ] || fail "the attempt's JSON"
+json "/runs/$bad_run/attempts/$failed" | jq -r .text | grep -q 'failed: failing 2024-02 as asked' \
+    || fail "the attempt's log text"
+echo "$page" | grep -q 'data-poll="' && fail "an ended attempt's page still polls"
+html "/runs/$bad_run" | grep -q "/runs/$bad_run/attempts/$failed" || fail "the run doesn't link the attempt"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$ok_run/attempts/$failed")
+[ "$code" = 404 ] || fail "another run's attempt answered $code"
+
+# The DAG: a box per step, an edge per after, coloured by the run.
+[ "$(html /pipelines/toy | grep -o 'class="dag__box' | wc -l)" -eq 3 ] || fail "toy's DAG hasn't 3 boxes"
+[ "$(html /pipelines/toy | grep -o 'class="dag__edge' | wc -l)" -eq 2 ] || fail "toy's DAG hasn't 2 edges"
+ORCA_NOW=2024-01-15T00:00Z ./build/orca register ./build/daily >> "$log" 2>&1 || fail "register daily"
+[ "$(html /pipelines/daily | grep -o 'class="dag__box' | wc -l)" -eq 2 ] || fail "daily's DAG hasn't 2 boxes"
+[ "$(html /pipelines/daily | grep -o 'class="dag__edge' | wc -l)" -eq 1 ] || fail "daily's DAG hasn't 1 edge"
+page=$(html "/runs/$bad_run")
+echo "$page" | grep -q 'dag__box dag__box--failed"><title>measure' || fail "measure isn't failed in the DAG"
+echo "$page" | grep -q 'dag__box dag__box--skipped"><title>total' || fail "total isn't skipped in the DAG"
+echo "$page" | grep -q 'data-poll="' && fail "an ended run's page still polls"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$bad_run/steps")
+[ "$code" = 286 ] || fail "an ended run's fragment answered $code, not 286"
+
+# A run going on: its page polls, its fragment and its running attempt's log
+# answer 200 until they end, then 286 with the end in them.
+ORCA_TOY_SLEEP=1 ./build/toy run --partitions 2024-03 >> "$log" 2>&1 &
+toy=$!
+i=0
+until [ "$(q "SELECT count(*) FROM orca.runs WHERE status = 'running'")" -eq 1 ]; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "the slow run didn't start"; sleep 0.05
+done
+live=$(q "SELECT id FROM orca.runs WHERE status = 'running'")
+html "/runs/$live" | grep -q "data-poll=\"/runs/$live/steps\"" || fail "a running run's page doesn't poll"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/steps")
+[ "$code" = 200 ] || fail "a running run's fragment answered $code"
+i=0
+until a=$(q "SELECT a.id FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $live AND a.status = 'running' LIMIT 1") && [ -n "$a" ]; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "no running attempt"; sleep 0.05
+done
+html "/runs/$live/attempts/$a" | grep -q "data-poll=\"/runs/$live/attempts/$a/log\"" \
+    || fail "a running attempt's page doesn't poll"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/attempts/$a/log")
+[ "$code" = 200 ] || fail "a running attempt's log answered $code"
+wait "$toy" || fail "the slow run failed"
+code=$(curl -s -o "$log.frag" -w '%{http_code}' "$base/runs/$live/steps")
+[ "$code" = 286 ] || fail "the ended run's fragment answered $code"
+grep -q 'status--succeeded">succeeded</span></h2>' "$log.frag" || fail "the fragment doesn't show the run succeeded"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/attempts/$a/log")" = 286 ] \
+    || fail "the ended attempt's log didn't answer 286"
+
+# A run with Dista tasks: its timeline, as Chrome's trace format.
+./build/fanout run --partitions 2024-01 >> "$log" 2>&1 || fail "fanout failed"
+fan=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
+html "/runs/$fan" | grep -q "/runs/$fan/timeline.json" || fail "the run doesn't link its timeline"
+curl -fsS "$base/runs/$fan/timeline.json" | grep -q '"ph":"X"' || fail "the timeline isn't a Chrome trace"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$ok_run/timeline.json")
+[ "$code" = 404 ] || fail "a run without tasks answered $code for its timeline"
 
 kill "$pid"
 echo "ok   ui"
