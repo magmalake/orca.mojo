@@ -127,7 +127,7 @@ This is what makes reruns safe (the vision's fourth principle).
 ## Failure and resume
 
 - **A failed step** fails its run once its retries are used up. Its downstream steps are `skipped`; other partitions' steps that don't depend on it carry on, so one bad month doesn't stop the other eleven.
-- **Retries** are per step: `retries=2` in the `Step` declaration, immediate in phase 1, with backoff in phase 2. `ctx.attempt` tells a step which attempt it is. Every attempt is a row in `attempts`, retries and resumes alike.
+- **Retries** are per step: `retries=2` in the `Step` declaration, immediate. Phase 2 retries a failed *run* with backoff, by resuming it. `ctx.attempt` tells a step which attempt it is. Every attempt is a row in `attempts`, retries and resumes alike.
 - **Resume** reruns every step that hasn't `succeeded`, in dependency order, with the recorded inputs and pinned reads. Steps that succeeded aren't run again; their outputs are read back from Postgres. A resume after a code change is refused unless `--allow-new-code`, which records the new hash on the attempts it makes.
 - **Order within a run.** Steps run in dependency order; independent partitions of a `Mapped` step run one after another in the driver in phase 1, each free to use dista for parallelism inside. Running several partitions' steps at once moved to phase 2, with backfills: in one driver it would need a thread per partition, each with its own database connection, and dista's `Runtime` isn't safe to share between threads. Phase 2 gets the same effect with one run per partition, started `max_runs` at a time, each in its own process.
 
@@ -171,11 +171,34 @@ What PR 6 needs from the tins, checked at PR 2, and what it turned out to need:
 
 Gate: a schedule fills each month's partition as it falls due, and a backfill over 2011–2024 runs with a bounded number at once.
 
-- **Partition definitions** on the pipeline: `partitions=Monthly(start="2011-01")` or `Daily(...)`, so the scheduler knows the set of keys and which are due.
+- **Partition definitions** on the pipeline: `partitions=Monthly["2011-01"]` or `Daily["2024-01-01"]`, so the scheduler knows the set of keys and which are due.
 - **Cron**: five-field expressions with ranges, steps and lists, and a time zone. Time zones are read from the system's TZif files (`/usr/share/zoneinfo`), which is a small, documented format. A schedule says which partition a fire fills, e.g. "at 03:00 on the 2nd, the previous month".
-- **The `orca` scheduler binary**: registers pipelines from their `describe`, ticks once a second, creates runs that are due, starts them as subprocesses, retries failed steps with exponential backoff and jitter, and enforces `max_runs` per pipeline by counting `running` rows in the same transaction that starts one.
+- **The `orca` scheduler binary**: registers pipelines from their `describe`, ticks once a second, creates runs that are due, starts them as subprocesses, retries failed runs with exponential backoff and jitter, and enforces `max_runs` per pipeline by counting `running` rows in the same transaction that starts one.
 - **Backfills**: one run per partition over a range, queued, started `max_runs` at a time. This is also how partitions run in parallel, in place of phase 1's `max_parallel`.
 - **Missed fires** after the scheduler was down are caught up once each, not dropped and not fired many times; a pipeline can say `catchup=False`.
+
+### How it fits together
+
+- **A partition key is a type.** `Month` and a new `Day` share a `Key` trait (parse, write, next, compare). `Monthly[start]` and `Daily[start]` are partition sets over them, with the range syntax the command line already takes (`2024-01..2024-03`, comma lists). `Pipeline` takes `partitions=`, and its first step must take that key (a `Mapped` step) or a `Seq` of it (a `Gather` step), checked at compile time like any other edge. A pipeline that leaves it out is `Monthly` with no start, as in phase 1, and can't be scheduled or backfilled from the beginning.
+- **A schedule is declared with the pipeline**: `schedule=Cron["0 3 2 * *", "America/New_York"]` and `fills=Previous` (the key before the one the fire falls in) or `Current`. `describe` prints the partitions and the schedule, so the scheduler learns both without linking the pipeline.
+- **Registration.** `orca register ./build/taxi` runs `taxi describe` and stores the binary's path with the DAG in `pipelines`. The scheduler reads the pipelines it schedules from Postgres; there is no configuration file.
+- **A fire is a row.** `fires` (pipeline, fire time, partition, run) has a unique (pipeline, fire time), and the scheduler inserts the fire and its `queued` run in one transaction, so a scheduler killed and restarted mid-tick doesn't fire twice. Backfills insert queued runs the same way, with trigger `backfill`.
+- **Starting a run is `resume`.** A queued run has nothing done and no heartbeat, which is exactly what `taxi resume <run>` already takes. The scheduler forks and executes the binary (`fork` and `execv` through FFI, as dista starts its local processes) and doesn't wait on it beyond reaping it: the run records its own progress, and a run whose process dies is found by its stale heartbeat.
+- **`max_runs`**: the scheduler starts a queued run only if, in the same transaction, fewer than `max_runs` of the pipeline's runs are `running`. A run is marked `running` by the scheduler when it starts it, before the process claims it.
+- **Retrying a failed run** is resuming it again, after `run_retries` backoffs (1 minute doubling, with jitter, 3 by default). Step retries inside a run stay immediate.
+- **Missed fires**: on each tick the scheduler computes the fires between a schedule's last recorded fire and now. With `catchup=True` (the default) each becomes a queued run, at most `max_runs` running at once; with `catchup=False` only the latest does.
+- **Time in tests.** `ORCA_NOW` fixes the scheduler's clock, and `orca tick` runs one tick and exits, so the tests step time forward deterministically.
+- **Daylight saving.** A cron time that a spring-forward skips fires at the first minute after the gap; one that a fall-back repeats fires once, at its first occurrence. That's what Vixie cron and systemd timers do.
+- **The time zone rules** come from TZif version 2 and later: the 64-bit transition times, then the footer's POSIX `TZ` string (such as `EST5EDT,M3.2.0,M11.1.0`) for times after the last transition, which "slim" TZif files rely on for every year since 2007.
+
+### PRs
+
+| # | PR | Gate | Size |
+|---|---|---|---|
+| 1 | **Partition keys and sets.** The `Key` trait, `Day`, `Monthly`, `Daily`, `partitions=` on `Pipeline`, the first step's input checked against the key, `describe` with partitions, the command line parsing keys of the pipeline's type. | A daily toy pipeline runs over a range of days; a pipeline whose first step takes a `Month` under `Daily` doesn't compile; phase 1's tests pass unchanged. | ~600 |
+| 2 | **Cron and time zones.** Cron parsing and next-fire computation in a time zone; a TZif reader with POSIX `TZ` rules; `schedule=`, `fills=` and `catchup=` on `Pipeline`, in `describe`. | Next fires match a table of known ones, including both daylight-saving transitions in `America/New_York` and `Europe/London`; the cron parser and the `TZ` string parser are fuzzed. | ~1,000 |
+| 3 | **The scheduler.** The `orca` binary: `register`, `tick`, `scheduler` (tick once a second), `backfill`; `fires`, queued runs, starting runs as subprocesses, `max_runs`, run retries with backoff, missed fires and `catchup`. | With `ORCA_NOW` stepped month by month, the toy pipeline's partitions are filled once each, as they fall due; a scheduler killed mid-tick and restarted fires nothing twice; a backfill of 24 months never has more than `max_runs` running. | ~1,200 |
+| 4 | **The taxi backfill.** The taxi pipeline gets `partitions=Monthly["2011-01"]` and a monthly schedule; the load handles the 2011–2022 files' schemas. | Phase 2's gate, by hand: `orca backfill taxi 2011-01..2024-12` with `max_runs=4` loads every month once, and the schedule then fills the next month when it falls due (with `ORCA_NOW`). | ~300 |
 
 ## Phase 3: the UI
 
