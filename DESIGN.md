@@ -201,6 +201,18 @@ Gate: a schedule fills each month's partition as it falls due, and a backfill ov
 | 3 | **The scheduler.** The `orca` binary: `register`, `tick`, `scheduler` (tick once a second), `backfill`; `fires`, queued runs, starting runs as subprocesses, `max_runs`, run retries with backoff, missed fires and `catchup`. | With `ORCA_NOW` stepped month by month, the toy pipeline's partitions are filled once each, as they fall due; a scheduler killed mid-tick and restarted fires nothing twice; a backfill of 24 months never has more than `max_runs` running. | ~1,200 |
 | 4 | **The taxi backfill.** The taxi pipeline gets `partitions=Monthly["2011-01"]` and a monthly schedule; the load handles the 2011–2022 files' schemas. | Phase 2's gate, by hand: `orca backfill taxi 2011-01..2024-12` with `max_runs=4` loads every month once, and the schedule then fills the next month when it falls due (with `ORCA_NOW`). | ~300 |
 
+### How the gate went
+
+Done by hand on one Mac (10 cores, 24 GB) from the 168 TLC files, 19 GB, already downloaded: `orca register ./build/taxi`, `orca backfill taxi 2011-01..2024-12`, then `orca scheduler` with `ORCA_NOW` fixed at 2025-01-15. All 168 runs succeeded on their first start, never more than 4 running, in 11 minutes, with 336 commits (a load and a compaction per month). The table holds 1,438,321,685 rows for 2011–2024, one file per month; its 2023–2024 months are still phase 1's 79,478,796. A tick at 05:59 on 2 February 2025 fired nothing; at 06:00 it fired once, for 2025-01, and that run downloaded the month from the TLC and loaded its 3,475,204 rows.
+
+What it took:
+
+- **The 2011–2022 schemas.** Every file from 2011 has the same 19 columns; only the types move. Before 2019 `congestion_surcharge` and before 2021 `airport_fee` are null, and a file whose column is all null types it as int32, not double. iceberg's writer already casts to the table's type, and an all-null int32 column stays null, so the load needed no change.
+- **Each run compacts only its months.** Phase 1's compaction rewrote every month with more than one file; with four runs loading at once it would rewrite the others' half-loaded months. It now rewrites the months its own loads loaded.
+- **Seeding `std.random` in each process.** The first attempt at the gate failed compactions with "none of the files this commit removes is in the current snapshot". iceberg draws snapshot IDs and file UUIDs from `std.random` and never seeds it, so every pipeline process drew the same sequence: concurrent runs committed snapshots with the same IDs and wrote each other's `snap-<id>` manifest lists. `orca_main` now seeds it from the clock and the process ID, and `tests/taxi.sh` commits from two runs at once and checks the snapshot IDs and manifest lists are distinct; without the seed it fails. iceberg should seed it itself.
+- **Memory.** A 2011 month is 14 to 16 million rows in one row group. Loading one peaks at about 4 GB and compacting it at about 6 GB, mostly iceberg's writer copying the batch to align it and again per partition; four at once peaked at 15 GB. Streaming the compaction's reads didn't change that, so it's left to iceberg's writer.
+- **The schedule** fires at 06:00 UTC on the 2nd for the month before. The TLC publishes a month about two months after it ends, so in real time that fire fails its download and is retried with backoff until its budget is spent; a backfill of the month once it's out loads it. A fill with a lag is left for later.
+
 ## Phase 3: the UI
 
 Gate: a failed step is found, its logs read and the run resumed, without a terminal.
