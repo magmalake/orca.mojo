@@ -26,7 +26,8 @@ test-scheduler = { cmd = "scripts/with-postgres.sh tests/scheduler.sh" }
 test-chaos = { cmd = "scripts/with-postgres.sh tests/chaos.sh" }
 test-ui = { cmd = "scripts/with-postgres.sh tests/ui.sh" }
 test-actions = { cmd = "scripts/with-postgres.sh tests/actions.sh" }
-test = { depends-on = ["test-steps", "test-cron", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-chaos"] }
+test-lost-workers = { cmd = "scripts/with-postgres.sh tests/lost_workers.sh" }
+test = { depends-on = ["test-steps", "test-cron", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-lost-workers", "test-chaos"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
 orca = { cmd = "mkdir -p build && mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca" }
@@ -39,7 +40,9 @@ daily = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/daily.moj
 [feature.stable.dependencies]
 mojo-compiler = "==1.2.0"
 memory-region-mojo = { git = "https://github.com/magmalake/memory-region.mojo", rev = "91ff4418b44a89f9354e7d32633e9b11ad365dfd" }
-arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "928a2435371c82395879779225df284e581dfb21" }
+arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "d157bb3296b4f6d36feae2848ebf6e0c7e4f9f5e" }
+# dista writes actor checkpoints through objectstore.
+objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "748e2d31450a7793592e439d6c69d8c6598d2129" }
 # orca's state. Pinned at the revision mojoshelf published as
 # postgres-mojo 0.3.2, and threads-mojo at the revision it pins: the
 # heartbeat runs on a thread of its own.
@@ -65,6 +68,8 @@ modular = ">=26.8.0.dev2026102305,<28"
 openssl = ">=3.0,<4"
 zlib = ">=1.3.1,<2"
 libdeflate = ">=1.22,<2"
+# objectstore's native shim, which the checkout below doesn't build.
+objectstore-shim = { git = "https://github.com/magmalake/objectstore.mojo", rev = "748e2d31450a7793592e439d6c69d8c6598d2129", subdirectory = "shim" }
 
 [feature.nightly.target.linux-64.dependencies]
 gxx = ">=13"
@@ -77,7 +82,7 @@ gxx = ">=13"
 scripts = ["../flare_mlake/flare/tls/ffi/build.sh", "../flare_mlake/flare/http/ffi/build.sh"]
 
 [feature.nightly.activation.env]
-DEP_INC = "-I ../dista.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src -I ../postgres.mojo/src -I ../threads.mojo/src -I ../threads.mojo/compat -I ../flare_mlake -I ../json_mlake"
+DEP_INC = "-I ../dista.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src -I ../objectstore.mojo/src -I ../postgres.mojo/src -I ../threads.mojo/src -I ../threads.mojo/compat -I ../flare_mlake -I ../json_mlake"
 
 # `mojo-compiler` ships no formatter; the nightly `modular` package does.
 # `mojo format` has no check mode, so format-check formats and then asserts
