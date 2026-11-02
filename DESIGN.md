@@ -217,17 +217,17 @@ What it took:
 
 Gate: a failed step is found, its logs read and the run resumed, without a terminal.
 
-**Decided: server-rendered HTML from flare, with htmx for the live parts.** It keeps the footprint at one process with nothing to build: no Node toolchain, no bundler, no client-side state. Every page is also the API: the same path answers JSON to `Accept: application/json` (or `?format=json`), so the command line, scripts and the UI read one thing and can't drift. A single-page app can be evaluated later, if a view needs more than this gives it (a zoomable DAG, a live Gantt chart); the JSON paths are what it would be built on.
+**Decided: server-rendered HTML from flare, with a little JavaScript for the live parts.** It keeps the footprint at one process with nothing to build: no Node toolchain, no bundler, no client-side state. Every page is also the API: the same path answers JSON to `Accept: application/json` (or `?format=json`), so the command line, scripts and the UI read one thing and can't drift. A single-page app can be evaluated later, if a view needs more than this gives it (a zoomable DAG, a live Gantt chart); the JSON paths are what it would be built on.
 
 ### How it fits together
 
 - **`orca ui`** is a command of the `orca` binary, not a new binary: it needs `ORCA_DATABASE_URL` like the others, reads the tables the scheduler and the runs write, and binds `127.0.0.1:8270` unless `ORCA_UI_ADDR` says otherwise. It holds no state of its own, so it can run beside the scheduler, or several of it at once.
 - **flare serves it**: its `Router` for paths, one reactor thread (`num_workers=1`) to start with. A request runs a few short queries against indexed columns, so it doesn't hold the loop for long; idle and write timeouts are set for the work rather than left at flare's web defaults (see flare's silent-reap history). Postgres is reached through one connection per request at first, measured, and pooled only if that shows.
 - **HTML is written in Mojo**, through a small `orca.html` writer that escapes every value it's given and only writes raw markup it's told is markup. flare's template engine was looked at and isn't used: its context is strings and lists of strings, and a run page is a table of records.
-- **The page skeleton**: one layout with a header (pipelines, runs), one stylesheet with magmalake.dev's colours and type, light and dark, and htmx 2 vendored as a static file (it's served by `orca ui`, so the UI works without the internet). No other JavaScript.
-- **Live parts are polled fragments**: a running run's step table and a log's tail are `hx-get` with `hx-trigger="every 2s"` on a fragment path that returns only that piece of HTML, and stops once the run has ended. Server-sent events are left for later; flare has them, but polling a few fragments is simpler and plenty for one team.
+- **The page skeleton**: one layout with a header (pipelines, runs) and one stylesheet with magmalake.dev's colours and type, light and dark. Nothing is fetched from elsewhere, so the UI works without the internet.
+- **Live parts are polled fragments**: a running run's DAG and steps, and a running attempt's log, sit in an element with `data-poll` naming a fragment path that returns only that piece of HTML. Twelve lines of script in the layout replace it every two seconds until the fragment answers 286 (htmx's "stop polling"), which it does once what it shows has ended. htmx was the plan; for this one pattern it would have been 50 KB to embed in the binary. Forms are plain HTML forms, so the actions need no script either. Server-sent events are left for later; flare has them, but polling a few fragments is simpler and plenty for one team.
 - **The DAG is drawn server-side as SVG**: steps laid out left to right by their order, mapped steps drawn as a stack, edges from `after`, each box coloured by the status of its partitions in the run being shown. A pipeline is a chain today, so the layout is a row; it's written for a DAG, as phase 4's datasets may branch.
-- **The Dista timeline** is served from the run's log directory as `timeline.json`, with a link that opens it in Perfetto, rather than drawn by orca.
+- **The Dista timeline** is served from the run's log directory as `timeline.json`, linked for opening in Perfetto, rather than drawn by orca. The directory is found from the run's attempts' log paths, so the UI needn't share the runs' `ORCA_LOGS`; a relative `ORCA_LOGS` is relative to where the run was started, which the UI must share.
 - **Actions go through Postgres, never through the UI's process.** The UI doesn't start pipeline binaries: it writes a row and the scheduler, which already starts and limits runs, acts on it. So `max_runs`, retries and ownership stay in one place, and the UI works the same whether the scheduler is on this machine or not.
   - **Start a run**: a queued run over the partitions entered, trigger `ui`.
   - **Resume** a failed or interrupted run: it's queued again (`retry_at` cleared), and the scheduler resumes it as it does a retry. A resume of a run whose code has changed asks for confirmation, which passes `--allow-new-code`.
@@ -244,7 +244,7 @@ Gate: a failed step is found, its logs read and the run resumed, without a termi
 | `/pipelines/<name>` | The DAG, partitions and schedule, the next fires, the latest runs, and the forms to start a run and backfill a range. |
 | `/runs` | Runs across pipelines, newest first, filterable by pipeline, status and trigger. |
 | `/runs/<id>` | The run: each step and partition with status, timing and attempts, the error of a failed one, its reads and commits, the DAG in this run's colours, and resume, rerun from a step and cancel. |
-| `/runs/<id>/attempts/<attempt>` | An attempt's log, its tail followed while it's running, with its error at the top when it failed. |
+| `/runs/<id>/attempts/<attempt>` | An attempt's log (its last MiB), followed while it's running, with its error at the top when it failed, and the step's other attempts. |
 | `/runs/<id>/timeline.json` | The run's Dista timeline, for Perfetto. |
 
 ### PRs
