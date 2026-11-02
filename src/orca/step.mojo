@@ -27,6 +27,20 @@ The edge is checked when the pipeline is compiled:
 A mapped step can't follow a gather step. Types are compared by their
 reflected names, which include their module; the first step's input is
 checked by `Pipeline.check`, which knows the key.
+
+A step declares the datasets it reads and writes, as `namespace.table`
+names in the warehouse (`orca.tables`):
+
+```mojo
+comptime Clean = Step[
+    "clean", Month, Int64, clean, Mapped,
+    reads=["raw.events"], writes=["lake.events"],
+]
+```
+
+`orca.tables` refuses a scan of a dataset the step didn't declare in
+`reads`, and a commit to one it didn't declare in `writes`, so the graph of
+pipelines and datasets that `describe` gives is what the steps do.
 """
 
 from std.reflection import reflect, reflect_fn
@@ -35,6 +49,18 @@ from dista.codec import decode, encode
 from dista.seq import Seq
 
 from orca.ctx import Ctx
+
+
+def _is_dataset(name: StaticString) -> Bool:
+    """Whether `name` is `namespace.table`: a dot with a name either side,
+    and nothing that would leave the warehouse."""
+    var dot = name.rfind(".")
+    return (
+        dot > 0
+        and dot < name.byte_length() - 1
+        and "/" not in name
+        and ".." not in name
+    )
 
 
 @fieldwise_init
@@ -102,6 +128,16 @@ trait StepLike:
         ...
 
     @staticmethod
+    def dataset_reads() -> List[String]:
+        """The datasets the step declared in `reads=`."""
+        ...
+
+    @staticmethod
+    def dataset_writes() -> List[String]:
+        """The datasets the step declared in `writes=`."""
+        ...
+
+    @staticmethod
     def check():
         """Asserts at compile time that the step's input matches its edge."""
         ...
@@ -151,6 +187,14 @@ struct NoStep(StepLike):
         return ""
 
     @staticmethod
+    def dataset_reads() -> List[String]:
+        return List[String]()
+
+    @staticmethod
+    def dataset_writes() -> List[String]:
+        return List[String]()
+
+    @staticmethod
     def check():
         pass
 
@@ -168,6 +212,8 @@ struct Step[
     *,
     after: StepLike = NoStep,
     retries: Int = 0,
+    reads: List[StaticString] = [],
+    writes: List[StaticString] = [],
 ](StepLike):
     """A step named `name` running `f` on an `A_` to make an `R_`."""
 
@@ -207,9 +253,33 @@ struct Step[
         return reflect[Self.R_].name()
 
     @staticmethod
+    def dataset_reads() -> List[String]:
+        var out = List[String]()
+        comptime for i in range(len(Self.reads)):
+            comptime d = Self.reads[i]
+            out.append(String(d))
+        return out^
+
+    @staticmethod
+    def dataset_writes() -> List[String]:
+        var out = List[String]()
+        comptime for i in range(len(Self.writes)):
+            comptime d = Self.writes[i]
+            out.append(String(d))
+        return out^
+
+    @staticmethod
     def check():
         comptime assert Self.name != "", "a step needs a name"
         comptime assert Self.retries >= 0, "retries can't be negative"
+        comptime for i in range(len(Self.reads)):
+            comptime assert _is_dataset(
+                Self.reads[i]
+            ), "a dataset is named namespace.table"
+        comptime for i in range(len(Self.writes)):
+            comptime assert _is_dataset(
+                Self.writes[i]
+            ), "a dataset is named namespace.table"
         comptime a = reflect[Self.A_].name()
         comptime if Self.after.step_name() == "":
             # A first step takes the pipeline's partition key, which the

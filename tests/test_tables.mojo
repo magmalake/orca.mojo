@@ -1,4 +1,5 @@
-"""Pinned reads and recognised commits, over local Iceberg tables. Run under
+"""Pinned reads, recognised commits and declared datasets, over local
+Iceberg tables in a warehouse (`ORCA_WAREHOUSE`). Run under
 scripts/with-postgres.sh, in the data environment."""
 
 from std.os import getenv, setenv
@@ -12,8 +13,11 @@ from iceberg.values import Datum
 from parquet import RecordBatch
 from postgres import Connection, Params
 
+from dista import Seq
+
 from orca import (
     Ctx,
+    Gather,
     Mapped,
     Month,
     PgStore,
@@ -23,7 +27,7 @@ from orca import (
     Step,
     parse_months,
 )
-from orca.tables import append, scan
+from orca.tables import append, dataset_of, scan, table
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -85,15 +89,61 @@ def copy_count(mut ctx: Ctx, m: Month) raises -> Int:
     return n
 
 
-comptime Load = Step["load", Month, Int64, load, Mapped]
+def sneak(mut ctx: Ctx, m: Month) raises -> Int:
+    """Scans `out`, which it doesn't declare."""
+    var out = _table("out")
+    return len(scan(ctx, out).to_batches())
+
+
+def scribble(mut ctx: Ctx, m: Month) raises -> Int64:
+    """Appends to `src`, which it declares it reads, not writes."""
+    var src = _table("src")
+    return append(ctx, src, _rows(String(m), 1))
+
+
+def by_name(mut ctx: Ctx, m: Month) raises -> Int:
+    """Counts `db.src`, loaded by its dataset name."""
+    var n = 0
+    for b in scan(ctx, table(ctx, "db.src")).to_batches():
+        n += b.num_rows
+    return n
+
+
+def key(mut ctx: Ctx, m: Month) raises -> Int:
+    return m.month
+
+
+def sum_all(mut ctx: Ctx, ms: Seq[Int]) raises -> Int64:
+    """Appends one row per month, in one commit for the run."""
+    var out = _table("out")
+    return append(ctx, out, _rows("all", len(ms)))
+
+
+comptime Load = Step["load", Month, Int64, load, Mapped, writes=["db.out"]]
 comptime Loads = Pipeline["loads", Load]
-comptime CopyCount = Step["copy_count", Month, Int, copy_count, Mapped]
+comptime CopyCount = Step[
+    "copy_count", Month, Int, copy_count, Mapped, reads=["db.src"]
+]
 comptime Copies = Pipeline["copies", CopyCount]
+comptime Sneak = Step["sneak", Month, Int, sneak, Mapped, reads=["db.src"]]
+comptime Sneaky = Pipeline["sneaky", Sneak]
+comptime Scribble = Step[
+    "scribble", Month, Int64, scribble, Mapped, reads=["db.src"]
+]
+comptime Scribbles = Pipeline["scribbles", Scribble]
+comptime ByName = Step["by_name", Month, Int, by_name, Mapped, reads=["db.src"]]
+comptime ByNames = Pipeline["by_names", ByName]
+comptime Key = Step["key", Month, Int, key, Mapped]
+comptime SumAll = Step[
+    "sum_all", Seq[Int], Int64, sum_all, Gather, after=Key, writes=["db.out"]
+]
+comptime Sums = Pipeline["sums", Key, SumAll]
 
 
 def _warehouse() raises -> FilesystemCatalog:
     var root = String("build/wh-", now_ms())
     _ = setenv("ORCA_TEST_WH", root)
+    _ = setenv("ORCA_WAREHOUSE", root)
     var cat = FilesystemCatalog.local(root)
     _ = cat.create_table("db", "out", Schema.parse(SCHEMA))
     _ = cat.create_table("db", "src", Schema.parse(SCHEMA))
@@ -131,7 +181,7 @@ def test_a_commit_is_recognised_on_resume() raises:
                 (
                     "SELECT count(*) AS n FROM orca.commits c JOIN"
                     " orca.attempts a ON a.id = c.attempt JOIN orca.steps s ON"
-                    " s.id = a.step WHERE s.run = $1"
+                    " s.id = a.step WHERE s.run = $1 AND c.dataset = 'db.out'"
                 ),
                 Params().int64(Int64(store.run)),
             )
@@ -156,6 +206,7 @@ def test_a_commit_is_recognised_on_resume() raises:
     assert_equal(s["orca.run"], String(store.run))
     assert_equal(s["orca.step"], "load")
     assert_equal(s["orca.partition"], "2024-02")
+    assert_equal(s["orca.partitions"], "2024-02")
     assert_equal(s["orca.attempt"], "1")
     assert_equal(s["orca.commit"], "0")
     assert_equal(s["orca.code"], hex(Loads.registry_hash()))
@@ -197,6 +248,68 @@ def test_an_empty_table_stays_empty_for_the_step() raises:
     _ = setenv("ORCA_TEST_DIE", "")
     var res = Copies.execute(store, _resume(store), months, store.run)
     assert_equal(res.output[Int]("copy_count", "2024-01"), 0)
+
+
+def _error(res: RunResult) -> String:
+    for st in res.steps:
+        if st.error:
+            return st.error
+    return ""
+
+
+def test_an_undeclared_dataset_fails_the_attempt() raises:
+    _ = _warehouse()
+    var res = Sneaky.run(parse_months("2024-01"))
+    assert_true(not res.succeeded())
+    assert_equal(
+        _error(res),
+        (
+            "orca: step sneak of sneaky reads db.out, which it doesn't declare"
+            " in reads="
+        ),
+    )
+    res = Scribbles.run(parse_months("2024-01"))
+    assert_equal(
+        _error(res),
+        (
+            "orca: step scribble of scribbles writes db.src, which it doesn't"
+            " declare in writes="
+        ),
+    )
+    assert_equal(_snapshots(_table("src")), 0)
+
+
+def test_a_declared_dataset_loads_by_name() raises:
+    _ = _warehouse()
+    var src = _table("src")
+    _ = src.append(_rows("2024-01", 3))
+    var res = ByNames.run(parse_months("2024-01"))
+    assert_true(res.succeeded())
+    assert_equal(res.output[Int]("by_name", "2024-01"), 3)
+    assert_equal(
+        dataset_of(String(getenv("ORCA_TEST_WH"), "/db/src/")), "db.src"
+    )
+    assert_equal(dataset_of("/elsewhere/db/src"), "")
+    assert_equal(dataset_of(String(getenv("ORCA_TEST_WH"), "/db")), "")
+
+
+def test_a_gather_commit_holds_the_runs_partitions() raises:
+    _ = _warehouse()
+    var store = _store("sums")
+    var res = Sums.execute(
+        store, RunResult(), parse_months("2024-01..2024-02"), store.run
+    )
+    assert_true(res.succeeded())
+    var s = _table("out").metadata.snapshots[0].summary.copy()
+    assert_equal(s["orca.partition"], "")
+    assert_equal(s["orca.partitions"], "2024-01,2024-02")
+
+
+def test_a_table_outside_the_warehouse_needs_no_declaration() raises:
+    _ = _warehouse()
+    _ = setenv("ORCA_WAREHOUSE", "build/wh-elsewhere")
+    var res = Sneaky.run(parse_months("2024-01"))
+    assert_true(res.succeeded())
 
 
 def main() raises:

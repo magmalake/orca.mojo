@@ -23,8 +23,10 @@ The TLC publishes a month about two months after it ends, so a fire for the
 month just ended fails its download, is retried with backoff and then fails;
 a backfill of the month once it's out loads it.
 
-- `TAXI_WAREHOUSE` (default `build/taxi-data/warehouse`): the warehouse that holds
-  `taxi.trips`, created by the first load.
+- `ORCA_WAREHOUSE` (default `build/taxi-data/warehouse`): the warehouse that
+  holds the dataset `taxi.trips`, created by the first load. `load` declares
+  it in `writes=`, and `compact`, which rewrites it, in `reads=` and
+  `writes=`.
 - `TAXI_TLC` (default `build/taxi-data/tlc`): where the downloads go. A month whose
   file is already there whole isn't downloaded again.
 - `TAXI_SOURCE` (default the TLC's URL): where to download from, a URL or a
@@ -38,10 +40,10 @@ in any snapshot and are left behind; expiring and removing orphans is for
 later.
 """
 
-from std.os import getenv
+from std.os import getenv, setenv
 
 from dista import Seq
-from iceberg.catalog.filesystem import FilesystemCatalog, Table
+from iceberg.catalog.filesystem import Table
 from iceberg.commit import OP_REPLACE, FileChanges
 from iceberg.nested import concat_tree
 from iceberg.scan import FileScanTask, TableScan
@@ -59,23 +61,16 @@ from orca import (
     Step,
     orca_main,
 )
-from orca.tables import append, commit, find_commit, scan
+from orca.tables import append, commit, ensure_table, find_commit, scan
 from tlc import TLC_URL, download, read_month, schema, spec
 
 
-def _trips() raises -> Table:
+comptime TRIPS = "taxi.trips"
+
+
+def _trips(mut ctx: Ctx) raises -> Table:
     """`taxi.trips`, created if the warehouse doesn't have it yet."""
-    var cat = FilesystemCatalog.local(
-        getenv("TAXI_WAREHOUSE", "build/taxi-data/warehouse")
-    )
-    if not cat.table_exists("taxi", "trips"):
-        try:
-            _ = cat.create_table("taxi", "trips", schema(), spec())
-        except e:
-            # Another run, started at the same time, created it first.
-            if not cat.table_exists("taxi", "trips"):
-                raise e^
-    return cat.load_table("taxi", "trips")
+    return ensure_table(ctx, TRIPS, schema(), spec())
 
 
 @fieldwise_init
@@ -114,7 +109,7 @@ def fetch(mut ctx: Ctx, m: Month) raises -> RawFile:
 
 def load(mut ctx: Ctx, raw: RawFile) raises -> Loaded:
     var rows = read_month(raw.path, raw.month)
-    var table = _trips()
+    var table = _trips(ctx)
     var id = append(ctx, table, rows.batches)
     ctx.log(
         String(
@@ -168,7 +163,7 @@ def compact(mut ctx: Ctx, loads: Seq[Loaded]) raises -> Compacted:
     """Rewrites each month this run loaded that has more than one file as one
     file, all in one `replace` snapshot. Months other runs load are theirs to
     compact, so runs at once don't rewrite each other's files."""
-    var table = _trips()
+    var table = _trips(ctx)
     var s = scan(ctx, table)
     var tasks = s.plan_files()
     var mine = List[String]()
@@ -232,9 +227,18 @@ def compact(mut ctx: Ctx, loads: Seq[Loaded]) raises -> Compacted:
 
 
 comptime Fetch = Step["download", Month, RawFile, fetch, Mapped, retries=2]
-comptime Load = Step["load", RawFile, Loaded, load, Mapped, after=Fetch]
+comptime Load = Step[
+    "load", RawFile, Loaded, load, Mapped, after=Fetch, writes=[TRIPS]
+]
 comptime Compact = Step[
-    "compact", Seq[Loaded], Compacted, compact, Gather, after=Load
+    "compact",
+    Seq[Loaded],
+    Compacted,
+    compact,
+    Gather,
+    after=Load,
+    reads=[TRIPS],
+    writes=[TRIPS],
 ]
 comptime Taxi = Pipeline[
     "taxi",
@@ -248,4 +252,6 @@ comptime Taxi = Pipeline[
 
 
 def main() raises:
+    if not getenv("ORCA_WAREHOUSE"):
+        _ = setenv("ORCA_WAREHOUSE", "build/taxi-data/warehouse")
     orca_main[Taxi]()

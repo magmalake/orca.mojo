@@ -19,7 +19,7 @@ q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
 
 root=build/taxi-test
 rm -rf "$root"
-export TAXI_TLC="$root/tlc" TAXI_WAREHOUSE="$root/wh"
+export TAXI_TLC="$root/tlc" ORCA_WAREHOUSE="$root/wh"
 
 # The fixtures: 499 rows of 2023-01 and 498 of 2024-01 picked up in their
 # month, 48 and 18 not, in 128-row row groups.
@@ -94,5 +94,13 @@ grep -q 'pickup_month=2023-01: 4 files to 1$' "$root.a" && ! grep -q 2024-01 "$r
     || fail "the 2023-01 run didn't compact just its month"
 grep -q 'pickup_month=2024-01: 4 files to 1$' "$root.b" && ! grep -q 2023-01 "$root.b" \
     || fail "the 2024-01 run didn't compact just its month"
+# Every commit and read was of the dataset taxi.trips, and its snapshots
+# say which months they hold.
+[ "$(q "SELECT count(*) FROM orca.commits WHERE dataset IS DISTINCT FROM 'taxi.trips'")" -eq 0 ] \
+    && [ "$(q "SELECT count(*) FROM orca.commits")" -gt 0 ] || fail "commits not recorded as taxi.trips"
+[ "$(q "SELECT count(*) FROM orca.reads WHERE dataset IS DISTINCT FROM 'taxi.trips'")" -eq 0 ] \
+    || fail "reads not recorded as taxi.trips"
+[ "$(jq -r '[.snapshots[].summary["orca.partitions"]] | sort | join(" ")' "$meta")" = "2023-01 2023-01 2024-01 2024-01" ] \
+    || fail "the snapshots' orca.partitions: $(jq -c '[.snapshots[].summary["orca.partitions"]]' "$meta")"
 rm -f "$root.a" "$root.b"
 echo "ok   taxi"

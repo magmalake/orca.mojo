@@ -120,6 +120,12 @@ def _migrations() -> List[List[String]]:
                 " REFERENCES orca.steps (id)"
             ),
         ],
+        # Datasets: the warehouse name of a table read or committed, null
+        # for a table outside the warehouse.
+        [
+            "ALTER TABLE orca.reads ADD COLUMN dataset text",
+            "ALTER TABLE orca.commits ADD COLUMN dataset text",
+        ],
     ]
 
 

@@ -39,6 +39,16 @@ from orca.store import MemoryStore, Store
 from orca.logs import attempt_log
 from orca.tasks import NoTasks, TaskSet, task_list, workers
 
+
+def _names(names: List[String]) -> String:
+    """`names` as a JSON array of strings."""
+    var out = String("[")
+    for i in range(len(names)):
+        out.write(", " if i > 0 else "", quote(names[i]))
+    out.write("]")
+    return out^
+
+
 comptime SUCCEEDED = "succeeded"
 comptime FAILED = "failed"
 comptime SKIPPED = "skipped"
@@ -185,9 +195,9 @@ struct Pipeline[
 
     @staticmethod
     def registry_hash() -> UInt64:
-        """A hash over the pipeline's name, its steps' names, kinds, edges and
-        functions, and its dista tasks: two binaries with the same hash run
-        the same DAG."""
+        """A hash over the pipeline's name, its steps' names, kinds, edges,
+        functions and datasets, and its dista tasks: two binaries with the
+        same hash run the same DAG."""
         Self.check()
         var all = String(Self.name, "\n")
         comptime for i in range(Self.Ts.length):
@@ -199,8 +209,14 @@ struct Pipeline[
                 Self.Ts[i].upstream(),
                 "\t",
                 Self.Ts[i].function(),
-                "\n",
             )
+            # Only when declared, so a pipeline without datasets keeps the
+            # hash it had before they existed.
+            for d in Self.Ts[i].dataset_reads():
+                all.write("\treads ", d)
+            for d in Self.Ts[i].dataset_writes():
+                all.write("\twrites ", d)
+            all.write("\n")
         for t in Self.tasks.names():
             all.write("task\t", t, "\n")
         all.write("partitions\t", Self.partitions.kind(), "\n")
@@ -209,8 +225,8 @@ struct Pipeline[
     @staticmethod
     def describe() -> String:
         """The DAG as JSON: the pipeline's name, its registry hash, its
-        partitions, each step's name, kind, upstream, function and types in
-        run order, and its dista tasks."""
+        partitions, each step's name, kind, upstream, function, types and
+        datasets in run order, and its dista tasks."""
         Self.check()
         var out = String("{")
         out.write('"pipeline": ', quote(Self.name), ", ")
@@ -244,7 +260,9 @@ struct Pipeline[
                 out.write('"after": ', quote(S.upstream()), ", ")
             out.write('"function": ', quote(S.function()), ", ")
             out.write('"input": ', quote(S.input_type()), ", ")
-            out.write('"output": ', quote(S.output_type()))
+            out.write('"output": ', quote(S.output_type()), ", ")
+            out.write('"reads": ', _names(S.dataset_reads()), ", ")
+            out.write('"writes": ', _names(S.dataset_writes()))
             out.write("}")
         out.write('], "tasks": [')
         var names = Self.tasks.names()
@@ -309,6 +327,9 @@ struct Pipeline[
         """
         Self.check()
         var res = prior^
+        var all_keys = String()
+        for j in range(len(keys)):
+            all_keys.write("," if j > 0 else "", keys[j])
         comptime for i in range(Self.Ts.length):
             comptime T = Self.Ts[i]
             comptime if T.kind() == Mapped:
@@ -327,7 +348,7 @@ struct Pipeline[
                         else:
                             input = res.steps[j].output.copy()
                     Self._step[T](
-                        store, res, i, run, runtime, key, input, blocked
+                        store, res, i, run, runtime, key, input, blocked, key
                     )
             else:
                 if Self._done(res, T.step_name(), ""):
@@ -355,7 +376,9 @@ struct Pipeline[
                             blocked.write(T.upstream(), " ", p)
                         else:
                             input.extend(Span(res.steps[j].output))
-                Self._step[T](store, res, i, run, runtime, "", input, blocked)
+                Self._step[T](
+                    store, res, i, run, runtime, "", input, blocked, all_keys
+                )
         return res^
 
     @staticmethod
@@ -377,9 +400,11 @@ struct Pipeline[
         partition: String,
         input: List[UInt8],
         blocked: String,
+        holds: String,
     ) raises:
         """Runs one step for one partition, with its retries, and records the
-        outcome in `res` (replacing an earlier one) and in `store`."""
+        outcome in `res` (replacing an earlier one) and in `store`.
+        `holds` are the partition keys its commits hold."""
         var outcome: StepRun
         if blocked:
             var reason = String("not run: ", blocked, " didn't succeed")
@@ -415,6 +440,9 @@ struct Pipeline[
                     log,
                     runtime if Self.tasks.HAS_RUNTIME else 0,
                     task_list[Self.tasks](),
+                    holds,
+                    T.dataset_reads(),
+                    T.dataset_writes(),
                 )
                 ctx.log_to_file(String("attempt ", attempt, " started"))
                 var out = List[UInt8]()
