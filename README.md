@@ -7,7 +7,9 @@ clusters over Iceberg tables in object storage.
 
 Early days: steps and pipelines are declared and checked at compile time, and
 runs are recorded in Postgres and resume where they stopped, with Iceberg
-reads pinned and commits recognised on retry (`orca.tables`).
+reads pinned and commits recognised on retry (`orca.tables`). A scheduler
+fires cron schedules and backfills; `orca ui` shows pipelines, runs and logs,
+and starts, resumes, reruns, backfills and cancels runs through it.
 [VISION.md](VISION.md) says what orca is for and how it gets there;
 [DESIGN.md](DESIGN.md) is the plan for building it; [K8S.md](K8S.md) is how
 it will run on Kubernetes and AWS.
@@ -24,7 +26,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/toy run --partitions 2024-01..2024-
 pixi run -e data taxi && pixi run -e data ./build/taxi run --partitions 2023-01..2024-12
 pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   # needs ORCA_DATABASE_URL
 ./build/orca register ./build/taxi && ./build/orca backfill taxi 2011-01..2024-12   # 19 GB of TLC files
-./build/orca ui                # pipelines and runs at http://127.0.0.1:8270, each page also JSON
+./build/orca ui                # http://127.0.0.1:8270: pipelines and runs, also as JSON; start, resume, rerun, backfill, cancel
 ```
 
 Part of [magmalake](https://magmalake.dev).

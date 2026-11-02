@@ -10,7 +10,10 @@ don't both apply one.
 a run only if its heartbeat is older than the stale limit, or cleared, which
 `finish_run` does when a run ends. Every attempt checks in the same
 transaction that this process still owns the run, so a process that lost its
-run to a resume stops at its next step instead of racing it.
+run to a resume stops at its next step instead of racing it. The same check
+stops a run that was asked to cancel (`runs.cancel_requested`, which `orca
+ui` sets) before its next attempt; an attempt already going finishes and is
+recorded.
 
 **Each change is one transaction.** Starting an attempt marks its step
 running and inserts the attempt; finishing it records the output or the
@@ -27,6 +30,7 @@ from orca.pipeline import FAILED, SUCCEEDED, SKIPPED, RunResult, StepRun
 from orca.store import Store
 
 comptime RUNNING = "running"
+comptime CANCELLED = "cancelled"
 
 
 def _migrations() -> List[List[String]]:
@@ -99,6 +103,22 @@ def _migrations() -> List[List[String]]:
             run bigint REFERENCES orca.runs (id),
             created timestamptz NOT NULL DEFAULT now(),
             PRIMARY KEY (pipeline, fire_at))""",
+        ],
+        # The UI's actions: a cancel asked for, a resume that may run new
+        # code, and the steps a rerun copied from the run it reruns.
+        [
+            (
+                "ALTER TABLE orca.runs ADD COLUMN cancel_requested boolean NOT"
+                " NULL DEFAULT false"
+            ),
+            (
+                "ALTER TABLE orca.runs ADD COLUMN allow_new_code boolean NOT"
+                " NULL DEFAULT false"
+            ),
+            (
+                "ALTER TABLE orca.steps ADD COLUMN copied_from bigint"
+                " REFERENCES orca.steps (id)"
+            ),
         ],
     ]
 
@@ -337,6 +357,16 @@ struct State(Movable):
             Params().int64(Int64(run)).text(status).text(owner),
         )
 
+    def cancel_requested(mut self, run: Int) raises -> Bool:
+        return (
+            self.conn.query(
+                "SELECT cancel_requested FROM orca.runs WHERE id = $1",
+                Params().int64(Int64(run)),
+            )
+            .row(0)
+            .bool("cancel_requested")
+        )
+
     def runs(mut self, limit: Int = 20) raises -> List[RunInfo]:
         """The latest runs, newest first."""
         var out = List[RunInfo]()
@@ -416,16 +446,22 @@ struct PgStore(Movable, Store):
         self._attempt_id = 0
 
     @staticmethod
-    def _still_owner(mut tx: Transaction, run: Int, owner: String) raises:
-        var n = tx.execute(
+    def _still_owner(
+        mut tx: Transaction, run: Int, owner: String, starting: Bool
+    ) raises:
+        """Raises unless this process still owns the run, or, when a step is
+        `starting`, if the run was asked to cancel."""
+        var res = tx.query(
             (
                 "UPDATE orca.runs SET heartbeat = now() WHERE id = $1 AND owner"
-                " = $2 AND status = 'running'"
+                " = $2 AND status = 'running' RETURNING cancel_requested"
             ),
             Params().int64(Int64(run)).text(owner),
         )
-        if n != 1:
+        if len(res) != 1:
             raise Error("orca: lost run ", run, " to another process; stopping")
+        if starting and res.row(0).bool("cancel_requested"):
+            raise Error("orca: run ", run, " was cancelled; stopping")
 
     def start_attempt(
         mut self,
@@ -435,7 +471,7 @@ struct PgStore(Movable, Store):
         input: Span[UInt8, _],
     ) raises -> Int:
         var tx = self.db.conn.begin()
-        Self._still_owner(tx, self.run, self.owner)
+        Self._still_owner(tx, self.run, self.owner, starting=True)
         var id = (
             tx.query(
                 (
@@ -523,7 +559,7 @@ struct PgStore(Movable, Store):
         error: String,
     ) raises:
         var tx = self.db.conn.begin()
-        Self._still_owner(tx, self.run, self.owner)
+        Self._still_owner(tx, self.run, self.owner, starting=False)
         var key = Params().int64(Int64(self.run)).text(step).text(partition)
         var id = (
             tx.query(
@@ -561,7 +597,7 @@ struct PgStore(Movable, Store):
         mut self, step: String, partition: String, ord: Int, reason: String
     ) raises:
         var tx = self.db.conn.begin()
-        Self._still_owner(tx, self.run, self.owner)
+        Self._still_owner(tx, self.run, self.owner, starting=True)
         _ = tx.execute(
             (
                 "INSERT INTO orca.steps (run, step, partition, ord, status,"

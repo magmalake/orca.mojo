@@ -13,6 +13,16 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error |
 | `/runs/<id>/timeline.json` | the run's Dista timeline, for Perfetto |
 
+And the actions, each a `POST` of a form (see `orca.actions`):
+
+| `POST` | |
+|---|---|
+| `/pipelines/<name>/runs` | start a run over `partitions` |
+| `/pipelines/<name>/backfill` | a run per partition in `partitions` that has none |
+| `/runs/<id>/resume` | queue a failed, cancelled or stalled run again; `allow_new_code=1` confirms new code |
+| `/runs/<id>/rerun` | a new run from `step` on, the steps before it copied |
+| `/runs/<id>/cancel` | cancel a run, before its next attempt if it's running |
+
 A page of something still going on (a queued or running run, a running
 attempt) refreshes its live part every two seconds from a fragment path,
 `/runs/<id>/steps` or `/runs/<id>/attempts/<attempt>/log`, which answers
@@ -21,10 +31,14 @@ the only JavaScript.
 
 Every path answers HTML, or JSON to `Accept: application/json` or
 `?format=json`, built from the same rows, so a script and a person see the
-same thing. The UI only reads: it holds no state, connects to Postgres per
-request, and can run beside the scheduler or anywhere else that reaches the
-database. `ORCA_UI_ADDR` (`host:port`) moves it; it binds to localhost
-unless told otherwise, as there's no authentication.
+same thing. An action answers `303 See Other` to the page of what it made,
+or that page's JSON; one refused answers 409 saying why. The UI holds no
+state: its actions are rows the scheduler acts on, it connects to Postgres
+per request, and it can run beside the scheduler or anywhere else that
+reaches the database. `ORCA_UI_ADDR` (`host:port`) moves it; it binds to
+localhost unless told otherwise, as there's no authentication, and a `POST`
+whose `Origin` (or `Referer`) isn't the UI's own is refused, so another
+site's page can't post to it through a browser.
 """
 
 from std.os import getenv
@@ -33,6 +47,15 @@ from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
 from postgres import Params
 
+from orca.actions import (
+    Outcome,
+    backfill_runs,
+    cancel_run,
+    rerun_from,
+    resume_run,
+    start_run,
+    stalled_sql,
+)
 from orca.civil import Civil, now
 from orca.logs import run_dir
 from orca.cron import CronExpr
@@ -98,6 +121,9 @@ struct RunRow(Copyable, Movable):
     var created: String
     var started: String
     var ended: String
+    var cancel_requested: Bool
+    var stalled: Bool
+    """`running` with no live process (`orca.actions.stalled_sql`)."""
 
 
 @fieldwise_init
@@ -126,6 +152,8 @@ struct StepRow(Copyable, Movable):
     var ended: String
     var attempt_id: Int
     """The latest attempt's ID, 0 before the first."""
+    var from_run: Int
+    """The run a rerun copied this step from, or 0."""
 
 
 @fieldwise_init
@@ -235,7 +263,9 @@ def _runs(
             _ts("started"),
             " AS started, ",
             _ts("ended"),
-            " AS ended FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
+            " AS ended, cancel_requested, ",
+            stalled_sql(),
+            " AS stalled FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
             " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) ORDER BY",
             " id DESC LIMIT $4",
         ),
@@ -254,6 +284,8 @@ def _runs(
                 r.text("created"),
                 r.text("started"),
                 r.text("ended"),
+                r.bool("cancel_requested"),
+                r.bool("stalled"),
             )
         )
     return out^
@@ -294,7 +326,9 @@ def _steps(mut db: State, run: Int) raises -> List[StepRow]:
             ),
             " AS ended, coalesce((SELECT a.id FROM orca.attempts a WHERE",
             " a.step = s.id ORDER BY a.attempt DESC LIMIT 1), 0)::text AS",
-            " attempt_id FROM orca.steps s WHERE s.run = $1 ORDER BY s.ord,",
+            " attempt_id, coalesce((SELECT c.run FROM orca.steps c WHERE c.id",
+            " = s.copied_from), 0)::text AS from_run FROM orca.steps s WHERE",
+            " s.run = $1 ORDER BY s.ord,",
             " s.id",
         ),
         Params().int64(Int64(run)),
@@ -312,6 +346,7 @@ def _steps(mut db: State, run: Int) raises -> List[StepRow]:
                 r.text("started"),
                 r.text("ended"),
                 _int(r.text("attempt_id")),
+                _int(r.text("from_run")),
             )
         )
     return out^
@@ -429,6 +464,10 @@ def _json_run(mut out: String, r: RunRow):
         quote(r.started),
         ', "ended": ',
         quote(r.ended),
+        ', "cancel_requested": ',
+        "true" if r.cancel_requested else "false",
+        ', "stalled": ',
+        "true" if r.stalled else "false",
         "}",
     )
 
@@ -525,6 +564,9 @@ struct Page(Movable):
     var content_type: String
     """Set for what isn't a page or its JSON (a fragment, a file): `html` is
     sent as this, whatever was asked for."""
+    var location: String
+    """Set for an action that was done: a browser is sent there with 303,
+    and a script gets `json` with 200."""
 
     def __init__(
         out self,
@@ -532,11 +574,13 @@ struct Page(Movable):
         var json: String,
         var html: String,
         content_type: String = "",
+        location: String = "",
     ):
         self.status = status
         self.json = json^
         self.html = html^
         self.content_type = content_type
+        self.location = location
 
 
 def home(mut db: State) raises -> Page:
@@ -680,6 +724,32 @@ def pipeline(mut db: State, name: String) raises -> Page:
         h.cell(s.after)
         h.raw("</tr>")
     h.raw("</tbody></table></div>")
+    if p.binary:
+        var base = String("/pipelines/", url_encode(p.name))
+        var example = String("2024-01-01" if p.kind == "daily" else "2024-01")
+        h.raw(
+            '<h2>Start runs</h2><div class="actions">',
+            '<form class="action" method="post" action="',
+        )
+        h.text(base, "/runs")
+        h.raw('"><label>One run over <input name="partitions" required')
+        h.raw(' placeholder="')
+        h.text(example, "..", example)
+        h.raw(
+            '"></label><button type="submit">Start</button></form>',
+            '<form class="action" method="post" action="',
+        )
+        h.text(base, "/backfill")
+        h.raw('"><label>A run per partition without one <input')
+        h.raw(' name="partitions" required placeholder="')
+        h.text(example, "..", example)
+        h.raw(
+            '"></label><button type="submit">Backfill</button></form></div>',
+            '<p class="muted more">The scheduler (<code>orca scheduler',
+            "</code>) starts queued runs, up to ",
+        )
+        h.text(p.max_runs)
+        h.raw(" at once.</p>")
     if len(fires) > 0:
         h.raw(
             '<h2>Next fires</h2><div class="scroll"><table><thead><tr>',
@@ -776,6 +846,8 @@ def run(mut db: State, id: Int) raises -> Page:
             quote(s.ended),
             ', "attempt_id": ',
             s.attempt_id,
+            ', "from_run": ',
+            s.from_run,
             "}",
         )
     j.write('], "tables": [')
@@ -831,6 +903,16 @@ def run(mut db: State, id: Int) raises -> Page:
             ' <span class="muted">(Dista tasks; open it in',
             ' <a href="https://ui.perfetto.dev">Perfetto</a>)</span></dd>',
         )
+    if r.stalled:
+        h.raw(
+            "<dt>Process</dt><dd>stalled: its heartbeat stopped, so it can",
+            " be resumed</dd>",
+        )
+    elif r.cancel_requested and _live(r.status):
+        h.raw(
+            "<dt>Cancel</dt><dd>asked for; the run stops before its next",
+            " attempt</dd>",
+        )
     h.raw("</dl>")
     if _live(r.status):
         h.raw('<div data-poll="/runs/')
@@ -860,6 +942,44 @@ def run(mut db: State, id: Int) raises -> Page:
     return Page(200, j^, _page(String("Run ", r.id), "/runs", h))
 
 
+def _action(mut h: Html, run: Int, name: StaticString):
+    """The start of a form that posts to one of a run's actions."""
+    h.raw('<form class="action" method="post" action="/runs/')
+    h.text(run)
+    h.raw("/", name, '">')
+
+
+def _run_actions(mut h: Html, r: RunRow, steps: List[StepDef]):
+    """The forms for what can be done to the run as it is: resume, rerun
+    from a step, cancel."""
+    var resumable = r.status == "failed" or r.status == "cancelled" or r.stalled
+    var cancellable = (
+        r.status == "queued" or r.status == "failed" or r.status == "running"
+    ) and not r.cancel_requested
+    var ended = not _live(r.status)
+    if not (resumable or cancellable or ended):
+        return
+    h.raw('<div class="actions">')
+    if resumable:
+        _action(h, r.id, "resume")
+        h.raw(
+            '<button type="submit">Resume</button><span class="muted">',
+            " what hasn't succeeded</span></form>",
+        )
+    if ended and len(steps) > 0:
+        _action(h, r.id, "rerun")
+        h.raw('<label>Rerun from <select name="step">')
+        for s in steps:
+            h.raw("<option>")
+            h.text(s.name)
+            h.raw("</option>")
+        h.raw('</select></label><button type="submit">Rerun</button></form>')
+    if cancellable:
+        _action(h, r.id, "cancel")
+        h.raw('<button type="submit" class="danger">Cancel</button></form>')
+    h.raw("</div>")
+
+
 def _live(status: String) -> Bool:
     """Whether a run or attempt with this status can still change."""
     return status == "queued" or status == "running"
@@ -868,10 +988,12 @@ def _live(status: String) -> Bool:
 def _run_live(
     mut h: Html, mut db: State, r: RunRow, steps: List[StepRow]
 ) raises:
-    """What changes while a run goes on: its DAG in its steps' colours, its
-    status, and its steps."""
+    """What changes while a run goes on: what can be done to it, its DAG in
+    its steps' colours, its status, and its steps."""
+    var defs = _step_defs(db, r.pipeline)
+    _run_actions(h, r, defs)
     var dag = List[DagStep]()
-    for d in _step_defs(db, r.pipeline):
+    for d in defs:
         var st = List[String]()
         for s in steps:
             if s.step == d.name:
@@ -900,6 +1022,9 @@ def _run_live(
                 String("/runs/", r.id, "/attempts/", s.attempt_id),
                 String("attempt ", s.attempts),
             )
+        elif s.from_run:
+            h.raw('<span class="muted">from </span>')
+            h.link(String("/runs/", s.from_run), String("run ", s.from_run))
         h.raw('</td><td class="error">')
         h.text(s.error)
         h.raw("</td></tr>")
@@ -1180,7 +1305,9 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
             _ts("started"),
             " AS started, ",
             _ts("ended"),
-            " AS ended FROM orca.runs WHERE id = $1",
+            " AS ended, cancel_requested, ",
+            stalled_sql(),
+            " AS stalled FROM orca.runs WHERE id = $1",
         ),
         Params().int64(Int64(id)),
     )
@@ -1197,6 +1324,8 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
         r.text("created"),
         r.text("started"),
         r.text("ended"),
+        r.bool("cancel_requested"),
+        r.bool("stalled"),
     )
 
 
@@ -1212,6 +1341,98 @@ def not_found(what: String) -> Page:
     )
 
 
+# ── actions ──────────────────────────────────────────────────────────────────
+
+
+def _form(body: String, name: StringSlice) -> String:
+    """A field of an `application/x-www-form-urlencoded` body, decoded."""
+    return _query(String("?", body), name)
+
+
+def _acted(
+    o: Outcome, back: String, var json: String, location: String
+) -> Page:
+    """The answer to an action: to `location` if it was done, or a 409
+    saying why not, with a way back to `back`, and to confirm if it asks."""
+    if not o.refused:
+        return Page(303, json^, String(), location=location)
+    var h = Html()
+    h.raw("<h1>Not done</h1><p>")
+    h.text(o.refused)
+    h.raw("</p>")
+    if o.confirm:
+        h.raw('<form class="action" method="post" action="')
+        h.text(back, "/resume")
+        h.raw(
+            '"><input type="hidden" name="allow_new_code" value="1">',
+            '<button type="submit">Resume with the new code</button></form>',
+        )
+    h.raw('<p><a href="')
+    h.text(back)
+    h.raw('">Back</a></p>')
+    return Page(
+        409,
+        String(
+            '{"error": ',
+            quote(o.refused),
+            ', "confirm": ',
+            "true" if o.confirm else "false",
+            "}",
+        ),
+        _page("Not done", "", h),
+    )
+
+
+def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
+    """Does the action `path` names, or None if it names none."""
+    var parts = path.split("/")
+    if len(parts) == 4 and parts[1] == "pipelines":
+        var name = url_decode(parts[2])
+        var back = String("/pipelines/", url_encode(name))
+        var keys = _form(body, "partitions")
+        if parts[3] == "runs":
+            var o = start_run(db, name, keys)
+            var to = String("/runs/", o.run)
+            return _acted(o, back, String('{"run": ', o.run, "}"), to)
+        if parts[3] == "backfill":
+            var o = backfill_runs(db, name, keys)
+            var to = String("/runs?pipeline=", url_encode(name))
+            return _acted(o, back, String('{"queued": ', o.queued, "}"), to)
+    if len(parts) == 4 and parts[1] == "runs":
+        var id: Int
+        try:
+            id = Int(parts[2])
+        except:
+            return None
+        var back = String("/runs/", id)
+        var o: Outcome
+        if parts[3] == "resume":
+            o = resume_run(db, id, _form(body, "allow_new_code") == "1")
+        elif parts[3] == "rerun":
+            o = rerun_from(db, id, _form(body, "step"))
+        elif parts[3] == "cancel":
+            o = cancel_run(db, id)
+        else:
+            return None
+        var to = String("/runs/", o.run)
+        return _acted(o, back, String('{"run": ', o.run, "}"), to)
+    return None
+
+
+def _same_origin(req: Request) raises -> Bool:
+    """Whether a `POST` came from the UI's own pages: its `Origin`, or
+    without one its `Referer`, is this server as the request addressed it."""
+    var host = req.headers.get("Host")
+    if not host:
+        return False
+    var own = String("http://", host)
+    var origin = req.headers.get("Origin")
+    if origin:
+        return origin == own
+    var referer = req.headers.get("Referer")
+    return referer == own or referer.startswith(String(own, "/"))
+
+
 # ── serving ──────────────────────────────────────────────────────────────────
 
 
@@ -1220,20 +1441,29 @@ def _reason(status: Int) -> String:
         return "OK"
     if status == 286:
         return "Done"
+    if status == 303:
+        return "See Other"
+    if status == 403:
+        return "Forbidden"
     if status == 404:
         return "Not Found"
+    if status == 409:
+        return "Conflict"
     return "Internal Server Error"
 
 
 def _respond(page: Page, json: Bool) -> Response:
     var raw = page.content_type != ""
     var body = page.json if json and not raw else page.html
+    var status = 200 if page.location and json else page.status
     var resp = Response(
-        status=page.status,
-        reason=_reason(page.status),
+        status=status,
+        reason=_reason(status),
         body=List[UInt8](body.as_bytes()),
     )
     try:
+        if page.location and not json:
+            resp.headers.set("Location", page.location)
         resp.headers.set(
             "Content-Type",
             page.content_type if raw else (
@@ -1259,6 +1489,40 @@ def _query(url: String, name: StringSlice) -> String:
     return ""
 
 
+def _is_action(path: String) -> Bool:
+    var parts = path.split("/")
+    if len(parts) != 4:
+        return False
+    if parts[1] == "pipelines":
+        return parts[3] == "runs" or parts[3] == "backfill"
+    return parts[1] == "runs" and (
+        parts[3] == "resume" or parts[3] == "rerun" or parts[3] == "cancel"
+    )
+
+
+def _not_allowed() -> Response:
+    var resp = Response(status=405, reason="Method Not Allowed")
+    try:
+        resp.headers.set("Allow", "GET, HEAD")
+    except:
+        pass
+    return resp^
+
+
+def _cross_origin() -> Page:
+    var why = String(
+        "this form wasn't posted from orca ui's own pages (its Origin or",
+        " Referer isn't this server), so it's refused",
+    )
+    var h = Html()
+    h.raw("<h1>Refused</h1><p>")
+    h.text(why)
+    h.raw("</p>")
+    return Page(
+        403, String('{"error": ', quote(why), "}"), _page("Refused", "", h)
+    )
+
+
 struct Ui(Copyable, Handler):
     """The pages, over the database at `url`."""
 
@@ -1280,13 +1544,21 @@ struct Ui(Copyable, Handler):
             )
             resp.headers.set("Content-Type", "text/css; charset=utf-8")
             return resp^
-        if req.method != "GET" and req.method != "HEAD":
-            var resp = Response(status=405, reason="Method Not Allowed")
-            resp.headers.set("Allow", "GET, HEAD")
-            return resp^
+        var post = req.method == "POST"
+        if post and not _is_action(path):
+            return _not_allowed()
+        if not post and req.method != "GET" and req.method != "HEAD":
+            return _not_allowed()
+        if post and not _same_origin(req):
+            return _respond(_cross_origin(), json)
         try:
             var db = State(self.url)
-            return _respond(self._page(db, req.url, path), json)
+            if not post:
+                return _respond(self._page(db, req.url, path), json)
+            var done = _act(db, path, String(from_utf8_lossy=Span(req.body)))
+            if not done:
+                return _respond(not_found(String("nothing at ", path)), json)
+            return _respond(done.take(), json)
         except e:
             var h = Html()
             h.raw("<h1>Error</h1><pre>")
