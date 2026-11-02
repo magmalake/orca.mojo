@@ -42,6 +42,17 @@ struct Day(Key):
             return Day(self.year, self.month + 1, 1)
         return Day(self.year + 1, 1, 1)
 
+    def prev(self) -> Day:
+        """The day before this one."""
+        if self.day > 1:
+            return Day(self.year, self.month, self.day - 1)
+        var m = Month(self.year, self.month).prev()
+        return Day(m.year, m.month, days_in(m.year, m.month))
+
+    @staticmethod
+    def containing(year: Int, month: Int, day: Int) -> Day:
+        return Day(year, month, day)
+
     def month_of(self) -> Month:
         return Month(self.year, self.month)
 

@@ -85,6 +85,7 @@ def load(mut ctx: Ctx, raw: RawFile) raises -> Loaded:
 | `taxi run --partitions 2024-01..2024-12` | Starts a run, prints its ID, runs it to the end |
 | `taxi resume <run>` | Continues a run at its unfinished steps |
 | `taxi status [<run>]` | Runs, or one run's steps and attempts |
+| `taxi fires [<count>] [--after <time>]` | From phase 2: the schedule's next fires, each with the partition it fills |
 
 Without `ORCA_DATABASE_URL`, `run` runs in memory and nothing is recorded. Exit codes: 0 for a run that succeeded, 1 for one with a step that didn't, 2 for a usage error, 3 for anything else (the database, a run that can't be resumed).
 
@@ -187,7 +188,7 @@ Gate: a schedule fills each month's partition as it falls due, and a backfill ov
 - **`max_runs`**: the scheduler starts a queued run only if, in the same transaction, fewer than `max_runs` of the pipeline's runs are `running`. A run is marked `running` by the scheduler when it starts it, before the process claims it.
 - **Retrying a failed run** is resuming it again, after `run_retries` backoffs (1 minute doubling, with jitter, 3 by default). Step retries inside a run stay immediate.
 - **Missed fires**: on each tick the scheduler computes the fires between a schedule's last recorded fire and now. With `catchup=True` (the default) each becomes a queued run, at most `max_runs` running at once; with `catchup=False` only the latest does.
-- **Time in tests.** `ORCA_NOW` fixes the scheduler's clock, and `orca tick` runs one tick and exits, so the tests step time forward deterministically.
+- **Time in tests.** `ORCA_NOW` (`2024-03-10T07:00Z`, or epoch seconds) fixes the clock of `fires` and the scheduler, and `orca tick` runs one tick and exits, so the tests step time forward deterministically.
 - **Daylight saving.** A cron time that a spring-forward skips fires at the first minute after the gap; one that a fall-back repeats fires once, at its first occurrence. That's what Vixie cron and systemd timers do.
 - **The time zone rules** come from TZif version 2 and later: the 64-bit transition times, then the footer's POSIX `TZ` string (such as `EST5EDT,M3.2.0,M11.1.0`) for times after the last transition, which "slim" TZif files rely on for every year since 2007.
 

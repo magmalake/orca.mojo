@@ -31,7 +31,9 @@ from std.reflection import reflect
 
 from orca.ctx import Ctx
 from orca.json import quote
+from orca.civil import Civil
 from orca.partitions import Monthly, Partitions
+from orca.schedule import Fill, NoSchedule, Previous, Schedule, ScheduleLike
 from orca.step import Gather, Mapped, StepLike
 from orca.store import MemoryStore, Store
 from orca.logs import attempt_log
@@ -121,9 +123,13 @@ struct Pipeline[
     *Ts: StepLike,
     tasks: TaskSet = NoTasks,
     partitions: Partitions = Monthly[],
+    schedule: ScheduleLike = NoSchedule,
+    fills: Fill = Previous,
+    catchup: Bool = True,
 ]:
     """A pipeline named `name` of the steps `Ts`, in run order, whose steps
-    call the dista `tasks`, over the keys of `partitions`."""
+    call the dista `tasks`, over the keys of `partitions`; run by
+    `schedule` for the partition its fires `fills` (`orca.schedule`)."""
 
     comptime K = Self.partitions.K
     """The partition key."""
@@ -206,6 +212,14 @@ struct Pipeline[
             out.write(', "start": ', quote(Self.partitions.start()), "}, ")
         else:
             out.write(', "start": null}, ')
+        comptime if Self.schedule.expr() != "":
+            out.write('"schedule": {"cron": ', quote(Self.schedule.expr()))
+            out.write(', "tz": ', quote(Self.schedule.zone()))
+            out.write(', "fills": ', quote(String(Self.fills)))
+            out.write(', "catchup": ', "true" if Self.catchup else "false")
+            out.write("}, ")
+        else:
+            out.write('"schedule": null, ')
         out.write('"steps": [')
         comptime for i in range(Self.Ts.length):
             comptime S = Self.Ts[i]
@@ -228,6 +242,28 @@ struct Pipeline[
             out.write(", " if i > 0 else "", quote(names[i]))
         out.write("]}")
         return out^
+
+    @staticmethod
+    def scheduled() -> Bool:
+        return Self.schedule.expr() != ""
+
+    @staticmethod
+    def load_schedule() raises -> Schedule:
+        """The schedule, parsed, with its zone loaded; raises for a pipeline
+        without one, or one whose expression or zone is bad."""
+        comptime if Self.schedule.expr() == "":
+            raise Error("pipeline ", Self.name, " has no schedule")
+        return Schedule.of[Self.schedule]()
+
+    @staticmethod
+    def fills_for(fire: Int64, s: Schedule) -> Self.K:
+        """The partition a fire at `fire` fills."""
+        var c = Civil.of(s.zone.to_local(fire))
+        var k = Self.K.containing(c.year, c.month, c.day)
+        comptime if Self.fills == Previous:
+            return k.prev()
+        else:
+            return k^
 
     @staticmethod
     def run(keys: List[Self.K], run: Int = 0) raises -> RunResult:

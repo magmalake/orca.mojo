@@ -40,6 +40,18 @@ set +e
 code=$?
 set -e
 [ "$code" -eq 2 ] || fail "a day before the start exited $code, not 2"
+# Its schedule: 02:30 in New York, for the day before. 2024-03-10 skips 02:30.
+out=$(./build/daily fires 2 --after 2024-03-09T12:00Z) || fail "fires exited $?"
+[ "$out" = "2024-03-10T07:00:00Z 2024-03-10T03:00:00 2024-03-09
+2024-03-11T06:30:00Z 2024-03-11T02:30:00 2024-03-10" ] || fail "wrong fires: $out"
+out=$(ORCA_NOW=2024-11-02T12:00Z ./build/daily fires 1) || fail "fires exited $?"
+[ "$out" = "2024-11-03T07:30:00Z 2024-11-03T02:30:00 2024-11-02" ] \
+    || fail "ORCA_NOW wasn't used: $out"
+set +e
+./build/toy fires > /dev/null 2>&1
+code=$?
+set -e
+[ "$code" -eq 2 ] || fail "fires without a schedule exited $code, not 2"
 
 for args in "" "run" "run --partitions 2024-03..2024-01" "nope"; do
     set +e

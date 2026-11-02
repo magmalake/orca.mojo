@@ -34,6 +34,16 @@ struct Month(Key):
             return Month(self.year + 1, 1)
         return Month(self.year, self.month + 1)
 
+    def prev(self) -> Month:
+        """The month before this one."""
+        if self.month == 1:
+            return Month(self.year - 1, 12)
+        return Month(self.year, self.month - 1)
+
+    @staticmethod
+    def containing(year: Int, month: Int, day: Int) -> Month:
+        return Month(year, month)
+
     def __eq__(self, other: Self) -> Bool:
         return self.year == other.year and self.month == other.month
 

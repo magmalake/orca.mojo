@@ -17,6 +17,15 @@ trait Key(Copyable, Deinitable, Equatable, Movable, Writable):
         """The key after this one."""
         ...
 
+    def prev(self) -> Self:
+        """The key before this one."""
+        ...
+
+    @staticmethod
+    def containing(year: Int, month: Int, day: Int) -> Self:
+        """The key a date falls in."""
+        ...
+
     def __lt__(self, other: Self) -> Bool:
         ...
 
