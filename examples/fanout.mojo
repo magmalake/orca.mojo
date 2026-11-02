@@ -7,7 +7,13 @@ day, over the run's workers.
 
 The run's runtime is started once, before the first step; with ORCA_LOGS set
 its timeline is written to <ORCA_LOGS>/fanout/<run>/timeline.json.
+ORCA_FANOUT_SLEEP makes every task take that many seconds, so
+tests/lost_workers.sh can kill workers while a step waits on them; the step
+is retried once in its run.
 """
+
+from std.os import getenv
+from std.time import sleep
 
 from dista import ObjectRef, Seq, Task
 from orca import Ctx, Gather, Mapped, Month, Pipeline, Step, Tasks, orca_main
@@ -21,6 +27,12 @@ struct Day(Copyable, Movable):
 
 def trips(d: Day) -> Int:
     """A stand-in for a day's work: a number that depends on the date."""
+    var s = getenv("ORCA_FANOUT_SLEEP")
+    if s:
+        try:
+            sleep(Float64(s))
+        except:
+            pass
     return (d.month.year * 13 + d.month.month * 31 + d.day * 7) % 1000
 
 
@@ -58,7 +70,9 @@ def all_trips(mut ctx: Ctx, months: Seq[Int]) raises -> Int:
     return t
 
 
-comptime MonthTrips = Step["month_trips", Month, Int, month_trips, Mapped]
+comptime MonthTrips = Step[
+    "month_trips", Month, Int, month_trips, Mapped, retries=1
+]
 comptime AllTrips = Step[
     "all_trips", Seq[Int], Int, all_trips, Gather, after=MonthTrips
 ]
