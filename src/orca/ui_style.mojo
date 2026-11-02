@@ -50,12 +50,18 @@ td.error { white-space: normal; color: var(--bad); font-family: var(--mono); fon
 .status--succeeded { color: var(--ok); }
 .status--failed { color: var(--bad); }
 .status--running { color: var(--ember); }
-.status--queued, .status--pending, .status--skipped { color: var(--faint); }
+.status--queued, .status--pending, .status--skipped, .status--cancelled { color: var(--faint); }
 .filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: end; margin-bottom: 1rem; }
 .filters label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
-input, button { font: inherit; padding: 0.3rem 0.5rem; border: 1px solid var(--border);
+input, button, select { font: inherit; padding: 0.3rem 0.5rem; border: 1px solid var(--border);
   border-radius: 4px; background: var(--surface); color: var(--text); }
 button { cursor: pointer; }
+button:hover { border-color: var(--lake); }
+button.danger { color: var(--bad); }
+button.danger:hover { border-color: var(--bad); }
+.actions { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; align-items: end; margin: 1rem 0; }
+form.action { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; margin: 0; }
+form.action label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
 pre.log { background: var(--surface); border: 1px solid var(--border); padding: 0.8rem 1rem;
   font-size: 0.8rem; line-height: 1.45; max-height: 70vh; overflow: auto; white-space: pre-wrap; }
 pre.error { color: var(--bad); background: var(--surface); border: 1px solid var(--border);
@@ -69,6 +75,7 @@ pre.error { color: var(--bad); background: var(--surface); border: 1px solid var
 .dag__box--succeeded rect { stroke: var(--ok); }
 .dag__box--failed rect { stroke: var(--bad); stroke-width: 2; }
 .dag__box--running rect { stroke: var(--ember); stroke-width: 2; }
-.dag__box--skipped rect, .dag__box--pending rect, .dag__box--queued rect { stroke-dasharray: 4 3; }
+.dag__box--skipped rect, .dag__box--pending rect, .dag__box--queued rect,
+.dag__box--cancelled rect { stroke-dasharray: 4 3; }
 h2 .status { vertical-align: middle; margin-left: 0.4rem; }
 """

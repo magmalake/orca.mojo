@@ -20,7 +20,8 @@ dista timeline is written beside them, and `status <run>` shows each step's
 latest log.
 
 `run` and `resume` print one line per step and partition, then the run's
-status. Exit codes: 0 when the run succeeded, 1 when a step didn't, 2 for a
+status. Exit codes: 0 when the run succeeded, 1 when a step didn't or the run
+was cancelled, 2 for a
 usage error, 3 for any other error (the database, a run that can't be
 resumed).
 """
@@ -38,7 +39,7 @@ from orca.tasks import workers
 from orca.civil import Civil, now, parse_time
 from orca.partitions import parse_partitions
 from orca.pipeline import FAILED, SUCCEEDED, Pipeline, RunResult
-from orca.state import PgStore, State, process_owner
+from orca.state import CANCELLED, PgStore, State, process_owner
 
 comptime USAGE = """usage:
   <pipeline> describe
@@ -277,14 +278,25 @@ def _execute[
 ) raises -> Int:
     """Runs what's left of `run` as its owner, with a heartbeat, then ends it.
 
-    If this raises (the database went away, or another process took the run
-    over), the run is left `running`; once its heartbeat is stale it can be
-    resumed.
+    A run asked to cancel stops before its next attempt and ends
+    `cancelled`. If this raises otherwise (the database went away, or another
+    process took the run over), the run is left `running`; once its heartbeat
+    is stale it can be resumed.
     """
     var b = Beat(url, run, owner, heartbeat_interval(_stale_seconds()))
     var pool = TypedPool.start[beat](1, b)
     var store = PgStore(db^, url, run, owner, hex(P.registry_hash()))
-    var res = P.execute(store, prior^, keys, run, Int(Pointer(to=rt)))
+    var res: RunResult
+    try:
+        res = P.execute(store, prior^, keys, run, Int(Pointer(to=rt)))
+    except e:
+        pool.shutdown()
+        if not store.db.cancel_requested(run):
+            raise e^
+        store.db.finish_run(run, owner, CANCELLED)
+        _print_steps(store.db, run)
+        print("run", CANCELLED)
+        return 1
     pool.shutdown()
     var dir = run_dir(P.name, run)
     comptime if P.tasks.HAS_RUNTIME:

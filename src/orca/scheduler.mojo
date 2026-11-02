@@ -19,8 +19,9 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   was down are made once each, or, with `catchup=False`, only the latest.
   A fire whose partition is before the pipeline's first is recorded without
   a run.
-- **Starting a run is `resume`.** A queued run has nothing done, which is
-  what `<binary> resume <run>` takes. The scheduler marks the run `running`,
+- **Starting a run is `resume`.** A queued run has nothing done, or what a
+  resume or rerun from `orca ui` left it, which is what `<binary> resume
+  <run>` takes (with `--allow-new-code` when the resume said so). The scheduler marks the run `running`,
   with no heartbeat and itself as owner, and execs the binary, which claims
   it. It doesn't wait: the run records its own progress.
 - **`max_runs`.** Under a lock on the pipeline's row, the runs that are live
@@ -30,7 +31,8 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   after `ORCA_RETRY_SECONDS` (default 60) doubling with each start, plus up
   to a tenth more as jitter, up to `run_retries` times. One whose process
   died (its heartbeat went stale) is started again at once, within the same
-  budget. A manual run is never retried by the scheduler.
+  budget. A manual run is never retried by the scheduler. A run asked to
+  cancel whose process died ends `cancelled`.
 
 The scheduler's clock is `orca.civil.now`, which `ORCA_NOW` fixes; fire
 times and retry times are on it. Heartbeats are on the database's clock.
@@ -57,7 +59,9 @@ comptime _RETRIED = "trigger IN ('schedule', 'backfill')"
 
 
 @fieldwise_init
-struct _Pipeline(Copyable, Movable):
+struct Registered(Copyable, Movable):
+    """A registered pipeline, as the scheduler reads it from `describe`."""
+
     var name: String
     var binary: String
     var registry_hash: String
@@ -82,6 +86,78 @@ def fill_key(kind: String, fills: String, local: Civil) raises -> String:
         var m = Month.containing(local.year, local.month, local.day)
         return String(m.prev() if fills == "previous" else m^)
     raise Error("orca: unknown partitions '", kind, "'")
+
+
+def registered(mut db: State, only: String = "") raises -> List[Registered]:
+    """Every pipeline registered with a binary, or the one named."""
+    var out = List[Registered]()
+    var rows = db.conn.query(
+        (
+            "SELECT name, binary_path, registry_hash, coalesce(since, 0) AS"
+            " since, coalesce(describe->'schedule'->>'cron', '') AS cron,"
+            " coalesce(describe->'schedule'->>'tz', 'UTC') AS tz,"
+            " coalesce(describe->'schedule'->>'fills', 'previous') AS"
+            " fills, coalesce((describe->'schedule'->>'catchup')::boolean,"
+            " true) AS catchup, coalesce(describe->'partitions'->>'kind',"
+            " 'monthly') AS kind, coalesce(describe->'partitions'->>"
+            "'start', '') AS start, coalesce((describe->>'max_runs')"
+            "::bigint, 1) AS max_runs, coalesce((describe->>"
+            "'run_retries')::bigint, 3) AS run_retries FROM"
+            " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
+            " name = $1) ORDER BY name"
+        ),
+        Params().text(only),
+    )
+    for r in rows:
+        out.append(
+            Registered(
+                r.text("name"),
+                r.text("binary_path"),
+                r.text("registry_hash"),
+                r.int64("since"),
+                r.text("cron"),
+                r.text("tz"),
+                r.text("fills"),
+                r.bool("catchup"),
+                r.text("kind"),
+                r.text("start"),
+                Int(r.int64("max_runs")),
+                Int(r.int64("run_retries")),
+            )
+        )
+    return out^
+
+
+def partition_keys(p: Registered, keys: String) raises -> List[String]:
+    """`keys` (`KEY[..KEY][,...]`) as the pipeline's partition keys, each
+    checked and from its first partition on."""
+    var texts = List[String]()
+    if p.kind == "daily":
+        for k in parse_keys[Day](keys, p.start):
+            texts.append(String(k))
+    else:
+        for k in parse_keys[Month](keys, p.start):
+            texts.append(String(k))
+    return texts^
+
+
+def backfill(mut db: State, p: Registered, keys: String) raises -> Int:
+    """Queues a run for each partition in `keys` that has no run queued,
+    running or succeeded; returns how many it queued."""
+    var queued = 0
+    for key in partition_keys(p, keys):
+        var res = db.conn.query(
+            (
+                "INSERT INTO orca.runs (pipeline, registry_hash, partitions,"
+                " trigger, status) SELECT $1, $2, $3, 'backfill', 'queued'"
+                " WHERE NOT EXISTS (SELECT 1 FROM orca.runs WHERE pipeline ="
+                " $1 AND partitions = $3 AND status IN ('queued', 'running',"
+                " 'succeeded')) RETURNING id"
+            ),
+            Params().text(p.name).text(p.registry_hash).text(key),
+        )
+        queued += len(res)
+    return queued
 
 
 struct Scheduler(Movable):
@@ -130,50 +206,12 @@ struct Scheduler(Movable):
         )
         return name^
 
-    def _pipelines(mut self, only: String = "") raises -> List[_Pipeline]:
-        var out = List[_Pipeline]()
-        var rows = self.db.conn.query(
-            (
-                "SELECT name, binary_path, registry_hash, coalesce(since, 0) AS"
-                " since, coalesce(describe->'schedule'->>'cron', '') AS cron,"
-                " coalesce(describe->'schedule'->>'tz', 'UTC') AS tz,"
-                " coalesce(describe->'schedule'->>'fills', 'previous') AS"
-                " fills, coalesce((describe->'schedule'->>'catchup')::boolean,"
-                " true) AS catchup, coalesce(describe->'partitions'->>'kind',"
-                " 'monthly') AS kind, coalesce(describe->'partitions'->>"
-                "'start', '') AS start, coalesce((describe->>'max_runs')"
-                "::bigint, 1) AS max_runs, coalesce((describe->>"
-                "'run_retries')::bigint, 3) AS run_retries FROM"
-                " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
-                " name = $1) ORDER BY name"
-            ),
-            Params().text(only),
-        )
-        for r in rows:
-            out.append(
-                _Pipeline(
-                    r.text("name"),
-                    r.text("binary_path"),
-                    r.text("registry_hash"),
-                    r.int64("since"),
-                    r.text("cron"),
-                    r.text("tz"),
-                    r.text("fills"),
-                    r.bool("catchup"),
-                    r.text("kind"),
-                    r.text("start"),
-                    Int(r.int64("max_runs")),
-                    Int(r.int64("run_retries")),
-                )
-            )
-        return out^
-
     def tick(mut self, now: Int64) raises:
         """One pass: reap ended runs, make due fires, schedule retries, and
         start what may start."""
         for done in reap():
             print("reaped pid", done[0], "exit", done[1])
-        for p in self._pipelines():
+        for p in registered(self.db):
             if p.cron:
                 try:
                     self._fire(p, now)
@@ -182,7 +220,7 @@ struct Scheduler(Movable):
             self._schedule_retries(p, now)
             self._start(p, now)
 
-    def _fire(mut self, p: _Pipeline, now: Int64) raises:
+    def _fire(mut self, p: Registered, now: Int64) raises:
         var s = Schedule(CronExpr.parse(p.cron), Zone.load(p.tz))
         var last = (
             self.db.conn.query(
@@ -250,7 +288,7 @@ struct Scheduler(Movable):
                     String("run ", run) if run >= 0 else "before the start",
                 )
 
-    def _schedule_retries(mut self, p: _Pipeline, now: Int64) raises:
+    def _schedule_retries(mut self, p: Registered, now: Int64) raises:
         """Gives each failed run that may be retried its time to start."""
         _ = self.db.conn.execute(
             String(
@@ -269,7 +307,7 @@ struct Scheduler(Movable):
             .int64(Int64(p.run_retries)),
         )
 
-    def _start(mut self, p: _Pipeline, now: Int64) raises:
+    def _start(mut self, p: Registered, now: Int64) raises:
         """Starts queued runs, retries that are due and runs whose process
         died, up to `max_runs` live at once."""
         var stale = "make_interval(secs => $2)"
@@ -285,6 +323,16 @@ struct Scheduler(Movable):
         _ = tx.query(
             "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
             Params().text(p.name),
+        )
+        # A run asked to cancel whose process died is cancelled.
+        _ = tx.execute(
+            String(
+                "UPDATE orca.runs SET status = 'cancelled', ended = now(),",
+                " heartbeat = NULL WHERE pipeline = $1 AND status = 'running'",
+                " AND cancel_requested AND ",
+                dead,
+            ),
+            Params().text(p.name).float64(self.stale),
         )
         # A run whose process died and has no retries left has failed.
         _ = tx.execute(
@@ -315,10 +363,14 @@ struct Scheduler(Movable):
         )
         var free = p.max_runs - live
         var ids = List[Int64]()
+        var new_code = List[Bool]()
         if free > 0:
             var rows = tx.query(
                 String(
-                    "SELECT id FROM orca.runs WHERE pipeline = $1 AND (status",
+                    (
+                        "SELECT id, allow_new_code FROM orca.runs WHERE"
+                        " pipeline = $1 AND (status"
+                    ),
                     " = 'queued' OR (status = 'failed' AND ",
                     _RETRIED,
                     " AND retry_at <= $4) OR (status = 'running' AND ",
@@ -336,6 +388,7 @@ struct Scheduler(Movable):
             )
             for r in rows:
                 ids.append(r.int64("id"))
+                new_code.append(r.bool("allow_new_code"))
             for id in ids:
                 _ = tx.execute(
                     (
@@ -347,41 +400,23 @@ struct Scheduler(Movable):
                     Params().int64(id),
                 )
         tx.commit()
-        for id in ids:
+        for i in range(len(ids)):
+            var id = ids[i]
             var log = String()
             if self.logs:
                 var dir = String(self.logs, "/", p.name, "/", id)
                 makedirs(dir, exist_ok=True)
                 log = String(dir, "/driver.log")
-            var pid = spawn([p.binary, "resume", String(id)], log)
+            var argv: List[String] = [p.binary, "resume", String(id)]
+            if new_code[i]:
+                argv.append("--allow-new-code")
+            var pid = spawn(argv, log)
             print("started", p.name, "run", id, "pid", pid)
 
     def backfill(mut self, pipeline: String, keys: String) raises -> Int:
-        """Queues a run for each partition in `keys` that has no run queued,
-        running or succeeded; returns how many it queued."""
-        var ps = self._pipelines(pipeline)
+        """Queues a run for each partition in `keys` that has none; see
+        `backfill`."""
+        var ps = registered(self.db, pipeline)
         if len(ps) == 0:
             raise Error("orca: pipeline ", pipeline, " isn't registered")
-        ref p = ps[0]
-        var texts = List[String]()
-        if p.kind == "daily":
-            for k in parse_keys[Day](keys, p.start):
-                texts.append(String(k))
-        else:
-            for k in parse_keys[Month](keys, p.start):
-                texts.append(String(k))
-        var queued = 0
-        for key in texts:
-            var res = self.db.conn.query(
-                (
-                    "INSERT INTO orca.runs (pipeline, registry_hash,"
-                    " partitions, trigger, status) SELECT $1, $2, $3,"
-                    " 'backfill', 'queued' WHERE NOT EXISTS (SELECT 1 FROM"
-                    " orca.runs WHERE pipeline = $1 AND partitions = $3 AND"
-                    " status IN ('queued', 'running', 'succeeded')) RETURNING"
-                    " id"
-                ),
-                Params().text(p.name).text(p.registry_hash).text(key),
-            )
-            queued += len(res)
-        return queued
+        return backfill(self.db, ps[0], keys)

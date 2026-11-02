@@ -230,10 +230,11 @@ Gate: a failed step is found, its logs read and the run resumed, without a termi
 - **The Dista timeline** is served from the run's log directory as `timeline.json`, linked for opening in Perfetto, rather than drawn by orca. The directory is found from the run's attempts' log paths, so the UI needn't share the runs' `ORCA_LOGS`; a relative `ORCA_LOGS` is relative to where the run was started, which the UI must share.
 - **Actions go through Postgres, never through the UI's process.** The UI doesn't start pipeline binaries: it writes a row and the scheduler, which already starts and limits runs, acts on it. So `max_runs`, retries and ownership stay in one place, and the UI works the same whether the scheduler is on this machine or not.
   - **Start a run**: a queued run over the partitions entered, trigger `ui`.
-  - **Resume** a failed or interrupted run: it's queued again (`retry_at` cleared), and the scheduler resumes it as it does a retry. A resume of a run whose code has changed asks for confirmation, which passes `--allow-new-code`.
-  - **Rerun from a step**: a new run, trigger `rerun`, over the same partitions, with the steps before the chosen one copied from the old run as succeeded (their outputs and their pinned reads), so `resume` runs the chosen step and what follows. The old run is left as it was.
+  - **Resume** a failed, cancelled or stalled run (`running`, with a heartbeat older than the stale limit): it's queued again (`retry_at` cleared), and the scheduler resumes it as it does a retry. A resume of a run whose code has changed asks for confirmation, which sets `allow_new_code` on the run, and the scheduler passes `--allow-new-code`.
+  - **Rerun from a step**: a new run, trigger `rerun`, over the same partitions, with the steps before the chosen one that succeeded copied from the old run (their inputs and outputs, and `copied_from` naming the step each came from, whose attempts, reads and commits stay with it), so `resume` runs the chosen step and what follows. The old run is left as it was. A run whose pipeline's code has changed since can only be rerun from the first step, as the old code's outputs may not be what the new code reads.
   - **Backfill a range**: what `orca backfill` does.
-  - **Cancel**: sets `cancel_requested` on the run. The run checks it where it already checks its ownership, before each attempt, and ends `cancelled`; the scheduler doesn't start or retry a cancelled run. A step already running finishes its attempt: cancelling doesn't kill it mid-commit.
+  - **Cancel**: a queued or failed run is `cancelled` at once (a failed one is then not retried). A running one gets `cancel_requested`: the run checks it where it already checks its ownership, before each attempt, and ends `cancelled`; if its process has died, the scheduler ends it `cancelled` instead of starting it again. A step already running finishes its attempt: cancelling doesn't kill it mid-commit.
+- **An action answers `303 See Other`** to the page of the run it made or acted on (or, to `Accept: application/json`, that run's ID). One that can't be done (a run still going, a range with a bad key) answers 409 with the reason, on a page with a way back; a resume onto new code answers 409 with the form that confirms it.
 - **No authentication in phase 3** (one team, a trusted network). Because the UI is on localhost and its actions change state, every `POST` checks that `Origin` (or, without it, `Referer`) is the UI's own, so a page on another site can't make the browser post to it. Nothing changes state on a `GET`.
 
 ### Pages
@@ -246,6 +247,8 @@ Gate: a failed step is found, its logs read and the run resumed, without a termi
 | `/runs/<id>` | The run: each step and partition with status, timing and attempts, the error of a failed one, its reads and commits, the DAG in this run's colours, and resume, rerun from a step and cancel. |
 | `/runs/<id>/attempts/<attempt>` | An attempt's log (its last MiB), followed while it's running, with its error at the top when it failed, and the step's other attempts. |
 | `/runs/<id>/timeline.json` | The run's Dista timeline, for Perfetto. |
+
+The actions are `POST`s of forms: `/pipelines/<name>/runs` and `/pipelines/<name>/backfill` (`partitions`), and `/runs/<id>/resume` (`allow_new_code`), `/runs/<id>/rerun` (`step`) and `/runs/<id>/cancel`. `tests/actions.sh` is the gate.
 
 ### PRs
 
