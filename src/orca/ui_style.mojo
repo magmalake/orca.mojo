@@ -79,6 +79,8 @@ pre.error { color: var(--bad); background: var(--surface); border: 1px solid var
 .dag__head { fill: var(--faint); }
 .dag__name { font-size: 13px; font-weight: 600; fill: var(--text); }
 .dag__kind { font-size: 11px; fill: var(--muted); }
+.dag a:hover rect { stroke: var(--lake); }
+.doc { font-size: 0.75rem; font-weight: 400; margin-left: 0.5rem; color: var(--faint); }
 .dag__box--succeeded rect { stroke: var(--ok); }
 .dag__box--failed rect { stroke: var(--bad); stroke-width: 2; }
 .dag__box--running rect { stroke: var(--ember); stroke-width: 2; }
@@ -96,4 +98,13 @@ h2 .status { vertical-align: middle; margin-left: 0.4rem; }
 .graph__node--pipeline rect { stroke: var(--ember); }
 .graph__node--source rect { stroke-dasharray: 4 3; }
 .graph__node--start rect { stroke: var(--ember); stroke-width: 2.5; }
+.tl { display: block; margin: 0.5rem 0; font-family: var(--mono); }
+.tl__lane, .tl__time { font-size: 11px; fill: var(--muted); }
+.tl__tick { stroke: var(--border); }
+.tl__count { fill: none; stroke: var(--lake); stroke-width: 2; }
+.tl--0 { fill: var(--lake); } .tl--1 { fill: var(--ember); } .tl--2 { fill: var(--ok); }
+.tl--3 { fill: #7a5af8; } .tl--4 { fill: #b54708; } .tl--5 { fill: #c11574; }
+.tl---1 { fill: var(--faint); }
+.runs--ok { fill: var(--ok); } .runs--bad { fill: var(--bad); } .runs--other { fill: var(--faint); }
+.runs--none { fill: transparent; }
 """

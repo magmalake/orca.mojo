@@ -113,6 +113,16 @@ struct Html(Movable, Writable):
         """`<a href="href">label</a>`, both escaped."""
         self.out.write('<a href="', escape(href), '">', escape(label), "</a>")
 
+    def link_out(mut self, href: StringSlice, label: StringSlice):
+        """A link that opens in a new tab: to code, or another site."""
+        self.out.write(
+            '<a href="',
+            escape(href),
+            '" target="_blank" rel="noopener">',
+            escape(label),
+            "</a>",
+        )
+
     def cell[*Ts: Writable](mut self, *values: *Ts):
         """One `<td>` holding the values, escaped."""
         self.out.write("<td>")

@@ -49,7 +49,7 @@ q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
 export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
 export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
 export ORCA_STALE_SECONDS=10 ORCA_START_SECONDS=60 ORCA_VCPU_BUDGET=15
-export ORCA_LOGS=$PWD/build/ec2-logs ORCA_FANOUT_SHOW_HOST=1 ORCA_FANOUT_SLEEP=0.5
+export ORCA_LOGS=$PWD/build/ec2-logs ORCA_FANOUT_SHOW_HOST=1 ORCA_FANOUT_SLEEP=0.5 ORCA_CLUSTER_LOG_SECONDS=1
 export ORCA_RUN_ENV=ORCA_FANOUT_SHOW_HOST,ORCA_FANOUT_SLEEP
 python3 tests/fake_ec2.py "$port" "$dir" >> "$log" 2>&1 &
 fake=$!
@@ -111,7 +111,10 @@ grep -q "DISTA_HEAD=127.0.0.1:6390" "$dir/$(echo "$workers" | head -1).sh" || fa
 i=0
 while :; do
     n=0
-    for w in $workers; do grep -q "trips on $w" "$dir/$w.log" && n=$((n + 1)); done
+    # A worker's output is its instance's log, which it keeps under ORCA_LOGS.
+    for w in $workers; do
+        grep -q "trips on $w" "$ORCA_LOGS/fanout/$f1/cluster/worker-$w.log" 2> /dev/null && n=$((n + 1))
+    done
     [ "$n" -eq 3 ] && break
     i=$((i + 1)); [ "$i" -lt 120 ] || fail "run $f1's tasks reached $n of 3 workers"; sleep 0.5
 done
@@ -124,11 +127,26 @@ while [ "$(running_of "$f1")" -gt 0 ]; do
     i=$((i + 1)); [ "$i" -lt 180 ] || fail "run $f1's instances are still running"; sleep 0.5
 done
 grep -q "^run succeeded" "$ORCA_LOGS/fanout/$f1/driver.log" || fail "run $f1's driver log"
+# Its instances, why each ended, and each one's log, the lost worker's too.
+got=$(q "SELECT string_agg(role || ' ' || instance_type || ' ' || market || ' ' || (ended IS NOT NULL)::text || ' ' || why, ',' ORDER BY role, why) FROM orca.instances WHERE run = $f1")
+# The head shuts itself down when its driver ends; the workers left wait for
+# it until the sweep terminates them; the one terminated mid-run says so.
+[ "$got" = "head c7g.large on-demand true shut itself down,worker c7g.xlarge spot true terminated,worker c7g.xlarge spot true terminated by orca: its run had ended,worker c7g.xlarge spot true terminated by orca: its run had ended" ] \
+    || fail "run $f1's instances: $got"
+for w in $workers; do
+    grep -q "trips on $w" "$ORCA_LOGS/fanout/$f1/cluster/worker-$w.log" || fail "worker $w's log"
+done
+head_id=$(ids_of "$f1" head | head -1)
+[ -s "$ORCA_LOGS/fanout/$f1/cluster/head-$head_id.log" ] || fail "the head's log"
 echo "ok   a fanout run on a head and 3 Spot workers, its tasks on all 3, one lost, nothing left"
 
 # The second: its head instance gone mid-run.
 until_true "SELECT status = 'running' AND heartbeat IS NOT NULL FROM orca.runs WHERE id = $f2" 120
-sleep 2
+# Mid-run: once a worker is running its tasks.
+i=0
+until cat "$ORCA_LOGS/fanout/$f2/cluster/"worker-*.log 2> /dev/null | grep -q "trips on"; do
+    i=$((i + 1)); [ "$i" -lt 240 ] || fail "run $f2's tasks didn't start"; sleep 0.25
+done
 ec2 TerminateInstances "InstanceId.1=$(ids_of "$f2" head | head -1)" > /dev/null
 until_true "SELECT status = 'succeeded' FROM orca.runs WHERE id = $f2" 300
 [ "$(q "SELECT starts FROM orca.runs WHERE id = $f2")" -eq 2 ] || fail "run $f2 started $(q "SELECT starts FROM orca.runs WHERE id = $f2") times"

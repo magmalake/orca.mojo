@@ -9,7 +9,8 @@ instance's script and output are <dir>/<id>.sh and <dir>/<id>.log, and its
 environment has HOSTNAME set to its ID, so a test can tell instances apart.
 All instances share 127.0.0.1 as their private address. A process that
 exits is an instance that terminated, as `InstanceInitiatedShutdownBehavior
-=terminate` makes one; TerminateInstances kills its process group. Requests
+=terminate` makes one; TerminateInstances kills its process group. A
+terminated instance's state reason says which, as EC2's does. Requests
 aren't checked for a signature.
 """
 
@@ -35,13 +36,20 @@ def _state(i):
     return "running" if i["proc"].poll() is None else "terminated"
 
 
+def _reason(i):
+    if _state(i) == "running":
+        return ""
+    code = "Client.UserInitiatedShutdown" if i.get("killed") else "Client.InstanceInitiatedShutdown"
+    return f"<stateReason><code>{code}</code><message>{code}</message></stateReason>"
+
+
 def _item(iid, i):
     tags = "".join(
         f"<item><key>{k}</key><value>{v}</value></item>" for k, v in i["tags"].items()
     )
     return (
         f"<item><instanceId>{iid}</instanceId><instanceType>{i['type']}</instanceType>"
-        f"<instanceState><code>16</code><name>{_state(i)}</name></instanceState>"
+        f"<instanceState><code>16</code><name>{_state(i)}</name></instanceState>{_reason(i)}"
         f"<privateIpAddress>127.0.0.1</privateIpAddress>"
         f"<launchTime>{i['launch']}</launchTime><tagSet>{tags}</tagSet></item>"
     )
@@ -92,6 +100,8 @@ def _describe(p):
         n += 1
     items = []
     for iid, i in INSTANCES.items():
+        if "instance-id" in filters and iid not in filters["instance-id"]:
+            continue
         if "tag-key" in filters and not any(k in i["tags"] for k in filters["tag-key"]):
             continue
         if "instance-state-name" in filters and _state(i) not in filters["instance-state-name"]:
@@ -108,6 +118,7 @@ def _terminate(p):
     while f"InstanceId.{n}" in p:
         i = INSTANCES.get(p[f"InstanceId.{n}"])
         if i and i["proc"].poll() is None:
+            i["killed"] = True
             try:
                 os.killpg(i["proc"].pid, signal.SIGKILL)
             except ProcessLookupError:

@@ -136,6 +136,12 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         before.extend(Span(data))
         write_location(args[3], Span(before))
         return 0
+    if cmd == "put-log" and len(args) == 4:
+        # For the ec2 runner's instances: a head's or worker's output so
+        # far, replacing what was kept of it before (orca.ec2).
+        var data = read_location(args[2])
+        write_location(args[3], Span(data))
+        return 0
     if cmd == "keys" and len(args) == 2:
         comptime if P.partitions.kind() != "keyed":
             _usage(String("pipeline ", P.name, " isn't keyed"))

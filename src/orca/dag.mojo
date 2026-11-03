@@ -27,6 +27,8 @@ struct DagStep(Copyable, Movable):
     """The step it follows, or empty."""
     var status: String
     """Its status in the run shown, or empty on a pipeline's own page."""
+    var href: String
+    """Its function's code, which the box links to, or empty."""
 
 
 def aggregate(statuses: List[String]) -> String:
@@ -118,6 +120,10 @@ def dag_svg(steps: List[DagStep]) -> String:
         var cls = String("dag__box")
         if s.status:
             cls.write(" dag__box--", escape(s.status))
+        if s.href:
+            out.write(
+                '<a href="', escape(s.href), '" target="_blank" rel="noopener">'
+            )
         out.write('<g class="', cls, '"><title>', escape(s.name))
         if s.status:
             out.write(": ", escape(s.status))
@@ -160,5 +166,7 @@ def dag_svg(steps: List[DagStep]) -> String:
         if s.status:
             out.write(" · ", escape(s.status))
         out.write("</text></g>")
+        if s.href:
+            out.write("</a>")
     out.write("</svg>")
     return out^

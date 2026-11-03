@@ -75,9 +75,9 @@ def test_migrate_is_idempotent() raises:
     var db = _db()
     db.migrate()
     assert_equal(
-        _count("SELECT max(version) AS n FROM orca.schema_version"), 11
+        _count("SELECT max(version) AS n FROM orca.schema_version"), 12
     )
-    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 11)
+    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 12)
 
 
 def test_claim_needs_a_stale_heartbeat() raises:

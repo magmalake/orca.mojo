@@ -35,7 +35,8 @@ RUN mkdir -p /out/bin /out/pipelines \
     && pixi run -e default sh -c 'mojo build -I src $DEP_INC bin/scheduler.mojo -o /out/bin/orca \
         && for p in '"${PIPELINES}"'; do n=$(basename "$p" .mojo); \
             mojo build -I src $DEP_INC -D ORCA_SOURCE='"${ORCA_SOURCE}"' -D ORCA_COMMIT='"${ORCA_COMMIT}"' \
-                "$p" -o "/out/pipelines/$n" || exit 1; done'
+                "$p" -o "/out/pipelines/$n" || exit 1; done \
+        && /out/bin/orca locate /out/pipelines/* --root .'
 # What the binaries link, and what they dlopen from $CONDA_PREFIX/lib at run
 # time (libpq for postgres.mojo, flare's shims for orca ui, objectstore's
 # for dista) with what those link: only libraries from the pixi

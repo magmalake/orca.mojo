@@ -38,6 +38,7 @@ fail() {
 [ "$(./build/toy-c1 describe | jq -r .registry_hash)" = "$(./build/toy describe | jq -r .registry_hash)" ] \
     || fail "the source changed the registry hash"
 
+./build/orca locate ./build/toy-c1 --root . >> "$log" 2>&1 || fail "locate c1"
 ./build/orca register --image orca:c1 ./build/toy-c1 >> "$log" 2>&1 || fail "register c1"
 ORCA_IMAGE=orca:c1 ./build/toy-c1 run --partitions 2024-01 >> "$log" 2>&1 || fail "run c1"
 ./build/orca register ./build/toy-c2 >> "$log" 2>&1 || fail "register c2"
@@ -76,14 +77,20 @@ json "/runs/$r2" | jq -e ".version.commit_url == \"$repo/tree/$c2\" and .version
     || fail "run $r2's version: $(json "/runs/$r2" | jq -c .version)"
 json "/runs/$r3" | jq -e '.version.commit == "" and .version.commit_url == null' > /dev/null \
     || fail "run $r3's version: $(json "/runs/$r3" | jq -c .version)"
-html "/runs/$r1" | grep -q "<a href=\"$repo/tree/$c1\">1a1a1a1a1a1a</a>" || fail "run $r1's page links its commit"
+html "/runs/$r1" | grep -q "<a href=\"$repo/tree/$c1\" target=\"_blank\" rel=\"noopener\">1a1a1a1a1a1a</a>" || fail "run $r1's page links its commit"
 html "/runs/$r2" | grep -q "plus uncommitted changes" || fail "run $r2's page says it was dirty"
 html "/runs/$r3" | grep -q "not recorded" || fail "run $r3's page says it has no source"
+# The steps' code, at the commit, for the version orca locate mapped.
+line=$(grep -n '^def days(' examples/toy.mojo | cut -d: -f1)
+html "/runs/$r1" | grep -q "<a href=\"$repo/blob/$c1/examples/toy.mojo#L$line\" target=\"_blank\" rel=\"noopener\">days</a>" \
+    || fail "run $r1's page links its steps' code"
+json "/runs/$r1" | jq -e '.version.locations["toy::measure"] | startswith("examples/toy.mojo#L")' > /dev/null \
+    || fail "run $r1's locations"
 
 # Newest first: the bare binary, then c2 (registered without --image, so
 # with the image the pipeline has), then c1.
 got=$(json /pipelines/toy | jq -c '[.versions[] | [.commit[0:1], .image, .runs]]')
 [ "$got" = '[["","",1],["2","orca:c1",1],["1","orca:c1",1]]' ] || fail "the pipeline's versions: $got"
-html /pipelines/toy | grep -q "<h2>Versions</h2>" || fail "the pipeline page's versions"
+html /pipelines/toy | grep -q "<h2>Versions" || fail "the pipeline page's versions"
 kill "$pid"
 echo "ok   versions: a run links the commit it ran, the pipeline lists its versions"

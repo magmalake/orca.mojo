@@ -1,6 +1,7 @@
 """`orca`: the scheduler, a binary that links no pipeline.
 
     pixi run orca
+    ./build/orca locate ./build/taxi --root .   # taxi.source.json, for the UI's links
     ./build/orca register ./build/taxi [...]
     ./build/orca backfill taxi 2011-01..2024-12
     ./build/orca tick
@@ -22,12 +23,15 @@ from std.time import sleep
 from orca.auth import add_user, remove_user, users
 from orca.civil import now
 from orca.lineage import Made, SnapshotRef, back, forward, latest
+from orca.locate import locate
+from orca.proc import capture
 from orca.scheduler import Scheduler
 from orca.sensors import rebuild, rebuilds
 from orca.state import State
 from orca.ui import DEFAULT_ADDR, serve_ui
 
 comptime USAGE = """usage:
+  orca locate <pipeline binary> [...] [--root <dir>]
   orca register [--image <image>] [--head-type T] [--worker-type T]
                 [--workers N] [--spot] <pipeline binary> [...]
   orca backfill <pipeline> KEY[..KEY][,...]   (keyed: NAME[,...]|@all|@file:<path>)
@@ -47,7 +51,34 @@ def _usage(msg: String = ""):
     exit(2)
 
 
+def _locate(args: List[String]) raises -> Int:
+    """`orca locate`: each binary's `<binary>.source.json`."""
+    var root = String(".")
+    var binaries = List[String]()
+    var i = 2
+    while i < len(args):
+        if args[i] == "--root" and i + 1 < len(args):
+            root = args[i + 1]
+            i += 2
+        else:
+            binaries.append(args[i])
+            i += 1
+    if len(binaries) == 0:
+        _usage("locate needs a pipeline binary")
+    for b in binaries:
+        var got = capture([b, "describe"])
+        if got[0] != 0:
+            raise Error("orca: ", b, " describe exited ", got[0], ": ", got[1])
+        var map = locate(got[1], root)
+        with open(String(b, ".source.json"), "w") as f:
+            f.write(map, "\n")
+        print("located", b, map)
+    return 0
+
+
 def _command(args: List[String]) raises -> Int:
+    if args[1] == "locate":
+        return _locate(args)
     var url = getenv("ORCA_DATABASE_URL")
     if not url:
         _usage("orca needs ORCA_DATABASE_URL")

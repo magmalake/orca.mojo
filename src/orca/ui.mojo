@@ -6,8 +6,8 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 
 | Path | |
 |---|---|
-| `/` | pipelines, with their schedules, next fires and last runs |
-| `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next fires and runs; a keyed one's keys, done, live and failed |
+| `/` | pipelines, with their schedules, next runs and last runs |
+| `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
 | `/runs` | runs, newest first; `?pipeline=`, `?status=`, `?trigger=` |
 | `/runs/<id>` | a run's DAG, steps and partitions, attempts, errors, reads and commits |
@@ -58,6 +58,8 @@ from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
 from postgres import Params
 
+from json import loads
+
 from orca.auth import (
     SESSION_COOKIE,
     audit,
@@ -78,12 +80,13 @@ from orca.actions import (
     start_run,
     stalled_sql,
 )
+from orca.chart import DayRuns, runs_chart
 from orca.civil import Civil, now
 from orca.logs import location_exists, read_location, run_dir
 from orca.cron import CronExpr
 from orca.dag import DagStep, aggregate, dag_svg
 from orca.graph import Edge, Node, graph_svg
-from orca.html import Html, url_decode, url_encode
+from orca.html import Html, escape, url_decode, url_encode
 from orca.lineage import (
     Made,
     SnapshotRef,
@@ -103,7 +106,14 @@ from orca.scheduler import (
 )
 from orca.sensors import Rebuild, rebuilds
 from orca.schedule import Schedule
-from orca.source import commit_url, web_url
+from orca.source import commit_url, is_hex, web_url
+from orca.locate import function_key
+from orca.timeline import (
+    MAX_BARS,
+    read_timeline,
+    timeline_svg,
+    workers_svg,
+)
 from orca.state import State
 from orca.tz import Zone
 from orca.ui_style import STYLE
@@ -179,6 +189,26 @@ struct VersionRow(Copyable, Movable):
     var first_seen: String
     var last_seen: String
     var runs: Int
+    var locations: String
+    """Where its functions are (`orca.locate`), as JSON, or empty."""
+
+
+@fieldwise_init
+struct InstanceRow(Copyable, Movable):
+    """An instance a run ran on (`orca.instances`)."""
+
+    var id: String
+    var start: Int
+    var role: String
+    var instance_type: String
+    var market: String
+    var launched: String
+    var ended: String
+    var why: String
+    var from_start: Float64
+    """Seconds from the run's start to its launch."""
+    var to_end: Float64
+    """Seconds from the run's start to its end, or to now."""
 
 
 @fieldwise_init
@@ -385,7 +415,8 @@ def _versions(
             " AS first_seen, ",
             _ts("v.last_seen"),
             " AS last_seen, (SELECT count(*) FROM orca.runs r WHERE r.version",
-            " = v.id) AS runs FROM orca.pipeline_versions v WHERE ($1 = '' OR",
+            " = v.id) AS runs, coalesce(v.locations::text, '') AS locations",
+            " FROM orca.pipeline_versions v WHERE ($1 = '' OR",
             " v.pipeline = $1) AND ($2 = 0 OR v.id = $2) ORDER BY v.id DESC",
         ),
         Params().text(pipeline).int64(Int64(id)),
@@ -403,9 +434,130 @@ def _versions(
                 r.text("first_seen"),
                 r.text("last_seen"),
                 Int(r.int64("runs")),
+                r.text("locations"),
             )
         )
     return out^
+
+
+def _code_url(v: VersionRow, location: String) -> String:
+    """`file#Lline` at the version's commit, or "" if it can't be linked."""
+    var web = web_url(v.source)
+    if not web or not v.commit or not location or not is_hex(v.commit):
+        return ""
+    if location.startswith("/") or ".." in location:
+        return ""
+    return String(web, "/blob/", v.commit, "/", location)
+
+
+struct CodeLinks(Movable):
+    """A version's code on its host: the pipeline's declaration, each
+    step's function and each dista task, from `orca.locate`'s map."""
+
+    var pipeline: String
+    var steps: Dict[String, String]
+    """Step name to its function's line."""
+    var tasks: List[Tuple[String, String]]
+    """A task's function name and its line."""
+
+    def __init__(out self):
+        self.pipeline = ""
+        self.steps = Dict[String, String]()
+        self.tasks = List[Tuple[String, String]]()
+
+    def step(self, name: String) -> String:
+        return self.steps.get(name, "")
+
+
+def _run_version(mut db: State, run: Int) raises -> Optional[VersionRow]:
+    """The version a run ran, if it recorded one."""
+    var rows = db.conn.query(
+        "SELECT coalesce(version, 0) AS v FROM orca.runs WHERE id = $1",
+        Params().int64(Int64(run)),
+    )
+    if len(rows) == 0 or not rows.row(0).int64("v"):
+        return None
+    var vs = _versions(db, id=Int(rows.row(0).int64("v")))
+    if len(vs) == 0:
+        return None
+    return vs[0].copy()
+
+
+def _code_links(
+    mut db: State, pipeline: String, v: Optional[VersionRow]
+) -> CodeLinks:
+    var out = CodeLinks()
+    if not v or not v.value().locations:
+        return out^
+    ref ver = v.value()
+    try:
+        var fn_step = Dict[String, String]()
+        var d = loads(
+            db.conn.query(
+                (
+                    "SELECT describe::text AS d FROM orca.pipelines WHERE name"
+                    " = $1"
+                ),
+                Params().text(pipeline),
+            )
+            .row(0)
+            .text("d")
+        )
+        for st in d["steps"].array_items():
+            fn_step[function_key(st["function"].string_value())] = st[
+                "name"
+            ].string_value()
+        for kv in loads(ver.locations).object_items():
+            var url = _code_url(ver, kv[1].string_value())
+            if not url:
+                continue
+            var key = kv[0]
+            if key == "pipeline":
+                out.pipeline = url
+            elif key in fn_step:
+                out.steps[fn_step[key]] = url
+            else:
+                out.tasks.append(
+                    (String(key[byte = key.rfind("::") + 2 :]), url)
+                )
+    except:
+        pass
+    return out^
+
+
+def _code_html(mut h: Html, name: String, links: CodeLinks):
+    """`Code`: the pipeline, then its dista tasks, each linked to its line."""
+    if not links.pipeline and len(links.tasks) == 0:
+        return
+    h.raw("<dt>Code</dt><dd>")
+    if links.pipeline:
+        h.raw("pipeline ")
+        h.link_out(links.pipeline, name)
+    for i in range(len(links.tasks)):
+        h.raw(" · " if i or links.pipeline else "", "task ")
+        h.link_out(links.tasks[i][1], links.tasks[i][0])
+    h.raw("</dd>")
+
+
+def _step_cell(mut h: Html, name: String, links: CodeLinks):
+    """A step's name, linked to its function where the code is known."""
+    var url = links.step(name)
+    h.raw("<td>")
+    if url:
+        h.link_out(url, name)
+    else:
+        h.text(name)
+    h.raw("</td>")
+
+
+def _docs(anchor: StaticString) -> String:
+    """A small link to the docs' section, beside a heading."""
+    var base = getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/")
+    return String(
+        ' <a class="doc" href="',
+        escape(String(base, "#", anchor)),
+        '" target="_blank" rel="noopener">docs</a>',
+    )
 
 
 def _json_version(mut out: String, v: VersionRow):
@@ -431,6 +583,8 @@ def _json_version(mut out: String, v: VersionRow):
         quote(v.last_seen),
         ', "runs": ',
         v.runs,
+        ', "locations": ',
+        v.locations if v.locations else String("null"),
         "}",
     )
 
@@ -445,7 +599,7 @@ def _source_html(mut h: Html, v: VersionRow):
     var short = String(v.commit[byte = : min(12, v.commit.byte_length())])
     h.raw("<code>")
     if url:
-        h.link(url, short)
+        h.link_out(url, short)
     else:
         h.text(short)
     h.raw("</code>")
@@ -455,10 +609,132 @@ def _source_html(mut h: Html, v: VersionRow):
         h.raw(' <span class="muted">of ')
         var web = web_url(v.source)
         if web:
-            h.link(web, v.source)
+            h.link_out(web, v.source)
         else:
             h.text(v.source)
         h.raw("</span>")
+
+
+def _instances(mut db: State, run: Int) raises -> List[InstanceRow]:
+    var rows = db.conn.query(
+        String(
+            "SELECT i.id, i.start, i.role, i.instance_type, i.market, ",
+            _ts("i.launched"),
+            " AS launched, ",
+            _ts("i.ended"),
+            " AS ended, coalesce(i.why, '') AS why,",
+            " extract(epoch FROM i.launched - coalesce(r.started,",
+            " i.launched))::float8 AS from_start, extract(epoch FROM",
+            " coalesce(i.ended, now()) - coalesce(r.started,",
+            " i.launched))::float8 AS to_end FROM orca.instances i JOIN",
+            " orca.runs r ON r.id = i.run WHERE i.run = $1 ORDER BY",
+            " i.launched, i.role, i.id",
+        ),
+        Params().int64(Int64(run)),
+    )
+    var out = List[InstanceRow]()
+    for r in rows:
+        out.append(
+            InstanceRow(
+                r.text("id"),
+                Int(r.int64("start")),
+                r.text("role"),
+                r.text("instance_type"),
+                r.text("market"),
+                r.text("launched"),
+                r.text("ended"),
+                r.text("why"),
+                r.float64("from_start"),
+                r.float64("to_end"),
+            )
+        )
+    return out^
+
+
+def _cluster_log(i: InstanceRow) -> String:
+    """The instance's log's name under its run's `cluster/`."""
+    return String(i.role, "-", i.id, ".log")
+
+
+def _json_instances(mut out: String, run: Int, xs: List[InstanceRow]):
+    out.write("[")
+    for k in range(len(xs)):
+        ref i = xs[k]
+        out.write(
+            ", " if k else "",
+            '{"id": ',
+            quote(i.id),
+            ', "start": ',
+            i.start,
+            ', "role": ',
+            quote(i.role),
+            ', "type": ',
+            quote(i.instance_type),
+            ', "market": ',
+            quote(i.market),
+            ', "launched": ',
+            quote(i.launched),
+            ', "ended": ',
+            quote(i.ended) if i.ended else String("null"),
+            ', "why": ',
+            quote(i.why) if i.why else String("null"),
+            ', "log": ',
+            quote(String("/runs/", run, "/cluster/", _cluster_log(i))),
+            "}",
+        )
+    out.write("]")
+
+
+def _instances_html(mut h: Html, run: Int, xs: List[InstanceRow]):
+    var changes = List[Tuple[Float64, Int]]()
+    var total = Float64(0)
+    for i in xs:
+        if i.role == "worker":
+            changes.append((i.from_start, 1))
+            changes.append((i.to_end, -1))
+        total = max(total, i.to_end)
+    # In time order, a start before an end at the same moment.
+    for a in range(1, len(changes)):
+        var b = a
+        while b > 0 and (
+            changes[b - 1][0] > changes[b][0]
+            or (
+                changes[b - 1][0] == changes[b][0]
+                and changes[b - 1][1] < changes[b][1]
+            )
+        ):
+            var t = changes[b - 1]
+            changes[b - 1] = changes[b]
+            changes[b] = t
+            b -= 1
+    h.raw("<h2>Instances", _docs("scheduler"), "</h2>")
+    if len(changes) > 0:
+        h.raw('<div class="scroll">', workers_svg(changes, total), "</div>")
+    h.raw(
+        '<div class="scroll"><table><thead><tr><th>Role</th><th>Instance</th>',
+        "<th>Type</th><th>Start</th><th>Launched</th><th>Ended</th>",
+        "<th>Why</th><th>Log</th></tr></thead><tbody>",
+    )
+    for i in xs:
+        h.raw("<tr>")
+        h.cell(i.role)
+        h.raw("<td><code>")
+        h.text(i.id)
+        h.raw("</code></td>")
+        h.cell(i.instance_type, " Spot" if i.market == "spot" else String(""))
+        h.cell(i.start)
+        h.cell(i.launched)
+        if i.ended:
+            h.cell(i.ended)
+        else:
+            h.raw(
+                '<td><span class="status status--running">running</span></td>'
+            )
+        h.cell(i.why)
+        h.raw("<td>")
+        h.link(String("/runs/", run, "/cluster/", _cluster_log(i)), "log")
+        h.raw("</td></tr>")
+    h.raw("</tbody></table></div>")
 
 
 def _step_defs(mut db: State, name: String) raises -> List[StepDef]:
@@ -709,6 +985,9 @@ def _page(title: String, active: StaticString, body: Html) -> String:
         if item[0] == active:
             h.raw(' aria-current="page"')
         h.raw(">", item[1], "</a>")
+    h.raw('<a href="')
+    h.text(getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"))
+    h.raw('" target="_blank" rel="noopener">Docs</a>')
     h.raw("</nav>", _USER_SLOT, "</header><main>")
     h.raw(body.out)
     h.raw("</main><script>", _POLL, "</script></body></html>")
@@ -775,9 +1054,38 @@ struct Page(Movable):
         self.location = location
 
 
+def _runs_per_day(mut db: State, days: Int) raises -> List[DayRuns]:
+    """Runs by the UTC day they started (or were made, if they haven't),
+    for the last `days` days up to today."""
+    var out = List[DayRuns]()
+    for r in db.conn.query(
+        (
+            "SELECT d::date::text AS day, count(r.id) FILTER (WHERE r.status ="
+            " 'succeeded') AS ok, count(r.id) FILTER (WHERE r.status ="
+            " 'failed') AS bad, count(r.id) FILTER (WHERE r.status NOT IN"
+            " ('succeeded', 'failed')) AS other FROM generate_series((now() AT"
+            " TIME ZONE 'UTC')::date - ($1::int - 1), (now() AT TIME ZONE"
+            " 'UTC')::date, interval '1 day') AS d LEFT JOIN orca.runs r ON"
+            " (coalesce(r.started, r.created) AT TIME ZONE 'UTC')::date ="
+            " d::date GROUP BY d ORDER BY d"
+        ),
+        Params().int64(Int64(days)),
+    ):
+        out.append(
+            DayRuns(
+                r.text("day"),
+                Int(r.int64("ok")),
+                Int(r.int64("bad")),
+                Int(r.int64("other")),
+            )
+        )
+    return out^
+
+
 def home(mut db: State) raises -> Page:
     var ps = _pipelines(db)
     var recent = _runs(db, limit=10)
+    var per_day = _runs_per_day(db, 30)
     var j = String('{"pipelines": [')
     for i in range(len(ps)):
         if i:
@@ -785,7 +1093,22 @@ def home(mut db: State) raises -> Page:
         _json_pipeline(j, ps[i])
     j.write('], "runs": ')
     _json_runs(j, recent)
-    j.write("}")
+    j.write(', "runs_per_day": [')
+    for i in range(len(per_day)):
+        ref d = per_day[i]
+        j.write(
+            ", " if i else "",
+            '{"day": ',
+            quote(d.day),
+            ', "succeeded": ',
+            d.succeeded,
+            ', "failed": ',
+            d.failed,
+            ', "other": ',
+            d.other,
+            "}",
+        )
+    j.write("]}")
 
     var h = Html()
     h.raw("<h1>Pipelines</h1>")
@@ -797,7 +1120,7 @@ def home(mut db: State) raises -> Page:
     else:
         h.raw(
             '<div class="scroll"><table><thead><tr><th>Pipeline</th>',
-            "<th>Partitions</th><th>Schedule</th><th>Next fire</th>",
+            "<th>Partitions</th><th>Schedule</th><th>Next run</th>",
             "<th>Running</th><th>Queued</th><th>Last run</th></tr></thead>",
             "<tbody>",
         )
@@ -828,6 +1151,14 @@ def home(mut db: State) raises -> Page:
                 h.text(p.last_partitions)
             h.raw("</td></tr>")
         h.raw("</tbody></table></div>")
+    h.raw(
+        "<h2>Runs per day</h2>",
+        '<p class="muted">The last 30 days, by the day each run started',
+        " (UTC).</p>",
+        '<div class="scroll">',
+        runs_chart(per_day),
+        "</div>",
+    )
     h.raw("<h2>Recent runs</h2>")
     _runs_table(h, recent, True)
     h.raw('<p class="more"><a href="/runs">All runs</a></p>')
@@ -905,7 +1236,7 @@ def _json_keys(mut out: String, k: KeyCounts):
 
 
 def _keys_html(mut h: Html, name: String, k: KeyCounts):
-    h.raw("<h2>Keys</h2>")
+    h.raw("<h2>Keys", _docs("partitions"), "</h2>")
     if k.error:
         h.raw('<p class="empty">Its keys can\'t be read: ')
         h.text(k.error)
@@ -1110,18 +1441,32 @@ def pipeline(mut db: State, name: String) raises -> Page:
     h.text(p.binary)
     h.raw("</code></dd><dt>Code</dt><dd><code>")
     h.text(p.registry_hash)
-    h.raw("</code></dd></dl>")
+    h.raw("</code></dd>")
+    var latest = _versions(db, pipeline=name)
+    var links = _code_links(
+        db,
+        name,
+        latest[0].copy() if len(latest) > 0 else Optional[VersionRow](None),
+    )
+    _code_html(h, name, links)
+    h.raw("</dl>")
     var dag = List[DagStep]()
     for d in steps:
-        dag.append(DagStep(d.name, d.kind, d.after, ""))
-    h.raw('<div class="scroll">', dag_svg(dag), "</div><h2>Steps</h2>")
+        dag.append(DagStep(d.name, d.kind, d.after, "", links.step(d.name)))
+    h.raw(
+        '<div class="scroll">',
+        dag_svg(dag),
+        "</div><h2>Steps",
+        _docs("steps"),
+        "</h2>",
+    )
     h.raw(
         '<div class="scroll"><table><thead><tr><th>Step</th><th>Kind</th>',
         "<th>After</th><th>Reads</th><th>Writes</th></tr></thead><tbody>",
     )
     for s in steps:
         h.raw("<tr>")
-        h.cell(s.name)
+        _step_cell(h, s.name, links)
         h.cell(s.kind)
         h.cell(s.after)
         h.raw("<td>")
@@ -1136,7 +1481,9 @@ def pipeline(mut db: State, name: String) raises -> Page:
         var base = String("/pipelines/", url_encode(p.name))
         var example = String("2024-01-01" if p.kind == "daily" else "2024-01")
         h.raw(
-            '<h2>Start runs</h2><div class="actions">',
+            "<h2>Start runs",
+            _docs("cli"),
+            '</h2><div class="actions">',
             '<form class="action" method="post" action="',
         )
         h.text(base, "/runs")
@@ -1166,7 +1513,9 @@ def pipeline(mut db: State, name: String) raises -> Page:
         h.raw(" at once.</p>")
     if len(fires) > 0:
         h.raw(
-            '<h2>Next fires</h2><div class="scroll"><table><thead><tr>',
+            "<h2>Next runs",
+            _docs("partitions"),
+            '</h2><div class="scroll"><table><thead><tr>',
             "<th>UTC</th><th>Wall clock</th><th>Fills</th></tr></thead><tbody>",
         )
         for f in fires:
@@ -1178,7 +1527,9 @@ def pipeline(mut db: State, name: String) raises -> Page:
         h.raw("</tbody></table></div>")
     if len(versions) > 0:
         h.raw(
-            '<h2>Versions</h2><div class="scroll"><table><thead><tr>',
+            "<h2>Versions",
+            _docs("build"),
+            '</h2><div class="scroll"><table><thead><tr>',
             "<th>Commit</th><th>Image</th><th>Code</th><th>First seen</th>",
             "<th>Last seen</th><th>Runs</th></tr></thead><tbody>",
         )
@@ -1288,6 +1639,9 @@ def run(mut db: State, id: Int) raises -> Page:
         _json_version(j, version.value())
     else:
         j.write("null")
+    var instances = _instances(db, id)
+    j.write(', "instances": ')
+    _json_instances(j, id, instances)
     j.write(', "sensed": [')
     for i in range(len(sensed)):
         j.write(", " if i else "", quote(String(sensed[i])))
@@ -1395,6 +1749,7 @@ def run(mut db: State, id: Int) raises -> Page:
             h.text(version.value().image)
             h.raw("</code>")
         h.raw("</dd>")
+        _code_html(h, r.pipeline, _code_links(db, r.pipeline, version))
     var dir = run_dir(r.pipeline, r.id)
     if dir and location_exists(String(dir, "/driver.log")):
         h.raw("<dt>Driver</dt><dd>")
@@ -1404,10 +1759,24 @@ def run(mut db: State, id: Int) raises -> Page:
     if timeline:
         h.raw("<dt>Timeline</dt><dd>")
         h.link(String("/runs/", r.id, "/timeline.json"), "timeline.json")
-        h.raw(
-            ' <span class="muted">(Dista tasks; open it in',
-            ' <a href="https://ui.perfetto.dev">Perfetto</a>)</span></dd>',
-        )
+        # Perfetto fetches it itself, so only from a UI it can reach.
+        var base = String(getenv("ORCA_UI_URL").rstrip("/"))
+        if base:
+            h.raw(' <span class="muted">·</span> ')
+            h.link_out(
+                String(
+                    "https://ui.perfetto.dev/#!/?url=",
+                    url_encode(String(base, "/runs/", r.id, "/timeline.json")),
+                ),
+                "open in Perfetto",
+            )
+            h.raw("</dd>")
+        else:
+            h.raw(
+                ' <span class="muted">(Dista tasks; open it in',
+                ' <a href="https://ui.perfetto.dev" target="_blank"',
+                ' rel="noopener">Perfetto</a>)</span></dd>',
+            )
     if r.stalled:
         h.raw(
             "<dt>Process</dt><dd>stalled: its heartbeat stopped, so it can",
@@ -1427,6 +1796,23 @@ def run(mut db: State, id: Int) raises -> Page:
         h.raw("<div>")
     _run_live(h, db, r, steps)
     h.raw("</div>")
+    if timeline:
+        try:
+            var t = read_timeline(
+                String(from_utf8_lossy=Span(read_location(timeline)))
+            )
+            h.raw("<h2>Timeline", _docs("dista"), "</h2>")
+            if t.left_out:
+                h.raw('<p class="muted">The first ')
+                h.text(MAX_BARS, " tasks; ", t.left_out, " more are in")
+                h.raw(" timeline.json.</p>")
+            h.raw('<div class="scroll">', timeline_svg(t), "</div>")
+        except e:
+            h.raw('<p class="muted">The timeline can\'t be drawn: ')
+            h.text(e)
+            h.raw("</p>")
+    if len(instances) > 0:
+        _instances_html(h, id, instances)
     # Who did what to it from the UI (orca.auth).
     var acts = db.conn.query(
         (
@@ -1450,7 +1836,9 @@ def run(mut db: State, id: Int) raises -> Page:
         h.raw("</tbody></table></div>")
     if len(touches) > 0:
         h.raw(
-            '<h2>Tables</h2><div class="scroll"><table><thead><tr>',
+            "<h2>Tables",
+            _docs("tables"),
+            '</h2><div class="scroll"><table><thead><tr>',
             "<th>Step</th><th>Partition</th><th></th><th>Table</th>",
             "<th>Snapshot</th></tr></thead><tbody>",
         )
@@ -1534,13 +1922,16 @@ def _run_live(
     its steps' colours, its status, and its steps."""
     var defs = _step_defs(db, r.pipeline)
     _run_actions(h, r, defs)
+    var links = _code_links(db, r.pipeline, _run_version(db, r.id))
     var dag = List[DagStep]()
     for d in defs:
         var st = List[String]()
         for s in steps:
             if s.step == d.name:
                 st.append(s.status)
-        dag.append(DagStep(d.name, d.kind, d.after, aggregate(st)))
+        dag.append(
+            DagStep(d.name, d.kind, d.after, aggregate(st), links.step(d.name))
+        )
     h.raw('<div class="scroll">', dag_svg(dag), "</div><h2>Steps ")
     h.status(r.status)
     h.raw(
@@ -1550,7 +1941,7 @@ def _run_live(
     )
     for s in steps:
         h.raw("<tr>")
-        h.cell(s.step)
+        _step_cell(h, s.step, links)
         h.cell(s.partition)
         h.raw("<td>")
         h.status(s.status)
@@ -1645,6 +2036,26 @@ def driver_log(mut db: State, id: Int) raises -> Page:
     )
     if not got[0]:
         return not_found(String("run ", id, " has no driver log"))
+    return Page(200, String(), got[0], "text/plain; charset=utf-8")
+
+
+def cluster_log(mut db: State, id: Int, name: String) raises -> Page:
+    """An instance's log, as its script kept it under ORCA_LOGS: only the
+    names of the run's own instances are served."""
+    var found = _runs_one(db, id)
+    if not found:
+        return not_found(String("no run ", id))
+    var known = False
+    for i in _instances(db, id):
+        if _cluster_log(i) == name:
+            known = True
+    var dir = run_dir(found.value().pipeline, id)
+    if not known or not dir:
+        return not_found(String("run ", id, " has no log ", name))
+    var path = String(dir, "/cluster/", name)
+    var got = _read_log(path)
+    if not got[0] and not location_exists(path):
+        return not_found(String("run ", id, " has no log ", name, " yet"))
     return Page(200, String(), got[0], "text/plain; charset=utf-8")
 
 
@@ -2064,9 +2475,9 @@ def dataset_page(mut db: State, name: String) raises -> Page:
             " order</span></form></div>",
         )
     if len(rbs) > 0:
-        h.raw("<h2>Rebuilds</h2>")
+        h.raw("<h2>Rebuilds", _docs("sensors"), "</h2>")
         _rebuilds_table(h, rbs)
-    h.raw("<h2>Snapshots</h2>")
+    h.raw("<h2>Snapshots", _docs("datasets"), "</h2>")
     if len(cs) == 0:
         h.raw('<p class="empty">No orca run has committed to it.</p>')
     else:
@@ -2545,6 +2956,11 @@ def _respond(page: Page, json: Bool) -> Response:
             ),
         )
         resp.headers.set("Cache-Control", "no-store")
+        # A run's timeline, which Perfetto fetches from its own page.
+        if raw and page.content_type == "application/json":
+            resp.headers.set(
+                "Access-Control-Allow-Origin", "https://ui.perfetto.dev"
+            )
     except:
         pass
     return resp^
@@ -2867,6 +3283,8 @@ struct Ui(Copyable, Handler):
                 return timeline(db, id)
             if len(parts) == 2 and parts[1] == "driver.log":
                 return driver_log(db, id)
+            if len(parts) == 3 and parts[1] == "cluster":
+                return cluster_log(db, id, String(parts[2]))
             if len(parts) >= 3 and len(parts) <= 4 and parts[1] == "attempts":
                 var aid: Int
                 try:
