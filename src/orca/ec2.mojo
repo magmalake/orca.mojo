@@ -27,6 +27,12 @@ exits once its work and results have moved, and its instance's script shuts
 it down. `ORCA_SCALE_UP_AFTER` (5 s), `ORCA_SCALE_IDLE` (60 s) and
 `ORCA_SCALE_STEP` (4) tune the policy. The budget counts `MAX`.
 
+A pipeline's secrets (`--secret NAME=ID`) are read by each instance's
+script at start, after the preamble, with `aws secretsmanager
+get-secret-value` (`ORCA_SECRET_FETCH` replaces the command, which is given
+the ID), exported as NAME, given to the containers, and named in
+`ORCA_SECRETS` so that every log orca writes masks them.
+
 Every tick, `sweep` terminates the instances of runs that aren't running at
 that start, and those older than `ORCA_RUN_DEADLINE` (a day). Instances get
 `ORCA_EC2_DATABASE_URL` as `ORCA_DATABASE_URL` (the control instance's
@@ -46,6 +52,7 @@ from dista.socket import wall_ns
 from postgres import Params
 
 from orca.awsec2 import Ec2, Instance
+from orca.secrets import parse_secrets
 from orca.state import State
 
 comptime HEAD_PORT = 6390
@@ -111,6 +118,8 @@ struct Ec2Spec(Copyable, Movable):
     var allow_new_code: Bool
     var min_workers: Int
     """The workers it starts with; fewer than `workers`, it scales."""
+    var secrets: List[Tuple[String, String]]
+    """Environment variable and Secrets Manager ID of each secret."""
 
 
 def _quote(s: String) -> String:
@@ -210,6 +219,10 @@ struct Ec2Runner(Movable):
             names.append(String(n))
         for n in self.env:
             names.append(n)
+        if len(r.secrets) > 0:
+            names.append("ORCA_SECRETS")
+        for s in r.secrets:
+            names.append(s[0])
         for n in names:
             flags.write(" -e ", n)
         for kv in env:
@@ -224,6 +237,42 @@ struct Ec2Runner(Movable):
             " ",
             args,
         )
+
+    def _secrets(self, r: Ec2Spec) -> String:
+        """Lines reading the run's secrets into its environment. A secret
+        that can't be read stops the script, and the run fails."""
+        if len(r.secrets) == 0:
+            return ""
+        var fetch = getenv(
+            "ORCA_SECRET_FETCH",
+            (
+                'aws secretsmanager get-secret-value --region "$AWS_REGION"'
+                " --query SecretString --output text --secret-id"
+            ),
+        )
+        var out = String()
+        var names = String()
+        for s in r.secrets:
+            out.write(
+                s[0],
+                "=$(",
+                fetch,
+                " ",
+                _quote(s[1]),
+                ") || { echo \"orca: can't read secret ",
+                s[1],
+                '"; ',
+                getenv(
+                    "ORCA_EC2_SHUTDOWN",
+                    "shutdown -h now" if self.mode == "docker" else "true",
+                ),
+                "; exit 1; }\nexport ",
+                s[0],
+                "\n",
+            )
+            names.write("," if names else "", s[0])
+        out.write("export ORCA_SECRETS=", names, "\n")
+        return out^
 
     def _instance_id(self) -> String:
         """A line setting `iid` to this instance's ID: from the instance
@@ -257,6 +306,7 @@ struct Ec2Runner(Movable):
         )
         s.write(self._exports(r, role, head))
         s.write(getenv("ORCA_EC2_PREAMBLE"), "\n")
+        s.write(self._secrets(r))
         # The head's or worker's output, uploaded while it runs and once
         # when it ends: an instance can go without notice.
         var keeps = role == "worker" or r.tasks
@@ -454,7 +504,8 @@ struct Ec2Runner(Movable):
                 " coalesce(p.worker_type, '') AS worker_type, coalesce(p.spot,"
                 " false) AS spot, p.ec2_min_workers AS lo, coalesce("
                 "p.ec2_workers, (p.describe->>'workers')::bigint, 2) AS hi,"
-                " h.address FROM orca.runs r JOIN orca.pipelines p ON p.name ="
+                " h.address, coalesce(p.secrets::text, '') AS secrets FROM"
+                " orca.runs r JOIN orca.pipelines p ON p.name ="
                 " r.pipeline JOIN orca.instances h ON h.run = r.id AND h.start"
                 " = r.starts AND h.role = 'head' AND h.ended IS NULL AND"
                 " h.address IS NOT NULL WHERE r.status = 'running' AND"
@@ -481,6 +532,7 @@ struct Ec2Runner(Movable):
                 row.bool("spot"),
                 row.bool("allow_new_code"),
                 lo,
+                parse_secrets(row.text("secrets")),
             )
             var key = String(r.run, "-", r.start)
             live[key] = True

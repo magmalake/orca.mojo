@@ -201,6 +201,13 @@ Resources:
         Statement: [{Effect: Allow, Principal: {Service: ec2.amazonaws.com}, Action: sts:AssumeRole}]
       ManagedPolicyArns: [arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore]
       Policies:
+        # Runs' secrets (orca register --secret), only those under orca/.
+        - PolicyName: secrets
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:orca/*
         - PolicyName: bucket-and-image
           PolicyDocument:
             Statement:

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Secrets for runs.** `orca register --secret NAME=ID` (ID under `orca/`)
+  gives an EC2 run's instances the Secrets Manager secret as `NAME`, read at
+  start with the run role, which the stack lets read `orca/*` only. Every
+  log orca writes masks the values of the variables `ORCA_SECRETS` names;
+  Postgres keeps only the IDs.
+
 - **Autoscaling on EC2.** `orca register --workers MIN..MAX` (MIN may be 0)
   starts a run with MIN workers; each tick the scheduler reads the run's
   head demand and applies `dista.scale.decide`, starting workers up to MAX

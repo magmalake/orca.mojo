@@ -76,6 +76,7 @@ from orca.month import Month
 from orca.name import parse_names, sort_texts
 from orca.proc import absolute, capture, reap, spawn
 from orca.schedule import Schedule
+from orca.secrets import parse_secrets, secrets_json
 from orca.sensors import (
     advance_rebuilds,
     join_keys,
@@ -125,6 +126,8 @@ struct Registered(Copyable, Movable):
     var min_workers: Int
     """On EC2, its runs' fewest workers, scaling up to `workers`; equal to
     `workers` for a fixed count."""
+    var secrets: List[Tuple[String, String]]
+    """Its runs' secrets: environment variable and Secrets Manager ID."""
 
 
 def fill_key(kind: String, fills: String, local: Civil) raises -> String:
@@ -162,7 +165,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " coalesce(ec2_workers, (describe->>'workers')::bigint, 2) ELSE 0"
             " END AS workers, coalesce(head_type, '') AS head_type,"
             " coalesce(worker_type, '') AS worker_type, coalesce(spot, false)"
-            " AS spot, coalesce(ec2_min_workers, -1) AS min_workers FROM"
+            " AS spot, coalesce(ec2_min_workers, -1) AS min_workers,"
+            " coalesce(secrets::text, '') AS secrets FROM"
             " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
             " name = $1) ORDER BY name"
         ),
@@ -192,6 +196,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 r.text("worker_type"),
                 r.bool("spot"),
                 Int(r.int64("min_workers")),
+                parse_secrets(r.text("secrets")),
             )
         )
     # A fixed count, or no tasks: no scaling.
@@ -543,13 +548,15 @@ struct Scheduler(Movable):
         workers: Int = 0,
         spot: Bool = False,
         min_workers: Int = -1,
+        secrets: List[String] = List[String](),
     ) raises -> String:
         """Records the pipeline `binary` describes, with its path; its
         schedule counts from `now` the first time, and a sensor from now the
         first time it's one, with the snapshots its datasets have now seen.
         Queued runs move to the new code. `min_workers`, with `workers` as the
         most, makes an EC2 run's workers scale between them; -1 keeps a
-        fixed count. Returns the pipeline's name."""
+        fixed count. `secrets`, `NAME=ID`s, replace the pipeline's when
+        given. Returns the pipeline's name."""
         var path = absolute(binary)
         var got = capture([path, "describe"])
         if got[0] != 0 or not got[1].startswith('{"pipeline": '):
@@ -591,11 +598,12 @@ struct Scheduler(Movable):
             (
                 "INSERT INTO orca.pipelines (name, registry_hash, describe,"
                 " binary_path, since, sensing_since, image, head_type,"
-                " worker_type, ec2_workers, spot, ec2_min_workers) SELECT"
+                " worker_type, ec2_workers, spot, ec2_min_workers, secrets)"
+                " SELECT"
                 " d->>'pipeline',"
                 " d->>'registry_hash', d, $2, $3, CASE WHEN $4 THEN now() END,"
                 " nullif($5, ''), nullif($6, ''), nullif($7, ''), nullif($8,"
-                " 0), $9, nullif($10, -1)"
+                " 0), $9, nullif($10, -1), nullif($11, '')::jsonb"
                 " FROM (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO"
                 " UPDATE SET registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
@@ -609,7 +617,8 @@ struct Scheduler(Movable):
                 " coalesce(EXCLUDED.ec2_workers, orca.pipelines.ec2_workers),"
                 " ec2_min_workers = CASE WHEN $8 > 0 THEN"
                 " EXCLUDED.ec2_min_workers ELSE orca.pipelines.ec2_min_workers"
-                " END,"
+                " END, secrets = coalesce(EXCLUDED.secrets,"
+                " orca.pipelines.secrets),"
                 " spot = CASE WHEN $6 <> '' OR $7 <> '' OR $8 > 0 OR $9 THEN $9"
                 " ELSE orca.pipelines.spot END, last_seen"
                 " = now() RETURNING name, registry_hash, coalesce(image, '')"
@@ -625,7 +634,8 @@ struct Scheduler(Movable):
             .text(worker_type)
             .int64(Int64(workers))
             .bool(spot)
-            .int64(Int64(min_workers)),
+            .int64(Int64(min_workers))
+            .text(secrets_json(secrets)),
         )
         var name = res.row(0).text("name")
         var version = self.db.version(
@@ -1181,6 +1191,7 @@ struct Scheduler(Movable):
                             p.spot,
                             new_code[i],
                             p.min_workers,
+                            p.secrets.copy(),
                         ),
                     )
                     print("started", p.name, "run", id, "on its instances")

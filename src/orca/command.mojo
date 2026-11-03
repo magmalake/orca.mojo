@@ -34,6 +34,7 @@ from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.locate import locate
 from orca.proc import capture
 from orca.scheduler import Scheduler
+from orca.secrets import secret_problem
 from orca.sensors import rebuild, rebuilds
 from orca.state import State
 from orca.ui import DEFAULT_ADDR, serve_ui
@@ -41,7 +42,8 @@ from orca.ui import DEFAULT_ADDR, serve_ui
 comptime USAGE = """usage:
   orca locate <pipeline binary> [...] [--root <dir>]
   orca register [--image <image>] [--head-type T] [--worker-type T]
-                [--workers N|MIN..MAX] [--spot] <pipeline binary> [...]
+                [--workers N|MIN..MAX] [--spot] [--secret NAME=ID ...]
+                <pipeline binary> [...]
   orca backfill <pipeline> KEY[..KEY][,...]   (keyed: NAME[,...]|@all|@file:<path>)
   orca tick
   orca scheduler
@@ -98,6 +100,7 @@ def _command(args: List[String]) raises -> Int:
         var workers = 0
         var min_workers = -1
         var spot = False
+        var secrets = List[String]()
         var i = 2
         while i < len(args) and args[i].startswith("--"):
             if args[i] == "--spot":
@@ -112,6 +115,12 @@ def _command(args: List[String]) raises -> Int:
                 head_type = args[i + 1]
             elif args[i] == "--worker-type":
                 worker_type = args[i + 1]
+            elif args[i] == "--secret":
+                # NAME=ID: the run's NAME is Secrets Manager's secret ID.
+                var why = secret_problem(args[i + 1])
+                if why:
+                    _usage(why)
+                secrets.append(args[i + 1])
             elif args[i] == "--workers":
                 # N, or MIN..MAX for autoscaling on EC2.
                 try:
@@ -146,6 +155,7 @@ def _command(args: List[String]) raises -> Int:
                     workers,
                     spot,
                     min_workers,
+                    secrets,
                 ),
             )
         return 0
