@@ -43,6 +43,7 @@ from std.os import getenv, makedirs
 from std.random import seed
 from std.sys import argv, exit
 
+from dista.client import Observer
 from threads import TypedPool
 
 from orca.heartbeat import Beat, beat, heartbeat_interval
@@ -135,6 +136,21 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         before.extend(String("--- start ", args[4], "\n").as_bytes())
         before.extend(Span(data))
         write_location(args[3], Span(before))
+        return 0
+    if cmd == "dista-status" and len(args) == 3:
+        # For the scheduler, scaling a run (orca.ec2): its head's demand.
+        # The pipeline's binary links dista; orca's own doesn't, since
+        # dista's sockets and flare's can't share one binary.
+        var o = Observer(args[2])
+        print(o.status_json(), end="")
+        return 0
+    if cmd == "dista-drain" and len(args) == 4:
+        var o = Observer(args[2])
+        try:
+            o.drain(args[3])
+        except e:
+            print(e)
+            return 1
         return 0
     if cmd == "put-log" and len(args) == 4:
         # For the ec2 runner's instances: a head's or worker's output so
