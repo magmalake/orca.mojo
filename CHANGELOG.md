@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-11-03)
+
+A project deploys itself to AWS.
 
 - **`orca aws`.** `up` creates or updates the stack from the template orca
   carries, `push` builds a project's image (its `bin/` and `pipelines/`,
@@ -11,6 +13,13 @@
   --yes` deletes it. They call the `aws` and `docker` commands, logged in
   as their user. The control instance gains `orca-refresh` and `orca-app`,
   and the stack's `ImageTag` defaults to `latest`.
+- **The stack's warehouse is public.** `ORCA_WAREHOUSE` is the public
+  bucket, so a project's tables can be read unsigned; logs and run state
+  stay in orca's own bucket. Apps get the region and the warehouse, not
+  orca's database. `orca aws up --zone` picks the Availability Zone.
+- **Scaling goes through the pipeline's binary** (`<binary> dista-status`,
+  `dista-drain`), since dista's sockets can't share orca's binary with
+  flare's on Linux; workers advertise their instance's private address.
 
 ## 0.2.0 (2026-11-03)
 
