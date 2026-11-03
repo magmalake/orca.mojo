@@ -72,7 +72,10 @@ curl -fs "$base/" | grep -q 'href="/login">Log in' || fail "no way to log in"
 [ "$(post /login 'name=nobody&password=correct+horse+battery' -c "$jar")" = 401 ] || fail "no such user"
 hdrs=$(curl -s -D - -o /dev/null -H "Origin: $base" -c "$jar" \
     -d 'name=alice&password=correct+horse+battery&next=//evil.example/x' "$base/login")
-echo "$hdrs" | grep -qi '^location: /\r\?$' || fail "followed an off-site next: $hdrs"
+# Header lines end in CRLF, which grep's `\r` doesn't match the same way on
+# every platform, so the CRs go first.
+hdrs=$(echo "$hdrs" | tr -d '\r')
+echo "$hdrs" | grep -qix 'location: /' || fail "followed an off-site next: $hdrs"
 echo "$hdrs" | grep -i '^set-cookie: orca_session=' | grep -i 'httponly' | grep -qi 'samesite=strict' \
     || fail "the cookie: $hdrs"
 [ "$(post /pipelines/toy/runs partitions=2024-02 -b "$jar")" = 303 ] || fail "an action with a session"
