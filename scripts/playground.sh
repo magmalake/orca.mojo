@@ -9,8 +9,8 @@
 # that succeed and fail, each step and task linked to its line on GitHub;
 # and two fanout runs on the ec2 runner against the
 # tests' stand-in EC2 (tests/fake_ec2.py), each "instance" a local process,
-# so the run page shows its instances, their logs, its timeline and the
-# workers over time. Then the scheduler keeps running the schedules, and
+# whose workers scale from 0 to 3 and are drained when idle, so the run page
+# shows its instances, their logs, its timeline and the workers over time. Then the scheduler keeps running the schedules, and
 # the UI's actions need the login demo / demo-password. Ctrl-C ends it and
 # removes everything. ORCA_UI_ADDR changes the address.
 set -eu
@@ -53,18 +53,19 @@ ORCA_TOY_FAIL=2024-05 ./build/toy run --partitions 2024-04..2024-06 >> "$log" 2>
 ./build/daily run --partitions 2024-02-27..2024-03-02 >> "$log" 2>&1
 ./build/fanout run --partitions 2024-01 >> "$log" 2>&1
 
-echo "two fanout runs on a head and 3 workers each, on the stand-in EC2 ..."
+echo "two fanout runs on the stand-in EC2, their workers scaling from 0 to 3 ..."
 port=$((33000 + $$ % 2000))
 python3 tests/fake_ec2.py "$port" "$dir/ec2" >> "$log" 2>&1 &
 fake=$!
 pids="$fake"
 until curl -s -o /dev/null "http://127.0.0.1:$port/"; do sleep 0.1; done
 ./build/orca register --image orca:playground --head-type c7g.large --worker-type c7g.2xlarge \
-    --workers 3 ./build/fanout >> "$log" 2>&1
+    --workers 0..3 ./build/fanout >> "$log" 2>&1
 ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port" \
     AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=playground AWS_SECRET_ACCESS_KEY=playground \
     ORCA_EC2_AMI=ami-playground ORCA_CLUSTER_LOG_SECONDS=1 ORCA_FANOUT_SLEEP=0.3 \
-    ORCA_FANOUT_SHOW_HOST=1 ORCA_RUN_ENV=ORCA_FANOUT_SLEEP,ORCA_FANOUT_SHOW_HOST \
+    ORCA_FANOUT_SHOW_HOST=1 ORCA_FANOUT_PAUSE=6 ORCA_SCALE_UP_AFTER=1 ORCA_SCALE_IDLE=2 \
+    ORCA_RUN_ENV=ORCA_FANOUT_SLEEP,ORCA_FANOUT_SHOW_HOST,ORCA_FANOUT_PAUSE \
     ./build/orca scheduler >> "$log" 2>&1 &
 sched=$!
 pids="$pids $sched"

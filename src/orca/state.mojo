@@ -256,6 +256,14 @@ def _migrations() -> List[List[String]]:
             # registration found them beside the binary.
             "ALTER TABLE orca.pipeline_versions ADD COLUMN locations jsonb",
         ],
+        # Autoscaling on EC2: a pipeline's fewest workers (`--workers
+        # A..B`; null, a fixed count), each instance's private address, and
+        # when the scheduler drained a worker.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN ec2_min_workers int",
+            "ALTER TABLE orca.instances ADD COLUMN address text",
+            "ALTER TABLE orca.instances ADD COLUMN drained timestamptz",
+        ],
     ]
 
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Autoscaling on EC2.** `orca register --workers MIN..MAX` (MIN may be 0)
+  starts a run with MIN workers; each tick the scheduler reads the run's
+  head demand and applies `dista.scale.decide`, starting workers up to MAX
+  and draining idle ones. `orca.instances` records each instance's address
+  and when it was drained (`drained: idle`). `ORCA_SCALE_UP_AFTER`,
+  `ORCA_SCALE_IDLE` and `ORCA_SCALE_STEP` tune it. The stack lets the
+  control instance reach run heads on port 6390. Needs dista-mojo 0.2.0.
+
 ## 0.1.0 (2026-11-03)
 
 orca's first release, as mojoshelf tin `orca-mojo`: phases 1 to 5 of

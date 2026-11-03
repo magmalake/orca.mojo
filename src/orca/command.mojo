@@ -41,7 +41,7 @@ from orca.ui import DEFAULT_ADDR, serve_ui
 comptime USAGE = """usage:
   orca locate <pipeline binary> [...] [--root <dir>]
   orca register [--image <image>] [--head-type T] [--worker-type T]
-                [--workers N] [--spot] <pipeline binary> [...]
+                [--workers N|MIN..MAX] [--spot] <pipeline binary> [...]
   orca backfill <pipeline> KEY[..KEY][,...]   (keyed: NAME[,...]|@all|@file:<path>)
   orca tick
   orca scheduler
@@ -96,6 +96,7 @@ def _command(args: List[String]) raises -> Int:
         var head_type = String()
         var worker_type = String()
         var workers = 0
+        var min_workers = -1
         var spot = False
         var i = 2
         while i < len(args) and args[i].startswith("--"):
@@ -112,10 +113,21 @@ def _command(args: List[String]) raises -> Int:
             elif args[i] == "--worker-type":
                 worker_type = args[i + 1]
             elif args[i] == "--workers":
+                # N, or MIN..MAX for autoscaling on EC2.
                 try:
-                    workers = Int(args[i + 1])
+                    var v = args[i + 1]
+                    var dots = v.find("..")
+                    if dots >= 0:
+                        min_workers = Int(v[byte=:dots])
+                        workers = Int(v[byte = dots + 2 :])
+                        if min_workers < 0 or workers < max(min_workers, 1):
+                            raise Error("bad range")
+                    else:
+                        workers = Int(v)
                 except:
-                    _usage(String("not a count: ", args[i + 1]))
+                    _usage(
+                        String("not a count or a range MIN..MAX: ", args[i + 1])
+                    )
             else:
                 _usage(String("unknown option: ", args[i]))
             i += 2
@@ -126,7 +138,14 @@ def _command(args: List[String]) raises -> Int:
             print(
                 "registered",
                 s.register(
-                    args[k], now(), image, head_type, worker_type, workers, spot
+                    args[k],
+                    now(),
+                    image,
+                    head_type,
+                    worker_type,
+                    workers,
+                    spot,
+                    min_workers,
                 ),
             )
         return 0
