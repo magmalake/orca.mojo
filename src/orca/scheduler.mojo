@@ -595,7 +595,8 @@ struct Scheduler(Movable):
                 " coalesce(EXCLUDED.ec2_workers, orca.pipelines.ec2_workers),"
                 " spot = CASE WHEN $6 <> '' OR $7 <> '' OR $8 > 0 OR $9 THEN $9"
                 " ELSE orca.pipelines.spot END, last_seen"
-                " = now() RETURNING name, registry_hash"
+                " = now() RETURNING name, registry_hash, coalesce(image, '')"
+                " AS image"
             ),
             Params()
             .text(got[1])
@@ -609,6 +610,21 @@ struct Scheduler(Movable):
             .bool(spot),
         )
         var name = res.row(0).text("name")
+        _ = self.db.conn.execute(
+            "UPDATE orca.pipelines SET version = $2 WHERE name = $1",
+            Params()
+            .text(name)
+            .int64(
+                Int64(
+                    self.db.version(
+                        name,
+                        res.row(0).text("registry_hash"),
+                        got[1],
+                        res.row(0).text("image"),
+                    )
+                )
+            ),
+        )
         # What its datasets hold now isn't new to it.
         for c in parse_sense(seen):
             if c.snapshot >= 0:

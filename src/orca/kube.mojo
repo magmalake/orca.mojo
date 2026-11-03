@@ -191,6 +191,8 @@ struct KubeRunner(Movable):
             quote(self.secret),
             ', "key": "url"}}}, {"name": "ORCA_STALE_SECONDS", "value": ',
             quote(getenv("ORCA_STALE_SECONDS", "30")),
+            '}, {"name": "ORCA_IMAGE", "value": ',
+            quote(r.image),
             "}",
         )
         if r.workers > 0:

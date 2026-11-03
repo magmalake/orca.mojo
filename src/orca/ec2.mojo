@@ -148,6 +148,8 @@ struct Ec2Runner(Movable):
         var out = String()
         var url = getenv("ORCA_EC2_DATABASE_URL", getenv("ORCA_DATABASE_URL"))
         out.write("export ORCA_DATABASE_URL=", _quote(url), "\n")
+        # The run records its version with the image it ran from.
+        out.write("export ORCA_IMAGE=", _quote(r.image), "\n")
         var names = List[String]()
         for n in materialize[_COPIED]():
             names.append(String(n))
@@ -179,6 +181,7 @@ struct Ec2Runner(Movable):
         var flags = String("--rm --network host")
         var names = List[String]()
         names.append("ORCA_DATABASE_URL")
+        names.append("ORCA_IMAGE")
         for n in materialize[_COPIED]():
             names.append(String(n))
         for n in self.env:
