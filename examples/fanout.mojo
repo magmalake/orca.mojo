@@ -11,6 +11,8 @@ ORCA_FANOUT_SLEEP makes every task take that many seconds, so
 tests/lost_workers.sh can kill workers while a step waits on them; the step
 is retried once in its run. With ORCA_FANOUT_SHOW_HOST set, each task prints
 the host it ran on, which tests/kind.sh reads from the worker pods' logs.
+ORCA_FANOUT_SECRET names a variable whose value every task prints and
+`all_trips` logs, for tests/secrets.sh to look for in the logs.
 ORCA_FANOUT_PAUSE makes `all_trips` wait that many seconds first, with no
 task running, which tests/autoscale.sh's run drains its idle workers in. On
 Kubernetes a run gets 3 workers.
@@ -33,6 +35,9 @@ def trips(d: Day) -> Int:
     """A stand-in for a day's work: a number that depends on the date."""
     if getenv("ORCA_FANOUT_SHOW_HOST"):
         print("trips on", getenv("HOSTNAME", "?"), flush=True)
+    var secret = getenv("ORCA_FANOUT_SECRET")
+    if secret:
+        print("secret", getenv(secret), flush=True)
     var s = getenv("ORCA_FANOUT_SLEEP")
     if s:
         try:
@@ -69,6 +74,11 @@ def month_trips(mut ctx: Ctx, m: Month) raises -> Int:
 
 
 def all_trips(mut ctx: Ctx, months: Seq[Int]) raises -> Int:
+    var secret = getenv("ORCA_FANOUT_SECRET")
+    if secret:
+        var v = getenv(secret)
+        print("secret", v, flush=True)
+        ctx.log(String("secret ", v, " of length ", v.byte_length()))
     var pause = getenv("ORCA_FANOUT_PAUSE")
     if pause:
         sleep(Float64(pause))

@@ -264,6 +264,11 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.instances ADD COLUMN address text",
             "ALTER TABLE orca.instances ADD COLUMN drained timestamptz",
         ],
+        # Secrets a pipeline's runs get (`--secret NAME=ID`): environment
+        # variable to Secrets Manager secret ID.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN secrets jsonb",
+        ],
     ]
 
 

@@ -15,7 +15,7 @@ log file as well (`orca.logs.attempt_log`).
 
 from postgres import Connection, Params
 
-from orca.logs import utc_now
+from orca.logs import mask, utc_now
 from orca.tasks import TaskSet, task_list
 
 
@@ -144,7 +144,7 @@ struct Ctx(Movable):
         if self.partition:
             tag.write(" ", self.partition)
         tag.write("] ")
-        print(tag, msg, sep="")
+        print(tag, mask(msg), sep="")
         self.log_to_file(msg)
 
     def log_to_file(self, msg: String):
@@ -157,7 +157,7 @@ struct Ctx(Movable):
         tag.write("] ")
         try:
             with open(self.log_path, "a") as f:
-                f.write(utc_now(), " ", tag, msg, "\n")
+                f.write(utc_now(), " ", tag, mask(msg), "\n")
         except e:
             print("orca: can't write ", self.log_path, ": ", e, sep="")
 

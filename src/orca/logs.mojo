@@ -14,6 +14,10 @@ a log is written to a staging file under `ORCA_LOG_STAGE` (default
 `$TMPDIR/orca-logs`) and `publish`ed when it's complete: an attempt's when
 the attempt ends, a timeline when the run does. `attempts.log` records
 where the log ends up, which `read_location` reads either way.
+
+Secrets are masked in every log written here: `ORCA_SECRETS` names the
+environment variables that hold a run's secrets (`orca register --secret`),
+and `mask` replaces their values with `***`.
 """
 
 from std.ffi import external_call
@@ -23,6 +27,59 @@ from std.os.path import exists
 from objectstore.fileio import FileIOResolver
 
 from orca.civil import Civil
+
+
+comptime _MASK = "***"
+
+
+def _secret_values() -> List[String]:
+    """The values of the variables `ORCA_SECRETS` names; short ones are
+    left out, since masking them would hide ordinary text."""
+    var out = List[String]()
+    for n in getenv("ORCA_SECRETS").split(","):
+        var name = String(n.strip())
+        if not name:
+            continue
+        var v = getenv(name)
+        if v.byte_length() >= 4:
+            out.append(v^)
+    return out^
+
+
+def mask(text: String) -> String:
+    """`text` with every secret's value replaced by `***`."""
+    var out = text
+    for v in _secret_values():
+        out = out.replace(v, _MASK)
+    return out^
+
+
+def mask_bytes(data: Span[UInt8, _]) -> List[UInt8]:
+    """`mask`, on bytes that may not be UTF-8."""
+    var out = List[UInt8](capacity=len(data))
+    for b in data:
+        out.append(b)
+    for v in _secret_values():
+        var pat = v.as_bytes()
+        var n = len(pat)
+        var got = List[UInt8](capacity=len(out))
+        var i = 0
+        while i < len(out):
+            var hit = i + n <= len(out)
+            if hit:
+                for k in range(n):
+                    if out[i + k] != pat[k]:
+                        hit = False
+                        break
+            if hit:
+                for c in _MASK.as_bytes():
+                    got.append(c)
+                i += n
+            else:
+                got.append(out[i])
+                i += 1
+        out = got^
+    return out^
 
 
 def logs_dir() -> String:
@@ -81,17 +138,19 @@ def publish(location: String) raises:
     var data: List[UInt8]
     with open(stage_of(location), "r") as f:
         data = f.read_bytes()
-    FileIOResolver().write(location, Span(data))
+    FileIOResolver().write(location, Span(mask_bytes(Span(data))))
 
 
 def write_location(location: String, data: Span[UInt8, _]) raises:
-    """Writes `data` to `location`, local or remote, replacing it."""
+    """Writes `data` to `location`, local or remote, replacing it, with
+    secrets masked."""
+    var masked = mask_bytes(data)
     if is_remote(location):
-        FileIOResolver().write(location, data)
+        FileIOResolver().write(location, Span(masked))
         return
     makedirs(_parent(location), exist_ok=True)
     with open(location, "w") as f:
-        f.write_bytes(data)
+        f.write_bytes(Span(masked))
 
 
 def read_location(location: String) raises -> List[UInt8]:
