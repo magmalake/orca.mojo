@@ -305,7 +305,8 @@ struct Pipeline[
     @staticmethod
     def sensed_datasets() -> List[String]:
         """The datasets its steps read and none of them writes, once each, in
-        step order: what a sensor watches."""
+        step order, and a keyed pipeline's keys dataset: what a sensor
+        watches."""
         var writes = List[String]()
         comptime for i in range(Self.Ts.length):
             for d in Self.Ts[i].dataset_writes():
@@ -315,6 +316,11 @@ struct Pipeline[
             for d in Self.Ts[i].dataset_reads():
                 if d not in writes and d not in out:
                     out.append(d)
+        # A keyed pipeline's keys come from its keys dataset, whether or not
+        # a step reads it.
+        var keys = String(Self.partitions.dataset())
+        if keys and keys not in writes and keys not in out:
+            out.append(keys)
         return out^
 
     @staticmethod

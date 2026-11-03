@@ -83,3 +83,33 @@ def parse_names(s: StringSlice) raises -> List[Name]:
         seen[n.text] = True
         out.append(n^)
     return out^
+
+
+def sort_texts(mut l: List[String]):
+    """Sorts `l` in place, by bytes: a merge sort, as there can be thousands
+    of keys."""
+    if len(l) < 2:
+        return
+    var tmp = l.copy()
+    var width = 1
+    var n = len(l)
+    while width < n:
+        var i = 0
+        while i < n:
+            var mid = min(i + width, n)
+            var hi = min(i + 2 * width, n)
+            var a = i
+            var b = mid
+            var k = i
+            while k < hi:
+                if b >= hi or (a < mid and not (l[b] < l[a])):
+                    tmp[k] = l[a]
+                    a += 1
+                else:
+                    tmp[k] = l[b]
+                    b += 1
+                k += 1
+            i += 2 * width
+        for k in range(n):
+            l[k] = tmp[k]
+        width *= 2

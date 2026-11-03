@@ -3,7 +3,8 @@ rebuilds, and starts runs.
 
 ```
 orca register ./build/taxi             runs `taxi describe`, records the binary
-orca backfill taxi 2011-01..2024-12    one queued run per partition
+orca backfill taxi 2011-01..2024-12    a run per partition that isn't done
+orca backfill labels @all              keyed: runs of keys_per_run undone keys
 orca rebuild taxi.trips 2024-01        the pipelines downstream, in order
 orca tick                              one pass, then exits
 orca scheduler                         a pass every second
@@ -29,10 +30,16 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
 - **`max_runs`.** Under a lock on the pipeline's row, the runs that are live
   (a fresh heartbeat, or started by the scheduler less than the stale limit
   ago) are counted, and only that many fewer than `max_runs` are started.
+- **Backfills queue what isn't done.** A key is done when every mapped
+  step has succeeded for it in a run of the pipeline's current code
+  (`DONE_SQL`). A backfill drops the keys that are done or in a queued or
+  running run, sorts the rest and queues a run per `keys_per_run` of them.
 - **Sensors and rebuilds** (`orca.sensors`). A sensor pipeline's pass
   looks for snapshots of the datasets it reads, in `orca.commits` on every
   tick and from `<binary> sense` every `ORCA_SENSE_SECONDS`, and queues a
-  run, trigger `sensor`, for those it hasn't seen. Each rebuild queues its
+  run, trigger `sensor`, for those it hasn't seen. A keyed sensor's keys
+  dataset is sensed too: a new snapshot of it queues the keys that aren't
+  done, in runs of `keys_per_run`. Each rebuild queues its
   next level once the one before has succeeded.
 - **Retries.** A scheduled, backfilled or sensed run that failed is started again
   after `ORCA_RETRY_SECONDS` (default 60) doubling with each start, plus up
@@ -50,14 +57,14 @@ A run's output goes to `<ORCA_LOGS>/<pipeline>/<run>/driver.log` when
 from std.os import getenv, makedirs
 from std.time import perf_counter_ns
 
-from postgres import Params
+from postgres import Params, Transaction
 
 from orca.civil import Civil
 from orca.cron import CronExpr
 from orca.day import Day
 from orca.key import parse_keys
 from orca.month import Month
-from orca.name import parse_names
+from orca.name import parse_names, sort_texts
 from orca.proc import absolute, capture, reap, spawn
 from orca.schedule import Schedule
 from orca.sensors import (
@@ -91,6 +98,9 @@ struct Registered(Copyable, Movable):
     var max_runs: Int
     var run_retries: Int
     var sensor: Bool
+    var keys_per_run: Int
+    var keys_dataset: String
+    """A keyed pipeline's keys dataset; empty for time partitions."""
 
 
 def fill_key(kind: String, fills: String, local: Civil) raises -> String:
@@ -120,7 +130,10 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             "'start', '') AS start, coalesce((describe->>'max_runs')"
             "::bigint, 1) AS max_runs, coalesce((describe->>"
             "'run_retries')::bigint, 3) AS run_retries,"
-            " coalesce((describe->>'sensor')::boolean, false) AS sensor FROM"
+            " coalesce((describe->>'sensor')::boolean, false) AS sensor,"
+            " coalesce((describe->>'keys_per_run')::bigint, 1) AS"
+            " keys_per_run, coalesce(describe->'partitions'->>'dataset', '')"
+            " AS keys_dataset FROM"
             " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
             " name = $1) ORDER BY name"
         ),
@@ -142,6 +155,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 Int(r.int64("max_runs")),
                 Int(r.int64("run_retries")),
                 r.bool("sensor"),
+                Int(r.int64("keys_per_run")),
+                r.text("keys_dataset"),
             )
         )
     return out^
@@ -213,21 +228,99 @@ def dataset_cycle(mut db: State, describe: String) raises -> String:
     return ""
 
 
+def current_keys(p: Registered) raises -> Tuple[Int64, List[String]]:
+    """A keyed pipeline's keys snapshot and keys, as `<binary> keys`
+    prints them."""
+    var got = capture([p.binary, "keys"])
+    if got[0] != 0:
+        raise Error("orca: ", p.binary, " keys exited ", got[0], ": ", got[1])
+    var lines = got[1].splitlines()
+    if len(lines) == 0:
+        raise Error("orca: ", p.binary, " keys printed nothing")
+    var keys = List[String]()
+    for i in range(1, len(lines)):
+        if lines[i]:
+            keys.append(String(lines[i]))
+    return (Int64(Int(lines[0])), keys^)
+
+
+def _file_names(path: String) raises -> String:
+    var text: String
+    with open(path, "r") as f:
+        text = f.read()
+    var joined = String()
+    for line in text.splitlines():
+        var n = line.strip()
+        if n:
+            joined.write("," if joined else "", n)
+    if not joined:
+        raise Error("orca: no names in ", path)
+    return joined^
+
+
+def kind_mismatch(mut db: State, describe: String) raises -> String:
+    """How the pipeline `describe` gives would make a sensor run keys of the
+    other kind, a keyed sensor reading a dataset a time-partitioned
+    pipeline writes or the other way round, or empty if it wouldn't."""
+    var rows = db.conn.query(
+        (
+            "WITH d AS (SELECT name, describe FROM orca.pipelines WHERE name"
+            " <> $1::jsonb->>'pipeline' UNION ALL SELECT $1::jsonb->>"
+            "'pipeline', $1::jsonb), io AS (SELECT DISTINCT d.name,"
+            " coalesce(d.describe->'partitions'->>'kind', 'monthly') AS"
+            " pkind, coalesce((d.describe->>'sensor')::boolean, false) AS"
+            " sensor, k.kind, x.ds FROM d, jsonb_array_elements(d.describe->"
+            "'steps') AS s(st), (VALUES ('reads'), ('writes')) AS k(kind),"
+            " jsonb_array_elements_text(coalesce(s.st->k.kind, '[]')) AS"
+            " x(ds) UNION SELECT d.name, 'keyed', coalesce((d.describe->>"
+            "'sensor')::boolean, false), 'reads', d.describe->'partitions'->>"
+            "'dataset' FROM d WHERE d.describe->'partitions'->>'dataset' IS"
+            " NOT NULL) SELECT w.name AS writer, w.pkind AS wkind, r.name AS"
+            " reader, r.pkind AS rkind, w.ds FROM io w JOIN io r ON r.ds ="
+            " w.ds AND r.kind = 'reads' WHERE w.kind = 'writes' AND w.name <>"
+            " r.name AND r.sensor AND (w.pkind = 'keyed') <> (r.pkind ="
+            " 'keyed') AND $1::jsonb->>'pipeline' IN (w.name, r.name) ORDER BY"
+            " 1, 3, 5 LIMIT 1"
+        ),
+        Params().text(describe),
+    )
+    if len(rows) == 0:
+        return ""
+    var r = rows.row(0)
+    return String(
+        "the sensor ",
+        r.text("reader"),
+        " (",
+        r.text("rkind"),
+        ") reads ",
+        r.text("ds"),
+        ", which ",
+        r.text("writer"),
+        " (",
+        r.text("wkind"),
+        ") writes, and no rule turns a name into a date or a date into a",
+        " name",
+    )
+
+
 def partition_keys(p: Registered, keys: String) raises -> List[String]:
-    """`keys` (`KEY[..KEY][,...]`) as the pipeline's partition keys, each
-    checked and from its first partition on."""
+    """`keys` as the pipeline's partition keys, each checked: for time keys
+    `KEY[..KEY][,...]` from its first partition on; for keyed partitions a
+    list of names, `@all` or `@file:<path>`, each a current key."""
     var texts = List[String]()
     if p.kind == "keyed":
-        if keys.startswith("@"):
-            raise Error(
-                (
-                    "orca: the scheduler takes a keyed pipeline's partitions as"
-                    " a list of names; run '"
-                ),
-                keys,
-                "' with the pipeline's binary",
-            )
-        for n in parse_names(keys):
+        var current = current_keys(p)[1].copy()
+        if keys == "@all":
+            return current^
+        var have = Dict[String, Bool]()
+        for k in current:
+            have[k] = True
+        var list = _file_names(String(keys[byte=6:])) if keys.startswith(
+            "@file:"
+        ) else keys
+        for n in parse_names(list):
+            if n.text not in have:
+                raise Error("orca: ", n, " isn't a key of ", p.keys_dataset)
             texts.append(n.text)
         return texts^
     if p.kind == "daily":
@@ -239,23 +332,114 @@ def partition_keys(p: Registered, keys: String) raises -> List[String]:
     return texts^
 
 
-def backfill(mut db: State, p: Registered, keys: String) raises -> Int:
-    """Queues a run for each partition in `keys` that has no run queued,
-    running or succeeded; returns how many it queued."""
-    var queued = 0
-    for key in partition_keys(p, keys):
-        var res = db.conn.query(
-            (
-                "INSERT INTO orca.runs (pipeline, registry_hash, partitions,"
-                " trigger, status) SELECT $1, $2, $3, 'backfill', 'queued'"
-                " WHERE NOT EXISTS (SELECT 1 FROM orca.runs WHERE pipeline ="
-                " $1 AND partitions = $3 AND status IN ('queued', 'running',"
-                " 'succeeded')) RETURNING id"
-            ),
-            Params().text(p.name).text(p.registry_hash).text(key),
+comptime DONE_SQL = (
+    "WITH k AS (SELECT DISTINCT unnest(string_to_array($2, ',')) AS key), p"
+    " AS (SELECT registry_hash, describe FROM orca.pipelines WHERE name ="
+    " $1), m AS (SELECT x->>'name' AS step FROM p,"
+    " jsonb_array_elements(p.describe->'steps') AS x WHERE x->>'kind' ="
+    " 'mapped') SELECT k.key FROM k WHERE CASE WHEN EXISTS (SELECT 1 FROM m)"
+    " THEN NOT EXISTS (SELECT 1 FROM m WHERE NOT EXISTS (SELECT 1 FROM"
+    " orca.steps st JOIN orca.runs r ON r.id = st.run JOIN p ON"
+    " r.registry_hash = p.registry_hash WHERE r.pipeline = $1 AND st.step ="
+    " m.step AND st.partition = k.key AND st.status = 'succeeded')) ELSE"
+    " EXISTS (SELECT 1 FROM orca.runs r JOIN p ON r.registry_hash ="
+    " p.registry_hash WHERE r.pipeline = $1 AND r.status = 'succeeded' AND"
+    " k.key = ANY (string_to_array(r.partitions, ','))) END"
+)
+"""Of the comma-separated keys `$2`, those done for pipeline `$1`: every
+mapped step has succeeded for the key in a run of the pipeline's current
+code. A pipeline with no mapped step has a key done when a run of its
+current code over it succeeded."""
+
+comptime LIVE_SQL = (
+    "SELECT DISTINCT unnest(string_to_array(partitions, ',')) AS key FROM"
+    " orca.runs WHERE pipeline = $1 AND status IN ('queued', 'running')"
+)
+"""The keys of pipeline `$1` in a queued or running run."""
+
+
+def done_keys(
+    mut db: State, pipeline: String, keys: List[String]
+) raises -> Dict[String, Bool]:
+    """Which of `keys` are done for `pipeline` (`DONE_SQL`)."""
+    var joined = String()
+    for i in range(len(keys)):
+        joined.write("," if i else "", keys[i])
+    var out = Dict[String, Bool]()
+    for r in db.conn.query(DONE_SQL, Params().text(pipeline).text(joined)):
+        out[r.text("key")] = True
+    return out^
+
+
+def queue_keys(
+    mut db: State, p: Registered, keys: List[String], trigger: String
+) raises -> List[Int]:
+    """Queues runs of `p` over those of `keys` that aren't done and aren't
+    in a live run, sorted, `keys_per_run` to a run; returns the runs. Under
+    a lock on the pipeline's row, so two backfills don't both queue a key."""
+    var tx = db.conn.begin()
+    var runs = _queue(tx, p, keys, trigger)
+    tx.commit()
+    return runs^
+
+
+def _queue(
+    mut tx: Transaction, p: Registered, keys: List[String], trigger: String
+) raises -> List[Int]:
+    """`queue_keys` in `tx`."""
+    _ = tx.query(
+        "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
+        Params().text(p.name),
+    )
+    var skip = Dict[String, Bool]()
+    for r in tx.query(LIVE_SQL, Params().text(p.name)):
+        skip[r.text("key")] = True
+    var joined = String()
+    for i in range(len(keys)):
+        joined.write("," if i else "", keys[i])
+    for r in tx.query(DONE_SQL, Params().text(p.name).text(joined)):
+        skip[r.text("key")] = True
+    var todo = List[String]()
+    for k in keys:
+        if k not in skip:
+            skip[k] = True  # each once
+            todo.append(k)
+    sort_texts(todo)
+    var runs = List[Int]()
+    var i = 0
+    while i < len(todo):
+        var batch = String()
+        var j = i
+        while j < len(todo) and j < i + p.keys_per_run:
+            batch.write("," if j > i else "", todo[j])
+            j += 1
+        runs.append(
+            Int(
+                tx.query(
+                    (
+                        "INSERT INTO orca.runs (pipeline, registry_hash,"
+                        " partitions, trigger, status) VALUES ($1, $2, $3, $4,"
+                        " 'queued') RETURNING id"
+                    ),
+                    Params()
+                    .text(p.name)
+                    .text(p.registry_hash)
+                    .text(batch)
+                    .text(trigger),
+                )
+                .row(0)
+                .int64("id")
+            )
         )
-        queued += len(res)
-    return queued
+        i = j
+    return runs^
+
+
+def backfill(mut db: State, p: Registered, keys: String) raises -> Int:
+    """Queues runs for the keys in `keys` that aren't done and aren't in a
+    queued or running run, `keys_per_run` to a run; returns how many runs
+    it queued."""
+    return len(queue_keys(db, p, partition_keys(p, keys), "backfill"))
 
 
 struct Scheduler(Movable):
@@ -291,6 +475,9 @@ struct Scheduler(Movable):
         var cycle = dataset_cycle(self.db, got[1])
         if cycle:
             raise Error("orca: ", path, " can't be registered: ", cycle)
+        var mismatch = kind_mismatch(self.db, got[1])
+        if mismatch:
+            raise Error("orca: ", path, " can't be registered: ", mismatch)
         var info = self.db.conn.query(
             (
                 "SELECT coalesce(($1::jsonb->>'sensor')::boolean, false) AS"
@@ -387,7 +574,10 @@ struct Scheduler(Movable):
                 " jsonb_array_elements(p.describe->'steps') AS s(st), (VALUES"
                 " ('reads'), ('writes')) AS k(kind),"
                 " jsonb_array_elements_text(coalesce(s.st->k.kind, '[]')) AS"
-                " x(ds) WHERE p.name = $1) SELECT DISTINCT ON (c.dataset,"
+                " x(ds) WHERE p.name = $1 UNION SELECT 'reads',"
+                " describe->'partitions'->>'dataset' FROM orca.pipelines WHERE"
+                " name = $1 AND describe->'partitions'->>'dataset' IS NOT"
+                " NULL) SELECT DISTINCT ON (c.dataset,"
                 " c.snapshot_id) c.dataset, c.snapshot_id,"
                 " coalesce(nullif(s.partition, ''), r.partitions) AS keys FROM"
                 " orca.commits c JOIN orca.attempts a ON a.id = c.attempt JOIN"
@@ -421,6 +611,9 @@ struct Scheduler(Movable):
                     snapshots.append(c.snapshot)
                     keys.append(c.partitions)
         if len(datasets) == 0:
+            return
+        if p.kind == "keyed":
+            self._sense_keyed(p, datasets, snapshots, keys)
             return
         var fallback: String
         if p.cron:
@@ -556,6 +749,70 @@ struct Scheduler(Movable):
                     key,
                     String("run ", run) if run >= 0 else "before the start",
                 )
+
+    def _sense_keyed(
+        mut self,
+        p: Registered,
+        datasets: List[String],
+        snapshots: List[Int64],
+        keys: List[String],
+    ) raises:
+        """For a keyed sensor: a snapshot of its keys dataset offers every
+        current key, and one of another dataset the names it holds that are
+        current keys; the offered keys that aren't done or in a live run are
+        queued, `keys_per_run` to a run."""
+        var cur = Dict[String, Bool]()
+        var all_keys = current_keys(p)[1].copy()
+        for k in all_keys:
+            cur[k] = True
+        var tx = self.db.conn.begin()
+        var taken = List[Int]()
+        var everything = False
+        var offer = List[String]()
+        for i in range(len(datasets)):
+            var new = tx.query(
+                (
+                    "INSERT INTO orca.sensed (pipeline, dataset, snapshot_id)"
+                    " VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING"
+                    " snapshot_id"
+                ),
+                Params().text(p.name).text(datasets[i]).int64(snapshots[i]),
+            )
+            if len(new) == 0:
+                continue
+            taken.append(i)
+            if datasets[i] == p.keys_dataset:
+                everything = True
+            else:
+                # Names a keyed pipeline upstream committed; others aren't
+                # this pipeline's to run.
+                for k in split_keys(keys[i]):
+                    if k in cur:
+                        offer.append(k)
+        var runs = _queue(tx, p, all_keys if everything else offer, "sensor")
+        if len(runs) > 0:
+            for i in taken:
+                _ = tx.execute(
+                    (
+                        "UPDATE orca.sensed SET run = $4 WHERE pipeline = $1"
+                        " AND dataset = $2 AND snapshot_id = $3"
+                    ),
+                    Params()
+                    .text(p.name)
+                    .text(datasets[i])
+                    .int64(snapshots[i])
+                    .int64(Int64(runs[0])),
+                )
+        tx.commit()
+        for i in taken:
+            print(
+                "sensed",
+                String(datasets[i], "@", snapshots[i]),
+                "for",
+                p.name,
+                String(len(runs), " runs from run ", runs[0]) if len(runs)
+                > 0 else "no new keys",
+            )
 
     def _schedule_retries(mut self, p: Registered, now: Int64) raises:
         """Gives each failed run that may be retried its time to start."""

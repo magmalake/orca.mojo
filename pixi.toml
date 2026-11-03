@@ -131,6 +131,7 @@ test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh" }
 test-commits = { cmd = "tests/concurrent_commits.sh" }
 test-sensors = { cmd = "scripts/with-postgres.sh tests/sensors.sh" }
 test-keyed = { cmd = "scripts/with-postgres.sh tests/keyed.sh" }
+test-keyed-backfills = { cmd = "scripts/with-postgres.sh tests/keyed_backfills.sh" }
 taxi = { cmd = "mkdir -p build && mojo build -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi" }
 
 # Fuzzing with mozz (packaged for magmalake as mozz_mlake), as dista does: one

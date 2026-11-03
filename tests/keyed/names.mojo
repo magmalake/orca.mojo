@@ -1,8 +1,9 @@
-"""Writes the keys dataset `keys.logs`: `log_id` and `frames` columns, 50
-logs named `log-00` to `log-49` and shuffled, each written twice, so the
-keys are the distinct values and not the rows.
+"""Appends to a keys dataset: `log_id` and `frames` columns, `count` logs
+(default 50) named `log-<n>` from `from` (default 0), zero-padded to
+`width` digits (default 2), shuffled and each written twice, so the keys
+are the distinct values and not the rows. Prints the snapshot.
 
-    names <warehouse> [<count>]
+    names <warehouse> [<count> [<table> [<from> [<width>]]]]   (table: keys.logs)
 """
 
 from std.sys import argv
@@ -28,20 +29,26 @@ def main() raises:
     seed_random()  # iceberg draws snapshot IDs from std.random
     var args = argv()
     var n = Int(String(args[2])) if len(args) > 2 else 50
+    var table = String(args[3]) if len(args) > 3 else String("logs")
+    var start = Int(String(args[4])) if len(args) > 4 else 0
+    var width = Int(String(args[5])) if len(args) > 5 else 2
     var cat = FilesystemCatalog.local(String(args[1]))
     var schema = Schema.parse(SCHEMA)
-    if not cat.table_exists("keys", "logs"):
+    if not cat.table_exists("keys", table):
         _ = cat.create_table(
-            "keys", "logs", schema.copy(), PartitionSpec.unpartitioned()
+            "keys", table, schema.copy(), PartitionSpec.unpartitioned()
         )
-    var t = cat.load_table("keys", "logs")
+    var t = cat.load_table("keys", table)
     var ids = ColumnBuilder.of(schema, 1)
     var frames = ColumnBuilder.of(schema, 2)
     for copy in range(2):
         for i in range(n):
-            # 37 is prime to 50, so this visits every log out of order.
-            var k = (i * 37 + copy) % n
-            ids.add(Datum.string_(String("log-", "0" if k < 10 else "", k)))
+            # 37 is prime to these counts, so this visits each log once,
+            # out of order.
+            var k = start + (i * 37 + copy) % n
+            var digits = String(k)
+            var padded = String("0") * max(width - digits.byte_length(), 0)
+            ids.add(Datum.string_(String("log-", padded, digits)))
             frames.add(Datum.long_(Int64(k * 10)))
     var files = write_data_files(
         t.io,
