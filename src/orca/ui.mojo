@@ -103,6 +103,7 @@ from orca.scheduler import (
 )
 from orca.sensors import Rebuild, rebuilds
 from orca.schedule import Schedule
+from orca.source import commit_url, web_url
 from orca.state import State
 from orca.tz import Zone
 from orca.ui_style import STYLE
@@ -163,6 +164,21 @@ struct RunRow(Copyable, Movable):
     var cancel_requested: Bool
     var stalled: Bool
     """`running` with no live process (`orca.actions.stalled_sql`)."""
+
+
+@fieldwise_init
+struct VersionRow(Copyable, Movable):
+    """A version of a pipeline's code (`orca.source`)."""
+
+    var id: Int
+    var registry_hash: String
+    var source: String
+    var commit: String
+    var dirty: Bool
+    var image: String
+    var first_seen: String
+    var last_seen: String
+    var runs: Int
 
 
 @fieldwise_init
@@ -355,6 +371,94 @@ def _runs(
             )
         )
     return out^
+
+
+def _versions(
+    mut db: State, pipeline: String = "", id: Int = 0
+) raises -> List[VersionRow]:
+    """A pipeline's versions newest first, or the one with `id`."""
+    var rows = db.conn.query(
+        String(
+            "SELECT v.id, v.registry_hash, v.source, v.commit_sha, v.dirty,",
+            " v.image, ",
+            _ts("v.first_seen"),
+            " AS first_seen, ",
+            _ts("v.last_seen"),
+            " AS last_seen, (SELECT count(*) FROM orca.runs r WHERE r.version",
+            " = v.id) AS runs FROM orca.pipeline_versions v WHERE ($1 = '' OR",
+            " v.pipeline = $1) AND ($2 = 0 OR v.id = $2) ORDER BY v.id DESC",
+        ),
+        Params().text(pipeline).int64(Int64(id)),
+    )
+    var out = List[VersionRow]()
+    for r in rows:
+        out.append(
+            VersionRow(
+                Int(r.int64("id")),
+                r.text("registry_hash"),
+                r.text("source"),
+                r.text("commit_sha"),
+                r.bool("dirty"),
+                r.text("image"),
+                r.text("first_seen"),
+                r.text("last_seen"),
+                Int(r.int64("runs")),
+            )
+        )
+    return out^
+
+
+def _json_version(mut out: String, v: VersionRow):
+    var url = commit_url(v.source, v.commit)
+    out.write(
+        '{"id": ',
+        v.id,
+        ', "registry_hash": ',
+        quote(v.registry_hash),
+        ', "source": ',
+        quote(v.source),
+        ', "commit": ',
+        quote(v.commit),
+        ', "commit_url": ',
+        quote(url) if url else String("null"),
+        ', "dirty": ',
+        "true" if v.dirty else "false",
+        ', "image": ',
+        quote(v.image),
+        ', "first_seen": ',
+        quote(v.first_seen),
+        ', "last_seen": ',
+        quote(v.last_seen),
+        ', "runs": ',
+        v.runs,
+        "}",
+    )
+
+
+def _source_html(mut h: Html, v: VersionRow):
+    """The commit, linked to its tree where the host is known."""
+    if not v.commit:
+        h.raw('<span class="muted">not recorded (built without')
+        h.raw(" <code>-D ORCA_COMMIT</code>)</span>")
+        return
+    var url = commit_url(v.source, v.commit)
+    var short = String(v.commit[byte = : min(12, v.commit.byte_length())])
+    h.raw("<code>")
+    if url:
+        h.link(url, short)
+    else:
+        h.text(short)
+    h.raw("</code>")
+    if v.dirty:
+        h.raw(' <span class="muted">plus uncommitted changes</span>')
+    if v.source:
+        h.raw(' <span class="muted">of ')
+        var web = web_url(v.source)
+        if web:
+            h.link(web, v.source)
+        else:
+            h.text(v.source)
+        h.raw("</span>")
 
 
 def _step_defs(mut db: State, name: String) raises -> List[StepDef]:
@@ -970,6 +1074,12 @@ def pipeline(mut db: State, name: String) raises -> Page:
             quote(fires[i].partition),
             "}",
         )
+    var versions = _versions(db, pipeline=name)
+    j.write('], "versions": [')
+    for i in range(len(versions)):
+        if i:
+            j.write(", ")
+        _json_version(j, versions[i])
     j.write('], "runs": ')
     _json_runs(j, runs)
     var keys = Optional[KeyCounts](None)
@@ -1066,6 +1176,25 @@ def pipeline(mut db: State, name: String) raises -> Page:
             h.cell(f.partition)
             h.raw("</tr>")
         h.raw("</tbody></table></div>")
+    if len(versions) > 0:
+        h.raw(
+            '<h2>Versions</h2><div class="scroll"><table><thead><tr>',
+            "<th>Commit</th><th>Image</th><th>Code</th><th>First seen</th>",
+            "<th>Last seen</th><th>Runs</th></tr></thead><tbody>",
+        )
+        for v in versions:
+            h.raw("<tr><td>")
+            _source_html(h, v)
+            h.raw("</td>")
+            h.cell(v.image)
+            h.raw("<td><code>")
+            h.text(v.registry_hash)
+            h.raw("</code></td>")
+            h.cell(v.first_seen)
+            h.cell(v.last_seen)
+            h.cell(v.runs)
+            h.raw("</tr>")
+        h.raw("</tbody></table></div>")
     h.raw("<h2>Runs</h2>")
     _runs_table(h, runs, False)
     h.raw('<p class="more"><a href="/runs?pipeline=')
@@ -1112,6 +1241,7 @@ def run(mut db: State, id: Int) raises -> Page:
     var row = db.conn.query(
         (
             "SELECT registry_hash, coalesce(rebuild, 0) AS rebuild,"
+            " coalesce(version, 0) AS version,"
             " coalesce(cpu_millis, 0) AS cpu, coalesce(extract(epoch FROM"
             " coalesce(ended, now()) - started)::bigint, 0) AS secs FROM"
             " orca.runs WHERE id = $1"
@@ -1120,6 +1250,11 @@ def run(mut db: State, id: Int) raises -> Page:
     ).row(0)
     var hash = row.text("registry_hash")
     var rebuild = Int(row.int64("rebuild"))
+    var version = Optional[VersionRow](None)
+    if row.int64("version"):
+        var vs = _versions(db, id=Int(row.int64("version")))
+        if len(vs) > 0:
+            version = vs[0].copy()
     # What its pods asked for, on Kubernetes: vCPU × seconds since it started.
     var cpu = Int(row.int64("cpu"))
     var secs = Int(row.int64("secs"))
@@ -1147,8 +1282,13 @@ def run(mut db: State, id: Int) raises -> Page:
         String(cpu) if cpu else String("null"),
         ', "cpu_seconds": ',
         String(cpu * secs // 1000) if cpu else String("null"),
-        ', "sensed": [',
+        ', "version": ',
     )
+    if version:
+        _json_version(j, version.value())
+    else:
+        j.write("null")
+    j.write(', "sensed": [')
     for i in range(len(sensed)):
         j.write(", " if i else "", quote(String(sensed[i])))
     j.write('], "steps": [')
@@ -1247,6 +1387,14 @@ def run(mut db: State, id: Int) raises -> Page:
     if hash != current:
         h.raw(' <span class="muted">(the pipeline has newer code)</span>')
     h.raw("</dd>")
+    if version:
+        h.raw("<dt>Source</dt><dd>")
+        _source_html(h, version.value())
+        if version.value().image:
+            h.raw(' <span class="muted">in image</span> <code>')
+            h.text(version.value().image)
+            h.raw("</code>")
+        h.raw("</dd>")
     var dir = run_dir(r.pipeline, r.id)
     if dir and location_exists(String(dir, "/driver.log")):
         h.raw("<dt>Driver</dt><dd>")

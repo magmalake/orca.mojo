@@ -191,6 +191,9 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         for j in range(len(keys)):
             key.write("," if j > 0 else "", keys[j])
         var run = db.create_run(P.name, hash, key, "manual", owner)
+        db.ran_version(
+            run, db.version(P.name, hash, P.describe(), getenv("ORCA_IMAGE"))
+        )
         print("run", run)
         return _execute[P](rt, db^, url, run, owner, keys, RunResult())
     if cmd == "resume":
@@ -236,6 +239,9 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
             )
         var owner = process_owner()
         db.claim(run, owner, _stale_seconds())
+        db.ran_version(
+            run, db.version(P.name, hash, P.describe(), getenv("ORCA_IMAGE"))
+        )
         var interrupted = db.interrupt(run)
         var prior = db.prior(run)
         print(

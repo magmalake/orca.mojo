@@ -34,6 +34,7 @@ from orca.json import quote
 from orca.civil import Civil
 from orca.partitions import Monthly, Partitions
 from orca.schedule import Fill, NoSchedule, Previous, Schedule, ScheduleLike
+from orca.source import source_commit, source_dirty, source_repo
 from orca.step import Gather, Mapped, StepLike
 from orca.store import MemoryStore, Store
 from orca.logs import attempt_log, publish, stage_of
@@ -305,7 +306,9 @@ struct Pipeline[
         var names = Self.tasks.names()
         for i in range(len(names)):
             out.write(", " if i > 0 else "", quote(names[i]))
-        out.write("]}")
+        out.write('], "source": {"repo": ', quote(source_repo()))
+        out.write(', "commit": ', quote(source_commit()))
+        out.write(', "dirty": ', "true" if source_dirty() else "false", "}}")
         return out^
 
     @staticmethod

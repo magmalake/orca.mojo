@@ -22,6 +22,7 @@ which `interrupt` marks failed when the run is resumed.
 """
 
 from std.ffi import external_call
+from std.os import getenv
 
 from postgres import Connection, Params, Transaction
 
@@ -208,6 +209,31 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pipelines ADD COLUMN ec2_workers int",
             "ALTER TABLE orca.pipelines ADD COLUMN spot boolean",
         ],
+        # Versions (orca.source): each registry hash, source commit and
+        # image a pipeline was registered or run with, the pipeline's
+        # latest, and the one each run ran.
+        [
+            """CREATE TABLE orca.pipeline_versions (
+            id bigserial PRIMARY KEY,
+            pipeline text NOT NULL REFERENCES orca.pipelines (name),
+            registry_hash text NOT NULL,
+            source text NOT NULL,
+            commit_sha text NOT NULL,
+            dirty boolean NOT NULL,
+            image text NOT NULL,
+            first_seen timestamptz NOT NULL DEFAULT now(),
+            last_seen timestamptz NOT NULL DEFAULT now(),
+            UNIQUE (pipeline, registry_hash, source, commit_sha, dirty,
+                image))""",
+            (
+                "ALTER TABLE orca.pipelines ADD COLUMN version bigint"
+                " REFERENCES orca.pipeline_versions (id)"
+            ),
+            (
+                "ALTER TABLE orca.runs ADD COLUMN version bigint REFERENCES"
+                " orca.pipeline_versions (id)"
+            ),
+        ],
     ]
 
 
@@ -304,6 +330,57 @@ struct State(Movable):
                 " EXCLUDED.describe, last_seen = now()"
             ),
             Params().text(pipeline).text(registry_hash).jsonb(describe),
+        )
+        _ = self.conn.execute(
+            "UPDATE orca.pipelines SET version = $2 WHERE name = $1",
+            Params()
+            .text(pipeline)
+            .int64(
+                Int64(
+                    self.version(
+                        pipeline, registry_hash, describe, getenv("ORCA_IMAGE")
+                    )
+                )
+            ),
+        )
+
+    def version(
+        mut self,
+        pipeline: String,
+        registry_hash: String,
+        describe: String,
+        image: String,
+    ) raises -> Int:
+        """The version of `pipeline` that code `registry_hash`, from the
+        source `describe` (a pipeline binary's) names, in `image` is;
+        recorded the first time it's seen."""
+        return Int(
+            self.conn.query(
+                (
+                    "INSERT INTO orca.pipeline_versions (pipeline,"
+                    " registry_hash, source, commit_sha, dirty, image) SELECT"
+                    " $1, $2, coalesce(d->'source'->>'repo', ''),"
+                    " coalesce(d->'source'->>'commit', ''),"
+                    " coalesce((d->'source'->>'dirty')::boolean, false), $4"
+                    " FROM (SELECT $3::jsonb AS d) AS x ON CONFLICT (pipeline,"
+                    " registry_hash, source, commit_sha, dirty, image) DO"
+                    " UPDATE SET last_seen = now() RETURNING id"
+                ),
+                Params()
+                .text(pipeline)
+                .text(registry_hash)
+                .text(describe)
+                .text(image),
+            )
+            .row(0)
+            .int64("id")
+        )
+
+    def ran_version(mut self, run: Int, version: Int) raises:
+        """Records that `run` is running `version`'s code."""
+        _ = self.conn.execute(
+            "UPDATE orca.runs SET version = $2 WHERE id = $1",
+            Params().int64(Int64(run)).int64(Int64(version)),
         )
 
     def create_run(
