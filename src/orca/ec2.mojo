@@ -195,13 +195,27 @@ struct Ec2Runner(Movable):
             if v:
                 out.write("export ", n, "=", _quote(v), "\n")
         if role == "worker":
+            # The worker's address is the instance's private one, which
+            # `orca.instances` keeps: the scheduler finds the instance of a
+            # worker it drains by it. Under the tests' stand-in EC2 every
+            # instance's is 127.0.0.1.
+            var advertise = String("127.0.0.1")
+            if self.mode == "docker":
+                advertise = String(
+                    "$(t=$(curl -s -X PUT -H",
+                    " 'X-aws-ec2-metadata-token-ttl-seconds: 60'",
+                    " http://169.254.169.254/latest/api/token); curl -s -H",
+                    ' "X-aws-ec2-metadata-token: $t"',
+                    " http://169.254.169.254/latest/meta-data/local-ipv4)",
+                )
             out.write(
                 "export DISTA_HEAD=",
                 head,
                 ":",
                 HEAD_PORT,
-                "\nexport DISTA_ADVERTISE=$(hostname -I 2>/dev/null | awk",
-                " '{print $1}')\n",
+                "\nexport DISTA_ADVERTISE=",
+                advertise,
+                "\n",
             )
         return out^
 
