@@ -39,8 +39,8 @@ Parameters:
     Description: arm64 Amazon Linux 2023 with Docker, for the control and run instances
   ImageTag:
     Type: String
-    Default: data
-    Description: The tag of the orca image in the stack's repository
+    Default: latest
+    Description: The tag of the orca image the control instance starts with (orca aws push pushes latest)
   ConsoleHostname:
     Type: String
     Default: libs.mlake.dev
@@ -356,10 +356,47 @@ Resources:
             ORCA_UI_SECURE_COOKIES=1
             ORCA_UI_TRUST_PROXY=1
             EOF
-            docker run -d --name scheduler --restart always --network orca --env-file /etc/orca.env \
-              -v /var/lib/orca/stage:/var/lib/orca/stage $image scheduler
-            docker run -d --name ui --restart always --network orca --env-file /etc/orca.env \
-              -v /var/lib/orca/stage:/var/lib/orca/stage $image ui
+            # orca aws register and orca aws app run these over SSM.
+            cat > /usr/local/bin/orca-refresh << 'EOS'
+            #!/bin/bash
+            # orca-refresh [TAG]: pull the orca image at TAG (else the last
+            # one) and run the scheduler and the UI from it again.
+            set -eu
+            repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+            [ $# -gt 0 ] && echo "$1" > /var/lib/orca/tag
+            tag=$(cat /var/lib/orca/tag)
+            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
+            docker pull -q "$repo:$tag"
+            for role in scheduler ui; do
+              docker rm -f $role > /dev/null 2>&1 || true
+              docker run -d --name $role --restart always --network orca --env-file /etc/orca.env \
+                -v /var/lib/orca/stage:/var/lib/orca/stage "$repo:$tag" $role
+            done
+            EOS
+            cat > /usr/local/bin/orca-app << 'EOS'
+            #!/bin/bash
+            # orca-app NAME HOST [PORT]: run the image's /opt/orca/bin/NAME as
+            # an app beside the UI, at https://HOST through Caddy, with
+            # orca's environment and PORT (default 8080).
+            set -eu
+            name=$1
+            host=$2
+            port=8080
+            [ $# -gt 2 ] && port=$3
+            repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+            tag=$(cat /var/lib/orca/tag)
+            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
+            docker pull -q "$repo:$tag"
+            docker rm -f "$name" > /dev/null 2>&1 || true
+            docker run -d --name "$name" --restart always --network orca --env-file /etc/orca.env \
+              -e PORT=$port --entrypoint /opt/orca/bin/$name "$repo:$tag"
+            grep -q "^$host {" /var/lib/orca/Caddyfile \
+              || printf '%s {\n  reverse_proxy %s:%s\n}\n' "$host" "$name" "$port" >> /var/lib/orca/Caddyfile
+            docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+            EOS
+            chmod +x /usr/local/bin/orca-refresh /usr/local/bin/orca-app
+            echo ${ImageTag} > /var/lib/orca/tag
+            orca-refresh
             cat > /var/lib/orca/Caddyfile << EOF
             $hosts {
               reverse_proxy ui:8270
@@ -403,5 +440,7 @@ Outputs:
     Value: !Ref PublicBucket
   ControlInstance:
     Value: !Ref Control
+  ConsoleHostname:
+    Value: !Ref ConsoleHostname
   PublicAddress:
     Value: !Ref ControlAddress

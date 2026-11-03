@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stands in for docker in tests/aws.sh: records each call to $FAKE_AWS_LOG.
+echo "docker $*" >> "$FAKE_AWS_LOG"
+[ "$1" = login ] && cat > /dev/null
+exit 0

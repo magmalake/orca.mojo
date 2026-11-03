@@ -29,6 +29,7 @@ from std.sys import argv, exit
 from std.time import sleep
 
 from orca.auth import add_user, remove_user, users
+from orca.aws import aws_command
 from orca.civil import now
 from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.locate import locate
@@ -41,6 +42,7 @@ from orca.ui import DEFAULT_ADDR, serve_ui
 
 comptime USAGE = """usage:
   orca locate <pipeline binary> [...] [--root <dir>]
+  orca aws up|push|register|app|status|down ...   (orca aws for more)
   orca register [--image <image>] [--head-type T] [--worker-type T]
                 [--workers N|MIN..MAX] [--spot] [--secret NAME=ID ...]
                 <pipeline binary> [...]
@@ -89,6 +91,8 @@ def _locate(args: List[String]) raises -> Int:
 def _command(args: List[String]) raises -> Int:
     if args[1] == "locate":
         return _locate(args)
+    if args[1] == "aws":
+        return aws_command(args)
     var url = getenv("ORCA_DATABASE_URL")
     if not url:
         _usage("orca needs ORCA_DATABASE_URL")

@@ -1,0 +1,26 @@
+#!/bin/sh
+# Stands in for the aws command in tests/aws.sh: records each call to
+# $FAKE_AWS_LOG and answers what orca aws asks. A stack exists once deployed.
+echo "aws $*" >> "$FAKE_AWS_LOG"
+state=$FAKE_AWS_STATE
+case "$*" in
+    *"cloudformation describe-stacks"*"Stacks[0].Outputs"*)
+        [ -f "$state/stack" ] || exit 254
+        cat << 'J'
+[{"OutputKey": "Repository", "OutputValue": "123456789012.dkr.ecr.us-east-2.amazonaws.com/orca"},
+ {"OutputKey": "ControlInstance", "OutputValue": "i-0control"},
+ {"OutputKey": "ConsoleHostname", "OutputValue": "libs.mlake.dev"},
+ {"OutputKey": "PublicBucket", "OutputValue": "mlake-public-123456789012"}]
+J
+        ;;
+    *"cloudformation describe-stacks"*) [ -f "$state/stack" ] || exit 254 ;;
+    *"cloudformation deploy"*) touch "$state/stack" ;;
+    *"cloudformation delete-stack"*) rm -f "$state/stack" ;;
+    *"cloudformation wait"*) ;;
+    *"ecr get-login-password"*) echo password ;;
+    *"ssm send-command"*) echo cmd-1 ;;
+    *"get-command-invocation"*"Status"*) echo Success ;;
+    *"get-command-invocation"*"StandardOutputContent"*) echo "registered on the control instance" ;;
+    *"get-command-invocation"*"StandardErrorContent"*) echo None ;;
+    *) echo "fake aws: unexpected: $*" >&2; exit 1 ;;
+esac
