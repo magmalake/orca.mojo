@@ -125,9 +125,12 @@ spec:
             - name: ORCA_DATABASE_URL
               valueFrom: {secretKeyRef: {name: orca-db, key: url}}
             - {name: ORCA_LOGS, value: /var/orca/logs}
-            # Reached through the Service; it has no authentication, so
-            # nothing should expose that Service outside the cluster.
+            # Actions need a user (orca user add, in the scheduler's
+            # container); reading doesn't, so nothing should expose the
+            # Service outside the cluster but through a proxy that asks for
+            # a login too. Behind HTTPS, set ORCA_UI_SECURE_COOKIES=1.
             - {name: ORCA_UI_ADDR, value: "0.0.0.0:8270"}
+            - {name: ORCA_UI_LOGIN, value: required}
           ports: [{containerPort: 8270}]
           readinessProbe:
             httpGet: {path: /, port: 8270}
