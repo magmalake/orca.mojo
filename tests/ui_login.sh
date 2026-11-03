@@ -11,7 +11,9 @@
 # - with the cookie the action is done and recorded as the user's, which the
 #   run's page shows;
 # - logging out, an expired session, a removed user and a changed password
-#   all end the session; a login posted from another site is refused.
+#   all end the session; a login posted from another site is refused;
+# - 5 failed logins for a name in 15 minutes get 429, the right password
+#   included, until the window passes.
 #
 # Needs ORCA_DATABASE_URL (pixi run test-ui-login starts a throwaway server),
 # curl and jq.
@@ -80,8 +82,8 @@ echo "$hdrs" | grep -i '^set-cookie: orca_session=' | grep -i 'httponly' | grep 
     || fail "the cookie: $hdrs"
 [ "$(post /pipelines/toy/runs partitions=2024-02 -b "$jar")" = 303 ] || fail "an action with a session"
 run=$(q "SELECT max(id) FROM orca.runs")
-[ "$(q "SELECT username || ' ' || action || ' ' || run FROM orca.audit")" = "alice /pipelines/toy/runs $run" ] \
-    || fail "the audit: $(q "SELECT * FROM orca.audit")"
+[ "$(q "SELECT username || ' ' || action || ' ' || run FROM orca.audit WHERE action <> 'login-failed'")" \
+    = "alice /pipelines/toy/runs $run" ] || fail "the audit: $(q "SELECT * FROM orca.audit")"
 curl -fs -b "$jar" "$base/runs/$run" | grep -q '<td>alice</td>' || fail "the run's page doesn't say who"
 curl -fs -b "$jar" "$base/" | grep -q 'class="top__user">alice' || fail "the header doesn't say who"
 [ "$(post "/runs/$run/cancel" '' -b "$jar")" = 303 ] || fail "cancel with a session"
@@ -104,6 +106,17 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: http://evil.example" \
     -d 'name=alice&password=x' "$base/login")
 [ "$code" = 403 ] || fail "a login from another site answered $code"
 printf 'short\n' | ./build/orca user add bob > /dev/null 2>&1 && fail "a short password was taken"
+
+# Guessing: 5 failures for a name, then 429 even with the right password.
+printf 'correct horse battery\n' | ./build/orca user add carol >> "$log" 2>&1
+for _ in 1 2 3 4 5; do
+    [ "$(post /login 'name=carol&password=wrong+guess+here')" = 401 ] || fail "a wrong guess"
+done
+[ "$(post /login 'name=carol&password=correct+horse+battery')" = 429 ] || fail "a sixth try wasn't refused"
+[ "$(q "SELECT count(*) FROM orca.audit WHERE action = 'login-failed' AND username = 'carol'")" -eq 5 ] \
+    || fail "the failures weren't recorded"
+q "UPDATE orca.audit SET at = now() - interval '16 minutes' WHERE action = 'login-failed'" > /dev/null
+[ "$(post /login 'name=carol&password=correct+horse+battery')" = 303 ] || fail "after the window"
 
 # ORCA_UI_LOGIN=required: no user yet, and still no action.
 kill "$ui"

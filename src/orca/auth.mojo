@@ -17,7 +17,10 @@ Passwords are kept as bcrypt hashes made by Postgres's pgcrypto
 one after it's checked. Logging in makes a session: 32 random bytes from
 the system's generator, given to the browser as the cookie `orca_session`
 and kept only as their SHA-256 digest, for `ORCA_UI_SESSION_HOURS` (default
-12). Every action a user takes is a row of `orca.audit`.
+12). Every action a user takes is a row of `orca.audit`, and so is every failed
+login, which `too_many_failures` counts: after 5 for one name, or 20 from
+one address, in 15 minutes, `/login` answers 429 without checking a
+password, so a public UI can't be guessed at.
 """
 
 from std.os import getenv
@@ -120,6 +123,38 @@ def _hex(b: List[UInt8]) -> String:
     for c in b:
         out.write(digits[byte=Int(c >> 4)], digits[byte=Int(c & 15)])
     return out^
+
+
+comptime FAILURES_PER_NAME = 5
+comptime FAILURES_PER_ADDRESS = 20
+comptime FAILURE_WINDOW_MINUTES = 15
+
+
+def too_many_failures(
+    mut db: State, name: String, address: String
+) raises -> Bool:
+    """Whether logins for `name`, or from `address`, have failed too often
+    of late to check another: `FAILURES_PER_NAME` for a name or
+    `FAILURES_PER_ADDRESS` from an address in `FAILURE_WINDOW_MINUTES`.
+    Failures are `login-failed` rows of `orca.audit`, with the address as
+    their detail."""
+    var n = db.conn.query(
+        (
+            "SELECT count(*) FILTER (WHERE username = $1) AS by_name,"
+            " count(*) FILTER (WHERE detail = $2) AS by_address FROM"
+            " orca.audit WHERE action = 'login-failed' AND at > now() -"
+            " make_interval(mins => $3)"
+        ),
+        Params().text(name).text(address).int32(Int32(FAILURE_WINDOW_MINUTES)),
+    ).row(0)
+    return (
+        n.int64("by_name") >= FAILURES_PER_NAME
+        or n.int64("by_address") >= FAILURES_PER_ADDRESS
+    )
+
+
+def login_failed(mut db: State, name: String, address: String) raises:
+    audit(db, name, "login-failed", 0, address)
 
 
 def open_session(
