@@ -351,7 +351,7 @@ As built in PR 2: the scheduler reads a keyed pipeline's keys by running `<binar
 
 ## Phase 5: on Kubernetes
 
-Gate: the taxi pipeline runs on a schedule on EC2, each run on its own cluster.
+Gate: the taxi pipeline runs on a schedule on EC2, each run on its own cluster of instances.
 
 - **The scheduler as a Deployment** with one replica and Postgres beside it (or RDS).
 - **A run as a dista cluster**: the scheduler creates a head, a worker set sized by the pipeline, and a Job for the driver, all labelled with the run ID, through the Kubernetes API over HTTPS with the pod's service-account token; and deletes them when the run ends. The run's pipeline image is named in its registration.
@@ -368,7 +368,7 @@ Gate: the taxi pipeline runs on a schedule on EC2, each run on its own cluster.
 | 2 | **Images and manifests.** A `deploy/Dockerfile` that builds a pipeline binary and the `orca` binary into slim images, as dista's does; manifests for the `orca` namespace (the scheduler as a one-replica Deployment, Postgres as a StatefulSet on a volume with `synchronous_commit` on, `orca ui` as a Service) and the `orca-runs` namespace (its ServiceAccount, the Role of K8S.md, a ResourceQuota). A run still uses a local dista runtime, inside its driver's pod. | `tests/kind.sh`: on kind, the toy pipeline is registered from its image and run by its schedule, and `orca ui` shows the run. | ~500 |
 | 3 | **A dista cluster per run.** With `ORCA_RUNNER=kubernetes`, the scheduler starts a run by creating a head Pod and Service, the pipeline's worker Pods and a driver Job (`<binary> resume <run>` with `DISTA_HEAD` set), all labelled `orca.run=<id>`, the head and workers owned by the Job, the Job with `activeDeadlineSeconds` and `ttlSecondsAfterFinished`. `orca register --image <image>` records the pipeline's image, and `workers=` on the pipeline its cluster size. The scheduler sees a run end from its Job, deletes what's labelled with it, and on start-up deletes objects of runs Postgres doesn't list as running. A total vCPU budget (`ORCA_VCPU_BUDGET`) is checked before a cluster is made, and each run records its pods' requested CPU × seconds, which its page shows. | On kind: the fanout pipeline's runs each get their own cluster of 3 workers, and their tasks run on all 3; nothing labelled with a run is left after it ends; a driver pod killed mid-run is resumed on a new cluster and succeeds; objects of a run a killed scheduler left behind are deleted when it starts again; a run that would exceed the budget waits. | ~1,200 |
 | 4 | **Object storage.** `ORCA_WAREHOUSE=s3://...` for datasets, `sense` reading metadata through objectstore, and `ORCA_LOGS=s3://...` for attempt logs, driver logs and timelines, which `orca ui` reads back. | The lineage and sensor tests pass with the warehouse and logs on MinIO (conda-forge's `minio-server`), and the UI shows an attempt's log from it. | ~700 |
-| 5 | **On AWS** (in the project's selected Region, us-east-2). The images in ECR, the warehouse and logs in an S3 bucket behind an S3 gateway endpoint, run pods' access to their prefix through EKS Pod Identity, and the cost limits of K8S.md: the ResourceQuota, a node-pool CPU limit, Spot workers, a Budgets alert. Where it runs, k3s on one EC2 instance or EKS Auto Mode, and where Postgres runs, are settled before anything is created. | Phase 5's gate: the taxi pipeline runs on its monthly schedule on EC2, each run on its own cluster, and its runs' cluster start times are measured and written down, with what the runs cost. | ~600 |
+| 5 | **The `ec2` runner, on AWS** (below). | Phase 5's gate on AWS, below. | ~1,600 in two PRs |
 
 As built in PR 2: one image (`deploy/Dockerfile`) holds `orca` and the pipeline binaries, built with pixi and copied onto Debian with the libraries they link and the ones they dlopen from `$CONDA_PREFIX/lib` (libpq, flare's shims), which the image sets to `/opt/orca`. The UI runs as a second container in the scheduler's pod, so both see the run logs on the pod's volume until logs move to object storage in PR 4. `ORCA_REGISTER` names the image's pipeline binaries to register when the scheduler starts.
 
@@ -377,6 +377,48 @@ As built in PR 3 (`orca.kube`): the scheduler makes a run's driver Job first, th
 As built in PR 4: `ORCA_WAREHOUSE` and `ORCA_LOGS` can be `s3://bucket/prefix`, read and written through iceberg's `FileIO` and objectstore's `FileIOResolver`, configured from the `AWS_*` environment. The filesystem catalog commits on S3 as it does on disk: each version is written under a unique name and the directory listed for a clash, which S3's strongly consistent listing makes as safe as the local case. `sense` lists and reads a table's metadata through objectstore, which every pipeline binary already links through dista. An object can't be appended to, so an attempt writes its log to a staging file (`ORCA_LOG_STAGE`) and publishes it when the attempt ends, and a run's timeline when the run does; a log is in the bucket once complete, not while it's written. The scheduler publishes a local run's `driver.log` when it reaps the process, and on Kubernetes it appends the driver pod's log to `driver.log` before it deletes the run's Job (k8s.mojo's `logs`, which needs `get` on `pods/log`). `orca ui` reads all three back, and shows a run's driver log at `/runs/<id>/driver.log`. The lineage and sensor tests run over MinIO too (`test-lineage-s3`, `test-sensors-s3`, `scripts/with-minio.sh`).
 
 PRs 1 to 4 need no AWS account: kind runs on colima on one Mac, and in CI. PR 5 creates paid resources, so its plan (the instance types, the cluster, Postgres, and their cost per month) is agreed before any is created, and what it creates is deleted or kept as agreed when the gate has passed.
+
+### PR 5: the `ec2` runner, on AWS
+
+Running on AWS through Kubernetes means paying for a cluster that's idle between runs: EKS's control plane and an always-on node come to about $150 a month before a run starts, and k3s on one big always-on instance to about $100 with no room to grow. Runs here are batch work, minutes to hours a day, so the cheaper shape is a small always-on instance for what has to be up, and instances bought by the second for each run. The Kubernetes runner stays in the code (PR 3), for a cluster that's already there.
+
+**`ORCA_RUNNER=ec2`** starts each run on instances of its own, in one Availability Zone (us-east-2a):
+
+1. **A head instance**, on-demand: the run's dista head and its driver (`<binary> resume <run>`, with `DISTA_HEAD` on localhost). `RunInstances` gives back its private address at once.
+2. **`workers` worker instances**, Spot when the pipeline is registered with `--spot`, started straight after with `DISTA_HEAD` at the head's address; they wait for the head (`orca.tasks.wait_for_head`) and advertise their own private addresses for results.
+3. Each instance starts the pipeline's image from user data and is told to terminate on shutdown, which the script ends with: the head when the driver exits, a worker when its head hangs up and dista's reconnect window passes.
+4. **Cleanup in layers, as on Kubernetes:** instances terminate themselves; every tick the scheduler terminates instances tagged `orca.run` whose run isn't running at that start, and those older than the run's deadline; and on start-up it does the same for everything tagged.
+
+A pipeline without dista tasks gets only the head instance. The instance types, the count and Spot are a deployment's choice, so they're given at registration rather than in the pipeline's code: `orca register --image <ecr image> --head-type c7g.large --worker-type c7g.4xlarge --workers 4 --spot <binary>`, defaulting to `ORCA_EC2_HEAD_TYPE`, `ORCA_EC2_WORKER_TYPE` and the pipeline's `workers=`. `ORCA_VCPU_BUDGET` counts a run's instances' vCPUs before any is started. The image is arm64, so the types are Graviton.
+
+The EC2 API is SigV4-signed HTTPS, as S3 is, so the client is a few calls (`RunInstances`, `DescribeInstances`, `TerminateInstances`, with tags in the call) on objectstore's signing and HTTP; the always-on instance gets its credentials from its instance role (IMDSv2), which objectstore reads already.
+
+**On AWS** (one CloudFormation stack, `deploy/aws/orca.yaml`, so it's reviewed as one file and deleted as one stack):
+
+| Resource | What for | About, per month |
+|---|---|---|
+| The **control** instance: t4g.large (2 vCPU, 8 GiB), on-demand, 40 GB gp3 | the scheduler, Postgres (a container on that volume, `synchronous_commit` on), `orca ui`, and LabelControl's site | $49 + $3 |
+| Its public IPv4 address | updates, ECR, and the tunnel out; no port is open to the internet | $3.60 |
+| **Run** instances: a head (c7g.large on-demand, $0.07/h) and workers (c7g.4xlarge Spot, about $0.20/h each) | only while a run runs, by the second | a taxi backfill of a few hours: a few dollars |
+| An **S3 bucket**, with a gateway endpoint | the warehouse and the logs | under $1 |
+| An **ECR repository**, with a lifecycle rule | the orca image | under $1 |
+| **IAM**: the control instance's role may start and terminate only instances tagged for orca, of the allowed types, with the run instances' profile; read and write the bucket; pull from the repository. The run instances' role may read and write the bucket's prefix and pull. | | free |
+| **Security groups**: run instances accept the head's port and the workers' result ports from each other only; the control instance accepts nothing from outside | | free |
+| A **Budgets** alert at $100 | | free |
+
+About $60 a month always on, plus the runs. The project's spend limit is set high, so the Budgets alert is what warns first.
+
+**Reaching the UIs.** `orca ui` has its own login for actions (`orca.auth`) but none for reading, and LabelControl has none at all; neither is opened to the internet. The control instance runs a Cloudflare Tunnel (outbound only) with Cloudflare Access in front of both UIs, as LabelControl's README describes for its own site, so one login covers both, with `ORCA_UI_SECURE_COOKIES=1` behind it. Without a tunnel, SSM Session Manager port forwarding reaches them with nothing open at all.
+
+**LabelControl** needs two things before it runs there: `linux-aarch64` in its `pixi.toml` (it's built for macOS only today), and a decision about its executor, which runs scene generation, the geometry pass and training in its own process: on the small control instance it would be slow and squeeze everything else, so either it runs elsewhere or its stages become orca pipelines on run instances.
+
+**The PRs:**
+
+| # | PR | Gate | Size |
+|---|---|---|---|
+| 5a | **The `ec2` runner.** The EC2 calls; `orca.ec2` (start, sweep, budget); registration's instance options; the user data that starts a head or a worker. | Against a stand-in EC2 API (a small HTTP server that records calls and runs each "instance" as a local process with its user data's environment): a fanout run starts one head and 3 workers with the right types, tags and `DISTA_HEAD`, its tasks reach all 3, everything it started is terminated after, a "Spot interruption" (a worker process killed) is survived, a head killed mid-run is restarted on new instances, and the budget makes a second run wait. | ~1,000 |
+| 5b | **On AWS.** `deploy/aws/orca.yaml`; the image pushed to ECR; the control instance set up from user data; the tunnel. | Phase 5's gate: the taxi pipeline runs on its monthly schedule, each run on its own head and workers, its start times (to the first task on every worker) and its cost measured and written here; `orca ui` and LabelControl's site reachable through the tunnel's login only. Afterwards, the stack is kept or deleted as agreed. | ~600 |
+
 
 ## Answers proposed to the vision's open questions
 
