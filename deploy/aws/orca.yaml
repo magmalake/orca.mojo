@@ -131,6 +131,15 @@ Resources:
       IpProtocol: tcp
       FromPort: 0
       ToPort: 65535
+  # The scheduler reads a scaling run's demand from its head (dista's port).
+  RunGroupHead:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RunGroup
+      SourceSecurityGroupId: !Ref ControlGroup
+      IpProtocol: tcp
+      FromPort: 6390
+      ToPort: 6390
   ControlGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:

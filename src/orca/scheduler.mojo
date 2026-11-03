@@ -122,6 +122,9 @@ struct Registered(Copyable, Movable):
     var worker_type: String
     var spot: Bool
     """On EC2, whether its workers are Spot instances."""
+    var min_workers: Int
+    """On EC2, its runs' fewest workers, scaling up to `workers`; equal to
+    `workers` for a fixed count."""
 
 
 def fill_key(kind: String, fills: String, local: Civil) raises -> String:
@@ -159,7 +162,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " coalesce(ec2_workers, (describe->>'workers')::bigint, 2) ELSE 0"
             " END AS workers, coalesce(head_type, '') AS head_type,"
             " coalesce(worker_type, '') AS worker_type, coalesce(spot, false)"
-            " AS spot FROM"
+            " AS spot, coalesce(ec2_min_workers, -1) AS min_workers FROM"
             " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
             " name = $1) ORDER BY name"
         ),
@@ -188,8 +191,14 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 r.text("head_type"),
                 r.text("worker_type"),
                 r.bool("spot"),
+                Int(r.int64("min_workers")),
             )
         )
+    # A fixed count, or no tasks: no scaling.
+    for ref p in out:
+        if p.min_workers < 0 or p.workers == 0:
+            p.min_workers = p.workers
+        p.min_workers = min(p.min_workers, p.workers)
     return out^
 
 
@@ -533,11 +542,14 @@ struct Scheduler(Movable):
         worker_type: String = "",
         workers: Int = 0,
         spot: Bool = False,
+        min_workers: Int = -1,
     ) raises -> String:
         """Records the pipeline `binary` describes, with its path; its
         schedule counts from `now` the first time, and a sensor from now the
         first time it's one, with the snapshots its datasets have now seen.
-        Queued runs move to the new code. Returns the pipeline's name."""
+        Queued runs move to the new code. `min_workers`, with `workers` as the
+        most, makes an EC2 run's workers scale between them; -1 keeps a
+        fixed count. Returns the pipeline's name."""
         var path = absolute(binary)
         var got = capture([path, "describe"])
         if got[0] != 0 or not got[1].startswith('{"pipeline": '):
@@ -579,10 +591,11 @@ struct Scheduler(Movable):
             (
                 "INSERT INTO orca.pipelines (name, registry_hash, describe,"
                 " binary_path, since, sensing_since, image, head_type,"
-                " worker_type, ec2_workers, spot) SELECT d->>'pipeline',"
+                " worker_type, ec2_workers, spot, ec2_min_workers) SELECT"
+                " d->>'pipeline',"
                 " d->>'registry_hash', d, $2, $3, CASE WHEN $4 THEN now() END,"
                 " nullif($5, ''), nullif($6, ''), nullif($7, ''), nullif($8,"
-                " 0), $9"
+                " 0), $9, nullif($10, -1)"
                 " FROM (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO"
                 " UPDATE SET registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
@@ -594,6 +607,9 @@ struct Scheduler(Movable):
                 " worker_type = coalesce(EXCLUDED.worker_type,"
                 " orca.pipelines.worker_type), ec2_workers ="
                 " coalesce(EXCLUDED.ec2_workers, orca.pipelines.ec2_workers),"
+                " ec2_min_workers = CASE WHEN $8 > 0 THEN"
+                " EXCLUDED.ec2_min_workers ELSE orca.pipelines.ec2_min_workers"
+                " END,"
                 " spot = CASE WHEN $6 <> '' OR $7 <> '' OR $8 > 0 OR $9 THEN $9"
                 " ELSE orca.pipelines.spot END, last_seen"
                 " = now() RETURNING name, registry_hash, coalesce(image, '')"
@@ -608,7 +624,8 @@ struct Scheduler(Movable):
             .text(head_type)
             .text(worker_type)
             .int64(Int64(workers))
-            .bool(spot),
+            .bool(spot)
+            .int64(Int64(min_workers)),
         )
         var name = res.row(0).text("name")
         var version = self.db.version(
@@ -679,6 +696,18 @@ struct Scheduler(Movable):
                     print("terminated", n, "instances of runs that ended")
             except e:
                 print("orca: can't sweep run instances:", e)
+            try:
+                var moved = self.ec2.value().scale(self.db)
+                if moved[0] or moved[1]:
+                    print(
+                        "scaled run workers:",
+                        moved[0],
+                        "started,",
+                        moved[1],
+                        "drained",
+                    )
+            except e:
+                print("orca: can't scale run workers:", e)
         advance_rebuilds(self.db)
         for p in registered(self.db):
             if p.cron:
@@ -1151,6 +1180,7 @@ struct Scheduler(Movable):
                             p.workers,
                             p.spot,
                             new_code[i],
+                            p.min_workers,
                         ),
                     )
                     print("started", p.name, "run", id, "on its instances")

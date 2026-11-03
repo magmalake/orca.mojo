@@ -18,6 +18,15 @@ binary itself (`direct`, for the tests' stand-in EC2), then shuts down
 (`ORCA_EC2_SHUTDOWN`). The head keeps the driver's output in the run's
 `driver.log` (`<binary> keep-log`) before it does.
 
+A pipeline registered with `--workers MIN..MAX` scales: its run starts
+`MIN` workers, which may be none, and every tick `scale` reads the head's
+demand (`dista status --json`, from port 6390 on the head's private address)
+and asks `dista.scale.decide` what to do. It starts the workers asked for,
+up to `MAX`, and drains the ones named with `dista drain`; a drained worker
+exits once its work and results have moved, and its instance's script shuts
+it down. `ORCA_SCALE_UP_AFTER` (5 s), `ORCA_SCALE_IDLE` (60 s) and
+`ORCA_SCALE_STEP` (4) tune the policy. The budget counts `MAX`.
+
 Every tick, `sweep` terminates the instances of runs that aren't running at
 that start, and those older than `ORCA_RUN_DEADLINE` (a day). Instances get
 `ORCA_EC2_DATABASE_URL` as `ORCA_DATABASE_URL` (the control instance's
@@ -31,6 +40,9 @@ against `ORCA_VCPU_BUDGET` first.
 from std.base64 import b64encode
 from std.os import getenv
 
+from dista.client import Observer
+from dista.scale import Demand, Policy, decide
+from dista.socket import wall_ns
 from postgres import Params
 
 from orca.awsec2 import Ec2, Instance
@@ -97,6 +109,8 @@ struct Ec2Spec(Copyable, Movable):
     var workers: Int
     var spot: Bool
     var allow_new_code: Bool
+    var min_workers: Int
+    """The workers it starts with; fewer than `workers`, it scales."""
 
 
 def _quote(s: String) -> String:
@@ -111,6 +125,12 @@ struct Ec2Runner(Movable):
     var worker_type: String
     var deadline: Int
     var env: List[String]
+    var up_after: Float64
+    var idle: Float64
+    var step: Int
+    var short_since: Dict[String, Float64]
+    """For each scaling run, `run-start`, since when it's been short of
+    workers: `decide`'s memory between ticks."""
 
     def __init__(out self) raises:
         self.ec2 = Ec2()
@@ -122,6 +142,10 @@ struct Ec2Runner(Movable):
         self.head_type = getenv("ORCA_EC2_HEAD_TYPE", "c7g.large")
         self.worker_type = getenv("ORCA_EC2_WORKER_TYPE", "c7g.xlarge")
         self.deadline = Int(getenv("ORCA_RUN_DEADLINE", "86400"))
+        self.up_after = Float64(getenv("ORCA_SCALE_UP_AFTER", "5"))
+        self.idle = Float64(getenv("ORCA_SCALE_IDLE", "60"))
+        self.step = Int(getenv("ORCA_SCALE_STEP", "4"))
+        self.short_since = Dict[String, Float64]()
         self.env = List[String]()
         for n in getenv("ORCA_RUN_ENV").split(","):
             if n.strip():
@@ -403,19 +427,131 @@ struct Ec2Runner(Movable):
             raise Error(
                 "orca: RunInstances gave no head instance with an address"
             )
-        if not r.tasks or r.workers == 0:
+        var n = min(r.min_workers, r.workers)
+        if not r.tasks or n <= 0:
             return
+        self._workers(db, r, n, head[0].private_ip)
+
+    def _workers(
+        self, mut db: State, r: Ec2Spec, n: Int, head_ip: String
+    ) raises:
         var workers = self.ec2.run_instances(
             self._params(
-                r,
-                "worker",
-                self.worker_of(r.worker_type),
-                r.workers,
-                r.spot,
-                head[0].private_ip,
+                r, "worker", self.worker_of(r.worker_type), n, r.spot, head_ip
             )
         )
         _record(db, r, "worker", workers, "spot" if r.spot else "on-demand")
+
+    def scale(mut self, mut db: State) raises -> Tuple[Int, Int]:
+        """Grows and shrinks the workers of every running run that scales,
+        from its head's demand; returns the workers started and drained."""
+        var started = 0
+        var drained = 0
+        var rows = db.conn.query(
+            (
+                "SELECT r.id, r.starts, r.pipeline, r.allow_new_code,"
+                " coalesce(p.image, '') AS image, p.binary_path,"
+                " coalesce(p.worker_type, '') AS worker_type, coalesce(p.spot,"
+                " false) AS spot, p.ec2_min_workers AS lo, coalesce("
+                "p.ec2_workers, (p.describe->>'workers')::bigint, 2) AS hi,"
+                " h.address FROM orca.runs r JOIN orca.pipelines p ON p.name ="
+                " r.pipeline JOIN orca.instances h ON h.run = r.id AND h.start"
+                " = r.starts AND h.role = 'head' AND h.ended IS NULL AND"
+                " h.address IS NOT NULL WHERE r.status = 'running' AND"
+                " p.ec2_min_workers IS NOT NULL"
+            ),
+            Params(),
+        )
+        var live = Dict[String, Bool]()
+        for row in rows:
+            var lo = Int(row.int64("lo"))
+            var hi = Int(row.int64("hi"))
+            if lo >= hi:
+                continue
+            var r = Ec2Spec(
+                Int(row.int64("id")),
+                Int(row.int64("starts")),
+                row.text("pipeline"),
+                row.text("image"),
+                row.text("binary_path"),
+                True,
+                "",
+                row.text("worker_type"),
+                hi,
+                row.bool("spot"),
+                row.bool("allow_new_code"),
+                lo,
+            )
+            var key = String(r.run, "-", r.start)
+            live[key] = True
+            var head_ip = row.text("address")
+            var o: Optional[Observer]
+            var text: String
+            try:
+                o = Observer(String(head_ip, ":", HEAD_PORT))
+                text = o.value().status_json()
+            except:
+                continue  # its head isn't up yet, or has gone
+            var demand = Demand.parse(text)
+            var up = Int(
+                db.conn.query(
+                    (
+                        "SELECT count(*) AS n FROM orca.instances WHERE run ="
+                        " $1 AND start = $2 AND role = 'worker' AND ended IS"
+                        " NULL AND drained IS NULL"
+                    ),
+                    Params().int64(Int64(r.run)).int64(Int64(r.start)),
+                )
+                .row(0)
+                .int64("n")
+            )
+            var pending = max(up - demand.live(), 0)
+            var got = decide(
+                demand,
+                self.policy(lo, hi),
+                Float64(wall_ns()) / 1e9,
+                pending,
+                self.short_since.get(key, 0),
+            )
+            self.short_since[key] = got.short_since
+            if got.start > 0:
+                self._workers(db, r, got.start, head_ip)
+                started += got.start
+            for addr in got.drain:
+                try:
+                    o.value().drain(addr)
+                except e:
+                    print("orca: run", r.run, "can't drain", addr, ":", e)
+                    continue
+                drained += 1
+                var ip = String(addr[byte = : addr.rfind(":")])
+                _ = db.conn.execute(
+                    (
+                        "UPDATE orca.instances SET drained = now() WHERE id ="
+                        " (SELECT id FROM orca.instances WHERE run = $1 AND"
+                        " start = $2 AND role = 'worker' AND ended IS NULL AND"
+                        " drained IS NULL AND address = $3 ORDER BY launched"
+                        " LIMIT 1)"
+                    ),
+                    Params().int64(Int64(r.run)).int64(Int64(r.start)).text(ip),
+                )
+        # Forget runs that ended.
+        var gone = List[String]()
+        for k in self.short_since.keys():
+            if k not in live:
+                gone.append(k)
+        for k in gone:
+            _ = self.short_since.pop(k, 0)
+        return (started, drained)
+
+    def policy(self, lo: Int, hi: Int) -> Policy:
+        return Policy(
+            min_workers=lo,
+            max_workers=hi,
+            up_after=self.up_after,
+            idle_before_down=self.idle,
+            max_step=self.step,
+        )
 
     def sweep(self, mut db: State) raises -> Int:
         """Terminates the instances of runs that aren't running at their
@@ -506,8 +642,8 @@ def _record(
         _ = db.conn.execute(
             (
                 "INSERT INTO orca.instances (id, run, start, role,"
-                " instance_type, market) VALUES ($1, $2, $3, $4, $5, $6) ON"
-                " CONFLICT (id) DO NOTHING"
+                " instance_type, market, address) VALUES ($1, $2, $3, $4, $5,"
+                " $6, nullif($7, '')) ON CONFLICT (id) DO NOTHING"
             ),
             Params()
             .text(i.id)
@@ -515,7 +651,8 @@ def _record(
             .int64(Int64(r.start))
             .text(String(role))
             .text(i.instance_type)
-            .text(market),
+            .text(market)
+            .text(i.private_ip),
         )
 
 
@@ -523,8 +660,9 @@ def _ended(mut db: State, id: String, why: String) raises:
     """Records that instance `id` ended, unless it's recorded already."""
     _ = db.conn.execute(
         (
-            "UPDATE orca.instances SET ended = now(), why = $2 WHERE id = $1"
-            " AND ended IS NULL"
+            "UPDATE orca.instances SET ended = now(), why = CASE WHEN drained"
+            " IS NOT NULL AND $2 = 'shut itself down' THEN 'drained: idle'"
+            " ELSE $2 END WHERE id = $1 AND ended IS NULL"
         ),
         Params().text(id).text(why),
     )
