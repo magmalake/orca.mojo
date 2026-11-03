@@ -58,6 +58,10 @@ for path in / /pipelines/toy /runs "/runs?pipeline=toy&status=failed" "/runs/$ok
 done
 [ "$(curl -fsS "$base/runs/$ok_run?format=json" | jq -r .run.status)" = succeeded ] \
     || fail "?format=json"
+# Runs per day on the home page: 30 days, today's with both runs.
+json / | jq -e '(.runs_per_day | length) == 30 and .runs_per_day[-1].succeeded == 1 and .runs_per_day[-1].failed == 1' > /dev/null \
+    || fail "runs per day: $(json / | jq -c '.runs_per_day[-1]')"
+html / | grep -q 'aria-label="Runs per day"' || fail "the home page's chart"
 
 # What the pages say.
 [ "$(json / | jq -r '.pipelines[0].name')" = toy ] || fail "/ doesn't list toy"
@@ -157,6 +161,9 @@ grep -q 'status--succeeded">succeeded</span></h2>' "$log.frag" || fail "the frag
 fan=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
 html "/runs/$fan" | grep -q "/runs/$fan/timeline.json" || fail "the run doesn't link its timeline"
 curl -fsS "$base/runs/$fan/timeline.json" | grep -q '"ph":"X"' || fail "the timeline isn't a Chrome trace"
+html "/runs/$fan" | grep -q '<svg class="tl"' || fail "the run page doesn't draw its timeline"
+curl -fsS -D - -o /dev/null "$base/runs/$fan/timeline.json" | grep -qi '^access-control-allow-origin: https://ui.perfetto.dev' \
+    || fail "Perfetto can't fetch the timeline"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$ok_run/timeline.json")
 [ "$code" = 404 ] || fail "a run without tasks answered $code for its timeline"
 

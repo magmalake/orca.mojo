@@ -161,7 +161,7 @@ struct Ec2Runner(Movable):
                 out.write("export ", n, "=", _quote(v), "\n")
         if role == "worker":
             out.write(
-                "export DISTA_ROLE=worker DISTA_HEAD=",
+                "export DISTA_HEAD=",
                 head,
                 ":",
                 HEAD_PORT,
@@ -201,6 +201,24 @@ struct Ec2Runner(Movable):
             args,
         )
 
+    def _instance_id(self) -> String:
+        """A line setting `iid` to this instance's ID: from the instance
+        metadata (IMDSv2) on EC2, from `HOSTNAME` under the tests' stand-in,
+        which sets it to the ID."""
+        if self.mode == "direct":
+            return "iid=$HOSTNAME"
+        return String(
+            "t=$(curl -s -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds:",
+            " 60' http://169.254.169.254/latest/api/token)\niid=$(curl -s -H",
+            ' "X-aws-ec2-metadata-token: $t"',
+            " http://169.254.169.254/latest/meta-data/instance-id)",
+        )
+
+    def _mounted(self, line: String) -> String:
+        """`line`, a container's run, with `/tmp` mounted, for the commands
+        that read a log the script wrote there."""
+        return line.replace("docker run --rm", "docker run --rm -v /tmp:/tmp")
+
     def _user_data(
         self, r: Ec2Spec, role: StaticString, head: String
     ) -> String:
@@ -215,15 +233,50 @@ struct Ec2Runner(Movable):
         )
         s.write(self._exports(r, role, head))
         s.write(getenv("ORCA_EC2_PREAMBLE"), "\n")
-        if role == "worker":
+        # The head's or worker's output, uploaded while it runs and once
+        # when it ends: an instance can go without notice.
+        var keeps = role == "worker" or r.tasks
+        var log = String(
+            "/tmp/orca-", r.run, "-", r.start, "-", role, "-$iid.log"
+        )
+        if keeps:
+            s.write(self._instance_id(), "\n")
             s.write(
-                self._run(
-                    r,
-                    ["DISTA_ROLE", "DISTA_HEAD", "DISTA_ADVERTISE"] if self.mode
-                    == "docker" else List[String](),
-                    "",
+                'up() { [ -z "${ORCA_LOGS:-}" ] || ',
+                self._mounted(
+                    self._run(
+                        r,
+                        List[String](),
+                        String(
+                            "put-log ",
+                            log,
+                            ' "$ORCA_LOGS/',
+                            r.pipeline,
+                            "/",
+                            r.run,
+                            "/cluster/",
+                            role,
+                            '-$iid.log"',
+                        ),
+                    )
                 ),
-                "\n",
+                " >/dev/null 2>&1; }\n",
+                "( while sleep ",
+                getenv("ORCA_CLUSTER_LOG_SECONDS", "30"),
+                "; do up; done ) &\nuploader=$!\n",
+            )
+        if role == "worker":
+            # The role goes to the worker alone: a binary given one serves
+            # it, whatever its command line says.
+            var env: List[String] = [String("DISTA_ROLE=worker")]
+            if self.mode == "docker":
+                env.append("DISTA_HEAD")
+                env.append("DISTA_ADVERTISE")
+            s.write(
+                self._run(r, env, ""),
+                " > ",
+                log,
+                " 2>&1\n",
             )
         else:
             if r.tasks:
@@ -236,7 +289,9 @@ struct Ec2Runner(Movable):
                         ],
                         "",
                     ),
-                    " &\nhead=$!\n",
+                    " > ",
+                    log,
+                    " 2>&1 &\nhead=$!\n",
                 )
             var args = String("resume ", r.run)
             if r.allow_new_code:
@@ -247,25 +302,29 @@ struct Ec2Runner(Movable):
             var out = String("/tmp/orca-", r.run, "-", r.start, "-driver.log")
             s.write(self._run(r, env, args), " > ", out, " 2>&1\n")
             if r.tasks:
-                s.write("kill $head 2>/dev/null\n")
+                s.write("kill $head 2>/dev/null\nwait $head 2>/dev/null\n")
             s.write(
                 'if [ -n "${ORCA_LOGS:-}" ]; then ',
-                self._run(
-                    r,
-                    List[String](),
-                    String(
-                        "keep-log ",
-                        out,
-                        ' "$ORCA_LOGS/',
-                        r.pipeline,
-                        "/",
-                        r.run,
-                        '/driver.log" ',
-                        r.start,
-                    ),
-                ).replace("docker run --rm", "docker run --rm -v /tmp:/tmp"),
+                self._mounted(
+                    self._run(
+                        r,
+                        List[String](),
+                        String(
+                            "keep-log ",
+                            out,
+                            ' "$ORCA_LOGS/',
+                            r.pipeline,
+                            "/",
+                            r.run,
+                            '/driver.log" ',
+                            r.start,
+                        ),
+                    )
+                ),
                 "; fi\n",
             )
+        if keeps:
+            s.write("kill $uploader 2>/dev/null\nup\n")
         s.write(
             getenv(
                 "ORCA_EC2_SHUTDOWN",
@@ -332,18 +391,21 @@ struct Ec2Runner(Movable):
             )
         return p^
 
-    def start(self, r: Ec2Spec) raises:
-        """Starts the run's head instance, then its workers."""
+    def start(self, mut db: State, r: Ec2Spec) raises:
+        """Starts the run's head instance, then its workers, and records
+        them in `orca.instances`."""
+        var head_type = self.head_of(r.head_type)
         var head = self.ec2.run_instances(
-            self._params(r, "head", self.head_of(r.head_type), 1, False, "")
+            self._params(r, "head", head_type, 1, False, "")
         )
+        _record(db, r, "head", head, "on-demand")
         if len(head) != 1 or not head[0].private_ip:
             raise Error(
                 "orca: RunInstances gave no head instance with an address"
             )
         if not r.tasks or r.workers == 0:
             return
-        _ = self.ec2.run_instances(
+        var workers = self.ec2.run_instances(
             self._params(
                 r,
                 "worker",
@@ -353,6 +415,7 @@ struct Ec2Runner(Movable):
                 head[0].private_ip,
             )
         )
+        _record(db, r, "worker", workers, "spot" if r.spot else "on-demand")
 
     def sweep(self, mut db: State) raises -> Int:
         """Terminates the instances of runs that aren't running at their
@@ -383,7 +446,9 @@ struct Ec2Runner(Movable):
         filters.append((String("tag-key"), tag^))
         filters.append((String("instance-state-name"), states^))
         var doomed = List[String]()
+        var up = List[String]()
         for i in self.ec2.describe(filters):
+            up.append(i.id)
             var key = String(
                 i.tags.get("orca.run", ""), "-", i.tags.get("orca.start", "")
             )
@@ -391,4 +456,75 @@ struct Ec2Runner(Movable):
             if key not in live or (i.launch_time and i.launch_time < old):
                 doomed.append(i.id)
         self.ec2.terminate(doomed)
+        for id in doomed:
+            _ended(db, id, "terminated by orca: its run had ended")
+        self._ended_since(db, up)
         return len(doomed)
+
+    def _ended_since(self, mut db: State, up: List[String]) raises:
+        """Records the end of every instance `orca.instances` has as live
+        that isn't among those `up`, with EC2's reason for it."""
+        var gone = List[String]()
+        for row in db.conn.query(
+            "SELECT id FROM orca.instances WHERE ended IS NULL", Params()
+        ):
+            var id = row.text("id")
+            if id not in up:
+                gone.append(id)
+        if len(gone) == 0:
+            return
+        var filters = List[Tuple[String, List[String]]]()
+        filters.append((String("instance-id"), gone.copy()))
+        var reasons = Dict[String, String]()
+        for i in self.ec2.describe(filters):
+            reasons[i.id] = i.state_reason
+        for id in gone:
+            _ended(db, id, _why(reasons.get(id, "")))
+
+
+def _why(code: String) -> String:
+    """EC2's state reason, said plainly."""
+    if code == "Client.InstanceInitiatedShutdown":
+        return "shut itself down"
+    if code == "Client.UserInitiatedShutdown":
+        return "terminated"
+    if code == "Server.SpotInstanceTermination":
+        return "Spot interruption"
+    if code == "Server.InsufficientInstanceCapacity":
+        return "no capacity"
+    return code if code else String("gone")
+
+
+def _record(
+    mut db: State,
+    r: Ec2Spec,
+    role: StaticString,
+    made: List[Instance],
+    market: String,
+) raises:
+    for i in made:
+        _ = db.conn.execute(
+            (
+                "INSERT INTO orca.instances (id, run, start, role,"
+                " instance_type, market) VALUES ($1, $2, $3, $4, $5, $6) ON"
+                " CONFLICT (id) DO NOTHING"
+            ),
+            Params()
+            .text(i.id)
+            .int64(Int64(r.run))
+            .int64(Int64(r.start))
+            .text(String(role))
+            .text(i.instance_type)
+            .text(market),
+        )
+
+
+def _ended(mut db: State, id: String, why: String) raises:
+    """Records that instance `id` ended, unless it's recorded already."""
+    _ = db.conn.execute(
+        (
+            "UPDATE orca.instances SET ended = now(), why = $2 WHERE id = $1"
+            " AND ended IS NULL"
+        ),
+        Params().text(id).text(why),
+    )

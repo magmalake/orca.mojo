@@ -8,7 +8,8 @@ from `AWS_REGION`. `ORCA_EC2_ENDPOINT` points the calls elsewhere, as the
 tests do at a stand-in (`tests/fake_ec2.py`).
 
 The answers are read for the fields the runner uses and nothing else: an
-instance's ID, private address, state, launch time and tags.
+instance's ID, type, private address, state, why it's in that state, launch
+time and tags.
 """
 
 from std.os import getenv
@@ -24,9 +25,15 @@ comptime EC2_VERSION = "2016-11-15"
 @fieldwise_init
 struct Instance(Copyable, Movable):
     var id: String
+    var instance_type: String
     var private_ip: String
     var state: String
     """`pending`, `running`, `shutting-down`, `terminated`, ..."""
+    var state_reason: String
+    """Why it's stopping or stopped, as EC2's code:
+    `Client.InstanceInitiatedShutdown` (it shut itself down),
+    `Client.UserInitiatedShutdown` (TerminateInstances),
+    `Server.SpotInstanceTermination`, ...; empty while it runs."""
     var launch_time: String
     """ISO 8601, UTC."""
     var tags: Dict[String, String]
@@ -109,11 +116,17 @@ def parse_instances(xml: String) -> List[Instance]:
         var si = item.find("<instanceState>")
         if si >= 0:
             state = _between(item, "name", si)[0]
+        var reason = String()
+        var ri = item.find("<stateReason>")
+        if ri >= 0:
+            reason = _between(item, "code", ri)[0]
         out.append(
             Instance(
                 _between(item, "instanceId")[0],
+                _between(item, "instanceType")[0],
                 _between(item, "privateIpAddress")[0],
                 state^,
+                reason^,
                 _between(item, "launchTime")[0],
                 tags^,
             )

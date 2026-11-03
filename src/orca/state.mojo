@@ -234,6 +234,28 @@ def _migrations() -> List[List[String]]:
                 " orca.pipeline_versions (id)"
             ),
         ],
+        # The instances a run ran on (orca.ec2): what each was, when it
+        # started and ended, and why it ended.
+        [
+            """CREATE TABLE orca.instances (
+            id text PRIMARY KEY,
+            run bigint NOT NULL REFERENCES orca.runs (id),
+            start int NOT NULL,
+            role text NOT NULL,
+            instance_type text NOT NULL,
+            market text NOT NULL,
+            launched timestamptz NOT NULL DEFAULT now(),
+            ended timestamptz,
+            why text)""",
+            "CREATE INDEX instances_run ON orca.instances (run)",
+            (
+                "CREATE INDEX instances_live ON orca.instances (run) WHERE"
+                " ended IS NULL"
+            ),
+            # Where its functions are in its source (orca.locate), as
+            # registration found them beside the binary.
+            "ALTER TABLE orca.pipeline_versions ADD COLUMN locations jsonb",
+        ],
     ]
 
 

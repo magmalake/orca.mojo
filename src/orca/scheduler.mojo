@@ -60,6 +60,7 @@ driver pod's log on Kubernetes (`orca.kube`).
 """
 
 from std.os import getenv, makedirs
+from std.os.path import exists
 from std.time import perf_counter_ns
 
 from postgres import Params, Transaction
@@ -610,21 +611,29 @@ struct Scheduler(Movable):
             .bool(spot),
         )
         var name = res.row(0).text("name")
+        var version = self.db.version(
+            name,
+            res.row(0).text("registry_hash"),
+            got[1],
+            res.row(0).text("image"),
+        )
         _ = self.db.conn.execute(
             "UPDATE orca.pipelines SET version = $2 WHERE name = $1",
-            Params()
-            .text(name)
-            .int64(
-                Int64(
-                    self.db.version(
-                        name,
-                        res.row(0).text("registry_hash"),
-                        got[1],
-                        res.row(0).text("image"),
-                    )
-                )
-            ),
+            Params().text(name).int64(Int64(version)),
         )
+        # Where its functions are, if `orca locate` left a map beside it.
+        var map = String(path, ".source.json")
+        if exists(map):
+            var text: String
+            with open(map, "r") as f:
+                text = f.read()
+            _ = self.db.conn.execute(
+                (
+                    "UPDATE orca.pipeline_versions SET locations = $2::jsonb"
+                    " WHERE id = $1"
+                ),
+                Params().int64(Int64(version)).text(text),
+            )
         # What its datasets hold now isn't new to it.
         for c in parse_sense(seen):
             if c.snapshot >= 0:
@@ -1129,6 +1138,7 @@ struct Scheduler(Movable):
             if self.ec2:
                 try:
                     self.ec2.value().start(
+                        self.db,
                         Ec2Spec(
                             Int(id),
                             starts[i],
@@ -1141,7 +1151,7 @@ struct Scheduler(Movable):
                             p.workers,
                             p.spot,
                             new_code[i],
-                        )
+                        ),
                     )
                     print("started", p.name, "run", id, "on its instances")
                 except e:
