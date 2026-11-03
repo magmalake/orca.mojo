@@ -62,9 +62,11 @@ from orca.auth import (
     SESSION_COOKIE,
     audit,
     close_session,
+    login_failed,
     login_required,
     open_session,
     session_user,
+    too_many_failures,
 )
 from orca.actions import (
     Outcome,
@@ -2367,6 +2369,8 @@ def _reason(status: Int) -> String:
         return "Forbidden"
     if status == 401:
         return "Unauthorized"
+    if status == 429:
+        return "Too Many Requests"
     if status == 404:
         return "Not Found"
     if status == 409:
@@ -2485,9 +2489,22 @@ def login_page(next: String, why: String, status: Int = 200) -> Page:
     )
 
 
-def _login(mut db: State, body: String, json: Bool) raises -> Response:
-    var token = open_session(db, _form(body, "name"), _form(body, "password"))
+def _login(
+    mut db: State, body: String, json: Bool, address: String
+) raises -> Response:
+    var name = _form(body, "name")
+    if too_many_failures(db, name, address):
+        return _respond(
+            login_page(
+                _form(body, "next"),
+                "Too many failed logins; try again in 15 minutes.",
+                429,
+            ),
+            json,
+        )
+    var token = open_session(db, name, _form(body, "password"))
     if not token:
+        login_failed(db, name, address)
         return _respond(
             login_page(_form(body, "next"), "Wrong name or password.", 401),
             json,
@@ -2504,6 +2521,17 @@ def _login(mut db: State, body: String, json: Bool) raises -> Response:
     )
     out.headers.set("Set-Cookie", _cookie_header(token, Int(hours * 3600.0)))
     return out^
+
+
+def _client(req: Request) -> String:
+    """The address a request came from: the connection's peer, or behind a
+    proxy (`ORCA_UI_TRUST_PROXY=1`) the first address of
+    `X-Forwarded-For`, which only a proxy in front can be trusted to set."""
+    if getenv("ORCA_UI_TRUST_PROXY") == "1":
+        var fwd = req.headers.get("X-Forwarded-For")
+        if fwd:
+            return String(fwd.split(",")[0].strip())
+    return String(req.peer.ip)
 
 
 def _login_needed(req: Request, json: Bool) raises -> Response:
@@ -2607,7 +2635,7 @@ struct Ui(Copyable, Handler):
                         user,
                         required,
                     )
-                return _login(db, body, json)
+                return _login(db, body, json, _client(req))
             if path == "/logout":
                 if token:
                     close_session(db, token)
