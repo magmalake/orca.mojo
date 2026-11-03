@@ -11,6 +11,10 @@
 # - nothing was made from the first raw snapshot, which clean never read;
 # - `orca lineage` and the UI's pages say the same.
 #
+# With ORCA_TEST_S3 set, the warehouse and the attempts' logs are in the
+# bucket ORCA_S3_BUCKET names (pixi run -e data test-lineage-s3 starts a
+# throwaway MinIO), and the UI shows an attempt's log read from it.
+#
 # Needs ORCA_DATABASE_URL (pixi run -e data test-lineage starts a throwaway
 # server), curl and jq.
 set -eu
@@ -24,8 +28,14 @@ done
 mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
 log=build/lineage.log
 : > "$log"
-export ORCA_WAREHOUSE=build/lineage-wh
-rm -rf "$ORCA_WAREHOUSE"
+if [ -n "${ORCA_TEST_S3:-}" ]; then
+    # shellcheck disable=SC2086
+    mojo build -I src $DEP_INC tests/s3cat.mojo -o build/s3cat
+    export ORCA_WAREHOUSE="$ORCA_S3_BUCKET/lineage-$$" ORCA_LOGS="$ORCA_S3_BUCKET/lineage-logs-$$"
+else
+    export ORCA_WAREHOUSE=build/lineage-wh
+    rm -rf "$ORCA_WAREHOUSE"
+fi
 ui=
 fail() {
     echo "FAIL: $*"
@@ -42,7 +52,16 @@ q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
 ./build/ln-report run --partitions 2024-01..2024-02 >> "$log" 2>&1 || fail "report"
 
 # What the tables themselves say: each snapshot's orca.reads, by dataset.
-meta() { ls "$ORCA_WAREHOUSE/lake/$1/metadata/"*.metadata.json | sort | tail -1; }
+meta() {
+    case "$ORCA_WAREHOUSE" in
+        s3://*)
+            m=$(./build/s3cat ls "$ORCA_WAREHOUSE/lake/$1/metadata/" | grep '\.metadata\.json$' | sort | tail -1)
+            ./build/s3cat get "$m" > "build/lineage-meta-$1.json"
+            echo "build/lineage-meta-$1.json"
+            ;;
+        *) ls "$ORCA_WAREHOUSE/lake/$1/metadata/"*.metadata.json | sort | tail -1 ;;
+    esac
+}
 current() { jq -r '."current-snapshot-id"' "$(meta "$1")"; }
 # reads_of TABLE SNAPSHOT: its summary's orca.reads as dataset@snapshot, sorted.
 reads_of() {
@@ -117,5 +136,15 @@ for path in /datasets/nope "/datasets/lake.raw/snapshots/1" /datasets/lake.raw/s
     code=$(curl -s -o /dev/null -w '%{http_code}' "$base$path")
     [ "$code" = 404 ] || fail "$path answered $code"
 done
+if [ -n "${ORCA_TEST_S3:-}" ]; then
+    # An attempt's log, kept in the bucket and read back by the UI.
+    aid=$(json "/runs/$run" | jq -r '.steps[0].attempt_id')
+    [ "$(json "/runs/$run/attempts/$aid" | jq -r '.attempt.log')" = \
+        "$ORCA_LOGS/report/$run/report/_run/1.log" ] || fail "the attempt's log location"
+    json "/runs/$run/attempts/$aid" | jq -e '.text | contains("attempt 1 succeeded")' > /dev/null \
+        || fail "the attempt's log from the bucket: $(json "/runs/$run/attempts/$aid")"
+    ./build/s3cat get "$ORCA_LOGS/report/$run/report/_run/1.log" | grep -q "attempt 1 succeeded" \
+        || fail "the log isn't in the bucket"
+fi
 kill "$ui"
-echo "ok   lineage"
+echo "ok   lineage${ORCA_TEST_S3:+ on S3}"

@@ -21,9 +21,9 @@ be before another process may resume it.
 A pipeline with dista tasks gets a runtime per run, started before anything
 else so its forked processes inherit no connection or thread; run with
 `DISTA_ROLE` set, the binary is a dista head or worker instead (see
-`orca.tasks`). With `ORCA_LOGS` set, attempts log to files there, the run's
-dista timeline is written beside them, and `status <run>` shows each step's
-latest log.
+`orca.tasks`). With `ORCA_LOGS` set, a directory or a location in object
+storage (`orca.logs`), attempts log there, the run's dista timeline is
+written beside them, and `status <run>` shows each step's latest log.
 
 `sense` prints a line per dataset the pipeline reads and doesn't write,
 `<dataset> <snapshot> <orca|other> <partitions|->`: its table's current
@@ -39,14 +39,14 @@ resumed).
 """
 
 from std.ffi import external_call
-from std.os import getenv
+from std.os import getenv, makedirs
 from std.random import seed
 from std.sys import argv, exit
 
 from threads import TypedPool
 
 from orca.heartbeat import Beat, beat, heartbeat_interval
-from orca.logs import run_dir
+from orca.logs import publish, run_dir, stage_of
 from orca.tasks import workers
 from orca.civil import Civil, now, parse_time
 from orca.pipeline import FAILED, SUCCEEDED, Pipeline, RunResult
@@ -301,6 +301,11 @@ def _print_fires[P: type_of(Pipeline)](args: List[String]) raises -> Int:
     return 0
 
 
+def _parent(path: String) -> String:
+    var at = path.rfind("/")
+    return String(path[byte=:at]) if at > 0 else String(".")
+
+
 def _stale_seconds() raises -> Float64:
     var s = getenv("ORCA_STALE_SECONDS", "30")
     try:
@@ -345,8 +350,11 @@ def _execute[
     var dir = run_dir(P.name, run)
     comptime if P.tasks.HAS_RUNTIME:
         if dir:
+            var at = String(dir, "/timeline.json")
             try:
-                _ = P.tasks.timeline(rt, String(dir, "/timeline.json"))
+                makedirs(_parent(stage_of(at)), exist_ok=True)
+                _ = P.tasks.timeline(rt, stage_of(at))
+                publish(at)
             except e:
                 print("orca: no timeline:", e)
     var ok = res.succeeded()

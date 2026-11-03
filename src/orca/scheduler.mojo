@@ -51,7 +51,9 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
 The scheduler's clock is `orca.civil.now`, which `ORCA_NOW` fixes; fire
 times and retry times are on it. Heartbeats are on the database's clock.
 A run's output goes to `<ORCA_LOGS>/<pipeline>/<run>/driver.log` when
-`ORCA_LOGS` is set.
+`ORCA_LOGS` is set: written there by a local run, published there when the
+process is reaped if `ORCA_LOGS` is in object storage, or kept from the
+driver pod's log on Kubernetes (`orca.kube`).
 """
 
 from std.os import getenv, makedirs
@@ -64,6 +66,7 @@ from orca.cron import CronExpr
 from orca.day import Day
 from orca.key import parse_keys
 from orca.kube import KubeRunner, RunSpec, cpu_millis
+from orca.logs import is_remote, publish, run_dir, stage_of
 from orca.month import Month
 from orca.name import parse_names, sort_texts
 from orca.proc import absolute, capture, reap, spawn
@@ -470,6 +473,9 @@ struct Scheduler(Movable):
     var _polled: Dict[String, Int]
     """When each sensor's binary was last asked to `sense`, on the monotonic
     clock in nanoseconds."""
+    var _driver_logs: Dict[Int, String]
+    """A local run's process to where its driver log goes, when that's in
+    object storage: it's published once the process is reaped."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -497,6 +503,7 @@ struct Scheduler(Movable):
         self.budget = cpu_millis(budget) if budget else 0
         self.logs = getenv("ORCA_LOGS")
         self._polled = Dict[String, Int]()
+        self._driver_logs = Dict[Int, String]()
 
     def register(
         mut self, binary: String, now: Int64, image: String = ""
@@ -591,6 +598,12 @@ struct Scheduler(Movable):
         sense new snapshots, schedule retries, and start what may start."""
         for done in reap():
             print("reaped pid", done[0], "exit", done[1])
+            var log = self._driver_logs.pop(done[0], "")
+            if log:
+                try:
+                    publish(log)
+                except e:
+                    print("orca: can't keep the driver log at", log, ":", e)
         if self.runner:
             try:
                 var n = self.runner.value().sweep(self.db)
@@ -1051,13 +1064,17 @@ struct Scheduler(Movable):
                 continue
             var log = String()
             if self.logs:
-                var dir = String(self.logs, "/", p.name, "/", id)
-                makedirs(dir, exist_ok=True)
-                log = String(dir, "/driver.log")
+                log = String(run_dir(p.name, Int(id)), "/driver.log")
+                var stage = stage_of(log)
+                makedirs(
+                    String(stage[byte = : stage.rfind("/")]), exist_ok=True
+                )
             var argv: List[String] = [p.binary, "resume", String(id)]
             if new_code[i]:
                 argv.append("--allow-new-code")
-            var pid = spawn(argv, log)
+            var pid = spawn(argv, stage_of(log) if log else log)
+            if is_remote(log):
+                self._driver_logs[pid] = log
             print("started", p.name, "run", id, "pid", pid)
 
     def backfill(mut self, pipeline: String, keys: String) raises -> Int:

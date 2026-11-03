@@ -9,6 +9,7 @@ from std.sys import argv
 
 from iceberg.append import prepare_append
 from iceberg.catalog.filesystem import FilesystemCatalog
+from iceberg.io import FileIO
 from iceberg.schema import Schema
 from iceberg.transforms import PartitionSpec
 from iceberg.write import WriteOptions, write_data_files
@@ -20,7 +21,11 @@ from rows import SCHEMA, rows
 def main() raises:
     seed_random()  # iceberg draws snapshot IDs from std.random
     var args = argv()
-    var cat = FilesystemCatalog.local(String(args[1]))
+    var root = String(args[1])
+    # A warehouse in object storage, as orca.tables opens one.
+    var cat = FilesystemCatalog(
+        root, FileIO()
+    ) if "://" in root else FilesystemCatalog.local(root)
     if not cat.table_exists("raw", "events"):
         _ = cat.create_table(
             "raw", "events", Schema.parse(SCHEMA), PartitionSpec.unpartitioned()

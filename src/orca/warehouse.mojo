@@ -10,6 +10,10 @@ and two properties of its summary: whether an orca step made it
 (`orca.run`), and the partition keys it holds (`orca.partitions`), which a
 writer that isn't orca can set too.
 
+The warehouse is a directory or a location in object storage
+(`s3://bucket/warehouse`), listed and read through objectstore's
+`FileIOResolver`, from the `AWS_*` environment.
+
 orca's pipelines import iceberg only if they use tables, and every binary
 answers `sense`, so this reads the JSON itself: just enough of it to walk
 objects and arrays to the fields it needs.
@@ -17,6 +21,8 @@ objects and arrays to the fields it needs.
 
 from std.os import listdir
 from std.os.path import exists
+
+from objectstore.fileio import FileIOResolver
 
 
 @fieldwise_init
@@ -38,49 +44,70 @@ def current_snapshot(warehouse: String, dataset: String) raises -> Sensed:
     if dot <= 0 or dot == dataset.byte_length() - 1:
         raise Error("orca: a dataset is named namespace.table, not ", dataset)
     var dir = String(
-        warehouse,
+        warehouse.rstrip("/"),
         "/",
         dataset[byte=:dot],
         "/",
         dataset[byte = dot + 1 :],
         "/metadata",
     )
-    if not exists(dir):
+    var names = _names(dir)
+    if len(names) == 0:
         return Sensed(dataset, -1, False, "")
-    var text: String
-    with open(_latest(dir), "r") as f:
-        text = f.read()
-    return current_of(dataset, text)
+    return current_of(dataset, _read(_latest(dir, names)))
 
 
-def _latest(dir: String) raises -> String:
-    var hint = String(dir, "/version-hint.text")
-    if exists(hint):
-        var v: String
-        with open(hint, "r") as f:
-            v = String(f.read().strip())
+def _remote(location: String) -> Bool:
+    return "://" in location and not location.startswith("file://")
+
+
+def _names(dir: String) raises -> List[String]:
+    """The files in `dir`, by name; none if it doesn't exist."""
+    if not _remote(dir):
+        if not exists(dir):
+            return List[String]()
+        return listdir(dir)
+    var prefix = String(dir, "/")
+    var out = List[String]()
+    for loc in FileIOResolver().list(prefix):
+        if loc.startswith(prefix):
+            var name = String(loc[byte = prefix.byte_length() :])
+            if name and "/" not in name:
+                out.append(name^)
+    return out^
+
+
+def _read(location: String) raises -> String:
+    if _remote(location):
+        return String(from_utf8_lossy=Span(FileIOResolver().read_all(location)))
+    with open(location, "r") as f:
+        return f.read()
+
+
+def _latest(dir: String, names: List[String]) raises -> String:
+    if "version-hint.text" in names:
+        var v = String(_read(String(dir, "/version-hint.text")).strip())
         for name in [
             String("v", v, ".metadata.json"),
             String(v, ".metadata.json"),
         ]:
-            if exists(String(dir, "/", name)):
+            if name in names:
                 return String(dir, "/", name)
     var best = -1
     var best_updated = Int64(-1)
     var path = String()
-    for name in listdir(dir):
+    for name in names:
         var v = _version_of(name)
         if v < 0 or v < best:
             continue
         var p = String(dir, "/", name)
         var updated = Int64(-1)
         try:
-            with open(p, "r") as f:
-                var t = f.read()
-                var b = t.as_bytes()
-                var at = _field(b, _ws(b, 0), "last-updated-ms")
-                if at >= 0:
-                    updated = Int64(Int(_scalar(b, at)))
+            var t = _read(p)
+            var b = t.as_bytes()
+            var at = _field(b, _ws(b, 0), "last-updated-ms")
+            if at >= 0:
+                updated = Int64(Int(_scalar(b, at)))
         except:
             pass
         if v > best or updated > best_updated:

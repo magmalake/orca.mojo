@@ -130,9 +130,20 @@ test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh" }
 test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh" }
 test-commits = { cmd = "tests/concurrent_commits.sh" }
 test-sensors = { cmd = "scripts/with-postgres.sh tests/sensors.sh" }
+# The same two over MinIO: the warehouse and logs in object storage.
+test-lineage-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/lineage.sh" }
+test-sensors-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/sensors.sh" }
 test-keyed = { cmd = "scripts/with-postgres.sh tests/keyed.sh" }
 test-keyed-backfills = { cmd = "scripts/with-postgres.sh tests/keyed_backfills.sh" }
 taxi = { cmd = "mkdir -p build && mojo build -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi" }
+
+# MinIO for the tests over object storage (scripts/with-minio.sh). conda-forge
+# builds it for these two platforms only.
+[feature.data.target.osx-arm64.dependencies]
+minio-server = ">=2025.10.15"
+
+[feature.data.target.linux-64.dependencies]
+minio-server = ">=2025.10.15"
 
 # Fuzzing with mozz (packaged for magmalake as mozz_mlake), as dista does: one
 # harness per parser or decoder under fuzz/, built with every bounds check

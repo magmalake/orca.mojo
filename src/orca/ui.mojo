@@ -13,6 +13,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/runs/<id>` | a run's DAG, steps and partitions, attempts, errors, reads and commits |
 | `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error |
 | `/runs/<id>/timeline.json` | the run's Dista timeline, for Perfetto |
+| `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph and its snapshots |
 | `/datasets/<name>/snapshots/<id>` | a snapshot's lineage, back and forward (`orca.lineage`) |
@@ -64,7 +65,7 @@ from orca.actions import (
     stalled_sql,
 )
 from orca.civil import Civil, now
-from orca.logs import run_dir
+from orca.logs import location_exists, read_location, run_dir
 from orca.cron import CronExpr
 from orca.dag import DagStep, aggregate, dag_svg
 from orca.graph import Edge, Node, graph_svg
@@ -1228,6 +1229,11 @@ def run(mut db: State, id: Int) raises -> Page:
     if hash != current:
         h.raw(' <span class="muted">(the pipeline has newer code)</span>')
     h.raw("</dd>")
+    var dir = run_dir(r.pipeline, r.id)
+    if dir and location_exists(String(dir, "/driver.log")):
+        h.raw("<dt>Driver</dt><dd>")
+        h.link(String("/runs/", r.id, "/driver.log"), "driver.log")
+        h.raw("</dd>")
     var timeline = _timeline_path(db, r)
     if timeline:
         h.raw("<dt>Timeline</dt><dd>")
@@ -1424,12 +1430,8 @@ def _timeline_path(mut db: State, r: RunRow) raises -> String:
         dirs.append(own)
     for d in dirs:
         var path = String(d, "/timeline.json")
-        try:
-            with open(path, "r") as f:
-                _ = f.read_bytes(1)
+        if location_exists(path):
             return path
-        except:
-            pass
     return ""
 
 
@@ -1440,10 +1442,23 @@ def timeline(mut db: State, id: Int) raises -> Page:
     var path = _timeline_path(db, found.value())
     if not path:
         return not_found(String("run ", id, " has no timeline"))
-    var body: String
-    with open(path, "r") as f:
-        body = f.read()
+    var body = String(from_utf8_lossy=Span(read_location(path)))
     return Page(200, String(), body^, "application/json")
+
+
+def driver_log(mut db: State, id: Int) raises -> Page:
+    """The run's driver log, as the scheduler kept it under ORCA_LOGS."""
+    var found = _runs_one(db, id)
+    if not found:
+        return not_found(String("no run ", id))
+    var dir = run_dir(found.value().pipeline, id)
+    var got = _read_log(String(dir, "/driver.log")) if dir else (
+        String(),
+        False,
+    )
+    if not got[0]:
+        return not_found(String("run ", id, " has no driver log"))
+    return Page(200, String(), got[0], "text/plain; charset=utf-8")
 
 
 comptime _LOG_LIMIT = 1 << 20
@@ -1456,12 +1471,11 @@ def _read_log(path: String) -> Tuple[String, Bool]:
     if not path:
         return (String(), False)
     try:
-        with open(path, "r") as f:
-            var b = f.read_bytes()
-            if len(b) <= _LOG_LIMIT:
-                return (String(from_utf8_lossy=Span(b)), False)
-            var start = len(b) - _LOG_LIMIT
-            return (String(from_utf8_lossy=Span(b)[start:]), True)
+        var b = read_location(path)
+        if len(b) <= _LOG_LIMIT:
+            return (String(from_utf8_lossy=Span(b)), False)
+        var start = len(b) - _LOG_LIMIT
+        return (String(from_utf8_lossy=Span(b)[start:]), True)
     except:
         return (String(), False)
 
@@ -2467,6 +2481,8 @@ struct Ui(Copyable, Handler):
                 return run_steps(db, id)
             if len(parts) == 2 and parts[1] == "timeline.json":
                 return timeline(db, id)
+            if len(parts) == 2 and parts[1] == "driver.log":
+                return driver_log(db, id)
             if len(parts) >= 3 and len(parts) <= 4 and parts[1] == "attempts":
                 var aid: Int
                 try:
