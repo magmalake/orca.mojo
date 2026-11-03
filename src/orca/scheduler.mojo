@@ -34,6 +34,9 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   step has succeeded for it in a run of the pipeline's current code
   (`DONE_SQL`). A backfill drops the keys that are done or in a queued or
   running run, sorts the rest and queues a run per `keys_per_run` of them.
+- **Where runs run.** `ORCA_RUNNER` is `local` (a process here, the
+  default), `kubernetes` (a dista cluster of pods per run, `orca.kube`) or
+  `ec2` (a head instance and worker instances per run, `orca.ec2`).
 - **Sensors and rebuilds** (`orca.sensors`). A sensor pipeline's pass
   looks for snapshots of the datasets it reads, in `orca.commits` on every
   tick and from `<binary> sense` every `ORCA_SENSE_SECONDS`, and queues a
@@ -65,6 +68,7 @@ from orca.civil import Civil
 from orca.cron import CronExpr
 from orca.day import Day
 from orca.key import parse_keys
+from orca.ec2 import Ec2Runner, Ec2Spec
 from orca.kube import KubeRunner, RunSpec, cpu_millis
 from orca.logs import is_remote, publish, run_dir, stage_of
 from orca.month import Month
@@ -111,7 +115,12 @@ struct Registered(Copyable, Movable):
     var image: String
     """The image its runs' pods run (`orca register --image`), or empty."""
     var workers: Int
-    """Its cluster's dista workers on Kubernetes; 0 if it has no tasks."""
+    """Its cluster's dista workers; 0 if it has no tasks."""
+    var head_type: String
+    """On EC2, its runs' head instance type; empty for the default."""
+    var worker_type: String
+    var spot: Bool
+    """On EC2, whether its workers are Spot instances."""
 
 
 def fill_key(kind: String, fills: String, local: Civil) raises -> String:
@@ -146,8 +155,10 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " keys_per_run, coalesce(describe->'partitions'->>'dataset', '')"
             " AS keys_dataset, coalesce(image, '') AS image, CASE WHEN"
             " jsonb_array_length(coalesce(describe->'tasks', '[]')) > 0 THEN"
-            " coalesce((describe->>'workers')::bigint, 2) ELSE 0 END AS"
-            " workers FROM"
+            " coalesce(ec2_workers, (describe->>'workers')::bigint, 2) ELSE 0"
+            " END AS workers, coalesce(head_type, '') AS head_type,"
+            " coalesce(worker_type, '') AS worker_type, coalesce(spot, false)"
+            " AS spot FROM"
             " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
             " name = $1) ORDER BY name"
         ),
@@ -173,6 +184,9 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 r.text("keys_dataset"),
                 r.text("image"),
                 Int(r.int64("workers")),
+                r.text("head_type"),
+                r.text("worker_type"),
+                r.bool("spot"),
             )
         )
     return out^
@@ -468,7 +482,9 @@ struct Scheduler(Movable):
     var budget: Int
     """`ORCA_VCPU_BUDGET` in thousandths of a vCPU; 0 for none."""
     var runner: Optional[KubeRunner]
-    """Set with `ORCA_RUNNER=kubernetes`; else runs are local processes."""
+    """Set with `ORCA_RUNNER=kubernetes`."""
+    var ec2: Optional[Ec2Runner]
+    """Set with `ORCA_RUNNER=ec2`; with neither, runs are local processes."""
     var logs: String
     var _polled: Dict[String, Int]
     """When each sensor's binary was last asked to `sense`, on the monotonic
@@ -484,19 +500,21 @@ struct Scheduler(Movable):
         self.retry_seconds = Int64(Int(getenv("ORCA_RETRY_SECONDS", "60")))
         self.sense_seconds = Float64(getenv("ORCA_SENSE_SECONDS", "60"))
         var runner = getenv("ORCA_RUNNER", "local")
+        self.runner = None
+        self.ec2 = None
         if runner == "kubernetes":
             self.runner = KubeRunner()
-        elif runner == "local":
-            self.runner = None
-        else:
+        elif runner == "ec2":
+            self.ec2 = Ec2Runner()
+        elif runner != "local":
             raise Error(
-                "orca: ORCA_RUNNER is local or kubernetes, not ", runner
+                "orca: ORCA_RUNNER is local, kubernetes or ec2, not ", runner
             )
         # A pod can take minutes to be scheduled and pull its image.
         self.start_grace = Float64(
             getenv(
                 "ORCA_START_SECONDS",
-                "300" if self.runner else String(self.stale),
+                "300" if self.runner or self.ec2 else String(self.stale),
             )
         )
         var budget = getenv("ORCA_VCPU_BUDGET")
@@ -506,7 +524,14 @@ struct Scheduler(Movable):
         self._driver_logs = Dict[Int, String]()
 
     def register(
-        mut self, binary: String, now: Int64, image: String = ""
+        mut self,
+        binary: String,
+        now: Int64,
+        image: String = "",
+        head_type: String = "",
+        worker_type: String = "",
+        workers: Int = 0,
+        spot: Bool = False,
     ) raises -> String:
         """Records the pipeline `binary` describes, with its path; its
         schedule counts from `now` the first time, and a sensor from now the
@@ -552,17 +577,24 @@ struct Scheduler(Movable):
         var res = self.db.conn.query(
             (
                 "INSERT INTO orca.pipelines (name, registry_hash, describe,"
-                " binary_path, since, sensing_since, image) SELECT"
-                " d->>'pipeline',"
+                " binary_path, since, sensing_since, image, head_type,"
+                " worker_type, ec2_workers, spot) SELECT d->>'pipeline',"
                 " d->>'registry_hash', d, $2, $3, CASE WHEN $4 THEN now() END,"
-                " nullif($5, '')"
+                " nullif($5, ''), nullif($6, ''), nullif($7, ''), nullif($8,"
+                " 0), $9"
                 " FROM (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO"
                 " UPDATE SET registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
                 " = coalesce(orca.pipelines.since, EXCLUDED.since),"
                 " sensing_since = CASE WHEN $4 THEN"
                 " coalesce(orca.pipelines.sensing_since, now()) END, image ="
-                " coalesce(EXCLUDED.image, orca.pipelines.image), last_seen"
+                " coalesce(EXCLUDED.image, orca.pipelines.image), head_type ="
+                " coalesce(EXCLUDED.head_type, orca.pipelines.head_type),"
+                " worker_type = coalesce(EXCLUDED.worker_type,"
+                " orca.pipelines.worker_type), ec2_workers ="
+                " coalesce(EXCLUDED.ec2_workers, orca.pipelines.ec2_workers),"
+                " spot = CASE WHEN $6 <> '' OR $7 <> '' OR $8 > 0 OR $9 THEN $9"
+                " ELSE orca.pipelines.spot END, last_seen"
                 " = now() RETURNING name, registry_hash"
             ),
             Params()
@@ -570,7 +602,11 @@ struct Scheduler(Movable):
             .text(path)
             .int64(now)
             .bool(sensor)
-            .text(image),
+            .text(image)
+            .text(head_type)
+            .text(worker_type)
+            .int64(Int64(workers))
+            .bool(spot),
         )
         var name = res.row(0).text("name")
         # What its datasets hold now isn't new to it.
@@ -611,6 +647,13 @@ struct Scheduler(Movable):
                     print("deleted", n, "objects of runs that ended")
             except e:
                 print("orca: can't sweep run clusters:", e)
+        if self.ec2:
+            try:
+                var n = self.ec2.value().sweep(self.db)
+                if n:
+                    print("terminated", n, "instances of runs that ended")
+            except e:
+                print("orca: can't sweep run instances:", e)
         advance_rebuilds(self.db)
         for p in registered(self.db):
             if p.cron:
@@ -918,7 +961,7 @@ struct Scheduler(Movable):
         """Starts queued runs, retries that are due and runs whose process
         died, up to `max_runs` live at once."""
         var dead = self._dead("$2")
-        if self.runner and not p.image:
+        if (self.runner or self.ec2) and not p.image:
             print(
                 "orca: pipeline",
                 p.name,
@@ -968,7 +1011,13 @@ struct Scheduler(Movable):
             .int64("n")
         )
         var free = p.max_runs - live
-        var need = self.runner.value().cpu_of(p.workers) if self.runner else 0
+        var need = 0
+        if self.runner:
+            need = self.runner.value().cpu_of(p.workers)
+        elif self.ec2:
+            need = self.ec2.value().cpu_of(
+                p.workers > 0, p.head_type, p.worker_type, p.workers
+            )
         if self.budget > 0 and free > 0:
             # Across pipelines: one start at a time weighs the budget.
             _ = tx.execute(
@@ -1050,6 +1099,35 @@ struct Scheduler(Movable):
                         )
                     )
                     print("started", p.name, "run", id, "on its cluster")
+                except e:
+                    print("orca: run", id, "of", p.name, "can't start:", e)
+                    _ = self.db.conn.execute(
+                        (
+                            "UPDATE orca.runs SET status = 'failed', ended ="
+                            " now() WHERE id = $1 AND status = 'running' AND"
+                            " heartbeat IS NULL"
+                        ),
+                        Params().int64(id),
+                    )
+                continue
+            if self.ec2:
+                try:
+                    self.ec2.value().start(
+                        Ec2Spec(
+                            Int(id),
+                            starts[i],
+                            p.name,
+                            p.image,
+                            p.binary,
+                            p.workers > 0,
+                            p.head_type,
+                            p.worker_type,
+                            p.workers,
+                            p.spot,
+                            new_code[i],
+                        )
+                    )
+                    print("started", p.name, "run", id, "on its instances")
                 except e:
                     # Retried as a run whose process failed is.
                     print("orca: run", id, "of", p.name, "can't start:", e)

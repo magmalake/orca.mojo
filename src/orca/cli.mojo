@@ -46,7 +46,14 @@ from std.sys import argv, exit
 from threads import TypedPool
 
 from orca.heartbeat import Beat, beat, heartbeat_interval
-from orca.logs import publish, run_dir, stage_of
+from orca.logs import (
+    location_exists,
+    publish,
+    read_location,
+    run_dir,
+    stage_of,
+    write_location,
+)
 from orca.tasks import workers
 from orca.civil import Civil, now, parse_time
 from orca.pipeline import FAILED, SUCCEEDED, Pipeline, RunResult
@@ -117,6 +124,17 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         return _fires[P](args)
     if cmd == "describe" and len(args) == 2:
         print(P.describe())
+        return 0
+    if cmd == "keep-log" and len(args) == 5:
+        # For the ec2 runner's head instance: the driver's output, appended
+        # to the run's driver.log wherever ORCA_LOGS is (orca.ec2).
+        var data = read_location(args[2])
+        var before = List[UInt8]()
+        if location_exists(args[3]):
+            before = read_location(args[3])
+        before.extend(String("--- start ", args[4], "\n").as_bytes())
+        before.extend(Span(data))
+        write_location(args[3], Span(before))
         return 0
     if cmd == "keys" and len(args) == 2:
         comptime if P.partitions.kind() != "keyed":
