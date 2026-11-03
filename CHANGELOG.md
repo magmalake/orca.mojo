@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **`orca aws`.** `up` creates or updates the stack from the template orca
+  carries, `push` builds a project's image (its `bin/` and `pipelines/`,
+  for linux-aarch64) and pushes it to the stack's repository, `register`
+  moves the control instance to it and registers pipelines with
+  `orca register`'s flags, `app` runs a project's `bin/<name>` beside the
+  UI on its own hostname, `status` prints the stack's outputs and `down
+  --yes` deletes it. They call the `aws` and `docker` commands, logged in
+  as their user. The control instance gains `orca-refresh` and `orca-app`,
+  and the stack's `ImageTag` defaults to `latest`.
+
 ## 0.2.0 (2026-11-03)
 
 Workers sized to the work, secrets for runs, and the stack's public data.

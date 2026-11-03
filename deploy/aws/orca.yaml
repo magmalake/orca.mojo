@@ -10,7 +10,8 @@
 #   share;
 # - a public bucket, mlake-public-<account>, for data anyone may read
 #   unsigned (the project's resource control policy refuses other accounts'
-#   signed requests); runs get it as ORCA_PUBLIC_WAREHOUSE;
+#   signed requests): the warehouse, ORCA_WAREHOUSE, is in it, since a
+#   demo's tables are meant to be read; orca's own bucket keeps the logs;
 # - the console's hostname, served by the same Caddy from a container
 #   named console on port 8080, once one runs;
 # - a Budgets alert.
@@ -39,8 +40,8 @@ Parameters:
     Description: arm64 Amazon Linux 2023 with Docker, for the control and run instances
   ImageTag:
     Type: String
-    Default: data
-    Description: The tag of the orca image in the stack's repository
+    Default: latest
+    Description: The tag of the orca image the control instance starts with (orca aws push pushes latest)
   ConsoleHostname:
     Type: String
     Default: libs.mlake.dev
@@ -346,7 +347,7 @@ Resources:
             ORCA_EC2_SECURITY_GROUP=${RunGroup}
             ORCA_EC2_PROFILE=${RunProfile}
             ORCA_EC2_PREAMBLE=$login
-            ORCA_WAREHOUSE=s3://${Bucket}/warehouse
+            ORCA_WAREHOUSE=s3://${PublicBucket}/warehouse
             ORCA_LOGS=s3://${Bucket}/logs
             ORCA_PUBLIC_WAREHOUSE=s3://${PublicBucket}/warehouse
             ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE
@@ -356,10 +357,49 @@ Resources:
             ORCA_UI_SECURE_COOKIES=1
             ORCA_UI_TRUST_PROXY=1
             EOF
-            docker run -d --name scheduler --restart always --network orca --env-file /etc/orca.env \
-              -v /var/lib/orca/stage:/var/lib/orca/stage $image scheduler
-            docker run -d --name ui --restart always --network orca --env-file /etc/orca.env \
-              -v /var/lib/orca/stage:/var/lib/orca/stage $image ui
+            # orca aws register and orca aws app run these over SSM.
+            cat > /usr/local/bin/orca-refresh << 'EOS'
+            #!/bin/bash
+            # orca-refresh [TAG]: pull the orca image at TAG (else the last
+            # one) and run the scheduler and the UI from it again.
+            set -eu
+            repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+            [ $# -gt 0 ] && echo "$1" > /var/lib/orca/tag
+            tag=$(cat /var/lib/orca/tag)
+            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
+            docker pull -q "$repo:$tag"
+            for role in scheduler ui; do
+              docker rm -f $role > /dev/null 2>&1 || true
+              docker run -d --name $role --restart always --network orca --env-file /etc/orca.env \
+                -v /var/lib/orca/stage:/var/lib/orca/stage "$repo:$tag" $role
+            done
+            EOS
+            cat > /usr/local/bin/orca-app << 'EOS'
+            #!/bin/bash
+            # orca-app NAME HOST [PORT]: run the image's /opt/orca/bin/NAME as
+            # an app beside the UI, at https://HOST through Caddy, with the
+            # region, the warehouse and PORT (default 8080).
+            set -eu
+            name=$1
+            host=$2
+            port=8080
+            [ $# -gt 2 ] && port=$3
+            repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+            tag=$(cat /var/lib/orca/tag)
+            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
+            docker pull -q "$repo:$tag"
+            docker rm -f "$name" > /dev/null 2>&1 || true
+            # An app reads the lake, not orca's database: it gets no password.
+            grep -E '^(AWS_REGION|ORCA_WAREHOUSE|ORCA_PUBLIC_WAREHOUSE)=' /etc/orca.env > /var/lib/orca/app.env
+            docker run -d --name "$name" --restart always --network orca --env-file /var/lib/orca/app.env \
+              -e PORT=$port --entrypoint /opt/orca/bin/$name "$repo:$tag"
+            grep -q "^$host {" /var/lib/orca/Caddyfile \
+              || printf '%s {\n  reverse_proxy %s:%s\n}\n' "$host" "$name" "$port" >> /var/lib/orca/Caddyfile
+            docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+            EOS
+            chmod +x /usr/local/bin/orca-refresh /usr/local/bin/orca-app
+            echo ${ImageTag} > /var/lib/orca/tag
+            orca-refresh
             cat > /var/lib/orca/Caddyfile << EOF
             $hosts {
               reverse_proxy ui:8270
@@ -403,5 +443,7 @@ Outputs:
     Value: !Ref PublicBucket
   ControlInstance:
     Value: !Ref Control
+  ConsoleHostname:
+    Value: !Ref ConsoleHostname
   PublicAddress:
     Value: !Ref ControlAddress
