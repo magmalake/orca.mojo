@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-03)
+
+Workers sized to the work, secrets for runs, and the stack's public data.
 
 - **Secrets for runs.** `orca register --secret NAME=ID` (ID under `orca/`)
   gives an EC2 run's instances the Secrets Manager secret as `NAME`, read at
@@ -15,6 +17,10 @@
   and when it was drained (`drained: idle`). `ORCA_SCALE_UP_AFTER`,
   `ORCA_SCALE_IDLE` and `ORCA_SCALE_STEP` tune it. The stack lets the
   control instance reach run heads on port 6390. Needs dista-mojo 0.2.0.
+- **The stack's public data.** `mlake-public-<account>`, which anyone may
+  read unsigned, for a lake's public tables; runs get its warehouse as
+  `ORCA_PUBLIC_WAREHOUSE`. The console's hostname (`ConsoleHostname`,
+  default `libs.mlake.dev`) is served by the control instance's Caddy.
 
 ## 0.1.0 (2026-11-03)
 
