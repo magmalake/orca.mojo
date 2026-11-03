@@ -1,7 +1,8 @@
 # orca on Kubernetes, in the `orca` namespace: Postgres, and the scheduler
-# with orca ui beside it in one pod. They share the logs volume, so the UI
-# shows the logs of the runs the scheduler starts; in this version a run is
-# a process in that pod, with a local dista runtime (DESIGN.md, phase 5).
+# with orca ui beside it in one pod. Each run gets a cluster of its own in
+# the orca-runs namespace (runs.yaml, orca.kube): a driver Job, and a dista
+# head and workers for a pipeline with tasks. Until logs go to object
+# storage, a run's logs are its pods' (kubectl -n orca-runs logs).
 #
 #     kubectl apply -f deploy/k8s/orca.yaml -f deploy/k8s/runs.yaml
 #     kubectl -n orca port-forward svc/orca-ui 8270:8270
@@ -100,16 +101,19 @@ spec:
           image: orca:dev
           imagePullPolicy: IfNotPresent
           # ORCA_REGISTER: the pipeline binaries in the image to register
-          # before the first tick, separated by spaces.
+          # before the first tick, separated by spaces; their runs' pods run
+          # ORCA_IMAGE.
           command:
             - /bin/sh
             - -c
-            - for b in $ORCA_REGISTER; do orca register "$b" || exit 1; done; exec orca scheduler
+            - for b in $ORCA_REGISTER; do orca register --image "$ORCA_IMAGE" "$b" || exit 1; done; exec orca scheduler
           env:
             - name: ORCA_DATABASE_URL
               valueFrom: {secretKeyRef: {name: orca-db, key: url}}
             - {name: ORCA_LOGS, value: /var/orca/logs}
             - {name: ORCA_REGISTER, value: ""}
+            - {name: ORCA_IMAGE, value: "orca:dev"}
+            - {name: ORCA_RUNNER, value: kubernetes}
           volumeMounts: &logs [{name: logs, mountPath: /var/orca/logs}]
           resources:
             requests: {cpu: 500m, memory: 512Mi}

@@ -63,6 +63,7 @@ from orca.civil import Civil
 from orca.cron import CronExpr
 from orca.day import Day
 from orca.key import parse_keys
+from orca.kube import KubeRunner, RunSpec, cpu_millis
 from orca.month import Month
 from orca.name import parse_names, sort_texts
 from orca.proc import absolute, capture, reap, spawn
@@ -76,6 +77,9 @@ from orca.sensors import (
 )
 from orca.state import State
 from orca.tz import Zone
+
+comptime _BUDGET_LOCK = 0x6F726362  # "orcb"
+"""Held while a start is weighed against `ORCA_VCPU_BUDGET`."""
 
 comptime _RETRIED = "trigger IN ('schedule', 'backfill', 'sensor')"
 """The runs the scheduler retries."""
@@ -101,6 +105,10 @@ struct Registered(Copyable, Movable):
     var keys_per_run: Int
     var keys_dataset: String
     """A keyed pipeline's keys dataset; empty for time partitions."""
+    var image: String
+    """The image its runs' pods run (`orca register --image`), or empty."""
+    var workers: Int
+    """Its cluster's dista workers on Kubernetes; 0 if it has no tasks."""
 
 
 def fill_key(kind: String, fills: String, local: Civil) raises -> String:
@@ -133,7 +141,10 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " coalesce((describe->>'sensor')::boolean, false) AS sensor,"
             " coalesce((describe->>'keys_per_run')::bigint, 1) AS"
             " keys_per_run, coalesce(describe->'partitions'->>'dataset', '')"
-            " AS keys_dataset FROM"
+            " AS keys_dataset, coalesce(image, '') AS image, CASE WHEN"
+            " jsonb_array_length(coalesce(describe->'tasks', '[]')) > 0 THEN"
+            " coalesce((describe->>'workers')::bigint, 2) ELSE 0 END AS"
+            " workers FROM"
             " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
             " name = $1) ORDER BY name"
         ),
@@ -157,6 +168,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 r.bool("sensor"),
                 Int(r.int64("keys_per_run")),
                 r.text("keys_dataset"),
+                r.text("image"),
+                Int(r.int64("workers")),
             )
         )
     return out^
@@ -447,6 +460,12 @@ struct Scheduler(Movable):
     var stale: Float64
     var retry_seconds: Int64
     var sense_seconds: Float64
+    var start_grace: Float64
+    """How long a run the scheduler started may go without a heartbeat."""
+    var budget: Int
+    """`ORCA_VCPU_BUDGET` in thousandths of a vCPU; 0 for none."""
+    var runner: Optional[KubeRunner]
+    """Set with `ORCA_RUNNER=kubernetes`; else runs are local processes."""
     var logs: String
     var _polled: Dict[String, Int]
     """When each sensor's binary was last asked to `sense`, on the monotonic
@@ -458,10 +477,30 @@ struct Scheduler(Movable):
         self.stale = Float64(getenv("ORCA_STALE_SECONDS", "30"))
         self.retry_seconds = Int64(Int(getenv("ORCA_RETRY_SECONDS", "60")))
         self.sense_seconds = Float64(getenv("ORCA_SENSE_SECONDS", "60"))
+        var runner = getenv("ORCA_RUNNER", "local")
+        if runner == "kubernetes":
+            self.runner = KubeRunner()
+        elif runner == "local":
+            self.runner = None
+        else:
+            raise Error(
+                "orca: ORCA_RUNNER is local or kubernetes, not ", runner
+            )
+        # A pod can take minutes to be scheduled and pull its image.
+        self.start_grace = Float64(
+            getenv(
+                "ORCA_START_SECONDS",
+                "300" if self.runner else String(self.stale),
+            )
+        )
+        var budget = getenv("ORCA_VCPU_BUDGET")
+        self.budget = cpu_millis(budget) if budget else 0
         self.logs = getenv("ORCA_LOGS")
         self._polled = Dict[String, Int]()
 
-    def register(mut self, binary: String, now: Int64) raises -> String:
+    def register(
+        mut self, binary: String, now: Int64, image: String = ""
+    ) raises -> String:
         """Records the pipeline `binary` describes, with its path; its
         schedule counts from `now` the first time, and a sensor from now the
         first time it's one, with the snapshots its datasets have now seen.
@@ -506,17 +545,25 @@ struct Scheduler(Movable):
         var res = self.db.conn.query(
             (
                 "INSERT INTO orca.pipelines (name, registry_hash, describe,"
-                " binary_path, since, sensing_since) SELECT d->>'pipeline',"
-                " d->>'registry_hash', d, $2, $3, CASE WHEN $4 THEN now() END"
+                " binary_path, since, sensing_since, image) SELECT"
+                " d->>'pipeline',"
+                " d->>'registry_hash', d, $2, $3, CASE WHEN $4 THEN now() END,"
+                " nullif($5, '')"
                 " FROM (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO"
                 " UPDATE SET registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
                 " = coalesce(orca.pipelines.since, EXCLUDED.since),"
                 " sensing_since = CASE WHEN $4 THEN"
-                " coalesce(orca.pipelines.sensing_since, now()) END, last_seen"
+                " coalesce(orca.pipelines.sensing_since, now()) END, image ="
+                " coalesce(EXCLUDED.image, orca.pipelines.image), last_seen"
                 " = now() RETURNING name, registry_hash"
             ),
-            Params().text(got[1]).text(path).int64(now).bool(sensor),
+            Params()
+            .text(got[1])
+            .text(path)
+            .int64(now)
+            .bool(sensor)
+            .text(image),
         )
         var name = res.row(0).text("name")
         # What its datasets hold now isn't new to it.
@@ -544,6 +591,13 @@ struct Scheduler(Movable):
         sense new snapshots, schedule retries, and start what may start."""
         for done in reap():
             print("reaped pid", done[0], "exit", done[1])
+        if self.runner:
+            try:
+                var n = self.runner.value().sweep(self.db)
+                if n:
+                    print("deleted", n, "objects of runs that ended")
+            except e:
+                print("orca: can't sweep run clusters:", e)
         advance_rebuilds(self.db)
         for p in registered(self.db):
             if p.cron:
@@ -833,18 +887,31 @@ struct Scheduler(Movable):
             .int64(Int64(p.run_retries)),
         )
 
+    def _dead(self, stale_param: StaticString) -> String:
+        """SQL true for a running run whose process died: its heartbeat is
+        older than the stale limit, the parameter `stale_param`, or it has
+        none and was started longer ago than the start grace."""
+        return String(
+            "((heartbeat IS NOT NULL AND heartbeat <= now() -",
+            " make_interval(secs => ",
+            stale_param,
+            ")) OR (heartbeat IS NULL AND (started IS NULL OR started <= now()",
+            " - make_interval(secs => ",
+            self.start_grace,
+            "))))",
+        )
+
     def _start(mut self, p: Registered, now: Int64) raises:
         """Starts queued runs, retries that are due and runs whose process
         died, up to `max_runs` live at once."""
-        var stale = "make_interval(secs => $2)"
-        var dead = String(
-            "((heartbeat IS NOT NULL AND heartbeat <= now() - ",
-            stale,
-            ") OR (heartbeat IS NULL AND (started IS NULL OR started <= now()",
-            " - ",
-            stale,
-            ")))",
-        )
+        var dead = self._dead("$2")
+        if self.runner and not p.image:
+            print(
+                "orca: pipeline",
+                p.name,
+                "has no image (orca register --image), so its runs wait",
+            )
+            return
         var tx = self.db.conn.begin()
         _ = tx.query(
             "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
@@ -888,8 +955,29 @@ struct Scheduler(Movable):
             .int64("n")
         )
         var free = p.max_runs - live
+        var need = self.runner.value().cpu_of(p.workers) if self.runner else 0
+        if self.budget > 0 and free > 0:
+            # Across pipelines: one start at a time weighs the budget.
+            _ = tx.execute(
+                "SELECT pg_advisory_xact_lock($1)",
+                Params().int64(_BUDGET_LOCK),
+            )
+            var used = Int(
+                tx.query(
+                    String(
+                        "SELECT coalesce(sum(cpu_millis), 0) AS n FROM",
+                        " orca.runs WHERE status = 'running' AND NOT ",
+                        self._dead("$1"),
+                    ),
+                    Params().float64(self.stale),
+                )
+                .row(0)
+                .int64("n")
+            )
+            free = min(free, (self.budget - used) // need if need > 0 else free)
         var ids = List[Int64]()
         var new_code = List[Bool]()
+        var starts = List[Int]()
         if free > 0:
             var rows = tx.query(
                 String(
@@ -916,18 +1004,51 @@ struct Scheduler(Movable):
                 ids.append(r.int64("id"))
                 new_code.append(r.bool("allow_new_code"))
             for id in ids:
-                _ = tx.execute(
-                    (
-                        "UPDATE orca.runs SET status = 'running', owner ="
-                        " 'scheduler', heartbeat = NULL, started = now(),"
-                        " ended = NULL, starts = starts + 1, retry_at = NULL"
-                        " WHERE id = $1"
-                    ),
-                    Params().int64(id),
+                starts.append(
+                    Int(
+                        tx.query(
+                            (
+                                "UPDATE orca.runs SET status = 'running', owner"
+                                " = 'scheduler', heartbeat = NULL, started ="
+                                " now(), ended = NULL, starts = starts + 1,"
+                                " retry_at = NULL, cpu_millis = $2 WHERE id ="
+                                " $1 RETURNING starts"
+                            ),
+                            Params().int64(id).int64(Int64(need)),
+                        )
+                        .row(0)
+                        .int64("starts")
+                    )
                 )
         tx.commit()
         for i in range(len(ids)):
             var id = ids[i]
+            if self.runner:
+                try:
+                    self.runner.value().start(
+                        RunSpec(
+                            Int(id),
+                            starts[i],
+                            p.name,
+                            p.image,
+                            p.binary,
+                            p.workers,
+                            new_code[i],
+                        )
+                    )
+                    print("started", p.name, "run", id, "on its cluster")
+                except e:
+                    # Retried as a run whose process failed is.
+                    print("orca: run", id, "of", p.name, "can't start:", e)
+                    _ = self.db.conn.execute(
+                        (
+                            "UPDATE orca.runs SET status = 'failed', ended ="
+                            " now() WHERE id = $1 AND status = 'running' AND"
+                            " heartbeat IS NULL"
+                        ),
+                        Params().int64(id),
+                    )
+                continue
             var log = String()
             if self.logs:
                 var dir = String(self.logs, "/", p.name, "/", id)

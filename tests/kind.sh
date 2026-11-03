@@ -1,10 +1,17 @@
 #!/bin/sh
-# orca on a kind cluster (deploy/): builds the image, loads it, applies the
-# manifests, and with the scheduler's clock fixed just after a fire,
-# registers the toy pipeline from the image. The scheduler fires it for
-# 2024-01 and runs it in its pod, and orca ui, through its Service, shows the
-# run succeeded with its driver log. Then the scheduler's pod is deleted: its
-# replacement finds the run in Postgres and fires nothing again.
+# orca on a kind cluster (deploy/), each run on a cluster of its own
+# (orca.kube). Builds the image, loads it, applies the manifests, and with
+# the scheduler's clock fixed just after a fire:
+#
+# - the toy, registered from the image, is fired, runs as a driver Job and
+#   succeeds, orca ui shows it, and nothing labelled with it is left;
+# - fanout's runs get a head and 3 workers each, and the tasks of a run
+#   reach all 3;
+# - a fanout driver pod deleted mid-run is resumed on a new cluster (start
+#   2) and succeeds, and the first cluster is gone;
+# - with ORCA_VCPU_BUDGET room for one fanout cluster, a toy run queued
+#   beside two fanout runs never runs at the same time as either;
+# - a pod a killed scheduler left behind is deleted when it starts again.
 #
 # KEEP_CLUSTER=1 leaves a cluster this made; KIND_CLUSTER names one to use.
 # Needs docker, kind, kubectl, curl and jq.
@@ -25,8 +32,25 @@ trap cleanup EXIT
 fail() {
     echo "FAIL: $*"
     kubectl -n orca get pods -o wide || true
+    kubectl -n orca-runs get pods,jobs,services -o wide || true
     kubectl -n orca logs deploy/orca-scheduler -c scheduler --tail=40 || true
     exit 1
+}
+q() { kubectl -n orca exec statefulset/postgres -- psql -U orca -d orca -Atc "$1"; }
+runs() { kubectl -n orca-runs get pods,jobs,services -l "$1" -o name 2> /dev/null; }
+orca_cli() { kubectl -n orca exec deploy/orca-scheduler -c scheduler -- "$@"; }
+# Until the SQL says t, for up to $2 seconds.
+until_true() {
+    i=0
+    until [ "$(q "$1")" = t ]; do
+        i=$((i + 1)); [ "$i" -lt "$2" ] || fail "waited for: $1"; sleep 1
+    done
+}
+gone() {
+    i=0
+    while [ -n "$(runs "$1")" ]; do
+        i=$((i + 1)); [ "$i" -lt 90 ] || fail "still there: $(runs "$1" | tr '\n' ' ')"; sleep 1
+    done
 }
 
 docker build -f deploy/Dockerfile -t orca:dev .
@@ -41,11 +65,17 @@ kind load docker-image orca:dev --name "$cluster"
 kubectl delete namespace orca orca-runs --ignore-not-found --wait
 kubectl apply -f deploy/k8s/orca.yaml -f deploy/k8s/runs.yaml
 kubectl -n orca rollout status statefulset/postgres --timeout=180s || fail "postgres"
-# The clock just after the toy's fire for January (03:00 UTC on 2 February).
-kubectl -n orca set env deployment/orca-scheduler -c scheduler ORCA_NOW=2024-02-02T03:00Z
+# The clock just after the toy's fire for January (03:00 UTC on 2 February);
+# small pods, room for one fanout cluster (100m driver and head, 3 × 100m
+# workers) and no more; a run whose heartbeat stops is restarted soon.
+kubectl -n orca set env deployment/orca-scheduler -c scheduler \
+    ORCA_NOW=2024-02-02T03:00Z ORCA_STALE_SECONDS=10 \
+    ORCA_DRIVER_CPU=100m ORCA_HEAD_CPU=100m ORCA_WORKER_CPU=100m ORCA_POD_MEMORY=128Mi \
+    ORCA_VCPU_BUDGET=550m ORCA_FANOUT_SHOW_HOST=1 ORCA_FANOUT_SLEEP=1 \
+    ORCA_RUN_ENV=ORCA_FANOUT_SHOW_HOST,ORCA_FANOUT_SLEEP
 kubectl -n orca rollout status deployment/orca-scheduler --timeout=180s || fail "the scheduler"
-kubectl -n orca exec deploy/orca-scheduler -c scheduler -- \
-    env ORCA_NOW=2024-02-01T00:00Z orca register /opt/orca/pipelines/toy || fail "register"
+orca_cli env ORCA_NOW=2024-02-01T00:00Z orca register --image orca:dev /opt/orca/pipelines/toy \
+    || fail "register the toy"
 
 port=$((26000 + $$ % 2000))
 kubectl -n orca port-forward svc/orca-ui "$port:8270" > build/kind-forward.log 2>&1 &
@@ -56,19 +86,76 @@ i=0
 until [ "$(json '/runs?pipeline=toy' 2> /dev/null | jq -r '[.runs[] | select(.status == "succeeded")] | length')" = 1 ]; do
     i=$((i + 1)); [ "$i" -lt 180 ] || fail "no succeeded toy run on the UI"; sleep 1
 done
-run=$(json '/runs?pipeline=toy' | jq -r '.runs[0].id')
-[ "$(json "/runs/$run" | jq -r '.run | "\(.trigger) \(.partitions)"')" = "schedule 2024-01" ] \
-    || fail "run $run: $(json "/runs/$run")"
-aid=$(json "/runs/$run" | jq -r '.steps[0].attempt_id')
-json "/runs/$run/attempts/$aid" | jq -e '.text | contains("attempt 1 succeeded")' > /dev/null \
-    || fail "the attempt's log: $(json "/runs/$run/attempts/$aid")"
-echo "ok   the toy, fired by the scheduler in its pod, succeeded, and orca ui shows it"
+toy=$(json '/runs?pipeline=toy' | jq -r '.runs[0].id')
+[ "$(json "/runs/$toy" | jq -r '.run | "\(.trigger) \(.partitions)"')" = "schedule 2024-01" ] \
+    || fail "run $toy: $(json "/runs/$toy")"
+[ "$(json "/runs/$toy" | jq .cpu_millis)" = 100 ] || fail "the toy's CPU: $(json "/runs/$toy" | jq .cpu_millis)"
+gone "orca.run=$toy"
+echo "ok   the toy ran as a driver Job, and nothing of it is left"
 
-# A new scheduler pod: everything it knows is in Postgres.
+# Two fanout runs, one at a time, and a toy run beside them.
+orca_cli orca register --image orca:dev /opt/orca/pipelines/fanout > /dev/null || fail "register fanout"
+orca_cli orca backfill fanout 2024-01..2024-02 > /dev/null || fail "backfill fanout"
+orca_cli orca backfill toy 2024-03 > /dev/null || fail "backfill the toy"
+f1=$(q "SELECT min(id) FROM orca.runs WHERE pipeline = 'fanout'")
+f2=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
+
+# The first: its tasks on all 3 workers, read from the workers' logs while
+# they're up.
+until_true "SELECT status = 'running' AND heartbeat IS NOT NULL FROM orca.runs WHERE id = $f1" 180
+[ "$(runs "orca.run=$f1,orca.role=worker" | grep -c '^pod/')" -eq 3 ] || fail "3 workers for run $f1"
+[ "$(runs "orca.run=$f1,orca.role=head" | wc -l | tr -d ' ')" -eq 2 ] || fail "a head pod and service for run $f1"
+hosts=
+i=0
+while [ "$(q "SELECT status FROM orca.runs WHERE id = $f1")" = running ]; do
+    hosts=$( (echo "$hosts"; kubectl -n orca-runs logs -l "orca.run=$f1,orca.role=worker" --prefix --tail=-1 2> /dev/null \
+        | sed -n 's|^\[pod/\([^/]*\)/.*trips on .*|\1|p') | sort -u | grep . || true)
+    i=$((i + 1)); [ "$i" -lt 300 ] || fail "run $f1 didn't end"; sleep 1
+done
+[ "$(q "SELECT status FROM orca.runs WHERE id = $f1")" = succeeded ] || fail "run $f1"
+[ "$(echo "$hosts" | wc -l | tr -d ' ')" -eq 3 ] || fail "run $f1's tasks reached $(echo "$hosts" | tr '\n' ' ')"
+
+# The second, which starts as the first ends: its driver deleted mid-run.
+until_true "SELECT status = 'running' AND heartbeat IS NOT NULL FROM orca.runs WHERE id = $f2" 180
+sleep 3
+[ "$(q "SELECT status FROM orca.runs WHERE id = $f2")" = running ] || fail "run $f2 ended before its driver could be deleted"
+kubectl -n orca-runs delete pod -l "orca.run=$f2,orca.role=driver" --wait=false > /dev/null
+gone "orca.run=$f1"
+echo "ok   fanout's run had its own head and 3 workers, and its tasks reached all 3"
+until_true "SELECT status = 'succeeded' FROM orca.runs WHERE id = $f2" 300
+[ "$(q "SELECT starts FROM orca.runs WHERE id = $f2")" -eq 2 ] || fail "run $f2 started $(q "SELECT starts FROM orca.runs WHERE id = $f2") times"
+gone "orca.run=$f2"
+echo "ok   a run whose driver was deleted resumed on a new cluster and succeeded"
+
+# The budget: the toy run never beside a fanout run.
+until_true "SELECT status = 'succeeded' FROM orca.runs WHERE pipeline = 'toy' AND partitions = '2024-03'" 180
+[ "$(q "SELECT count(*) FROM orca.runs t JOIN orca.runs f ON f.pipeline = 'fanout' WHERE t.pipeline = 'toy' AND t.partitions = '2024-03' AND t.started < f.ended AND f.started < t.ended")" -eq 0 ] \
+    || fail "the toy ran beside a fanout run over the budget"
+echo "ok   the budget kept the toy waiting"
+
+# What a killed scheduler left behind.
 kill "$fwd"; fwd=
-kubectl -n orca delete pod -l app=orca-scheduler --wait
-kubectl -n orca rollout status deployment/orca-scheduler --timeout=180s || fail "the new scheduler"
-sleep 5
-n=$(kubectl -n orca exec statefulset/postgres -- psql -U orca -d orca -Atc "SELECT count(*) FROM orca.runs")
-[ "$n" = 1 ] || fail "$n runs after the scheduler was replaced"
+kubectl -n orca scale deployment/orca-scheduler --replicas=0
+kubectl -n orca rollout status deployment/orca-scheduler --timeout=60s
+# With requests, which the namespace's ResourceQuota insists on.
+kubectl apply -f - > /dev/null << 'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: orca-999-1-worker-0
+  namespace: orca-runs
+  labels: {orca.run: "999", orca.start: "1", orca.role: worker}
+spec:
+  restartPolicy: Never
+  containers:
+    - name: main
+      image: orca:dev
+      imagePullPolicy: IfNotPresent
+      command: [sleep, "600"]
+      resources: {requests: {cpu: 10m, memory: 16Mi}}
+EOF
+kubectl -n orca scale deployment/orca-scheduler --replicas=1
+kubectl -n orca rollout status deployment/orca-scheduler --timeout=180s || fail "the scheduler again"
+gone "orca.run=999"
+[ -z "$(runs orca.run)" ] || fail "left over: $(runs orca.run | tr '\n' ' ')"
 echo "ok   kind"

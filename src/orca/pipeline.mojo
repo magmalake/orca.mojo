@@ -37,7 +37,8 @@ from orca.schedule import Fill, NoSchedule, Previous, Schedule, ScheduleLike
 from orca.step import Gather, Mapped, StepLike
 from orca.store import MemoryStore, Store
 from orca.logs import attempt_log
-from orca.tasks import NoTasks, TaskSet, task_list, workers
+from orca.tasks import NoTasks, TaskSet, task_list
+from orca.tasks import workers as local_workers
 
 
 def _names(names: List[String]) -> String:
@@ -140,6 +141,7 @@ struct Pipeline[
     run_retries: Int = 3,
     sensor: Bool = False,
     keys_per_run: Int = 1,
+    workers: Int = 2,
 ]:
     """A pipeline named `name` of the steps `Ts`, in run order, whose steps
     call the dista `tasks`, over the keys of `partitions`; run by
@@ -148,6 +150,8 @@ struct Pipeline[
     (`orca.sensors`). A backfill puts `keys_per_run` keys in each run it
     queues: one for time keys by default, tens to hundreds for keyed
     partitions (`orca.keyed`), whose runs then each go through many keys.
+    On Kubernetes, a run of a pipeline with `tasks` gets a cluster of
+    `workers` dista workers (`orca.kube`); locally it forks `ORCA_WORKERS`.
 
     The scheduler runs at most `max_runs` of its runs at once, and starts a
     failed scheduled or backfilled run again up to `run_retries` times, with
@@ -173,6 +177,7 @@ struct Pipeline[
         comptime assert (
             Self.keys_per_run >= 1
         ), "keys_per_run must be at least 1"
+        comptime assert Self.workers >= 1, "workers must be at least 1"
         comptime if Self.partitions.kind() == "keyed":
             comptime assert Self.schedule.expr() == "", (
                 "a keyed pipeline has no calendar for a schedule to fill; run"
@@ -277,6 +282,7 @@ struct Pipeline[
         out.write('"run_retries": ', Self.run_retries, ", ")
         out.write('"sensor": ', "true" if Self.sensor else "false", ", ")
         out.write('"keys_per_run": ', Self.keys_per_run, ", ")
+        out.write('"workers": ', Self.workers, ", ")
         out.write('"steps": [')
         comptime for i in range(Self.Ts.length):
             comptime S = Self.Ts[i]
@@ -348,7 +354,9 @@ struct Pipeline[
         """Runs every step over `keys`, in order, recording nothing,
         with a dista runtime of its own if the pipeline has tasks."""
         var store = MemoryStore()
-        var rt = Self.tasks.start(workers() if Self.tasks.HAS_RUNTIME else 0)
+        var rt = Self.tasks.start(
+            local_workers() if Self.tasks.HAS_RUNTIME else 0
+        )
         var res = Self.execute(
             store, RunResult(), keys, run, Int(Pointer(to=rt))
         )

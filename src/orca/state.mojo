@@ -171,6 +171,12 @@ def _migrations() -> List[List[String]]:
         ],
         # Keys: what's done is a step's status by its partition key.
         ["CREATE INDEX steps_partition ON orca.steps (partition, step)"],
+        # Runs on Kubernetes (orca.kube): the image a pipeline's pods run,
+        # and the CPU a run's pods asked for, in thousandths of a vCPU.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN image text",
+            "ALTER TABLE orca.runs ADD COLUMN cpu_millis int",
+        ],
     ]
 
 

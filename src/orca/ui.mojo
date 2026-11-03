@@ -1092,13 +1092,18 @@ def run(mut db: State, id: Int) raises -> Page:
     )
     var row = db.conn.query(
         (
-            "SELECT registry_hash, coalesce(rebuild, 0) AS rebuild FROM"
+            "SELECT registry_hash, coalesce(rebuild, 0) AS rebuild,"
+            " coalesce(cpu_millis, 0) AS cpu, coalesce(extract(epoch FROM"
+            " coalesce(ended, now()) - started)::bigint, 0) AS secs FROM"
             " orca.runs WHERE id = $1"
         ),
         Params().int64(Int64(id)),
     ).row(0)
     var hash = row.text("registry_hash")
     var rebuild = Int(row.int64("rebuild"))
+    # What its pods asked for, on Kubernetes: vCPU × seconds since it started.
+    var cpu = Int(row.int64("cpu"))
+    var secs = Int(row.int64("secs"))
     # The snapshots that started it, for a sensor's run.
     var sensed = List[SnapshotRef]()
     for x in db.conn.query(
@@ -1119,6 +1124,10 @@ def run(mut db: State, id: Int) raises -> Page:
         "true" if hash == current else "false",
         ', "rebuild": ',
         String(rebuild) if rebuild else String("null"),
+        ', "cpu_millis": ',
+        String(cpu) if cpu else String("null"),
+        ', "cpu_seconds": ',
+        String(cpu * secs // 1000) if cpu else String("null"),
         ', "sensed": [',
     )
     for i in range(len(sensed)):
@@ -1201,6 +1210,18 @@ def run(mut db: State, id: Int) raises -> Page:
     h.text(r.ended)
     h.raw("</dd><dt>Starts</dt><dd>")
     h.text(r.starts)
+    if cpu:
+        h.raw("</dd><dt>CPU</dt><dd>")
+        h.text(
+            cpu // 1000,
+            ".",
+            String(cpu % 1000 + 1000)[byte=1:],
+            " vCPU for ",
+            secs,
+            " s, ",
+            cpu * secs // 1000,
+            " vCPU-seconds",
+        )
     h.raw("</dd><dt>Code</dt><dd><code>")
     h.text(hash)
     h.raw("</code>")
