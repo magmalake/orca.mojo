@@ -57,6 +57,7 @@ from orca.cron import CronExpr
 from orca.day import Day
 from orca.key import parse_keys
 from orca.month import Month
+from orca.name import parse_names
 from orca.proc import absolute, capture, reap, spawn
 from orca.schedule import Schedule
 from orca.sensors import (
@@ -216,6 +217,19 @@ def partition_keys(p: Registered, keys: String) raises -> List[String]:
     """`keys` (`KEY[..KEY][,...]`) as the pipeline's partition keys, each
     checked and from its first partition on."""
     var texts = List[String]()
+    if p.kind == "keyed":
+        if keys.startswith("@"):
+            raise Error(
+                (
+                    "orca: the scheduler takes a keyed pipeline's partitions as"
+                    " a list of names; run '"
+                ),
+                keys,
+                "' with the pipeline's binary",
+            )
+        for n in parse_names(keys):
+            texts.append(n.text)
+        return texts^
     if p.kind == "daily":
         for k in parse_keys[Day](keys, p.start):
             texts.append(String(k))

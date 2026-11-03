@@ -130,6 +130,7 @@ test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh" }
 test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh" }
 test-commits = { cmd = "tests/concurrent_commits.sh" }
 test-sensors = { cmd = "scripts/with-postgres.sh tests/sensors.sh" }
+test-keyed = { cmd = "scripts/with-postgres.sh tests/keyed.sh" }
 taxi = { cmd = "mkdir -p build && mojo build -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi" }
 
 # Fuzzing with mozz (packaged for magmalake as mozz_mlake), as dista does: one
@@ -147,7 +148,8 @@ fuzz-tz = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DE
 fuzz-json = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_json.mojo -o build/fuzz-json && ./build/fuzz-json" }
 fuzz-summary = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_summary.mojo -o build/fuzz-summary && ./build/fuzz-summary" }
 fuzz-metadata = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_metadata.mojo -o build/fuzz-metadata && ./build/fuzz-metadata" }
-fuzz = { depends-on = ["fuzz-months", "fuzz-days", "fuzz-cron", "fuzz-tz", "fuzz-inputs", "fuzz-json", "fuzz-summary", "fuzz-metadata"] }
+fuzz-names = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_names.mojo -o build/fuzz-names && ./build/fuzz-names" }
+fuzz = { depends-on = ["fuzz-months", "fuzz-days", "fuzz-cron", "fuzz-tz", "fuzz-inputs", "fuzz-json", "fuzz-summary", "fuzz-metadata", "fuzz-names"] }
 
 [environments]
 default = ["stable"]

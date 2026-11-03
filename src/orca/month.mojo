@@ -5,11 +5,11 @@ ends included. A run is over a list of months; a mapped step runs once for
 each.
 """
 
-from orca.key import Key, parse_keys
+from orca.key import TimeKey, parse_keys
 
 
 @fieldwise_init
-struct Month(Key):
+struct Month(TimeKey):
     """A calendar month, `month` from 1 to 12."""
 
     var year: Int

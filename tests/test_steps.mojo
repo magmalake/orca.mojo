@@ -20,11 +20,54 @@ from orca import (
     Mapped,
     Month,
     Monthly,
+    Name,
     Pipeline,
     Step,
     parse_months,
+    parse_names,
     parse_partitions,
 )
+
+
+# --- names ---
+
+
+def test_name_parse() raises:
+    for ok in [
+        "a",
+        "log-0f3a",
+        "315969629_00000000-0000-0000",
+        "x.y:z_1",
+        String("n") * 128,
+    ]:
+        assert_equal(String(Name.parse(ok)), ok)
+    for bad in [
+        "",
+        String("n") * 129,
+        "a b",
+        "a,b",
+        "a/b",
+        "a..b",
+        "café",
+    ]:
+        with assert_raises(contains="not a name"):
+            _ = Name.parse(bad)
+    assert_true(Name.parse("a") < Name.parse("b"))
+    assert_true(Name.parse("B") < Name.parse("a"))  # by bytes
+    assert_true(Name.parse("x") == Name.parse("x"))
+
+
+def test_parse_names() raises:
+    var ns = parse_names("log-2, log-1,log-3")
+    assert_equal(len(ns), 3)
+    assert_equal(String(ns[0]), "log-2")
+    assert_equal(String(ns[1]), "log-1")
+    with assert_raises(contains="not a range"):
+        _ = parse_names("a..b")
+    with assert_raises(contains="given twice"):
+        _ = parse_names("a,b,a")
+    with assert_raises(contains="not a name"):
+        _ = parse_names("a,,b")
 
 
 # --- months ---
@@ -197,7 +240,7 @@ def test_a_daily_pipeline() raises:
     assert_true(
         '"partitions": {"kind": "daily", "start": "2024-01-01"},'
         ' "schedule": null, "max_runs": 1, "run_retries": 3, "sensor": false,'
-        ' "steps"'
+        ' "keys_per_run": 1, "steps"'
         in d
     )
     assert_true('"input": "orca.day.Day"' in d)

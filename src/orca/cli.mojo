@@ -6,7 +6,12 @@ taxi run --partitions 2024-01..2024-03     starts a run and runs it
 taxi resume <run> [--allow-new-code]       continues a run at what's unfinished
 taxi status [<run>]                        the latest runs, or one run's steps
 taxi sense                                 the current snapshot of each dataset it reads
+labels keys                                a keyed pipeline's keys snapshot, then its keys
 ```
+
+For a keyed pipeline (`orca.keyed`), `--partitions` takes names: a list,
+`@all` or `@file:<path>`. A name its keys dataset doesn't have now is
+refused, as a malformed key is, with exit code 2.
 
 With `ORCA_DATABASE_URL` set, runs are recorded in Postgres and can be
 resumed; without it, `run` runs in memory and `resume` and `status` aren't
@@ -44,7 +49,6 @@ from orca.heartbeat import Beat, beat, heartbeat_interval
 from orca.logs import run_dir
 from orca.tasks import workers
 from orca.civil import Civil, now, parse_time
-from orca.partitions import parse_partitions
 from orca.pipeline import FAILED, SUCCEEDED, Pipeline, RunResult
 from orca.state import CANCELLED, PgStore, State, process_owner
 from orca.warehouse import current_snapshot
@@ -52,9 +56,11 @@ from orca.warehouse import current_snapshot
 comptime USAGE = """usage:
   <pipeline> describe
   <pipeline> run --partitions KEY[..KEY][,...]   (YYYY-MM, or YYYY-MM-DD daily)
+  <pipeline> run --partitions NAME[,...]|@all|@file:<path>   (keyed)
   <pipeline> resume <run> [--allow-new-code]
   <pipeline> status [<run>]
   <pipeline> sense
+  <pipeline> keys
   <pipeline> fires [<count>] [--after YYYY-MM-DDTHH:MM[:SS]Z]"""
 
 
@@ -112,6 +118,16 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
     if cmd == "describe" and len(args) == 2:
         print(P.describe())
         return 0
+    if cmd == "keys" and len(args) == 2:
+        comptime if P.partitions.kind() != "keyed":
+            _usage(String("pipeline ", P.name, " isn't keyed"))
+            return 2
+        else:
+            var got = P.partitions.keys()
+            print(got[0])
+            for k in got[1]:
+                print(k)
+            return 0
     if cmd == "sense" and len(args) == 2:
         var wh = getenv("ORCA_WAREHOUSE")
         var names = P.sensed_datasets()
@@ -139,7 +155,7 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
             _usage("run needs --partitions")
         var keys: List[P.K]
         try:
-            keys = parse_partitions[P.partitions](partitions)
+            keys = P.partitions.parse(partitions, check=True)
         except e:
             _usage(String(e))
             return 2
@@ -219,7 +235,7 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
             url,
             run,
             owner,
-            parse_partitions[P.partitions](info.partitions),
+            P.partitions.parse(info.partitions, check=False),
             prior^,
         )
     if cmd == "status":
@@ -252,6 +268,11 @@ def _fires[P: type_of(Pipeline)](args: List[String]) raises -> Int:
     comptime if not P.scheduled():
         _usage(String("pipeline ", P.name, " has no schedule"))
         return 2
+    else:
+        return _print_fires[P](args)
+
+
+def _print_fires[P: type_of(Pipeline)](args: List[String]) raises -> Int:
     var count = 5
     var after = now()
     var i = 2

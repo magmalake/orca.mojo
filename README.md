@@ -22,6 +22,7 @@ pixi run -e data test-tables   # Iceberg; needs the sibling checkouts (see CI)
 pixi run -e data test-taxi     # examples/taxi on two sliced TLC months
 pixi run -e data test-lineage  # lineage over three pipelines' tables
 pixi run -e data test-sensors  # sensors and a rebuild, with the scheduler running
+pixi run -e data test-keyed    # partitions named by a dataset's column, not dates
 pixi run toy && ./build/toy run --partitions 2024-01..2024-03
 pixi run fanout && ./build/fanout run --partitions 2024-01   # steps calling dista
 pixi run daily && ./build/daily run --partitions 2024-02-27..2024-03-02   # by day

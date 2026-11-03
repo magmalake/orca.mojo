@@ -1,9 +1,12 @@
 """`Key`: what a partition key is, whatever it counts.
 
-`Month` and `Day` are keys. A key is written as text (`2024-01`,
-`2024-01-31`), read back by `parse`, ordered, and has a next key, which is
-what a range of keys needs. `parse_keys` reads the ranges and lists the
-command line takes.
+A key is written as text (`2024-01`, `2024-01-31`, `log-0f3a`), read back
+by `parse`, and ordered, for sorting and display. `Month` and `Day` are
+`TimeKey`s too: each has a next and a previous key, and the key a date
+falls in, which ranges, schedules' fills and sensors' day-to-month mapping
+need. `Name` (`orca.name`) is a key that isn't a date, so asking it for its
+next key doesn't compile. `parse_keys` reads the ranges and lists the
+command line takes for time keys.
 """
 
 
@@ -12,6 +15,13 @@ trait Key(Copyable, Deinitable, Equatable, Movable, Writable):
     def parse(s: StringSlice) raises -> Self:
         """Reads the key as `write_to` writes it, and nothing else."""
         ...
+
+    def __lt__(self, other: Self) -> Bool:
+        ...
+
+
+trait TimeKey(Key):
+    """A key that is a span of the calendar."""
 
     def next(self) -> Self:
         """The key after this one."""
@@ -26,12 +36,9 @@ trait Key(Copyable, Deinitable, Equatable, Movable, Writable):
         """The key a date falls in."""
         ...
 
-    def __lt__(self, other: Self) -> Bool:
-        ...
-
 
 def parse_keys[
-    K: Key
+    K: TimeKey
 ](s: StringSlice, first: StringSlice = "") raises -> List[K]:
     """Reads a key, `A..B` (both ends included), or a comma-separated list of
     either, in the order given. A key given twice, or one before `first`

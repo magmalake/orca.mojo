@@ -116,6 +116,14 @@ def _catalog() raises -> FilesystemCatalog:
     return FilesystemCatalog.local(root)
 
 
+def load_dataset(dataset: String) raises -> Table:
+    """A dataset's table, outside any step: nothing is checked or recorded.
+    For reading what isn't a step's input, such as a keyed pipeline's keys
+    (`orca.keyed`)."""
+    var name = _split(dataset)
+    return _catalog().load_table(name[0], name[1])
+
+
 def table(mut ctx: Ctx, dataset: String) raises -> Table:
     """The table of a dataset the step declared it reads or writes."""
     if dataset not in ctx.declared_writes:
