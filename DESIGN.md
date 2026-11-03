@@ -408,7 +408,7 @@ The EC2 API is SigV4-signed HTTPS, as S3 is, so the client is a few calls (`RunI
 
 About $60 a month always on, plus the runs. The project's spend limit is set high, so the Budgets alert is what warns first.
 
-**Reaching the UIs.** `orca ui` has its own login for actions (`orca.auth`) but none for reading, and LabelControl has none at all; neither is opened to the internet. The control instance runs a Cloudflare Tunnel (outbound only) with Cloudflare Access in front of both UIs, as LabelControl's README describes for its own site, so one login covers both, with `ORCA_UI_SECURE_COOKIES=1` behind it. Without a tunnel, SSM Session Manager port forwarding reaches them with nothing open at all.
+**Reaching the UIs.** For the demo they're public: `orca ui` reads without a login and acts only with one (`orca.auth`, rate-limited against guessing before it's exposed), over HTTPS so its cookie is `Secure`, either through a Cloudflare Tunnel (outbound only, nothing open on AWS) or Caddy on the control instance with a Let's Encrypt certificate (ports 80 and 443 open). Logs and errors are public with them, so the demo runs nothing whose logs could hold a secret. LabelControl has no login, so it's public read-only (`LABELCONTROL_READONLY=1`), as its README describes.
 
 **LabelControl** needs two things before it runs there: `linux-aarch64` in its `pixi.toml` (it's built for macOS only today), and a decision about its executor, which runs scene generation, the geometry pass and training in its own process: on the small control instance it would be slow and squeeze everything else, so either it runs elsewhere or its stages become orca pipelines on run instances.
 
