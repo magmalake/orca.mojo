@@ -139,12 +139,15 @@ struct Pipeline[
     max_runs: Int = 1,
     run_retries: Int = 3,
     sensor: Bool = False,
+    keys_per_run: Int = 1,
 ]:
     """A pipeline named `name` of the steps `Ts`, in run order, whose steps
     call the dista `tasks`, over the keys of `partitions`; run by
     `schedule` for the partition its fires `fills` (`orca.schedule`), and,
     with `sensor`, when a dataset it reads gets a new snapshot
-    (`orca.sensors`).
+    (`orca.sensors`). A backfill puts `keys_per_run` keys in each run it
+    queues: one for time keys by default, tens to hundreds for keyed
+    partitions (`orca.keyed`), whose runs then each go through many keys.
 
     The scheduler runs at most `max_runs` of its runs at once, and starts a
     failed scheduled or backfilled run again up to `run_retries` times, with
@@ -167,6 +170,17 @@ struct Pipeline[
         comptime assert Self.Ts.length > 0, "a pipeline needs a step"
         comptime assert Self.max_runs >= 1, "max_runs must be at least 1"
         comptime assert Self.run_retries >= 0, "run_retries can't be negative"
+        comptime assert (
+            Self.keys_per_run >= 1
+        ), "keys_per_run must be at least 1"
+        comptime if Self.partitions.kind() == "keyed":
+            comptime assert Self.schedule.expr() == "", (
+                "a keyed pipeline has no calendar for a schedule to fill; run"
+                " it by backfill or as a sensor of its keys dataset"
+            )
+            comptime assert (
+                Self.fills == Previous
+            ), "a keyed pipeline has no calendar to fill"
         comptime for i in range(Self.Ts.length):
             Self.Ts[i].check()
             comptime assert (
@@ -223,6 +237,14 @@ struct Pipeline[
         for t in Self.tasks.names():
             all.write("task\t", t, "\n")
         all.write("partitions\t", Self.partitions.kind(), "\n")
+        comptime if Self.partitions.kind() == "keyed":
+            all.write(
+                "keys\t",
+                Self.partitions.dataset(),
+                "\t",
+                Self.partitions.column(),
+                "\n",
+            )
         return fnv1a64(all)
 
     @staticmethod
@@ -236,9 +258,13 @@ struct Pipeline[
         out.write('"registry_hash": ', quote(hex(Self.registry_hash())), ", ")
         out.write('"partitions": {"kind": ', quote(Self.partitions.kind()))
         if Self.partitions.start():
-            out.write(', "start": ', quote(Self.partitions.start()), "}, ")
+            out.write(', "start": ', quote(Self.partitions.start()))
         else:
-            out.write(', "start": null}, ')
+            out.write(', "start": null')
+        comptime if Self.partitions.kind() == "keyed":
+            out.write(', "dataset": ', quote(Self.partitions.dataset()))
+            out.write(', "column": ', quote(Self.partitions.column()))
+        out.write("}, ")
         comptime if Self.schedule.expr() != "":
             out.write('"schedule": {"cron": ', quote(Self.schedule.expr()))
             out.write(', "tz": ', quote(Self.schedule.zone()))
@@ -250,6 +276,7 @@ struct Pipeline[
         out.write('"max_runs": ', Self.max_runs, ", ")
         out.write('"run_retries": ', Self.run_retries, ", ")
         out.write('"sensor": ', "true" if Self.sensor else "false", ", ")
+        out.write('"keys_per_run": ', Self.keys_per_run, ", ")
         out.write('"steps": [')
         comptime for i in range(Self.Ts.length):
             comptime S = Self.Ts[i]
@@ -303,14 +330,12 @@ struct Pipeline[
         return Schedule.of[Self.schedule]()
 
     @staticmethod
-    def fills_for(fire: Int64, s: Schedule) -> Self.K:
+    def fills_for(fire: Int64, s: Schedule) raises -> Self.K:
         """The partition a fire at `fire` fills."""
         var c = Civil.of(s.zone.to_local(fire))
-        var k = Self.K.containing(c.year, c.month, c.day)
-        comptime if Self.fills == Previous:
-            return k.prev()
-        else:
-            return k^
+        return Self.partitions.fill(
+            c.year, c.month, c.day, previous=Self.fills == Previous
+        )
 
     @staticmethod
     def run(keys: List[Self.K], run: Int = 0) raises -> RunResult:

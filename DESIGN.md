@@ -340,6 +340,8 @@ Months and days are the only partition keys so far, and the `Key` trait assumes 
 
 These need iceberg for the keys dataset, so like the lineage and sensor tests they run in the `data` environment.
 
+As built in PR 1: `Keyed` is in `orca.keyed`, the one module of it that imports iceberg, and each partition set reads its own `--partitions` (`Partitions.parse`), fills a schedule's partition only if it has a calendar (`Partitions.fill`, which `fills_for` calls), and lists its keys only if it's keyed (`Partitions.keys`). `fills=` is refused as `fills=Current`, since the default can't be told from `fills=Previous` written out. A keyed pipeline's registry hash covers its keys dataset and column; a time-partitioned pipeline's is unchanged. The scheduler takes a keyed backfill as a list of names; `@all` there comes with PR 2, through `<binary> keys`.
+
 ### Not decided here
 
 - **Running several keys of a mapped step at once inside one run.** One driver runs a batch's keys one after another, as phase 1 does, and any parallelism within a key goes through dista. Dispatching a whole batch's keys as dista tasks would make one run use a cluster better, but a step is a function in the driver, not a dista task, so it's a change to the programming model. It's worth measuring on labelrefinery's first backfill before deciding.

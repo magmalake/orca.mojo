@@ -1,5 +1,7 @@
 #!/bin/sh
-# Every pipeline in tests/compile_fail/ breaks one rule and must not compile.
+# Every pipeline in tests/compile_fail/ (or the directory given) breaks one
+# rule and must not compile. tests/keyed.sh runs it on
+# tests/compile_fail_keyed/, whose pipelines need iceberg.
 # The first line of each file is `# expect: <text>`, and the compiler's
 # output has to contain that text, so a file can't pass by failing for some
 # other reason.
@@ -7,7 +9,8 @@ set -u
 cd "$(dirname "$0")/.."
 mkdir -p build
 fails=0
-for f in tests/compile_fail/*.mojo; do
+dir=${1:-tests/compile_fail}
+for f in "$dir"/*.mojo; do
     expect=$(head -1 "$f" | sed -n 's/^# expect: //p')
     if [ -z "$expect" ]; then
         echo "FAIL $f: no '# expect:' line"

@@ -205,6 +205,8 @@ jobs:
         run: pixi run -e data test-lineage
       - name: Sensors and a rebuild (phase 4's gate)
         run: pixi run -e data test-sensors
+      - name: Keyed partitions over a dataset of names
+        run: pixi run -e data test-keyed
       - name: Six writers committing to one table at once
         run: pixi run -e data test-commits
       # examples/taxi over two sliced TLC months in tests/fixtures/taxi; the
