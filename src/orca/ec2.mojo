@@ -20,8 +20,10 @@ binary itself (`direct`, for the tests' stand-in EC2), then shuts down
 
 A pipeline registered with `--workers MIN..MAX` scales: its run starts
 `MIN` workers, which may be none, and every tick `scale` reads the head's
-demand (`dista status --json`, from port 6390 on the head's private address)
-and asks `dista.scale.decide` what to do. It starts the workers asked for,
+demand (`dista status --json`, from port 6390 on the head's private address,
+through the pipeline's binary: `<binary> dista-status`, since dista's
+sockets can't share orca's binary with flare's) and asks
+`dista.scale.decide` what to do. It starts the workers asked for,
 up to `MAX`, and drains the ones named with `dista drain`; a drained worker
 exits once its work and results have moved, and its instance's script shuts
 it down. `ORCA_SCALE_UP_AFTER` (5 s), `ORCA_SCALE_IDLE` (60 s) and
@@ -46,12 +48,12 @@ against `ORCA_VCPU_BUDGET` first.
 from std.base64 import b64encode
 from std.os import getenv
 
-from dista.client import Observer
 from dista.scale import Demand, Policy, decide
 from dista.socket import wall_ns
 from postgres import Params
 
 from orca.awsec2 import Ec2, Instance
+from orca.proc import capture
 from orca.secrets import parse_secrets
 from orca.state import State
 
@@ -193,13 +195,27 @@ struct Ec2Runner(Movable):
             if v:
                 out.write("export ", n, "=", _quote(v), "\n")
         if role == "worker":
+            # The worker's address is the instance's private one, which
+            # `orca.instances` keeps: the scheduler finds the instance of a
+            # worker it drains by it. Under the tests' stand-in EC2 every
+            # instance's is 127.0.0.1.
+            var advertise = String("127.0.0.1")
+            if self.mode == "docker":
+                advertise = String(
+                    "$(t=$(curl -s -X PUT -H",
+                    " 'X-aws-ec2-metadata-token-ttl-seconds: 60'",
+                    " http://169.254.169.254/latest/api/token); curl -s -H",
+                    ' "X-aws-ec2-metadata-token: $t"',
+                    " http://169.254.169.254/latest/meta-data/local-ipv4)",
+                )
             out.write(
                 "export DISTA_HEAD=",
                 head,
                 ":",
                 HEAD_PORT,
-                "\nexport DISTA_ADVERTISE=$(hostname -I 2>/dev/null | awk",
-                " '{print $1}')\n",
+                "\nexport DISTA_ADVERTISE=",
+                advertise,
+                "\n",
             )
         return out^
 
@@ -537,14 +553,15 @@ struct Ec2Runner(Movable):
             var key = String(r.run, "-", r.start)
             live[key] = True
             var head_ip = row.text("address")
-            var o: Optional[Observer]
-            var text: String
-            try:
-                o = Observer(String(head_ip, ":", HEAD_PORT))
-                text = o.value().status_json()
-            except:
+            var head = String(head_ip, ":", HEAD_PORT)
+            var got_status = capture([r.binary, "dista-status", head])
+            if got_status[0] != 0:
                 continue  # its head isn't up yet, or has gone
-            var demand = Demand.parse(text)
+            var demand: Demand
+            try:
+                demand = Demand.parse(got_status[1])
+            except:
+                continue
             var up = Int(
                 db.conn.query(
                     (
@@ -570,10 +587,11 @@ struct Ec2Runner(Movable):
                 self._workers(db, r, got.start, head_ip)
                 started += got.start
             for addr in got.drain:
-                try:
-                    o.value().drain(addr)
-                except e:
-                    print("orca: run", r.run, "can't drain", addr, ":", e)
+                var drain = capture([r.binary, "dista-drain", head, addr])
+                if drain[0] != 0:
+                    print(
+                        "orca: run", r.run, "can't drain", addr, ":", drain[1]
+                    )
                     continue
                 drained += 1
                 var ip = String(addr[byte = : addr.rfind(":")])
