@@ -16,7 +16,8 @@ comptime STACK_TEMPLATE: StaticString = """# orca on AWS with the ec2 runner (DE
 #   share;
 # - a public bucket, mlake-public-<account>, for data anyone may read
 #   unsigned (the project's resource control policy refuses other accounts'
-#   signed requests); runs get it as ORCA_PUBLIC_WAREHOUSE;
+#   signed requests): the warehouse, ORCA_WAREHOUSE, is in it, since a
+#   demo's tables are meant to be read; orca's own bucket keeps the logs;
 # - the console's hostname, served by the same Caddy from a container
 #   named console on port 8080, once one runs;
 # - a Budgets alert.
@@ -352,7 +353,7 @@ Resources:
             ORCA_EC2_SECURITY_GROUP=${RunGroup}
             ORCA_EC2_PROFILE=${RunProfile}
             ORCA_EC2_PREAMBLE=$login
-            ORCA_WAREHOUSE=s3://${Bucket}/warehouse
+            ORCA_WAREHOUSE=s3://${PublicBucket}/warehouse
             ORCA_LOGS=s3://${Bucket}/logs
             ORCA_PUBLIC_WAREHOUSE=s3://${PublicBucket}/warehouse
             ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE
@@ -382,8 +383,8 @@ Resources:
             cat > /usr/local/bin/orca-app << 'EOS'
             #!/bin/bash
             # orca-app NAME HOST [PORT]: run the image's /opt/orca/bin/NAME as
-            # an app beside the UI, at https://HOST through Caddy, with
-            # orca's environment and PORT (default 8080).
+            # an app beside the UI, at https://HOST through Caddy, with the
+            # region, the warehouse and PORT (default 8080).
             set -eu
             name=$1
             host=$2
@@ -394,7 +395,9 @@ Resources:
             aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
             docker pull -q "$repo:$tag"
             docker rm -f "$name" > /dev/null 2>&1 || true
-            docker run -d --name "$name" --restart always --network orca --env-file /etc/orca.env \\
+            # An app reads the lake, not orca's database: it gets no password.
+            grep -E '^(AWS_REGION|ORCA_WAREHOUSE|ORCA_PUBLIC_WAREHOUSE)=' /etc/orca.env > /var/lib/orca/app.env
+            docker run -d --name "$name" --restart always --network orca --env-file /var/lib/orca/app.env \\
               -e PORT=$port --entrypoint /opt/orca/bin/$name "$repo:$tag"
             grep -q "^$host {" /var/lib/orca/Caddyfile \\
               || printf '%s {\\n  reverse_proxy %s:%s\\n}\\n' "$host" "$name" "$port" >> /var/lib/orca/Caddyfile
@@ -481,9 +484,10 @@ RUN mkdir -p /out/bin /out/pipelines \\
                 "$p" -o "/out/pipelines/$n" || exit 1; done; \\
         if ls /out/pipelines/* > /dev/null 2>&1; then /out/bin/orca locate /out/pipelines/* --root .; fi'
 # Only the pixi environment's libraries the binaries link or dlopen: libpq
-# (postgres), flare's shims (orca ui, apps), objectstore's (dista).
+# (postgres), flare's shims (orca ui, apps), and every tin's shim, such as
+# objectstore's and the codecs' (zstd, for Iceberg writes).
 RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib \\
-    && loaded=$(ls $env/lib/libpq.so* $env/lib/libflare_*.so $env/lib/libobjectstoremojo.so 2>/dev/null) \\
+    && loaded=$(ls $env/lib/libpq.so* $env/lib/libflare_*.so $env/lib/lib*mojo*.so 2>/dev/null) \\
     && ldd /out/bin/* /out/pipelines/* $loaded 2> /dev/null | awk -v e="$env" '$3 ~ "^"e {print $3}' \\
         | sort -u | xargs -r cp -L -t /out/lib \\
     && cp -L -t /out/lib $loaded

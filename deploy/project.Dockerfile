@@ -27,9 +27,10 @@ RUN mkdir -p /out/bin /out/pipelines \
                 "$p" -o "/out/pipelines/$n" || exit 1; done; \
         if ls /out/pipelines/* > /dev/null 2>&1; then /out/bin/orca locate /out/pipelines/* --root .; fi'
 # Only the pixi environment's libraries the binaries link or dlopen: libpq
-# (postgres), flare's shims (orca ui, apps), objectstore's (dista).
+# (postgres), flare's shims (orca ui, apps), and every tin's shim, such as
+# objectstore's and the codecs' (zstd, for Iceberg writes).
 RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib \
-    && loaded=$(ls $env/lib/libpq.so* $env/lib/libflare_*.so $env/lib/libobjectstoremojo.so 2>/dev/null) \
+    && loaded=$(ls $env/lib/libpq.so* $env/lib/libflare_*.so $env/lib/lib*mojo*.so 2>/dev/null) \
     && ldd /out/bin/* /out/pipelines/* $loaded 2> /dev/null | awk -v e="$env" '$3 ~ "^"e {print $3}' \
         | sort -u | xargs -r cp -L -t /out/lib \
     && cp -L -t /out/lib $loaded

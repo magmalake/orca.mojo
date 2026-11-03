@@ -2,7 +2,7 @@
 its user already has (`aws login`, or `AWS_PROFILE` for a named profile).
 
     orca aws up --email you@example.com [--stack orca] [--hostname H]
-                [--console-hostname H] [--budget 100]
+                [--console-hostname H] [--budget 100] [--zone us-east-2a]
     orca aws push [--tag T]                     # the project's image, to ECR
     orca aws register [--tag T] [register flags] <pipeline> [...]
     orca aws app <name> [--host H] [--port 8080] [--tag T]
@@ -42,6 +42,7 @@ from orca.proc import capture
 comptime _DIR = "build/orca-aws"
 comptime AWS_USAGE = """usage:
   orca aws up --email ADDR [--hostname H] [--console-hostname H] [--budget N]
+              [--zone AZ]
   orca aws push [--tag T]
   orca aws register [--tag T] [register flags] <pipeline> [...]
   orca aws app <name> [--host H] [--port 8080] [--tag T]
@@ -57,6 +58,7 @@ comptime _VALUED = [
     "--hostname",
     "--console-hostname",
     "--budget",
+    "--zone",
     "--host",
     "--port",
 ]
@@ -107,6 +109,7 @@ struct _Opts(Movable):
     var hostname: String
     var console_hostname: String
     var budget: String
+    var zone: String
     var host: String
     var port: String
     var yes: Bool
@@ -121,6 +124,7 @@ struct _Opts(Movable):
         self.hostname = String()
         self.console_hostname = String()
         self.budget = String()
+        self.zone = String()
         self.host = String()
         self.port = String("8080")
         self.yes = False
@@ -157,6 +161,8 @@ struct _Opts(Movable):
                 self.console_hostname = v
             elif a == "--budget":
                 self.budget = v
+            elif a == "--zone":
+                self.zone = v
             elif a == "--host":
                 self.host = v
             else:
@@ -263,6 +269,8 @@ def _up(o: _Opts) raises -> Int:
         params.append(String("ConsoleHostname=", o.console_hostname))
     if o.budget:
         params.append(String("BudgetDollars=", o.budget))
+    if o.zone:
+        params.append(String("AvailabilityZone=", o.zone))
     var cmd = o.aws(
         String(
             "cloudformation deploy --stack-name ",

@@ -30,11 +30,11 @@ printf 'from orca.command import orca_command\n' > bin/scheduler.mojo
 if "$orca" aws up > ../up.out 2>&1; then fail "up made a stack without --email"; fi
 grep -q "needs --email" ../up.out || fail "up's message: $(cat ../up.out)"
 calls > /dev/null
-"$orca" aws up --email ops@example.com --console-hostname libs.example.dev > ../up.out 2>&1 || fail "up: $(cat ../up.out)"
+"$orca" aws up --email ops@example.com --console-hostname libs.example.dev --zone us-east-2b > ../up.out 2>&1 || fail "up: $(cat ../up.out)"
 got=$(calls)
 echo "$got" | grep -q "aws --region us-east-2 cloudformation deploy --stack-name orca --template-file build/orca-aws/orca.yaml --capabilities CAPABILITY_IAM" \
     || fail "up's deploy: $got"
-echo "$got" | grep -q "DbPassword=[0-9a-f]\{36\} BudgetEmail=ops@example.com ConsoleHostname=libs.example.dev" || fail "up's parameters: $got"
+echo "$got" | grep -q "DbPassword=[0-9a-f]\{36\} BudgetEmail=ops@example.com ConsoleHostname=libs.example.dev AvailabilityZone=us-east-2b" || fail "up's parameters: $got"
 grep -q "PublicBucket" ../up.out || fail "up didn't print the outputs"
 if grep -q "DbPassword" ../up.out; then fail "up printed the password"; fi
 cmp -s build/orca-aws/orca.yaml "$root/deploy/aws/orca.yaml" || fail "the template written isn't deploy/aws/orca.yaml"
