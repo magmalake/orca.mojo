@@ -59,7 +59,11 @@ def _accepts(host: String, port: Int) raises -> Bool:
         return False
     var ok = False
     try:
-        _ = external_call["fcntl", c_int](fd, _F_SETFL, _O_NONBLOCK)
+        # fcntl is variadic, which Apple's arm64 ABI passes on the stack:
+        # declared as dista declares it, or the flag isn't set there.
+        _ = external_call["fcntl", c_int, num_fixed_args=2](
+            fd, _F_SETFL, _O_NONBLOCK
+        )
         var addr = _sockaddr(resolve_ipv4(host), port)
         if (
             external_call["connect", c_int](
