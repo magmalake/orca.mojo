@@ -4,7 +4,8 @@
 # the scheduler's clock fixed just after a fire:
 #
 # - the toy, registered from the image, is fired, runs as a driver Job and
-#   succeeds, orca ui shows it, and nothing labelled with it is left;
+#   succeeds, orca ui shows it and the driver log the scheduler kept, and
+#   nothing labelled with it is left;
 # - fanout's runs get a head and 3 workers each, and the tasks of a run
 #   reach all 3;
 # - a fanout driver pod deleted mid-run is resumed on a new cluster (start
@@ -91,7 +92,8 @@ toy=$(json '/runs?pipeline=toy' | jq -r '.runs[0].id')
     || fail "run $toy: $(json "/runs/$toy")"
 [ "$(json "/runs/$toy" | jq .cpu_millis)" = 100 ] || fail "the toy's CPU: $(json "/runs/$toy" | jq .cpu_millis)"
 gone "orca.run=$toy"
-echo "ok   the toy ran as a driver Job, and nothing of it is left"
+curl -fsS "$base/runs/$toy/driver.log" | grep -qx "run succeeded" || fail "the toy's driver log"
+echo "ok   the toy ran as a driver Job, its driver log was kept, and nothing of it is left"
 
 # Two fanout runs, one at a time, and a toy run beside them.
 orca_cli orca register --image orca:dev /opt/orca/pipelines/fanout > /dev/null || fail "register fanout"

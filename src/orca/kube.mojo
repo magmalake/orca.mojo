@@ -22,7 +22,8 @@ head through `DISTA_HEAD`; the scheduler's variables named in
 `ORCA_RUN_ENV` are copied to every pod.
 
 Every tick, `sweep` deletes the objects of a run that isn't running at that
-start any more, and those of a Job that has finished: what's left after a
+start any more, and those of a Job that has finished, first appending its
+driver pod's log to the run's `driver.log` under `ORCA_LOGS`: what's left after a
 run ends, a run restarted on a new cluster, and what a scheduler that was
 killed left behind. Pods ask for `ORCA_DRIVER_CPU`, `ORCA_HEAD_CPU` and
 `ORCA_WORKER_CPU` (default 500m, 250m and 1) and `ORCA_POD_MEMORY` (512Mi)
@@ -37,6 +38,7 @@ from k8s import JOBS, PODS, SERVICES, Client, Config
 from postgres import Params
 
 from orca.json import quote
+from orca.logs import location_exists, read_location, run_dir, write_location
 from orca.state import State
 
 comptime DISTA_PORT = 6390
@@ -286,6 +288,37 @@ struct KubeRunner(Movable):
                 ),
             )
 
+    def _keep_driver_log(self, job: Value):
+        """Appends the log of the Job's driver pod to the run's `driver.log`
+        under `ORCA_LOGS`, as the pod is about to go."""
+        try:
+            var run = Int(job.at("/metadata/labels/orca.run").string_value())
+            var pipeline = job.at(
+                "/metadata/labels/orca.pipeline"
+            ).string_value()
+            var start = job.at("/metadata/labels/orca.start").string_value()
+            var at = run_dir(pipeline, run)
+            if not at:
+                return
+            at.write("/driver.log")
+            var text = String()
+            for pod in self.k.list(
+                PODS,
+                String(
+                    "orca.run=", run, ",orca.start=", start, ",orca.role=driver"
+                ),
+            ).items:
+                text.write(self.k.logs(_name_of(pod)))
+            if not text:
+                return
+            var before = String()
+            if location_exists(at):
+                before = String(from_utf8_lossy=Span(read_location(at)))
+            var all = String(before, "--- start ", start, "\n", text)
+            write_location(at, all.as_bytes())
+        except e:
+            print("orca: can't keep a driver log:", e)
+
     def remove(self, run: Int) raises:
         """Deletes everything labelled with the run, whatever its start."""
         var sel = String("orca.run=", run)
@@ -312,6 +345,7 @@ struct KubeRunner(Movable):
                 or _count(o, "/status/failed") > 0
             )
             if finished or _key(o) not in live:
+                self._keep_driver_log(o)
                 if self.k.delete(JOBS, _name_of(o)):
                     n += 1
         # What the Job owned goes with it, but not at once, and an orphan of

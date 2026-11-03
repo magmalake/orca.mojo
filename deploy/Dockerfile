@@ -10,7 +10,7 @@
 # expects.
 FROM ghcr.io/prefix-dev/pixi:0.78.0 AS build
 ARG DISTA_REV=0a388e3f4afc0f6e5b45f84516eb766d4414e730
-ARG K8S_REV=ac6bee86eb7ab5fc3cf9177e01ec2b365ec480ff
+ARG K8S_REV=b7977c8f7c3b7ffa95815be981f673380e596100
 ARG PIPELINES="examples/toy.mojo examples/fanout.mojo"
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
     && rm -rf /var/lib/apt/lists/*

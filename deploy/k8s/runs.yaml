@@ -24,6 +24,10 @@ rules:
   - apiGroups: [""]
     resources: [pods, services]
     verbs: [create, get, list, watch, delete]
+  # A driver's log, kept under ORCA_LOGS before its Job is deleted.
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
   - apiGroups: [batch]
     resources: [jobs]
     verbs: [create, get, list, watch, delete]

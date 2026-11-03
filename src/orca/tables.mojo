@@ -26,7 +26,9 @@ def load(mut ctx: Ctx, raw: RawFile) raises -> Loaded:
 A table is known by its location, `metadata.location`, and, when it's in
 the warehouse, by its dataset name. `ORCA_WAREHOUSE` is the root of a
 filesystem catalog: dataset `nyc.trips` is the table at
-`<warehouse>/nyc/trips`. **`table`** loads a dataset the step declared, and
+`<warehouse>/nyc/trips`, where the warehouse is a directory or a location
+in object storage (`s3://bucket/warehouse`, as iceberg's `FileIO` reads it,
+from the `AWS_*` environment). **`table`** loads a dataset the step declared, and
 **`ensure_table`** creates one it writes if it's missing. `scan` refuses a
 dataset the step didn't declare in `reads=`, and `append` and `commit` one it
 didn't declare in `writes=`. A table outside the warehouse (or with
@@ -44,6 +46,7 @@ from std.time import sleep
 from iceberg.append import prepare_append
 from iceberg.catalog.filesystem import FilesystemCatalog, Table
 from iceberg.commit import FileChanges, prepare_commit
+from iceberg.io import FileIO
 from iceberg.scan import TableScan
 from iceberg.schema import Schema
 from iceberg.transforms import PartitionSpec
@@ -103,10 +106,14 @@ def warehouse() -> String:
 
 
 def _norm(path: String) raises -> String:
-    var p = path.removeprefix("file://")
+    """A location without its trailing slashes; a local one absolute."""
+    var p = String(path.removeprefix("file://"))
     while p.endswith("/") and p.byte_length() > 1:
-        p = p[byte = : p.byte_length() - 1]
-    return absolute(String(p))
+        var cut = String(p[byte = : p.byte_length() - 1])
+        p = cut^
+    if "://" in p:
+        return p^
+    return absolute(p)
 
 
 def dataset_of(location: String) raises -> String:
@@ -137,11 +144,16 @@ def _split(dataset: String) raises -> Tuple[String, String]:
 
 
 def _catalog() raises -> FilesystemCatalog:
+    """The warehouse's filesystem catalog: local, or in object storage
+    (`s3://bucket/prefix`, through objectstore, configured from the
+    `AWS_*` environment)."""
     var root = warehouse()
     if not root:
         raise Error(
             "orca: ORCA_WAREHOUSE isn't set, so datasets can't be found"
         )
+    if "://" in root and not root.startswith("file://"):
+        return FilesystemCatalog(String(root.rstrip("/")), FileIO())
     return FilesystemCatalog.local(root)
 
 

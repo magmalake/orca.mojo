@@ -22,6 +22,7 @@ pixi run -e data test-tables   # Iceberg; needs the sibling checkouts (see CI)
 pixi run -e data test-taxi     # examples/taxi on two sliced TLC months
 pixi run -e data test-lineage  # lineage over three pipelines' tables
 pixi run -e data test-sensors  # sensors and a rebuild, with the scheduler running
+pixi run -e data test-lineage-s3   # lineage, and sensors (test-sensors-s3), over MinIO
 pixi run -e data test-keyed    # partitions named by a dataset's column, not dates
 pixi run -e data test-keyed-backfills   # 20,000 keys backfilled a hundred to a run, and new ones sensed
 pixi run toy && ./build/toy run --partitions 2024-01..2024-03

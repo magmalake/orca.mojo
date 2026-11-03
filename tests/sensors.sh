@@ -15,6 +15,10 @@
 #   commits start no sensor;
 # - the UI shows the rebuild and what started each run.
 #
+# With ORCA_TEST_S3 set, the warehouse and logs are in the bucket
+# ORCA_S3_BUCKET names (pixi run -e data test-sensors-s3 starts a throwaway
+# MinIO), and the scheduler keeps each run's driver log there.
+#
 # Needs ORCA_DATABASE_URL (pixi run -e data test-sensors starts a throwaway
 # server), curl and jq.
 set -eu
@@ -28,9 +32,13 @@ done
 mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
 log=build/sensors.log
 : > "$log"
-export ORCA_WAREHOUSE=build/sensors-wh ORCA_SENSE_SECONDS=1 ORCA_NOW=2024-05-15T00:00Z
-export ORCA_LOGS=build/sensors-logs
-rm -rf "$ORCA_WAREHOUSE" "$ORCA_LOGS"
+export ORCA_SENSE_SECONDS=1 ORCA_NOW=2024-05-15T00:00Z
+if [ -n "${ORCA_TEST_S3:-}" ]; then
+    export ORCA_WAREHOUSE="$ORCA_S3_BUCKET/sensors-$$" ORCA_LOGS="$ORCA_S3_BUCKET/sensors-logs-$$"
+else
+    export ORCA_WAREHOUSE=build/sensors-wh ORCA_LOGS=build/sensors-logs
+    rm -rf "$ORCA_WAREHOUSE" "$ORCA_LOGS"
+fi
 sched=
 ui=
 stop() {
@@ -141,5 +149,9 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: $base" -d partitions=2
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: $base" -d partitions=2024-03 "$base/datasets/lake.report/rebuild")
 [ "$code" = 409 ] || fail "a rebuild of what nothing reads answered $code"
 until_true "SELECT count(*) = 2 FROM orca.rebuilds WHERE status = 'succeeded'" "the UI's rebuild"
+if [ -n "${ORCA_TEST_S3:-}" ]; then
+    curl -fsS "$base/runs/$clean1/driver.log" | grep -q "run succeeded" \
+        || fail "run $clean1's driver log from the bucket"
+fi
 stop
-echo "ok   sensors"
+echo "ok   sensors${ORCA_TEST_S3:+ on S3}"

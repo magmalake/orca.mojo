@@ -36,7 +36,7 @@ from orca.partitions import Monthly, Partitions
 from orca.schedule import Fill, NoSchedule, Previous, Schedule, ScheduleLike
 from orca.step import Gather, Mapped, StepLike
 from orca.store import MemoryStore, Store
-from orca.logs import attempt_log
+from orca.logs import attempt_log, publish, stage_of
 from orca.tasks import NoTasks, TaskSet, task_list
 from orca.tasks import workers as local_workers
 
@@ -495,7 +495,7 @@ struct Pipeline[
                     code,
                     pinned.copy(),
                     store.recorder(),
-                    log,
+                    stage_of(log),
                     runtime if Self.tasks.HAS_RUNTIME else 0,
                     task_list[Self.tasks](),
                     holds,
@@ -514,6 +514,11 @@ struct Pipeline[
                 for r in ctx.reads:
                     if r.table not in pinned:
                         pinned[r.table] = r.snapshot_id
+                if log:
+                    try:
+                        publish(log)
+                    except e:
+                        print("orca: can't keep the log at", log, ":", e)
                 if error:
                     store.finish_attempt(
                         T.step_name(),

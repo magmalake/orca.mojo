@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: magmalake/k8s.mojo
-          ref: ac6bee86eb7ab5fc3cf9177e01ec2b365ec480ff
+          ref: b7977c8f7c3b7ffa95815be981f673380e596100
           path: k8s.mojo
 
       # The nightly compiles dista's dependencies from source too, because
@@ -165,7 +165,7 @@ jobs:
       - uses: actions/checkout@v4
         with: {repository: magmalake/dista.mojo, ref: 0a388e3f4afc0f6e5b45f84516eb766d4414e730, path: dista.mojo}
       - uses: actions/checkout@v4
-        with: {repository: magmalake/k8s.mojo, ref: ac6bee86eb7ab5fc3cf9177e01ec2b365ec480ff, path: k8s.mojo}
+        with: {repository: magmalake/k8s.mojo, ref: b7977c8f7c3b7ffa95815be981f673380e596100, path: k8s.mojo}
       - uses: actions/checkout@v4
         with: {repository: magmalake/memory-region.mojo, ref: 9e299b82e3a866073a30ff9450c27f823513046f, path: memory-region.mojo}
       - uses: actions/checkout@v4
@@ -213,6 +213,8 @@ jobs:
         run: pixi run -e data test-lineage
       - name: Sensors and a rebuild (phase 4's gate)
         run: pixi run -e data test-sensors
+      - name: Lineage and sensors with the warehouse and logs on MinIO
+        run: pixi run -e data test-lineage-s3 && pixi run -e data test-sensors-s3
       - name: Keyed partitions over a dataset of names
         run: pixi run -e data test-keyed
       - name: Keyed backfills and sensors over 20,000 names
