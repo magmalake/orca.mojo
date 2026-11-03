@@ -1,10 +1,19 @@
-# Where runs' clusters go, from phase 5's third PR on (K8S.md): the
-# `orca-runs` namespace, what the scheduler may do there and nothing else,
-# and a hard cap on what all run pods together can ask for.
+# Where runs' clusters go (K8S.md, orca.kube): the `orca-runs` namespace,
+# what the scheduler may do there and nothing else, the database its drivers
+# reach, and a hard cap on what all run pods together can ask for.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: orca-runs
+---
+# For a local cluster, as orca.yaml's; anywhere else, make it yourself.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orca-db
+  namespace: orca-runs
+stringData:
+  url: postgresql://orca:orca-local@postgres.orca.svc:5432/orca
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

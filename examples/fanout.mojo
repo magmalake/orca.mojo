@@ -9,7 +9,9 @@ The run's runtime is started once, before the first step; with ORCA_LOGS set
 its timeline is written to <ORCA_LOGS>/fanout/<run>/timeline.json.
 ORCA_FANOUT_SLEEP makes every task take that many seconds, so
 tests/lost_workers.sh can kill workers while a step waits on them; the step
-is retried once in its run.
+is retried once in its run. With ORCA_FANOUT_SHOW_HOST set, each task prints
+the host it ran on, which tests/kind.sh reads from the worker pods' logs. On
+Kubernetes a run gets 3 workers.
 """
 
 from std.os import getenv
@@ -27,6 +29,8 @@ struct Day(Copyable, Movable):
 
 def trips(d: Day) -> Int:
     """A stand-in for a day's work: a number that depends on the date."""
+    if getenv("ORCA_FANOUT_SHOW_HOST"):
+        print("trips on", getenv("HOSTNAME", "?"), flush=True)
     var s = getenv("ORCA_FANOUT_SLEEP")
     if s:
         try:
@@ -76,7 +80,9 @@ comptime MonthTrips = Step[
 comptime AllTrips = Step[
     "all_trips", Seq[Int], Int, all_trips, Gather, after=MonthTrips
 ]
-comptime Fanout = Pipeline["fanout", MonthTrips, AllTrips, tasks=FanoutTasks]
+comptime Fanout = Pipeline[
+    "fanout", MonthTrips, AllTrips, tasks=FanoutTasks, workers=3
+]
 
 
 def main() raises:

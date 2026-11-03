@@ -19,11 +19,95 @@ set, `orca_main` hands the process to dista before reading its arguments.
 
 The runtime starts before orca opens a database connection or its heartbeat
 thread, so the forked head and workers inherit neither.
+
+A driver or worker given `DISTA_HEAD` first waits until the head accepts a
+connection (`wait_for_head`), trying for a second at a time. On Kubernetes
+the head's Service can be a moment old: a connection sent before the node
+routes its address waits on a connection-tracking entry that never routes,
+for minutes, and dista connects without a timeout. A fresh try each second
+gets a fresh entry.
 """
 
+from std.ffi import c_int, c_uint, external_call
+from std.memory import stack_allocation
 from std.os import getenv
+from std.sys.info import CompilationTarget, platform_map
+from std.time import perf_counter_ns, sleep
 
 from dista import Runtime, TaskLike
+from dista.socket import (
+    AF_INET,
+    POLLOUT,
+    SOCK_STREAM,
+    SOCKADDR_IN_SIZE,
+    SOL_SOCKET,
+    _sockaddr,
+    poll,
+    resolve_ipv4,
+)
+
+comptime _pm = platform_map[T=Int, ...]
+comptime _F_SETFL: c_int = 4
+comptime _O_NONBLOCK: c_int = c_int(_pm["O_NONBLOCK", linux=0x800, macos=0x4]())
+comptime _SO_ERROR: c_int = c_int(_pm["SO_ERROR", linux=4, macos=0x1007]())
+
+
+def _accepts(host: String, port: Int) raises -> Bool:
+    """Whether `host`:`port` accepts a TCP connection within a second."""
+    var fd = external_call["socket", c_int](AF_INET, SOCK_STREAM, c_int(0))
+    if fd < 0:
+        return False
+    var ok = False
+    try:
+        _ = external_call["fcntl", c_int](fd, _F_SETFL, _O_NONBLOCK)
+        var addr = _sockaddr(resolve_ipv4(host), port)
+        if (
+            external_call["connect", c_int](
+                fd,
+                addr.unsafe_ptr().unsafe_bitcast[NoneType](),
+                c_uint(SOCKADDR_IN_SIZE),
+            )
+            == 0
+        ):
+            ok = True
+        elif poll([fd], [POLLOUT], 1000)[0] != 0:
+            var err = stack_allocation[1, c_int]()
+            err[] = -1
+            var size = stack_allocation[1, c_uint]()
+            size[] = 4
+            _ = external_call["getsockopt", c_int](
+                fd,
+                SOL_SOCKET,
+                _SO_ERROR,
+                err.unsafe_bitcast[NoneType](),
+                size.unsafe_bitcast[NoneType](),
+            )
+            ok = err[] == 0
+    except:
+        pass
+    _ = external_call["close", c_int](fd)
+    return ok
+
+
+def wait_for_head(addr: String, timeout_s: Float64) raises:
+    """Returns once the dista head at `host:port` accepts a connection;
+    raises after `timeout_s` seconds."""
+    var colon = addr.rfind(":")
+    if colon <= 0:
+        raise Error("orca: DISTA_HEAD is host:port, not ", addr)
+    var host = String(addr[byte=:colon])
+    var port = Int(addr[byte = colon + 1 :])
+    var deadline = Int(perf_counter_ns()) + Int(timeout_s * 1e9)
+    while not _accepts(host, port):
+        if Int(perf_counter_ns()) >= deadline:
+            raise Error(
+                "orca: the dista head at ",
+                addr,
+                " accepted no connection in ",
+                timeout_s,
+                " s",
+            )
+        sleep(0.25)
 
 
 trait TaskSet:
@@ -58,6 +142,12 @@ struct Tasks[*Ts: TaskLike](TaskSet):
 
     @staticmethod
     def start(workers: Int) raises -> Self.RT:
+        var head = getenv("DISTA_HEAD")
+        if head and getenv("DISTA_ROLE") != "head":
+            # A head pod may wait for a node and its image.
+            wait_for_head(
+                head, Float64(getenv("ORCA_HEAD_WAIT_SECONDS", "300"))
+            )
         return Self.RT(workers=workers)
 
     @staticmethod

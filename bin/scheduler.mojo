@@ -27,7 +27,7 @@ from orca.state import State
 from orca.ui import DEFAULT_ADDR, serve_ui
 
 comptime USAGE = """usage:
-  orca register <pipeline binary> [...]
+  orca register [--image <image>] <pipeline binary> [...]
   orca backfill <pipeline> KEY[..KEY][,...]   (keyed: NAME[,...]|@all|@file:<path>)
   orca tick
   orca scheduler
@@ -49,9 +49,16 @@ def _command(args: List[String]) raises -> Int:
         _usage("orca needs ORCA_DATABASE_URL")
     var cmd = args[1]
     if cmd == "register" and len(args) >= 3:
+        var image = String()
+        var first = 2
+        if args[2] == "--image":
+            if len(args) < 5:
+                _usage("register --image needs an image and a binary")
+            image = args[3]
+            first = 4
         var s = Scheduler(url)
-        for i in range(2, len(args)):
-            print("registered", s.register(args[i], now()))
+        for i in range(first, len(args)):
+            print("registered", s.register(args[i], now(), image))
         return 0
     if cmd == "backfill" and len(args) == 4:
         var s = Scheduler(url)

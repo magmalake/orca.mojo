@@ -5,15 +5,19 @@
 #     docker build -f deploy/Dockerfile -t orca:dev .
 #
 # PIPELINES are the Mojo files to build into /opt/orca/pipelines/, each
-# named after its file. dista compiles from source at DISTA_REV, the
-# revision CI checks out, cloned next to orca as pixi.toml expects.
+# named after its file. dista and k8s compile from source at DISTA_REV and
+# K8S_REV, the revisions CI checks out, cloned next to orca as pixi.toml
+# expects.
 FROM ghcr.io/prefix-dev/pixi:0.78.0 AS build
 ARG DISTA_REV=0a388e3f4afc0f6e5b45f84516eb766d4414e730
+ARG K8S_REV=ac6bee86eb7ab5fc3cf9177e01ec2b365ec480ff
 ARG PIPELINES="examples/toy.mojo examples/fanout.mojo"
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone -q https://github.com/magmalake/dista.mojo /src/dista.mojo \
-    && git -C /src/dista.mojo checkout -q ${DISTA_REV}
+    && git -C /src/dista.mojo checkout -q ${DISTA_REV} \
+    && git clone -q https://github.com/magmalake/k8s.mojo /src/k8s.mojo \
+    && git -C /src/k8s.mojo checkout -q ${K8S_REV}
 WORKDIR /src/orca.mojo
 COPY pixi.toml pixi.lock ./
 RUN pixi install --locked -e default

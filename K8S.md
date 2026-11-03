@@ -2,7 +2,7 @@
 
 November 1, 2026
 
-How orca will create the pods a run needs, what that takes on AWS, how its cost stays bounded, and the small Kubernetes client it needs. This is phase 5 of [DESIGN.md](DESIGN.md). Nothing here is built yet: until phase 5, a run's dista runtime is local, forking its head and workers on the machine the run is on.
+How orca will create the pods a run needs, what that takes on AWS, how its cost stays bounded, and the small Kubernetes client it needs. This is phase 5 of [DESIGN.md](DESIGN.md). The client is built ([k8s.mojo](https://github.com/magmalake/k8s.mojo)), and so are the image, the manifests (`deploy/`) and a dista cluster per run (`orca.kube`), tested on kind (`tests/kind.sh`); object storage and AWS come next (DESIGN.md, phase 5).
 
 ## Who creates the pods
 

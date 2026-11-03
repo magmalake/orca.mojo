@@ -28,6 +28,12 @@ jobs:
           repository: magmalake/dista.mojo
           ref: 0a388e3f4afc0f6e5b45f84516eb766d4414e730
           path: dista.mojo
+      # So does k8s, the scheduler's Kubernetes client.
+      - uses: actions/checkout@v4
+        with:
+          repository: magmalake/k8s.mojo
+          ref: ac6bee86eb7ab5fc3cf9177e01ec2b365ec480ff
+          path: k8s.mojo
 
       # The nightly compiles dista's dependencies from source too, because
       # their packages are precompiled by 1.2.0. The refs match the pins in
@@ -158,6 +164,8 @@ jobs:
           path: orca.mojo
       - uses: actions/checkout@v4
         with: {repository: magmalake/dista.mojo, ref: 0a388e3f4afc0f6e5b45f84516eb766d4414e730, path: dista.mojo}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/k8s.mojo, ref: ac6bee86eb7ab5fc3cf9177e01ec2b365ec480ff, path: k8s.mojo}
       - uses: actions/checkout@v4
         with: {repository: magmalake/memory-region.mojo, ref: 9e299b82e3a866073a30ff9450c27f823513046f, path: memory-region.mojo}
       - uses: actions/checkout@v4

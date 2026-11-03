@@ -36,7 +36,7 @@ pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   #
 ./build/orca lineage lake.report   # what a dataset's latest snapshot was made from, and what was made from it
 ./build/orca rebuild raw.events 2024-03   # rerun every pipeline downstream of a dataset, in order
 docker build -f deploy/Dockerfile -t orca:dev . && kubectl apply -f deploy/k8s/   # on Kubernetes
-tests/kind.sh                  # that, on a kind cluster: the toy run by the scheduler's pod
+tests/kind.sh                  # that, on a kind cluster: each run on a dista cluster of its own
 ```
 
 Part of [magmalake](https://magmalake.dev).
