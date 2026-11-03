@@ -7,7 +7,8 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | Path | |
 |---|---|
 | `/` | pipelines, with their schedules, next fires and last runs |
-| `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next fires and runs |
+| `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next fires and runs; a keyed one's keys, done, live and failed |
+| `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
 | `/runs` | runs, newest first; `?pipeline=`, `?status=`, `?trigger=` |
 | `/runs/<id>` | a run's DAG, steps and partitions, attempts, errors, reads and commits |
 | `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error |
@@ -78,7 +79,13 @@ from orca.lineage import (
     forward,
 )
 from orca.json import quote
-from orca.scheduler import fill_key
+from orca.scheduler import (
+    LIVE_SQL,
+    current_keys,
+    done_keys,
+    fill_key,
+    registered,
+)
 from orca.sensors import Rebuild, rebuilds
 from orca.schedule import Schedule
 from orca.state import State
@@ -704,6 +711,201 @@ def home(mut db: State) raises -> Page:
     return Page(200, j^, _page("Pipelines", "/", h))
 
 
+@fieldwise_init
+struct KeyCounts(Copyable, Movable):
+    """A keyed pipeline's keys and how far it is through them."""
+
+    var dataset: String
+    var snapshot: Int64
+    var total: Int
+    var done: Int
+    var live: Int
+    var failed: List[String]
+    """Keys not done or in a live run, with a failed or skipped step."""
+    var error: String
+    """Why its keys couldn't be read, or empty."""
+
+
+comptime _FAILED_SQL = (
+    "SELECT DISTINCT st.partition AS key FROM orca.steps st JOIN orca.runs r"
+    " ON r.id = st.run WHERE r.pipeline = $1 AND st.status IN ('failed',"
+    " 'skipped') AND st.partition = ANY (string_to_array($2, ',')) ORDER BY 1"
+)
+
+
+def _key_counts(mut db: State, name: String) raises -> KeyCounts:
+    var ps = registered(db, name)
+    if len(ps) == 0:
+        return KeyCounts("", -1, 0, 0, 0, List[String](), "not registered")
+    ref p = ps[0]
+    var got: Tuple[Int64, List[String]]
+    try:
+        got = current_keys(p)
+    except e:
+        return KeyCounts(p.keys_dataset, -1, 0, 0, 0, List[String](), String(e))
+    var done = done_keys(db, name, got[1])
+    var live = Dict[String, Bool]()
+    for r in db.conn.query(LIVE_SQL, Params().text(name)):
+        live[r.text("key")] = True
+    var n_live = 0
+    var open = String()
+    for k in got[1]:
+        if k in live:
+            n_live += 1
+        elif k not in done:
+            open.write("," if open else "", k)
+    var failed = List[String]()
+    if open:
+        for r in db.conn.query(_FAILED_SQL, Params().text(name).text(open)):
+            failed.append(r.text("key"))
+    return KeyCounts(
+        p.keys_dataset, got[0], len(got[1]), len(done), n_live, failed^, ""
+    )
+
+
+def _json_keys(mut out: String, k: KeyCounts):
+    out.write(
+        '{"dataset": ',
+        quote(k.dataset),
+        ', "snapshot": ',
+        k.snapshot,
+        ', "total": ',
+        k.total,
+        ', "done": ',
+        k.done,
+        ', "live": ',
+        k.live,
+        ', "failed": ',
+    )
+    _json_strings(out, k.failed)
+    out.write(', "error": ', quote(k.error), "}")
+
+
+def _keys_html(mut h: Html, name: String, k: KeyCounts):
+    h.raw("<h2>Keys</h2>")
+    if k.error:
+        h.raw('<p class="empty">Its keys can\'t be read: ')
+        h.text(k.error)
+        h.raw("</p>")
+        return
+    h.raw('<dl class="facts"><dt>From</dt><dd>')
+    h.link(_dataset_href(k.dataset), k.dataset)
+    h.raw(" @ ")
+    h.text(k.snapshot)
+    h.raw("</dd><dt>Keys</dt><dd>")
+    h.text(k.total)
+    h.raw("</dd><dt>Done</dt><dd>")
+    h.text(k.done)
+    h.raw("</dd><dt>In live runs</dt><dd>")
+    h.text(k.live)
+    h.raw("</dd><dt>Failed</dt><dd>")
+    h.text(len(k.failed))
+    h.raw("</dd></dl>")
+    if len(k.failed) == 0:
+        return
+    var base = String("/pipelines/", url_encode(name))
+    h.raw('<p class="more">')
+    for i in range(min(len(k.failed), 100)):
+        if i:
+            h.raw(", ")
+        h.link(String(base, "/keys/", url_encode(k.failed[i])), k.failed[i])
+    if len(k.failed) > 100:
+        h.raw(" and ")
+        h.text(len(k.failed) - 100)
+        h.raw(" more")
+    var all = String()
+    for i in range(len(k.failed)):
+        all.write("," if i else "", k.failed[i])
+    h.raw(
+        '</p><div class="actions"><form class="action" method="post" action="'
+    )
+    h.text(base, "/backfill")
+    h.raw('"><input type="hidden" name="partitions" value="')
+    h.text(all)
+    h.raw(
+        '"><button type="submit">Backfill the failed keys</button></form></div>'
+    )
+
+
+def key_page(mut db: State, name: String, key: String) raises -> Page:
+    """One key of a keyed pipeline: its steps in every run it was in."""
+    var ps = _pipelines(db, name)
+    if len(ps) == 0:
+        return not_found(String("no pipeline ", name))
+    var rows = db.conn.query(
+        (
+            "SELECT r.id AS run, r.status AS run_status, r.registry_hash ="
+            " p.registry_hash AS current, st.step, st.status,"
+            " coalesce(st.error, '') AS error, (SELECT count(*) FROM"
+            " orca.attempts a WHERE a.step = st.id) AS attempts FROM orca.steps"
+            " st JOIN orca.runs r ON r.id = st.run JOIN orca.pipelines p ON"
+            " p.name = r.pipeline WHERE r.pipeline = $1 AND st.partition = $2"
+            " ORDER BY r.id, st.ord"
+        ),
+        Params().text(name).text(key),
+    )
+    var done = done_keys(db, name, [key])
+    var j = String(
+        '{"pipeline": ',
+        quote(name),
+        ', "key": ',
+        quote(key),
+        ', "done": ',
+        "true" if key in done else "false",
+        ', "steps": [',
+    )
+    var h = Html()
+    h.raw('<p class="crumb"><a href="/">Pipelines</a> · ')
+    h.link(String("/pipelines/", url_encode(name)), name)
+    h.raw("</p><h1>")
+    h.text(key)
+    h.raw(" ")
+    h.status("succeeded" if key in done else "not done")
+    h.raw("</h1>")
+    if len(rows) == 0:
+        h.raw('<p class="empty">No run has had this key.</p>')
+    else:
+        h.raw(
+            '<div class="scroll"><table><thead><tr><th>Run</th><th>Step</th>',
+            "<th>Status</th><th>Attempts</th><th>Code</th><th>Error</th>",
+            "</tr></thead><tbody>",
+        )
+    var i = 0
+    for r in rows:
+        j.write(
+            ", " if i else "",
+            '{"run": ',
+            r.int64("run"),
+            ', "step": ',
+            quote(r.text("step")),
+            ', "status": ',
+            quote(r.text("status")),
+            ', "attempts": ',
+            r.int64("attempts"),
+            ', "current_code": ',
+            "true" if r.bool("current") else "false",
+            ', "error": ',
+            quote(r.text("error")),
+            "}",
+        )
+        i += 1
+        h.raw("<tr><td>")
+        h.link(String("/runs/", r.int64("run")), String(r.int64("run")))
+        h.raw("</td>")
+        h.cell(r.text("step"))
+        h.raw("<td>")
+        h.status(r.text("status"))
+        h.raw("</td>")
+        h.cell(r.int64("attempts"))
+        h.cell("current" if r.bool("current") else "older")
+        h.cell(r.text("error"))
+        h.raw("</tr>")
+    if len(rows) > 0:
+        h.raw("</tbody></table></div>")
+    j.write("]}")
+    return Page(200, j^, _page(String(name, " · ", key), "/", h))
+
+
 def pipeline(mut db: State, name: String) raises -> Page:
     var ps = _pipelines(db, name)
     if len(ps) == 0:
@@ -751,6 +953,11 @@ def pipeline(mut db: State, name: String) raises -> Page:
         )
     j.write('], "runs": ')
     _json_runs(j, runs)
+    var keys = Optional[KeyCounts](None)
+    if p.kind == "keyed":
+        keys = _key_counts(db, name)
+        j.write(', "keys": ')
+        _json_keys(j, keys.value())
     j.write("}")
 
     var h = Html()
@@ -794,6 +1001,8 @@ def pipeline(mut db: State, name: String) raises -> Page:
         _dataset_links(h, s.writes)
         h.raw("</td></tr>")
     h.raw("</tbody></table></div>")
+    if keys:
+        _keys_html(h, p.name, keys.value())
     if p.binary:
         var base = String("/pipelines/", url_encode(p.name))
         var example = String("2024-01-01" if p.kind == "daily" else "2024-01")
@@ -804,15 +1013,21 @@ def pipeline(mut db: State, name: String) raises -> Page:
         h.text(base, "/runs")
         h.raw('"><label>One run over <input name="partitions" required')
         h.raw(' placeholder="')
-        h.text(example, "..", example)
+        if p.kind == "keyed":
+            h.text("name,name")
+        else:
+            h.text(example, "..", example)
         h.raw(
             '"></label><button type="submit">Start</button></form>',
             '<form class="action" method="post" action="',
         )
         h.text(base, "/backfill")
-        h.raw('"><label>A run per partition without one <input')
+        h.raw("\"><label>Runs of what isn't done <input")
         h.raw(' name="partitions" required placeholder="')
-        h.text(example, "..", example)
+        if p.kind == "keyed":
+            h.text("@all, or names")
+        else:
+            h.text(example, "..", example)
         h.raw(
             '"></label><button type="submit">Backfill</button></form></div>',
             '<p class="muted more">The scheduler (<code>orca scheduler',
@@ -2263,9 +2478,12 @@ struct Ui(Copyable, Handler):
                 return not_found(String("no rebuild ", path[byte=10:]))
             return rebuild_page(db, id)
         if path.startswith("/pipelines/"):
-            var name = url_decode(path[byte=11:])
-            if name and "/" not in name:
+            var parts = path[byte=11:].split("/")
+            var name = url_decode(parts[0])
+            if len(parts) == 1 and name:
                 return pipeline(db, name)
+            if len(parts) == 3 and parts[1] == "keys" and name:
+                return key_page(db, name, url_decode(parts[2]))
         return not_found(String("nothing at ", path))
 
 

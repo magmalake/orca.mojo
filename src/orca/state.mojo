@@ -169,6 +169,8 @@ def _migrations() -> List[List[String]]:
                 " orca.rebuilds (id)"
             ),
         ],
+        # Keys: what's done is a step's status by its partition key.
+        ["CREATE INDEX steps_partition ON orca.steps (partition, step)"],
     ]
 
 

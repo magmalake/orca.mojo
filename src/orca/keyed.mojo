@@ -22,7 +22,7 @@ with one (`Pipeline.check`). This module imports iceberg, so only binaries
 with a keyed pipeline build it.
 """
 
-from orca.name import Name, parse_names
+from orca.name import Name, parse_names, sort_texts
 from orca.partitions import Partitions
 from orca.tables import load_dataset
 
@@ -120,42 +120,5 @@ struct Keyed[dataset_: StaticString, column_: StaticString](Partitions):
                 _ = Name.parse(d.s)
                 seen[d.s] = True
                 out.append(d.s)
-        _sort(out)
+        sort_texts(out)
         return (id, out^)
-
-
-def _sort(mut l: List[String]):
-    """In place, by bytes: a merge sort, as there can be many."""
-    if len(l) < 2:
-        return
-    var tmp = l.copy()
-    var width = 1
-    var n = len(l)
-    while width < n:
-        var i = 0
-        while i < n:
-            var mid = min(i + width, n)
-            var hi = min(i + 2 * width, n)
-            var a = i
-            var b = mid
-            var k = i
-            while a < mid and b < hi:
-                if l[b] < l[a]:
-                    tmp[k] = l[b]
-                    b += 1
-                else:
-                    tmp[k] = l[a]
-                    a += 1
-                k += 1
-            while a < mid:
-                tmp[k] = l[a]
-                a += 1
-                k += 1
-            while b < hi:
-                tmp[k] = l[b]
-                b += 1
-                k += 1
-            i += 2 * width
-        for k in range(n):
-            l[k] = tmp[k]
-        width *= 2

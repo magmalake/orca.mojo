@@ -28,7 +28,7 @@ from orca.ui import DEFAULT_ADDR, serve_ui
 
 comptime USAGE = """usage:
   orca register <pipeline binary> [...]
-  orca backfill <pipeline> KEY[..KEY][,...]
+  orca backfill <pipeline> KEY[..KEY][,...]   (keyed: NAME[,...]|@all|@file:<path>)
   orca tick
   orca scheduler
   orca ui

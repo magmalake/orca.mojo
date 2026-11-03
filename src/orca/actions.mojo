@@ -102,7 +102,9 @@ def start_run(mut db: State, pipeline: String, keys: String) raises -> Outcome:
 def backfill_runs(
     mut db: State, pipeline: String, keys: String
 ) raises -> Outcome:
-    """What `orca backfill` does: a queued run for each partition in `keys`
+    """What `orca backfill` does: queued runs, `keys_per_run` keys each, of
+    the keys in `keys` that aren't done and aren't in a live run; for time
+    keys, by default a run for each partition in `keys`
     that has none queued, running or succeeded."""
     var p = _pipeline(db, pipeline)
     if not p:
