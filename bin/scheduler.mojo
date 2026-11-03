@@ -28,7 +28,8 @@ from orca.state import State
 from orca.ui import DEFAULT_ADDR, serve_ui
 
 comptime USAGE = """usage:
-  orca register [--image <image>] <pipeline binary> [...]
+  orca register [--image <image>] [--head-type T] [--worker-type T]
+                [--workers N] [--spot] <pipeline binary> [...]
   orca backfill <pipeline> KEY[..KEY][,...]   (keyed: NAME[,...]|@all|@file:<path>)
   orca tick
   orca scheduler
@@ -53,15 +54,42 @@ def _command(args: List[String]) raises -> Int:
     var cmd = args[1]
     if cmd == "register" and len(args) >= 3:
         var image = String()
-        var first = 2
-        if args[2] == "--image":
-            if len(args) < 5:
-                _usage("register --image needs an image and a binary")
-            image = args[3]
-            first = 4
+        var head_type = String()
+        var worker_type = String()
+        var workers = 0
+        var spot = False
+        var i = 2
+        while i < len(args) and args[i].startswith("--"):
+            if args[i] == "--spot":
+                spot = True
+                i += 1
+                continue
+            if i + 1 >= len(args):
+                _usage(String(args[i], " needs a value"))
+            if args[i] == "--image":
+                image = args[i + 1]
+            elif args[i] == "--head-type":
+                head_type = args[i + 1]
+            elif args[i] == "--worker-type":
+                worker_type = args[i + 1]
+            elif args[i] == "--workers":
+                try:
+                    workers = Int(args[i + 1])
+                except:
+                    _usage(String("not a count: ", args[i + 1]))
+            else:
+                _usage(String("unknown option: ", args[i]))
+            i += 2
+        if i >= len(args):
+            _usage("register needs a pipeline binary")
         var s = Scheduler(url)
-        for i in range(first, len(args)):
-            print("registered", s.register(args[i], now(), image))
+        for k in range(i, len(args)):
+            print(
+                "registered",
+                s.register(
+                    args[k], now(), image, head_type, worker_type, workers, spot
+                ),
+            )
         return 0
     if cmd == "backfill" and len(args) == 4:
         var s = Scheduler(url)

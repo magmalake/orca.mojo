@@ -414,6 +414,8 @@ About $60 a month always on, plus the runs. The project's spend limit is set hig
 
 **LabelControl** needs two things before it runs there: `linux-aarch64` in its `pixi.toml` (it's built for macOS only today), and a decision about its executor, which runs scene generation, the geometry pass and training in its own process: on the small control instance it would be slow and squeeze everything else, so either it runs elsewhere or its stages become orca pipelines on run instances.
 
+As built in 5a (`orca.ec2`, `orca.awsec2`): the head instance's script runs the head in the background and the driver in front, then keeps the driver's output with `<binary> keep-log`, which appends it to the run's `driver.log` wherever `ORCA_LOGS` is; a worker's script exports `DISTA_ADVERTISE` from `hostname -I`. Instances are told `ORCA_EC2_DATABASE_URL` as their `ORCA_DATABASE_URL`, which goes in their user data: anyone in the account allowed `ec2:DescribeInstanceAttribute` can read it, so the demo's database password is for that database alone. `DescribeInstances` is read without paging, which holds up to a thousand instances. `tests/ec2.sh` (`test-ec2`) is 5a's gate, against `tests/fake_ec2.py`.
+
 **The PRs:**
 
 | # | PR | Gate | Size |

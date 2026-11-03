@@ -200,6 +200,14 @@ def _migrations() -> List[List[String]]:
             detail text NOT NULL)""",
             "CREATE INDEX audit_run ON orca.audit (run)",
         ],
+        # The ec2 runner (orca.ec2): a pipeline's instance types, its
+        # workers' count and whether they're Spot, as registered.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN head_type text",
+            "ALTER TABLE orca.pipelines ADD COLUMN worker_type text",
+            "ALTER TABLE orca.pipelines ADD COLUMN ec2_workers int",
+            "ALTER TABLE orca.pipelines ADD COLUMN spot boolean",
+        ],
     ]
 
 
