@@ -12,6 +12,34 @@ fires cron schedules and backfills, and runs sensor pipelines when a dataset
 they read gets a snapshot; `orca ui` shows pipelines, runs, logs and the
 lineage of datasets, and starts, resumes, reruns, backfills, cancels and
 rebuilds through it.
+## Install
+
+orca is the mojoshelf tin `orca-mojo`, built for Mojo 1.2:
+
+```sh
+pixi init lake && cd lake
+pixi shelf add orca-mojo
+```
+
+A pipeline is a Mojo file ending in `orca_main[YourPipeline]()` (see
+`examples/`), and the `orca` command (scheduler, UI, registration) is two
+lines of your own (not in a file named `orca.mojo`, which would be the
+module `orca` itself):
+
+```mojo
+# bin/scheduler.mojo
+from orca.command import orca_command
+
+def main() raises:
+    orca_command()
+```
+
+```sh
+mojo build pipelines/daily.mojo -o build/daily
+mojo build bin/scheduler.mojo -o build/orca
+./build/orca locate build/daily --root . && ./build/orca register ./build/daily
+```
+
 [VISION.md](VISION.md) says what orca is for and how it gets there;
 [DESIGN.md](DESIGN.md) is the plan for building it; [K8S.md](K8S.md) is how
 it will run on Kubernetes and AWS.
