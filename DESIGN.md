@@ -486,7 +486,7 @@ magmalake.dev (mlake.dev is the same site):
 
 | # | PR | Gate | Size |
 |---|---|---|---|
-| 1 | **The stack on AWS** (#38, phase 5's 5b), now with the public bucket and the console's hostname. | Phase 5's gate. | open |
+| 1 | **The stack on AWS** (#38, phase 5's 5b), now with the public bucket and the console's hostname. #38 merged; the public bucket (`mlake-public-<account>`, `ORCA_PUBLIC_WAREHOUSE` for runs) and `ConsoleHostname` (Caddy to a `console` container on port 8080) follow it. | Phase 5's gate. | in review |
 | 2 | **Pipeline versions** (A): migration for `pipeline_versions`, `runs.version`; `-D` source and commit in `describe`; the links. | Two registrations of the toy from two commits: each run's page links its own commit, the pipeline page lists both versions. | ~500 |
 | 3 | **Cluster logs and the timeline view** (B, C). | `tests/ec2.sh`: a fanout run's head and workers' logs are listed on its page, including the worker terminated mid-run; the page draws 3 lanes. | ~800 |
 | 4 | **Autoscaling** (D), after dista's autoscaling PRs. Done: `--workers 0..N` is allowed, and `tests/autoscale.sh` grows a run from 0 to 3 workers and drains them all while it pauses. | `tests/ec2.sh` against the stand-in EC2: with `--workers 1..6`, a run of 200 slow tasks grows to 6 workers and back to 1, never past the budget; a worker drained while holding results loses none. On AWS: the backfill of one month, its workers over time and its cost. | ~700 |
