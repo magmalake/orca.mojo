@@ -68,6 +68,35 @@ def _backoff(attempt: Int):
     sleep(base * random_float64(0.5, 1.5))
 
 
+def _reload(mut table: Table) raises:
+    """`table.refresh()`, tried again when the metadata file it chose is
+    gone: writers that clashed on a version delete the files they wrote, so
+    a reader that listed one a moment before finds it missing."""
+    var attempt = 0
+    while True:
+        try:
+            table.refresh()
+            return
+        except e:
+            attempt += 1
+            if attempt > _COMMIT_RETRIES:
+                raise e^
+            _backoff(attempt)
+
+
+def _load(cat: FilesystemCatalog, ns: String, name: String) raises -> Table:
+    """`cat.load_table`, tried again as `_reload` is."""
+    var attempt = 0
+    while True:
+        try:
+            return cat.load_table(ns, name)
+        except e:
+            attempt += 1
+            if attempt > _COMMIT_RETRIES:
+                raise e^
+            _backoff(attempt)
+
+
 def warehouse() -> String:
     """`ORCA_WAREHOUSE`: the root datasets are found under, or empty."""
     return getenv("ORCA_WAREHOUSE")
@@ -129,7 +158,7 @@ def table(mut ctx: Ctx, dataset: String) raises -> Table:
     if dataset not in ctx.declared_writes:
         ctx.check_declared(dataset, write=False)
     var name = _split(dataset)
-    return _catalog().load_table(name[0], name[1])
+    return _load(_catalog(), name[0], name[1])
 
 
 def ensure_table(
@@ -150,7 +179,7 @@ def ensure_table(
             # Another run, started at the same time, created it first.
             if not cat.table_exists(name[0], name[1]):
                 raise e^
-    return cat.load_table(name[0], name[1])
+    return _load(cat, name[0], name[1])
 
 
 def scan(mut ctx: Ctx, table: Table) raises -> TableScan:
@@ -191,7 +220,7 @@ def append(
 ) raises -> Int64:
     """Writes `batches` to `table` as one `append` snapshot and returns its ID,
     or returns the snapshot an earlier attempt of this step committed."""
-    table.refresh()
+    _reload(table)
     var loc = table.metadata.location
     var dataset = dataset_of(loc)
     ctx.check_declared(dataset, write=True)
@@ -221,10 +250,10 @@ def append(
             if attempt > _COMMIT_RETRIES:
                 raise e^
             _backoff(attempt)
-            table.refresh()
+            _reload(table)
             continue
         ctx.committed(loc, result.snapshot_id, dataset)
-        table.refresh()
+        _reload(table)
         return result.snapshot_id
 
 
@@ -238,7 +267,7 @@ def commit(
     `table` as one snapshot of `operation`, e.g. `replace` for a compaction,
     and returns its ID, or returns the snapshot an earlier attempt of this
     step committed."""
-    table.refresh()
+    _reload(table)
     var loc = table.metadata.location
     var dataset = dataset_of(loc)
     ctx.check_declared(dataset, write=True)
@@ -259,8 +288,8 @@ def commit(
             if attempt > _COMMIT_RETRIES:
                 raise e^
             _backoff(attempt)
-            table.refresh()
+            _reload(table)
             continue
         ctx.committed(loc, result.snapshot_id, dataset)
-        table.refresh()
+        _reload(table)
         return result.snapshot_id
