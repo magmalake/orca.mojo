@@ -2,7 +2,7 @@
 
 November 1, 2026 · targets stable Mojo 1.2.0
 
-This turns [VISION.md](VISION.md) into a buildable plan. It covers phase 1 in detail, sketches phases 2 to 5 and keyed partitions, and proposes answers to the vision's open questions. Everything marked *verified* was compiled and run on Mojo 1.2.0; every other claim about what Mojo accepts is checked in the PR that first needs it, and this file is corrected when one turns out wrong.
+This turns [VISION.md](VISION.md) into a buildable plan. It covers phase 1 in detail, sketches phases 2 to 6 and keyed partitions, and proposes answers to the vision's open questions. Everything marked *verified* was compiled and run on Mojo 1.2.0; every other claim about what Mojo accepts is checked in the PR that first needs it, and this file is corrected when one turns out wrong.
 
 ## What orca builds on
 
@@ -423,6 +423,80 @@ As built in 5a (`orca.ec2`, `orca.awsec2`): the head instance's script runs the 
 | 5a | **The `ec2` runner.** The EC2 calls; `orca.ec2` (start, sweep, budget); registration's instance options; the user data that starts a head or a worker. | Against a stand-in EC2 API (a small HTTP server that records calls and runs each "instance" as a local process with its user data's environment): a fanout run starts one head and 3 workers with the right types, tags and `DISTA_HEAD`, its tasks reach all 3, everything it started is terminated after, a "Spot interruption" (a worker process killed) is survived, a head killed mid-run is restarted on new instances, and the budget makes a second run wait. | ~1,000 |
 | 5b | **On AWS, with `ec2`.** `deploy/aws/orca.yaml`; the image pushed to ECR; the control instance set up from user data; HTTPS in front of the UIs. | Phase 5's gate: the taxi pipeline runs on its monthly schedule, each run on its own head and workers, its start times (to the first task on every worker) and its cost measured and written here; the UIs public over HTTPS, `orca ui`'s actions behind its login. Afterwards, the stack is kept or deleted as agreed. | ~600 |
 | 5c | **On AWS, with EKS.** An EKS Auto Mode cluster beside the stack: a NodePool for runs on Spot with a CPU limit, Pod Identity for run pods' access to the bucket, `deploy/k8s` with the ECR image. | The same gate with `ORCA_RUNNER=kubernetes`: taxi's runs on their own pods across nodes, start times and cost measured beside 5b's. | ~600 |
+
+
+## Phase 6: getting started
+
+Gate: on a clean machine, an agent given the getting-started page's prompt builds a GitHub Archive lake from 2023 on, imports a day of it every day, sizes its dista workers to the work, and serves a flare app showing how Mojo libraries grew and which Mojo versions they moved to; a person following the page's step-by-step section builds the same thing at a smaller size. Both run on AWS, and the orca UI, the app and the lake's tables stay up afterwards.
+
+The page is written last, from what worked. Writing it is how this phase finds what a user is missing, so the list below is what the first draft found and will grow while the agent runs.
+
+### What the example builds
+
+`magmalake/gharchive.example`, a project of its own made with `pixi shelf add orca`:
+
+1. **`gharchive`**, daily-partitioned (`Daily`, `schedule="0 3 * * *"`, `fills=Previous`): each day's 24 hourly files from data.gharchive.org, read with objectstore's HTTP, parsed as JSON lines and written to `gharchive.events` (Iceberg, partitioned by day). Backfilled from 2023-01-01, a few TB of input.
+2. **`mojo_repos`**, a sensor on `gharchive.events`: finds Mojo repositories in each day's events and in GitHub's code search (files ending `.mojo` or `.🔥`, and `pixi.toml`/`mojoproject.toml` naming a Mojo package), and adds the new ones to `mojo.repos`. How repositories are found is the example's code, so the page shows it rather than orca hiding it.
+3. **`mojo_history`**, keyed by repository (`Keyed["mojo.repos", "repo"]`, `keys_per_run=50`, `sensor=True`): clones each repository as a dista task, reads its history and writes `mojo.commits` and `mojo.migrations`. New repositories start runs by themselves; a daily refresh brings known ones up to date.
+4. **The console**, a flare app reading the `mojo.*` tables: libraries by size and age, Mojo versions adopted over time, and a page per repository.
+
+**The lake's schema.** Everything from GitHub is kept, so questions other than the console's can be asked of it:
+
+| Table | One row per | Columns |
+|---|---|---|
+| `gharchive.events` | GitHub event | `id`, `type`, `created_at`, `repo`, `actor`, `payload` (JSON) |
+| `mojo.repos` | repository | `repo`, `created_at` (GitHub's), `first_mojo_commit`, `first_seen` (first event), `found_by`, `stars`, `forks`, `license`, `default_branch`, `archived`, `description`, `refreshed_at` |
+| `mojo.commits` | commit on the default branch | `repo`, `sha`, `committed_at`, `author`, `mojo_files`, `mojo_lines`, `lines_added`, `lines_removed`, `tooling`, `manifest`, `mojo_package`, `mojo_constraint`, `mojo_version`, `channel` |
+| `mojo.migrations` | change of tooling or Mojo version | `repo`, `sha`, `at`, `kind` (`tooling` or `mojo`), `from`, `to` |
+| `mojo.daily` | repository and day it changed | `repo`, `day`, `mojo_lines`, `mojo_version`, `tooling`, `stars`, for the console's charts |
+
+How the history is read, cheaply: `git log --numstat` over the default branch gives every commit's lines added and removed by file, summed into `mojo_lines` without checking anything out. Only commits touching a manifest or lock file are read with `git show <sha>:<file>`, which is where the tooling and the Mojo version change.
+
+- **`tooling`** is what the project was built with at that commit: `none` (early 2023, the `modular` CLI, no project file), `magic` (`mojoproject.toml`, `magic.lock`), or `pixi` (`pixi.toml`, `pixi.lock`, or `[tool.pixi]` in `pyproject.toml`). A repository's move from magic to pixi is a `tooling` row of `mojo.migrations`.
+- **`mojo_version`** is the version the lock file resolved (the `max`, `mojo`, `mojo-compiler` or `modular` package, whichever the project used, kept in `mojo_package`), else the manifest's constraint (`mojo_constraint`), else null. `channel` is `stable` or `nightly`, from the version (`.dev` builds) and the channel URL. Versions are compared in one order across the renumbering (24.x, 25.x, 0.25.x and 0.26.x, 1.x), which the example's code defines and tests.
+
+### The data is public
+
+The `mojo.*` and `gharchive.*` tables are written to a bucket of their own (`mlake-public-<account>`) with a bucket policy allowing anyone `s3:GetObject` and `s3:ListBucket`; orca's bucket, with logs and run state, stays private. The project's resource control policy denies S3 to principals of other accounts, so readers read unsigned: `aws s3 ls --no-sign-request`, DuckDB's and pyiceberg's anonymous settings, and the page says how. Downloads are billed to the project at S3's egress price, so the Budgets alert covers the bucket, and CloudFront in front of it is the step if readers turn out to download a lot.
+
+### What users are missing
+
+| | Missing | What it is |
+|---|---|---|
+| A | **The code each run ran** | `orca register` keeps every version of a pipeline instead of replacing it: its registry hash, its image digest, and the git repository and commit it was built from, which a build passes with `-D ORCA_SOURCE=... -D ORCA_COMMIT=...` and `describe` reports. Each run records its version. The run page links to `github.com/<repo>/tree/<sha>`, and the pipeline page lists its versions with the runs of each. A binary built from a dirty tree says so. |
+| B | **dista's logs** | Today a run keeps its driver's output and its attempts' logs; the head's and workers' output goes with their instances. Each instance's script now uploads its output to `<run>/cluster/<role>-<instance>.log`, every 30 s while it runs and once when it exits, since an instance can go without notice. The run page lists the run's instances (role, type, started, ended, why it ended) with their logs. |
+| C | **The timeline, in the UI** | The run's timeline is a JSON download for Perfetto today. The run page draws it: one lane per worker, tasks as bars by step, and the number of workers over the run, so scaling shows. An "open in Perfetto" link stays, through Perfetto's `?url=` with CORS allowed for ui.perfetto.dev. |
+| D | **Workers sized to the work** | dista's autoscaling (dista's DESIGN.md, "Autoscaling"): a pipeline is registered with `--workers 1..12`, the scheduler reads each running run's demand from its head every tick, starts workers when tasks wait and drains and terminates idle ones, within the range, `ORCA_VCPU_BUDGET` and the instance quota. A backfill and a day's import then use the same registration. |
+| E | **Secrets for runs** | `orca register --secret GITHUB_TOKEN=orca/github-token` names a Secrets Manager secret; run instances read it at start with their role (which may read only secrets under `orca/`), and the run's environment gets it. Its value is masked in every log orca writes, since the logs are public. |
+| F | **orca from mojoshelf** | `pixi shelf add orca` in a new project; orca and k8s.mojo published like the other tins. |
+| G | **Deploying from a user's project** | `orca aws up` creates or updates the stack from the template shipped in the package, `orca aws push` builds the project's image from a template Dockerfile and pushes it to ECR, `orca aws register` registers its pipelines on the control instance, and `orca aws down` deletes the stack. They call the `aws` and `docker` commands a user already has, logged in with `aws login`. |
+| H | **Long-running apps** | The stack runs an app container next to the orca UI, behind the same Caddy, on its own hostname: `orca aws app console --image ... --host libs.mlake.dev`. It reads the public tables like any reader. |
+| I | **Skills** | In magmalake/skills, beside `mojo-data-performance`: `orca` (pipelines, partitions, keyed partitions, sensors, registering, backfilling, the runners), `dista` (tasks, refs, `remote_many`, actors, local and cluster mode, autoscaling), `magmalake-apps` (a project's layout, a lake on Iceberg over S3, a flare app over it, deploying with `orca aws`), and `mojoshelf` (finding and adding tins) if mojoshelf has none. With the AWS MCP server and its skills, these are what the page tells an agent to install. |
+
+**Instances are on-demand.** The project is on the Paid plan, whose service control policy denies Spot (`DenySpotMarketType`) and Reserved Instances, and keeping the spend limit means staying on it. `--spot` stays for accounts that allow it; the page says so. Autoscaling is what keeps on-demand workers affordable: an idle lake runs no workers, and a backfill's cost is measured on one month before the rest is queued.
+
+### The site
+
+magmalake.dev (mlake.dev is the same site):
+
+- **The home page fits on one screen**: a headline (a mostly-Mojo stack for comptime-checked, scalable, reliable, distributed data pipelines); the layers, bottom to top, each linked: formats (Parquet, Avro, Arrow, compression), storage (objectstore, Iceberg), compute (dista), orchestration (orca), apps (flare), with what isn't Mojo (Postgres) in a footnote; three short points (agent friendly; performance; small images and fast builds, the last two linking to the performance page); and two buttons, Getting started and GitHub. The rest of today's home page moves to pages of its own.
+- **Getting started** has two sections over the same example. **Let an agent build it**: install the magmalake, mojoshelf and AWS skills, then one prompt to copy, with what it will do and roughly what it costs. **Step by step**: install pixi and mojoshelf, create the project, `pixi shelf add orca`, the code of each pipeline and of the console (one month of the archive and a few repositories), and deploying it with `orca aws`.
+
+### PRs
+
+| # | PR | Gate | Size |
+|---|---|---|---|
+| 1 | **The stack on AWS** (#38, phase 5's 5b), now with the public bucket and the console's hostname. | Phase 5's gate. | open |
+| 2 | **Pipeline versions** (A): migration for `pipeline_versions`, `runs.version`; `-D` source and commit in `describe`; the links. | Two registrations of the toy from two commits: each run's page links its own commit, the pipeline page lists both versions. | ~500 |
+| 3 | **Cluster logs and the timeline view** (B, C). | `tests/ec2.sh`: a fanout run's head and workers' logs are listed on its page, including the worker terminated mid-run; the page draws 3 lanes. | ~800 |
+| 4 | **Autoscaling** (D), after dista's autoscaling PRs. | `tests/ec2.sh` against the stand-in EC2: with `--workers 1..6`, a run of 200 slow tasks grows to 6 workers and back to 1, never past the budget; a worker drained while holding results loses none. On AWS: the backfill of one month, its workers over time and its cost. | ~700 |
+| 5 | **Secrets** (E). | A run reads a secret from a stand-in Secrets Manager; its value appears in no log. | ~400 |
+| 6 | **orca on mojoshelf, `orca aws`, apps** (F, G, H). | From a new directory: `pixi init`, `pixi shelf add orca`, a toy pipeline, `orca aws up/push/register` against the running stack, and an app answering on its hostname. | ~900 |
+| 7 | **The skills** (I), in magmalake/skills. | `agentskills validate` passes; an agent with only the skills writes a keyed pipeline that compiles. | ~1,500 lines of text |
+| 8 | **gharchive.example**, built by an agent from the draft prompt, then fixed by hand where it got stuck, each fix recorded as a missing feature here. | The phase's gate. | the example |
+| 9 | **The site**: the one-screen home page and the getting-started page (magmalake.org repo). | Someone following Step by step, and an agent following the prompt, both finish. | site |
+
+The order is 1, 2, 3, dista's autoscaling, 4, 5, 6, 7, 8, 9. Paid resources beyond the stack (the backfill's instances, the console's container) are created once the stack's gate has passed, with their cost estimated first.
 
 
 ## Answers proposed to the vision's open questions
