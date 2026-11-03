@@ -27,6 +27,13 @@ pre { white-space: pre-wrap; }
 .top nav { display: flex; gap: 1rem; }
 .top nav a { color: var(--muted); text-decoration: none; }
 .top nav a[aria-current] { color: var(--text); font-weight: 600; }
+.top__user { margin-left: auto; color: var(--muted); }
+.top__user form { display: inline; }
+.top__user button { font: inherit; color: var(--muted); background: none; border: 0;
+  padding: 0; cursor: pointer; text-decoration: underline; }
+form.login { display: grid; gap: 0.6rem; max-width: 20rem; }
+form.login input { display: block; width: 100%; }
+.error { color: var(--bad, #b3261e); }
 main { max-width: 72rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
 h1 { font-size: 1.6rem; margin: 0.2rem 0 1rem; }
 h2 { font-size: 1.15rem; margin: 2rem 0 0.6rem; }

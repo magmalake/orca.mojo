@@ -29,6 +29,7 @@ And the actions, each a `POST` of a form (see `orca.actions`):
 | `/runs/<id>/rerun` | a new run from `step` on, the steps before it copied |
 | `/runs/<id>/cancel` | cancel a run, before its next attempt if it's running |
 | `/datasets/<name>/rebuild` | rebuild every pipeline downstream over `partitions` |
+| `/login`, `/logout` | a session for the actions, as a cookie; `name`, `password`, `next` |
 
 A page of something still going on (a queued or running run, a running
 attempt) refreshes its live part every two seconds from a fragment path,
@@ -43,9 +44,12 @@ or that page's JSON; one refused answers 409 saying why. The UI holds no
 state: its actions are rows the scheduler acts on, it connects to Postgres
 per request, and it can run beside the scheduler or anywhere else that
 reaches the database. `ORCA_UI_ADDR` (`host:port`) moves it; it binds to
-localhost unless told otherwise, as there's no authentication, and a `POST`
-whose `Origin` (or `Referer`) isn't the UI's own is refused, so another
-site's page can't post to it through a browser.
+localhost unless told otherwise, and a `POST` whose `Origin` (or
+`Referer`) isn't the UI's own is refused, so another site's page can't post
+to it through a browser. Reading needs no login; once login is on
+(`ORCA_UI_LOGIN=required`, or any user added with `orca user add`), every
+action needs a session from `/login`, and each one is recorded as its
+user's (`orca.auth`), which a run's page shows.
 """
 
 from std.os import getenv
@@ -54,6 +58,14 @@ from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
 from postgres import Params
 
+from orca.auth import (
+    SESSION_COOKIE,
+    audit,
+    close_session,
+    login_required,
+    open_session,
+    session_user,
+)
 from orca.actions import (
     Outcome,
     backfill_runs,
@@ -566,6 +578,10 @@ two seconds by what its path returns, until that answers 286 (htmx's "stop
 polling"), which a fragment does once what it shows has ended."""
 
 
+comptime _USER_SLOT = "<!--orca-user-->"
+"""Where `serve` puts who's logged in, or a link to log in."""
+
+
 def _page(title: String, active: StaticString, body: Html) -> String:
     var h = Html()
     h.raw(
@@ -587,7 +603,7 @@ def _page(title: String, active: StaticString, body: Html) -> String:
         if item[0] == active:
             h.raw(' aria-current="page"')
         h.raw(">", item[1], "</a>")
-    h.raw("</nav></header><main>")
+    h.raw("</nav>", _USER_SLOT, "</header><main>")
     h.raw(body.out)
     h.raw("</main><script>", _POLL, "</script></body></html>")
     return h^.finish()
@@ -1261,6 +1277,27 @@ def run(mut db: State, id: Int) raises -> Page:
         h.raw("<div>")
     _run_live(h, db, r, steps)
     h.raw("</div>")
+    # Who did what to it from the UI (orca.auth).
+    var acts = db.conn.query(
+        (
+            "SELECT to_char(at AT TIME ZONE 'UTC',"
+            ' \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') AS at, username, action FROM'
+            " orca.audit WHERE run = $1 ORDER BY id"
+        ),
+        Params().int64(Int64(id)),
+    )
+    if len(acts) > 0:
+        h.raw(
+            '<h2>Actions</h2><div class="scroll"><table><thead><tr>',
+            "<th>At</th><th>By</th><th>Action</th></tr></thead><tbody>",
+        )
+        for a in acts:
+            h.raw("<tr>")
+            h.cell(a.text("at"))
+            h.cell(a.text("username"))
+            h.cell(a.text("action"))
+            h.raw("</tr>")
+        h.raw("</tbody></table></div>")
     if len(touches) > 0:
         h.raw(
             '<h2>Tables</h2><div class="scroll"><table><thead><tr>',
@@ -2328,6 +2365,8 @@ def _reason(status: Int) -> String:
         return "See Other"
     if status == 403:
         return "Forbidden"
+    if status == 401:
+        return "Unauthorized"
     if status == 404:
         return "Not Found"
     if status == 409:
@@ -2373,6 +2412,8 @@ def _query(url: String, name: StringSlice) -> String:
 
 
 def _is_action(path: String) -> Bool:
+    if path == "/login" or path == "/logout":
+        return True
     var parts = path.split("/")
     if len(parts) != 4:
         return False
@@ -2383,6 +2424,122 @@ def _is_action(path: String) -> Bool:
     return parts[1] == "runs" and (
         parts[3] == "resume" or parts[3] == "rerun" or parts[3] == "cancel"
     )
+
+
+def _cookie(req: Request, name: StringSlice) -> String:
+    """A cookie the request sent, or empty."""
+    for part in req.headers.get("Cookie").split(";"):
+        var kv = part.strip()
+        var eq = kv.find("=")
+        if eq > 0 and kv[byte=:eq] == name:
+            return String(kv[byte = eq + 1 :])
+    return ""
+
+
+def _cookie_header(token: String, max_age: Int) -> String:
+    """The session cookie: only for this site's requests (`SameSite`), out
+    of scripts' reach (`HttpOnly`), and with `ORCA_UI_SECURE_COOKIES=1`
+    (behind HTTPS) never sent in the clear."""
+    return String(
+        SESSION_COOKIE,
+        "=",
+        token,
+        "; Path=/; HttpOnly; SameSite=Strict; Max-Age=",
+        max_age,
+        "; Secure" if getenv("ORCA_UI_SECURE_COOKIES") == "1" else "",
+    )
+
+
+def _safe_next(next: String) -> String:
+    """Where to go after logging in: a path on this site, else `/`."""
+    if next.startswith("/") and not next.startswith("//") and "\\" not in next:
+        return next
+    return "/"
+
+
+def login_page(next: String, why: String, status: Int = 200) -> Page:
+    var h = Html()
+    h.raw("<h1>Log in</h1>")
+    if why:
+        h.raw('<p class="error">')
+        h.text(why)
+        h.raw("</p>")
+    h.raw('<form class="login" method="post" action="/login">')
+    h.raw('<input type="hidden" name="next" value="')
+    h.text(_safe_next(next))
+    h.raw(
+        '"><label>Name <input name="name" autocomplete="username"',
+        ' required></label><label>Password <input type="password"',
+        ' name="password" autocomplete="current-password" required></label>',
+        '<button type="submit">Log in</button></form>',
+        '<p class="muted">Reading needs no login; starting, resuming,',
+        " rerunning, backfilling, cancelling and rebuilding do. Users are",
+        " added with <code>orca user add</code>.</p>",
+    )
+    return Page(
+        status,
+        String('{"error": ', quote(why), "}") if why else String(
+            '{"login": "/login"}'
+        ),
+        _page("Log in", "", h),
+    )
+
+
+def _login(mut db: State, body: String, json: Bool) raises -> Response:
+    var token = open_session(db, _form(body, "name"), _form(body, "password"))
+    if not token:
+        return _respond(
+            login_page(_form(body, "next"), "Wrong name or password.", 401),
+            json,
+        )
+    var hours = Float64(getenv("ORCA_UI_SESSION_HOURS", "12"))
+    var out = _respond(
+        Page(
+            303,
+            String('{"user": ', quote(_form(body, "name")), "}"),
+            String(),
+            location=_safe_next(_form(body, "next")),
+        ),
+        json,
+    )
+    out.headers.set("Set-Cookie", _cookie_header(token, Int(hours * 3600.0)))
+    return out^
+
+
+def _login_needed(req: Request, json: Bool) raises -> Response:
+    """An action without a session: 401 for a script, to the login page for
+    a browser, which comes back to the page the form was on."""
+    if json:
+        return _respond(
+            Page(
+                401,
+                String('{"error": "log in first", "login": "/login"}'),
+                String(),
+            ),
+            json,
+        )
+    var back = String("/")
+    var referer = req.headers.get("Referer")
+    var host = String("http://", req.headers.get("Host"))
+    if referer.startswith(String(host, "/")):
+        back = String(referer[byte = host.byte_length() :])
+    var out = Response(status=303, reason="See Other")
+    out.headers.set("Location", String("/login?next=", url_encode(back)))
+    return out^
+
+
+def _run_of(location: String, path: String) -> Int:
+    """The run an action made or acted on, from where it sent the browser or
+    its own path; 0 for none."""
+    for p in [location, path]:
+        if p.startswith("/runs/"):
+            var rest = p[byte=6:]
+            var end = rest.find("/")
+            try:
+                return Int(rest[byte=:end] if end >= 0 else rest)
+            except:
+                pass
+    return 0
 
 
 def _not_allowed() -> Response:
@@ -2438,12 +2595,41 @@ struct Ui(Copyable, Handler):
             return _respond(_cross_origin(), json)
         try:
             var db = State(self.url)
+            var token = _cookie(req, SESSION_COOKIE)
+            var user = session_user(db, token)
+            var required = login_required(db)
+            var body = String(from_utf8_lossy=Span(req.body))
+            if path == "/login":
+                if not post:
+                    return self._with_user(
+                        login_page(_query(req.url, "next"), ""),
+                        json,
+                        user,
+                        required,
+                    )
+                return _login(db, body, json)
+            if path == "/logout":
+                if token:
+                    close_session(db, token)
+                var out = _respond(
+                    Page(303, String('{"user": null}'), String(), location="/"),
+                    json,
+                )
+                out.headers.set("Set-Cookie", _cookie_header("", 0))
+                return out^
             if not post:
-                return _respond(self._page(db, req.url, path), json)
-            var done = _act(db, path, String(from_utf8_lossy=Span(req.body)))
+                return self._with_user(
+                    self._page(db, req.url, path), json, user, required
+                )
+            if required and not user:
+                return _login_needed(req, json)
+            var done = _act(db, path, body)
             if not done:
                 return _respond(not_found(String("nothing at ", path)), json)
-            return _respond(done.take(), json)
+            var page = done.take()
+            if page.status == 303 and user:
+                audit(db, user, path, _run_of(page.location, path), body)
+            return self._with_user(page^, json, user, required)
         except e:
             var h = Html()
             h.raw("<h1>Error</h1><pre>")
@@ -2457,6 +2643,28 @@ struct Ui(Copyable, Handler):
             var resp = _respond(page, json)
             resp.reason = "Internal Server Error"
             return resp^
+
+    def _with_user(
+        self, var page: Page, json: Bool, user: String, required: Bool
+    ) -> Response:
+        """The page, with who's logged in (or a way to log in) in its
+        header."""
+        var slot: String
+        if user:
+            var h = Html()
+            h.raw('<span class="top__user">')
+            h.text(user)
+            h.raw(
+                ' <form method="post" action="/logout"><button type="submit">',
+                "Log out</button></form></span>",
+            )
+            slot = h^.finish()
+        elif required:
+            slot = String('<a class="top__user" href="/login">Log in</a>')
+        else:
+            slot = String()
+        page.html = page.html.replace(_USER_SLOT, slot)
+        return _respond(page, json)
 
     def _page(self, mut db: State, url: String, path: String) raises -> Page:
         if path == "/" or path == "":

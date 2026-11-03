@@ -19,6 +19,7 @@ from std.os import getenv
 from std.sys import argv, exit
 from std.time import sleep
 
+from orca.auth import add_user, remove_user, users
 from orca.civil import now
 from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.scheduler import Scheduler
@@ -33,7 +34,9 @@ comptime USAGE = """usage:
   orca scheduler
   orca ui
   orca lineage <dataset> [<snapshot>]
-  orca rebuild <dataset> KEY[..KEY][,...]"""
+  orca rebuild <dataset> KEY[..KEY][,...]
+  orca user add|remove <name>       (add reads the password from stdin)
+  orca user list"""
 
 
 def _usage(msg: String = ""):
@@ -111,6 +114,29 @@ def _command(args: List[String]) raises -> Int:
         for p in rebuilds(db, id)[0].plan:
             print("  level", p.level, p.pipeline, p.partitions)
         return 0
+    if cmd == "user" and len(args) >= 3:
+        var db = State(url)
+        db.migrate()
+        if args[2] == "list" and len(args) == 3:
+            for u in users(db):
+                print(u)
+            return 0
+        if args[2] == "add" and len(args) == 4:
+            var password = String(input().rstrip("\r\n"))
+            if add_user(db, args[3], password):
+                print("added", args[3])
+            else:
+                print(
+                    "changed the password of",
+                    args[3],
+                    "and ended their sessions",
+                )
+            return 0
+        if args[2] == "remove" and len(args) == 4:
+            if not remove_user(db, args[3]):
+                raise Error("orca: no user ", args[3])
+            print("removed", args[3])
+            return 0
     if cmd == "ui" and len(args) == 2:
         var db = State(url)
         db.migrate()

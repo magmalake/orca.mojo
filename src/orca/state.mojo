@@ -177,6 +177,29 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pipelines ADD COLUMN image text",
             "ALTER TABLE orca.runs ADD COLUMN cpu_millis int",
         ],
+        # Login to orca ui (orca.auth): users, their sessions, and what each
+        # did. pgcrypto, a trusted extension, hashes the passwords.
+        [
+            "CREATE EXTENSION IF NOT EXISTS pgcrypto",
+            """CREATE TABLE orca.users (
+            name text PRIMARY KEY,
+            password_hash text NOT NULL,
+            created timestamptz NOT NULL DEFAULT now())""",
+            """CREATE TABLE orca.sessions (
+            token_hash bytea PRIMARY KEY,
+            username text NOT NULL REFERENCES orca.users (name) ON DELETE
+                CASCADE,
+            created timestamptz NOT NULL DEFAULT now(),
+            expires timestamptz NOT NULL)""",
+            """CREATE TABLE orca.audit (
+            id bigserial PRIMARY KEY,
+            at timestamptz NOT NULL DEFAULT now(),
+            username text NOT NULL,
+            action text NOT NULL,
+            run bigint,
+            detail text NOT NULL)""",
+            "CREATE INDEX audit_run ON orca.audit (run)",
+        ],
     ]
 
 
