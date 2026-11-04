@@ -67,11 +67,16 @@ struct Heartbeat[B: Beater](Movable):
         )
 
     def __deinit__(deinit self):
-        # Joined before the state it beats with is freed.
+        # Joined before the state it beats with is freed. `_state` is
+        # moved out only after the join: unused, it would be destroyed at
+        # the start of this body (last-use destruction), freeing the beater
+        # and its connection under a thread still beating with them.
         try:
             self._pool.shutdown()
         except:
             pass
+        var state = self._state^
+        state.clear()
 
 
 def heartbeat_interval(stale_seconds: Float64) -> Float64:
