@@ -90,6 +90,16 @@ def _hex(c: UInt8) -> Int:
     return -1
 
 
+comptime _CODE_ICON = (
+    '<svg class="src__icon" viewBox="0 0 16 16" width="12" height="12"'
+    ' aria-hidden="true" focusable="false"><path d="M5.5 4.5 2 8l3.5 3.5M10.5'
+    ' 4.5 14 8l-3.5 3.5" fill="none" stroke="currentColor"'
+    ' stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+)
+"""`</>`, before a link to code: drawn in the link's own colour, so it
+follows the theme."""
+
+
 struct Html(Movable, Writable):
     """A page being written."""
 
@@ -121,6 +131,33 @@ struct Html(Movable, Writable):
             '" target="_blank" rel="noopener">',
             escape(label),
             "</a>",
+        )
+
+    def code(
+        mut self, href: StringSlice, label: StringSlice, commit: StringSlice
+    ):
+        """A link to source code on its host, set apart from links inside
+        orca: an icon, `label` (where, as `file.mojo:26`) in monospace, and
+        ↗; it opens in a new tab, and its title names the commit."""
+        var short = String(commit[byte = : min(7, commit.byte_length())])
+        var host = (
+            String(" on GitHub") if "://github.com/"
+            in String(href) else String()
+        )
+        self.out.write(
+            '<a class="src" href="',
+            escape(href),
+            '" target="_blank" rel="noopener" title="View source',
+            host,
+        )
+        if short:
+            self.out.write(" at ", escape(short))
+        self.out.write(
+            '">',
+            _CODE_ICON,
+            '<span class="src__at">',
+            escape(label),
+            '</span><span class="src__out" aria-hidden="true">↗</span></a>',
         )
 
     def cell[*Ts: Writable](mut self, *values: *Ts):

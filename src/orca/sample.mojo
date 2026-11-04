@@ -1,8 +1,8 @@
 """The sampler: a run's machine metrics, one JSON line every few seconds.
 
 ```
-orca sample --out <location> [--pid PID] [--match PATH] [--dirs D,...]
-            [--seconds S] [--count N]
+orca sample --out <location> [--pid PID] [--until FILE] [--match PATH]
+            [--dirs D,...] [--seconds S] [--count N]
 <pipeline> sample ...                       the same, from a pipeline binary
 ```
 
@@ -55,8 +55,11 @@ sampler ends), or `-`, standard output with each line prefixed
 at `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`
 (`metrics_location`).
 
-It ends after a last line once the `--pid` process has, or on SIGTERM or
-SIGINT, which it holds pending to see them; or after `--count` lines. A line it can't write is dropped
+It ends after a last line once the `--pid` process has, once the file
+`--until` names exists, or on SIGTERM or SIGINT, which it holds pending to
+see them; or after `--count` lines. A script that stops it with `--until`
+gets its last line however soon after starting it it stops it, which a
+signal sent before the sampler has blocked it doesn't. A line it can't write is dropped
 with one message, and it carries on: a sampler never fails a run.
 """
 
@@ -81,8 +84,8 @@ comptime PREFIX = "orca-sample "
 """What starts a sample line written to standard output (`--out -`)."""
 
 comptime _USAGE = """usage:
-  sample --out <location>|- [--pid PID] [--match PATH] [--dirs D,...]
-         [--seconds S] [--count N]"""
+  sample --out <location>|- [--pid PID] [--until FILE] [--match PATH]
+         [--dirs D,...] [--seconds S] [--count N]"""
 
 
 def sample_seconds() -> Float64:
@@ -877,6 +880,7 @@ def sample_main(args: List[String]) -> Int:
     var dirs = default_dirs()
     var seconds = sample_seconds()
     var count = 0
+    var until = String()
     var i = 2
     try:
         while i < len(args):
@@ -896,6 +900,8 @@ def sample_main(args: List[String]) -> Int:
                         dirs.append(String(d.strip()))
             elif args[i] == "--seconds":
                 seconds = Float64(v)
+            elif args[i] == "--until":
+                until = v
             elif args[i] == "--count":
                 count = Int(v)
             else:
@@ -933,7 +939,11 @@ def sample_main(args: List[String]) -> Int:
     var uploaded = start
     var dirty = False
     while True:
-        var gone = (root > 0 and not alive(root)) or term_pending()
+        var gone = (
+            (root > 0 and not alive(root))
+            or (until != "" and exists(until))
+            or term_pending()
+        )
         var now = Float64(perf_counter_ns()) / 1e9
         if gone or now >= due:
             var line = s.line()

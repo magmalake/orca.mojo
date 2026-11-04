@@ -23,12 +23,119 @@
   the scheduler moves them out of the pod's log. A sampler that can't write
   never fails a run, and `ORCA_SAMPLE_SECONDS=0` turns it off. Its overhead
   is well under 0.1% of one core.
+- **Runs in a SQLite file: `ORCA_DATABASE_URL=sqlite:<path>`** (#82).
+  `orca.sqlite_store.SqliteStore`, over sqlite-mojo 0.3.5, is a whole
+  `RunStore`. With it, `run`, `resume` and `status` record a pipeline's
+  runs in that file, resumable after a kill as on Postgres, with no server
+  to operate: for a laptop, one VM or CI. `sqlite:///abs/path` is an
+  absolute path. It is WAL mode with one writer at a time (`BEGIN
+  IMMEDIATE`, a one-second busy timeout, then retries on the file opened
+  again for `ORCA_DB_RETRY_SECONDS`), `synchronous = FULL`, and the file
+  must be on a local disk. The scheduler, the UI and orca's other
+  commands still need Postgres, and refuse a SQLite URL. `tests/chaos.sh`
+  runs over a file as well (`test-chaos-sqlite`), with another writer
+  holding the file's lock in place of Postgres restarts. orca-mojo now
+  depends on sqlite-mojo, at the revision mojoshelf published (the one
+  iceberg-mojo pins), and on libsqlite. `DbRetry`'s waits are
+  `orca.store.Backoff`, shared by both stores.
+- **`MemoryStore` is a whole `RunStore`** (#82). It keeps pipelines, runs,
+  steps, attempts, reads and commits in the process, with the rules
+  `PgStore` has (claims, stale heartbeats, losing a run, cancelling), so
+  a run in it can be interrupted and resumed within the process.
+  `<pipeline> run` without `ORCA_DATABASE_URL` now takes the same path
+  as a recorded run: it prints `run 0` first, and its steps as `status`
+  lists them (`after N attempts` included). In-memory runs are numbered
+  0, -1, -2 and so on, never positive, so their commits are never taken
+  for another run's. The executor's store tests (`tests/store_suite.mojo`)
+  are written once over the trait: `test-store` runs them with no server,
+  `test-state` on Postgres.
+- **A pipeline binary depends on the `RunStore` trait alone** (#82).
+  `orca.store.RunStore` extends `Store` with what `orca.cli` asked of
+  `State` directly: `migrate`, `register`, `scheduled_hash`, `version`,
+  `create_run`, `claim`, `ran_version`, `interrupt`, `prior`, `run_info`,
+  `runs`, `steps`, and for the run it owns `own`, `start_heartbeat`,
+  `stop_heartbeat`, `finish_run` and `cancel_requested`. `PgStore`
+  implements it over `State` (`PgStore(url)` opens one), and keeps the
+  heartbeat thread itself (`orca.heartbeat.Heartbeat[B]` over a `Beater`,
+  `PgBeat` for Postgres), so `orca.cli` imports neither `State` nor
+  postgres. `RunResult`, `StepRun`, the statuses, `RunInfo`, `StepInfo`
+  and `process_owner` move to `orca.store`; the old import paths still
+  work. The scheduler and the UI stay on `State`'s SQL.
+- **Links to code look like links to code.** A link to a pipeline's source
+  on its host (the pipeline's declaration, a step's function, a dista task,
+  the commit and the repository, on the pipeline, run and attempt pages)
+  was styled like a link inside orca. Every one is now drawn by one helper
+  (`Html.code`): a small `</>` icon, the place in monospace and muted
+  (`pipelines/gharchive.mojo:26`), then `↗`, opening in a new tab, titled
+  `View source on GitHub at <commit>`. A DAG box that links to code says
+  `↗` and `(view source)`. Links inside orca, and the JSON, are unchanged.
+- **A dataset's page links the steps that write and read it to their
+  code.** Under *Written by* and *Read by*, each pipeline lists its steps
+  that declare the dataset in `writes=` / `reads=` or committed to (read)
+  it, each linked to its line at the commit of the newest run that did, or
+  of the version registered now if none has; each snapshot's step is linked
+  at the commit of the run that committed it. A step without a recorded
+  source has no link. An attempt's page links its step's code too.
+
 - **A step's reads and commits are recorded through its run's `Store`**
   (#82). `Recorder` used to open a Postgres connection of its own;
   it now calls the store it came from (`Store.record`, which `PgStore`
   retries as it does its other writes), so `orca.ctx` no longer imports
   postgres and another store can keep lineage too. `TableSnapshot` and
   `Recorder` live in `orca.store`, and `orca.ctx` still exports both.
+- **One live run per partition.** Only backfills checked for a queued or
+  running run of the same key; a fire, a time-partitioned sensor, a
+  rebuild's level and the UI's start each queued a run regardless, so two
+  runs over one day could run at once and both append. Each now checks, in
+  the transaction that would queue it and under a lock on the pipeline's
+  row: a fire records the live run as its own (`fired ... left to live run
+  N`), a sensor leaves those keys to it, a rebuild's level waits for it to
+  end, and the UI refuses the start, naming the run. `orca register` warns
+  of a schedule that fires more than once for one partition, since a fire
+  after the first run has ended runs it again. The liveness SQL moved to
+  `orca.live`. (#62)
+
+- **A manual, UI or rerun run whose process died no longer stays
+  `running`.** The scheduler retries only scheduled, backfilled and sensed
+  runs, and left the others `running` with a stale heartbeat for good;
+  since every queued or running run held its keys, `orca backfill` then
+  queued nothing for them and a keyed sensor never offered them again. A
+  tick now fails such a run with the error `interrupted: its process
+  stopped`, so it can be resumed or cancelled, and a running run whose
+  process died no longer holds its keys anywhere (`live_sql` replaces
+  `LIVE_SQL`). A run whose retries are spent says so too. `orca backfill`
+  prints on stderr which keys it left: those done, and those in a live
+  run, with the run. (#61)
+- **A process that may have lost its run no longer commits.** Liveness is
+  a heartbeat, so a run whose process stayed alive while its heartbeat went
+  stale (Postgres unreachable for longer than `ORCA_STALE_SECONDS`, a
+  paused VM) was started again, and both processes could append the same
+  step's rows. `append` and `commit` in `orca.tables` now check, right
+  before committing to Iceberg, that this process still owns the run and
+  that its heartbeat is younger than half the stale limit (`Ctx.fence`,
+  which asks the run's store: `Store.fence`; `MemoryStore` has nothing to
+  check); otherwise the attempt fails without committing, and a process that lost
+  its run stops at the attempt's end as before. (#60)
+- **Cancel stops a running step, and steps can time out** (#68). A
+  running run asked to cancel has `ORCA_CANCEL_KILL_SECONDS` (default 60)
+  to finish its step; past that its heartbeat thread fails the attempt,
+  ends the run `cancelled` and exits the process, so on EC2 and Kubernetes
+  the sweep removes its cluster instead of it billing until
+  `ORCA_RUN_DEADLINE`. `Step[..., timeout_seconds=N]` stops an attempt
+  older than N seconds the same way, failing the run (retried as any
+  failed run is) with the timeout as its error. Both write an `orca.audit`
+  row. The scheduler kills a local process of its own whose heartbeat
+  went stale before it acts on the run. `runs.cancel_at`, migration 19.
+- **A pipeline binary that hangs no longer stalls the scheduler or the UI**
+  (#64). `capture` takes a timeout and kills the command's process group
+  past it. The scheduler runs `sense` and `keys` in children it checks on
+  each tick instead of waiting for them, killing one still going after
+  `ORCA_BINARY_SECONDS` (default 300) and keeping that as the sensor's
+  `sense_error`; `orca tick` still waits. `dista-status` and `dista-drain`
+  get 10 s. A keyed sensor's keys are read again only for a newer snapshot
+  of its keys dataset, and kept in `orca.keys` (migration 20), which the
+  UI's keyed page shows instead of running `keys` on every view.
+
 - **Behind an HTTPS proxy, the UI's forms work** (#57). The `Origin` check
   compared the browser's `Origin` with `http://` + `Host`, so behind Caddy
   terminating TLS (as `orca aws up` deploys it) every `POST`, `/login`
@@ -90,6 +197,17 @@
   A sensor pass that fails is kept as the pipeline's `sense_error` (printed
   once, not every second) and shown on its page in `orca ui`, with the
   snapshots it saw and didn't run. Migration 17.
+- **Retries that wait, and steps that say "not yet"** (#66).
+  `Step[..., retries=3, backoff_seconds=30]` waits 30 s before the first
+  retry, doubling. `Pipeline[..., retry_seconds=3600,
+  max_retry_seconds=3600]` sets a run's retry wait (else
+  `ORCA_RETRY_SECONDS`) and caps its doubling, so a run can be retried
+  hourly for days. A step raises `defer(seconds, why)` when it can't work
+  yet: the attempt ends `deferred` without spending a retry, the run ends
+  `deferred`, and the scheduler starts it again at that time without
+  counting it against `run_retries` (`runs.deferrals`, migration 18). The
+  UI shows "until ..." and can resume or cancel a deferred run. A backfill
+  doesn't queue a deferred run's keys again.
 
 ## 0.3.2 (2026-11-03)
 

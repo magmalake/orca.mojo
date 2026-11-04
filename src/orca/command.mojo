@@ -29,7 +29,7 @@ Exit codes: 0, 2 for a usage error, 3 for any other error.
 """
 
 from std.os import getenv
-from std.sys import argv, exit
+from std.sys import argv, exit, stderr
 from std.time import sleep
 
 from orca.actions import cancel_runs, pause_pipeline
@@ -38,7 +38,7 @@ from orca.aws import aws_command
 from orca.civil import now
 from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.locate import locate
-from orca.proc import capture
+from orca.proc import binary_seconds, capture
 from orca.sample import sample_main
 from orca.scheduler import Scheduler
 from orca.secrets import secret_problem
@@ -90,7 +90,7 @@ def _locate(args: List[String]) raises -> Int:
     if len(binaries) == 0:
         _usage("locate needs a pipeline binary")
     for b in binaries:
-        var got = capture([b, "describe"])
+        var got = capture([b, "describe"], binary_seconds())
         if got[0] != 0:
             raise Error("orca: ", b, " describe exited ", got[0], ": ", got[1])
         var map = locate(got[1], root)
@@ -184,11 +184,12 @@ def _command(args: List[String]) raises -> Int:
         # running run is still left to it.
         var rerun = len(args) == 5
         var s = Scheduler(url)
-        print(
-            "queued",
-            s.backfill(args[len(args) - 2], args[len(args) - 1], rerun),
-            "runs",
-        )
+        var got = s.backfill(args[len(args) - 2], args[len(args) - 1], rerun)
+        # Why keys weren't queued goes to stderr, so the count stays the
+        # one line of output.
+        for line in got.skipped():
+            print(line, file=stderr)
+        print("queued", len(got.runs), "runs")
         return 0
     if cmd == "cancel" and len(args) == 4:
         var db = State(url)
@@ -208,6 +209,7 @@ def _command(args: List[String]) raises -> Int:
         return 0
     if cmd == "tick" and len(args) == 2:
         var s = Scheduler(url)
+        s.wait_for_binaries = True
         s.tick(now())
         return 0
     if cmd == "scheduler" and len(args) == 2:

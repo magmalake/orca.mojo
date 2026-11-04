@@ -137,7 +137,7 @@ td code { font-size: 0.8125rem; }
 .status--queued, .status--pending { color: var(--warn);
   background: color-mix(in srgb, var(--warn) 10%, transparent);
   border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
-.status--cancelled { color: var(--muted); background: var(--surface-2); border-color: var(--border-strong); }
+.status--cancelled, .status--deferred { color: var(--muted); background: var(--surface-2); border-color: var(--border-strong); }
 .status--skipped, .status--not-done { color: var(--faint); background: transparent;
   border-style: dashed; }
 h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
@@ -189,6 +189,16 @@ pre.error { color: var(--bad); background: var(--surface); border: 1px solid var
 .dag__name { font-size: 13px; font-weight: 600; fill: var(--text); }
 .dag__kind { font-size: 11px; fill: var(--muted); }
 .dag a:hover rect { stroke: var(--lake); }
+/* A link to source code on its host, unlike a link inside orca: an icon, the
+   file and line in monospace, and an arrow out. */
+a.src { font-family: var(--mono); font-size: 0.78rem; font-weight: 400; color: var(--muted);
+  text-decoration: none; white-space: nowrap; }
+a.src:hover { color: var(--lake); }
+a.src:hover .src__at { text-decoration: underline; text-underline-offset: 0.18em; }
+.src__icon { display: inline-block; vertical-align: -0.1em; margin-right: 0.3em; }
+.src__out { color: var(--faint); margin-left: 0.2em; }
+a.src:hover .src__out { color: inherit; }
+.steps-of { color: var(--muted); }
 .doc { font-size: 0.75rem; font-weight: 400; margin-left: 0.5rem; color: var(--faint); }
 .dag__box--succeeded rect { stroke: var(--ok); }
 .dag__box--failed rect { stroke: var(--bad); stroke-width: 2; }

@@ -6,7 +6,7 @@
 #   after a last line once the process has;
 # - a process shorter than an interval still leaves a line;
 # - a sampler that can't write carries on and exits 0;
-# - told to stop with SIGTERM, it writes a last line and exits 0;
+# - told to stop with SIGTERM or --until, it writes a last line and exits 0;
 # - `--out -` prints prefixed lines;
 # - its own CPU, at the default 5 s, is under 0.5% of one core.
 #
@@ -66,6 +66,12 @@ wait "$s" || fail "a sampler told to stop exited $?"
 started=
 python3 tests/metrics_ok.py --min 1 "$dir/e.jsonl" > /dev/null || fail "e.jsonl"
 echo "ok   SIGTERM: a last line, then exit 0"
+
+# Told to stop with --until, even before it has started: a line, then exit.
+touch "$dir/stop"
+./build/orca sample --out "$dir/f.jsonl" --until "$dir/stop" --seconds 5 || fail "--until exited $?"
+python3 tests/metrics_ok.py --min 1 "$dir/f.jsonl" > /dev/null || fail "f.jsonl"
+echo "ok   --until: a last line, then exit 0"
 
 line=$(./build/orca sample --out - --count 1 --seconds 0.2)
 case "$line" in "orca-sample {"*"}") ;; *) fail "--out -: $line" ;; esac

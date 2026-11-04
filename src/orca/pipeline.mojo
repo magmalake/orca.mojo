@@ -18,25 +18,37 @@ so a pipeline that breaks a rule doesn't compile.
 `execute` is the executor: it runs the steps that haven't succeeded yet and
 reports each attempt to a `Store`, either `MemoryStore` (what `run` uses: a
 run lives as long as the process) or `orca.state.PgStore`, which makes a run
-resumable. Each step's output is kept encoded by dista's codec, as Postgres
+resumable by another process. Each step's output is kept encoded by dista's codec, as Postgres
 holds it. A step that raises is retried up to its `retries`, then fails its
 partition: the steps after it for that partition, and any gather step over
-it, are skipped, while other partitions carry on.
+it, are skipped, while other partitions carry on. One that raises
+`orca.step.defer` ends `deferred`, with no more retries, and its downstream
+steps are skipped likewise; the run is `deferred` if no step failed.
 """
 
-from dista.codec import decode, encode, put_scalar
+from dista.codec import encode, put_scalar
 from dista.seq import Seq
 from dista.task import fnv1a64
 from std.reflection import reflect
+from std.time import sleep
 
 from orca.ctx import Ctx
 from orca.json import quote
-from orca.civil import Civil
+from orca.civil import Civil, now
 from orca.partitions import Monthly, Partitions
 from orca.schedule import Fill, NoSchedule, Previous, Schedule, ScheduleLike
 from orca.source import source_commit, source_dirty, source_repo
-from orca.step import Gather, Mapped, StepLike
-from orca.store import MemoryStore, Store
+from orca.step import Gather, Mapped, StepLike, deferred_for, deferred_why
+from orca.store import (
+    DEFERRED,
+    FAILED,
+    SKIPPED,
+    SUCCEEDED,
+    MemoryStore,
+    RunResult,
+    Store,
+    StepRun,
+)
 from orca.logs import attempt_log, publish, stage_of
 from orca.tasks import NoTasks, TaskSet, task_list
 from orca.tasks import workers as local_workers
@@ -51,85 +63,6 @@ def _names(names: List[String]) -> String:
     return out^
 
 
-comptime SUCCEEDED = "succeeded"
-comptime FAILED = "failed"
-comptime SKIPPED = "skipped"
-
-
-struct StepRun(Copyable, Movable):
-    """One step for one partition (or for the run, for a gather step)."""
-
-    var step: String
-    var partition: String
-    """Empty for a gather step."""
-    var status: String
-    var output: List[UInt8]
-    """The encoded output, when the step succeeded."""
-    var error: String
-    var attempt: Int
-    """The number of the attempt that settled it; 0 for a skipped step."""
-
-    def __init__(
-        out self,
-        step: String,
-        partition: String,
-        status: String,
-        var output: List[UInt8],
-        error: String,
-        attempt: Int = 0,
-    ):
-        self.step = step
-        self.partition = partition
-        self.status = status
-        self.output = output^
-        self.error = error
-        self.attempt = attempt
-
-
-struct RunResult(Movable):
-    """What a run did: every step and partition, in the order they ran."""
-
-    var steps: List[StepRun]
-
-    def __init__(out self):
-        self.steps = List[StepRun]()
-
-    def succeeded(self) -> Bool:
-        for i in range(len(self.steps)):
-            if self.steps[i].status != SUCCEEDED:
-                return False
-        return True
-
-    def find(self, step: StringSlice, partition: StringSlice) -> Int:
-        """The index of `step` for `partition`, or -1."""
-        for i in range(len(self.steps)):
-            ref s = self.steps[i]
-            if s.step == step and s.partition == partition:
-                return i
-        return -1
-
-    def status(
-        self, step: StringSlice, partition: StringSlice
-    ) raises -> String:
-        var i = self.find(step, partition)
-        if i < 0:
-            raise Error("no step ", step, " for '", partition, "'")
-        return self.steps[i].status
-
-    def output[
-        T: Movable
-    ](self, step: StringSlice, partition: StringSlice = "") raises -> T:
-        """The decoded output of `step` for `partition`."""
-        var i = self.find(step, partition)
-        if i < 0:
-            raise Error("no step ", step, " for '", partition, "'")
-        ref s = self.steps[i]
-        if s.status != SUCCEEDED:
-            raise Error("step ", step, " for '", partition, "' ", s.status)
-        var pos = 0
-        return decode[T](Span(s.output), pos)
-
-
 struct Pipeline[
     name: StaticString,
     *Ts: StepLike,
@@ -140,6 +73,8 @@ struct Pipeline[
     catchup: Bool = True,
     max_runs: Int = 1,
     run_retries: Int = 3,
+    retry_seconds: Int = 0,
+    max_retry_seconds: Int = 0,
     sensor: Bool = False,
     keys_per_run: Int = 1,
     workers: Int = 2,
@@ -156,7 +91,10 @@ struct Pipeline[
 
     The scheduler runs at most `max_runs` of its runs at once, and starts a
     failed scheduled or backfilled run again up to `run_retries` times, with
-    backoff (`orca.scheduler`)."""
+    backoff: `retry_seconds` (0 for the scheduler's `ORCA_RETRY_SECONDS`)
+    doubling with each start, up to `max_retry_seconds` if it's set
+    (`orca.scheduler`). `run_retries=72, retry_seconds=3600,
+    max_retry_seconds=3600` tries hourly for three days."""
 
     comptime K = Self.partitions.K
     """The partition key."""
@@ -175,6 +113,12 @@ struct Pipeline[
         comptime assert Self.Ts.length > 0, "a pipeline needs a step"
         comptime assert Self.max_runs >= 1, "max_runs must be at least 1"
         comptime assert Self.run_retries >= 0, "run_retries can't be negative"
+        comptime assert (
+            Self.retry_seconds >= 0
+        ), "retry_seconds can't be negative"
+        comptime assert (
+            Self.max_retry_seconds >= 0
+        ), "max_retry_seconds can't be negative"
         comptime assert (
             Self.keys_per_run >= 1
         ), "keys_per_run must be at least 1"
@@ -281,6 +225,11 @@ struct Pipeline[
             out.write('"schedule": null, ')
         out.write('"max_runs": ', Self.max_runs, ", ")
         out.write('"run_retries": ', Self.run_retries, ", ")
+        # Only when set, so a pipeline that sets neither keeps its describe.
+        comptime if Self.retry_seconds > 0:
+            out.write('"retry_seconds": ', Self.retry_seconds, ", ")
+        comptime if Self.max_retry_seconds > 0:
+            out.write('"max_retry_seconds": ', Self.max_retry_seconds, ", ")
         out.write('"sensor": ', "true" if Self.sensor else "false", ", ")
         out.write('"keys_per_run": ', Self.keys_per_run, ", ")
         out.write('"workers": ', Self.workers, ", ")
@@ -299,6 +248,9 @@ struct Pipeline[
             out.write('"function": ', quote(S.function()), ", ")
             out.write('"input": ', quote(S.input_type()), ", ")
             out.write('"output": ', quote(S.output_type()), ", ")
+            # Only when set, so a step without one keeps the describe it had.
+            comptime if S.timeout() > 0:
+                out.write('"timeout_seconds": ', S.timeout(), ", ")
             out.write('"reads": ', _names(S.dataset_reads()), ", ")
             out.write('"writes": ', _names(S.dataset_writes()))
             out.write("}")
@@ -309,6 +261,19 @@ struct Pipeline[
         out.write('], "source": {"repo": ', quote(source_repo()))
         out.write(', "commit": ', quote(source_commit()))
         out.write(', "dirty": ', "true" if source_dirty() else "false", "}}")
+        return out^
+
+    @staticmethod
+    def timeouts() -> String:
+        """`step=seconds` for each step with `timeout_seconds`,
+        comma-separated, for the run's watchdog (`orca.heartbeat`)."""
+        var out = String()
+        comptime for i in range(Self.Ts.length):
+            comptime T = Self.Ts[i]
+            comptime if T.timeout() > 0:
+                if out:
+                    out.write(",")
+                out.write(T.step_name(), "=", T.timeout())
         return out^
 
     @staticmethod
@@ -354,9 +319,16 @@ struct Pipeline[
 
     @staticmethod
     def run(keys: List[Self.K], run: Int = 0) raises -> RunResult:
-        """Runs every step over `keys`, in order, recording nothing,
-        with a dista runtime of its own if the pipeline has tasks."""
+        """Runs every step over `keys`, in order, recorded in a
+        `MemoryStore` of its own, with a dista runtime of its own if the
+        pipeline has tasks."""
         var store = MemoryStore()
+        var key = String()
+        for j in range(len(keys)):
+            key.write("," if j > 0 else "", keys[j])
+        var hash = hex(Self.registry_hash())
+        var id = store.create_run(Self.name, hash, key, "manual", "memory")
+        store.own(id, "memory", hash)
         var rt = Self.tasks.start(
             local_workers() if Self.tasks.HAS_RUNTIME else 0
         )
@@ -480,7 +452,21 @@ struct Pipeline[
             # Every attempt reads the snapshots the first one read.
             var pinned = store.pinned_reads(T.step_name(), partition)
             var code = hex(Self.registry_hash())
-            for _ in range(T.max_retries() + 1):
+            var wait = Float64(T.backoff())
+            for k in range(T.max_retries() + 1):
+                if k > 0 and wait > 0:
+                    print(
+                        "[",
+                        T.step_name(),
+                        " ",
+                        partition,
+                        "] retrying in ",
+                        Int(wait),
+                        " s",
+                        sep="",
+                    )
+                    sleep(wait)
+                    wait *= 2
                 var attempt = store.start_attempt(
                     T.step_name(), partition, ord, Span(input)
                 )
@@ -522,6 +508,33 @@ struct Pipeline[
                         publish(log)
                     except e:
                         print("orca: can't keep the log at", log, ":", e)
+                var later = deferred_for(error)
+                if later > 0:
+                    var until = now() + Int64(later)
+                    var why = String(
+                        "deferred until ",
+                        Civil.of(until),
+                        "Z: ",
+                        deferred_why(error),
+                    )
+                    store.finish_attempt(
+                        T.step_name(),
+                        partition,
+                        attempt,
+                        DEFERRED,
+                        Span(out),
+                        why,
+                    )
+                    outcome = StepRun(
+                        T.step_name(),
+                        partition,
+                        DEFERRED,
+                        List[UInt8](),
+                        why,
+                        attempt,
+                        until,
+                    )
+                    break
                 if error:
                     store.finish_attempt(
                         T.step_name(),

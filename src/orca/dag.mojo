@@ -127,6 +127,8 @@ def dag_svg(steps: List[DagStep]) -> String:
         out.write('<g class="', cls, '"><title>', escape(s.name))
         if s.status:
             out.write(": ", escape(s.status))
+        if s.href:
+            out.write(" (view source)")
         out.write("</title>")
         if s.kind == "mapped":
             for k in [8, 4]:
@@ -165,6 +167,8 @@ def dag_svg(steps: List[DagStep]) -> String:
         )
         if s.status:
             out.write(" · ", escape(s.status))
+        if s.href:
+            out.write(" ↗")
         out.write("</text></g>")
         if s.href:
             out.write("</a>")

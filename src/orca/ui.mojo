@@ -16,7 +16,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
 | `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
-| `/datasets/<name>` | a dataset's place in that graph and its snapshots |
+| `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), and its snapshots |
 | `/datasets/<name>/snapshots/<id>` | a snapshot's lineage, back and forward (`orca.lineage`) |
 | `/rebuilds/<id>` | a rebuild's pipelines by level, with their runs (`orca.sensors`) |
 
@@ -103,6 +103,7 @@ from orca.lineage import (
     forward,
 )
 from orca.json import quote
+from orca.live import live_sql
 from orca.metrics import (
     InstanceMetrics,
     StepSpan,
@@ -111,9 +112,10 @@ from orca.metrics import (
     read_metrics,
 )
 from orca.scheduler import (
-    LIVE_SQL,
     current_keys,
     done_keys,
+    keep_keys,
+    kept_keys,
     fill_key,
     registered,
 )
@@ -194,6 +196,8 @@ struct RunRow(Copyable, Movable):
     """`running` with no live process (`orca.actions.stalled_sql`)."""
     var error: String
     """Why the run ended without its steps saying so (`runs.error`)."""
+    var waiting_until: String
+    """When a deferred run starts again; empty for any other."""
 
 
 @fieldwise_init
@@ -388,6 +392,16 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
     return out^
 
 
+comptime _WAITING = (
+    "CASE WHEN status = 'deferred' THEN coalesce(retry_at, 0) ELSE 0 END"
+)
+"""SQL for when a deferred run starts again (`retry_at`), 0 for others."""
+
+
+def _waiting(t: Int64) -> String:
+    return _epoch(t) if t > 0 else String()
+
+
 def _runs(
     mut db: State,
     pipeline: String = "",
@@ -407,7 +421,9 @@ def _runs(
             _ts("ended"),
             " AS ended, cancel_requested, coalesce(error, '') AS error, ",
             stalled_sql(),
-            " AS stalled FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
+            " AS stalled, ",
+            _WAITING,
+            " AS waiting FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
             " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) ORDER BY",
             " id DESC LIMIT $4",
         ),
@@ -429,6 +445,7 @@ def _runs(
                 r.bool("cancel_requested"),
                 r.bool("stalled"),
                 r.text("error"),
+                _waiting(r.int64("waiting")),
             )
         )
     return out^
@@ -481,23 +498,49 @@ def _code_url(v: VersionRow, location: String) -> String:
     return String(web, "/blob/", v.commit, "/", location)
 
 
-struct CodeLinks(Movable):
+@fieldwise_init
+struct CodeRef(Copyable, Defaultable, Movable):
+    """A line of a version's code on its host: its URL, where it is
+    (`file.mojo:26`), and the commit."""
+
+    var url: String
+    var at: String
+    var commit: String
+
+    def __init__(out self):
+        self.url = ""
+        self.at = ""
+        self.commit = ""
+
+    def __bool__(self) -> Bool:
+        return self.url.byte_length() > 0
+
+
+def _code_ref(v: VersionRow, location: String) -> CodeRef:
+    """`file#Lline` at the version's commit, or an empty one."""
+    var url = _code_url(v, location)
+    if not url:
+        return CodeRef()
+    return CodeRef(url, location.replace("#L", ":"), v.commit)
+
+
+struct CodeLinks(Copyable, Movable):
     """A version's code on its host: the pipeline's declaration, each
     step's function and each dista task, from `orca.locate`'s map."""
 
-    var pipeline: String
-    var steps: Dict[String, String]
+    var pipeline: CodeRef
+    var steps: Dict[String, CodeRef]
     """Step name to its function's line."""
-    var tasks: List[Tuple[String, String]]
+    var tasks: List[Tuple[String, CodeRef]]
     """A task's function name and its line."""
 
     def __init__(out self):
-        self.pipeline = ""
-        self.steps = Dict[String, String]()
-        self.tasks = List[Tuple[String, String]]()
+        self.pipeline = CodeRef()
+        self.steps = Dict[String, CodeRef]()
+        self.tasks = List[Tuple[String, CodeRef]]()
 
-    def step(self, name: String) -> String:
-        return self.steps.get(name, "")
+    def step(self, name: String) -> CodeRef:
+        return self.steps.get(name, CodeRef())
 
 
 def _run_version(mut db: State, run: Int) raises -> Optional[VersionRow]:
@@ -539,21 +582,68 @@ def _code_links(
                 "name"
             ].string_value()
         for kv in loads(ver.locations).object_items():
-            var url = _code_url(ver, kv[1].string_value())
-            if not url:
+            var at = _code_ref(ver, kv[1].string_value())
+            if not at:
                 continue
             var key = kv[0]
             if key == "pipeline":
-                out.pipeline = url
+                out.pipeline = at^
             elif key in fn_step:
-                out.steps[fn_step[key]] = url
+                out.steps[fn_step[key]] = at^
             else:
                 out.tasks.append(
-                    (String(key[byte = key.rfind("::") + 2 :]), url)
+                    (String(key[byte = key.rfind("::") + 2 :]), at^)
                 )
     except:
         pass
     return out^
+
+
+def _code_of(
+    mut db: State,
+    mut cache: Dict[String, CodeLinks],
+    pipeline: String,
+    run: Int = 0,
+) -> CodeLinks:
+    """The code of the version `run` ran or, if it recorded none or there's
+    no run, of the version `pipeline` is registered with; each version's
+    worked out once per `cache`."""
+    try:
+        var rows = db.conn.query(
+            (
+                "SELECT r.pipeline, coalesce(r.version, p.version, 0) AS v"
+                " FROM orca.runs r LEFT JOIN orca.pipelines p ON p.name ="
+                " r.pipeline WHERE r.id = $1"
+            ),
+            Params().int64(Int64(run)),
+        ) if run else db.conn.query(
+            (
+                "SELECT name AS pipeline, coalesce(version, 0) AS v FROM"
+                " orca.pipelines WHERE name = $1"
+            ),
+            Params().text(pipeline),
+        )
+        if len(rows) == 0 or not rows.row(0).int64("v"):
+            return CodeLinks()
+        var name = rows.row(0).text("pipeline")
+        var id = Int(rows.row(0).int64("v"))
+        var key = String(name, "\0", id)
+        if key not in cache:
+            var vs = _versions(db, id=id)
+            cache[key] = _code_links(
+                db,
+                name,
+                vs[0].copy() if len(vs) > 0 else Optional[VersionRow](None),
+            )
+        return cache[key].copy()
+    except:
+        return CodeLinks()
+
+
+def _code(mut h: Html, at: CodeRef):
+    """A link to a line of code: every one orca shows is drawn by this,
+    so they all look alike and unlike orca's own links."""
+    h.code(at.url, at.at, at.commit)
 
 
 def _code_html(mut h: Html, name: String, links: CodeLinks):
@@ -562,22 +652,23 @@ def _code_html(mut h: Html, name: String, links: CodeLinks):
         return
     h.raw("<dt>Code</dt><dd>")
     if links.pipeline:
-        h.raw("pipeline ")
-        h.link_out(links.pipeline, name)
+        h.text("pipeline ", name, " ")
+        _code(h, links.pipeline)
     for i in range(len(links.tasks)):
-        h.raw(" · " if i or links.pipeline else "", "task ")
-        h.link_out(links.tasks[i][1], links.tasks[i][0])
+        h.raw(" · " if i or links.pipeline else "")
+        h.text("task ", links.tasks[i][0], " ")
+        _code(h, links.tasks[i][1])
     h.raw("</dd>")
 
 
 def _step_cell(mut h: Html, name: String, links: CodeLinks):
-    """A step's name, linked to its function where the code is known."""
-    var url = links.step(name)
+    """A step's name, then a link to its function where the code is known."""
+    var at = links.step(name)
     h.raw("<td>")
-    if url:
-        h.link_out(url, name)
-    else:
-        h.text(name)
+    h.text(name)
+    if at:
+        h.raw(" ")
+        _code(h, at)
     h.raw("</td>")
 
 
@@ -628,19 +719,19 @@ def _source_html(mut h: Html, v: VersionRow):
         return
     var url = commit_url(v.source, v.commit)
     var short = String(v.commit[byte = : min(12, v.commit.byte_length())])
-    h.raw("<code>")
     if url:
-        h.link_out(url, short)
+        h.code(url, short, v.commit)
     else:
+        h.raw("<code>")
         h.text(short)
-    h.raw("</code>")
+        h.raw("</code>")
     if v.dirty:
         h.raw(' <span class="muted">plus uncommitted changes</span>')
     if v.source:
         h.raw(' <span class="muted">of ')
         var web = web_url(v.source)
         if web:
-            h.link_out(web, v.source)
+            h.code(web, v.source, "")
         else:
             h.text(v.source)
         h.raw("</span>")
@@ -1054,6 +1145,8 @@ def _json_run(mut out: String, r: RunRow):
         "true" if r.stalled else "false",
         ', "error": ',
         quote(r.error),
+        ', "waiting_until": ',
+        quote(r.waiting_until) if r.waiting_until else String("null"),
         "}",
     )
 
@@ -1177,6 +1270,10 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
         h.cell(r.trigger)
         h.raw("<td>")
         h.status(r.status)
+        if r.waiting_until:
+            h.raw(' <span class="muted">until ')
+            h.text(r.waiting_until)
+            h.raw("</span>")
         h.raw("</td>")
         h.num(r.starts)
         h.mono(r.created)
@@ -1353,6 +1450,24 @@ struct KeyCounts(Copyable, Movable):
     """Keys not done or in a live run, with a failed or skipped step."""
     var error: String
     """Why its keys couldn't be read, or empty."""
+    var read_at: String
+    """When `<binary> keys` printed them."""
+    var note: String
+    """Why they're older than they'd be, or empty."""
+
+
+comptime _UI_KEYS_SECONDS = 10.0
+"""How long the page waits for `<binary> keys` before showing the keys
+last read, if any: it runs on the server's one thread."""
+
+
+def _keys_seconds() -> Float64:
+    """How old kept keys may be before the page reads them again: the
+    scheduler's `ORCA_SENSE_SECONDS` (60)."""
+    try:
+        return Float64(getenv("ORCA_SENSE_SECONDS", "60"))
+    except:
+        return 60.0
 
 
 comptime _FAILED_SQL = (
@@ -1365,16 +1480,41 @@ comptime _FAILED_SQL = (
 def _key_counts(mut db: State, name: String) raises -> KeyCounts:
     var ps = registered(db, name)
     if len(ps) == 0:
-        return KeyCounts("", -1, 0, 0, 0, List[String](), "not registered")
+        return KeyCounts(
+            "", -1, 0, 0, 0, List[String](), "not registered", "", ""
+        )
     ref p = ps[0]
+    # The keys last read (by the scheduler, or this page) while they're
+    # fresh, so a view doesn't scan the keys column each time.
     var got: Tuple[Int64, List[String]]
-    try:
-        got = current_keys(p)
-    except e:
-        return KeyCounts(p.keys_dataset, -1, 0, 0, 0, List[String](), String(e))
+    var note = String()
+    var kept = kept_keys(db, name)
+    if kept and kept.value().age < _keys_seconds():
+        got = (kept.value().snapshot, kept.value().keys.copy())
+    else:
+        try:
+            got = current_keys(p, _UI_KEYS_SECONDS)
+            keep_keys(db, name, got)
+            kept = kept_keys(db, name)
+        except e:
+            if not kept:
+                return KeyCounts(
+                    p.keys_dataset,
+                    -1,
+                    0,
+                    0,
+                    0,
+                    List[String](),
+                    String(e),
+                    "",
+                    "",
+                )
+            got = (kept.value().snapshot, kept.value().keys.copy())
+            note = String("reading them again failed: ", e)
+    var read_at = kept.value().read_at if kept else String()
     var done = done_keys(db, name, got[1])
     var live = Dict[String, Bool]()
-    for r in db.conn.query(LIVE_SQL, Params().text(name)):
+    for r in db.conn.query(live_sql(), Params().text(name)):
         live[r.text("key")] = True
     var n_live = 0
     var open = String()
@@ -1388,7 +1528,15 @@ def _key_counts(mut db: State, name: String) raises -> KeyCounts:
         for r in db.conn.query(_FAILED_SQL, Params().text(name).text(open)):
             failed.append(r.text("key"))
     return KeyCounts(
-        p.keys_dataset, got[0], len(got[1]), len(done), n_live, failed^, ""
+        p.keys_dataset,
+        got[0],
+        len(got[1]),
+        len(done),
+        n_live,
+        failed^,
+        "",
+        read_at,
+        note,
     )
 
 
@@ -1407,7 +1555,15 @@ def _json_keys(mut out: String, k: KeyCounts):
         ', "failed": ',
     )
     _json_strings(out, k.failed)
-    out.write(', "error": ', quote(k.error), "}")
+    out.write(
+        ', "error": ',
+        quote(k.error),
+        ', "read_at": ',
+        quote(k.read_at),
+        ', "note": ',
+        quote(k.note),
+        "}",
+    )
 
 
 def _keys_html(mut h: Html, name: String, k: KeyCounts):
@@ -1421,6 +1577,14 @@ def _keys_html(mut h: Html, name: String, k: KeyCounts):
     h.link(_dataset_href(k.dataset), k.dataset)
     h.raw(" @ ")
     h.text(k.snapshot)
+    if k.read_at:
+        h.raw(' <span class="muted">read ')
+        h.text(k.read_at)
+        h.raw("</span>")
+    if k.note:
+        h.raw(' <span class="error">')
+        h.text(k.note)
+        h.raw("</span>")
     h.raw("</dd><dt>Keys</dt><dd>")
     h.text(k.total)
     h.raw("</dd><dt>Done</dt><dd>")
@@ -1703,7 +1867,7 @@ def pipeline(mut db: State, name: String) raises -> Page:
     h.raw("</dl>")
     var dag = List[DagStep]()
     for d in steps:
-        dag.append(DagStep(d.name, d.kind, d.after, "", links.step(d.name)))
+        dag.append(DagStep(d.name, d.kind, d.after, "", links.step(d.name).url))
     h.raw(
         '<div class="scroll">',
         dag_svg(dag),
@@ -1993,6 +2157,10 @@ def run(mut db: State, id: Int) raises -> Page:
     h.text(r.started)
     h.raw("</dd><dt>Ended</dt><dd>")
     h.text(r.ended)
+    if r.waiting_until:
+        h.raw("</dd><dt>Waiting</dt><dd>until ")
+        h.text(r.waiting_until)
+        h.raw(", when a step asked to run again")
     h.raw("</dd><dt>Starts</dt><dd>")
     h.text(r.starts)
     if cpu:
@@ -2167,9 +2335,17 @@ def _action(mut h: Html, run: Int, name: StaticString):
 def _run_actions(mut h: Html, r: RunRow, steps: List[StepDef]):
     """The forms for what can be done to the run as it is: resume, rerun
     from a step, cancel."""
-    var resumable = r.status == "failed" or r.status == "cancelled" or r.stalled
+    var resumable = (
+        r.status == "failed"
+        or r.status == "cancelled"
+        or r.status == "deferred"
+        or r.stalled
+    )
     var cancellable = (
-        r.status == "queued" or r.status == "failed" or r.status == "running"
+        r.status == "queued"
+        or r.status == "failed"
+        or r.status == "running"
+        or r.status == "deferred"
     ) and not r.cancel_requested
     var ended = not _live(r.status)
     if not (resumable or cancellable or ended):
@@ -2215,7 +2391,13 @@ def _run_live(
             if s.step == d.name:
                 st.append(s.status)
         dag.append(
-            DagStep(d.name, d.kind, d.after, aggregate(st), links.step(d.name))
+            DagStep(
+                d.name,
+                d.kind,
+                d.after,
+                aggregate(st),
+                links.step(d.name).url,
+            )
         )
     h.raw('<div class="scroll">', dag_svg(dag), "</div><h2>Steps ")
     h.status(r.status)
@@ -2515,6 +2697,12 @@ def attempt(mut db: State, run: Int, id: Int) raises -> Page:
     h.raw("</dd><dt>Log file</dt><dd><code>")
     h.text(a.log)
     h.raw("</code></dd>")
+    var cache = Dict[String, CodeLinks]()
+    var at = _code_of(db, cache, "", run).step(a.step)
+    if at:
+        h.raw("<dt>Code</dt><dd>")
+        _code(h, at)
+        h.raw("</dd>")
     if len(siblings) > 1:
         h.raw("<dt>Attempts</dt><dd>")
         for i in range(len(siblings)):
@@ -2570,7 +2758,9 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
             _ts("ended"),
             " AS ended, cancel_requested, coalesce(error, '') AS error, ",
             stalled_sql(),
-            " AS stalled FROM orca.runs WHERE id = $1",
+            " AS stalled, ",
+            _WAITING,
+            " AS waiting FROM orca.runs WHERE id = $1",
         ),
         Params().int64(Int64(id)),
     )
@@ -2590,6 +2780,7 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
         r.bool("cancel_requested"),
         r.bool("stalled"),
         r.text("error"),
+        _waiting(r.int64("waiting")),
     )
 
 
@@ -2721,6 +2912,79 @@ def _pipeline_links(mut h: Html, names: List[String]):
         h.link(String("/pipelines/", url_encode(names[i])), names[i])
 
 
+@fieldwise_init
+struct StepUse(Copyable, Movable):
+    """A step that writes (or reads) a dataset: declared in its `writes=`
+    (`reads=`), or seen committing to (reading) it; and the newest run that
+    did, or 0."""
+
+    var pipeline: String
+    var step: String
+    var run: Int
+
+
+def _dataset_steps(
+    mut db: State, dataset: String, writes: Bool
+) raises -> List[StepUse]:
+    var kind = "writes" if writes else "reads"
+    var table = "orca.commits" if writes else "orca.reads"
+    var rows = db.conn.query(
+        String(
+            "WITH d AS (SELECT p.name AS pipeline, st->>'name' AS step FROM",
+            " orca.pipelines p, jsonb_array_elements(p.describe->'steps') AS",
+            " x(st) WHERE EXISTS (SELECT 1 FROM",
+            " jsonb_array_elements_text(coalesce(st->'",
+            kind,
+            "', '[]')) AS v WHERE v = $1)), seen AS (SELECT DISTINCT ON",
+            " (r.pipeline, s.step) r.pipeline, s.step, r.id AS run FROM ",
+            table,
+            " c JOIN orca.attempts a ON a.id = c.attempt JOIN orca.steps s ON",
+            " s.id = a.step JOIN orca.runs r ON r.id = s.run WHERE c.dataset",
+            " = $1 ORDER BY r.pipeline, s.step, c.attempt DESC) SELECT",
+            " coalesce(d.pipeline, seen.pipeline) AS pipeline,",
+            " coalesce(d.step, seen.step) AS step, coalesce(seen.run, 0) AS",
+            " run FROM d FULL JOIN seen ON seen.pipeline = d.pipeline AND",
+            " seen.step = d.step ORDER BY 1, 2",
+        ),
+        Params().text(dataset),
+    )
+    var out = List[StepUse]()
+    for r in rows:
+        out.append(
+            StepUse(r.text("pipeline"), r.text("step"), Int(r.int64("run")))
+        )
+    return out^
+
+
+def _steps_using(
+    mut h: Html,
+    mut db: State,
+    mut cache: Dict[String, CodeLinks],
+    uses: List[StepUse],
+):
+    """Each pipeline, then its steps, each linked to its line at the commit
+    of the newest run that used the dataset."""
+    if len(uses) == 0:
+        h.raw('<span class="muted">none</span>')
+        return
+    for i in range(len(uses)):
+        ref u = uses[i]
+        if i == 0 or uses[i - 1].pipeline != u.pipeline:
+            if i:
+                h.raw("; ")
+            h.link(String("/pipelines/", url_encode(u.pipeline)), u.pipeline)
+            h.raw(' <span class="steps-of">step ')
+        else:
+            h.raw(", ")
+        h.text(u.step)
+        var at = _code_of(db, cache, u.pipeline, u.run).step(u.step)
+        if at:
+            h.raw(" ")
+            _code(h, at)
+        if i + 1 == len(uses) or uses[i + 1].pipeline != u.pipeline:
+            h.raw("</span>")
+
+
 def dataset_page(mut db: State, name: String) raises -> Page:
     var ds = dataset_rows(db, name)
     if len(ds) == 0:
@@ -2761,10 +3025,11 @@ def dataset_page(mut db: State, name: String) raises -> Page:
     var h = Html()
     h.raw('<p class="crumb"><a href="/datasets">Datasets</a></p><h1>')
     h.text(d.name)
+    var cache = Dict[String, CodeLinks]()
     h.raw('</h1><dl class="facts"><dt>Written by</dt><dd>')
-    _pipeline_links(h, d.writers)
+    _steps_using(h, db, cache, _dataset_steps(db, name, writes=True))
     h.raw("</dd><dt>Read by</dt><dd>")
-    _pipeline_links(h, d.readers)
+    _steps_using(h, db, cache, _dataset_steps(db, name, writes=False))
     h.raw("</dd></dl>")
     h.raw('<div class="scroll">', _flow_graph(db, d.name), "</div>")
     if len(d.readers) > 0:
@@ -2799,8 +3064,13 @@ def dataset_page(mut db: State, name: String) raises -> Page:
             h.link(String("/pipelines/", url_encode(c.pipeline)), c.pipeline)
             h.raw("</td><td>")
             h.chip(String("/runs/", c.run), String(c.run))
+            h.raw("</td><td>")
+            h.text(c.step)
+            var at = _code_of(db, cache, c.pipeline, c.run).step(c.step)
+            if at:
+                h.raw(" ")
+                _code(h, at)
             h.raw("</td>")
-            h.cell(c.step)
             h.mono(c.partition)
             h.mono(c.ended)
             h.raw("</tr>")

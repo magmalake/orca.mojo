@@ -44,6 +44,7 @@ from postgres import Params
 from orca.day import Day
 from orca.key import parse_keys
 from orca.lineage import flows
+from orca.live import live_runs
 from orca.month import Month, days_in
 from orca.state import State
 from orca.warehouse import Sensed
@@ -382,6 +383,23 @@ def advance_rebuilds(mut db: State) raises:
                 elif status[k] != "succeeded":
                     waiting = True
             for k in queue:
+                # A live run of one of its keys runs first: the level's run
+                # waits for it instead of running beside it.
+                _ = tx.query(
+                    (
+                        "SELECT name FROM orca.pipelines WHERE name = $1 FOR"
+                        " UPDATE"
+                    ),
+                    Params().text(pipeline[k]),
+                )
+                var live = live_runs(tx, pipeline[k])
+                var busy = False
+                for key in split_keys(keys[k]):
+                    if key in live:
+                        busy = True
+                if busy:
+                    waiting = True
+                    continue
                 var run = (
                     tx.query(
                         (

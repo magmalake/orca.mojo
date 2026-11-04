@@ -23,15 +23,27 @@ which `interrupt` marks failed when the run is resumed.
 
 from std.ffi import external_call
 from std.os import getenv
-from std.time import perf_counter_ns, sleep
 
 from postgres import Connection, Params, Transaction
 
-from orca.pipeline import FAILED, SUCCEEDED, SKIPPED, RunResult, StepRun
-from orca.store import Store, TableSnapshot
-
-comptime RUNNING = "running"
-comptime CANCELLED = "cancelled"
+from orca.heartbeat import Beater, Heartbeat
+from orca.store import (
+    CANCELLED,
+    DEFERRED,
+    FINAL,
+    FAILED,
+    Backoff,
+    RUNNING,
+    SKIPPED,
+    SUCCEEDED,
+    RunInfo,
+    RunResult,
+    RunStore,
+    StepInfo,
+    StepRun,
+    TableSnapshot,
+    process_owner,
+)
 
 
 def _migrations() -> List[List[String]]:
@@ -291,44 +303,29 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pipelines ADD COLUMN sense_error text",
             "ALTER TABLE orca.pipelines ADD COLUMN sense_error_at timestamptz",
         ],
+        # Deferred runs (orca.step.defer): how many of a run's starts were
+        # after it deferred, which its retry budget doesn't count.
+        [
+            "ALTER TABLE orca.runs ADD COLUMN deferrals int NOT NULL DEFAULT 0",
+        ],
+        # Stopping a step (orca.heartbeat): when a running run asked to
+        # cancel is stopped if its step hasn't finished by then.
+        [
+            "ALTER TABLE orca.runs ADD COLUMN cancel_at timestamptz",
+        ],
+        # A keyed pipeline's keys as `<binary> keys` last printed them, with
+        # their snapshot, so the UI shows them without running the binary.
+        [
+            """CREATE TABLE orca.keys (
+            pipeline text PRIMARY KEY REFERENCES orca.pipelines (name),
+            snapshot_id bigint NOT NULL,
+            keys text NOT NULL,
+            read_at timestamptz NOT NULL DEFAULT now())""",
+        ],
     ]
 
 
 comptime _MIGRATION_LOCK = 0x6F726361  # "orca"
-
-
-def process_owner() -> String:
-    """`host:pid`, naming this process as a run's owner."""
-    var buf = List[UInt8](length=256, fill=0)
-    _ = external_call["gethostname", Int32](buf.unsafe_ptr(), Int(255))
-    var n = 0
-    while n < 255 and buf[n] != 0:
-        n += 1
-    var host = String(from_utf8_lossy=Span(buf)[:n])
-    return String(host, ":", external_call["getpid", Int32]())
-
-
-@fieldwise_init
-struct RunInfo(Copyable, Movable):
-    var id: Int
-    var pipeline: String
-    var registry_hash: String
-    var partitions: String
-    var status: String
-    var owner: String
-    var error: String
-    """Why the run ended without its steps saying so, or empty."""
-
-
-@fieldwise_init
-struct StepInfo(Copyable, Movable):
-    var step: String
-    var partition: String
-    var status: String
-    var attempts: Int
-    var error: String
-    var log: String
-    """The latest attempt's log file, or empty."""
 
 
 struct State(Movable):
@@ -337,6 +334,12 @@ struct State(Movable):
     var conn: Connection
 
     def __init__(out self, url: String) raises:
+        if url.startswith("sqlite:"):
+            raise Error(
+                "orca: ORCA_DATABASE_URL is a SQLite file, which only a",
+                " pipeline binary's run, resume and status take; the",
+                " scheduler, the UI and orca's other commands need Postgres",
+            )
         self.conn = Connection(url)
 
     def migrate(mut self) raises:
@@ -515,8 +518,9 @@ struct State(Movable):
             (
                 "UPDATE orca.runs SET status = 'running', owner = $2, heartbeat"
                 " = now(), ended = NULL, error = NULL WHERE id = $1 AND status"
-                " IN ('queued', 'running', 'failed') AND (heartbeat IS NULL OR"
-                " heartbeat < now() - make_interval(secs => $3)) RETURNING id"
+                " IN ('queued', 'running', 'failed', 'deferred') AND (heartbeat"
+                " IS NULL OR heartbeat < now() - make_interval(secs => $3))"
+                " RETURNING id"
             ),
             Params().int64(Int64(run)).text(owner).float64(stale_seconds),
         )
@@ -527,6 +531,7 @@ struct State(Movable):
             info.status != RUNNING
             and info.status != FAILED
             and info.status != "queued"
+            and info.status != DEFERRED
         ):
             raise Error("orca: run ", run, " is ", info.status)
         raise Error(
@@ -595,6 +600,19 @@ struct State(Movable):
             Params().int64(Int64(run)).text(status).text(owner),
         )
 
+    def defer_run(mut self, run: Int, owner: String, until: Int64) raises:
+        """Ends the run `deferred`, to be started again at `until` (on the
+        scheduler's clock) by the scheduler, whatever started it; that start
+        isn't counted against its retries."""
+        _ = self.conn.execute(
+            (
+                "UPDATE orca.runs SET status = 'deferred', ended = now(),"
+                " heartbeat = NULL, retry_at = $3, deferrals = deferrals + 1"
+                " WHERE id = $1 AND owner = $2"
+            ),
+            Params().int64(Int64(run)).text(owner).int64(until),
+        )
+
     def cancel_requested(mut self, run: Int) raises -> Bool:
         return (
             self.conn.query(
@@ -658,70 +676,173 @@ struct State(Movable):
         return out^
 
 
-comptime FINAL = "\x1f"
-"""Starts the message of an error a retry can't help: the run was lost to
-another process, or cancelled. `DbRetry` raises it at once, without it."""
-
-
-def db_retry_seconds() -> Float64:
-    """`ORCA_DB_RETRY_SECONDS`: how long a run's process keeps retrying a
-    write to Postgres that failed, by default the stale limit
-    (`ORCA_STALE_SECONDS`, 30), past which another process may take the run
-    over anyway."""
-    try:
-        return Float64(
-            getenv("ORCA_DB_RETRY_SECONDS", getenv("ORCA_STALE_SECONDS", "30"))
-        )
-    except:
-        return 30.0
-
-
 struct DbRetry(Movable):
-    """Retries of one call to Postgres from a run's process.
+    """Retries of one call to Postgres from a run's process: `Backoff`,
+    then a new connection, so a restart or failover of the server doesn't
+    stop the run."""
 
-    `again(e, ...)` is called with what the call raised: it raises again
-    if the error is final (`FINAL`) or the time is up, else it waits, a
-    quarter of a second doubling to 4 s, and makes a new connection, so a
-    restart or failover of the server doesn't stop the run."""
-
-    var started: Int
-    var wait: Float64
-    var budget: Float64
+    var backoff: Backoff
 
     def __init__(out self):
-        self.started = perf_counter_ns()
-        self.wait = 0.25
-        self.budget = db_retry_seconds()
+        self.backoff = Backoff("Postgres")
 
     def again(mut self, e: Error, mut db: State, url: String) raises:
-        var msg = String(e)
-        if msg.startswith(FINAL):
-            raise Error(String(msg[byte = FINAL.byte_length() :]))
-        var spent = Float64(perf_counter_ns() - self.started) / 1e9
-        if spent + self.wait > self.budget:
-            raise Error(msg)
-        print(
-            "orca: Postgres failed (",
-            msg,
-            "); retrying in ",
-            self.wait,
-            " s",
-            sep="",
-        )
-        sleep(self.wait)
-        self.wait = min(self.wait * 2, 4.0)
+        self.backoff.again(e)
         try:
             db = State(url)
         except:
             pass  # the next try fails too, and comes back here
 
 
-struct PgStore(Movable, Store):
-    """Records a run's attempts in Postgres, as its owner.
+comptime _WATCH_SQL = (
+    "SELECT 'cancel' AS why, 0::bigint AS attempt, '' AS step, '' AS"
+    " partition, 0::float8 AS secs FROM orca.runs WHERE id = $1 AND owner ="
+    " $2 AND status = 'running' AND cancel_requested AND cancel_at <= now()"
+    " UNION ALL SELECT 'timeout', a.id, s.step, s.partition, t.secs FROM"
+    " orca.attempts a JOIN orca.steps s ON s.id = a.step JOIN orca.runs r ON"
+    " r.id = s.run JOIN (SELECT split_part(x, '=', 1) AS step,"
+    " split_part(x, '=', 2)::float8 AS secs FROM unnest(string_to_array($3,"
+    " ',')) AS x) AS t ON t.step = s.step WHERE s.run = $1 AND r.owner = $2"
+    " AND r.status = 'running' AND a.status = 'running' AND a.started <= now()"
+    " - make_interval(secs => t.secs) LIMIT 1"
+)
+"""A reason to stop the run's process now, if there is one: a cancel whose
+time has come, or an attempt past its step's timeout."""
 
-    Every call is retried for `ORCA_DB_RETRY_SECONDS` on a new connection
+
+def _stop(
+    mut conn: Connection, run: Int, owner: String, timeouts: String
+) raises -> String:
+    """Ends the run as the watchdog finds it should end, and returns why,
+    or empty if it shouldn't."""
+    var rows = conn.query(
+        _WATCH_SQL, Params().int64(Int64(run)).text(owner).text(timeouts)
+    )
+    if len(rows) == 0:
+        return ""
+    var r = rows.row(0)
+    var tx = conn.begin()
+    var why: String
+    if r.text("why") == "timeout":
+        var step = r.text("step")
+        if r.text("partition"):
+            step.write(" ", r.text("partition"))
+        why = String(
+            "timed out after ",
+            Int(r.float64("secs")),
+            " s (timeout_seconds), so its process was stopped",
+        )
+        var n = tx.execute(
+            (
+                "UPDATE orca.attempts SET status = 'failed', ended = now(),"
+                " error = $2 WHERE id = $1 AND status = 'running'"
+            ),
+            Params().int64(r.int64("attempt")).text(why),
+        )
+        if n != 1:
+            tx.rollback()
+            return ""  # it ended as we looked
+        _ = tx.execute(
+            (
+                "UPDATE orca.steps SET status = 'failed', error = $2 WHERE id ="
+                " (SELECT step FROM orca.attempts WHERE id = $1)"
+            ),
+            Params().int64(r.int64("attempt")).text(why),
+        )
+        why = String("step ", step, " ", why)
+        _ = tx.execute(
+            (
+                "UPDATE orca.runs SET status = 'failed', ended = now(),"
+                " heartbeat = NULL, error = $3 WHERE id = $1 AND owner = $2"
+            ),
+            Params().int64(Int64(run)).text(owner).text(why),
+        )
+    else:
+        why = String(
+            "cancelled: its step hadn't finished when the cancel's",
+            " ORCA_CANCEL_KILL_SECONDS ran out, so its process was stopped",
+        )
+        _ = tx.execute(
+            (
+                "UPDATE orca.attempts a SET status = 'failed', ended = now(),"
+                " error = $2 FROM orca.steps s WHERE a.step = s.id AND s.run ="
+                " $1 AND a.status = 'running'"
+            ),
+            Params().int64(Int64(run)).text(why),
+        )
+        _ = tx.execute(
+            (
+                "UPDATE orca.steps SET status = 'failed', error = $2 WHERE run"
+                " = $1 AND status = 'running'"
+            ),
+            Params().int64(Int64(run)).text(why),
+        )
+        _ = tx.execute(
+            (
+                "UPDATE orca.runs SET status = 'cancelled', ended = now(),"
+                " heartbeat = NULL WHERE id = $1 AND owner = $2"
+            ),
+            Params().int64(Int64(run)).text(owner),
+        )
+    _ = tx.execute(
+        (
+            "INSERT INTO orca.audit (username, action, run, detail) VALUES"
+            " ('orca', 'stop', $1, $2)"
+        ),
+        Params().int64(Int64(run)).text(String(owner, ": ", why)),
+    )
+    tx.commit()
+    return why^
+
+
+struct PgBeat(Beater):
+    """Refreshes a run's heartbeat in Postgres, on a connection of its own."""
+
+    var url: String
+    var run: Int
+    var owner: String
+    var timeouts: String
+    """`step=seconds` for each step with a timeout, comma-separated."""
+    var _conn: Optional[Connection]
+
+    def __init__(
+        out self, url: String, run: Int, owner: String, timeouts: String = ""
+    ):
+        self.url = url
+        self.run = run
+        self.owner = owner
+        self.timeouts = timeouts
+        self._conn = None
+
+    def beat(mut self) raises:
+        if not self._conn:
+            self._conn = Connection(self.url)
+        _ = self._conn.value().execute(
+            (
+                "UPDATE orca.runs SET heartbeat = now() WHERE id = $1 AND"
+                " owner = $2 AND status = 'running'"
+            ),
+            Params().int64(Int64(self.run)).text(self.owner),
+        )
+        # The watchdog (orca.heartbeat): a cancel whose time has come, or
+        # an attempt past its step's timeout, stops the process.
+        var why = _stop(self._conn.value(), self.run, self.owner, self.timeouts)
+        if why:
+            print("run", self.run, why, flush=True)
+            external_call["_exit", NoneType](Int32(1))
+
+    def reset(mut self):
+        self._conn = None
+
+
+struct PgStore(Movable, RunStore):
+    """orca's runs in Postgres, `State` behind the `RunStore` trait.
+
+    The calls for the owned run (attempts, skips, reads and commits, its
+    end) are retried for `ORCA_DB_RETRY_SECONDS` on a new connection
     (`DbRetry`), except when the run was lost or cancelled, so a blip of
-    the server doesn't throw away a step that finished."""
+    the server doesn't throw away a step that finished. The others are made
+    once, before the run starts or after it ends."""
 
     var db: State
     var url: String
@@ -730,6 +851,17 @@ struct PgStore(Movable, Store):
     var registry_hash: String
     var _attempt_id: Int64
     """The `attempts` row of the attempt last started."""
+    var _heartbeat: Optional[Heartbeat[PgBeat]]
+
+    def __init__(out self, url: String) raises:
+        """Connects to `url`; `own` a run before recording attempts."""
+        self.db = State(url)
+        self.url = url
+        self.run = 0
+        self.owner = String()
+        self.registry_hash = String()
+        self._attempt_id = 0
+        self._heartbeat = None
 
     def __init__(
         out self,
@@ -739,12 +871,86 @@ struct PgStore(Movable, Store):
         owner: String,
         registry_hash: String,
     ):
+        """Over `db`, already owning `run`."""
         self.db = db^
         self.url = url
         self.run = run
         self.owner = owner
         self.registry_hash = registry_hash
         self._attempt_id = 0
+        self._heartbeat = None
+
+    # --- RunStore: State's calls, for the pipeline binary ---
+
+    def migrate(mut self) raises:
+        self.db.migrate()
+
+    def register(
+        mut self, pipeline: String, registry_hash: String, describe: String
+    ) raises:
+        self.db.register(pipeline, registry_hash, describe)
+
+    def scheduled_hash(mut self, pipeline: String) raises -> String:
+        return self.db.scheduled_hash(pipeline)
+
+    def version(
+        mut self,
+        pipeline: String,
+        registry_hash: String,
+        describe: String,
+        image: String,
+    ) raises -> Int:
+        return self.db.version(pipeline, registry_hash, describe, image)
+
+    def create_run(
+        mut self,
+        pipeline: String,
+        registry_hash: String,
+        partitions: String,
+        trigger: String,
+        owner: String,
+    ) raises -> Int:
+        return self.db.create_run(
+            pipeline, registry_hash, partitions, trigger, owner
+        )
+
+    def claim(mut self, run: Int, owner: String, stale_seconds: Float64) raises:
+        self.db.claim(run, owner, stale_seconds)
+
+    def ran_version(mut self, run: Int, version: Int) raises:
+        self.db.ran_version(run, version)
+
+    def interrupt(mut self, run: Int) raises -> Int:
+        return self.db.interrupt(run)
+
+    def prior(mut self, run: Int) raises -> RunResult:
+        return self.db.prior(run)
+
+    def run_info(mut self, run: Int) raises -> RunInfo:
+        return self.db.run_info(run)
+
+    def runs(mut self, limit: Int) raises -> List[RunInfo]:
+        return self.db.runs(limit)
+
+    def steps(mut self, run: Int) raises -> List[StepInfo]:
+        return self.db.steps(run)
+
+    def own(mut self, run: Int, owner: String, registry_hash: String) raises:
+        self.run = run
+        self.owner = owner
+        self.registry_hash = registry_hash
+
+    def start_heartbeat(
+        mut self, interval: Float64, timeouts: String = ""
+    ) raises:
+        self._heartbeat = Heartbeat(
+            PgBeat(self.url, self.run, self.owner, timeouts), interval
+        )
+
+    def stop_heartbeat(mut self):
+        self._heartbeat = None
+
+    # --- Store: the owned run's attempts ---
 
     @staticmethod
     def _still_owner(
@@ -888,6 +1094,58 @@ struct PgStore(Movable, Store):
             except e:
                 r.again(e, self.db, self.url)
 
+    def fence(mut self) raises:
+        # On the store's connection; an unreachable database is waited for
+        # while the heartbeat could still be fresh, then the commit is off.
+        var stale: Float64
+        try:
+            stale = Float64(getenv("ORCA_STALE_SECONDS", "30"))
+        except:
+            stale = 30.0
+        var r = DbRetry()
+        r.backoff.budget = stale / 2
+        while True:
+            try:
+                var row = self.db.conn.query(
+                    (
+                        "SELECT coalesce(owner, '') AS owner, status,"
+                        " coalesce(heartbeat > now() - make_interval(secs =>"
+                        " $2), false) AS fresh FROM orca.runs WHERE id = $1"
+                    ),
+                    Params().int64(Int64(self.run)).float64(stale / 2),
+                ).row(0)
+                if (
+                    row.text("owner") != self.owner
+                    or row.text("status") != RUNNING
+                ):
+                    raise Error(
+                        "orca: not committing: run ",
+                        self.run,
+                        " is ",
+                        row.text("status"),
+                        " and held by ",
+                        row.text("owner") if row.text("owner") else "nobody",
+                        ", not this process (",
+                        self.owner,
+                        ")",
+                    )
+                if not row.bool("fresh"):
+                    raise Error(
+                        "orca: not committing: run ",
+                        self.run,
+                        "'s heartbeat is older than ",
+                        stale / 2,
+                        " s, so another process may take it over",
+                    )
+                return
+            except e:
+                if String(e).startswith("orca: not committing"):
+                    raise e^
+                try:
+                    r.again(e, self.db, self.url)
+                except e2:
+                    raise Error("orca: not committing: ", e2)
+
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String
     ) raises:
@@ -984,6 +1242,16 @@ struct PgStore(Movable, Store):
         while True:
             try:
                 self.db.finish_run(self.run, self.owner, status)
+                return
+            except e:
+                r.again(e, self.db, self.url)
+
+    def defer_run(mut self, until: Int64) raises:
+        """`State.defer_run` for this run, retried as the attempts are."""
+        var r = DbRetry()
+        while True:
+            try:
+                self.db.defer_run(self.run, self.owner, until)
                 return
             except e:
                 r.again(e, self.db, self.url)

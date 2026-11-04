@@ -20,7 +20,8 @@ binary itself (`direct`, for the tests' stand-in EC2), then shuts down
 instance runs `<binary> sample` (`orca.sample`; in docker mode as a
 container with `--pid host`), whose lines its script uploads to the run's
 `metrics/<role>-<instance>.jsonl` with its log (`<binary> put-log`), every
-`ORCA_CLUSTER_LOG_SECONDS` and once when it ends.
+`ORCA_CLUSTER_LOG_SECONDS` and once when it ends, after telling the
+sampler to write a last line and stop (`--until`).
 
 A pipeline registered with `--workers MIN..MAX` scales: its run starts
 `MIN` workers, which may be none, and every tick `scale` reads the head's
@@ -63,6 +64,10 @@ from orca.secrets import parse_secrets
 from orca.state import State
 
 comptime HEAD_PORT = 6390
+
+comptime HEAD_SECONDS = 10.0
+"""How long `<binary> dista-status` or `dista-drain` may take, asking a
+run's head, before it's killed and the run skipped this tick."""
 
 comptime _COPIED = [
     "ORCA_STALE_SECONDS",
@@ -361,6 +366,7 @@ struct Ec2Runner(Movable):
         var name = String(r.run, "-", r.start, "-", role, "-$iid")
         var log = String("/tmp/orca-", name, ".log")
         var metrics = String("/tmp/orca-", name, ".jsonl")
+        var stop = String("/tmp/orca-", name, ".stop")
         if keeps or samples:
             s.write(self._instance_id(), "\n")
             s.write('up() { [ -z "${ORCA_LOGS:-}" ] || {')
@@ -388,7 +394,13 @@ struct Ec2Runner(Movable):
             # Beside everything else: the script's processes, and in docker
             # mode the binary's in its containers, which aren't the
             # script's children.
-            var args = String("sample --out ", metrics, " --pid $$ --dirs /tmp")
+            var args = String(
+                "sample --out ",
+                metrics,
+                " --pid $$ --until ",
+                stop,
+                " --dirs /tmp",
+            )
             var line: String
             if self.mode == "docker":
                 args.write(" --match ", _quote(r.binary))
@@ -400,6 +412,8 @@ struct Ec2Runner(Movable):
             s.write(
                 "rm -f ",
                 metrics,
+                " ",
+                stop,
                 "\n",
                 line,
                 " >/dev/null 2>&1 &\nsampler=$!\n",
@@ -463,7 +477,13 @@ struct Ec2Runner(Movable):
                 "; fi\n",
             )
         if samples:
-            s.write("kill $sampler 2>/dev/null\nwait $sampler 2>/dev/null\n")
+            # Its last line, then it ends; a wedged one isn't waited for.
+            s.write(
+                "touch ",
+                stop,
+                "\n( sleep 15; kill -9 $sampler ) 2>/dev/null &\nguard=$!\n",
+                "wait $sampler 2>/dev/null\nkill $guard 2>/dev/null\n",
+            )
         if keeps or samples:
             s.write("kill $uploader 2>/dev/null\nup\n")
         s.write(
@@ -605,7 +625,15 @@ struct Ec2Runner(Movable):
             live[key] = True
             var head_ip = row.text("address")
             var head = String(head_ip, ":", HEAD_PORT)
-            var got_status = capture([r.binary, "dista-status", head])
+            # A head whose port black-holes mustn't hold up the tick.
+            var got_status: Tuple[Int, String]
+            try:
+                got_status = capture(
+                    [r.binary, "dista-status", head], HEAD_SECONDS
+                )
+            except e:
+                print("orca: run", r.run, "has no status from its head:", e)
+                continue
             if got_status[0] != 0:
                 continue  # its head isn't up yet, or has gone
             var demand: Demand
@@ -638,7 +666,14 @@ struct Ec2Runner(Movable):
                 self._workers(db, r, got.start, head_ip)
                 started += got.start
             for addr in got.drain:
-                var drain = capture([r.binary, "dista-drain", head, addr])
+                var drain: Tuple[Int, String]
+                try:
+                    drain = capture(
+                        [r.binary, "dista-drain", head, addr], HEAD_SECONDS
+                    )
+                except e:
+                    print("orca: run", r.run, "can't drain", addr, ":", e)
+                    continue
                 if drain[0] != 0:
                     print(
                         "orca: run", r.run, "can't drain", addr, ":", drain[1]

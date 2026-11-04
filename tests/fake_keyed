@@ -1,0 +1,18 @@
+#!/bin/sh
+# Stands in for a keyed pipeline's binary in tests/binary_timeouts.sh:
+# keyed on keys.names. `keys` appends a line to $FAKE_KEYS.calls, then
+# prints snapshot 7 and three names, or hangs while $FAKE_KEYS.slow exists.
+case "$1" in
+    describe)
+        cat << 'J'
+{"pipeline": "fake_keyed", "registry_hash": "0x4e75", "partitions": {"kind": "keyed", "start": null, "dataset": "keys.names", "column": "name"}, "schedule": null, "max_runs": 1, "run_retries": 0, "sensor": false, "keys_per_run": 10, "workers": 2, "steps": [{"name": "label", "kind": "mapped", "after": null, "function": "label", "input": "orca.name.Name", "output": "Int", "reads": [], "writes": []}], "tasks": [], "source": {"repo": "", "commit": "", "dirty": false}}
+J
+        ;;
+    keys)
+        echo keys >> "$FAKE_KEYS.calls"
+        [ -e "$FAKE_KEYS.slow" ] && exec sleep 1000
+        printf '7\nann\nbob\ncy\n'
+        ;;
+    resume) ;;
+    *) echo "fake_keyed: unexpected: $*" >&2; exit 2 ;;
+esac

@@ -77,8 +77,12 @@ done
 ./build/orca register ./build/kn-slashes >> "$log" 2>&1 || fail "register"
 ORCA_SLASH_FAIL=org/repo-02 ./build/orca scheduler >> "$log" 2>&1 &
 sched=$!
-out=$(./build/orca backfill slashes @all 2>&1) || fail "the backfill exited $?: $out"
+out=$(./build/orca backfill slashes @all 2> build/keyed-names-backfill.err) \
+    || fail "the backfill exited $?: $out $(cat build/keyed-names-backfill.err)"
 [ "$out" = "queued 1 runs" ] || fail "the backfill: $out"
+# Why the rest weren't queued goes to stderr (#61).
+grep -qx "skipped 2 done: org/repo-01, org/repo-03" build/keyed-names-backfill.err \
+    || fail "the backfill's skipped keys: $(cat build/keyed-names-backfill.err)"
 i=0
 until [ "$(q "SELECT count(*) FROM orca.runs WHERE pipeline = 'slashes' AND status IN ('queued', 'running')")" -eq 0 ]; do
     i=$((i + 1)); [ "$i" -lt 1200 ] || fail "the backfill's run didn't finish"; sleep 0.1
