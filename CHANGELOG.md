@@ -25,6 +25,16 @@
   `LIVE_SQL`). A run whose retries are spent says so too. `orca backfill`
   prints on stderr which keys it left: those done, and those in a live
   run, with the run. (#61)
+- **A process that may have lost its run no longer commits.** Liveness is
+  a heartbeat, so a run whose process stayed alive while its heartbeat went
+  stale (Postgres unreachable for longer than `ORCA_STALE_SECONDS`, a
+  paused VM) was started again, and both processes could append the same
+  step's rows. `append` and `commit` in `orca.tables` now check, right
+  before committing to Iceberg, that this process still owns the run and
+  that its heartbeat is younger than half the stale limit (`Ctx.fence`);
+  otherwise the attempt fails without committing, and a process that lost
+  its run stops at the attempt's end as before. (#60)
+
 - **Behind an HTTPS proxy, the UI's forms work** (#57). The `Origin` check
   compared the browser's `Origin` with `http://` + `Host`, so behind Caddy
   terminating TLS (as `orca aws up` deploys it) every `POST`, `/login`

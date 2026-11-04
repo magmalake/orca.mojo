@@ -10,6 +10,15 @@ pipeline with `tasks=`.
 
 `log` writes to stdout and, when `ORCA_LOGS` is set, appends to the attempt's
 log file as well (`orca.logs.attempt_log`).
+
+**Commits are fenced.** A process whose heartbeat went stale while it was
+alive (the database unreachable for a while, a paused VM) may have lost its
+run to another process, which reruns the step. `orca.tables` calls `fence`
+right before each commit to Iceberg: it goes ahead only if this process
+still owns the run and its heartbeat is younger than half the stale limit,
+so no other process can have claimed the run, nor claim it during the
+commit unless the commit takes that long. Otherwise the attempt fails
+without committing.
 """
 
 
@@ -41,12 +50,89 @@ struct Recorder(Movable):
     var url: String
     """Empty when nothing is recorded (an in-memory run)."""
     var attempt_id: Int64
+    var run: Int
+    var owner: String
+    """The process that runs the attempt (`orca.state.process_owner`)."""
     var _conn: Optional[Connection]
 
-    def __init__(out self, url: String = "", attempt_id: Int64 = 0):
+    def __init__(
+        out self,
+        url: String = "",
+        attempt_id: Int64 = 0,
+        run: Int = 0,
+        owner: String = "",
+    ):
         self.url = url
         self.attempt_id = attempt_id
+        self.run = run
+        self.owner = owner
         self._conn = None
+
+    def fence(mut self) raises:
+        """Raises unless this process still owns the run, with a heartbeat
+        younger than half of `ORCA_STALE_SECONDS`: what a commit to Iceberg
+        checks right before it's made. Nothing to check in memory."""
+        if not self.url or not self.owner:
+            return
+        var stale: Float64
+        try:
+            stale = Float64(getenv("ORCA_STALE_SECONDS", "30"))
+        except:
+            stale = 30.0
+        var started = perf_counter_ns()
+        var wait = 0.25
+        while True:
+            try:
+                if not self._conn:
+                    self._conn = Connection(self.url)
+                var r = (
+                    self._conn.value()
+                    .query(
+                        (
+                            "SELECT coalesce(owner, '') AS owner, status,"
+                            " coalesce(heartbeat > now() - make_interval(secs"
+                            " => $2), false) AS fresh FROM orca.runs WHERE id"
+                            " = $1"
+                        ),
+                        Params().int64(Int64(self.run)).float64(stale / 2),
+                    )
+                    .row(0)
+                )
+                if (
+                    r.text("owner") != self.owner
+                    or r.text("status") != "running"
+                ):
+                    raise Error(
+                        "orca: not committing: run ",
+                        self.run,
+                        " is ",
+                        r.text("status"),
+                        " and held by ",
+                        r.text("owner") if r.text("owner") else "nobody",
+                        ", not this process (",
+                        self.owner,
+                        ")",
+                    )
+                if not r.bool("fresh"):
+                    raise Error(
+                        "orca: not committing: run ",
+                        self.run,
+                        "'s heartbeat is older than ",
+                        stale / 2,
+                        " s, so another process may take it over",
+                    )
+                return
+            except e:
+                if String(e).startswith("orca: not committing"):
+                    raise e^
+                # The database is unreachable: wait for it while the
+                # heartbeat could still be fresh, then give up.
+                var spent = Float64(perf_counter_ns() - started) / 1e9
+                if spent + wait > stale / 2:
+                    raise Error("orca: not committing: ", e)
+                sleep(wait)
+                wait = min(wait * 2, 4.0)
+                self._conn = None
 
     def _insert(mut self, into: StaticString, t: TableSnapshot) raises:
         """Retried on a new connection for `ORCA_DB_RETRY_SECONDS`, as
@@ -226,6 +312,11 @@ struct Ctx(Movable):
         self.recorder.read(t)
         self.reads.append(t^)
         return id
+
+    def fence(mut self) raises:
+        """Raises unless this process may still commit for its run (see
+        the module's doc); `orca.tables` calls it before each commit."""
+        self.recorder.fence()
 
     def committed(
         mut self, table: String, snapshot_id: Int64, dataset: String = ""
