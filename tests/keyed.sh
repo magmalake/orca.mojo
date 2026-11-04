@@ -76,7 +76,7 @@ echo "$out" | grep -qx "run succeeded" || fail "the resumed run"
 # A value that isn't a name is left out of the keys, and said, rather than
 # making every key unreadable.
 ./build/kd-names "$ORCA_WAREHOUSE" 1 logs 0 2 'not a name ' > /dev/null 2>> "$log" || fail "names with a bad value"
-labels keys > build/keyed-keys.txt 2> build/keyed-keys.err || fail "keys over a bad value exited $?"
+./build/kd-labels keys > build/keyed-keys.txt 2> build/keyed-keys.err || fail "keys over a bad value exited $?"
 [ "$(tail -n +2 build/keyed-keys.txt)" = "$want" ] || fail "keys over a bad value: $(tail -n +2 build/keyed-keys.txt | tr '\n' ' ')"
 grep -q "keys.logs (log_id) has 1 values that aren't names, left out of its keys: not a name" build/keyed-keys.err \
     || fail "the bad value isn't said: $(cat build/keyed-keys.err)"
