@@ -114,7 +114,9 @@ def runs_chart(days: List[DayRuns]) -> String:
             y,
             '"/></g>',
         )
-        if i % 7 == 0 or i == len(days) - 1:
+        # A label a week, and the last day's; a week's label too close to
+        # the last day's would run into it.
+        if (i % 7 == 0 and len(days) - 1 - i >= 3) or i == len(days) - 1:
             out.write(
                 '<text class="tl__time" x="',
                 x,

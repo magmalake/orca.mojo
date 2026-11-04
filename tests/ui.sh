@@ -41,7 +41,9 @@ q "UPDATE orca.steps SET error = '<script>alert(1)</script> & \"so\"' WHERE run 
 
 port=$((18000 + $$ % 2000))
 base="http://127.0.0.1:$port"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+# The deployment's own nav links: one good, one with markup, one not http(s).
+ORCA_UI_LINKS='Census ↗=https://census.example/?a=b, <b>x</b>=http://x.example, Bad=javascript:alert(1)' \
+    ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 pid=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
@@ -58,6 +60,11 @@ for path in / /pipelines/toy /runs "/runs?pipeline=toy&status=failed" "/runs/$ok
 done
 [ "$(curl -fsS "$base/runs/$ok_run?format=json" | jq -r .run.status)" = succeeded ] \
     || fail "?format=json"
+nav=$(html /)
+echo "$nav" | grep -qF '<a href="https://census.example/?a=b" target="_blank" rel="noopener">Census ↗</a>' \
+    || fail "ORCA_UI_LINKS' link isn't in the nav"
+echo "$nav" | grep -qF '>&lt;b&gt;x&lt;/b&gt;</a>' || fail "an ORCA_UI_LINKS label isn't escaped"
+echo "$nav" | grep -q 'javascript:' && fail "a javascript: link from ORCA_UI_LINKS is in the nav"
 # Runs per day on the home page: 30 days, today's with both runs.
 json / | jq -e '(.runs_per_day | length) == 30 and .runs_per_day[-1].succeeded == 1 and .runs_per_day[-1].failed == 1' > /dev/null \
     || fail "runs per day: $(json / | jq -c '.runs_per_day[-1]')"
