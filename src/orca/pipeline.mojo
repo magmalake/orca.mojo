@@ -18,7 +18,7 @@ so a pipeline that breaks a rule doesn't compile.
 `execute` is the executor: it runs the steps that haven't succeeded yet and
 reports each attempt to a `Store`, either `MemoryStore` (what `run` uses: a
 run lives as long as the process) or `orca.state.PgStore`, which makes a run
-resumable. Each step's output is kept encoded by dista's codec, as Postgres
+resumable by another process. Each step's output is kept encoded by dista's codec, as Postgres
 holds it. A step that raises is retried up to its `retries`, then fails its
 partition: the steps after it for that partition, and any gather step over
 it, are skipped, while other partitions carry on.
@@ -283,9 +283,16 @@ struct Pipeline[
 
     @staticmethod
     def run(keys: List[Self.K], run: Int = 0) raises -> RunResult:
-        """Runs every step over `keys`, in order, recording nothing,
-        with a dista runtime of its own if the pipeline has tasks."""
+        """Runs every step over `keys`, in order, recorded in a
+        `MemoryStore` of its own, with a dista runtime of its own if the
+        pipeline has tasks."""
         var store = MemoryStore()
+        var key = String()
+        for j in range(len(keys)):
+            key.write("," if j > 0 else "", keys[j])
+        var hash = hex(Self.registry_hash())
+        var id = store.create_run(Self.name, hash, key, "manual", "memory")
+        store.own(id, "memory", hash)
         var rt = Self.tasks.start(
             local_workers() if Self.tasks.HAS_RUNTIME else 0
         )

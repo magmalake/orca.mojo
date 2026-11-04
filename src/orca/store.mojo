@@ -2,9 +2,9 @@
 
 `Pipeline.execute` reports every attempt it starts and finishes, and every
 step it skips, to a `Store`; a step's reads and commits reach the same store
-through the `Recorder` its `Ctx` holds. `MemoryStore` only counts attempts,
-for a run that lives as long as its process; `orca.state.PgStore` writes them
-to Postgres, so a run can be resumed by another process.
+through the `Recorder` its `Ctx` holds. `MemoryStore` keeps them in the
+process, for a run that lives as long as it does; `orca.state.PgStore`
+writes them to Postgres, so a run can be resumed by another process.
 
 `RunStore` is a `Store` that also keeps runs: the rest of what a pipeline
 binary (`orca.cli`) asks of persistence, from registering the pipeline to
@@ -13,6 +13,8 @@ The scheduler and the UI query `orca.state.State`'s SQL directly.
 """
 
 from std.ffi import external_call
+from std.os import getenv
+from std.time import perf_counter_ns
 
 from dista.codec import decode
 
@@ -363,13 +365,317 @@ trait RunStore(Store):
         ...
 
 
-struct MemoryStore(Movable, Store):
-    """Keeps nothing but the attempt counts."""
+@fieldwise_init
+struct _MemRun(Copyable, Movable):
+    var pipeline: String
+    var registry_hash: String
+    var partitions: String
+    var status: String
+    var owner: String
+    var error: String
+    var heartbeat: Int
+    """`perf_counter_ns` at the last beat; -1 when cleared."""
+    var cancel_requested: Bool
+    var version: Int
 
-    var _attempts: Dict[String, Int]
+
+@fieldwise_init
+struct _MemStep(Copyable, Movable):
+    var run: Int
+    var step: String
+    var partition: String
+    var ord: Int
+    var status: String
+    var input: List[UInt8]
+    var output: List[UInt8]
+    var error: String
+
+
+@fieldwise_init
+struct _MemAttempt(Copyable, Movable):
+    var step: Int
+    """The step's index in `MemoryStore._steps`."""
+    var attempt: Int
+    var status: String
+    var host: String
+    var registry_hash: String
+    var error: String
+    var log: String
+
+
+@fieldwise_init
+struct MemRecord(Copyable, Movable):
+    """A read or commit an attempt recorded in a `MemoryStore`."""
+
+    var attempt: Int
+    """The attempt's index in the store's attempts."""
+    var commit: Bool
+    var table: TableSnapshot
+
+
+struct MemoryStore(Movable, RunStore):
+    """Keeps runs in the process's memory: what `<pipeline> run` uses
+    without `ORCA_DATABASE_URL`, and `Pipeline.run`.
+
+    The same rows `PgStore` keeps, and the same rules: a run in it can be
+    interrupted, claimed by another owner and resumed, so long as the
+    process lives. Its runs are numbered 0, -1, -2, ...: never positive, so
+    `Ctx.made` recognises none of their commits, since another process's
+    in-memory run would have the same number. Nothing beats the heartbeat:
+    no other process can see the run."""
+
+    var _pipelines: Dict[String, String]
+    """Name to registry hash."""
+    var _versions: List[String]
+    """Version `i + 1` is the pipeline, hash, `describe` and image at `i`."""
+    var _runs: List[_MemRun]
+    """Run `-i` is at `i`."""
+    var _steps: List[_MemStep]
+    var _attempts: List[_MemAttempt]
+    var records: List[MemRecord]
+    """Every read and commit recorded, in order."""
+    var run: Int
+    var owner: String
+    var registry_hash: String
+    var _attempt: Int
+    """The index of the attempt last started; -1 before the first."""
 
     def __init__(out self):
-        self._attempts = Dict[String, Int]()
+        self._pipelines = Dict[String, String]()
+        self._versions = List[String]()
+        self._runs = List[_MemRun]()
+        self._steps = List[_MemStep]()
+        self._attempts = List[_MemAttempt]()
+        self.records = List[MemRecord]()
+        self.run = 0
+        self.owner = String()
+        self.registry_hash = String()
+        self._attempt = -1
+
+    def _at(self, run: Int) raises -> Int:
+        if run > 0 or -run >= len(self._runs):
+            raise Error("orca: no run ", run)
+        return -run
+
+    def _step_at(self, run: Int, step: String, partition: String) -> Int:
+        for i in range(len(self._steps)):
+            ref s = self._steps[i]
+            if s.run == run and s.step == step and s.partition == partition:
+                return i
+        return -1
+
+    def _still_owner(mut self, starting: Bool) raises:
+        """Raises unless this store still owns its run, or, when a step is
+        `starting`, if the run was asked to cancel."""
+        ref r = self._runs[self._at(self.run)]
+        if r.owner != self.owner or r.status != RUNNING:
+            raise Error(
+                "orca: lost run ", self.run, " to another process; stopping"
+            )
+        if starting and r.cancel_requested:
+            raise Error("orca: run ", self.run, " was cancelled; stopping")
+        r.heartbeat = Int(perf_counter_ns())
+
+    def _upsert_step(
+        mut self, step: String, partition: String, ord: Int
+    ) -> Int:
+        var i = self._step_at(self.run, step, partition)
+        if i >= 0:
+            return i
+        self._steps.append(
+            _MemStep(
+                self.run,
+                step,
+                partition,
+                ord,
+                RUNNING,
+                List[UInt8](),
+                List[UInt8](),
+                "",
+            )
+        )
+        return len(self._steps) - 1
+
+    def request_cancel(mut self, run: Int) raises:
+        """Asks `run` to cancel, as `orca ui` does in Postgres."""
+        self._runs[self._at(run)].cancel_requested = True
+
+    # --- RunStore ---
+
+    def migrate(mut self) raises:
+        pass
+
+    def register(
+        mut self, pipeline: String, registry_hash: String, describe: String
+    ) raises:
+        self._pipelines[pipeline] = registry_hash
+        _ = self.version(
+            pipeline, registry_hash, describe, getenv("ORCA_IMAGE")
+        )
+
+    def scheduled_hash(mut self, pipeline: String) raises -> String:
+        # Only `orca register`, against a shared store, schedules a binary.
+        return String()
+
+    def version(
+        mut self,
+        pipeline: String,
+        registry_hash: String,
+        describe: String,
+        image: String,
+    ) raises -> Int:
+        var key = String(
+            pipeline, "\t", registry_hash, "\t", describe, "\t", image
+        )
+        for i in range(len(self._versions)):
+            if self._versions[i] == key:
+                return i + 1
+        self._versions.append(key^)
+        return len(self._versions)
+
+    def create_run(
+        mut self,
+        pipeline: String,
+        registry_hash: String,
+        partitions: String,
+        trigger: String,
+        owner: String,
+    ) raises -> Int:
+        self._runs.append(
+            _MemRun(
+                pipeline,
+                registry_hash,
+                partitions,
+                RUNNING,
+                owner,
+                "",
+                Int(perf_counter_ns()),
+                False,
+                0,
+            )
+        )
+        return -(len(self._runs) - 1)
+
+    def claim(mut self, run: Int, owner: String, stale_seconds: Float64) raises:
+        ref r = self._runs[self._at(run)]
+        if r.status != RUNNING and r.status != FAILED and r.status != "queued":
+            raise Error("orca: run ", run, " is ", r.status)
+        var now = Int(perf_counter_ns())
+        if (
+            r.heartbeat >= 0
+            and Float64(now - r.heartbeat) / 1e9 <= stale_seconds
+        ):
+            raise Error(
+                "orca: run ",
+                run,
+                " is held by ",
+                r.owner,
+                ", whose heartbeat is fresher than ",
+                stale_seconds,
+                " s",
+            )
+        r.status = RUNNING
+        r.owner = owner
+        r.heartbeat = now
+        r.error = String()
+
+    def ran_version(mut self, run: Int, version: Int) raises:
+        self._runs[self._at(run)].version = version
+
+    def interrupt(mut self, run: Int) raises -> Int:
+        var n = 0
+        for ref a in self._attempts:
+            if self._steps[a.step].run == run and a.status == RUNNING:
+                a.status = FAILED
+                a.error = "interrupted: the process running it stopped"
+                n += 1
+        for ref s in self._steps:
+            if s.run == run and s.status == RUNNING:
+                s.status = FAILED
+                s.error = "interrupted"
+        return n
+
+    def prior(mut self, run: Int) raises -> RunResult:
+        var res = RunResult()
+        for s in self._steps:
+            if s.run == run and s.status == SUCCEEDED:
+                res.steps.append(
+                    StepRun(s.step, s.partition, SUCCEEDED, s.output.copy(), "")
+                )
+        return res^
+
+    def run_info(mut self, run: Int) raises -> RunInfo:
+        ref r = self._runs[self._at(run)]
+        return RunInfo(
+            run,
+            r.pipeline,
+            r.registry_hash,
+            r.partitions,
+            r.status,
+            r.owner,
+            r.error,
+        )
+
+    def runs(mut self, limit: Int) raises -> List[RunInfo]:
+        var out = List[RunInfo]()
+        var i = len(self._runs) - 1
+        while i >= 0 and len(out) < limit:
+            out.append(self.run_info(-i))
+            i -= 1
+        return out^
+
+    def steps(mut self, run: Int) raises -> List[StepInfo]:
+        # In run order, then in the order they were first recorded, as
+        # `ORDER BY ord, id`.
+        var at = List[Int]()
+        for i in range(len(self._steps)):
+            if self._steps[i].run != run:
+                continue
+            var j = len(at)
+            at.append(i)
+            while j > 0 and self._steps[at[j - 1]].ord > self._steps[i].ord:
+                at[j] = at[j - 1]
+                j -= 1
+            at[j] = i
+        var out = List[StepInfo]()
+        for i in at:
+            ref s = self._steps[i]
+            var attempts = 0
+            var last = 0
+            var log = String()
+            for a in self._attempts:
+                if a.step == i:
+                    attempts += 1
+                    if a.attempt > last:
+                        last = a.attempt
+                        log = a.log
+            out.append(
+                StepInfo(s.step, s.partition, s.status, attempts, s.error, log)
+            )
+        return out^
+
+    def own(mut self, run: Int, owner: String, registry_hash: String) raises:
+        _ = self._at(run)
+        self.run = run
+        self.owner = owner
+        self.registry_hash = registry_hash
+
+    def start_heartbeat(mut self, interval: Float64) raises:
+        pass
+
+    def stop_heartbeat(mut self):
+        pass
+
+    def finish_run(mut self, status: String) raises:
+        ref r = self._runs[self._at(self.run)]
+        if r.owner == self.owner:
+            r.status = status
+            r.heartbeat = -1
+
+    def cancel_requested(mut self) raises -> Bool:
+        return self._runs[self._at(self.run)].cancel_requested
+
+    # --- Store ---
 
     def start_attempt(
         mut self,
@@ -378,9 +684,20 @@ struct MemoryStore(Movable, Store):
         ord: Int,
         input: Span[UInt8, _],
     ) raises -> Int:
-        var key = String(step, "\t", partition)
-        var n = self._attempts.get(key, 0) + 1
-        self._attempts[key] = n
+        self._still_owner(starting=True)
+        var i = self._upsert_step(step, partition, ord)
+        ref s = self._steps[i]
+        s.status = RUNNING
+        s.input = List[UInt8](input)
+        s.error = String()
+        var n = 1
+        for a in self._attempts:
+            if a.step == i and a.attempt >= n:
+                n = a.attempt + 1
+        self._attempts.append(
+            _MemAttempt(i, n, RUNNING, self.owner, self.registry_hash, "", "")
+        )
+        self._attempt = len(self._attempts) - 1
         return n
 
     def finish_attempt(
@@ -392,22 +709,47 @@ struct MemoryStore(Movable, Store):
         output: Span[UInt8, _],
         error: String,
     ) raises:
-        pass
+        self._still_owner(starting=False)
+        var i = self._step_at(self.run, step, partition)
+        if i < 0:
+            raise Error("orca: no step ", step, " ", partition)
+        for ref a in self._attempts:
+            if a.step == i and a.attempt == attempt:
+                a.status = status
+                a.error = error
+        ref s = self._steps[i]
+        s.status = status
+        s.output = List[UInt8](output) if status == SUCCEEDED else List[UInt8]()
+        s.error = error
 
     def skip(
         mut self, step: String, partition: String, ord: Int, reason: String
     ) raises:
-        pass
+        self._still_owner(starting=True)
+        ref s = self._steps[self._upsert_step(step, partition, ord)]
+        s.status = SKIPPED
+        s.error = reason
+        s.output = List[UInt8]()
 
     def pinned_reads(
         mut self, step: String, partition: String
     ) raises -> Dict[String, Int64]:
-        # Within one process the executor carries reads from attempt to
-        # attempt itself; there are no earlier processes to ask.
-        return Dict[String, Int64]()
+        # Each table at the earliest attempt that read it.
+        var out = Dict[String, Int64]()
+        var first = Dict[String, Int]()
+        var i = self._step_at(self.run, step, partition)
+        for r in self.records:
+            if r.commit or self._attempts[r.attempt].step != i:
+                continue
+            var n = self._attempts[r.attempt].attempt
+            if first.get(r.table.table, n + 1) > n:
+                first[r.table.table] = n
+                out[r.table.table] = r.table.snapshot_id
+        return out^
 
     def record(mut self, commit: Bool, t: TableSnapshot) raises:
-        pass
+        if self._attempt >= 0:
+            self.records.append(MemRecord(self._attempt, commit, t.copy()))
 
     def fence(mut self) raises:
         pass  # one process: nothing can take its run over
@@ -415,4 +757,5 @@ struct MemoryStore(Movable, Store):
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String
     ) raises:
-        pass
+        if self._attempt >= 0:
+            self._attempts[self._attempt].log = path

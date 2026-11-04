@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **`MemoryStore` is a whole `RunStore`** (#82). It keeps pipelines, runs,
+  steps, attempts, reads and commits in the process, with the rules
+  `PgStore` has (claims, stale heartbeats, losing a run, cancelling), so
+  a run in it can be interrupted and resumed within the process.
+  `<pipeline> run` without `ORCA_DATABASE_URL` now takes the same path
+  as a recorded run: it prints `run 0` first, and its steps as `status`
+  lists them (`after N attempts` included). In-memory runs are numbered
+  0, -1, -2 and so on, never positive, so their commits are never taken
+  for another run's. The executor's store tests (`tests/store_suite.mojo`)
+  are written once over the trait: `test-store` runs them with no server,
+  `test-state` on Postgres.
 - **A pipeline binary depends on the `RunStore` trait alone** (#82).
   `orca.store.RunStore` extends `Store` with what `orca.cli` asked of
   `State` directly: `migrate`, `register`, `scheduled_hash`, `version`,
