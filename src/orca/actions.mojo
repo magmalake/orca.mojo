@@ -21,6 +21,7 @@ from postgres import Params
 
 from orca.day import Day
 from orca.key import parse_keys
+from orca.live import live_runs
 from orca.month import Month
 from orca.name import parse_names
 from orca.scheduler import (
@@ -82,7 +83,9 @@ def _pipeline(mut db: State, name: String) raises -> Optional[Registered]:
 
 
 def start_run(mut db: State, pipeline: String, keys: String) raises -> Outcome:
-    """A queued run over the partitions in `keys`, trigger `ui`."""
+    """A queued run over the partitions in `keys`, trigger `ui`. Refused
+    while a live run has one of them, which a second run would run beside;
+    a partition that's done is run again."""
     var p = _pipeline(db, pipeline)
     if not p:
         return Outcome.no(_unregistered(pipeline))
@@ -96,8 +99,27 @@ def start_run(mut db: State, pipeline: String, keys: String) raises -> Outcome:
     var joined = String()
     for i in range(len(texts)):
         joined.write("," if i else "", texts[i])
+    var tx = db.conn.begin()
+    _ = tx.query(
+        "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
+        Params().text(pipeline),
+    )
+    var live = live_runs(tx, pipeline)
+    for k in texts:
+        var run = live.get(k)
+        if run:
+            tx.commit()
+            return Outcome.no(
+                String(
+                    k,
+                    " is in run ",
+                    run.value(),
+                    ", which is queued or running; wait for it to end, or",
+                    " cancel it",
+                )
+            )
     var id = (
-        db.conn.query(
+        tx.query(
             (
                 "INSERT INTO orca.runs (pipeline, registry_hash, partitions,"
                 " trigger, status) VALUES ($1, $2, $3, 'ui', 'queued')"
@@ -108,6 +130,7 @@ def start_run(mut db: State, pipeline: String, keys: String) raises -> Outcome:
         .row(0)
         .int64("id")
     )
+    tx.commit()
     return Outcome.done(Int(id))
 
 
