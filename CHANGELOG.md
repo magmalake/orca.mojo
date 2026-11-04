@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **A run's page charts its machines** (#95). Under the timeline, a
+  server-rendered SVG lines up each instance's CPU, memory, disk and
+  network samples (`orca sample`) with a lane of the run's steps, marks
+  where memory was over 90%, a disk over 90% full or CPU steal over 20%,
+  and a table gives each instance's peaks, which the run's JSON has as
+  `instances[].peaks`. A running run's charts follow it, polling
+  `/runs/<id>/metrics`. A run without samples renders as before.
 - **Each run records its machines' metrics** (#94). `orca sample` (and
   `<binary> sample`) appends a JSON line every `ORCA_SAMPLE_SECONDS`
   (default 5) with CPU (user, system, iowait, steal, busiest core), memory

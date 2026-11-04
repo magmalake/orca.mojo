@@ -222,4 +222,23 @@ pre.error { color: var(--bad); background: var(--surface); border: 1px solid var
 .runs--none { fill: transparent; }
 .tl g:hover .runs--ok { fill: var(--lake-soft); }
 .tl g:hover .runs--none { fill: color-mix(in srgb, var(--text) 4%, transparent); }
+
+/* A run's machines (orca.metrics). */
+.mx__name { font-size: 12px; font-weight: 600; fill: var(--text); }
+.mx__strip { fill: var(--surface-2); }
+.mx__cpu { fill: color-mix(in srgb, var(--lake) 55%, transparent); }
+.mx__wait { fill: color-mix(in srgb, var(--warn) 45%, transparent); }
+.mx__steal, .mx__mem, .mx__disk, .mx__io, .mx__net { fill: none; stroke-width: 1.5; }
+.mx__steal { stroke: var(--bad); }
+.mx__mem { stroke: var(--ember); } .mx__disk { stroke: #7a5af8; }
+.mx__io { stroke: #b54708; } .mx__net { stroke: var(--lake); }
+.mx__warn { fill: color-mix(in srgb, var(--bad) 14%, transparent); }
+.mx__now { stroke: var(--live); stroke-dasharray: 3 3; }
+.mx__key { display: inline-block; width: 0.9em; height: 0.55em; margin: 0 0.3em 0 0.7em; border-radius: 2px; }
+.mx__key--cpu { background: color-mix(in srgb, var(--lake) 55%, transparent); }
+.mx__key--wait { background: color-mix(in srgb, var(--warn) 45%, transparent); }
+.mx__key--steal { background: var(--bad); } .mx__key--mem { background: var(--ember); }
+.mx__key--disk { background: #7a5af8; } .mx__key--io { background: #b54708; }
+.mx__key--net { background: var(--lake); }
+.mx__key--warn { background: color-mix(in srgb, var(--bad) 14%, transparent); border: 1px solid var(--bad); }
 """
