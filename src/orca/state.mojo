@@ -867,7 +867,7 @@ struct PgStore(Movable, Store):
         return out^
 
     def recorder(mut self) raises -> Recorder:
-        return Recorder(self.url, self._attempt_id)
+        return Recorder(self.url, self._attempt_id, self.run, self.owner)
 
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String
