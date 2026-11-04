@@ -39,7 +39,9 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   `ec2` (a head instance and worker instances per run, `orca.ec2`).
 - **Sensors and rebuilds** (`orca.sensors`). A sensor pipeline's pass
   looks for snapshots of the datasets it reads, in `orca.commits` on every
-  tick and from `<binary> sense` every `ORCA_SENSE_SECONDS`, and queues a
+  tick and from `<binary> sense` every `ORCA_SENSE_SECONDS` (asked in a
+  child the next ticks check on, killed after `ORCA_BINARY_SECONDS`), and
+  queues a
   run, trigger `sensor`, for those it hasn't seen. A keyed sensor's keys
   dataset is sensed too: a new snapshot of it queues the keys that aren't
   done, in runs of `keys_per_run`. Each rebuild queues its
@@ -74,7 +76,7 @@ driver pod's log on Kubernetes (`orca.kube`).
 
 from std.os import getenv, makedirs
 from std.os.path import exists
-from std.time import perf_counter_ns
+from std.time import perf_counter_ns, sleep
 
 from postgres import Params, Transaction
 
@@ -87,7 +89,7 @@ from orca.kube import KubeRunner, RunSpec, cpu_millis
 from orca.logs import is_remote, publish, run_dir, stage_of
 from orca.month import Month
 from orca.name import Name, parse_names, sort_texts
-from orca.proc import absolute, capture, reap, spawn
+from orca.proc import Capture, absolute, binary_seconds, capture, reap, spawn
 from orca.schedule import Schedule
 from orca.secrets import parse_secrets, secrets_json
 from orca.sensors import (
@@ -291,20 +293,82 @@ def dataset_cycle(mut db: State, describe: String) raises -> String:
     return ""
 
 
-def current_keys(p: Registered) raises -> Tuple[Int64, List[String]]:
-    """A keyed pipeline's keys snapshot and keys, as `<binary> keys`
-    prints them."""
-    var got = capture([p.binary, "keys"])
-    if got[0] != 0:
-        raise Error("orca: ", p.binary, " keys exited ", got[0], ": ", got[1])
-    var lines = got[1].splitlines()
+def parse_keys_output(
+    binary: String, text: String
+) raises -> Tuple[Int64, List[String]]:
+    """What `<binary> keys` printed: its keys snapshot, then its keys."""
+    var lines = text.splitlines()
     if len(lines) == 0:
-        raise Error("orca: ", p.binary, " keys printed nothing")
+        raise Error("orca: ", binary, " keys printed nothing")
     var keys = List[String]()
     for i in range(1, len(lines)):
         if lines[i]:
             keys.append(String(lines[i]))
     return (Int64(Int(lines[0])), keys^)
+
+
+def current_keys(
+    p: Registered, timeout: Float64 = -1
+) raises -> Tuple[Int64, List[String]]:
+    """A keyed pipeline's keys snapshot and keys, as `<binary> keys`
+    prints them, killed past `timeout` seconds (by default
+    `ORCA_BINARY_SECONDS`)."""
+    var got = capture(
+        [p.binary, "keys"], timeout if timeout >= 0 else binary_seconds()
+    )
+    if got[0] != 0:
+        raise Error("orca: ", p.binary, " keys exited ", got[0], ": ", got[1])
+    return parse_keys_output(p.binary, got[1])
+
+
+def keep_keys(
+    mut db: State, pipeline: String, keys: Tuple[Int64, List[String]]
+) raises:
+    """Records the keys `<binary> keys` printed, in `orca.keys`."""
+    var text = String()
+    for i in range(len(keys[1])):
+        text.write("\n" if i else "", keys[1][i])
+    _ = db.conn.execute(
+        (
+            "INSERT INTO orca.keys (pipeline, snapshot_id, keys) VALUES ($1,"
+            " $2, $3) ON CONFLICT (pipeline) DO UPDATE SET snapshot_id ="
+            " EXCLUDED.snapshot_id, keys = EXCLUDED.keys, read_at = now()"
+        ),
+        Params().text(pipeline).int64(keys[0]).text(text),
+    )
+
+
+@fieldwise_init
+struct KeptKeys(Copyable, Movable):
+    """A pipeline's keys as `orca.keys` has them."""
+
+    var snapshot: Int64
+    var keys: List[String]
+    var read_at: String
+    var age: Float64
+    """Seconds since they were read."""
+
+
+def kept_keys(mut db: State, pipeline: String) raises -> Optional[KeptKeys]:
+    var rows = db.conn.query(
+        (
+            "SELECT snapshot_id, keys, to_char(read_at AT TIME ZONE 'UTC',"
+            ' \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') AS at, extract(epoch FROM'
+            " now() - read_at)::float8 AS age FROM orca.keys WHERE pipeline ="
+            " $1"
+        ),
+        Params().text(pipeline),
+    )
+    if len(rows) == 0:
+        return None
+    var r = rows.row(0)
+    var keys = List[String]()
+    for k in r.text("keys").split("\n"):
+        if k:
+            keys.append(String(k))
+    return KeptKeys(
+        r.int64("snapshot_id"), keys^, r.text("at"), r.float64("age")
+    )
 
 
 def _file_names(path: String) raises -> String:
@@ -582,6 +646,17 @@ struct Scheduler(Movable):
     var _spawned: Dict[Int, Tuple[Int, Int, String]]
     """A local run's process to its run, the run's start count when it was
     started, and the local file its output goes to (or empty)."""
+    var _asked: Dict[String, Capture]
+    """The `sense` and `keys` of pipeline binaries still going, by
+    `<command> <pipeline>`: a tick starts one and later ticks check on it,
+    so a slow binary holds up no other pipeline."""
+    var _unsensed: Dict[String, String]
+    """A keyed sensor's `sense` output, kept until its keys are read."""
+    var _keys: Dict[String, Tuple[Int64, List[String]]]
+    """Each keyed sensor's keys as last read, by pipeline."""
+    var wait_for_binaries: Bool
+    """Whether a tick waits for the binaries it asks (`orca tick`, which
+    has no later tick to collect them), rather than checking next tick."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -611,6 +686,10 @@ struct Scheduler(Movable):
         self.budget = cpu_millis(budget) if budget else 0
         self.logs = getenv("ORCA_LOGS")
         self._polled = Dict[String, Int]()
+        self._asked = Dict[String, Capture]()
+        self._unsensed = Dict[String, String]()
+        self._keys = Dict[String, Tuple[Int64, List[String]]]()
+        self.wait_for_binaries = False
         self._driver_logs = Dict[Int, String]()
         self._spawned = Dict[Int, Tuple[Int, Int, String]]()
 
@@ -635,7 +714,7 @@ struct Scheduler(Movable):
         fixed count. `secrets`, `NAME=ID`s, replace the pipeline's when
         given. Returns the pipeline's name."""
         var path = absolute(binary)
-        var got = capture([path, "describe"])
+        var got = capture([path, "describe"], binary_seconds())
         if got[0] != 0 or not got[1].startswith('{"pipeline": '):
             raise Error(
                 "orca: ", path, " describe exited ", got[0], ": ", got[1]
@@ -658,7 +737,7 @@ struct Scheduler(Movable):
         var sensor = info.bool("sensor")
         var seen = String()
         if sensor:
-            var sensed = capture([path, "sense"])
+            var sensed = capture([path, "sense"], binary_seconds())
             if sensed[0] != 0:
                 raise Error(
                     "orca: ", path, " sense exited ", sensed[0], ": ", sensed[1]
@@ -770,6 +849,15 @@ struct Scheduler(Movable):
         """One pass: reap ended runs, advance rebuilds, make due fires,
         sense new snapshots, schedule retries, and start what may start."""
         for done in reap():
+            var asked = String()
+            for e in self._asked.items():
+                if e.value.pid == done[0]:
+                    asked = e.key
+            if asked:
+                var c = self._asked.pop(asked)
+                c.code = done[1]
+                self._asked[asked] = c^
+                continue
             print("reaped pid", done[0], "exit", done[1])
             var spawned = self._spawned.pop(done[0], (-1, 0, String()))
             if spawned[0] >= 0:
@@ -855,7 +943,13 @@ struct Scheduler(Movable):
 
     def _sensed(mut self, p: Registered, error: String) raises:
         """Records how `p`'s pass went: the error of one that failed, which
-        is printed when it's new rather than on every tick, or none."""
+        is printed when it's new rather than on every tick, or none. A
+        pass still waiting for its `sense` or `keys` changes nothing."""
+        if not error and (
+            String("sense ", p.name) in self._asked
+            or String("keys ", p.name) in self._asked
+        ):
+            return
         if not error:
             _ = self.db.conn.execute(
                 (
@@ -916,14 +1010,23 @@ struct Scheduler(Movable):
             datasets.append(r.text("dataset"))
             snapshots.append(r.int64("snapshot_id"))
             keys.append(r.text("keys"))
-        var t = Int(perf_counter_ns())
-        var last = self._polled.get(p.name)
-        if not last or Float64(t - last.value()) >= self.sense_seconds * 1e9:
-            self._polled[p.name] = t
-            var got = capture([p.binary, "sense"])
-            if got[0] != 0:
-                raise Error("sense exited ", got[0], ": ", got[1])
-            for c in parse_sense(got[1]):
+        var polled = Optional[String](None)
+        if p.name in self._unsensed:
+            polled = self._unsensed.pop(p.name)
+        else:
+            var job = String("sense ", p.name)
+            var t = Int(perf_counter_ns())
+            var last = self._polled.get(p.name)
+            if (
+                job in self._asked
+                or not last
+                or Float64(t - last.value()) >= self.sense_seconds * 1e9
+            ):
+                if job not in self._asked:
+                    self._polled[p.name] = t
+                polled = self._ask(job, "sense", [p.binary, "sense"])
+        if polled:
+            for c in parse_sense(polled.value()):
                 if c.snapshot >= 0 and not c.by_orca:
                     datasets.append(c.dataset)
                     snapshots.append(c.snapshot)
@@ -931,7 +1034,16 @@ struct Scheduler(Movable):
         if len(datasets) == 0:
             return
         if p.kind == "keyed":
-            self._sense_keyed(p, datasets, snapshots, keys)
+            var current = self._keys_for(p, datasets, snapshots)
+            if not current:
+                # Its keys are still being read: this pass waits for them,
+                # with what `sense` said kept for it.
+                if polled:
+                    self._unsensed[p.name] = polled.value()
+                return
+            self._sense_keyed(
+                p, current.value()[1].copy(), datasets, snapshots, keys
+            )
             return
         var fallback: String
         if p.cron:
@@ -1097,19 +1209,74 @@ struct Scheduler(Movable):
                     String("run ", run) if run >= 0 else "before the start",
                 )
 
-    def _sense_keyed(
+    def _ask(
+        mut self, job: String, what: String, argv: List[String]
+    ) raises -> Optional[String]:
+        """What `argv` printed, once it has ended: started the first time
+        `job` is asked for, and checked on by later calls, which get None
+        while it's going (unless `wait_for_binaries`). One that exits
+        non-zero raises `<what> exited <code>: <output>`; one going longer
+        than `ORCA_BINARY_SECONDS` is killed, and raises saying so."""
+        if job not in self._asked:
+            self._asked[job] = Capture.start(argv)
+        var limit = binary_seconds()
+        while True:
+            var c = self._asked.pop(job)
+            if c.ended():
+                var out = c.output()
+                if c.code != 0:
+                    raise Error(what, " exited ", c.code, ": ", out)
+                return out^
+            if limit > 0 and c.seconds() > limit:
+                c.kill()
+                raise c.timed_out(limit)
+            self._asked[job] = c^
+            if not self.wait_for_binaries:
+                return None
+            sleep(0.01)
+
+    def _keys_for(
         mut self,
         p: Registered,
         datasets: List[String],
         snapshots: List[Int64],
+    ) raises -> Optional[Tuple[Int64, List[String]]]:
+        """A keyed sensor's current keys: those last read if no snapshot of
+        its keys dataset among `snapshots` is newer than theirs, else from
+        `<binary> keys`, which may still be going (None)."""
+        var keys_snap = Int64(-1)
+        for i in range(len(datasets)):
+            if datasets[i] == p.keys_dataset:
+                keys_snap = snapshots[i]
+        var have = self._keys.get(p.name)
+        if have and (keys_snap < 0 or have.value()[0] == keys_snap):
+            return have.value().copy()
+        var out = self._ask(
+            String("keys ", p.name),
+            String("orca: ", p.binary, " keys"),
+            [p.binary, "keys"],
+        )
+        if not out:
+            return None
+        var got = parse_keys_output(p.binary, out.value())
+        keep_keys(self.db, p.name, got)
+        self._keys[p.name] = got.copy()
+        return got^
+
+    def _sense_keyed(
+        mut self,
+        p: Registered,
+        var all_keys: List[String],
+        datasets: List[String],
+        snapshots: List[Int64],
         keys: List[String],
     ) raises:
-        """For a keyed sensor: a snapshot of its keys dataset offers every
-        current key, and one of another dataset the names it holds that are
-        current keys; the offered keys that aren't done or in a live run are
-        queued, `keys_per_run` to a run."""
+        """For a keyed sensor whose current keys are `all_keys`: a snapshot
+        of its keys dataset offers every current key, and one of another
+        dataset the names it holds that are current keys; the offered keys
+        that aren't done or in a live run are queued, `keys_per_run` to a
+        run."""
         var cur = Dict[String, Bool]()
-        var all_keys = current_keys(p)[1].copy()
         for k in all_keys:
             cur[k] = True
         var tx = self.db.conn.begin()

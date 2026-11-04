@@ -37,7 +37,7 @@ from orca.aws import aws_command
 from orca.civil import now
 from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.locate import locate
-from orca.proc import capture
+from orca.proc import binary_seconds, capture
 from orca.scheduler import Scheduler
 from orca.secrets import secret_problem
 from orca.sensors import rebuild, rebuilds
@@ -86,7 +86,7 @@ def _locate(args: List[String]) raises -> Int:
     if len(binaries) == 0:
         _usage("locate needs a pipeline binary")
     for b in binaries:
-        var got = capture([b, "describe"])
+        var got = capture([b, "describe"], binary_seconds())
         if got[0] != 0:
             raise Error("orca: ", b, " describe exited ", got[0], ": ", got[1])
         var map = locate(got[1], root)
@@ -202,6 +202,7 @@ def _command(args: List[String]) raises -> Int:
         return 0
     if cmd == "tick" and len(args) == 2:
         var s = Scheduler(url)
+        s.wait_for_binaries = True
         s.tick(now())
         return 0
     if cmd == "scheduler" and len(args) == 2:

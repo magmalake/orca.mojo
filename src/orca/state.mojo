@@ -292,6 +292,15 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pipelines ADD COLUMN sense_error text",
             "ALTER TABLE orca.pipelines ADD COLUMN sense_error_at timestamptz",
         ],
+        # A keyed pipeline's keys as `<binary> keys` last printed them, with
+        # their snapshot, so the UI shows them without running the binary.
+        [
+            """CREATE TABLE orca.keys (
+            pipeline text PRIMARY KEY REFERENCES orca.pipelines (name),
+            snapshot_id bigint NOT NULL,
+            keys text NOT NULL,
+            read_at timestamptz NOT NULL DEFAULT now())""",
+        ],
     ]
 
 
