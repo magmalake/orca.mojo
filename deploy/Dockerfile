@@ -14,8 +14,8 @@
 # dista and k8s compile from source at DISTA_REV and K8S_REV, the revisions
 # CI checks out, cloned next to orca as pixi.toml expects.
 FROM ghcr.io/prefix-dev/pixi:0.78.0 AS build
-ARG DISTA_REV=ca915f1a79c6f3dfd6f3fa00dfa729eb21f46250
-ARG K8S_REV=6195cfd61250263720ada0293a0096ee50e3e437
+ARG DISTA_REV=9e4839937d82f36893285301bf9ce4338dcb14ec
+ARG K8S_REV=aa5eb7971284255bde3af8d799c213776ae92a9b
 ARG PIPELINES="examples/toy.mojo examples/fanout.mojo"
 ARG ORCA_SOURCE=""
 ARG ORCA_COMMIT=""

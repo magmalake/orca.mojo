@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.1 (2026-11-03)
+
 - **`ensure_table` adds the columns a table lacks.** Given a schema with
   columns the existing table doesn't have, matched by name at any depth, it
   adds them in one schema commit (iceberg-mojo's `UpdateSchema.union_by_name`)
@@ -34,6 +36,16 @@
   again. `orca backfill --rerun <pipeline> KEYS` queues the done keys as
   well; a key already in a queued or running run is still left to it. The
   UI's backfill form has the same as a checkbox (`rerun=1`).
+
+- **Built against the shim-loading fix releases.** dista-mojo 0.2.1,
+  k8s-mojo 0.1.1, iceberg-mojo 0.8.6, postgres-mojo 0.3.3,
+  objectstore-mojo 0.4.1, flare_mlake 0.13.1 and json_mlake 0.4.3 (and, in
+  the data environment, zstd 0.1.5, lz4 0.1.4, brotli 0.1.4 and sqlite
+  0.3.5): every library they load is found without `CONDA_PREFIX`, next to
+  the executable, in its `../lib` or on the binary's rpath, so a pipeline
+  binary built under pixi runs from a plain shell, and a missing one is an
+  Error instead of an abort. The CI checkouts and `deploy/Dockerfile` pin
+  the same revisions.
 
 ## 0.3.0 (2026-11-03)
 
