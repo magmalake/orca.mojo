@@ -140,6 +140,29 @@ This is what makes reruns safe (the vision's fourth principle).
 
 With `ORCA_LOGS` set to a directory, each attempt writes its log to `$ORCA_LOGS/<pipeline>/<run>/<step>/<partition>/<attempt>.log` (`_run` for a gather step) and records the location in `attempts.log`, which `status <run>` shows. The file always exists: orca writes the attempt's start, its end, and its error if it failed; `ctx.log` adds the step's lines, each with a UTC timestamp, and prints them to stdout too. The step's own stdout and stderr aren't captured in phase 1, since steps run in the driver process. A run of a pipeline with tasks writes its dista timeline (Chrome's trace format) beside its logs as `timeline.json`. Since phase 5, `ORCA_LOGS` can be in object storage (`s3://`), where pods don't share a disk; see phase 5's PR 4. *Verified* by `tests/logs.sh`, and over MinIO by `test-lineage-s3`.
 
+## Machine metrics
+
+A run's logs, timeline and task spans say nothing about the machines it ran on. `orca sample` (`orca.sample`; `<binary> sample` in a pipeline binary, which is what the runners start, since every instance and image has it) runs beside each process that does a run's work and appends a JSON line every `ORCA_SAMPLE_SECONDS` (5; the first after a second) to `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`:
+
+- **CPU:** user, system, iowait and steal as percentages of all cores, and the busiest core.
+- **Memory:** total, used, available, page cache, swap, and the resident set of the run's own processes (the process tree it watches, plus, on Linux, processes whose command is the pipeline's binary, which on the ec2 runner live in containers rather than under the script).
+- **Disk:** total, used and free per file system holding the temporary directory and dista's spill and store directories, and read and write bytes per second over whole disks.
+- **Network:** bytes in and out per second, loopback left out.
+
+Each line carries `v` (1), the Unix time `t`, `dt` since the previous line, the host, the core count and the sampler's own CPU seconds. Readers ignore keys they don't know: the control instance's containers (#96) and CPU counters (#97) will be added as keys of their own, without a new `v`. Linux is read from `/proc` and `statvfs`; macOS, so a local run on a laptop has metrics too, from `host_processor_info`, `host_statistics64`, `sysctl` (memory, swap), `getifaddrs` and `statfs`, with no disk rates (`io` is `null`) and iowait and steal always 0.
+
+Where it runs:
+
+| Runner | Started by | Instance | Ends |
+|---|---|---|---|
+| local | the scheduler, beside each run's process | `local` | after a last line once the run's process has |
+| ec2 | each instance's user data, next to dista; in docker mode as a container with `--pid host` and `/tmp` mounted | `<role>-<instance id>`, beside `cluster/<role>-<instance id>.log` | on SIGTERM from the script, after a last line |
+| kube | each pod's command, wrapped in `sh -c` so the sampler runs beside it and signals reach the command | the pod's name | after a last line once the pod's command has |
+
+On ec2 the lines go to a file in `/tmp` that the script's uploader puts under the run's `metrics/` with the instance's log, every `ORCA_CLUSTER_LOG_SECONDS` and once at the end, so a short run's samples are kept and a terminated instance keeps what it had uploaded. On Kubernetes, where run pods don't share the scheduler's `ORCA_LOGS`, the sampler prints its lines to the pod's log prefixed `orca-sample `, and the scheduler moves them to `metrics/<pod>.jsonl`, out of `driver.log`, before it deletes a finished Job: a pod deleted mid-run takes its samples with it, as it takes its log. With `ORCA_LOGS` in object storage, a local sampler stages its file and uploads the whole of it every `ORCA_SAMPLE_UPLOAD_SECONDS` (30) and when it ends.
+
+A sampler never fails a run: it's a process of its own, it exits 0 whatever happens, and a line it can't write is dropped with one message. `ORCA_SAMPLE_SECONDS=0` turns it off on every runner. It holds SIGTERM and SIGINT pending rather than handle them, and checks for them, and for its process, four times a second. A line is about 500 bytes, so a 1-hour run on 5 instances at 5 s keeps under 2 MB. Its CPU is under 0.5 ms a line on an M-series Mac, about 0.04% of one core at 5 s; `tests/sample.sh` asserts under 0.5%. CloudWatch isn't used: detailed and custom metrics cost about $0.30 per metric per month, for instances that live for one run. *Verified* by `tests/sample.sh` (the sampler itself; over MinIO in `test-sample-s3`), `tests/scheduler.sh` (local), `tests/ec2.sh` (a file per instance, the lost worker's too, and a run shorter than the interval) and `tests/kind.sh` (a file per pod, none in `driver.log`).
+
 ## Testing
 
 - **Unit tests** with `TestSuite`, as in the other tins: the DAG's order and edges, partition ranges, the codec round-trip of step outputs, cron parsing (phase 2).

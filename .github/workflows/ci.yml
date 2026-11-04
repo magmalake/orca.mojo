@@ -215,6 +215,8 @@ jobs:
         run: pixi run -e data test-sensors
       - name: Lineage and sensors with the warehouse and logs on MinIO
         run: pixi run -e data test-lineage-s3 && pixi run -e data test-sensors-s3
+      - name: The sampler's metrics uploaded to MinIO
+        run: pixi run -e data test-sample-s3
       - name: Keyed partitions over a dataset of names
         run: pixi run -e data test-keyed
       - name: Keyed backfills and sensors over 20,000 names

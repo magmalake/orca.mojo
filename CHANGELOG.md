@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Each run records its machines' metrics** (#94). `orca sample` (and
+  `<binary> sample`) appends a JSON line every `ORCA_SAMPLE_SECONDS`
+  (default 5) with CPU (user, system, iowait, steal, busiest core), memory
+  (used, available, cache, swap, the run's resident set), disk (used and
+  free per file system the run writes to, read and write rates) and network
+  rates, read from `/proc` on Linux and from sysctls and Mach calls on
+  macOS. Every runner starts it beside a run's work: the local runner
+  beside each run's process, the ec2 runner from each instance's user data
+  next to dista, the kube runner in each pod. The lines go to
+  `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`, uploaded with an
+  instance's logs and at its end, so a short run keeps them; on Kubernetes
+  the scheduler moves them out of the pod's log. A sampler that can't write
+  never fails a run, and `ORCA_SAMPLE_SECONDS=0` turns it off. Its overhead
+  is well under 0.1% of one core.
 - **A step's reads and commits are recorded through its run's `Store`**
   (#82). `Recorder` used to open a Postgres connection of its own;
   it now calls the store it came from (`Store.record`, which `PgStore`

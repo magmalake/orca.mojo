@@ -4,10 +4,11 @@
 # the scheduler's clock fixed just after a fire:
 #
 # - the toy, registered from the image, is fired, runs as a driver Job and
-#   succeeds, orca ui shows it and the driver log the scheduler kept, and
-#   nothing labelled with it is left;
+#   succeeds, orca ui shows it and the driver log the scheduler kept, its
+#   driver pod's samples are kept apart from that log, and nothing
+#   labelled with it is left;
 # - fanout's runs get a head and 3 workers each, and the tasks of a run
-#   reach all 3;
+#   reach all 3; every pod's samples are kept;
 # - a fanout driver pod deleted mid-run is resumed on a new cluster (start
 #   2) and succeeds, and the first cluster is gone;
 # - with ORCA_VCPU_BUDGET room for one fanout cluster, a toy run queued
@@ -93,7 +94,13 @@ toy=$(json '/runs?pipeline=toy' | jq -r '.runs[0].id')
 [ "$(json "/runs/$toy" | jq .cpu_millis)" = 100 ] || fail "the toy's CPU: $(json "/runs/$toy" | jq .cpu_millis)"
 gone "orca.run=$toy"
 curl -fsS "$base/runs/$toy/driver.log" | grep -qx "run succeeded" || fail "the toy's driver log"
-echo "ok   the toy ran as a driver Job, its driver log was kept, and nothing of it is left"
+# Its driver pod's samples (orca.sample), kept beside the driver log and
+# out of it.
+orca_cli sh -c "cat /var/orca/logs/toy/$toy/metrics/orca-$toy-1-*.jsonl" > build/kind-toy-metrics.jsonl \
+    || fail "the toy's metrics"
+python3 tests/metrics_ok.py --rss build/kind-toy-metrics.jsonl > /dev/null || fail "the toy's metrics"
+! curl -fsS "$base/runs/$toy/driver.log" | grep -q "^orca-sample" || fail "samples in the toy's driver log"
+echo "ok   the toy ran as a driver Job, its driver log and metrics were kept, and nothing of it is left"
 
 # Two fanout runs, one at a time, and a toy run beside them.
 orca_cli orca register --image orca:dev /opt/orca/pipelines/fanout > /dev/null || fail "register fanout"
@@ -123,7 +130,12 @@ sleep 3
 [ "$(q "SELECT status FROM orca.runs WHERE id = $f2")" = running ] || fail "run $f2 ended before its driver could be deleted"
 kubectl -n orca-runs delete pod -l "orca.run=$f2,orca.role=driver" --wait=false > /dev/null
 gone "orca.run=$f1"
-echo "ok   fanout's run had its own head and 3 workers, and its tasks reached all 3"
+# A metrics file per pod: the driver's, the head's and the 3 workers'.
+pods=$(orca_cli sh -c "ls /var/orca/logs/fanout/$f1/metrics" | while read -r f; do
+    case "$f" in *-head.jsonl) echo head ;; *-worker-*.jsonl) echo worker ;; *) echo driver ;; esac
+done | sort | tr '\n' ' ')
+[ "$pods" = "driver head worker worker worker " ] || fail "run $f1's metrics: $pods"
+echo "ok   fanout's run had its own head and 3 workers, and its tasks reached all 3, each with metrics"
 until_true "SELECT status = 'succeeded' FROM orca.runs WHERE id = $f2" 300
 [ "$(q "SELECT starts FROM orca.runs WHERE id = $f2")" -eq 2 ] || fail "run $f2 started $(q "SELECT starts FROM orca.runs WHERE id = $f2") times"
 gone "orca.run=$f2"

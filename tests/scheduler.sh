@@ -2,7 +2,8 @@
 # The orca scheduler over examples/toy.mojo (03:00 UTC on the 2nd, for the
 # month before, from 2024-01, max_runs=2), with ORCA_NOW stepping time:
 # fires once each, catch-up, ticks racing, max_runs, retries with backoff, a
-# killed run restarted, and a backfill, then one with --rerun. Needs ORCA_DATABASE_URL (pixi run
+# killed run restarted, a backfill, then one with --rerun, and the machine's
+# metrics beside a run. Needs ORCA_DATABASE_URL (pixi run
 # test-scheduler starts a throwaway server).
 set -eu
 cd "$(dirname "$0")/.."
@@ -52,6 +53,13 @@ settle
 [ "$(q "SELECT partition FROM orca.fires WHERE pipeline = 'toy'")" = "2024-01" ] || fail "no fire for 2024-01"
 [ "$(succeeded 2024-01)" -eq 1 ] || fail "2024-01 didn't succeed"
 [ -s "$ORCA_LOGS/toy/1/driver.log" ] || fail "no driver log"
+# The sampler beside it (orca.sample) left the machine's metrics, though the
+# run was shorter than an interval.
+i=0
+until [ -s "$ORCA_LOGS/toy/1/metrics/local.jsonl" ]; do
+    i=$((i + 1)); [ "$i" -lt 50 ] || fail "no metrics for run 1"; sleep 0.1
+done
+python3 tests/metrics_ok.py "$ORCA_LOGS/toy/1/metrics/local.jsonl" > /dev/null || fail "run 1's metrics"
 tick 2024-02-02T03:00Z
 [ "$(q "SELECT count(*) FROM orca.fires")" -eq 1 ] || fail "fired twice"
 

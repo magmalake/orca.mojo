@@ -64,6 +64,7 @@ from orca.logs import (
 from orca.tasks import workers
 from orca.civil import Civil, now, parse_time
 from orca.pipeline import FAILED, SUCCEEDED, Pipeline, RunResult
+from orca.sample import sample_main
 from orca.state import CANCELLED, PgStore, State, process_owner
 from orca.warehouse import current_snapshot
 
@@ -75,7 +76,8 @@ comptime USAGE = """usage:
   <pipeline> status [<run>]
   <pipeline> sense
   <pipeline> keys
-  <pipeline> fires [<count>] [--after YYYY-MM-DDTHH:MM[:SS]Z]"""
+  <pipeline> fires [<count>] [--after YYYY-MM-DDTHH:MM[:SS]Z]
+  <pipeline> sample --out <location>|- [--pid PID] [--seconds S] ..."""
 
 
 def _usage(msg: String = ""):
@@ -122,6 +124,9 @@ def orca_main[P: type_of(Pipeline)]() raises:
 
 def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
     var cmd = args[1]
+    if cmd == "sample":
+        # For the runners: this machine's metrics beside a run (orca.sample).
+        return sample_main(args)
     var url = getenv("ORCA_DATABASE_URL")
     # A schedule is checked on every command, so a binary whose cron
     # expression or zone is bad can't be registered or run.

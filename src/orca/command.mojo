@@ -18,6 +18,7 @@ Its commands:
     ./build/orca tick
     ./build/orca scheduler
     ./build/orca ui                 # http://127.0.0.1:8270, or ORCA_UI_ADDR
+    ./build/orca sample --out m.jsonl --pid 1234   # machine metrics
     ./build/orca lineage lake.report [<snapshot>]
     ./build/orca rebuild raw.events 2024-03
 
@@ -38,6 +39,7 @@ from orca.civil import now
 from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.locate import locate
 from orca.proc import capture
+from orca.sample import sample_main
 from orca.scheduler import Scheduler
 from orca.secrets import secret_problem
 from orca.sensors import rebuild, rebuilds
@@ -58,6 +60,8 @@ comptime USAGE = """usage:
   orca tick
   orca scheduler
   orca ui
+  orca sample --out <location>|- [--pid PID] [--match PATH] [--dirs D,...]
+              [--seconds S] [--count N]   (machine metrics, orca.sample)
   orca lineage <dataset> [<snapshot>]
   orca rebuild <dataset> KEY[..KEY][,...]
   orca user add|remove <name>       (add reads the password from stdin)
@@ -101,6 +105,8 @@ def _command(args: List[String]) raises -> Int:
         return _locate(args)
     if args[1] == "aws":
         return aws_command(args)
+    if args[1] == "sample":
+        return sample_main(args)
     var url = getenv("ORCA_DATABASE_URL")
     if not url:
         _usage("orca needs ORCA_DATABASE_URL")

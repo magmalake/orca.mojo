@@ -25,7 +25,12 @@ Every tick, `sweep` deletes the objects of a run that isn't running at that
 start any more, and those of a Job that has finished, first appending its
 driver pod's log to the run's `driver.log` under `ORCA_LOGS`: what's left after a
 run ends, a run restarted on a new cluster, and what a scheduler that was
-killed left behind. Pods ask for `ORCA_DRIVER_CPU`, `ORCA_HEAD_CPU` and
+killed left behind. Each pod's command runs with the sampler beside it
+(`orca.sample`, unless `ORCA_SAMPLE_SECONDS=0`), whose lines go to the
+pod's log prefixed `orca-sample `; before a finished Job is deleted, each
+of its pods' lines are kept in the run's `metrics/<pod>.jsonl` and left out
+of `driver.log`. A pod deleted before its Job finishes takes its samples
+with it, as it does its log. Pods ask for `ORCA_DRIVER_CPU`, `ORCA_HEAD_CPU` and
 `ORCA_WORKER_CPU` (default 500m, 250m and 1) and `ORCA_POD_MEMORY` (512Mi)
 each; `cpu_millis` is a run's total, which the scheduler checks against
 `ORCA_VCPU_BUDGET` before making a cluster.
@@ -39,9 +44,44 @@ from postgres import Params
 
 from orca.json import quote
 from orca.logs import location_exists, read_location, run_dir, write_location
+from orca.sample import PREFIX, metrics_location, sample_seconds
 from orca.state import State
 
 comptime DISTA_PORT = 6390
+
+comptime _SAMPLED = (
+    '"$0" "$@" & m=$!; trap \'kill -TERM $m 2>/dev/null\' TERM INT; (unset'
+    ' DISTA_ROLE; exec "$0" sample --out - --pid $m) & s=$!; while :; do'
+    " wait $m; c=$?; kill -0 $m 2>/dev/null || break; done; wait $s; exit $c"
+)
+"""A container's script with the sampler beside its command (`$0 $@`):
+signals go to the command, and the container exits with its code once the
+sampler has written its last line."""
+
+
+def _command(var argv: List[String]) -> String:
+    """A container's `command`: `argv`, with the sampler (`orca.sample`)
+    beside it unless `ORCA_SAMPLE_SECONDS=0`. Its lines go to the pod's
+    log, prefixed, and the scheduler moves them to the run's metrics."""
+    var out = String("[")
+    if sample_seconds() > 0:
+        out.write('"/bin/sh", "-c", ', quote(_SAMPLED), ", ")
+    for i in range(len(argv)):
+        out.write(", " if i else "", quote(argv[i]))
+    out.write("]")
+    return out^
+
+
+def split_samples(text: String) -> Tuple[String, String]:
+    """A pod's log as its own lines and the sampler's, the prefix dropped."""
+    var own = String()
+    var samples = String()
+    for line in text.splitlines():
+        if line.startswith(PREFIX):
+            samples.write(line[byte = PREFIX.byte_length() :], "\n")
+        else:
+            own.write(line, "\n")
+    return (own^, samples^)
 
 
 def cpu_millis(s: String) raises -> Int:
@@ -120,7 +160,11 @@ struct KubeRunner(Movable):
         """A container's `env`: the copied variables, then `extra`."""
         var out = String("[")
         var first = True
-        for n in self.env:
+        var names = self.env.copy()
+        # The sampler's interval, as the scheduler has it.
+        if "ORCA_SAMPLE_SECONDS" not in names:
+            names.append("ORCA_SAMPLE_SECONDS")
+        for n in names:
             var v = getenv(n)
             if not v:
                 continue
@@ -181,10 +225,10 @@ struct KubeRunner(Movable):
         it has tasks."""
         var name = self._name(r)
         var head = String(name, "-head")
-        var argv = String("[", quote(r.binary), ', "resume", "', r.run, '"')
+        var args: List[String] = [r.binary, "resume", String(r.run)]
         if r.allow_new_code:
-            argv.write(', "--allow-new-code"')
-        argv.write("]")
+            args.append("--allow-new-code")
+        var argv = _command(args^)
         var driver_env = String(
             '{"name": "ORCA_DATABASE_URL", "valueFrom": {"secretKeyRef":',
             ' {"name": ',
@@ -234,7 +278,7 @@ struct KubeRunner(Movable):
             quote(made.at("/metadata/uid").string_value()),
             "}",
         )
-        var bin = String("[", quote(r.binary), "]")
+        var bin = _command([r.binary])
         _ = self.k.create(
             PODS,
             self._pod(
@@ -290,9 +334,10 @@ struct KubeRunner(Movable):
                 ),
             )
 
-    def _keep_driver_log(self, job: Value):
+    def _keep_logs(self, job: Value):
         """Appends the log of the Job's driver pod to the run's `driver.log`
-        under `ORCA_LOGS`, as the pod is about to go."""
+        under `ORCA_LOGS`, and keeps each of its pods' samples in the run's
+        `metrics/<pod>.jsonl`, as the pods are about to go."""
         try:
             var run = Int(job.at("/metadata/labels/orca.run").string_value())
             var pipeline = job.at(
@@ -305,12 +350,18 @@ struct KubeRunner(Movable):
             at.write("/driver.log")
             var text = String()
             for pod in self.k.list(
-                PODS,
-                String(
-                    "orca.run=", run, ",orca.start=", start, ",orca.role=driver"
-                ),
+                PODS, String("orca.run=", run, ",orca.start=", start)
             ).items:
-                text.write(self.k.logs(_name_of(pod)))
+                var name = _name_of(pod)
+                var got = split_samples(self.k.logs(name))
+                if got[1]:
+                    write_location(
+                        metrics_location(pipeline, run, name),
+                        got[1].as_bytes(),
+                    )
+                var role = pod.try_at("/metadata/labels/orca.role")
+                if role and role.value().string_value() == "driver":
+                    text.write(got[0])
             if not text:
                 return
             var before = String()
@@ -319,7 +370,7 @@ struct KubeRunner(Movable):
             var all = String(before, "--- start ", start, "\n", text)
             write_location(at, all.as_bytes())
         except e:
-            print("orca: can't keep a driver log:", e)
+            print("orca: can't keep a run's pod logs:", e)
 
     def remove(self, run: Int) raises:
         """Deletes everything labelled with the run, whatever its start."""
@@ -347,7 +398,7 @@ struct KubeRunner(Movable):
                 or _count(o, "/status/failed") > 0
             )
             if finished or _key(o) not in live:
-                self._keep_driver_log(o)
+                self._keep_logs(o)
                 if self.k.delete(JOBS, _name_of(o)):
                     n += 1
         # What the Job owned goes with it, but not at once, and an orphan of
