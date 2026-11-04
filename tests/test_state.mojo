@@ -71,6 +71,21 @@ comptime Add = Step["add", Seq[Int], Int, add, Gather, after=Flaky]
 comptime Retrying = Pipeline["retrying", MonthNo, Flaky, Add]
 
 
+# --- a step that reads and commits a table, as orca.tables would ---
+
+
+def touch(mut ctx: Ctx, m: Month) raises -> Int:
+    var id = ctx.pin("/wh/in", Int64(100 + ctx.attempt), "ns.in")
+    ctx.committed("/wh/out", Int64(m.month), "ns.out")
+    if ctx.attempt == 1:
+        raise Error("fails after its commit")
+    return Int(id)
+
+
+comptime Touch = Step["touch", Month, Int, touch, Mapped, retries=1]
+comptime Touching = Pipeline["touching", Touch]
+
+
 def test_migrate_is_idempotent() raises:
     var db = _db()
     db.migrate()
@@ -188,6 +203,42 @@ def test_resume_skips_what_succeeded() raises:
             assert_equal(s.status, "succeeded")
         elif s.step == "month_no":
             assert_equal(s.attempts, 1)
+
+
+def test_reads_and_commits_go_through_the_store() raises:
+    var db = _db()
+    db.register("touching", hex(Touching.registry_hash()), "{}")
+    var run = db.create_run("touching", "h", "x", "manual", "a:1")
+    var store = PgStore(db^, getenv("ORCA_DATABASE_URL"), run, "a:1", "h")
+    var res = Touching.execute(store, RunResult(), parse_months("2024-03"), run)
+    # The second attempt read the snapshot the first one did.
+    assert_equal(res.output[Int]("touch", "2024-03"), 101)
+    var att = String(
+        " r JOIN orca.attempts a ON a.id = r.attempt JOIN orca.steps s ON",
+        " s.id = a.step WHERE s.run = ",
+        run,
+    )
+    assert_equal(
+        _count(
+            String(
+                "SELECT count(*) AS n FROM orca.reads",
+                att,
+                " AND r.snapshot_id = 101 AND r.dataset = 'ns.in'",
+            )
+        ),
+        2,
+    )
+    # Both commits are on record, the failed attempt's too.
+    assert_equal(
+        _count(
+            String(
+                "SELECT count(*) AS n FROM orca.commits",
+                att,
+                " AND r.table_name = '/wh/out' AND r.snapshot_id = 3",
+            )
+        ),
+        2,
+    )
 
 
 def test_a_store_that_lost_its_run_stops() raises:
