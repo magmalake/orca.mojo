@@ -63,6 +63,17 @@
   A sensor pass that fails is kept as the pipeline's `sense_error` (printed
   once, not every second) and shown on its page in `orca ui`, with the
   snapshots it saw and didn't run. Migration 17.
+- **Retries that wait, and steps that say "not yet"** (#66).
+  `Step[..., retries=3, backoff_seconds=30]` waits 30 s before the first
+  retry, doubling. `Pipeline[..., retry_seconds=3600,
+  max_retry_seconds=3600]` sets a run's retry wait (else
+  `ORCA_RETRY_SECONDS`) and caps its doubling, so a run can be retried
+  hourly for days. A step raises `defer(seconds, why)` when it can't work
+  yet: the attempt ends `deferred` without spending a retry, the run ends
+  `deferred`, and the scheduler starts it again at that time without
+  counting it against `run_retries` (`runs.deferrals`, migration 18). The
+  UI shows "until ..." and can resume or cancel a deferred run. A backfill
+  doesn't queue a deferred run's keys again.
 
 ## 0.3.2 (2026-11-03)
 

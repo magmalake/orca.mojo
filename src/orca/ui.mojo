@@ -185,6 +185,8 @@ struct RunRow(Copyable, Movable):
     """`running` with no live process (`orca.actions.stalled_sql`)."""
     var error: String
     """Why the run ended without its steps saying so (`runs.error`)."""
+    var waiting_until: String
+    """When a deferred run starts again; empty for any other."""
 
 
 @fieldwise_init
@@ -379,6 +381,16 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
     return out^
 
 
+comptime _WAITING = (
+    "CASE WHEN status = 'deferred' THEN coalesce(retry_at, 0) ELSE 0 END"
+)
+"""SQL for when a deferred run starts again (`retry_at`), 0 for others."""
+
+
+def _waiting(t: Int64) -> String:
+    return _epoch(t) if t > 0 else String()
+
+
 def _runs(
     mut db: State,
     pipeline: String = "",
@@ -398,7 +410,9 @@ def _runs(
             _ts("ended"),
             " AS ended, cancel_requested, coalesce(error, '') AS error, ",
             stalled_sql(),
-            " AS stalled FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
+            " AS stalled, ",
+            _WAITING,
+            " AS waiting FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
             " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) ORDER BY",
             " id DESC LIMIT $4",
         ),
@@ -420,6 +434,7 @@ def _runs(
                 r.bool("cancel_requested"),
                 r.bool("stalled"),
                 r.text("error"),
+                _waiting(r.int64("waiting")),
             )
         )
     return out^
@@ -965,6 +980,8 @@ def _json_run(mut out: String, r: RunRow):
         "true" if r.stalled else "false",
         ', "error": ',
         quote(r.error),
+        ', "waiting_until": ',
+        quote(r.waiting_until) if r.waiting_until else String("null"),
         "}",
     )
 
@@ -1088,6 +1105,10 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
         h.cell(r.trigger)
         h.raw("<td>")
         h.status(r.status)
+        if r.waiting_until:
+            h.raw(' <span class="muted">until ')
+            h.text(r.waiting_until)
+            h.raw("</span>")
         h.raw("</td>")
         h.num(r.starts)
         h.mono(r.created)
@@ -1903,6 +1924,10 @@ def run(mut db: State, id: Int) raises -> Page:
     h.text(r.started)
     h.raw("</dd><dt>Ended</dt><dd>")
     h.text(r.ended)
+    if r.waiting_until:
+        h.raw("</dd><dt>Waiting</dt><dd>until ")
+        h.text(r.waiting_until)
+        h.raw(", when a step asked to run again")
     h.raw("</dd><dt>Starts</dt><dd>")
     h.text(r.starts)
     if cpu:
@@ -2068,9 +2093,17 @@ def _action(mut h: Html, run: Int, name: StaticString):
 def _run_actions(mut h: Html, r: RunRow, steps: List[StepDef]):
     """The forms for what can be done to the run as it is: resume, rerun
     from a step, cancel."""
-    var resumable = r.status == "failed" or r.status == "cancelled" or r.stalled
+    var resumable = (
+        r.status == "failed"
+        or r.status == "cancelled"
+        or r.status == "deferred"
+        or r.stalled
+    )
     var cancellable = (
-        r.status == "queued" or r.status == "failed" or r.status == "running"
+        r.status == "queued"
+        or r.status == "failed"
+        or r.status == "running"
+        or r.status == "deferred"
     ) and not r.cancel_requested
     var ended = not _live(r.status)
     if not (resumable or cancellable or ended):
@@ -2455,7 +2488,9 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
             _ts("ended"),
             " AS ended, cancel_requested, coalesce(error, '') AS error, ",
             stalled_sql(),
-            " AS stalled FROM orca.runs WHERE id = $1",
+            " AS stalled, ",
+            _WAITING,
+            " AS waiting FROM orca.runs WHERE id = $1",
         ),
         Params().int64(Int64(id)),
     )
@@ -2475,6 +2510,7 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
         r.bool("cancel_requested"),
         r.bool("stalled"),
         r.text("error"),
+        _waiting(r.int64("waiting")),
     )
 
 

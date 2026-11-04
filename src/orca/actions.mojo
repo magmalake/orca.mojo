@@ -129,8 +129,9 @@ def backfill_runs(
 
 
 def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
-    """Queues a failed, cancelled or stalled run again, so the scheduler
-    resumes it at what's unfinished. A run whose pipeline's code has changed
+    """Queues a failed, cancelled, deferred or stalled run again, so the
+    scheduler resumes it at what's unfinished (a deferred one now rather
+    than when it asked). A run whose pipeline's code has changed
     since is refused until `allow_new_code`, which the scheduler passes on
     as `--allow-new-code`."""
     var rows = db.conn.query(
@@ -148,14 +149,22 @@ def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
         return Outcome.no(String("no run ", run))
     var r = rows.row(0)
     var status = r.text("status")
-    if status != "failed" and status != "cancelled" and not r.bool("stalled"):
+    if (
+        status != "failed"
+        and status != "cancelled"
+        and status != "deferred"
+        and not r.bool("stalled")
+    ):
         return Outcome.no(
             String(
                 "run ",
                 run,
                 " is ",
                 status,
-                "; only a failed, cancelled or stalled run can be resumed",
+                (
+                    "; only a failed, cancelled, deferred or stalled run can be"
+                    " resumed"
+                ),
             )
         )
     if not r.bool("has_binary"):
@@ -182,7 +191,7 @@ def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
                 " error = NULL, allow_new_code = $2 WHERE id = $1 AND (status"
                 " IN ('failed',"
             ),
-            " 'cancelled') OR ",
+            " 'cancelled', 'deferred') OR ",
             stalled_sql(),
             ")",
         ),
@@ -266,14 +275,15 @@ def rerun_from(mut db: State, run: Int, step: String) raises -> Outcome:
 
 
 def cancel_run(mut db: State, run: Int) raises -> Outcome:
-    """Cancels a run: a queued or failed one at once (a failed one isn't
-    retried), a running one before its next attempt."""
+    """Cancels a run: a queued, deferred or failed one at once (it isn't
+    started again), a running one before its next attempt."""
     var rows = db.conn.query(
         (
             "UPDATE orca.runs SET cancel_requested = true, status = CASE WHEN"
             " status = 'running' THEN status ELSE 'cancelled' END, ended ="
             " CASE WHEN status = 'running' THEN ended ELSE now() END WHERE id"
-            " = $1 AND status IN ('queued', 'running', 'failed') RETURNING id"
+            " = $1 AND status IN ('queued', 'running', 'failed', 'deferred')"
+            " RETURNING id"
         ),
         Params().int64(Int64(run)),
     )
@@ -294,8 +304,8 @@ def cancel_runs(
     mut db: State, pipeline: String, keys: String
 ) raises -> Outcome:
     """What `orca cancel` does: cancels, as `cancel_run` does each, the
-    pipeline's runs that are queued, running, or failed and due to be
-    retried, over any of `keys` (a run of several keys is cancelled whole),
+    pipeline's runs that are queued, deferred, running, or failed and due
+    to be retried, over any of `keys` (a run of several keys is cancelled whole),
     or all of them for `@all`. The outcome's `queued` is how many."""
     var rows = db.conn.query(
         (
@@ -332,10 +342,11 @@ def cancel_runs(
             " status = 'running' THEN status ELSE 'cancelled' END, ended =",
             " CASE WHEN status = 'running' THEN ended ELSE now() END WHERE",
             " pipeline = $1 AND ($2 OR string_to_array(partitions, ',') &&",
-            " string_to_array($3, ',')) AND (status = 'queued' OR (status =",
-            " 'running' AND NOT cancel_requested) OR (status = 'failed' AND ",
+            " string_to_array($3, ',')) AND (status IN ('queued', 'deferred')",
+            " OR (status = 'running' AND NOT cancel_requested) OR (status =",
+            " 'failed' AND ",
             RETRIED_SQL,
-            " AND starts <= $4)) RETURNING id",
+            " AND starts - deferrals <= $4)) RETURNING id",
         ),
         Params().text(pipeline).bool(all).text(joined).int64(retries),
     )

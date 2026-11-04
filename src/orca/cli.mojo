@@ -38,8 +38,10 @@ and the partition keys its summary says it holds. The scheduler polls it for
 a sensor pipeline (`orca.sensors`).
 
 `run` and `resume` print one line per step and partition, then the run's
-status. Exit codes: 0 when the run succeeded, 1 when a step didn't or the run
-was cancelled, 2 for a
+status. A run whose step raised `defer` (and none failed) ends `deferred`,
+and the scheduler starts it again when the step asked. Exit codes: 0 when
+the run succeeded, 1 when a step didn't, the run deferred or was cancelled,
+2 for a
 usage error, 3 for any other error (the database, a run that can't be
 resumed).
 """
@@ -63,7 +65,7 @@ from orca.logs import (
 )
 from orca.tasks import workers
 from orca.civil import Civil, now, parse_time
-from orca.pipeline import FAILED, SUCCEEDED, Pipeline, RunResult
+from orca.pipeline import DEFERRED, FAILED, SUCCEEDED, Pipeline, RunResult
 from orca.state import CANCELLED, PgStore, State, process_owner
 from orca.warehouse import current_snapshot
 
@@ -433,11 +435,17 @@ def _execute[
                 publish(at)
             except e:
                 print("orca: no timeline:", e)
-    var ok = res.succeeded()
-    store.finish_run(SUCCEEDED if ok else FAILED)
+    var outcome = res.outcome()
+    if outcome == DEFERRED:
+        store.defer_run(res.deferred_until())
+    else:
+        store.finish_run(outcome)
     _print_steps_after(store.db, run)
-    print("run", SUCCEEDED if ok else FAILED)
-    return 0 if ok else 1
+    if outcome == DEFERRED:
+        print("run deferred until", String(Civil.of(res.deferred_until()), "Z"))
+    else:
+        print("run", outcome)
+    return 0 if outcome == SUCCEEDED else 1
 
 
 def _print_steps_after(mut db: State, run: Int):
@@ -476,4 +484,8 @@ def report(res: RunResult):
         if s.error:
             line.write(": ", s.error)
         print(line)
-    print("run", SUCCEEDED if res.succeeded() else "failed")
+    var outcome = res.outcome()
+    if outcome == DEFERRED:
+        print("run deferred until", String(Civil.of(res.deferred_until()), "Z"))
+    else:
+        print("run", outcome)

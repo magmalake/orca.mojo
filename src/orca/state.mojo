@@ -28,7 +28,14 @@ from std.time import perf_counter_ns, sleep
 from postgres import Connection, Params, Transaction
 
 from orca.ctx import Recorder
-from orca.pipeline import FAILED, SUCCEEDED, SKIPPED, RunResult, StepRun
+from orca.pipeline import (
+    DEFERRED,
+    FAILED,
+    SUCCEEDED,
+    SKIPPED,
+    RunResult,
+    StepRun,
+)
 from orca.store import Store
 
 comptime RUNNING = "running"
@@ -292,6 +299,11 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pipelines ADD COLUMN sense_error text",
             "ALTER TABLE orca.pipelines ADD COLUMN sense_error_at timestamptz",
         ],
+        # Deferred runs (orca.step.defer): how many of a run's starts were
+        # after it deferred, which its retry budget doesn't count.
+        [
+            "ALTER TABLE orca.runs ADD COLUMN deferrals int NOT NULL DEFAULT 0",
+        ],
     ]
 
 
@@ -516,8 +528,9 @@ struct State(Movable):
             (
                 "UPDATE orca.runs SET status = 'running', owner = $2, heartbeat"
                 " = now(), ended = NULL, error = NULL WHERE id = $1 AND status"
-                " IN ('queued', 'running', 'failed') AND (heartbeat IS NULL OR"
-                " heartbeat < now() - make_interval(secs => $3)) RETURNING id"
+                " IN ('queued', 'running', 'failed', 'deferred') AND (heartbeat"
+                " IS NULL OR heartbeat < now() - make_interval(secs => $3))"
+                " RETURNING id"
             ),
             Params().int64(Int64(run)).text(owner).float64(stale_seconds),
         )
@@ -528,6 +541,7 @@ struct State(Movable):
             info.status != RUNNING
             and info.status != FAILED
             and info.status != "queued"
+            and info.status != DEFERRED
         ):
             raise Error("orca: run ", run, " is ", info.status)
         raise Error(
@@ -594,6 +608,19 @@ struct State(Movable):
                 " NULL WHERE id = $1 AND owner = $3"
             ),
             Params().int64(Int64(run)).text(status).text(owner),
+        )
+
+    def defer_run(mut self, run: Int, owner: String, until: Int64) raises:
+        """Ends the run `deferred`, to be started again at `until` (on the
+        scheduler's clock) by the scheduler, whatever started it; that start
+        isn't counted against its retries."""
+        _ = self.conn.execute(
+            (
+                "UPDATE orca.runs SET status = 'deferred', ended = now(),"
+                " heartbeat = NULL, retry_at = $3, deferrals = deferrals + 1"
+                " WHERE id = $1 AND owner = $2"
+            ),
+            Params().int64(Int64(run)).text(owner).int64(until),
         )
 
     def cancel_requested(mut self, run: Int) raises -> Bool:
@@ -965,6 +992,16 @@ struct PgStore(Movable, Store):
         while True:
             try:
                 self.db.finish_run(self.run, self.owner, status)
+                return
+            except e:
+                r.again(e, self.db, self.url)
+
+    def defer_run(mut self, until: Int64) raises:
+        """`State.defer_run` for this run, retried as the attempts are."""
+        var r = DbRetry()
+        while True:
+            try:
+                self.db.defer_run(self.run, self.owner, until)
                 return
             except e:
                 r.again(e, self.db, self.url)

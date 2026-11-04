@@ -51,10 +51,14 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   exits non-zero, is kept as the pipeline's `sense_error`, which `orca ui`
   shows, and printed once rather than on every tick.
 - **Retries.** A scheduled, backfilled or sensed run that failed is started again
-  after `ORCA_RETRY_SECONDS` (default 60) doubling with each start, plus up
-  to a tenth more as jitter, up to `run_retries` times. One whose process
+  after the pipeline's `retry_seconds` (else `ORCA_RETRY_SECONDS`, default
+  60) doubling with each start, at most its `max_retry_seconds` if set,
+  plus up to a tenth more as jitter, up to `run_retries` times. One whose process
   died (its heartbeat went stale) is started again at once, within the same
-  budget. A manual run is never retried by the scheduler. A run asked to
+  budget. A manual run is never retried by the scheduler. A run whose step
+  raised `defer` ends `deferred` with `retry_at` the time it asked for, and
+  is started again then, whatever its trigger; those starts (`deferrals`)
+  don't count against `run_retries`. A run asked to
   cancel whose process died ends `cancelled`.
 - **New code.** `orca register` of a new build moves the queued runs to it,
   and the failed ones waiting for a retry that have no step done. A retry
@@ -125,6 +129,10 @@ struct Registered(Copyable, Movable):
     var start: String
     var max_runs: Int
     var run_retries: Int
+    var retry_seconds: Int
+    """The first retry's wait, doubling; 0 for `ORCA_RETRY_SECONDS`."""
+    var max_retry_seconds: Int
+    """The longest wait between retries; 0 for no limit."""
     var sensor: Bool
     var keys_per_run: Int
     var keys_dataset: String
@@ -174,6 +182,9 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             "'start', '') AS start, coalesce((describe->>'max_runs')"
             "::bigint, 1) AS max_runs, coalesce((describe->>"
             "'run_retries')::bigint, 3) AS run_retries,"
+            " coalesce((describe->>'retry_seconds')::bigint, 0) AS"
+            " retry_seconds, coalesce((describe->>'max_retry_seconds')"
+            "::bigint, 0) AS max_retry_seconds,"
             " coalesce((describe->>'sensor')::boolean, false) AS sensor,"
             " coalesce((describe->>'keys_per_run')::bigint, 1) AS"
             " keys_per_run, coalesce(describe->'partitions'->>'dataset', '')"
@@ -204,6 +215,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 r.text("start"),
                 Int(r.int64("max_runs")),
                 Int(r.int64("run_retries")),
+                Int(r.int64("retry_seconds")),
+                Int(r.int64("max_retry_seconds")),
                 r.bool("sensor"),
                 Int(r.int64("keys_per_run")),
                 r.text("keys_dataset"),
@@ -430,9 +443,10 @@ current code over it succeeded."""
 
 comptime LIVE_SQL = (
     "SELECT DISTINCT unnest(string_to_array(partitions, ',')) AS key FROM"
-    " orca.runs WHERE pipeline = $1 AND status IN ('queued', 'running')"
+    " orca.runs WHERE pipeline = $1 AND status IN ('queued', 'running',"
+    " 'deferred')"
 )
-"""The keys of pipeline `$1` in a queued or running run."""
+"""The keys of pipeline `$1` in a queued, running or deferred run."""
 
 
 def done_keys(
@@ -755,12 +769,13 @@ struct Scheduler(Movable):
             String(
                 "UPDATE orca.runs r SET registry_hash = $2 WHERE pipeline =",
                 " $1 AND registry_hash <> $2 AND (status = 'queued' OR",
-                " (status = 'failed' AND ",
+                " ((status = 'deferred' OR (status = 'failed' AND ",
                 _RETRIED,
-                " AND starts BETWEEN 1 AND (SELECT coalesce((describe->>",
-                "'run_retries')::bigint, 3) FROM orca.pipelines WHERE name =",
-                " $1) AND NOT EXISTS (SELECT 1 FROM orca.steps s WHERE s.run =",
-                " r.id AND s.status = 'succeeded')))",
+                " AND starts - deferrals BETWEEN 1 AND (SELECT",
+                " coalesce((describe->>'run_retries')::bigint, 3) FROM",
+                " orca.pipelines WHERE name = $1))) AND NOT EXISTS (SELECT 1",
+                " FROM orca.steps s WHERE s.run = r.id AND s.status =",
+                " 'succeeded')))",
             ),
             Params().text(name).text(res.row(0).text("registry_hash")),
         )
@@ -1162,23 +1177,34 @@ struct Scheduler(Movable):
             )
 
     def _schedule_retries(mut self, p: Registered, now: Int64) raises:
-        """Gives each failed run that may be retried its time to start."""
+        """Gives each failed run that may be retried its time to start:
+        the pipeline's `retry_seconds` (or `ORCA_RETRY_SECONDS`) doubling
+        with each start that wasn't after a deferral, up to its
+        `max_retry_seconds`, plus up to a tenth as jitter."""
+        var base = Int64(p.retry_seconds) if p.retry_seconds > 0 else (
+            self.retry_seconds
+        )
         _ = self.db.conn.execute(
             String(
                 (
-                    "UPDATE orca.runs SET retry_at = $2 + ($3 * power(2, starts"
-                    " - 1))::bigint + (id * 7919 % 1000) * $3 / 10000 WHERE"
+                    "UPDATE orca.runs SET retry_at = $2 + (SELECT CASE WHEN $5"
+                    " > 0 THEN least(w, $5) ELSE w END FROM (SELECT least($3 *"
+                    " power(2, least(starts - deferrals - 1, 60)),"
+                    " 1e15)::bigint AS w) AS x) + (id * 7919 % 1000) * least($3"
+                    " * power(2, least(starts - deferrals - 1, 60)), CASE WHEN"
+                    " $5 > 0 THEN $5 ELSE 1e15 END)::bigint / 10000 WHERE"
                     " pipeline = $1 AND status = 'failed' AND "
                 ),
                 _RETRIED,
-                " AND retry_at IS NULL AND starts BETWEEN 1 AND $4 AND",
-                " (registry_hash = $5 OR allow_new_code)",
+                " AND retry_at IS NULL AND starts - deferrals BETWEEN 1 AND $4",
+                " AND (registry_hash = $6 OR allow_new_code)",
             ),
             Params()
             .text(p.name)
             .int64(now)
-            .int64(self.retry_seconds)
+            .int64(base)
             .int64(Int64(p.run_retries))
+            .int64(Int64(p.max_retry_seconds))
             .text(p.registry_hash),
         )
 
@@ -1235,9 +1261,11 @@ struct Scheduler(Movable):
                 " with the new code from orca ui, or with <binary> resume",
                 " ' || id || ' --allow-new-code' WHERE pipeline = $1 AND",
                 " registry_hash <> $4 AND NOT allow_new_code AND error IS NULL",
-                " AND (status = 'queued' OR (status = 'failed' AND ",
+                " AND (status IN ('queued', 'deferred') OR (status = 'failed'",
+                " AND ",
                 _RETRIED,
-                " AND starts BETWEEN 1 AND $3) OR (status = 'running' AND ",
+                " AND starts - deferrals BETWEEN 1 AND $3) OR (status =",
+                " 'running' AND ",
                 _RETRIED,
                 " AND NOT cancel_requested AND ",
                 dead,
@@ -1257,7 +1285,7 @@ struct Scheduler(Movable):
                 _RETRIED,
                 " AND ",
                 dead,
-                " AND starts > $3",
+                " AND starts - deferrals > $3",
             ),
             Params()
             .text(p.name)
@@ -1313,13 +1341,17 @@ struct Scheduler(Movable):
                         "SELECT id, allow_new_code FROM orca.runs WHERE"
                         " pipeline = $1 AND (status"
                     ),
-                    " = 'queued' OR (status = 'failed' AND ",
+                    (
+                        " = 'queued' OR (status = 'deferred' AND retry_at <="
+                        " $4) OR"
+                    ),
+                    " (status = 'failed' AND ",
                     _RETRIED,
                     " AND retry_at <= $4) OR (status = 'running' AND ",
                     _RETRIED,
                     " AND ",
                     dead,
-                    " AND starts <= $3)) ORDER BY id LIMIT $5",
+                    " AND starts - deferrals <= $3)) ORDER BY id LIMIT $5",
                 ),
                 Params()
                 .text(p.name)
