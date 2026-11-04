@@ -1,10 +1,16 @@
 """`Name`: the partition key of a keyed pipeline (`orca.keyed`).
 
-A name is 1 to 128 bytes of `[A-Za-z0-9._:-]` without two dots in a row,
-such as a log's UUID. Neither a comma nor `..` can appear in one, so a list
-of names on the command line or in `runs.partitions` reads back
-unambiguously. Names order by their bytes. A name has no next or previous
-name and falls in no date: it's a `Key` but not a `TimeKey`.
+A name is 1 to 128 bytes of `[A-Za-z0-9._:/-]` without two dots in a row,
+such as a log's UUID or a repository's `owner/name`. A `/` separates
+segments, so a name doesn't start or end with one or have two in a row.
+Neither a comma nor `..` can appear in one, so a list of names on the
+command line or in `runs.partitions` reads back unambiguously. Names order
+by their bytes. A name has no next or previous name and falls in no date:
+it's a `Key` but not a `TimeKey`.
+
+Wherever a name becomes one segment of a path or a URL (an attempt's log,
+`/pipelines/<name>/keys/<key>`), it goes through `path_segment`, which
+writes `/` as `%2F`; no other byte of a name needs escaping.
 """
 
 from orca.key import Key
@@ -21,7 +27,17 @@ def _name_byte(b: Byte) -> Bool:
         or b == UInt8(ord("_"))
         or b == UInt8(ord(":"))
         or b == UInt8(ord("-"))
+        or b == UInt8(ord("/"))
     )
+
+
+comptime _NAME_BYTES = "A-Z a-z 0-9 . _ : - /"
+
+
+def path_segment(name: StringSlice) -> String:
+    """`name` as one segment of a path: each `/` written `%2F`. A name holds
+    no `%`, so this can't collide with another name."""
+    return String(name).replace("/", "%2F")
 
 
 struct Name(Key):
@@ -38,21 +54,33 @@ struct Name(Key):
             raise Error(
                 "not a name (1 to ",
                 MAX_NAME,
-                " bytes of A-Z a-z 0-9 . _ : -): '",
+                " bytes of ",
+                _NAME_BYTES,
+                "): '",
                 s,
                 "'",
             )
+        comptime dot = UInt8(ord("."))
+        comptime slash = UInt8(ord("/"))
         for i in range(len(b)):
             if not _name_byte(b[i]) or (
-                i > 0
-                and b[i] == UInt8(ord("."))
-                and b[i - 1] == UInt8(ord("."))
+                i > 0 and b[i] == dot and b[i - 1] == dot
             ):
                 raise Error(
                     "not a name (1 to ",
                     MAX_NAME,
-                    " bytes of A-Z a-z 0-9 . _ : -,",
-                    " no '..'): '",
+                    " bytes of ",
+                    _NAME_BYTES,
+                    ", no '..'): '",
+                    s,
+                    "'",
+                )
+            if b[i] == slash and (
+                i == 0 or i == len(b) - 1 or b[i - 1] == slash
+            ):
+                raise Error(
+                    "not a name (a '/' only between other bytes, one at a",
+                    " time): '",
                     s,
                     "'",
                 )

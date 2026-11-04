@@ -2,7 +2,8 @@
 
 With `ORCA_LOGS` set, each attempt logs to
 `<ORCA_LOGS>/<pipeline>/<run>/<step>/<partition>/<attempt>.log` (the
-partition is `_run` for a gather step), a run of a pipeline with dista
+partition is `_run` for a gather step, and a keyed one's `/` is written
+`%2F`, `orca.name.path_segment`), a run of a pipeline with dista
 tasks leaves its timeline at `<ORCA_LOGS>/<pipeline>/<run>/timeline.json`,
 and the scheduler keeps a run's output at `.../<run>/driver.log`. Without
 it, logs go to stdout only.
@@ -27,6 +28,7 @@ from std.os.path import exists
 from objectstore.fileio import FileIOResolver
 
 from orca.civil import Civil
+from orca.name import path_segment
 
 
 comptime _MASK = "***"
@@ -124,7 +126,8 @@ def attempt_log(
     var dir = run_dir(pipeline, run)
     if not dir:
         return ""
-    dir.write("/", step, "/", partition if partition else "_run")
+    # A keyed partition can hold `/` (`owner/name`): one directory still.
+    dir.write("/", step, "/", path_segment(partition) if partition else "_run")
     var log = String(dir, "/", attempt, ".log")
     makedirs(_parent(stage_of(log)), exist_ok=True)
     return log^

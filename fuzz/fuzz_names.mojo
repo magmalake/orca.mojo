@@ -1,8 +1,8 @@
 """Fuzz: `parse_names` on arbitrary text, as a keyed `run --partitions`
 gets it.
 
-Whatever it accepts must be names: 1 to 128 bytes of `[A-Za-z0-9._:-]`, no
-`..`, none twice; and joined with commas, as `runs.partitions` stores them,
+Whatever it accepts must be names: 1 to 128 bytes of `[A-Za-z0-9._:/-]`, no
+`..`, a `/` only between other bytes, none twice; and joined with commas, as `runs.partitions` stores them,
 they must read back to the same list.
 
     pixi run -e fuzz fuzz-names
@@ -29,6 +29,12 @@ def target(data: List[UInt8]) raises:
         check(len(b) >= 1 and len(b) <= 128, "a name's length")
         check(".." not in ns[i].text, "a name with '..'")
         check("," not in ns[i].text, "a name with a comma")
+        check("//" not in ns[i].text, "a name with '//'")
+        check(
+            not ns[i].text.startswith("/") and not ns[i].text.endswith("/"),
+            "a name starting or ending with '/'",
+        )
+        check("%" not in ns[i].text, "a name with '%'")
         for j in range(i):
             check(not (ns[i] == ns[j]), "a name twice")
         again.write("," if i > 0 else "", ns[i])
@@ -46,6 +52,8 @@ def main() raises:
         "315969629_a1b2:c.d",
         "a..b",
         "a,,b",
+        "modular/modular,owner/name",
+        "a//b",
     ]:
         seeds.append(bytes_of(s))
     run_harness[target]("names", seeds, max_len=512)
