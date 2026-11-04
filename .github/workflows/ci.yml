@@ -19,8 +19,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Whether the PR changes anything but prose (*.md, docs/, the licence
+  # files), which no test, build or check reads: a prose-only PR skips every
+  # other job, and `ci` still reports. Pushes, the nightly, runs by hand, and
+  # a failure here all count as code.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.number }}
+        run: |
+          code=true
+          if [ "$EVENT" = pull_request ]; then
+            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
+            printf '%s\n' "$files" | grep -qvE '(\.md$|^docs/|^LICENSE$|^NOTICE$)' || code=false
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   test:
     name: ${{ matrix.env == 'default' && 'stable' || matrix.env }} / ${{ matrix.os }} / ${{ matrix.shard }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -150,7 +174,8 @@ jobs:
   # orca on a kind cluster (deploy/): the image, built with pixi inside
   # docker, the manifests, and the toy pipeline run by the scheduler's pod.
   kind:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -163,7 +188,8 @@ jobs:
   # Every fuzz harness under fuzz/, for a short session each, with all bounds
   # checks on. Longer sessions are a FUZZ_RUNS away locally.
   fuzz:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -205,7 +231,8 @@ jobs:
           key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   format:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -223,7 +250,8 @@ jobs:
   # set); memory-region at the fix that lets it share a binary with the
   # standard library's file seek.
   data:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' }}
     name: data / ${{ matrix.group }}
     runs-on: ubuntu-latest
     strategy:
@@ -301,3 +329,21 @@ jobs:
         with:
           path: orca.mojo/.pixi/envs/data/share/max/cache
           key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+
+  # The one check to require: every Linux job above passed, or, for a
+  # prose-only PR, was skipped. (macOS runs only on the nightly, which this
+  # gate doesn't cover.)
+  ci:
+    if: ${{ always() && github.event_name != 'schedule' }}
+    needs: [changes, test, kind, fuzz, format, data]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+          CODE: ${{ needs.changes.outputs.code }}
+        run: |
+          echo "results: $RESULTS (code: $CODE)"
+          ok='"success"'
+          [ "$CODE" = false ] && ok='"success"|"skipped"'
+          bad=$(printf '%s\n' "$RESULTS" | tr -d '[] \n' | tr ',' '\n' | grep -cvE "^($ok)$" || true)
+          [ "$bad" -eq 0 ] || { echo "$bad job(s) didn't succeed"; exit 1; }
