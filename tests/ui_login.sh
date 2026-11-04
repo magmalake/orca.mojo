@@ -12,6 +12,8 @@
 #   run's page shows;
 # - logging out, an expired session, a removed user and a changed password
 #   all end the session; a login posted from another site is refused;
+# - behind a TLS proxy (ORCA_UI_TRUST_PROXY=1, X-Forwarded-Proto) or with
+#   ORCA_UI_SECURE_COOKIES=1, an https Origin is the UI's own;
 # - 5 failed logins for a name in 15 minutes get 429, the right password
 #   included, until the window passes.
 #
@@ -128,5 +130,57 @@ until curl -fs "$base/" > /dev/null 2>&1; do
 done
 [ "$(post /pipelines/toy/runs partitions=2024-03 -H 'Accept: application/json')" = 401 ] \
     || fail "ORCA_UI_LOGIN=required with no users"
+kill "$ui"
+
+# Behind a proxy that terminates TLS (ORCA_UI_TRUST_PROXY=1), the browser's
+# Origin is https://, as X-Forwarded-Proto says; in any case of the host.
+# Without the header, or with Origin http:// when it says https, the POST is
+# refused.
+restart() {
+    kill "$ui"; wait "$ui" 2> /dev/null || true
+    env "$@" ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+    ui=$!
+    i=0
+    until curl -fs "$base/" > /dev/null 2>&1; do
+        i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't restart"; sleep 0.1
+    done
+}
+ORCA_UI_TRUST_PROXY=1 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+ui=$!
+i=0
+until curl -fs "$base/" > /dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start behind a proxy"; sleep 0.1
+done
+https="https://127.0.0.1:$port"
+# hpost ORIGIN PATH BODY [curl args]: the status of a POST as a browser on
+# ORIGIN sends it.
+hpost() {
+    o=$1; p=$2; b=$3; shift 3
+    curl -s -o build/ui-login-body.txt -w '%{http_code}' -H "Origin: $o" -d "$b" "$@" "$base$p"
+}
+login='name=carol&password=correct+horse+battery'
+[ "$(hpost "$https" /login "$login" -H 'X-Forwarded-Proto: https' -c "$jar")" = 303 ] \
+    || fail "a login through an https proxy: $(cat build/ui-login-body.txt)"
+[ "$(hpost "$https" /pipelines/toy/runs partitions=2024-04 -H 'X-Forwarded-Proto: https' -b "$jar")" = 303 ] \
+    || fail "an action through an https proxy"
+[ "$(hpost "https://127.0.0.1:$port" /logout '' -H 'X-Forwarded-Proto: HTTPS' -H "Host: 127.0.0.1:$port")" = 303 ] \
+    || fail "X-Forwarded-Proto in upper case"
+[ "$(hpost "HTTPS://127.0.0.1:$port" /login "$login" -H 'X-Forwarded-Proto: https')" = 303 ] \
+    || fail "an Origin in upper case"
+[ "$(hpost "$base" /login "$login" -H 'X-Forwarded-Proto: https')" = 403 ] \
+    || fail "an http Origin when the proxy says https"
+[ "$(hpost "$https" /login "$login")" = 403 ] || fail "an https Origin with no X-Forwarded-Proto"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Referer: $https/pipelines/toy" -H 'X-Forwarded-Proto: https' \
+    -d "$login" "$base/login")" = 303 ] || fail "an https Referer through the proxy"
+[ "$(hpost "https://evil.example" /login "$login" -H 'X-Forwarded-Proto: https')" = 403 ] \
+    || fail "another site through the proxy"
+# Without a trusted proxy, X-Forwarded-Proto is ignored; secure cookies
+# imply https.
+restart
+[ "$(hpost "$https" /login "$login" -H 'X-Forwarded-Proto: https')" = 403 ] \
+    || fail "X-Forwarded-Proto believed without ORCA_UI_TRUST_PROXY"
+restart ORCA_UI_SECURE_COOKIES=1
+[ "$(hpost "$https" /login "$login")" = 303 ] || fail "an https Origin with secure cookies"
+[ "$(hpost "$base" /login "$login")" = 403 ] || fail "an http Origin with secure cookies"
 kill "$ui"
 echo "ok   ui login"

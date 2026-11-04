@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Behind an HTTPS proxy, the UI's forms work** (#57). The `Origin` check
+  compared the browser's `Origin` with `http://` + `Host`, so behind Caddy
+  terminating TLS (as `orca aws up` deploys it) every `POST`, `/login`
+  included, got 403. The UI's own origin now takes its scheme from
+  `X-Forwarded-Proto` when `ORCA_UI_TRUST_PROXY=1`, else `https` when
+  `ORCA_UI_SECURE_COOKIES=1`; scheme and host compare in any case, and a
+  default port is ignored. Another site's `Origin` is still refused, and
+  `X-Forwarded-Proto` is ignored without a trusted proxy.
+
 ## 0.3.2 (2026-11-03)
 
 - **Built against flare_mlake 0.13.2 and k8s-mojo 0.1.2.** flare now declares
