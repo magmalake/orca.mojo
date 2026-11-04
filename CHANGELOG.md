@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **A manual, UI or rerun run whose process died no longer stays
+  `running`.** The scheduler retries only scheduled, backfilled and sensed
+  runs, and left the others `running` with a stale heartbeat for good;
+  since every queued or running run held its keys, `orca backfill` then
+  queued nothing for them and a keyed sensor never offered them again. A
+  tick now fails such a run with the error `interrupted: its process
+  stopped`, so it can be resumed or cancelled, and a running run whose
+  process died no longer holds its keys anywhere (`live_sql` replaces
+  `LIVE_SQL`). A run whose retries are spent says so too. `orca backfill`
+  prints on stderr which keys it left: those done, and those in a live
+  run, with the run. (#61)
 - **Behind an HTTPS proxy, the UI's forms work** (#57). The `Origin` check
   compared the browser's `Origin` with `http://` + `Host`, so behind Caddy
   terminating TLS (as `orca aws up` deploys it) every `POST`, `/login`

@@ -28,7 +28,7 @@ Exit codes: 0, 2 for a usage error, 3 for any other error.
 """
 
 from std.os import getenv
-from std.sys import argv, exit
+from std.sys import argv, exit, stderr
 from std.time import sleep
 
 from orca.actions import cancel_runs, pause_pipeline
@@ -178,11 +178,12 @@ def _command(args: List[String]) raises -> Int:
         # running run is still left to it.
         var rerun = len(args) == 5
         var s = Scheduler(url)
-        print(
-            "queued",
-            s.backfill(args[len(args) - 2], args[len(args) - 1], rerun),
-            "runs",
-        )
+        var got = s.backfill(args[len(args) - 2], args[len(args) - 1], rerun)
+        # Why keys weren't queued goes to stderr, so the count stays the
+        # one line of output.
+        for line in got.skipped():
+            print(line, file=stderr)
+        print("queued", len(got.runs), "runs")
         return 0
     if cmd == "cancel" and len(args) == 4:
         var db = State(url)

@@ -123,7 +123,7 @@ def backfill_runs(
     if not p:
         return Outcome.no(_unregistered(pipeline))
     try:
-        return Outcome.done(0, backfill(db, p.value(), keys, rerun))
+        return Outcome.done(0, len(backfill(db, p.value(), keys, rerun).runs))
     except e:
         return Outcome.no(String(e))
 
