@@ -238,6 +238,8 @@ Gate: a failed step is found, its logs read and the run resumed, without a termi
   - **Rerun from a step**: a new run, trigger `rerun`, over the same partitions, with the steps before the chosen one that succeeded copied from the old run (their inputs and outputs, and `copied_from` naming the step each came from, whose attempts, reads and commits stay with it), so `resume` runs the chosen step and what follows. The old run is left as it was. A run whose pipeline's code has changed since can only be rerun from the first step, as the old code's outputs may not be what the new code reads.
   - **Backfill a range**: what `orca backfill` does; with its checkbox checked, what `orca backfill --rerun` does.
   - **Cancel**: a queued or failed run is `cancelled` at once (a failed one is then not retried). A running one gets `cancel_requested`: the run checks it where it already checks its ownership, before each attempt, and ends `cancelled`; if its process has died, the scheduler ends it `cancelled` instead of starting it again. A step already running finishes its attempt: cancelling doesn't kill it mid-commit.
+  - **Cancel in bulk**: what `orca cancel <pipeline> KEYS|@all` does, from the pipeline page (`partitions`, empty for all): each of the pipeline's runs over any of the keys (a run of several keys whole) that is queued, running, or failed and due a retry is cancelled as above. A failed run with no retries left, and one that ended, are left as they are. Added after a 31-run backfill had to be cancelled in SQL.
+  - **Pause**: `orca pause <pipeline>` (or the page's button) sets `pipelines.paused` (migration 15), and the scheduler starts none of the pipeline's runs: fires, sensors, retries and backfills still queue theirs, which wait, and runs already going go on. `orca unpause` lets the scheduler start them on its next tick. A paused pipeline says so on `/` and its page, and in their JSON (`paused`).
 - **An action answers `303 See Other`** to the page of the run it made or acted on (or, to `Accept: application/json`, that run's ID). One that can't be done (a run still going, a range with a bad key) answers 409 with the reason, on a page with a way back; a resume onto new code answers 409 with the form that confirms it.
 - **No authentication in phase 3** (one team, a trusted network). Because the UI is on localhost and its actions change state, every `POST` checks that `Origin` (or, without it, `Referer`) is the UI's own, so a page on another site can't make the browser post to it. The UI's own origin is `Host` with the scheme the browser used: `X-Forwarded-Proto` behind a proxy that terminates TLS (`ORCA_UI_TRUST_PROXY=1`, as `orca aws up` deploys Caddy), else `https` with `ORCA_UI_SECURE_COOKIES=1`, else `http`; scheme and host compare in any case, and a default port is left out. Nothing changes state on a `GET`.
 
@@ -246,13 +248,13 @@ Gate: a failed step is found, its logs read and the run resumed, without a termi
 | Path | What it shows |
 |---|---|
 | `/` | Pipelines: each with its schedule, next fire, last run and its status, and runs live now against `max_runs`. |
-| `/pipelines/<name>` | The DAG, partitions and schedule, the next fires, the latest runs, and the forms to start a run and backfill a range. |
+| `/pipelines/<name>` | The DAG, partitions and schedule, the next fires, the latest runs, and the forms to start a run, backfill a range, cancel its runs and pause it. |
 | `/runs` | Runs across pipelines, newest first, filterable by pipeline, status and trigger. |
 | `/runs/<id>` | The run: each step and partition with status, timing and attempts, the error of a failed one, its reads and commits, the DAG in this run's colours, and resume, rerun from a step and cancel. |
 | `/runs/<id>/attempts/<attempt>` | An attempt's log (its last MiB), followed while it's running, with its error at the top when it failed, and the step's other attempts. |
 | `/runs/<id>/timeline.json` | The run's Dista timeline, for Perfetto. |
 
-The actions are `POST`s of forms: `/pipelines/<name>/runs` and `/pipelines/<name>/backfill` (`partitions`), and `/runs/<id>/resume` (`allow_new_code`), `/runs/<id>/rerun` (`step`) and `/runs/<id>/cancel`. `tests/actions.sh` is the gate.
+The actions are `POST`s of forms: `/pipelines/<name>/runs`, `/pipelines/<name>/backfill` and `/pipelines/<name>/cancel` (`partitions`), `/pipelines/<name>/pause` and `/unpause`, and `/runs/<id>/resume` (`allow_new_code`), `/runs/<id>/rerun` (`step`) and `/runs/<id>/cancel`. `tests/actions.sh` is the gate, and `tests/pause.sh` for cancelling in bulk and pausing.
 
 ### PRs
 

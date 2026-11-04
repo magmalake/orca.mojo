@@ -276,6 +276,14 @@ def _migrations() -> List[List[String]]:
         [
             "ALTER TABLE orca.runs ADD COLUMN error text",
         ],
+        # `orca pause`: the scheduler starts none of a paused pipeline's
+        # runs, which stay queued (or due to retry) until `orca unpause`.
+        [
+            (
+                "ALTER TABLE orca.pipelines ADD COLUMN paused boolean NOT NULL"
+                " DEFAULT false"
+            ),
+        ],
     ]
 
 

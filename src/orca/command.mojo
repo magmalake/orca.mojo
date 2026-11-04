@@ -13,6 +13,8 @@ Its commands:
     ./build/orca register ./build/taxi [...]
     ./build/orca backfill taxi 2011-01..2024-12
     ./build/orca backfill --rerun taxi 2024-03     # again, though it succeeded
+    ./build/orca cancel taxi @all   # its queued, running and retrying runs
+    ./build/orca pause taxi         # start none of its runs; orca unpause taxi
     ./build/orca tick
     ./build/orca scheduler
     ./build/orca ui                 # http://127.0.0.1:8270, or ORCA_UI_ADDR
@@ -29,6 +31,7 @@ from std.os import getenv
 from std.sys import argv, exit
 from std.time import sleep
 
+from orca.actions import cancel_runs, pause_pipeline
 from orca.auth import add_user, remove_user, users
 from orca.aws import aws_command
 from orca.civil import now
@@ -49,6 +52,9 @@ comptime USAGE = """usage:
                 <pipeline binary> [...]
   orca backfill [--rerun] <pipeline> KEY[..KEY][,...]
                 (keyed: NAME[,...]|@all|@file:<path>; --rerun: done ones too)
+  orca cancel <pipeline> KEY[..KEY][,...]|@all
+                (its queued, running and retrying runs over those keys)
+  orca pause|unpause <pipeline>     (the scheduler starts none of its runs)
   orca tick
   orca scheduler
   orca ui
@@ -177,6 +183,22 @@ def _command(args: List[String]) raises -> Int:
             s.backfill(args[len(args) - 2], args[len(args) - 1], rerun),
             "runs",
         )
+        return 0
+    if cmd == "cancel" and len(args) == 4:
+        var db = State(url)
+        db.migrate()
+        var o = cancel_runs(db, args[2], args[3])
+        if o.refused:
+            raise Error("orca: ", o.refused)
+        print("cancelled", o.queued, "runs")
+        return 0
+    if (cmd == "pause" or cmd == "unpause") and len(args) == 3:
+        var db = State(url)
+        db.migrate()
+        var o = pause_pipeline(db, args[2], cmd == "pause")
+        if o.refused:
+            raise Error("orca: ", o.refused)
+        print(cmd + "d", args[2])
         return 0
     if cmd == "tick" and len(args) == 2:
         var s = Scheduler(url)

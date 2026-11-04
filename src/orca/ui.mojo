@@ -25,6 +25,8 @@ And the actions, each a `POST` of a form (see `orca.actions`):
 |---|---|
 | `/pipelines/<name>/runs` | start a run over `partitions` |
 | `/pipelines/<name>/backfill` | a run per partition in `partitions` that has none; `rerun=1` for done ones too |
+| `/pipelines/<name>/cancel` | cancel its queued, running and retrying runs over `partitions` (`@all` or empty: all) |
+| `/pipelines/<name>/pause`, `/unpause` | stop the scheduler starting its runs, or let it again |
 | `/runs/<id>/resume` | queue a failed, cancelled or stalled run again; `allow_new_code=1` confirms new code |
 | `/runs/<id>/rerun` | a new run from `step` on, the steps before it copied |
 | `/runs/<id>/cancel` | cancel a run, before its next attempt if it's running |
@@ -74,6 +76,8 @@ from orca.actions import (
     Outcome,
     backfill_runs,
     cancel_run,
+    cancel_runs,
+    pause_pipeline,
     rebuild_downstream,
     rerun_from,
     resume_run,
@@ -158,6 +162,8 @@ struct PipelineRow(Copyable, Movable):
     var last_partitions: String
     var next_fire: String
     var next_partition: String
+    var paused: Bool
+    """`orca pause`: the scheduler starts none of its runs."""
 
 
 @fieldwise_init
@@ -320,7 +326,8 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
             " orca.runs r WHERE r.pipeline = p.name AND r.status ="
             " 'queued')::text AS queued, coalesce(l.id, 0)::text AS last_run,"
             " coalesce(l.status, '') AS last_status, coalesce(l.partitions,"
-            " '') AS last_partitions FROM orca.pipelines p LEFT JOIN LATERAL"
+            " '') AS last_partitions, p.paused FROM orca.pipelines p LEFT"
+            " JOIN LATERAL"
             " (SELECT id, status, partitions FROM orca.runs r WHERE"
             " r.pipeline = p.name ORDER BY id DESC LIMIT 1) l ON true WHERE"
             " ($1 = '' OR p.name = $1) ORDER BY p.name"
@@ -348,6 +355,7 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
             r.text("last_partitions"),
             "",
             "",
+            r.bool("paused"),
         )
         try:
             var f = _fires(p, t, 1)
@@ -879,6 +887,8 @@ def _json_pipeline(mut out: String, p: PipelineRow):
         p.running,
         ', "queued": ',
         p.queued,
+        ', "paused": ',
+        "true" if p.paused else "false",
         ', "last_run": ',
     )
     if p.last_run:
@@ -1132,6 +1142,9 @@ def home(mut db: State) raises -> Page:
         for p in ps:
             h.raw("<tr><td>")
             h.link(String("/pipelines/", url_encode(p.name)), p.name)
+            if p.paused:
+                h.raw(" ")
+                h.status("paused")
             h.raw("</td>")
             h.cell(
                 p.kind, " from ", p.start if p.start else String("the start")
@@ -1286,6 +1299,43 @@ def _keys_html(mut h: Html, name: String, k: KeyCounts):
     )
 
 
+def _control_html(mut h: Html, p: PipelineRow):
+    """The forms that cancel a pipeline's runs in bulk and pause it."""
+    var base = String("/pipelines/", url_encode(p.name))
+    h.raw(
+        "<h2>Stop runs</h2>",
+        '<div class="actions"><form class="action" method="post" action="',
+    )
+    h.text(base, "/cancel")
+    h.raw('"><label>Of <input name="partitions" placeholder="')
+    h.text("@all, or names" if p.kind == "keyed" else "@all, or a range")
+    h.raw(
+        '"></label><button type="submit">Cancel queued runs</button></form>',
+        '<form class="action" method="post" action="',
+    )
+    if p.paused:
+        h.text(base, "/unpause")
+        h.raw('"><button type="submit">Unpause</button></form></div>')
+    else:
+        h.text(base, "/pause")
+        h.raw('"><button type="submit">Pause</button></form></div>')
+    h.raw(
+        '<p class="muted more">Cancelling stops runs that are queued or',
+        " waiting to be retried, and asks running ones to stop before their",
+        " next step. ",
+    )
+    if p.paused:
+        h.raw(
+            "Paused: the scheduler starts none of its runs; fires, sensors,",
+            " retries and backfills queue theirs until it's unpaused.</p>",
+        )
+    else:
+        h.raw(
+            "Pausing stops the scheduler starting its runs, which stay",
+            " queued; runs already going go on.</p>",
+        )
+
+
 def key_page(mut db: State, name: String, key: String) raises -> Page:
     """One key of a keyed pipeline: its steps in every run it was in."""
     var ps = _pipelines(db, name)
@@ -1428,6 +1478,9 @@ def pipeline(mut db: State, name: String) raises -> Page:
     var h = Html()
     h.raw('<p class="crumb"><a href="/">Pipelines</a></p><h1>')
     h.text(p.name)
+    if p.paused:
+        h.raw(" ")
+        h.status("paused")
     h.raw('</h1><dl class="facts"><dt>Partitions</dt><dd>')
     h.text(p.kind, " from ", p.start if p.start else String("the start"))
     h.raw("</dd><dt>Schedule</dt><dd>")
@@ -1518,6 +1571,7 @@ def pipeline(mut db: State, name: String) raises -> Page:
         )
         h.text(p.max_runs)
         h.raw(" at once.</p>")
+    _control_html(h, p)
     if len(fires) > 0:
         h.raw(
             "<h2>Next runs",
@@ -2893,6 +2947,19 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
             )
             var to = String("/runs?pipeline=", url_encode(name))
             return _acted(o, back, String('{"queued": ', o.queued, "}"), to)
+        if parts[3] == "cancel":
+            var o = cancel_runs(db, name, keys if keys.strip() else "@all")
+            var to = String("/runs?pipeline=", url_encode(name))
+            return _acted(o, back, String('{"cancelled": ', o.queued, "}"), to)
+        if parts[3] == "pause" or parts[3] == "unpause":
+            var paused = parts[3] == "pause"
+            var o = pause_pipeline(db, name, paused)
+            return _acted(
+                o,
+                back,
+                String('{"paused": ', "true" if paused else "false", "}"),
+                back,
+            )
     if len(parts) == 4 and parts[1] == "datasets" and parts[3] == "rebuild":
         var name = url_decode(parts[2])
         var o = rebuild_downstream(db, name, _form(body, "partitions"))
@@ -3054,7 +3121,13 @@ def _is_action(path: String) -> Bool:
     if len(parts) != 4:
         return False
     if parts[1] == "pipelines":
-        return parts[3] == "runs" or parts[3] == "backfill"
+        return (
+            parts[3] == "runs"
+            or parts[3] == "backfill"
+            or parts[3] == "cancel"
+            or parts[3] == "pause"
+            or parts[3] == "unpause"
+        )
     if parts[1] == "datasets":
         return parts[3] == "rebuild"
     return parts[1] == "runs" and (

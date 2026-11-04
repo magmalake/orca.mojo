@@ -99,6 +99,8 @@ comptime _BUDGET_LOCK = 0x6F726362  # "orcb"
 
 comptime _RETRIED = "trigger IN ('schedule', 'backfill', 'sensor')"
 """The runs the scheduler retries."""
+comptime RETRIED_SQL = _RETRIED
+"""`_RETRIED`, for `orca.actions`."""
 
 
 @fieldwise_init
@@ -135,6 +137,8 @@ struct Registered(Copyable, Movable):
     `workers` for a fixed count."""
     var secrets: List[Tuple[String, String]]
     """Its runs' secrets: environment variable and Secrets Manager ID."""
+    var paused: Bool
+    """`orca pause`: its runs are queued as ever, but none is started."""
 
 
 def fill_key(kind: String, fills: String, local: Civil) raises -> String:
@@ -173,7 +177,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " END AS workers, coalesce(head_type, '') AS head_type,"
             " coalesce(worker_type, '') AS worker_type, coalesce(spot, false)"
             " AS spot, coalesce(ec2_min_workers, -1) AS min_workers,"
-            " coalesce(secrets::text, '') AS secrets FROM"
+            " coalesce(secrets::text, '') AS secrets, paused FROM"
             " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
             " name = $1) ORDER BY name"
         ),
@@ -204,6 +208,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 r.bool("spot"),
                 Int(r.int64("min_workers")),
                 parse_secrets(r.text("secrets")),
+                r.bool("paused"),
             )
         )
     # A fixed count, or no tasks: no scaling.
@@ -1132,7 +1137,8 @@ struct Scheduler(Movable):
 
     def _start(mut self, p: Registered, now: Int64) raises:
         """Starts queued runs, retries that are due and runs whose process
-        died, up to `max_runs` live at once."""
+        died, up to `max_runs` live at once; none while `p` is paused, when
+        they wait (runs already going go on)."""
         var dead = self._dead("$2")
         if (self.runner or self.ec2) and not p.image:
             print(
@@ -1209,7 +1215,7 @@ struct Scheduler(Movable):
             .row(0)
             .int64("n")
         )
-        var free = p.max_runs - live
+        var free = 0 if p.paused else p.max_runs - live
         var need = 0
         if self.runner:
             need = self.runner.value().cpu_of(p.workers)
