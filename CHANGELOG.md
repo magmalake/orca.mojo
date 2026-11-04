@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A step's reads and commits are recorded through its run's `Store`**
+  (#82). `Recorder` used to open a Postgres connection of its own;
+  it now calls the store it came from (`Store.record`, which `PgStore`
+  retries as it does its other writes), so `orca.ctx` no longer imports
+  postgres and another store can keep lineage too. `TableSnapshot` and
+  `Recorder` live in `orca.store`, and `orca.ctx` still exports both.
 - **Behind an HTTPS proxy, the UI's forms work** (#57). The `Origin` check
   compared the browser's `Origin` with `http://` + `Host`, so behind Caddy
   terminating TLS (as `orca aws up` deploys it) every `POST`, `/login`

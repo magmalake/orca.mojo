@@ -1,13 +1,61 @@
 """Where the executor records what it does.
 
 `Pipeline.execute` reports every attempt it starts and finishes, and every
-step it skips, to a `Store`. `MemoryStore` only counts attempts, for a run
-that lives as long as its process; `orca.state.PgStore` writes them to
-Postgres, so a run can be resumed by another process.
+step it skips, to a `Store`; a step's reads and commits reach the same store
+through the `Recorder` its `Ctx` holds. `MemoryStore` only counts attempts,
+for a run that lives as long as its process; `orca.state.PgStore` writes them
+to Postgres, so a run can be resumed by another process.
 """
 
 
-from orca.ctx import Recorder
+@fieldwise_init
+struct TableSnapshot(Copyable, Movable):
+    """A table, by its location, at a snapshot."""
+
+    var table: String
+    var snapshot_id: Int64
+    """-1 for a table that had no snapshot yet."""
+    var dataset: String
+    """The table's dataset name, `namespace.table`, or empty for a table
+    outside the warehouse."""
+
+
+def _record_nothing(store: Int, commit: Bool, t: TableSnapshot) raises:
+    pass
+
+
+def _record_in[S: Store](store: Int, commit: Bool, t: TableSnapshot) raises:
+    Pointer[S, MutAnyOrigin](unsafe_from_address=store)[].record(commit, t)
+
+
+struct Recorder(Movable):
+    """Records an attempt's reads and commits in the store it came from, as
+    they happen, so a process killed right after a commit still leaves it on
+    record.
+
+    It holds the store by address, as `Ctx` holds the run's dista runtime:
+    `Ctx` isn't generic over the store, and the store outlives every `Ctx`
+    `Pipeline.execute` makes from it."""
+
+    var _store: Int
+    """The store's address; 0 when nothing is recorded."""
+    var _record: def(Int, Bool, TableSnapshot) raises thin -> None
+
+    def __init__(out self):
+        """A recorder that records nothing."""
+        self._store = 0
+        self._record = _record_nothing
+
+    def __init__[S: Store](out self, mut store: S):
+        """A recorder that records in `store`."""
+        self._store = Int(Pointer(to=store))
+        self._record = _record_in[S]
+
+    def read(mut self, t: TableSnapshot) raises:
+        self._record(self._store, False, t)
+
+    def commit(mut self, t: TableSnapshot) raises:
+        self._record(self._store, True, t)
 
 
 trait Store:
@@ -49,9 +97,14 @@ trait Store:
         read, each table at its first attempt's snapshot."""
         ...
 
+    def record(mut self, commit: Bool, t: TableSnapshot) raises:
+        """Records that the attempt last started read `t` (or, if `commit`,
+        committed it). What a `Recorder` from this store calls."""
+        ...
+
     def recorder(mut self) raises -> Recorder:
         """What records the reads and commits of the attempt just started."""
-        ...
+        return Recorder(self)
 
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String
@@ -103,8 +156,8 @@ struct MemoryStore(Movable, Store):
         # attempt itself; there are no earlier processes to ask.
         return Dict[String, Int64]()
 
-    def recorder(mut self) raises -> Recorder:
-        return Recorder()
+    def record(mut self, commit: Bool, t: TableSnapshot) raises:
+        pass
 
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String

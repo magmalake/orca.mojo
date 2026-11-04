@@ -27,9 +27,8 @@ from std.time import perf_counter_ns, sleep
 
 from postgres import Connection, Params, Transaction
 
-from orca.ctx import Recorder
 from orca.pipeline import FAILED, SUCCEEDED, SKIPPED, RunResult, StepRun
-from orca.store import Store
+from orca.store import Store, TableSnapshot
 
 comptime RUNNING = "running"
 comptime CANCELLED = "cancelled"
@@ -866,8 +865,28 @@ struct PgStore(Movable, Store):
             out[r.text("table_name")] = r.int64("snapshot_id")
         return out^
 
-    def recorder(mut self) raises -> Recorder:
-        return Recorder(self.url, self._attempt_id)
+    def record(mut self, commit: Bool, t: TableSnapshot) raises:
+        # Not owner-checked: what an attempt read or committed is so even
+        # if the run was lost meanwhile, and a commit must stay on record.
+        var r = DbRetry()
+        while True:
+            try:
+                _ = self.db.conn.execute(
+                    String(
+                        "INSERT INTO orca.",
+                        "commits" if commit else "reads",
+                        " (attempt, table_name, snapshot_id, dataset) VALUES",
+                        " ($1, $2, $3, nullif($4, ''))",
+                    ),
+                    Params()
+                    .int64(self._attempt_id)
+                    .text(t.table)
+                    .int64(t.snapshot_id)
+                    .text(t.dataset),
+                )
+                return
+            except e:
+                r.again(e, self.db, self.url)
 
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String
