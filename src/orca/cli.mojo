@@ -15,8 +15,9 @@ For a keyed pipeline (`orca.keyed`), `--partitions` takes names: a list,
 refused, as a malformed key is, with exit code 2.
 
 With `ORCA_DATABASE_URL` set, runs are recorded in Postgres and can be
-resumed; without it, `run` runs in memory and `resume` and `status` aren't
-available. `run` records the pipeline the first time; once `orca register`
+resumed, or, for `sqlite:<path>` (`sqlite:///abs/path` for an absolute
+one), in that SQLite file (`orca.sqlite_store`); without it, `run` records its run in memory (`MemoryStore`, run 0)
+on the same path, and `resume` and `status` aren't available. `run` records the pipeline the first time; once `orca register`
 has given it a binary, `run` leaves the registration as it is, since what
 the scheduler queues and counts as done is that code's. A binary whose code
 isn't the registered one's is refused (exit code 2) unless `run` is given
@@ -38,8 +39,10 @@ and the partition keys its summary says it holds. The scheduler polls it for
 a sensor pipeline (`orca.sensors`).
 
 `run` and `resume` print one line per step and partition, then the run's
-status. Exit codes: 0 when the run succeeded, 1 when a step didn't or the run
-was cancelled, 2 for a
+status. A run whose step raised `defer` (and none failed) ends `deferred`,
+and the scheduler starts it again when the step asked. Exit codes: 0 when
+the run succeeded, 1 when a step didn't, the run deferred or was cancelled,
+2 for a
 usage error, 3 for any other error (the database, a run that can't be
 resumed).
 """
@@ -50,9 +53,8 @@ from std.random import seed
 from std.sys import argv, exit
 
 from dista.client import Observer
-from threads import TypedPool
 
-from orca.heartbeat import Beat, beat, heartbeat_interval
+from orca.heartbeat import heartbeat_interval
 from orca.logs import (
     location_exists,
     publish,
@@ -63,9 +65,20 @@ from orca.logs import (
 )
 from orca.tasks import workers
 from orca.civil import Civil, now, parse_time
-from orca.pipeline import FAILED, SUCCEEDED, Pipeline, RunResult
+from orca.pipeline import Pipeline
 from orca.sample import sample_main
-from orca.state import CANCELLED, PgStore, State, process_owner
+from orca.sqlite_store import SqliteStore, sqlite_path
+from orca.state import PgStore
+from orca.store import (
+    CANCELLED,
+    DEFERRED,
+    FAILED,
+    SUCCEEDED,
+    MemoryStore,
+    RunResult,
+    RunStore,
+    process_owner,
+)
 from orca.warehouse import current_snapshot
 
 comptime USAGE = """usage:
@@ -214,42 +227,15 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         except e:
             _usage(String(e))
             return 2
-        if not url:
-            var res = P.run(keys)
-            report(res)
-            return 0 if res.succeeded() else 1
-        var hash = hex(P.registry_hash())
         var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
-        var db = State(url)
-        db.migrate()
-        # Only `orca register` moves a scheduled pipeline's code.
-        var current = db.scheduled_hash(P.name)
-        if not current:
-            db.register(P.name, hash, P.describe())
-        elif current != hash and not new_code:
-            print(
-                "orca: pipeline ",
-                P.name,
-                " is registered with code ",
-                current,
-                " and this binary is ",
-                hash,
-                "; its run wouldn't count as the pipeline's. Pass",
-                " --allow-new-code to run it anyway, or register it with",
-                " `orca register`",
-                sep="",
-            )
-            return 2
-        var owner = process_owner()
-        var key = String()
-        for j in range(len(keys)):
-            key.write("," if j > 0 else "", keys[j])
-        var run = db.create_run(P.name, hash, key, "manual", owner)
-        db.ran_version(
-            run, db.version(P.name, hash, P.describe(), getenv("ORCA_IMAGE"))
-        )
-        print("run", run)
-        return _execute[P](rt, db^, url, run, owner, keys, RunResult())
+        if not url:
+            var mem = MemoryStore()
+            return _run[P](rt, mem, keys, new_code)
+        if sqlite_path(url):
+            var file = SqliteStore(sqlite_path(url))
+            return _run[P](rt, file, keys, new_code)
+        var store = PgStore(url)
+        return _run[P](rt, store, keys, new_code)
     if cmd == "resume":
         if not url:
             _usage("resume needs ORCA_DATABASE_URL")
@@ -268,76 +254,136 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         if run < 0:
             _usage("resume needs a run")
         var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
-        var db = State(url)
-        db.migrate()
-        var info = db.run_info(run)
-        if info.pipeline != P.name:
-            raise Error(
-                "orca: run ",
-                run,
-                " is of pipeline ",
-                info.pipeline,
-                ", not ",
-                P.name,
-            )
-        var hash = hex(P.registry_hash())
-        if info.registry_hash != hash and not allow_new_code:
-            raise Error(
-                "orca: run ",
-                run,
-                " ran code ",
-                info.registry_hash,
-                " and this binary is ",
-                hash,
-                "; pass --allow-new-code to resume it anyway",
-            )
-        var owner = process_owner()
-        db.claim(run, owner, _stale_seconds())
-        db.ran_version(
-            run, db.version(P.name, hash, P.describe(), getenv("ORCA_IMAGE"))
-        )
-        var interrupted = db.interrupt(run)
-        var prior = db.prior(run)
-        print(
-            "resuming run",
-            run,
-            "with",
-            len(prior.steps),
-            "steps done and",
-            interrupted,
-            "interrupted",
-        )
-        return _execute[P](
-            rt,
-            db^,
-            url,
-            run,
-            owner,
-            P.partitions.parse(info.partitions, check=False),
-            prior^,
-        )
+        if sqlite_path(url):
+            var file = SqliteStore(sqlite_path(url))
+            return _resume[P](rt, file, run, allow_new_code)
+        var store = PgStore(url)
+        return _resume[P](rt, store, run, allow_new_code)
     if cmd == "status":
         if not url:
             _usage("status needs ORCA_DATABASE_URL")
-        var db = State(url)
-        db.migrate()
-        if len(args) == 2:
-            for r in db.runs():
-                print(r.id, r.pipeline, r.status, r.partitions)
-            return 0
-        if len(args) == 3:
-            var run: Int
-            try:
-                run = Int(args[2])
-            except:
-                _usage(String("not a run: ", args[2]))
-                return 2
-            var info = db.run_info(run)
-            print("run", run, info.pipeline, info.status, info.partitions)
-            if info.error:
-                print("error:", info.error)
-            _print_steps(db, run, show_logs=True)
-            return 0
+        if sqlite_path(url):
+            var file = SqliteStore(sqlite_path(url))
+            return _status(file, args)
+        var store = PgStore(url)
+        return _status(store, args)
+    _usage()
+    return 2
+
+
+def _run[
+    P: type_of(Pipeline), S: RunStore
+](
+    mut rt: P.tasks.RT, mut store: S, keys: List[P.K], new_code: Bool
+) raises -> Int:
+    """`run`: records the pipeline and a new run of `keys` in `store`, and
+    runs it."""
+    var hash = hex(P.registry_hash())
+    store.migrate()
+    # Only `orca register` moves a scheduled pipeline's code.
+    var current = store.scheduled_hash(P.name)
+    if not current:
+        store.register(P.name, hash, P.describe())
+    elif current != hash and not new_code:
+        print(
+            "orca: pipeline ",
+            P.name,
+            " is registered with code ",
+            current,
+            " and this binary is ",
+            hash,
+            "; its run wouldn't count as the pipeline's. Pass",
+            " --allow-new-code to run it anyway, or register it with",
+            " `orca register`",
+            sep="",
+        )
+        return 2
+    var owner = process_owner()
+    var key = String()
+    for j in range(len(keys)):
+        key.write("," if j > 0 else "", keys[j])
+    var run = store.create_run(P.name, hash, key, "manual", owner)
+    store.ran_version(
+        run, store.version(P.name, hash, P.describe(), getenv("ORCA_IMAGE"))
+    )
+    print("run", run)
+    return _execute[P](rt, store, run, owner, keys, RunResult())
+
+
+def _resume[
+    P: type_of(Pipeline), S: RunStore
+](
+    mut rt: P.tasks.RT, mut store: S, run: Int, allow_new_code: Bool
+) raises -> Int:
+    """`resume`: claims `run` from `store` and runs what's left of it."""
+    store.migrate()
+    var info = store.run_info(run)
+    if info.pipeline != P.name:
+        raise Error(
+            "orca: run ",
+            run,
+            " is of pipeline ",
+            info.pipeline,
+            ", not ",
+            P.name,
+        )
+    var hash = hex(P.registry_hash())
+    if info.registry_hash != hash and not allow_new_code:
+        raise Error(
+            "orca: run ",
+            run,
+            " ran code ",
+            info.registry_hash,
+            " and this binary is ",
+            hash,
+            "; pass --allow-new-code to resume it anyway",
+        )
+    var owner = process_owner()
+    store.claim(run, owner, _stale_seconds())
+    store.ran_version(
+        run, store.version(P.name, hash, P.describe(), getenv("ORCA_IMAGE"))
+    )
+    var interrupted = store.interrupt(run)
+    var prior = store.prior(run)
+    print(
+        "resuming run",
+        run,
+        "with",
+        len(prior.steps),
+        "steps done and",
+        interrupted,
+        "interrupted",
+    )
+    return _execute[P](
+        rt,
+        store,
+        run,
+        owner,
+        P.partitions.parse(info.partitions, check=False),
+        prior^,
+    )
+
+
+def _status[S: RunStore](mut store: S, args: List[String]) raises -> Int:
+    """`status`: the latest runs, or one run's steps."""
+    store.migrate()
+    if len(args) == 2:
+        for r in store.runs(20):
+            print(r.id, r.pipeline, r.status, r.partitions)
+        return 0
+    if len(args) == 3:
+        var run: Int
+        try:
+            run = Int(args[2])
+        except:
+            _usage(String("not a run: ", args[2]))
+            return 2
+        var info = store.run_info(run)
+        print("run", run, info.pipeline, info.status, info.partitions)
+        if info.error:
+            print("error:", info.error)
+        _print_steps(store, run, show_logs=True)
+        return 0
     _usage()
     return 2
 
@@ -395,11 +441,10 @@ def _stale_seconds() raises -> Float64:
 
 
 def _execute[
-    P: type_of(Pipeline)
+    P: type_of(Pipeline), S: RunStore
 ](
     mut rt: P.tasks.RT,
-    var db: State,
-    url: String,
+    mut store: S,
     run: Int,
     owner: String,
     keys: List[P.K],
@@ -408,26 +453,26 @@ def _execute[
     """Runs what's left of `run` as its owner, with a heartbeat, then ends it.
 
     A run asked to cancel stops before its next attempt and ends
-    `cancelled`. Writes to Postgres are retried on a new connection for
-    `ORCA_DB_RETRY_SECONDS` (`orca.state.DbRetry`). If this raises otherwise
-    (the database stayed away, or another process took the run over), the
-    run is left `running`; once its heartbeat is stale it can be resumed.
+    `cancelled`. The store retries its writes for the run (`PgStore`: on a
+    new connection for `ORCA_DB_RETRY_SECONDS`, `orca.state.DbRetry`). If
+    this raises otherwise (the database stayed away, or another process took
+    the run over), the run is left `running`; once its heartbeat is stale it
+    can be resumed.
     """
-    var b = Beat(url, run, owner, heartbeat_interval(_stale_seconds()))
-    var pool = TypedPool.start[beat](1, b)
-    var store = PgStore(db^, url, run, owner, hex(P.registry_hash()))
+    store.own(run, owner, hex(P.registry_hash()))
+    store.start_heartbeat(heartbeat_interval(_stale_seconds()), P.timeouts())
     var res: RunResult
     try:
         res = P.execute(store, prior^, keys, run, Int(Pointer(to=rt)))
     except e:
-        pool.shutdown()
+        store.stop_heartbeat()
         if not store.cancel_requested():
             raise e^
         store.finish_run(CANCELLED)
-        _print_steps_after(store.db, run)
+        _print_steps_after(store, run)
         print("run", CANCELLED)
         return 1
-    pool.shutdown()
+    store.stop_heartbeat()
     var dir = run_dir(P.name, run)
     comptime if P.tasks.HAS_RUNTIME:
         if dir:
@@ -438,25 +483,33 @@ def _execute[
                 publish(at)
             except e:
                 print("orca: no timeline:", e)
-    var ok = res.succeeded()
-    store.finish_run(SUCCEEDED if ok else FAILED)
-    _print_steps_after(store.db, run)
-    print("run", SUCCEEDED if ok else FAILED)
-    return 0 if ok else 1
+    var outcome = res.outcome()
+    if outcome == DEFERRED:
+        store.defer_run(res.deferred_until())
+    else:
+        store.finish_run(outcome)
+    _print_steps_after(store, run)
+    if outcome == DEFERRED:
+        print("run deferred until", String(Civil.of(res.deferred_until()), "Z"))
+    else:
+        print("run", outcome)
+    return 0 if outcome == SUCCEEDED else 1
 
 
-def _print_steps_after(mut db: State, run: Int):
+def _print_steps_after[S: RunStore](mut store: S, run: Int):
     """`_print_steps` once the run has ended: it's recorded, so not being
     able to list its steps doesn't change how it ended."""
     try:
-        _print_steps(db, run)
+        _print_steps(store, run)
     except e:
         print("orca: can't list run", run, "steps:", e)
 
 
-def _print_steps(mut db: State, run: Int, show_logs: Bool = False) raises:
+def _print_steps[
+    S: RunStore
+](mut store: S, run: Int, show_logs: Bool = False) raises:
     """The run's steps in run order, as recorded."""
-    for s in db.steps(run):
+    for s in store.steps(run):
         var line = String(s.step)
         if s.partition:
             line.write(" ", s.partition)
@@ -481,4 +534,8 @@ def report(res: RunResult):
         if s.error:
             line.write(": ", s.error)
         print(line)
-    print("run", SUCCEEDED if res.succeeded() else "failed")
+    var outcome = res.outcome()
+    if outcome == DEFERRED:
+        print("run deferred until", String(Civil.of(res.deferred_until()), "Z"))
+    else:
+        print("run", outcome)

@@ -10,6 +10,15 @@ pipeline with `tasks=`.
 
 `log` writes to stdout and, when `ORCA_LOGS` is set, appends to the attempt's
 log file as well (`orca.logs.attempt_log`).
+
+**Commits are fenced.** A process whose heartbeat went stale while it was
+alive (the database unreachable for a while, a paused VM) may have lost its
+run to another process, which reruns the step. `orca.tables` calls `fence`
+right before each commit to Iceberg: it goes ahead only if this process
+still owns the run and its heartbeat is younger than half the stale limit,
+so no other process can have claimed the run, nor claim it during the
+commit unless the commit takes that long. Otherwise the attempt fails
+without committing.
 """
 
 
@@ -135,6 +144,11 @@ struct Ctx(Movable):
         self.recorder.read(t)
         self.reads.append(t^)
         return id
+
+    def fence(mut self) raises:
+        """Raises unless this process may still commit for its run (see
+        the module's doc); `orca.tables` calls it before each commit."""
+        self.recorder.fence()
 
     def committed(
         mut self, table: String, snapshot_id: Int64, dataset: String = ""

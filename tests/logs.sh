@@ -1,7 +1,8 @@
 #!/bin/sh
 # Each attempt's log is where `status` says, with the step's lines and its
 # error; a run of a pipeline with dista tasks leaves its timeline beside them.
-# Needs ORCA_DATABASE_URL (pixi run test-logs starts a throwaway server).
+# Needs ORCA_DATABASE_URL; pixi run test-logs gives it a fresh SQLite file,
+# since nothing here needs Postgres.
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build

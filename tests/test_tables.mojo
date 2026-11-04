@@ -77,6 +77,31 @@ def load(mut ctx: Ctx, m: Month) raises -> Int64:
     return id
 
 
+def taken_load(mut ctx: Ctx, m: Month) raises -> Int64:
+    """Appends as `load` does, after making the run look lost as
+    ORCA_TEST_TAKE says: `owner`, another process claimed it; `stale`, this
+    process's heartbeat went stale while it worked."""
+    var c = Connection(getenv("ORCA_DATABASE_URL"))
+    if getenv("ORCA_TEST_TAKE") == "owner":
+        _ = c.execute(
+            (
+                "UPDATE orca.runs SET owner = 'b:2', heartbeat = now() WHERE id"
+                " = $1"
+            ),
+            Params().int64(Int64(ctx.run)),
+        )
+    else:
+        _ = c.execute(
+            (
+                "UPDATE orca.runs SET heartbeat = now() - interval '1 hour'"
+                " WHERE id = $1"
+            ),
+            Params().int64(Int64(ctx.run)),
+        )
+    var out = _table("out")
+    return append(ctx, out, _rows(String(m), 3))
+
+
 def copy_count(mut ctx: Ctx, m: Month) raises -> Int:
     """Counts `src` at the pinned snapshot. While ORCA_TEST_DIE is set,
     another writer appends to `src` first, then the attempt dies."""
@@ -131,6 +156,10 @@ def evolve(mut ctx: Ctx, m: Month) raises -> Int:
 
 comptime Load = Step["load", Month, Int64, load, Mapped, writes=["db.out"]]
 comptime Loads = Pipeline["loads", Load]
+comptime TakenLoad = Step[
+    "taken_load", Month, Int64, taken_load, Mapped, writes=["db.out"]
+]
+comptime Takens = Pipeline["takens", TakenLoad]
 comptime CopyCount = Step[
     "copy_count", Month, Int, copy_count, Mapped, reads=["db.src"]
 ]
@@ -238,6 +267,38 @@ def test_a_commit_is_recognised_on_resume() raises:
     assert_equal(s["orca.attempt"], "1")
     assert_equal(s["orca.commit"], "0")
     assert_equal(s["orca.code"], hex(Loads.registry_hash()))
+
+
+def test_a_lost_run_doesnt_commit() raises:
+    """A process whose run another process claimed while it worked (its
+    heartbeat went stale while it was alive) doesn't commit (#60)."""
+    _ = _warehouse()
+    var store = _store("takens")
+    _ = setenv("ORCA_TEST_TAKE", "owner")
+    var raised = False
+    try:
+        _ = Takens.execute(
+            store, RunResult(), parse_months("2024-01"), store.run
+        )
+    except e:
+        raised = True
+        assert_true("lost run" in String(e), String(e))
+    assert_true(raised, "the attempt carried on after losing its run")
+    assert_equal(_snapshots(_table("out")), 0)
+
+
+def test_a_stale_heartbeat_doesnt_commit() raises:
+    """A process whose heartbeat is stale may lose its run at any moment,
+    so it doesn't commit either; the attempt fails saying why."""
+    _ = _warehouse()
+    var store = _store("takens")
+    _ = setenv("ORCA_TEST_TAKE", "stale")
+    var res = Takens.execute(
+        store, RunResult(), parse_months("2024-01"), store.run
+    )
+    assert_true(not res.succeeded())
+    assert_true("heartbeat is older than" in _error(res), _error(res))
+    assert_equal(_snapshots(_table("out")), 0)
 
 
 def test_in_memory_runs_dont_recognise() raises:

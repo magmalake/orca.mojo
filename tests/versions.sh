@@ -78,13 +78,30 @@ json "/runs/$r2" | jq -e ".version.commit_url == \"$repo/tree/$c2\" and .version
     || fail "run $r2's version: $(json "/runs/$r2" | jq -c .version)"
 json "/runs/$r3" | jq -e '.version.commit == "" and .version.commit_url == null' > /dev/null \
     || fail "run $r3's version: $(json "/runs/$r3" | jq -c .version)"
-html "/runs/$r1" | grep -q "<a href=\"$repo/tree/$c1\" target=\"_blank\" rel=\"noopener\">1a1a1a1a1a1a</a>" || fail "run $r1's page links its commit"
+html "/runs/$r1" | grep -qF "<a class=\"src\" href=\"$repo/tree/$c1\" target=\"_blank\" rel=\"noopener\" title=\"View source on GitHub at 1a1a1a1\"><svg class=\"src__icon\"" \
+    || fail "run $r1's page links its commit"
 html "/runs/$r2" | grep -q "plus uncommitted changes" || fail "run $r2's page says it was dirty"
 html "/runs/$r3" | grep -q "not recorded" || fail "run $r3's page says it has no source"
 # The steps' code, at the commit, for the version orca locate mapped.
 line=$(grep -n '^def days(' examples/toy.mojo | cut -d: -f1)
-html "/runs/$r1" | grep -q "<a href=\"$repo/blob/$c1/examples/toy.mojo#L$line\" target=\"_blank\" rel=\"noopener\">days</a>" \
+# A code link: the icon, out of the screen reader's way, the file and line
+# in monospace, and an arrow out, in a new tab; unlike orca's own links.
+icon='<svg class="src__icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">'
+code_link() { # url, commit
+    printf '<a class="src" href="%s" target="_blank" rel="noopener" title="View source on GitHub at %.7s">%s' "$1" "$2" "$icon"
+}
+code_at() { printf '<span class="src__at">%s</span><span class="src__out" aria-hidden="true">↗</span></a>' "$1"; }
+page=$(html "/runs/$r1")
+echo "$page" | grep -qF "<td>days $(code_link "$repo/blob/$c1/examples/toy.mojo#L$line" $c1)" \
     || fail "run $r1's page links its steps' code"
+echo "$page" | grep -qF "$(code_at "examples/toy.mojo:$line")" || fail "the code link doesn't show the file and line"
+echo "$page" | grep -qF '<a class="src" href="/' && fail "an internal link took the code link's look"
+echo "$page" | grep -o '<a class="src"[^>]*>' | grep -vq 'target="_blank" rel="noopener" title="View source' \
+    && fail "a code link without its target or title"
+curl -fsS "$base/static/orca.css" | grep -q '^a.src {' || fail "the stylesheet has no code link style"
+att=$(json "/runs/$r1" | jq -r '.steps[0].attempt_id')
+html "/runs/$r1/attempts/$att" | grep -qF "<dt>Code</dt><dd>$(code_link "$repo/blob/$c1/examples/toy.mojo#L$line" $c1)" \
+    || fail "the attempt's page doesn't link its step's code"
 json "/runs/$r1" | jq -e '.version.locations["toy::measure"] | startswith("examples/toy.mojo#L")' > /dev/null \
     || fail "run $r1's locations"
 
@@ -93,5 +110,32 @@ json "/runs/$r1" | jq -e '.version.locations["toy::measure"] | startswith("examp
 got=$(json /pipelines/toy | jq -c '[.versions[] | [.commit[0:1], .image, .runs]]')
 [ "$got" = '[["","",1],["2","orca:c1",1],["1","orca:c1",1]]' ] || fail "the pipeline's versions: $got"
 html /pipelines/toy | grep -q "<h2>Versions" || fail "the pipeline page's versions"
+
+# A dataset's page links the steps that write and read it to their lines:
+# the writer at the commit of the run that committed the snapshot (c1), the
+# reader, which no run has read with, at the one registered now (c2).
+for c in 1 2; do
+    eval "sha=\$c$c"
+    src=$repo.git
+    [ "$c" = 2 ] && src=git@github.com:magmalake/orca.mojo.git
+    # shellcheck disable=SC2086
+    mojo build -I src $DEP_INC -D ORCA_SOURCE=$src -D ORCA_COMMIT="$sha" tests/datasets/first.mojo -o "build/ds-first-c$c"
+    ./build/orca locate "./build/ds-first-c$c" --root . >> "$log" 2>&1 || fail "locate first c$c"
+done
+./build/orca register ./build/ds-first-c1 >> "$log" 2>&1 || fail "register first c1"
+./build/ds-first-c1 run --partitions 2024-01 >> "$log" 2>&1 || fail "run first c1"
+q "INSERT INTO orca.commits (attempt, table_name, snapshot_id, dataset) SELECT a.id, 'a', 7, 'lake.a' FROM orca.attempts a JOIN orca.steps s ON s.id = a.step JOIN orca.runs r ON r.id = s.run WHERE r.pipeline = 'first'" > /dev/null
+./build/orca register ./build/ds-first-c2 >> "$log" 2>&1 || fail "register first c2"
+fline=$(grep -n '^def step(' tests/datasets/first.mojo | cut -d: -f1)
+page=$(html /datasets/lake.a)
+echo "$page" | grep -qF "<dt>Written by</dt><dd><a href=\"/pipelines/first\">first</a> <span class=\"steps-of\">step step $(code_link "$repo/blob/$c1/tests/datasets/first.mojo#L$fline" $c1)" \
+    || fail "the dataset's page doesn't link its writer's code at the run's commit: $(echo "$page" | grep -o '<dt>Written by.*</dl>')"
+echo "$page" | grep -qF "$(code_at "tests/datasets/first.mojo:$fline")" || fail "the writer's code link doesn't show its file and line"
+echo "$page" | grep -qF "<td>step $(code_link "$repo/blob/$c1/tests/datasets/first.mojo#L$fline" $c1)" \
+    || fail "the snapshot doesn't link its step's code"
+html /datasets/lake.c | grep -qF "<dt>Read by</dt><dd><a href=\"/pipelines/first\">first</a> <span class=\"steps-of\">step step $(code_link "$repo/blob/$c2/tests/datasets/first.mojo#L$fline" $c2)" \
+    || fail "the dataset's page doesn't link its reader's code at the registered commit"
+json /datasets/lake.a | jq -e '.writers == ["first"] and .snapshots[0].snapshot == 7' > /dev/null \
+    || fail "the dataset's JSON changed: $(json /datasets/lake.a | jq -c .)"
 kill "$pid"
 echo "ok   versions: a run links the commit it ran, the pipeline lists its versions"

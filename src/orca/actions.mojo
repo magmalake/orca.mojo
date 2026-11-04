@@ -4,8 +4,9 @@ scheduler, or the run's own process, acts on.
 The UI never starts a pipeline's binary. Starting, resuming, rerunning and
 backfilling leave a `queued` run, which the scheduler starts on its next
 tick as it starts any other, within `max_runs`; cancelling sets
-`cancel_requested`, which a running run sees before its next attempt (an
-attempt already going finishes). Pausing a pipeline sets
+`cancel_requested`, which a running run sees before its next attempt; an
+attempt still going `ORCA_CANCEL_KILL_SECONDS` (60) later is stopped, its
+process exiting (`orca.heartbeat`). Pausing a pipeline sets
 `pipelines.paused`, and the scheduler starts none of its runs until it's
 unpaused. So the UI works the same wherever the
 scheduler runs, and retries and limits stay in one place.
@@ -21,6 +22,7 @@ from postgres import Params
 
 from orca.day import Day
 from orca.key import parse_keys
+from orca.live import live_runs
 from orca.month import Month
 from orca.name import parse_names
 from orca.scheduler import (
@@ -63,6 +65,15 @@ def stale_seconds() -> Float64:
         return 30.0
 
 
+def cancel_kill_seconds() -> Float64:
+    """`ORCA_CANCEL_KILL_SECONDS` (default 60): how long a running run
+    asked to cancel has to finish its step before it's stopped."""
+    try:
+        return Float64(getenv("ORCA_CANCEL_KILL_SECONDS", "60"))
+    except:
+        return 60.0
+
+
 def stalled_sql() -> String:
     """True for a run that's `running` with no live process: its heartbeat,
     or its start when it has none yet, is older than the stale limit."""
@@ -82,7 +93,9 @@ def _pipeline(mut db: State, name: String) raises -> Optional[Registered]:
 
 
 def start_run(mut db: State, pipeline: String, keys: String) raises -> Outcome:
-    """A queued run over the partitions in `keys`, trigger `ui`."""
+    """A queued run over the partitions in `keys`, trigger `ui`. Refused
+    while a live run has one of them, which a second run would run beside;
+    a partition that's done is run again."""
     var p = _pipeline(db, pipeline)
     if not p:
         return Outcome.no(_unregistered(pipeline))
@@ -96,8 +109,27 @@ def start_run(mut db: State, pipeline: String, keys: String) raises -> Outcome:
     var joined = String()
     for i in range(len(texts)):
         joined.write("," if i else "", texts[i])
+    var tx = db.conn.begin()
+    _ = tx.query(
+        "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
+        Params().text(pipeline),
+    )
+    var live = live_runs(tx, pipeline)
+    for k in texts:
+        var run = live.get(k)
+        if run:
+            tx.commit()
+            return Outcome.no(
+                String(
+                    k,
+                    " is in run ",
+                    run.value(),
+                    ", which is queued or running; wait for it to end, or",
+                    " cancel it",
+                )
+            )
     var id = (
-        db.conn.query(
+        tx.query(
             (
                 "INSERT INTO orca.runs (pipeline, registry_hash, partitions,"
                 " trigger, status) VALUES ($1, $2, $3, 'ui', 'queued')"
@@ -108,6 +140,7 @@ def start_run(mut db: State, pipeline: String, keys: String) raises -> Outcome:
         .row(0)
         .int64("id")
     )
+    tx.commit()
     return Outcome.done(Int(id))
 
 
@@ -123,14 +156,15 @@ def backfill_runs(
     if not p:
         return Outcome.no(_unregistered(pipeline))
     try:
-        return Outcome.done(0, backfill(db, p.value(), keys, rerun))
+        return Outcome.done(0, len(backfill(db, p.value(), keys, rerun).runs))
     except e:
         return Outcome.no(String(e))
 
 
 def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
-    """Queues a failed, cancelled or stalled run again, so the scheduler
-    resumes it at what's unfinished. A run whose pipeline's code has changed
+    """Queues a failed, cancelled, deferred or stalled run again, so the
+    scheduler resumes it at what's unfinished (a deferred one now rather
+    than when it asked). A run whose pipeline's code has changed
     since is refused until `allow_new_code`, which the scheduler passes on
     as `--allow-new-code`."""
     var rows = db.conn.query(
@@ -148,14 +182,22 @@ def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
         return Outcome.no(String("no run ", run))
     var r = rows.row(0)
     var status = r.text("status")
-    if status != "failed" and status != "cancelled" and not r.bool("stalled"):
+    if (
+        status != "failed"
+        and status != "cancelled"
+        and status != "deferred"
+        and not r.bool("stalled")
+    ):
         return Outcome.no(
             String(
                 "run ",
                 run,
                 " is ",
                 status,
-                "; only a failed, cancelled or stalled run can be resumed",
+                (
+                    "; only a failed, cancelled, deferred or stalled run can be"
+                    " resumed"
+                ),
             )
         )
     if not r.bool("has_binary"):
@@ -182,7 +224,7 @@ def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
                 " error = NULL, allow_new_code = $2 WHERE id = $1 AND (status"
                 " IN ('failed',"
             ),
-            " 'cancelled') OR ",
+            " 'cancelled', 'deferred') OR ",
             stalled_sql(),
             ")",
         ),
@@ -266,16 +308,20 @@ def rerun_from(mut db: State, run: Int, step: String) raises -> Outcome:
 
 
 def cancel_run(mut db: State, run: Int) raises -> Outcome:
-    """Cancels a run: a queued or failed one at once (a failed one isn't
-    retried), a running one before its next attempt."""
+    """Cancels a run: a queued, deferred or failed one at once (it isn't
+    started again), a running one before its next attempt, or, if its step
+    is still going `ORCA_CANCEL_KILL_SECONDS` later, by stopping its process
+    (`orca.heartbeat`)."""
     var rows = db.conn.query(
         (
             "UPDATE orca.runs SET cancel_requested = true, status = CASE WHEN"
             " status = 'running' THEN status ELSE 'cancelled' END, ended ="
-            " CASE WHEN status = 'running' THEN ended ELSE now() END WHERE id"
-            " = $1 AND status IN ('queued', 'running', 'failed') RETURNING id"
+            " CASE WHEN status = 'running' THEN ended ELSE now() END,"
+            " cancel_at = CASE WHEN status = 'running' THEN coalesce(cancel_at,"
+            " now() + make_interval(secs => $2)) END WHERE id = $1 AND status"
+            " IN ('queued', 'running', 'failed', 'deferred') RETURNING id"
         ),
-        Params().int64(Int64(run)),
+        Params().int64(Int64(run)).float64(cancel_kill_seconds()),
     )
     if len(rows) == 1:
         return Outcome.done(run)
@@ -294,8 +340,8 @@ def cancel_runs(
     mut db: State, pipeline: String, keys: String
 ) raises -> Outcome:
     """What `orca cancel` does: cancels, as `cancel_run` does each, the
-    pipeline's runs that are queued, running, or failed and due to be
-    retried, over any of `keys` (a run of several keys is cancelled whole),
+    pipeline's runs that are queued, deferred, running, or failed and due
+    to be retried, over any of `keys` (a run of several keys is cancelled whole),
     or all of them for `@all`. The outcome's `queued` is how many."""
     var rows = db.conn.query(
         (
@@ -330,14 +376,25 @@ def cancel_runs(
         String(
             "UPDATE orca.runs SET cancel_requested = true, status = CASE WHEN",
             " status = 'running' THEN status ELSE 'cancelled' END, ended =",
-            " CASE WHEN status = 'running' THEN ended ELSE now() END WHERE",
+            " CASE WHEN status = 'running' THEN ended ELSE now() END,",
+            (
+                " cancel_at = CASE WHEN status = 'running' THEN"
+                " coalesce(cancel_at,"
+            ),
+            " now() + make_interval(secs => $5)) END WHERE",
             " pipeline = $1 AND ($2 OR string_to_array(partitions, ',') &&",
-            " string_to_array($3, ',')) AND (status = 'queued' OR (status =",
-            " 'running' AND NOT cancel_requested) OR (status = 'failed' AND ",
+            " string_to_array($3, ',')) AND (status IN ('queued', 'deferred')",
+            " OR (status = 'running' AND NOT cancel_requested) OR (status =",
+            " 'failed' AND ",
             RETRIED_SQL,
-            " AND starts <= $4)) RETURNING id",
+            " AND starts - deferrals <= $4)) RETURNING id",
         ),
-        Params().text(pipeline).bool(all).text(joined).int64(retries),
+        Params()
+        .text(pipeline)
+        .bool(all)
+        .text(joined)
+        .int64(retries)
+        .float64(cancel_kill_seconds()),
     )
     return Outcome.done(0, len(done))
 

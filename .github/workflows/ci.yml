@@ -82,6 +82,14 @@ jobs:
           repository: magmalake/json_mlake
           ref: bcaa7161e757748a1310a213e123bf8810ff7e96
           path: json_mlake
+      # orca.sqlite_store's binding, at the revision mojoshelf published as
+      # sqlite-mojo 0.3.5.
+      - if: matrix.env == 'nightly'
+        uses: actions/checkout@v4
+        with:
+          repository: magmalake/sqlite.mojo
+          ref: 0d76aa7b672c85580f4d8c5de855772bc972d535
+          path: sqlite.mojo
 
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
