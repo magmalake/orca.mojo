@@ -192,6 +192,7 @@ test-lineage-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-pos
 test-sensors-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/sensors.sh" }
 test-keyed = { cmd = "scripts/with-postgres.sh tests/keyed.sh" }
 test-keyed-backfills = { cmd = "scripts/with-postgres.sh tests/keyed_backfills.sh" }
+test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh" }
 taxi = { cmd = "mkdir -p build && mojo build -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi" }
 
 # MinIO for the tests over object storage (scripts/with-minio.sh). conda-forge

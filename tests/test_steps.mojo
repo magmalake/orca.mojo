@@ -27,6 +27,7 @@ from orca import (
     parse_names,
     parse_partitions,
 )
+from orca.name import path_segment
 
 
 # --- names ---
@@ -38,6 +39,8 @@ def test_name_parse() raises:
         "log-0f3a",
         "315969629_00000000-0000-0000",
         "x.y:z_1",
+        "modular/modular",
+        "a/b/c",
         String("n") * 128,
     ]:
         assert_equal(String(Name.parse(ok)), ok)
@@ -46,15 +49,28 @@ def test_name_parse() raises:
         String("n") * 129,
         "a b",
         "a,b",
-        "a/b",
         "a..b",
+        "../a",
+        "a/../b",
         "café",
+        "a%2Fb",
+        "a\\b",
+        "/a",
+        "a/",
+        "a//b",
+        "/",
     ]:
         with assert_raises(contains="not a name"):
             _ = Name.parse(bad)
     assert_true(Name.parse("a") < Name.parse("b"))
     assert_true(Name.parse("B") < Name.parse("a"))  # by bytes
     assert_true(Name.parse("x") == Name.parse("x"))
+
+
+def test_path_segment() raises:
+    assert_equal(path_segment("log-01"), "log-01")
+    assert_equal(path_segment("modular/modular"), "modular%2Fmodular")
+    assert_equal(path_segment("a/b/c"), "a%2Fb%2Fc")
 
 
 def test_parse_names() raises:
@@ -68,6 +84,8 @@ def test_parse_names() raises:
         _ = parse_names("a,b,a")
     with assert_raises(contains="not a name"):
         _ = parse_names("a,,b")
+    var repos = parse_names("modular/modular,owner/name")
+    assert_equal(String(repos[1]), "owner/name")
 
 
 # --- months ---
