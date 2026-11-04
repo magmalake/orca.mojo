@@ -101,8 +101,8 @@ from orca.lineage import (
     forward,
 )
 from orca.json import quote
+from orca.live import live_sql
 from orca.scheduler import (
-    LIVE_SQL,
     current_keys,
     done_keys,
     fill_key,
@@ -1285,7 +1285,7 @@ def _key_counts(mut db: State, name: String) raises -> KeyCounts:
         return KeyCounts(p.keys_dataset, -1, 0, 0, 0, List[String](), String(e))
     var done = done_keys(db, name, got[1])
     var live = Dict[String, Bool]()
-    for r in db.conn.query(LIVE_SQL, Params().text(name)):
+    for r in db.conn.query(live_sql(), Params().text(name)):
         live[r.text("key")] = True
     var n_live = 0
     var open = String()

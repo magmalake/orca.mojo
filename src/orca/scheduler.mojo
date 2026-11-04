@@ -22,6 +22,14 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   was down are made once each, or, with `catchup=False`, only the latest.
   A fire whose partition is before the pipeline's first is recorded without
   a run.
+- **One live run per partition.** Every way a run is queued checks, under
+  a lock on the pipeline's row, for a live run (`orca.live`) of the same
+  keys: a fire whose partition a live run has records that run as its own,
+  a sensor leaves such keys to it (the snapshot's run, if it left nothing
+  else), a rebuild's level waits for it, the UI refuses to start one, and a
+  backfill skips the key. A partition that's done is run again by a fire,
+  sensor, rebuild or start, and its steps append again; `orca register`
+  warns of a schedule that fires more than once for one partition.
 - **Starting a run is `resume`.** A queued run has nothing done, or what a
   resume or rerun from `orca ui` left it, which is what `<binary> resume
   <run>` takes (with `--allow-new-code` when the resume said so). The scheduler marks the run `running`,
@@ -32,8 +40,10 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   ago) are counted, and only that many fewer than `max_runs` are started.
 - **Backfills queue what isn't done.** A key is done when every mapped
   step has succeeded for it in a run of the pipeline's current code
-  (`DONE_SQL`). A backfill drops the keys that are done or in a queued or
-  running run, sorts the rest and queues a run per `keys_per_run` of them.
+  (`DONE_SQL`). A backfill drops the keys that are done or in a live run
+  (queued, or running with its process alive: `live_sql`), sorts the rest
+  and queues a run per `keys_per_run` of them; `orca backfill` says on
+  stderr which keys it dropped and why.
 - **Where runs run.** `ORCA_RUNNER` is `local` (a process here, the
   default), `kubernetes` (a dista cluster of pods per run, `orca.kube`) or
   `ec2` (a head instance and worker instances per run, `orca.ec2`).
@@ -54,8 +64,10 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   after `ORCA_RETRY_SECONDS` (default 60) doubling with each start, plus up
   to a tenth more as jitter, up to `run_retries` times. One whose process
   died (its heartbeat went stale) is started again at once, within the same
-  budget. A manual run is never retried by the scheduler. A run asked to
-  cancel whose process died ends `cancelled`.
+  budget. A manual, UI or rerun run is never retried by the scheduler: one
+  whose process died ends `failed`, with the error `interrupted: its
+  process stopped`, so it can be resumed and holds its keys no longer. A
+  run asked to cancel whose process died ends `cancelled`.
 - **New code.** `orca register` of a new build moves the queued runs to it,
   and the failed ones waiting for a retry that have no step done. A retry
   of a run with steps done by other code would be refused by the binary's
@@ -84,6 +96,7 @@ from orca.day import Day
 from orca.key import parse_keys
 from orca.ec2 import Ec2Runner, Ec2Spec
 from orca.kube import KubeRunner, RunSpec, cpu_millis
+from orca.live import dead_sql, live_runs, live_sql, stale_limit, start_grace
 from orca.logs import is_remote, publish, run_dir, stage_of
 from orca.month import Month
 from orca.name import Name, parse_names, sort_texts
@@ -157,6 +170,36 @@ def fill_key(kind: String, fills: String, local: Civil) raises -> String:
         var m = Month.containing(local.year, local.month, local.day)
         return String(m.prev() if fills == "previous" else m^)
     raise Error("orca: unknown partitions '", kind, "'")
+
+
+def repeated_fill(p: Registered, after: Int64) raises -> String:
+    """How `p`'s schedule fires more than once for one partition in the
+    year or so after `after` (such as `0 */6 * * *` on daily partitions), or
+    empty if it doesn't."""
+    if not p.cron or p.kind == "keyed":
+        return ""
+    var s = Schedule(CronExpr.parse(p.cron), Zone.load(p.tz))
+    var t = after
+    var last = String()
+    for _ in range(2000):
+        t = s.next_fire(t)
+        if t > after + 400 * 86400:
+            break
+        var key = fill_key(p.kind, p.fills, Civil.of(s.zone.to_local(t)))
+        if key == last:
+            return String(
+                "the schedule of ",
+                p.name,
+                " (",
+                p.cron,
+                ") fires more than once for ",
+                key,
+                ": a fire while a run of the partition is live is left to",
+                " it, but one after that run has ended runs the partition",
+                " again, and its steps append again",
+            )
+        last = key^
+    return ""
 
 
 def registered(mut db: State, only: String = "") raises -> List[Registered]:
@@ -428,11 +471,49 @@ mapped step has succeeded for the key in a run of the pipeline's current
 code. A pipeline with no mapped step has a key done when a run of its
 current code over it succeeded."""
 
-comptime LIVE_SQL = (
-    "SELECT DISTINCT unnest(string_to_array(partitions, ',')) AS key FROM"
-    " orca.runs WHERE pipeline = $1 AND status IN ('queued', 'running')"
-)
-"""The keys of pipeline `$1` in a queued or running run."""
+
+@fieldwise_init
+struct Queued(Movable):
+    """What a backfill or a keyed sensor queued, and the keys it left."""
+
+    var runs: List[Int]
+    var done: List[String]
+    """Keys left because they're done."""
+    var live: List[String]
+    """Keys left because a live run has them, that run in `live_runs`."""
+    var live_runs: List[Int]
+
+    def __init__(out self):
+        self.runs = List[Int]()
+        self.done = List[String]()
+        self.live = List[String]()
+        self.live_runs = List[Int]()
+
+    def skipped(self) -> List[String]:
+        """A line for each reason keys were left, or none."""
+        var out = List[String]()
+        if len(self.done) > 0:
+            var line = String("skipped ", len(self.done), " done: ")
+            _list(line, self.done)
+            out.append(line^)
+        if len(self.live) > 0:
+            var line = String("skipped ", len(self.live), " in live runs: ")
+            var named = List[String]()
+            for i in range(len(self.live)):
+                named.append(
+                    String(self.live[i], " (run ", self.live_runs[i], ")")
+                )
+            _list(line, named)
+            out.append(line^)
+        return out^
+
+
+def _list(mut line: String, items: List[String]):
+    """The first ten of `items`, comma-separated, and how many more."""
+    for i in range(min(len(items), 10)):
+        line.write(", " if i else "", items[i])
+    if len(items) > 10:
+        line.write(", and ", len(items) - 10, " more")
 
 
 def done_keys(
@@ -454,16 +535,17 @@ def queue_keys(
     keys: List[String],
     trigger: String,
     rerun: Bool = False,
-) raises -> List[Int]:
+) raises -> Queued:
     """Queues runs of `p` over those of `keys` that aren't done and aren't
-    in a live run, sorted, `keys_per_run` to a run; returns the runs. With
+    in a live run, sorted, `keys_per_run` to a run; returns the runs, and
+    the keys it left and why. With
     `rerun`, keys that are done are queued too, but never one in a live
     run. Under a lock on the pipeline's row, so two backfills don't both
     queue a key."""
     var tx = db.conn.begin()
-    var runs = _queue(tx, p, keys, trigger, rerun)
+    var got = _queue(tx, p, keys, trigger, rerun)
     tx.commit()
-    return runs^
+    return got^
 
 
 def _queue(
@@ -472,28 +554,37 @@ def _queue(
     keys: List[String],
     trigger: String,
     rerun: Bool = False,
-) raises -> List[Int]:
+) raises -> Queued:
     """`queue_keys` in `tx`."""
     _ = tx.query(
         "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
         Params().text(p.name),
     )
-    var skip = Dict[String, Bool]()
-    for r in tx.query(LIVE_SQL, Params().text(p.name)):
-        skip[r.text("key")] = True
+    var got = Queued()
+    var live = live_runs(tx, p.name)
     var joined = String()
     for i in range(len(keys)):
         joined.write("," if i else "", keys[i])
+    var done = Dict[String, Bool]()
     if not rerun:
         for r in tx.query(DONE_SQL, Params().text(p.name).text(joined)):
-            skip[r.text("key")] = True
+            done[r.text("key")] = True
+    var seen = Dict[String, Bool]()
     var todo = List[String]()
     for k in keys:
-        if k not in skip:
-            skip[k] = True  # each once
+        if k in seen:
+            continue
+        seen[k] = True  # each once
+        var in_run = live.get(k)
+        if in_run:
+            got.live.append(k)
+            got.live_runs.append(in_run.value())
+        elif k in done:
+            got.done.append(k)
+        else:
             todo.append(k)
     sort_texts(todo)
-    var runs = List[Int]()
+    ref runs = got.runs
     var i = 0
     while i < len(todo):
         var batch = String()
@@ -520,17 +611,17 @@ def _queue(
             )
         )
         i = j
-    return runs^
+    return got^
 
 
 def backfill(
     mut db: State, p: Registered, keys: String, rerun: Bool = False
-) raises -> Int:
+) raises -> Queued:
     """Queues runs for the keys in `keys` that aren't done and aren't in a
-    queued or running run, `keys_per_run` to a run; returns how many runs
-    it queued. With `rerun` (`orca backfill --rerun`) the done ones are
+    live run, `keys_per_run` to a run; returns the runs it queued and the
+    keys it left. With `rerun` (`orca backfill --rerun`) the done ones are
     queued again too, as for a day whose source has changed since."""
-    return len(queue_keys(db, p, partition_keys(p, keys), "backfill", rerun))
+    return queue_keys(db, p, partition_keys(p, keys), "backfill", rerun)
 
 
 def _last_line(path: String) -> String:
@@ -586,7 +677,7 @@ struct Scheduler(Movable):
     def __init__(out self, url: String) raises:
         self.db = State(url)
         self.db.migrate()
-        self.stale = Float64(getenv("ORCA_STALE_SECONDS", "30"))
+        self.stale = stale_limit()
         self.retry_seconds = Int64(Int(getenv("ORCA_RETRY_SECONDS", "60")))
         self.sense_seconds = Float64(getenv("ORCA_SENSE_SECONDS", "60"))
         var runner = getenv("ORCA_RUNNER", "local")
@@ -601,12 +692,7 @@ struct Scheduler(Movable):
                 "orca: ORCA_RUNNER is local, kubernetes or ec2, not ", runner
             )
         # A pod can take minutes to be scheduled and pull its image.
-        self.start_grace = Float64(
-            getenv(
-                "ORCA_START_SECONDS",
-                "300" if self.runner or self.ec2 else String(self.stale),
-            )
-        )
+        self.start_grace = start_grace(self.stale)
         var budget = getenv("ORCA_VCPU_BUDGET")
         self.budget = cpu_millis(budget) if budget else 0
         self.logs = getenv("ORCA_LOGS")
@@ -749,6 +835,10 @@ struct Scheduler(Movable):
                     ),
                     Params().text(name).text(c.dataset).int64(c.snapshot),
                 )
+        for q in registered(self.db, name):
+            var twice = repeated_fill(q, now)
+            if twice:
+                print("orca: warning:", twice)
         # A retry of a run with steps done would run the new code over the
         # old code's outputs, which only a resume that says so may do.
         _ = self.db.conn.execute(
@@ -940,6 +1030,10 @@ struct Scheduler(Movable):
         else:
             fallback = fill_key(p.kind, "current", Civil.of(now))
         var tx = self.db.conn.begin()
+        _ = tx.query(
+            "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
+            Params().text(p.name),
+        )
         var taken = List[Int]()
         var unusable = List[Tuple[Int, String]]()
         var all = List[String]()
@@ -980,7 +1074,19 @@ struct Scheduler(Movable):
             taken.append(i)
             all.extend(ks^)
         var run = Int64(-1)
-        var mapped = map_keys(all, p.kind, p.start)
+        # Keys a live run has are left to it, which becomes the snapshot's
+        # run if it left nothing else.
+        var live = live_runs(tx, p.name)
+        var mapped = List[String]()
+        var held = Int64(-1)
+        for k in map_keys(all, p.kind, p.start):
+            var in_run = live.get(k)
+            if not in_run:
+                mapped.append(k)
+            elif held < 0:
+                held = Int64(in_run.value())
+        if len(mapped) == 0:
+            run = held
         if len(mapped) > 0:
             run = (
                 tx.query(
@@ -997,6 +1103,7 @@ struct Scheduler(Movable):
                 .row(0)
                 .int64("id")
             )
+        if run >= 0:
             for i in taken:
                 _ = tx.execute(
                     (
@@ -1016,8 +1123,11 @@ struct Scheduler(Movable):
                 String(datasets[i], "@", snapshots[i]),
                 "for",
                 p.name,
-                String("run ", run, " for ", join_keys(mapped)) if run
-                >= 0 else "before its first partition",
+                String("run ", run, " for ", join_keys(mapped)) if len(mapped)
+                > 0 else (
+                    String("left to live run ", run) if run
+                    >= 0 else "before its first partition"
+                ),
             )
         for u in unusable:
             print(
@@ -1055,6 +1165,10 @@ struct Scheduler(Movable):
         for t in times:
             var key = fill_key(p.kind, p.fills, Civil.of(s.zone.to_local(t)))
             var tx = self.db.conn.begin()
+            _ = tx.query(
+                "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
+                Params().text(p.name),
+            )
             var made = tx.query(
                 (
                     "INSERT INTO orca.fires (pipeline, fire_at, partition)"
@@ -1064,19 +1178,15 @@ struct Scheduler(Movable):
                 Params().text(p.name).int64(t).text(key),
             )
             var run = Int64(-1)
+            var held = False
             # Keys of one kind order as text: `YYYY-MM`, `YYYY-MM-DD`.
             if len(made) == 1 and (not p.start or key >= p.start):
-                run = (
-                    tx.query(
-                        (
-                            "INSERT INTO orca.runs (pipeline, registry_hash,"
-                            " partitions, trigger, status) VALUES ($1, $2, $3,"
-                            " 'schedule', 'queued') RETURNING id"
-                        ),
-                        Params().text(p.name).text(p.registry_hash).text(key),
-                    )
-                    .row(0)
-                    .int64("id")
+                # A live run of the key is the fire's run: a second one
+                # would run beside it, and both would append.
+                var live = live_runs(tx, p.name).get(key)
+                held = Bool(live)
+                run = Int64(live.value()) if live else self._queue_fire(
+                    tx, p, key
                 )
                 _ = tx.execute(
                     (
@@ -1094,8 +1204,27 @@ struct Scheduler(Movable):
                     String(Civil.of(t), "Z"),
                     "for",
                     key,
-                    String("run ", run) if run >= 0 else "before the start",
+                    String("left to live run ", run) if held else (
+                        String("run ", run) if run >= 0 else "before the start"
+                    ),
                 )
+
+    def _queue_fire(
+        mut self, mut tx: Transaction, p: Registered, key: String
+    ) raises -> Int64:
+        """A queued run of `p` over `key`, trigger `schedule`."""
+        return (
+            tx.query(
+                (
+                    "INSERT INTO orca.runs (pipeline, registry_hash,"
+                    " partitions, trigger, status) VALUES ($1, $2, $3,"
+                    " 'schedule', 'queued') RETURNING id"
+                ),
+                Params().text(p.name).text(p.registry_hash).text(key),
+            )
+            .row(0)
+            .int64("id")
+        )
 
     def _sense_keyed(
         mut self,
@@ -1136,7 +1265,9 @@ struct Scheduler(Movable):
                 for k in split_keys(keys[i]):
                     if k in cur:
                         offer.append(k)
-        var runs = _queue(tx, p, all_keys if everything else offer, "sensor")
+        var runs = _queue(
+            tx, p, all_keys if everything else offer, "sensor"
+        ).runs.copy()
         if len(runs) > 0:
             for i in taken:
                 _ = tx.execute(
@@ -1186,15 +1317,7 @@ struct Scheduler(Movable):
         """SQL true for a running run whose process died: its heartbeat is
         older than the stale limit, the parameter `stale_param`, or it has
         none and was started longer ago than the start grace."""
-        return String(
-            "((heartbeat IS NOT NULL AND heartbeat <= now() -",
-            " make_interval(secs => ",
-            stale_param,
-            ")) OR (heartbeat IS NULL AND (started IS NULL OR started <= now()",
-            " - make_interval(secs => ",
-            self.start_grace,
-            "))))",
-        )
+        return dead_sql(String(stale_param), self.start_grace)
 
     def _start(mut self, p: Registered, now: Int64) raises:
         """Starts queued runs, retries that are due and runs whose process
@@ -1249,15 +1372,22 @@ struct Scheduler(Movable):
             .int64(Int64(p.run_retries))
             .text(p.registry_hash),
         )
-        # A run whose process died and has no retries left has failed.
+        # A run whose process died and has no retries left has failed, and
+        # so has one the scheduler doesn't retry (a manual, UI or rerun
+        # run), so it holds its keys no longer and can be resumed.
         _ = tx.execute(
             String(
-                "UPDATE orca.runs SET status = 'failed', ended = now() WHERE",
-                " pipeline = $1 AND status = 'running' AND ",
+                "UPDATE orca.runs SET status = 'failed', ended = now(),",
+                " heartbeat = NULL, error = CASE WHEN ",
                 _RETRIED,
-                " AND ",
+                " THEN 'interrupted: its process stopped, and its retries are",
+                " spent' ELSE 'interrupted: its process stopped' END WHERE",
+                " pipeline = $1 AND status = 'running' AND NOT",
+                " cancel_requested AND ",
                 dead,
-                " AND starts > $3",
+                " AND (starts > $3 OR NOT ",
+                _RETRIED,
+                ")",
             ),
             Params()
             .text(p.name)
@@ -1431,7 +1561,7 @@ struct Scheduler(Movable):
 
     def backfill(
         mut self, pipeline: String, keys: String, rerun: Bool = False
-    ) raises -> Int:
+    ) raises -> Queued:
         """Queues a run for each partition in `keys` that has none; see
         `backfill`."""
         var ps = registered(self.db, pipeline)

@@ -13,7 +13,9 @@
 #   month it is (ORCA_NOW), and report after it;
 # - `orca rebuild raw.events 2024-03` reruns clean, then report, and its
 #   commits start no sensor;
-# - the UI shows the rebuild and what started each run.
+# - the UI shows the rebuild and what started each run;
+# - while a run of a partition is live, a snapshot of it is left to that
+#   run, and a rebuild of it waits for it.
 #
 # With ORCA_TEST_S3 set, the warehouse and logs are in the bucket
 # ORCA_S3_BUCKET names (pixi run -e data test-sensors-s3 starts a throwaway
@@ -153,5 +155,25 @@ if [ -n "${ORCA_TEST_S3:-}" ]; then
     curl -fsS "$base/runs/$clean1/driver.log" | grep -q "run succeeded" \
         || fail "run $clean1's driver log from the bucket"
 fi
+
+# One live run per partition: while a run of clean over 2024-03 is live (a
+# process elsewhere holds it), a new snapshot of 2024-03 is left to it, and
+# a rebuild of 2024-03 waits for it instead of running beside it.
+live=$(psql "$ORCA_DATABASE_URL" -qAtc "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, owner, heartbeat, started) SELECT name, registry_hash, '2024-03', 'manual', 'running', 'elsewhere:1', now(), now() FROM orca.pipelines WHERE name = 'clean' RETURNING id")
+sensed=$(runs clean)
+s3=$(source_commit 2024-03)
+until_true "SELECT count(*) = 1 FROM orca.sensed WHERE pipeline = 'clean' AND snapshot_id = $s3" "raw.events@$s3 sensed"
+[ "$(q "SELECT run FROM orca.sensed WHERE pipeline = 'clean' AND snapshot_id = $s3")" = "$live" ] \
+    || fail "raw.events@$s3 wasn't left to live run $live: $(q "SELECT run FROM orca.sensed WHERE snapshot_id = $s3")"
+[ "$(runs clean)" -eq "$sensed" ] || fail "a second run of clean over 2024-03 beside a live one"
+out=$(./build/orca rebuild raw.events 2024-03) || fail "orca rebuild: $out"
+echo "$out" >> "$log"
+rb3=$(echo "$out" | sed -n 's/^rebuild \([0-9]*\)$/\1/p')
+q "UPDATE orca.runs SET heartbeat = now() WHERE id = $live" > /dev/null
+sleep 3
+[ "$(q "SELECT run IS NULL FROM orca.rebuild_pipelines WHERE rebuild = $rb3 AND pipeline = 'clean'")" = t ] \
+    || fail "the rebuild queued clean beside live run $live"
+q "UPDATE orca.runs SET status = 'succeeded', ended = now(), heartbeat = NULL WHERE id = $live" > /dev/null
+until_true "SELECT status = 'succeeded' FROM orca.rebuilds WHERE id = $rb3" "the rebuild once the live run ended"
 stop
 echo "ok   sensors${ORCA_TEST_S3:+ on S3}"

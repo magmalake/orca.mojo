@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **One live run per partition.** Only backfills checked for a queued or
+  running run of the same key; a fire, a time-partitioned sensor, a
+  rebuild's level and the UI's start each queued a run regardless, so two
+  runs over one day could run at once and both append. Each now checks, in
+  the transaction that would queue it and under a lock on the pipeline's
+  row: a fire records the live run as its own (`fired ... left to live run
+  N`), a sensor leaves those keys to it, a rebuild's level waits for it to
+  end, and the UI refuses the start, naming the run. `orca register` warns
+  of a schedule that fires more than once for one partition, since a fire
+  after the first run has ended runs it again. The liveness SQL moved to
+  `orca.live`. (#62)
+
+- **A manual, UI or rerun run whose process died no longer stays
+  `running`.** The scheduler retries only scheduled, backfilled and sensed
+  runs, and left the others `running` with a stale heartbeat for good;
+  since every queued or running run held its keys, `orca backfill` then
+  queued nothing for them and a keyed sensor never offered them again. A
+  tick now fails such a run with the error `interrupted: its process
+  stopped`, so it can be resumed or cancelled, and a running run whose
+  process died no longer holds its keys anywhere (`live_sql` replaces
+  `LIVE_SQL`). A run whose retries are spent says so too. `orca backfill`
+  prints on stderr which keys it left: those done, and those in a live
+  run, with the run. (#61)
 - **Behind an HTTPS proxy, the UI's forms work** (#57). The `Origin` check
   compared the browser's `Origin` with `http://` + `Host`, so behind Caddy
   terminating TLS (as `orca aws up` deploys it) every `POST`, `/login`
