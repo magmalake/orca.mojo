@@ -2866,6 +2866,13 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
         var name = url_decode(parts[2])
         var back = String("/pipelines/", url_encode(name))
         var keys = _form(body, "partitions")
+        if (parts[3] == "runs" or parts[3] == "backfill") and String(
+            keys.strip()
+        ).startswith("@file:"):
+            return _bad_request(
+                "partitions from a file (@file:) are for the command line,"
+                " which reads its own files; list the names, or use @all"
+            )
         if parts[3] == "runs":
             var o = start_run(db, name, keys)
             var to = String("/runs/", o.run)
@@ -2904,6 +2911,17 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
     return None
 
 
+def _bad_request(why: String) -> Page:
+    """A 400: the form asked for something the UI never does."""
+    var h = Html()
+    h.raw("<h1>Refused</h1><p>")
+    h.text(why)
+    h.raw("</p>")
+    return Page(
+        400, String('{"error": ', quote(why), "}"), _page("Refused", "", h)
+    )
+
+
 def _same_origin(req: Request) raises -> Bool:
     """Whether a `POST` came from the UI's own pages: its `Origin`, or
     without one its `Referer`, is this server as the request addressed it."""
@@ -2928,6 +2946,8 @@ def _reason(status: Int) -> String:
         return "Done"
     if status == 303:
         return "See Other"
+    if status == 400:
+        return "Bad Request"
     if status == 403:
         return "Forbidden"
     if status == 401:

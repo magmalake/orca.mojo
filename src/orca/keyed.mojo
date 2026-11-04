@@ -33,9 +33,17 @@ def _read_file(path: String) raises -> String:
     with open(path, "r") as f:
         text = f.read()
     var joined = String()
+    var at = 0
     for line in text.splitlines():
+        at += 1
         var n = line.strip()
         if n:
+            # The error names the line, not its text: a file's other
+            # contents stay out of the message.
+            try:
+                _ = Name.parse(n)
+            except:
+                raise Error("line ", at, " of ", path, " isn't a name")
             joined.write("," if joined else "", n)
     if not joined:
         raise Error("no names in ", path)

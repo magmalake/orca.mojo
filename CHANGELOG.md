@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The UI refuses `partitions=@file:<path>`** (#58). The start and backfill
+  actions passed the field to the CLI's key parser, which read the file on
+  the UI's host and echoed its first line that wasn't a name in the 409, so
+  a logged-in user could read `/proc/self/environ` or a password file, or
+  hang the UI on `/dev/zero`. They now answer 400 without reading anything;
+  `@all` and lists of names work as before. On the command line, a line of
+  an `@file:` list that isn't a name is named by its number, not its text.
+
 ## 0.3.2 (2026-11-03)
 
 - **Built against flare_mlake 0.13.2 and k8s-mojo 0.1.2.** flare now declares
