@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Cancel runs in bulk, and pause a pipeline.** `orca cancel <pipeline>
+  KEYS|@all` cancels the pipeline's runs over those keys that are queued,
+  running (before their next step) or failed and due a retry, as cancelling
+  one run does; the pipeline page has the same form, empty for all. `orca
+  pause <pipeline>` and `orca unpause`, and the page's buttons, stop and
+  restart the scheduler starting its runs: fires, sensors, retries and
+  backfills still queue theirs while it's paused, and runs already going go
+  on. Migration 15 adds `pipelines.paused`; `/` and the pipeline page show
+  it, also in JSON.
+
 ## 0.3.2 (2026-11-03)
 
 - **Built against flare_mlake 0.13.2 and k8s-mojo 0.1.2.** flare now declares
