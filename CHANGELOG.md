@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **One live run per partition.** Only backfills checked for a queued or
+  running run of the same key; a fire, a time-partitioned sensor, a
+  rebuild's level and the UI's start each queued a run regardless, so two
+  runs over one day could run at once and both append. Each now checks, in
+  the transaction that would queue it and under a lock on the pipeline's
+  row: a fire records the live run as its own (`fired ... left to live run
+  N`), a sensor leaves those keys to it, a rebuild's level waits for it to
+  end, and the UI refuses the start, naming the run. `orca register` warns
+  of a schedule that fires more than once for one partition, since a fire
+  after the first run has ended runs it again. The liveness SQL moved to
+  `orca.live`. (#62)
+
 - **A manual, UI or rerun run whose process died no longer stays
   `running`.** The scheduler retries only scheduled, backfilled and sensed
   runs, and left the others `running` with a stale heartbeat for good;

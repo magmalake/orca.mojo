@@ -101,8 +101,8 @@ from orca.lineage import (
     forward,
 )
 from orca.json import quote
+from orca.live import live_sql
 from orca.scheduler import (
-    live_sql,
     current_keys,
     done_keys,
     fill_key,
