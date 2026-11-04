@@ -2,13 +2,17 @@
 
 `spawn` forks and executes a binary without waiting for it, its output
 appended to a log file if one is given; `reap` collects the ones that ended.
-`capture` runs a command to the end and returns what it printed. Everything a
-child needs is prepared before `fork`, so the child calls only `fopen`,
-`dup2`, `execv` and `_exit`.
+`capture` runs a command to the end, killing it past a timeout, and returns
+what it printed; `Capture` is the same started without waiting, for the
+scheduler to check on from tick to tick. Everything a child needs is
+prepared before `fork`, so the child calls only `setpgid`, `fopen`, `dup2`,
+`execv` (or `execvp`) and `_exit`.
 """
 
 from std.ffi import c_int, external_call
 from std.memory import stack_allocation
+from std.os import getenv, remove
+from std.time import perf_counter_ns, sleep
 
 
 def _cstr(s: String) -> List[UInt8]:
@@ -66,41 +70,151 @@ def reap() -> List[Tuple[Int, Int]]:
         var pid = external_call["waitpid", c_int](c_int(-1), status, c_int(1))
         if pid <= 0:
             break
-        var s = Int(status[])
-        var code = (s >> 8) & 0xFF if s & 0x7F == 0 else 128 + (s & 0x7F)
-        out.append((Int(pid), code))
+        out.append((Int(pid), _code(Int(status[]))))
     return out^
 
 
-def _quote(s: String) -> String:
-    """`s` as one shell word."""
-    return String("'", s.replace("'", "'\\''"), "'")
+def binary_seconds() -> Float64:
+    """`ORCA_BINARY_SECONDS` (default 300): how long a pipeline binary's
+    `describe`, `sense` or `keys` may take before it's killed."""
+    try:
+        return Float64(getenv("ORCA_BINARY_SECONDS", "300"))
+    except:
+        return 300.0
 
 
-def capture(argv: List[String]) raises -> Tuple[Int, String]:
-    """Runs `argv` to the end through the shell and returns its exit code and
-    standard output."""
-    var cmd = String()
-    for i in range(len(argv)):
-        cmd.write(" " if i > 0 else "", _quote(argv[i]))
-    var cmd_c = _cstr(cmd)
-    var mode = _cstr("r")
-    var f = external_call["popen", Int](cmd_c.unsafe_ptr(), mode.unsafe_ptr())
-    if f == 0:
-        raise Error("capture: popen failed for ", cmd)
-    var out = List[UInt8]()
-    var buf = List[UInt8](length=4096, fill=0)
-    while True:
-        var n = external_call["fread", Int](
-            buf.unsafe_ptr(), Int(1), Int(4096), f
+def _code(s: Int) -> Int:
+    """An exit code from a `waitpid` status: 128 + the signal if killed."""
+    return (s >> 8) & 0xFF if s & 0x7F == 0 else 128 + (s & 0x7F)
+
+
+@fieldwise_init
+struct Capture(Copyable, Movable):
+    """A command started with its standard output going to a file of its
+    own, to be read when it ends (`capture` waits; the scheduler checks on
+    it from tick to tick). It leads a process group of its own, so killing
+    it kills what it started too."""
+
+    var pid: Int
+    var path: String
+    var what: String
+    """The command, for messages."""
+    var started: Int
+    """When it started, on the monotonic clock in nanoseconds."""
+    var code: Int
+    """Its exit code once it has ended, else -1."""
+
+    @staticmethod
+    def start(argv: List[String]) raises -> Capture:
+        """Starts `argv` (`argv[0]` looked up on `PATH`), its stdout to a
+        new file under `TMPDIR`, its stderr shared with this process."""
+        if len(argv) == 0:
+            raise Error("capture: no program")
+        var what = String()
+        for i in range(len(argv)):
+            what.write(" " if i > 0 else "", argv[i])
+        var t = Int(perf_counter_ns())
+        var path = String(
+            getenv("TMPDIR", "/tmp").rstrip("/"),
+            "/orca-out-",
+            external_call["getpid", c_int](),
+            "-",
+            t,
         )
-        if n <= 0:
-            break
-        for k in range(n):
-            out.append(buf[k])
-    var s = Int(external_call["pclose", c_int](f))
-    var code = (s >> 8) & 0xFF if s & 0x7F == 0 else 128 + (s & 0x7F)
-    return (code, String(from_utf8_lossy=Span(out)))
+        var args = List[List[UInt8]]()
+        for a in argv:
+            args.append(_cstr(a))
+        var ptrs = List[Int]()
+        for i in range(len(args)):
+            ptrs.append(Int(args[i].unsafe_ptr()))
+        ptrs.append(0)
+        var path_c = _cstr(path)
+        var mode = _cstr("w")
+        var pid = external_call["fork", c_int]()
+        if pid < 0:
+            raise Error("capture: fork failed for ", what)
+        if pid == 0:
+            _ = external_call["setpgid", c_int](c_int(0), c_int(0))
+            var f = external_call["fopen", Int](
+                path_c.unsafe_ptr(), mode.unsafe_ptr()
+            )
+            if f == 0:
+                external_call["_exit", NoneType](c_int(126))
+            var fd = external_call["fileno", c_int](f)
+            _ = external_call["dup2", c_int](fd, c_int(1))
+            _ = external_call["execvp", c_int](
+                args[0].unsafe_ptr(), ptrs.unsafe_ptr()
+            )
+            external_call["_exit", NoneType](c_int(127))
+        _ = args^
+        _ = ptrs^
+        return Capture(Int(pid), path^, what^, t, -1)
+
+    def seconds(self) -> Float64:
+        """How long it has been going."""
+        return Float64(Int(perf_counter_ns()) - self.started) / 1e9
+
+    def ended(mut self) -> Bool:
+        """Whether it has ended, waiting for it if it has (not if the
+        scheduler's `reap` got to it first, which sets `code`)."""
+        if self.code >= 0:
+            return True
+        var status = stack_allocation[1, c_int]()
+        status[] = 0
+        var got = external_call["waitpid", c_int](
+            c_int(self.pid), status, c_int(1)
+        )
+        if got == c_int(self.pid):
+            self.code = _code(Int(status[]))
+        elif got < 0:
+            self.code = 255  # not our child any more: someone reaped it
+        return self.code >= 0
+
+    def kill(mut self):
+        """Kills it and what it started, and forgets its output."""
+        _ = external_call["kill", c_int](c_int(-self.pid), c_int(9))
+        _ = external_call["kill", c_int](c_int(self.pid), c_int(9))
+        self._remove()
+
+    def output(mut self) raises -> String:
+        """What it printed, once it has ended; the file is removed."""
+        var text: String
+        with open(self.path, "r") as f:
+            text = f.read()
+        self._remove()
+        return text^
+
+    def _remove(self):
+        try:
+            remove(self.path)
+        except:
+            pass
+
+    def timed_out(self, limit: Float64) -> Error:
+        return Error(
+            "`",
+            self.what,
+            "` took longer than ",
+            Int(limit),
+            " s, and was killed",
+        )
+
+
+def capture(
+    argv: List[String], timeout: Float64 = 0
+) raises -> Tuple[Int, String]:
+    """Runs `argv` to the end and returns its exit code and standard output.
+    With a `timeout` (seconds), a command still going then is killed, with
+    what it started, and this raises saying so."""
+    var c = Capture.start(argv)
+    while not c.ended():
+        if timeout > 0 and c.seconds() > timeout:
+            c.kill()
+            var status = stack_allocation[1, c_int]()
+            _ = external_call["waitpid", c_int](c_int(c.pid), status, c_int(0))
+            raise c.timed_out(timeout)
+        sleep(0.005)
+    return (c.code, c.output())
 
 
 def absolute(path: String) raises -> String:

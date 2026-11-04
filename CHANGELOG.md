@@ -89,6 +89,15 @@
   failed run is) with the timeout as its error. Both write an `orca.audit`
   row. The scheduler kills a local process of its own whose heartbeat
   went stale before it acts on the run. `runs.cancel_at`, migration 19.
+- **A pipeline binary that hangs no longer stalls the scheduler or the UI**
+  (#64). `capture` takes a timeout and kills the command's process group
+  past it. The scheduler runs `sense` and `keys` in children it checks on
+  each tick instead of waiting for them, killing one still going after
+  `ORCA_BINARY_SECONDS` (default 300) and keeping that as the sensor's
+  `sense_error`; `orca tick` still waits. `dista-status` and `dista-drain`
+  get 10 s. A keyed sensor's keys are read again only for a newer snapshot
+  of its keys dataset, and kept in `orca.keys` (migration 20), which the
+  UI's keyed page shows instead of running `keys` on every view.
 
 - **Behind an HTTPS proxy, the UI's forms work** (#57). The `Origin` check
   compared the browser's `Origin` with `http://` + `Host`, so behind Caddy

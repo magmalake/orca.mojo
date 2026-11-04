@@ -105,6 +105,8 @@ from orca.live import live_sql
 from orca.scheduler import (
     current_keys,
     done_keys,
+    keep_keys,
+    kept_keys,
     fill_key,
     registered,
 )
@@ -1285,6 +1287,24 @@ struct KeyCounts(Copyable, Movable):
     """Keys not done or in a live run, with a failed or skipped step."""
     var error: String
     """Why its keys couldn't be read, or empty."""
+    var read_at: String
+    """When `<binary> keys` printed them."""
+    var note: String
+    """Why they're older than they'd be, or empty."""
+
+
+comptime _UI_KEYS_SECONDS = 10.0
+"""How long the page waits for `<binary> keys` before showing the keys
+last read, if any: it runs on the server's one thread."""
+
+
+def _keys_seconds() -> Float64:
+    """How old kept keys may be before the page reads them again: the
+    scheduler's `ORCA_SENSE_SECONDS` (60)."""
+    try:
+        return Float64(getenv("ORCA_SENSE_SECONDS", "60"))
+    except:
+        return 60.0
 
 
 comptime _FAILED_SQL = (
@@ -1297,13 +1317,38 @@ comptime _FAILED_SQL = (
 def _key_counts(mut db: State, name: String) raises -> KeyCounts:
     var ps = registered(db, name)
     if len(ps) == 0:
-        return KeyCounts("", -1, 0, 0, 0, List[String](), "not registered")
+        return KeyCounts(
+            "", -1, 0, 0, 0, List[String](), "not registered", "", ""
+        )
     ref p = ps[0]
+    # The keys last read (by the scheduler, or this page) while they're
+    # fresh, so a view doesn't scan the keys column each time.
     var got: Tuple[Int64, List[String]]
-    try:
-        got = current_keys(p)
-    except e:
-        return KeyCounts(p.keys_dataset, -1, 0, 0, 0, List[String](), String(e))
+    var note = String()
+    var kept = kept_keys(db, name)
+    if kept and kept.value().age < _keys_seconds():
+        got = (kept.value().snapshot, kept.value().keys.copy())
+    else:
+        try:
+            got = current_keys(p, _UI_KEYS_SECONDS)
+            keep_keys(db, name, got)
+            kept = kept_keys(db, name)
+        except e:
+            if not kept:
+                return KeyCounts(
+                    p.keys_dataset,
+                    -1,
+                    0,
+                    0,
+                    0,
+                    List[String](),
+                    String(e),
+                    "",
+                    "",
+                )
+            got = (kept.value().snapshot, kept.value().keys.copy())
+            note = String("reading them again failed: ", e)
+    var read_at = kept.value().read_at if kept else String()
     var done = done_keys(db, name, got[1])
     var live = Dict[String, Bool]()
     for r in db.conn.query(live_sql(), Params().text(name)):
@@ -1320,7 +1365,15 @@ def _key_counts(mut db: State, name: String) raises -> KeyCounts:
         for r in db.conn.query(_FAILED_SQL, Params().text(name).text(open)):
             failed.append(r.text("key"))
     return KeyCounts(
-        p.keys_dataset, got[0], len(got[1]), len(done), n_live, failed^, ""
+        p.keys_dataset,
+        got[0],
+        len(got[1]),
+        len(done),
+        n_live,
+        failed^,
+        "",
+        read_at,
+        note,
     )
 
 
@@ -1339,7 +1392,15 @@ def _json_keys(mut out: String, k: KeyCounts):
         ', "failed": ',
     )
     _json_strings(out, k.failed)
-    out.write(', "error": ', quote(k.error), "}")
+    out.write(
+        ', "error": ',
+        quote(k.error),
+        ', "read_at": ',
+        quote(k.read_at),
+        ', "note": ',
+        quote(k.note),
+        "}",
+    )
 
 
 def _keys_html(mut h: Html, name: String, k: KeyCounts):
@@ -1353,6 +1414,14 @@ def _keys_html(mut h: Html, name: String, k: KeyCounts):
     h.link(_dataset_href(k.dataset), k.dataset)
     h.raw(" @ ")
     h.text(k.snapshot)
+    if k.read_at:
+        h.raw(' <span class="muted">read ')
+        h.text(k.read_at)
+        h.raw("</span>")
+    if k.note:
+        h.raw(' <span class="error">')
+        h.text(k.note)
+        h.raw("</span>")
     h.raw("</dd><dt>Keys</dt><dd>")
     h.text(k.total)
     h.raw("</dd><dt>Done</dt><dd>")
