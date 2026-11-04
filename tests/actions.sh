@@ -134,6 +134,26 @@ code=$(curl -s -o "$log.body" -w '%{http_code}' -H 'Accept: application/json' -H
 curl -fsS "$base/pipelines/toy" | grep -q 'name="rerun"' || fail "no rerun checkbox on the backfill form"
 for r in $(json '/runs?trigger=backfill' | jq -r '.runs[].id'); do until_status "$r" succeeded; done
 
+# Partitions from a file are the CLI's: the UI refuses @file: with a 400 and
+# reads nothing, so a logged-in user can't make it echo a file's lines. The
+# keyed pipeline is a stand-in whose `keys` prints two names.
+printf '#!/bin/sh\n[ "$1" = keys ] && printf "1\\nalice\\nbob\\n"\n' > build/actions-keyed.sh
+chmod +x build/actions-keyed.sh
+psql "$ORCA_DATABASE_URL" -qc "INSERT INTO orca.pipelines (name, registry_hash, describe, binary_path)
+    VALUES ('names', 'k', '{\"pipeline\": \"names\", \"partitions\": {\"kind\": \"keyed\",
+    \"dataset\": \"people.names\"}, \"steps\": []}', '$PWD/build/actions-keyed.sh')" > /dev/null
+[ "$(post /pipelines/names/runs partitions=carol)" = 409 ] || fail "a key the stand-in hasn't was started"
+grep -q 'a key of people.names' "$log.body" || fail "the keyed refusal: $(cat "$log.body")"
+printf 'secret value, line one\nalice\n' > build/actions-secret.txt
+for action in runs backfill; do
+    code=$(post "/pipelines/names/$action" "partitions=@file:$PWD/build/actions-secret.txt")
+    [ "$code" = 400 ] || fail "$action with @file: answered $code: $(cat "$log.body")"
+    grep -q 'secret value' "$log.body" && fail "$action with @file: echoed the file"
+    code=$(post "/pipelines/toy/$action" partitions=@file:/etc/passwd)
+    [ "$code" = 400 ] || fail "$action of toy with @file: answered $code"
+done
+[ "$(json '/runs?pipeline=names' | jq '.runs | length')" -eq 0 ] || fail "@file: queued a run"
+
 # Cancel a queued run: it never starts.
 kill "$sched"; wait "$sched" 2> /dev/null || true; sched=
 [ "$(post /pipelines/toy/runs partitions=2024-07)" = 303 ] || fail "start 2024-07"

@@ -73,7 +73,7 @@ from orca.ec2 import Ec2Runner, Ec2Spec
 from orca.kube import KubeRunner, RunSpec, cpu_millis
 from orca.logs import is_remote, publish, run_dir, stage_of
 from orca.month import Month
-from orca.name import parse_names, sort_texts
+from orca.name import Name, parse_names, sort_texts
 from orca.proc import absolute, capture, reap, spawn
 from orca.schedule import Schedule
 from orca.secrets import parse_secrets, secrets_json
@@ -294,9 +294,17 @@ def _file_names(path: String) raises -> String:
     with open(path, "r") as f:
         text = f.read()
     var joined = String()
+    var at = 0
     for line in text.splitlines():
+        at += 1
         var n = line.strip()
         if n:
+            # The error names the line, not its text: a file's other
+            # contents stay out of the message.
+            try:
+                _ = Name.parse(n)
+            except:
+                raise Error("orca: line ", at, " of ", path, " isn't a name")
             joined.write("," if joined else "", n)
     if not joined:
         raise Error("orca: no names in ", path)
