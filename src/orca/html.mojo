@@ -130,10 +130,37 @@ struct Html(Movable, Writable):
             self.out.write(escape(String(values[i])))
         self.out.write("</td>")
 
+    def mono[*Ts: Writable](mut self, *values: *Ts):
+        """A `<td>` in the monospace font: an id, a partition, a time."""
+        self.out.write('<td class="mono">')
+        comptime for i in range(values.__len__()):
+            self.out.write(escape(String(values[i])))
+        self.out.write("</td>")
+
+    def num[*Ts: Writable](mut self, *values: *Ts):
+        """A `<td>` of a count, right-aligned in tabular figures."""
+        self.out.write('<td class="num">')
+        comptime for i in range(values.__len__()):
+            self.out.write(escape(String(values[i])))
+        self.out.write("</td>")
+
+    def chip(mut self, href: StringSlice, label: StringSlice):
+        """A link to a run, as a small chip of its number."""
+        self.out.write(
+            '<a class="chip" href="', escape(href), '">', escape(label), "</a>"
+        )
+
     def status(mut self, s: StringSlice):
-        """A status as a badge, its class named after it."""
+        """A status as a badge, its class named after it (a space in the
+        status is a hyphen in the class)."""
         var e = escape(s)
-        self.out.write('<span class="status status--', e, '">', e, "</span>")
+        self.out.write(
+            '<span class="status status--',
+            e.replace(" ", "-"),
+            '">',
+            e,
+            "</span>",
+        )
 
     def finish(deinit self) -> String:
         """The page written."""
