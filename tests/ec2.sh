@@ -8,7 +8,7 @@
 #   (c7g.xlarge), all tagged with the run; its tasks reach all 3 workers;
 #   a worker terminated mid-run (a Spot interruption) is survived;
 # - nothing of a run is left running after it, and its driver log is kept,
-#   and each instance's samples (orca.sample), the lost worker's too;
+#   and each instance's samples (orca.sample);
 # - a head terminated mid-run is restarted on new instances (start 2), which
 #   succeed;
 # - with ORCA_VCPU_BUDGET room for one fanout run's 14 vCPUs and not one
@@ -140,12 +140,17 @@ for w in $workers; do
 done
 head_id=$(ids_of "$f1" head | head -1)
 [ -s "$ORCA_LOGS/fanout/$f1/cluster/head-$head_id.log" ] || fail "the head's log"
-# One metrics file per instance, each with the instance's processes resident.
+# A metrics file per instance that lived, each with the instance's
+# processes resident; the worker lost mid-run keeps what it had uploaded,
+# if it lived long enough to upload any.
 m=$ORCA_LOGS/fanout/$f1/metrics
-[ "$(ls "$m" | sort | tr '\n' ' ')" = "$(for i in "head-$head_id" $(for w in $workers; do echo "worker-$w"; done); do echo "$i.jsonl"; done | sort | tr '\n' ' ')" ] \
-    || fail "run $f1's metrics: $(ls "$m" | tr '\n' ' ')"
-# The worker lost mid-run kept what it had uploaded.
-python3 tests/metrics_ok.py --rss "$m"/*.jsonl > /dev/null || fail "run $f1's metrics"
+lost=$(echo "$workers" | head -1)
+for i in "head-$head_id" $(for w in $workers; do [ "$w" = "$lost" ] || echo "worker-$w"; done); do
+    python3 tests/metrics_ok.py --rss "$m/$i.jsonl" > /dev/null || fail "run $f1's metrics of $i: $(ls "$m" | tr '\n' ' ')"
+done
+[ "$(ls "$m" | grep -cv -e "^head-$head_id.jsonl$" -e "^worker-")" -eq 0 ] || fail "run $f1's metrics: $(ls "$m" | tr '\n' ' ')"
+[ ! -e "$m/worker-$lost.jsonl" ] || python3 tests/metrics_ok.py "$m/worker-$lost.jsonl" > /dev/null \
+    || fail "the lost worker's metrics"
 python3 tests/metrics_ok.py --min 3 "$m/head-$head_id.jsonl" > /dev/null || fail "run $f1's head's metrics"
 echo "ok   a fanout run on a head and 3 Spot workers, its tasks on all 3, one lost, nothing left, metrics kept"
 
