@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A dated pipeline may write a keyed sensor's keys.** `orca register` no
+  longer refuses a keyed sensor whose keys dataset a daily or monthly
+  pipeline writes: a new snapshot of the keys dataset offers the keys it
+  holds, and the sensor queues those that aren't done, so no rule from dates
+  to names is needed. A keyed sensor reading any other dataset a
+  time-partitioned pipeline writes, or the other way round, is still
+  refused. `orca lineage` follows a step's declared read of the keys dataset
+  back to the pipeline that wrote it.
+
 - **Names can hold a `/`.** A keyed pipeline's keys may now be
   `owner/name`, such as GitHub repositories: a `Name` is 1 to 128 bytes of
   `A-Z a-z 0-9 . _ : - /`, still without `..` or a comma, and with a `/`
