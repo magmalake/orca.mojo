@@ -306,7 +306,11 @@ def _file_names(path: String) raises -> String:
 def kind_mismatch(mut db: State, describe: String) raises -> String:
     """How the pipeline `describe` gives would make a sensor run keys of the
     other kind, a keyed sensor reading a dataset a time-partitioned
-    pipeline writes or the other way round, or empty if it wouldn't."""
+    pipeline writes or the other way round, or empty if it wouldn't.
+
+    A keyed sensor's own keys dataset needs no mapping, whoever writes it:
+    a new snapshot of it offers the keys it holds, which are names already.
+    So a dated pipeline may write the keys a keyed sensor runs."""
     var rows = db.conn.query(
         (
             "WITH d AS (SELECT name, describe FROM orca.pipelines WHERE name"
@@ -314,18 +318,20 @@ def kind_mismatch(mut db: State, describe: String) raises -> String:
             "'pipeline', $1::jsonb), io AS (SELECT DISTINCT d.name,"
             " coalesce(d.describe->'partitions'->>'kind', 'monthly') AS"
             " pkind, coalesce((d.describe->>'sensor')::boolean, false) AS"
-            " sensor, k.kind, x.ds FROM d, jsonb_array_elements(d.describe->"
+            " sensor, k.kind, x.ds, coalesce(d.describe->'partitions'->>"
+            "'dataset', '') AS keys FROM d, jsonb_array_elements(d.describe->"
             "'steps') AS s(st), (VALUES ('reads'), ('writes')) AS k(kind),"
             " jsonb_array_elements_text(coalesce(s.st->k.kind, '[]')) AS"
             " x(ds) UNION SELECT d.name, 'keyed', coalesce((d.describe->>"
             "'sensor')::boolean, false), 'reads', d.describe->'partitions'->>"
-            "'dataset' FROM d WHERE d.describe->'partitions'->>'dataset' IS"
-            " NOT NULL) SELECT w.name AS writer, w.pkind AS wkind, r.name AS"
-            " reader, r.pkind AS rkind, w.ds FROM io w JOIN io r ON r.ds ="
-            " w.ds AND r.kind = 'reads' WHERE w.kind = 'writes' AND w.name <>"
-            " r.name AND r.sensor AND (w.pkind = 'keyed') <> (r.pkind ="
-            " 'keyed') AND $1::jsonb->>'pipeline' IN (w.name, r.name) ORDER BY"
-            " 1, 3, 5 LIMIT 1"
+            "'dataset', d.describe->'partitions'->>'dataset' FROM d WHERE"
+            " d.describe->'partitions'->>'dataset' IS NOT NULL) SELECT w.name"
+            " AS writer, w.pkind AS wkind, r.name AS reader, r.pkind AS rkind,"
+            " w.ds FROM io w JOIN io r ON r.ds = w.ds AND r.kind = 'reads'"
+            " WHERE w.kind = 'writes' AND w.name <> r.name AND r.sensor AND"
+            " (w.pkind = 'keyed') <> (r.pkind = 'keyed') AND NOT (r.pkind ="
+            " 'keyed' AND r.ds = r.keys) AND $1::jsonb->>'pipeline' IN"
+            " (w.name, r.name) ORDER BY 1, 3, 5 LIMIT 1"
         ),
         Params().text(describe),
     )

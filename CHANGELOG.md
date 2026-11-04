@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A dated pipeline may write a keyed sensor's keys.** `orca register` no
+  longer refuses a keyed sensor whose keys dataset a daily or monthly
+  pipeline writes: a new snapshot of the keys dataset offers the keys it
+  holds, and the sensor queues those that aren't done, so no rule from dates
+  to names is needed. A keyed sensor reading any other dataset a
+  time-partitioned pipeline writes, or the other way round, is still
+  refused. `orca lineage` follows a step's declared read of the keys dataset
+  back to the pipeline that wrote it.
+
 - **`orca backfill --rerun`.** A backfill skips keys that are done, so
   there was no way from the command line to run a finished day or month
   again. `orca backfill --rerun <pipeline> KEYS` queues the done keys as
