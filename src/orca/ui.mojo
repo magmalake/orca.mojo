@@ -24,7 +24,7 @@ And the actions, each a `POST` of a form (see `orca.actions`):
 | `POST` | |
 |---|---|
 | `/pipelines/<name>/runs` | start a run over `partitions` |
-| `/pipelines/<name>/backfill` | a run per partition in `partitions` that has none |
+| `/pipelines/<name>/backfill` | a run per partition in `partitions` that has none; `rerun=1` for done ones too |
 | `/runs/<id>/resume` | queue a failed, cancelled or stalled run again; `allow_new_code=1` confirms new code |
 | `/runs/<id>/rerun` | a new run from `step` on, the steps before it copied |
 | `/runs/<id>/cancel` | cancel a run, before its next attempt if it's running |
@@ -1505,7 +1505,9 @@ def pipeline(mut db: State, name: String) raises -> Page:
         else:
             h.text(example, "..", example)
         h.raw(
-            '"></label><button type="submit">Backfill</button></form></div>',
+            '"></label><label><input type="checkbox" name="rerun" value="1">',
+            " and what is</label>",
+            '<button type="submit">Backfill</button></form></div>',
             '<p class="muted more">The scheduler (<code>orca scheduler',
             "</code>) starts queued runs, up to ",
         )
@@ -2869,7 +2871,9 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
             var to = String("/runs/", o.run)
             return _acted(o, back, String('{"run": ', o.run, "}"), to)
         if parts[3] == "backfill":
-            var o = backfill_runs(db, name, keys)
+            var o = backfill_runs(
+                db, name, keys, rerun=_form(body, "rerun") == "1"
+            )
             var to = String("/runs?pipeline=", url_encode(name))
             return _acted(o, back, String('{"queued": ', o.queued, "}"), to)
     if len(parts) == 4 and parts[1] == "datasets" and parts[3] == "rebuild":

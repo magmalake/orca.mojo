@@ -12,6 +12,7 @@ Its commands:
     ./build/orca locate ./build/taxi --root .   # taxi.source.json, for the UI's links
     ./build/orca register ./build/taxi [...]
     ./build/orca backfill taxi 2011-01..2024-12
+    ./build/orca backfill --rerun taxi 2024-03     # again, though it succeeded
     ./build/orca tick
     ./build/orca scheduler
     ./build/orca ui                 # http://127.0.0.1:8270, or ORCA_UI_ADDR
@@ -46,7 +47,8 @@ comptime USAGE = """usage:
   orca register [--image <image>] [--head-type T] [--worker-type T]
                 [--workers N|MIN..MAX] [--spot] [--secret NAME=ID ...]
                 <pipeline binary> [...]
-  orca backfill <pipeline> KEY[..KEY][,...]   (keyed: NAME[,...]|@all|@file:<path>)
+  orca backfill [--rerun] <pipeline> KEY[..KEY][,...]
+                (keyed: NAME[,...]|@all|@file:<path>; --rerun: done ones too)
   orca tick
   orca scheduler
   orca ui
@@ -163,9 +165,18 @@ def _command(args: List[String]) raises -> Int:
                 ),
             )
         return 0
-    if cmd == "backfill" and len(args) == 4:
+    if cmd == "backfill" and (
+        len(args) == 4 or (len(args) == 5 and args[2] == "--rerun")
+    ):
+        # --rerun queues keys that are done as well; a key in a queued or
+        # running run is still left to it.
+        var rerun = len(args) == 5
         var s = Scheduler(url)
-        print("queued", s.backfill(args[2], args[3]), "runs")
+        print(
+            "queued",
+            s.backfill(args[len(args) - 2], args[len(args) - 1], rerun),
+            "runs",
+        )
         return 0
     if cmd == "tick" and len(args) == 2:
         var s = Scheduler(url)

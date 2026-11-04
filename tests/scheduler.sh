@@ -2,7 +2,7 @@
 # The orca scheduler over examples/toy.mojo (03:00 UTC on the 2nd, for the
 # month before, from 2024-01, max_runs=2), with ORCA_NOW stepping time:
 # fires once each, catch-up, ticks racing, max_runs, retries with backoff, a
-# killed run restarted, and a backfill. Needs ORCA_DATABASE_URL (pixi run
+# killed run restarted, and a backfill, then one with --rerun. Needs ORCA_DATABASE_URL (pixi run
 # test-scheduler starts a throwaway server).
 set -eu
 cd "$(dirname "$0")/.."
@@ -120,6 +120,26 @@ while [ "$(q "SELECT count(*) FROM orca.runs WHERE status IN ('queued', 'running
 done
 for m in 2024-01 2024-02 2024-03 2024-04 2024-05 2024-06 2024-07 2024-08 2024-09 2024-10 2024-11 2024-12; do
     [ "$(succeeded $m)" -eq 1 ] || fail "$m didn't succeed exactly once"
+done
+
+# Done months aren't backfilled again, unless with --rerun, which still
+# leaves a month that's queued alone.
+out=$(ORCA_NOW=2024-08-02T04:00Z ./build/orca backfill toy 2024-03..2024-04) || fail "backfill exited $?"
+[ "$out" = "queued 0 runs" ] || fail "a backfill of done months: $out"
+out=$(ORCA_NOW=2024-08-02T04:00Z ./build/orca backfill --rerun toy 2024-03..2024-04) || fail "backfill --rerun exited $?"
+[ "$out" = "queued 2 runs" ] || fail "backfill --rerun: $out"
+out=$(ORCA_NOW=2024-08-02T04:00Z ./build/orca backfill --rerun toy 2024-03..2024-04) || fail "backfill --rerun again exited $?"
+[ "$out" = "queued 0 runs" ] || fail "backfill --rerun of queued months: $out"
+[ "$(q "SELECT count(*) FROM orca.runs WHERE status = 'queued' AND trigger = 'backfill'")" -eq 2 ] || fail "the reruns' runs"
+code=0
+ORCA_NOW=2024-08-02T04:00Z ./build/orca backfill --again toy 2024-03 >> "$log" 2>&1 || code=$?
+[ "$code" -eq 2 ] || fail "an unknown backfill option exited $code"
+while [ "$(q "SELECT count(*) FROM orca.runs WHERE status IN ('queued', 'running')")" -gt 0 ]; do
+    ORCA_TOY_SLEEP=0 ORCA_NOW=2024-08-02T04:00Z ./build/orca tick >> "$log" 2>&1
+    sleep 0.2
+done
+for m in 2024-03 2024-04; do
+    [ "$(succeeded $m)" -eq 2 ] || fail "$m didn't succeed again"
 done
 
 # The daily example has catchup=False: registered on the 10th and first

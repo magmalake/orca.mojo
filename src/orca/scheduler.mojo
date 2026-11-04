@@ -417,19 +417,29 @@ def done_keys(
 
 
 def queue_keys(
-    mut db: State, p: Registered, keys: List[String], trigger: String
+    mut db: State,
+    p: Registered,
+    keys: List[String],
+    trigger: String,
+    rerun: Bool = False,
 ) raises -> List[Int]:
     """Queues runs of `p` over those of `keys` that aren't done and aren't
-    in a live run, sorted, `keys_per_run` to a run; returns the runs. Under
-    a lock on the pipeline's row, so two backfills don't both queue a key."""
+    in a live run, sorted, `keys_per_run` to a run; returns the runs. With
+    `rerun`, keys that are done are queued too, but never one in a live
+    run. Under a lock on the pipeline's row, so two backfills don't both
+    queue a key."""
     var tx = db.conn.begin()
-    var runs = _queue(tx, p, keys, trigger)
+    var runs = _queue(tx, p, keys, trigger, rerun)
     tx.commit()
     return runs^
 
 
 def _queue(
-    mut tx: Transaction, p: Registered, keys: List[String], trigger: String
+    mut tx: Transaction,
+    p: Registered,
+    keys: List[String],
+    trigger: String,
+    rerun: Bool = False,
 ) raises -> List[Int]:
     """`queue_keys` in `tx`."""
     _ = tx.query(
@@ -442,8 +452,9 @@ def _queue(
     var joined = String()
     for i in range(len(keys)):
         joined.write("," if i else "", keys[i])
-    for r in tx.query(DONE_SQL, Params().text(p.name).text(joined)):
-        skip[r.text("key")] = True
+    if not rerun:
+        for r in tx.query(DONE_SQL, Params().text(p.name).text(joined)):
+            skip[r.text("key")] = True
     var todo = List[String]()
     for k in keys:
         if k not in skip:
@@ -480,11 +491,14 @@ def _queue(
     return runs^
 
 
-def backfill(mut db: State, p: Registered, keys: String) raises -> Int:
+def backfill(
+    mut db: State, p: Registered, keys: String, rerun: Bool = False
+) raises -> Int:
     """Queues runs for the keys in `keys` that aren't done and aren't in a
     queued or running run, `keys_per_run` to a run; returns how many runs
-    it queued."""
-    return len(queue_keys(db, p, partition_keys(p, keys), "backfill"))
+    it queued. With `rerun` (`orca backfill --rerun`) the done ones are
+    queued again too, as for a day whose source has changed since."""
+    return len(queue_keys(db, p, partition_keys(p, keys), "backfill", rerun))
 
 
 struct Scheduler(Movable):
@@ -1222,10 +1236,12 @@ struct Scheduler(Movable):
                 self._driver_logs[pid] = log
             print("started", p.name, "run", id, "pid", pid)
 
-    def backfill(mut self, pipeline: String, keys: String) raises -> Int:
+    def backfill(
+        mut self, pipeline: String, keys: String, rerun: Bool = False
+    ) raises -> Int:
         """Queues a run for each partition in `keys` that has none; see
         `backfill`."""
         var ps = registered(self.db, pipeline)
         if len(ps) == 0:
             raise Error("orca: pipeline ", pipeline, " isn't registered")
-        return backfill(self.db, ps[0], keys)
+        return backfill(self.db, ps[0], keys, rerun)
