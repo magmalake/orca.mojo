@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: magmalake/k8s.mojo
-          ref: aa5eb7971284255bde3af8d799c213776ae92a9b
+          ref: 6cb83ce08e02234873f2d09c7501208eedb5589f
           path: k8s.mojo
 
       # The nightly compiles dista's dependencies from source too, because
@@ -74,7 +74,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: magmalake/flare_mlake
-          ref: 541259f938dd2913f691a8facc06882fb8f47ca0
+          ref: b1371866a7844afefe86b25eb8af58aaa9d3fa6c
           path: flare_mlake
       - if: matrix.env == 'nightly'
         uses: actions/checkout@v4
@@ -165,7 +165,7 @@ jobs:
       - uses: actions/checkout@v4
         with: {repository: magmalake/dista.mojo, ref: 9e4839937d82f36893285301bf9ce4338dcb14ec, path: dista.mojo}
       - uses: actions/checkout@v4
-        with: {repository: magmalake/k8s.mojo, ref: aa5eb7971284255bde3af8d799c213776ae92a9b, path: k8s.mojo}
+        with: {repository: magmalake/k8s.mojo, ref: 6cb83ce08e02234873f2d09c7501208eedb5589f, path: k8s.mojo}
       - uses: actions/checkout@v4
         with: {repository: magmalake/memory-region.mojo, ref: 40068c4f95ea659e9b78aa91ced45420b07e3e6e, path: memory-region.mojo}
       - uses: actions/checkout@v4

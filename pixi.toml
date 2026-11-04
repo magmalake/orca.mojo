@@ -2,7 +2,7 @@
 authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
 channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
 name = "orca.mojo"
-version = "0.3.1"
+version = "0.3.2"
 description = "Orchestration for Mojo data pipelines: DAGs in Mojo, cron schedules, a web UI."
 preview = ["pixi-build"]
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
@@ -17,7 +17,7 @@ postgresql = ">=16,<19"
 # revisions mojoshelf published of what it imports.
 [package]
 name = "orca-mojo"
-version = "0.3.1"
+version = "0.3.2"
 
 [package.build]
 backend = { name = "pixi-build-mojo", version = "0.*" }
@@ -31,14 +31,14 @@ extra-args = ["-I", "$PREFIX/lib/mojo"]
 [package.host-dependencies]
 mojo-compiler = "==1.2.0"
 dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "9e4839937d82f36893285301bf9ce4338dcb14ec" }
-k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "aa5eb7971284255bde3af8d799c213776ae92a9b" }
+k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "6cb83ce08e02234873f2d09c7501208eedb5589f" }
 iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "ec4f4e07605b687a2ea9e2fda5dfd4a01aa6ba97" }
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
 objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "41fac2800882e5a64da09729262dfa22bbd4ad13" }
 arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
 memory-region-mojo = { git = "https://github.com/magmalake/memory-region.mojo", rev = "40068c4f95ea659e9b78aa91ced45420b07e3e6e" }
 threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e780a8de77278c140cee36904e46e93e0ca1c" }
-flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "541259f938dd2913f691a8facc06882fb8f47ca0" }
+flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b1371866a7844afefe86b25eb8af58aaa9d3fa6c" }
 json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "bcaa7161e757748a1310a213e123bf8810ff7e96" }
 
 [package.build-dependencies]
@@ -48,14 +48,14 @@ mojo-compiler = "==1.2.0"
 mojo-compiler = ">=1.2.0,<2"
 libpq = ">=16,<19"
 dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "9e4839937d82f36893285301bf9ce4338dcb14ec" }
-k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "aa5eb7971284255bde3af8d799c213776ae92a9b" }
+k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "6cb83ce08e02234873f2d09c7501208eedb5589f" }
 iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "ec4f4e07605b687a2ea9e2fda5dfd4a01aa6ba97" }
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
 objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "41fac2800882e5a64da09729262dfa22bbd4ad13" }
 arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
 memory-region-mojo = { git = "https://github.com/magmalake/memory-region.mojo", rev = "40068c4f95ea659e9b78aa91ced45420b07e3e6e" }
 threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e780a8de77278c140cee36904e46e93e0ca1c" }
-flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "541259f938dd2913f691a8facc06882fb8f47ca0" }
+flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b1371866a7844afefe86b25eb8af58aaa9d3fa6c" }
 json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "bcaa7161e757748a1310a213e123bf8810ff7e96" }
 
 
@@ -112,7 +112,7 @@ threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e7
 # `orca ui` serves its pages with flare. Pinned at the revision mojoshelf
 # published as flare_mlake 0.13.0, which pins threads at the revision above
 # and json_mlake at 0.4.2's revision; it builds its own native shims.
-flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "541259f938dd2913f691a8facc06882fb8f47ca0" }
+flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b1371866a7844afefe86b25eb8af58aaa9d3fa6c" }
 json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "bcaa7161e757748a1310a213e123bf8810ff7e96" }
 
 [feature.stable.activation.env]
@@ -170,7 +170,7 @@ sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
 # The orca binary, which tests/lineage.sh builds for `orca lineage` and
 # `orca ui`, serves the UI with flare: the stable environment's pins.
-flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "541259f938dd2913f691a8facc06882fb8f47ca0" }
+flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b1371866a7844afefe86b25eb8af58aaa9d3fa6c" }
 json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "bcaa7161e757748a1310a213e123bf8810ff7e96" }
 libcurl = ">=8,<9"
 libsqlite = ">=3.45,<4"

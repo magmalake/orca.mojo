@@ -15,7 +15,7 @@
 # CI checks out, cloned next to orca as pixi.toml expects.
 FROM ghcr.io/prefix-dev/pixi:0.78.0 AS build
 ARG DISTA_REV=9e4839937d82f36893285301bf9ce4338dcb14ec
-ARG K8S_REV=aa5eb7971284255bde3af8d799c213776ae92a9b
+ARG K8S_REV=6cb83ce08e02234873f2d09c7501208eedb5589f
 ARG PIPELINES="examples/toy.mojo examples/fanout.mojo"
 ARG ORCA_SOURCE=""
 ARG ORCA_COMMIT=""
