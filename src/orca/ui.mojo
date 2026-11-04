@@ -2911,6 +2911,33 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
     return None
 
 
+def _scheme(req: Request) raises -> String:
+    """The scheme the browser used: behind a proxy (`ORCA_UI_TRUST_PROXY=1`)
+    the first of `X-Forwarded-Proto`, else `https` with
+    `ORCA_UI_SECURE_COOKIES=1` (secure cookies imply TLS in front), else
+    `http`."""
+    if getenv("ORCA_UI_TRUST_PROXY") == "1":
+        var fwd = req.headers.get("X-Forwarded-Proto")
+        if fwd:
+            var first = String(fwd.split(",")[0].strip()).lower()
+            if first == "http" or first == "https":
+                return first
+    if getenv("ORCA_UI_SECURE_COOKIES") == "1":
+        return "https"
+    return "http"
+
+
+def _without_default_port(origin: String) -> String:
+    """`origin` (`scheme://host[:port]`), lower case, without the scheme's
+    default port, which a browser leaves out of `Origin`."""
+    var o = origin.lower()
+    if o.startswith("https://") and o.endswith(":443"):
+        return String(o[byte = : o.byte_length() - 4])
+    if o.startswith("http://") and o.endswith(":80"):
+        return String(o[byte = : o.byte_length() - 3])
+    return o^
+
+
 def _bad_request(why: String) -> Page:
     """A 400: the form asked for something the UI never does."""
     var h = Html()
@@ -2924,16 +2951,23 @@ def _bad_request(why: String) -> Page:
 
 def _same_origin(req: Request) raises -> Bool:
     """Whether a `POST` came from the UI's own pages: its `Origin`, or
-    without one its `Referer`, is this server as the request addressed it."""
+    without one its `Referer`, is this server as the browser addressed it,
+    by `Host` and the scheme `_scheme` gives. Host and scheme compare in
+    any case."""
     var host = req.headers.get("Host")
     if not host:
         return False
-    var own = String("http://", host)
+    var own = _without_default_port(String(_scheme(req), "://", host))
     var origin = req.headers.get("Origin")
     if origin:
-        return origin == own
+        return _without_default_port(origin) == own
     var referer = req.headers.get("Referer")
-    return referer == own or referer.startswith(String(own, "/"))
+    if not referer:
+        return False
+    # The Referer's origin is what comes before the path's first '/'.
+    var rest = referer.find("/", referer.find("://") + 3)
+    var ref_origin = String(referer[byte=:rest]) if rest >= 0 else referer
+    return _without_default_port(ref_origin) == own
 
 
 # ── serving ──────────────────────────────────────────────────────────────────
