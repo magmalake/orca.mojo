@@ -15,8 +15,8 @@ For a keyed pipeline (`orca.keyed`), `--partitions` takes names: a list,
 refused, as a malformed key is, with exit code 2.
 
 With `ORCA_DATABASE_URL` set, runs are recorded in Postgres and can be
-resumed; without it, `run` runs in memory and `resume` and `status` aren't
-available. `run` records the pipeline the first time; once `orca register`
+resumed; without it, `run` records its run in memory (`MemoryStore`, run 0)
+on the same path, and `resume` and `status` aren't available. `run` records the pipeline the first time; once `orca register`
 has given it a binary, `run` leaves the registration as it is, since what
 the scheduler queues and counts as done is that code's. A binary whose code
 isn't the registered one's is refused (exit code 2) unless `run` is given
@@ -68,6 +68,7 @@ from orca.store import (
     CANCELLED,
     FAILED,
     SUCCEEDED,
+    MemoryStore,
     RunResult,
     RunStore,
     process_owner,
@@ -216,11 +217,10 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         except e:
             _usage(String(e))
             return 2
-        if not url:
-            var res = P.run(keys)
-            report(res)
-            return 0 if res.succeeded() else 1
         var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
+        if not url:
+            var mem = MemoryStore()
+            return _run[P](rt, mem, keys, new_code)
         var store = PgStore(url)
         return _run[P](rt, store, keys, new_code)
     if cmd == "resume":
