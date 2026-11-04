@@ -32,7 +32,7 @@ extra-args = ["-I", "$PREFIX/lib/mojo"]
 mojo-compiler = "==1.2.0"
 dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "9e4839937d82f36893285301bf9ce4338dcb14ec" }
 k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "aa5eb7971284255bde3af8d799c213776ae92a9b" }
-iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "2177fcc0e878cd0d8af6601844f12961a3336440" }
+iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "ec4f4e07605b687a2ea9e2fda5dfd4a01aa6ba97" }
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
 objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "41fac2800882e5a64da09729262dfa22bbd4ad13" }
 arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
@@ -49,7 +49,7 @@ mojo-compiler = ">=1.2.0,<2"
 libpq = ">=16,<19"
 dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "9e4839937d82f36893285301bf9ce4338dcb14ec" }
 k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "aa5eb7971284255bde3af8d799c213776ae92a9b" }
-iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "2177fcc0e878cd0d8af6601844f12961a3336440" }
+iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "ec4f4e07605b687a2ea9e2fda5dfd4a01aa6ba97" }
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
 objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "41fac2800882e5a64da09729262dfa22bbd4ad13" }
 arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
