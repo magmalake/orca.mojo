@@ -174,6 +174,8 @@ struct RunRow(Copyable, Movable):
     var cancel_requested: Bool
     var stalled: Bool
     """`running` with no live process (`orca.actions.stalled_sql`)."""
+    var error: String
+    """Why the run ended without its steps saying so (`runs.error`)."""
 
 
 @fieldwise_init
@@ -375,7 +377,7 @@ def _runs(
             _ts("started"),
             " AS started, ",
             _ts("ended"),
-            " AS ended, cancel_requested, ",
+            " AS ended, cancel_requested, coalesce(error, '') AS error, ",
             stalled_sql(),
             " AS stalled FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
             " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) ORDER BY",
@@ -398,6 +400,7 @@ def _runs(
                 r.text("ended"),
                 r.bool("cancel_requested"),
                 r.bool("stalled"),
+                r.text("error"),
             )
         )
     return out^
@@ -928,6 +931,8 @@ def _json_run(mut out: String, r: RunRow):
         "true" if r.cancel_requested else "false",
         ', "stalled": ',
         "true" if r.stalled else "false",
+        ', "error": ',
+        quote(r.error),
         "}",
     )
 
@@ -1779,6 +1784,10 @@ def run(mut db: State, id: Int) raises -> Page:
                 ' <a href="https://ui.perfetto.dev" target="_blank"',
                 ' rel="noopener">Perfetto</a>)</span></dd>',
             )
+    if r.error:
+        h.raw("<dt>Error</dt><dd>")
+        h.text(r.error)
+        h.raw("</dd>")
     if r.stalled:
         h.raw(
             "<dt>Process</dt><dd>stalled: its heartbeat stopped, so it can",
@@ -2268,7 +2277,7 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
             _ts("started"),
             " AS started, ",
             _ts("ended"),
-            " AS ended, cancel_requested, ",
+            " AS ended, cancel_requested, coalesce(error, '') AS error, ",
             stalled_sql(),
             " AS stalled FROM orca.runs WHERE id = $1",
         ),
@@ -2289,6 +2298,7 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
         r.text("ended"),
         r.bool("cancel_requested"),
         r.bool("stalled"),
+        r.text("error"),
     )
 
 

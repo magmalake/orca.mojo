@@ -269,6 +269,12 @@ def _migrations() -> List[List[String]]:
         [
             "ALTER TABLE orca.pipelines ADD COLUMN secrets jsonb",
         ],
+        # Why a run ended without running, or stopped where no step could
+        # say: code its binary refuses, a process that exited before it
+        # claimed the run, a cluster that couldn't start.
+        [
+            "ALTER TABLE orca.runs ADD COLUMN error text",
+        ],
     ]
 
 
@@ -294,6 +300,8 @@ struct RunInfo(Copyable, Movable):
     var partitions: String
     var status: String
     var owner: String
+    var error: String
+    """Why the run ended without its steps saying so, or empty."""
 
 
 @fieldwise_init
@@ -450,7 +458,8 @@ struct State(Movable):
         var res = self.conn.query(
             (
                 "SELECT pipeline, registry_hash, partitions, status,"
-                " coalesce(owner, '') AS owner FROM orca.runs WHERE id = $1"
+                " coalesce(owner, '') AS owner, coalesce(error, '') AS error"
+                " FROM orca.runs WHERE id = $1"
             ),
             Params().int64(Int64(run)),
         )
@@ -464,6 +473,7 @@ struct State(Movable):
             r.text("partitions"),
             r.text("status"),
             r.text("owner"),
+            r.text("error"),
         )
 
     def claim(mut self, run: Int, owner: String, stale_seconds: Float64) raises:
@@ -476,9 +486,9 @@ struct State(Movable):
         var res = self.conn.query(
             (
                 "UPDATE orca.runs SET status = 'running', owner = $2, heartbeat"
-                " = now(), ended = NULL WHERE id = $1 AND status IN ('queued',"
-                " 'running', 'failed') AND (heartbeat IS NULL OR heartbeat <"
-                " now() - make_interval(secs => $3)) RETURNING id"
+                " = now(), ended = NULL, error = NULL WHERE id = $1 AND status"
+                " IN ('queued', 'running', 'failed') AND (heartbeat IS NULL OR"
+                " heartbeat < now() - make_interval(secs => $3)) RETURNING id"
             ),
             Params().int64(Int64(run)).text(owner).float64(stale_seconds),
         )
@@ -573,8 +583,8 @@ struct State(Movable):
         var rows = self.conn.query(
             (
                 "SELECT id, pipeline, registry_hash, partitions, status,"
-                " coalesce(owner, '') AS owner FROM orca.runs ORDER BY id DESC"
-                " LIMIT $1"
+                " coalesce(owner, '') AS owner, coalesce(error, '') AS error"
+                " FROM orca.runs ORDER BY id DESC LIMIT $1"
             ),
             Params().int64(Int64(limit)),
         )
@@ -587,6 +597,7 @@ struct State(Movable):
                     r.text("partitions"),
                     r.text("status"),
                     r.text("owner"),
+                    r.text("error"),
                 )
             )
         return out^
