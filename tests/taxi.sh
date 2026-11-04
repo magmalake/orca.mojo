@@ -8,7 +8,7 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
 # shellcheck disable=SC2086
-mojo build -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi
+scripts/mojo-build.sh -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi
 
 fail() {
     echo "FAIL: $*"

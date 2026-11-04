@@ -16,7 +16,7 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
 log=build/sense-errors.log
 : > "$log"
 export ORCA_SENSE_SECONDS=0 FAKE_SENSE="$PWD/build/sense-errors.txt"

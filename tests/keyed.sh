@@ -17,10 +17,14 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
+# The pipelines compile at once (scripts/mojo-build.sh).
+pids=
 for p in names labels; do
     # shellcheck disable=SC2086
-    mojo build -I src $DEP_INC "tests/keyed/$p.mojo" -o "build/kd-$p"
+    scripts/mojo-build.sh -I src $DEP_INC "tests/keyed/$p.mojo" -o "build/kd-$p" &
+    pids="$pids $!"
 done
+for pid in $pids; do wait "$pid"; done
 log=build/keyed.log
 : > "$log"
 export ORCA_WAREHOUSE=build/keyed-wh

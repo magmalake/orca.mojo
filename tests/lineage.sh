@@ -20,17 +20,21 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
+# The pipelines and orca compile at once (scripts/mojo-build.sh).
+pids=
 for p in ingest clean report; do
     # shellcheck disable=SC2086
-    mojo build -I src -I tests/lineage $DEP_INC "tests/lineage/$p.mojo" -o "build/ln-$p"
+    scripts/mojo-build.sh -I src -I tests/lineage $DEP_INC "tests/lineage/$p.mojo" -o "build/ln-$p" &
+    pids="$pids $!"
 done
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+for pid in $pids $!; do wait "$pid"; done
 log=build/lineage.log
 : > "$log"
 if [ -n "${ORCA_TEST_S3:-}" ]; then
     # shellcheck disable=SC2086
-    mojo build -I src $DEP_INC tests/s3cat.mojo -o build/s3cat
+    scripts/mojo-build.sh -I src $DEP_INC tests/s3cat.mojo -o build/s3cat
     export ORCA_WAREHOUSE="$ORCA_S3_BUCKET/lineage-$$" ORCA_LOGS="$ORCA_S3_BUCKET/lineage-logs-$$"
 else
     export ORCA_WAREHOUSE=build/lineage-wh

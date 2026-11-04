@@ -7,9 +7,9 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC examples/toy.mojo -o build/toy
+scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout
+scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
 
 ORCA_LOGS=$(pwd)/build/logs-$$
 export ORCA_LOGS

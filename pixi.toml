@@ -67,17 +67,17 @@ sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7
 
 
 [tasks]
-test-steps = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_steps.mojo -o build/test-steps && ./build/test-steps" }
-test-cron = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_cron.mojo -o build/test-cron && ./build/test-cron" }
-test-warehouse = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_warehouse.mojo -o build/test-warehouse && ./build/test-warehouse" }
+test-steps = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_steps.mojo -o build/test-steps && ./build/test-steps" }
+test-cron = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_cron.mojo -o build/test-cron && ./build/test-cron" }
+test-warehouse = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_warehouse.mojo -o build/test-warehouse && ./build/test-warehouse" }
 test-cli = { cmd = "tests/cli.sh" }
 test-compile-fail = { cmd = "tests/compile_fail.sh" }
 # The executor over every store that needs no server (tests/store_suite.mojo),
 # then over Postgres, with what only Postgres has.
-test-store = { cmd = "mkdir -p build && mojo build -I src -I tests $DEP_INC tests/test_store.mojo -o build/test-store && ./build/test-store" }
-test-state = { cmd = "mkdir -p build && mojo build -I src -I tests $DEP_INC tests/test_state.mojo -o build/test-state && scripts/with-postgres.sh ./build/test-state" }
+test-store = { cmd = "scripts/mojo-build.sh -I src -I tests $DEP_INC tests/test_store.mojo -o build/test-store && ./build/test-store" }
+test-state = { cmd = "scripts/mojo-build.sh -I src -I tests $DEP_INC tests/test_state.mojo -o build/test-state && scripts/with-postgres.sh ./build/test-state" }
 test-kill = { cmd = "scripts/with-postgres.sh tests/kill.sh" }
-test-tasks = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_tasks.mojo -o build/test-tasks && ./build/test-tasks" }
+test-tasks = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_tasks.mojo -o build/test-tasks && ./build/test-tasks" }
 test-logs = { cmd = "rm -f build/logs.db build/logs.db-wal build/logs.db-shm && ORCA_DATABASE_URL=sqlite:build/logs.db tests/logs.sh" }
 test-scheduler = { cmd = "scripts/with-postgres.sh tests/scheduler.sh" }
 test-chaos = { cmd = "scripts/with-postgres.sh tests/chaos.sh" }
@@ -93,10 +93,10 @@ test-new-code = { cmd = "scripts/with-postgres.sh tests/new_code.sh" }
 test-manual-run = { cmd = "scripts/with-postgres.sh tests/manual_run.sh" }
 test-dead-runs = { cmd = "scripts/with-postgres.sh tests/dead_runs.sh" }
 test-one-run-per-key = { cmd = "scripts/with-postgres.sh tests/one_run_per_key.sh" }
-test-source = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_source.mojo -o build/test-source && ./build/test-source" }
+test-source = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_source.mojo -o build/test-source && ./build/test-source" }
 playground = { cmd = "scripts/playground.sh" }
-test-locate = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_locate.mojo -o build/test-locate && ./build/test-locate" }
-test-timeline = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_timeline.mojo -o build/test-timeline && ./build/test-timeline" }
+test-locate = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_locate.mojo -o build/test-locate && ./build/test-locate" }
+test-timeline = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_timeline.mojo -o build/test-timeline && ./build/test-timeline" }
 test-ec2 = { cmd = "scripts/with-postgres.sh tests/ec2.sh" }
 test-autoscale = { cmd = "scripts/with-postgres.sh tests/autoscale.sh" }
 test-secrets = { cmd = "scripts/with-postgres.sh tests/secrets.sh" }
@@ -110,11 +110,14 @@ test-sense-errors = { cmd = "scripts/with-postgres.sh tests/sense_errors.sh" }
 test-defer = { cmd = "scripts/with-postgres.sh tests/defer.sh" }
 # Needs docker, kind and kubectl; builds the image of deploy/Dockerfile.
 test-kind = { cmd = "tests/kind.sh" }
-test = { depends-on = ["test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-pause", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
-toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
-fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
-orca = { cmd = "mkdir -p build && mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca" }
-daily = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/daily.mojo -o build/daily" }
+# The binaries most tests share, built at once before the tests that copy
+# them (scripts/build-shared.sh, scripts/mojo-build.sh).
+build-shared = { cmd = "scripts/build-shared.sh" }
+test = { depends-on = ["build-shared", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-pause", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
+toy = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy" }
+fanout = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
+orca = { cmd = "scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca" }
+daily = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/daily.mojo -o build/daily" }
 
 # Stable is the default: orca targets Mojo 1.2.0. dista and k8s compile from
 # checkouts next to this one (CI lays them out at the revisions in its
@@ -206,7 +209,9 @@ postgresql = ">=16,<19"
 DEP_INC = "-I ../dista.mojo/src -I ../k8s.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src -I ../parquet.mojo/src -I ../parquet.mojo/full/src -I ../threads.mojo/src -I ../threads.mojo/compat -I ../thrift.mojo/src -I ../hashes.mojo/src -I ../snappy.mojo/src -I ../deflate.mojo/src -I ../avro.mojo/src -I ../roaring.mojo/src -I ../objectstore.mojo/src -I ../zstd.mojo/src -I ../lz4.mojo/src -I ../brotli.mojo/src -I ../sqlite.mojo -I ../postgres.mojo/src -I ../iceberg.mojo/src"
 
 [feature.data.tasks]
-test-tables = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_tables.mojo -o build/test-tables && scripts/with-postgres.sh ./build/test-tables" }
+# orca, which most of these tests run, built once (scripts/mojo-build.sh).
+build-shared = { cmd = "scripts/build-shared.sh orca" }
+test-tables = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_tables.mojo -o build/test-tables && scripts/with-postgres.sh ./build/test-tables" }
 test-chaos-tables = { cmd = "CHAOS_SRC=tests/chaos_tables.mojo CHAOS_CHECK=1 scripts/with-postgres.sh tests/chaos.sh" }
 test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh" }
 test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh" }
@@ -219,7 +224,7 @@ test-keyed = { cmd = "scripts/with-postgres.sh tests/keyed.sh" }
 test-keyed-backfills = { cmd = "scripts/with-postgres.sh tests/keyed_backfills.sh" }
 test-keyed-sensor = { cmd = "scripts/with-postgres.sh tests/keyed_sensor.sh" }
 test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh" }
-taxi = { cmd = "mkdir -p build && mojo build -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi" }
+taxi = { cmd = "scripts/mojo-build.sh -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi" }
 
 # MinIO for the tests over object storage (scripts/with-minio.sh). conda-forge
 # builds it for these two platforms only.
@@ -236,15 +241,15 @@ minio-server = ">=2025.10.15"
 mozz_mlake = { git = "https://github.com/magmalake/mozz_mlake.git", rev = "bd84a1f1e376912414a3ddcf0f4151ed65435a44" }
 
 [feature.fuzz.tasks]
-fuzz-months = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_months.mojo -o build/fuzz-months && ./build/fuzz-months" }
-fuzz-inputs = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_inputs.mojo -o build/fuzz-inputs && ./build/fuzz-inputs" }
-fuzz-days = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_days.mojo -o build/fuzz-days && ./build/fuzz-days" }
-fuzz-cron = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_cron.mojo -o build/fuzz-cron && ./build/fuzz-cron" }
-fuzz-tz = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_tz.mojo -o build/fuzz-tz && ./build/fuzz-tz" }
-fuzz-json = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_json.mojo -o build/fuzz-json && ./build/fuzz-json" }
-fuzz-summary = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_summary.mojo -o build/fuzz-summary && ./build/fuzz-summary" }
-fuzz-metadata = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_metadata.mojo -o build/fuzz-metadata && ./build/fuzz-metadata" }
-fuzz-names = { cmd = "mkdir -p build && mojo build -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_names.mojo -o build/fuzz-names && ./build/fuzz-names" }
+fuzz-months = { cmd = "scripts/mojo-build.sh -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_months.mojo -o build/fuzz-months && ./build/fuzz-months" }
+fuzz-inputs = { cmd = "scripts/mojo-build.sh -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_inputs.mojo -o build/fuzz-inputs && ./build/fuzz-inputs" }
+fuzz-days = { cmd = "scripts/mojo-build.sh -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_days.mojo -o build/fuzz-days && ./build/fuzz-days" }
+fuzz-cron = { cmd = "scripts/mojo-build.sh -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_cron.mojo -o build/fuzz-cron && ./build/fuzz-cron" }
+fuzz-tz = { cmd = "scripts/mojo-build.sh -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_tz.mojo -o build/fuzz-tz && ./build/fuzz-tz" }
+fuzz-json = { cmd = "scripts/mojo-build.sh -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_json.mojo -o build/fuzz-json && ./build/fuzz-json" }
+fuzz-summary = { cmd = "scripts/mojo-build.sh -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_summary.mojo -o build/fuzz-summary && ./build/fuzz-summary" }
+fuzz-metadata = { cmd = "scripts/mojo-build.sh -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_metadata.mojo -o build/fuzz-metadata && ./build/fuzz-metadata" }
+fuzz-names = { cmd = "scripts/mojo-build.sh -D ASSERT=all -I src -I fuzz $DEP_INC fuzz/fuzz_names.mojo -o build/fuzz-names && ./build/fuzz-names" }
 fuzz = { depends-on = ["fuzz-months", "fuzz-days", "fuzz-cron", "fuzz-tz", "fuzz-inputs", "fuzz-json", "fuzz-summary", "fuzz-metadata", "fuzz-names"] }
 
 [environments]

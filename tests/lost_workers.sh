@@ -17,7 +17,7 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout
+scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
 log=build/lost-workers.log
 : > "$log"
 export ORCA_WORKERS=4

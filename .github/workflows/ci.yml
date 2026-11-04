@@ -259,6 +259,10 @@ jobs:
           path: orca.mojo/.pixi/envs/data/share/max/cache
           key: mojo-${{ runner.os }}-data-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
           restore-keys: mojo-${{ runner.os }}-data-${{ hashFiles('orca.mojo/pixi.lock') }}-
+      # orca, which most steps below run, compiled once: their own builds of
+      # it are copies (scripts/mojo-build.sh).
+      - name: Build orca
+        run: pixi run -e data build-shared
       - name: Pinned reads and recognised commits
         run: pixi run -e data test-tables
       - name: Chaos over Iceberg (one snapshot per month, however often killed)
