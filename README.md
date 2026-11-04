@@ -42,7 +42,8 @@ mojo build bin/scheduler.mojo -o build/orca
 
 [VISION.md](VISION.md) says what orca is for and how it gets there;
 [DESIGN.md](DESIGN.md) is the plan for building it; [K8S.md](K8S.md) is how
-it will run on Kubernetes and AWS.
+it will run on Kubernetes and AWS; [docs/future-directions.md](docs/future-directions.md)
+is where its seams are and which are worth cutting.
 
 ```
 pixi run test                  # unit, CLI, compile-fail, state, kill, tasks, logs
