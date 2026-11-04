@@ -42,7 +42,7 @@
   pause <pipeline>` and `orca unpause`, and the page's buttons, stop and
   restart the scheduler starting its runs: fires, sensors, retries and
   backfills still queue theirs while it's paused, and runs already going go
-  on. Migration 15 adds `pipelines.paused`; `/` and the pipeline page show
+  on. Migration 16 adds `pipelines.paused`; `/` and the pipeline page show
   it, also in JSON.
 - **`<binary> run` no longer re-registers the pipeline.** With
   `ORCA_DATABASE_URL` set, a run by hand of a pipeline `orca register` gave
@@ -53,6 +53,16 @@
   whose code isn't the registered one's unless it's given
   `--allow-new-code`; that run is recorded as its own code's version. Only
   `orca register` moves a pipeline's code. (#59)
+- **A snapshot a sensor can't run no longer wedges it** (#65). One whose
+  `orca.partitions` (or the keys an upstream run committed) aren't
+  partitions of the sensor's kind is recorded in `orca.sensed` with no run
+  and why (`sensed.error`), and the tick's other snapshots start their run;
+  before, the raise rolled the tick back, every tick, for good. A value of a
+  keys column that isn't a name is left out of `<binary> keys`, and counted
+  on stderr, instead of failing every keyed sensor pass, backfill and page.
+  A sensor pass that fails is kept as the pipeline's `sense_error` (printed
+  once, not every second) and shown on its page in `orca ui`, with the
+  snapshots it saw and didn't run. Migration 17.
 
 ## 0.3.2 (2026-11-03)
 

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Stands in for a sensor pipeline's binary in tests/sense_errors.sh: a
+# monthly sensor reading raw.a and raw.b. `sense` prints $FAKE_SENSE, or
+# fails while $FAKE_SENSE.fail exists; `resume` ends at once.
+case "$1" in
+    describe)
+        cat << 'J'
+{"pipeline": "fake_sensor", "registry_hash": "0x5e45e", "partitions": {"kind": "monthly", "start": null}, "schedule": null, "max_runs": 1, "run_retries": 0, "sensor": true, "keys_per_run": 1, "workers": 2, "steps": [{"name": "load", "kind": "mapped", "after": null, "function": "load", "input": "orca.month.Month", "output": "Int", "reads": ["raw.a", "raw.b"], "writes": ["lake.ab"]}], "tasks": [], "source": {"repo": "", "commit": "", "dirty": false}}
+J
+        ;;
+    sense)
+        if [ -e "$FAKE_SENSE.fail" ]; then
+            echo "can't reach the warehouse"
+            exit 1
+        fi
+        cat "$FAKE_SENSE"
+        ;;
+    resume) ;;
+    *) echo "fake_sensor: unexpected: $*" >&2; exit 2 ;;
+esac

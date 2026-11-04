@@ -44,6 +44,12 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   dataset is sensed too: a new snapshot of it queues the keys that aren't
   done, in runs of `keys_per_run`. Each rebuild queues its
   next level once the one before has succeeded.
+- **A snapshot it can't run** is seen all the same. One whose keys aren't
+  partitions of the sensor's kind (a week in `orca.partitions`, or names
+  for a dated sensor) is recorded in `orca.sensed` with no run and why, and
+  the others the tick saw are run. A pass that fails, such as a `sense` that
+  exits non-zero, is kept as the pipeline's `sense_error`, which `orca ui`
+  shows, and printed once rather than on every tick.
 - **Retries.** A scheduled, backfilled or sensed run that failed is started again
   after `ORCA_RETRY_SECONDS` (default 60) doubling with each start, plus up
   to a tenth more as jitter, up to `run_retries` times. One whose process
@@ -811,10 +817,12 @@ struct Scheduler(Movable):
                 except e:
                     print("orca: pipeline", p.name, "can't fire:", e)
             if p.sensor:
+                var error = String()
                 try:
                     self._sense(p, now)
                 except e:
-                    print("orca: pipeline", p.name, "can't sense:", e)
+                    error = String(e)
+                self._sensed(p, error)
             self._schedule_retries(p, now)
             self._start(p, now)
 
@@ -844,6 +852,30 @@ struct Scheduler(Movable):
         )
         if n == 1:
             print("run", spawned[0], "failed:", why)
+
+    def _sensed(mut self, p: Registered, error: String) raises:
+        """Records how `p`'s pass went: the error of one that failed, which
+        is printed when it's new rather than on every tick, or none."""
+        if not error:
+            _ = self.db.conn.execute(
+                (
+                    "UPDATE orca.pipelines SET sense_error = NULL,"
+                    " sense_error_at = NULL WHERE name = $1 AND sense_error IS"
+                    " NOT NULL"
+                ),
+                Params().text(p.name),
+            )
+            return
+        var changed = self.db.conn.query(
+            (
+                "UPDATE orca.pipelines SET sense_error = $2, sense_error_at ="
+                " now() WHERE name = $1 AND sense_error IS DISTINCT FROM $2"
+                " RETURNING name"
+            ),
+            Params().text(p.name).text(error),
+        )
+        if len(changed) > 0:
+            print("orca: pipeline", p.name, "can't sense:", error)
 
     def _sense(mut self, p: Registered, now: Int64) raises:
         """Queues a run for the snapshots of `p`'s datasets it hasn't seen:
@@ -909,6 +941,7 @@ struct Scheduler(Movable):
             fallback = fill_key(p.kind, "current", Civil.of(now))
         var tx = self.db.conn.begin()
         var taken = List[Int]()
+        var unusable = List[Tuple[Int, String]]()
         var all = List[String]()
         for i in range(len(datasets)):
             # Seen by another tick already, or twice in this one.
@@ -922,10 +955,29 @@ struct Scheduler(Movable):
             )
             if len(new) == 0:
                 continue
-            taken.append(i)
             var ks = split_keys(keys[i])
             if len(ks) == 0:
                 ks.append(fallback)
+            # Keys that aren't partitions, such as a week another writer
+            # put in `orca.partitions`, run nothing: the snapshot is seen,
+            # with why, so it doesn't stop the others or the next tick.
+            try:
+                _ = map_keys(ks, p.kind, p.start)
+            except e:
+                _ = tx.execute(
+                    (
+                        "UPDATE orca.sensed SET error = $4 WHERE pipeline = $1"
+                        " AND dataset = $2 AND snapshot_id = $3"
+                    ),
+                    Params()
+                    .text(p.name)
+                    .text(datasets[i])
+                    .int64(snapshots[i])
+                    .text(String(e)),
+                )
+                unusable.append((i, String(e)))
+                continue
+            taken.append(i)
             all.extend(ks^)
         var run = Int64(-1)
         var mapped = map_keys(all, p.kind, p.start)
@@ -966,6 +1018,15 @@ struct Scheduler(Movable):
                 p.name,
                 String("run ", run, " for ", join_keys(mapped)) if run
                 >= 0 else "before its first partition",
+            )
+        for u in unusable:
+            print(
+                "sensed",
+                String(datasets[u[0]], "@", snapshots[u[0]]),
+                "for",
+                p.name,
+                "and ran nothing:",
+                u[1],
             )
 
     def _fire(mut self, p: Registered, now: Int64) raises:
