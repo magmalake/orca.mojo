@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Runs in a SQLite file: `ORCA_DATABASE_URL=sqlite:<path>`** (#82).
+  `orca.sqlite_store.SqliteStore`, over sqlite-mojo 0.3.5, is a whole
+  `RunStore`. With it, `run`, `resume` and `status` record a pipeline's
+  runs in that file, resumable after a kill as on Postgres, with no server
+  to operate: for a laptop, one VM or CI. `sqlite:///abs/path` is an
+  absolute path. It is WAL mode with one writer at a time (`BEGIN
+  IMMEDIATE`, a one-second busy timeout, then retries on the file opened
+  again for `ORCA_DB_RETRY_SECONDS`), `synchronous = FULL`, and the file
+  must be on a local disk. The scheduler, the UI and orca's other
+  commands still need Postgres, and refuse a SQLite URL. `tests/chaos.sh`
+  runs over a file as well (`test-chaos-sqlite`), with another writer
+  holding the file's lock in place of Postgres restarts. orca-mojo now
+  depends on sqlite-mojo, at the revision mojoshelf published (the one
+  iceberg-mojo pins), and on libsqlite. `DbRetry`'s waits are
+  `orca.store.Backoff`, shared by both stores.
 - **`MemoryStore` is a whole `RunStore`** (#82). It keeps pipelines, runs,
   steps, attempts, reads and commits in the process, with the rules
   `PgStore` has (claims, stale heartbeats, losing a run, cancelling), so

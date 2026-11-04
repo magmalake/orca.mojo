@@ -12,6 +12,10 @@ platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 [dependencies]
 libpq = ">=16,<19"
 postgresql = ">=16,<19"
+# libsqlite is what sqlite-mojo dlopens for orca.sqlite_store; the sqlite3
+# shell is for the tests that look into a run's file (tests/chaos.sh).
+libsqlite = ">=3.45,<4"
+sqlite = ">=3.45,<4"
 
 # orca as mojoshelf tin orca-mojo: the `orca` package, built against the
 # revisions mojoshelf published of what it imports.
@@ -40,6 +44,7 @@ memory-region-mojo = { git = "https://github.com/magmalake/memory-region.mojo", 
 threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e780a8de77278c140cee36904e46e93e0ca1c" }
 flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b1371866a7844afefe86b25eb8af58aaa9d3fa6c" }
 json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "bcaa7161e757748a1310a213e123bf8810ff7e96" }
+sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7b672c85580f4d8c5de855772bc972d535" }
 
 [package.build-dependencies]
 mojo-compiler = "==1.2.0"
@@ -47,6 +52,7 @@ mojo-compiler = "==1.2.0"
 [package.run-dependencies]
 mojo-compiler = ">=1.2.0,<2"
 libpq = ">=16,<19"
+libsqlite = ">=3.45,<4"
 dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "9e4839937d82f36893285301bf9ce4338dcb14ec" }
 k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "6cb83ce08e02234873f2d09c7501208eedb5589f" }
 iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "ec4f4e07605b687a2ea9e2fda5dfd4a01aa6ba97" }
@@ -57,6 +63,7 @@ memory-region-mojo = { git = "https://github.com/magmalake/memory-region.mojo", 
 threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e780a8de77278c140cee36904e46e93e0ca1c" }
 flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b1371866a7844afefe86b25eb8af58aaa9d3fa6c" }
 json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "bcaa7161e757748a1310a213e123bf8810ff7e96" }
+sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7b672c85580f4d8c5de855772bc972d535" }
 
 
 [tasks]
@@ -71,9 +78,11 @@ test-store = { cmd = "mkdir -p build && mojo build -I src -I tests $DEP_INC test
 test-state = { cmd = "mkdir -p build && mojo build -I src -I tests $DEP_INC tests/test_state.mojo -o build/test-state && scripts/with-postgres.sh ./build/test-state" }
 test-kill = { cmd = "scripts/with-postgres.sh tests/kill.sh" }
 test-tasks = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_tasks.mojo -o build/test-tasks && ./build/test-tasks" }
-test-logs = { cmd = "scripts/with-postgres.sh tests/logs.sh" }
+test-logs = { cmd = "rm -f build/logs.db build/logs.db-wal build/logs.db-shm && ORCA_DATABASE_URL=sqlite:build/logs.db tests/logs.sh" }
 test-scheduler = { cmd = "scripts/with-postgres.sh tests/scheduler.sh" }
 test-chaos = { cmd = "scripts/with-postgres.sh tests/chaos.sh" }
+# The same over a SQLite file (orca.sqlite_store), with no server.
+test-chaos-sqlite = { cmd = "ORCA_DATABASE_URL=sqlite:build/chaos.db tests/chaos.sh" }
 test-ui = { cmd = "scripts/with-postgres.sh tests/ui.sh" }
 test-actions = { cmd = "scripts/with-postgres.sh tests/actions.sh" }
 test-ui-login = { cmd = "scripts/with-postgres.sh tests/ui_login.sh" }
@@ -98,7 +107,7 @@ test-db-blip = { cmd = "scripts/with-postgres.sh tests/db_blip.sh" }
 test-sense-errors = { cmd = "scripts/with-postgres.sh tests/sense_errors.sh" }
 # Needs docker, kind and kubectl; builds the image of deploy/Dockerfile.
 test-kind = { cmd = "tests/kind.sh" }
-test = { depends-on = ["test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-pause", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-versions", "test-manual-run", "test-new-code", "test-dead-runs", "test-one-run-per-key", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-sense-errors"] }
+test = { depends-on = ["test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-pause", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-versions", "test-manual-run", "test-new-code", "test-dead-runs", "test-one-run-per-key", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite", "test-sense-errors"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
 orca = { cmd = "mkdir -p build && mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca" }
@@ -124,6 +133,9 @@ threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e7
 # and json_mlake at 0.4.2's revision; it builds its own native shims.
 flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b1371866a7844afefe86b25eb8af58aaa9d3fa6c" }
 json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "bcaa7161e757748a1310a213e123bf8810ff7e96" }
+# orca.sqlite_store. Pinned at the revision mojoshelf published as
+# sqlite-mojo 0.3.5, which iceberg-mojo pins too (the data environment).
+sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7b672c85580f4d8c5de855772bc972d535" }
 
 [feature.stable.activation.env]
 DEP_INC = "-I ../dista.mojo/src -I ../k8s.mojo/src"
@@ -153,7 +165,7 @@ gxx = ">=13"
 scripts = ["../flare_mlake/flare/tls/ffi/build.sh", "../flare_mlake/flare/http/ffi/build.sh"]
 
 [feature.nightly.activation.env]
-DEP_INC = "-I ../dista.mojo/src -I ../k8s.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src -I ../objectstore.mojo/src -I ../postgres.mojo/src -I ../threads.mojo/src -I ../threads.mojo/compat -I ../flare_mlake -I ../json_mlake"
+DEP_INC = "-I ../dista.mojo/src -I ../k8s.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src -I ../objectstore.mojo/src -I ../postgres.mojo/src -I ../threads.mojo/src -I ../threads.mojo/compat -I ../flare_mlake -I ../json_mlake -I ../sqlite.mojo"
 
 # `mojo-compiler` ships no formatter; the nightly `modular` package does.
 # `mojo format` has no check mode, so format-check formats and then asserts

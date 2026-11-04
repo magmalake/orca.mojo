@@ -237,6 +237,9 @@ struct Dying[S: RunStore](Movable, Store):
     def record(mut self, commit: Bool, t: TableSnapshot) raises:
         self.store[].record(commit, t)
 
+    def fence(mut self) raises:
+        self.store[].fence()
+
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String
     ) raises:

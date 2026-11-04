@@ -53,6 +53,7 @@ from orca.schedule import (
     Schedule,
     ScheduleLike,
 )
+from orca.sqlite_store import SqliteStore, sqlite_path
 from orca.state import PgStore, State
 from orca.store import (
     MemoryStore,

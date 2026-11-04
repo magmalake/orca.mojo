@@ -1,8 +1,17 @@
 """`tests/store_suite.mojo` on the stores that need no server."""
 
+from std.os import remove
+from std.os.path import exists
 from std.testing import TestSuite, assert_equal, assert_raises, assert_true
 
-from orca import MemoryStore, RunResult, parse_months
+from orca import (
+    MemoryStore,
+    PgStore,
+    RunResult,
+    SqliteStore,
+    parse_months,
+    sqlite_path,
+)
 from store_suite import (
     Retrying,
     Touching,
@@ -86,6 +95,98 @@ def test_memory_cancel_stops_before_the_next_attempt() raises:
     assert_true(s.cancel_requested())
     with assert_raises(contains="was cancelled"):
         _ = Retrying.execute(s, RunResult(), parse_months("2024-01"), run)
+
+
+def _file(name: String) raises -> SqliteStore:
+    """A store on a fresh file under build/."""
+    var path = String("build/test-store-", name, ".db")
+    for suffix in ["", "-wal", "-shm"]:
+        if exists(path + suffix):
+            remove(path + suffix)
+    return SqliteStore(path)
+
+
+def test_sqlite_claim_needs_a_stale_heartbeat() raises:
+    var s = _file("claim")
+    check_claim_needs_a_stale_heartbeat(s)
+
+
+def test_sqlite_finished_runs() raises:
+    var s = _file("finished")
+    check_finished_runs(s)
+
+
+def test_sqlite_execute_records_attempts_and_retries() raises:
+    var s = _file("execute")
+    check_execute_records_attempts_and_retries(s)
+
+
+def test_sqlite_resume_skips_what_succeeded() raises:
+    var s = _file("resume")
+    check_resume_skips_what_succeeded(s)
+
+
+def test_sqlite_lost_run_stops() raises:
+    var s = _file("lost")
+    check_a_store_that_lost_its_run_stops(s)
+
+
+def test_sqlite_reads_are_pinned_across_attempts() raises:
+    var s = _file("pinned")
+    check_reads_are_pinned_across_attempts(s)
+
+
+def test_sqlite_versions() raises:
+    var s = _file("versions")
+    check_versions(s)
+
+
+def test_sqlite_killed_anywhere_then_resumed() raises:
+    var s = _file("killed")
+    check_killed_anywhere_then_resumed(s)
+
+
+def test_sqlite_survives_reopening() raises:
+    # What one process recorded, another reads back from the file.
+    var a = _file("reopen")
+    var run = new_run(a, "a:1")
+    var res = Retrying.execute(a, RunResult(), parse_months("2024-01"), run)
+    assert_true(res.succeeded())
+    a.finish_run("succeeded")
+    var b = SqliteStore("build/test-store-reopen.db")
+    b.migrate()
+    assert_equal(b.run_info(run).status, "succeeded")
+    assert_equal(len(b.prior(run).steps), 3)
+    assert_equal(b.prior(run).output[Int]("add"), 10)
+    assert_equal(b.steps(run)[1].attempts, 1)
+
+
+def test_sqlite_fences_commits() raises:
+    # What a commit to Iceberg checks first (#84): the owner, and a fresh
+    # heartbeat.
+    var a = _file("fence")
+    var run = new_run(a, "a:1")
+    a.fence()
+    a.db.execute(
+        String("UPDATE runs SET heartbeat = heartbeat - 3600 WHERE id = ", run)
+    )
+    with assert_raises(contains="heartbeat is older than"):
+        a.fence()
+    var b = SqliteStore("build/test-store-fence.db")
+    b.claim(run, "b:2", -1.0)
+    with assert_raises(contains="held by b:2, not this process (a:1)"):
+        a.fence()
+
+
+def test_sqlite_urls() raises:
+    assert_equal(sqlite_path("sqlite:runs.db"), "runs.db")
+    assert_equal(sqlite_path("sqlite://runs.db"), "runs.db")
+    assert_equal(sqlite_path("sqlite:///var/orca/runs.db"), "/var/orca/runs.db")
+    assert_equal(sqlite_path("postgresql:///orca"), "")
+    with assert_raises(contains="no file"):
+        _ = SqliteStore(sqlite_path("sqlite:"))
+    with assert_raises(contains="need Postgres"):
+        _ = PgStore("sqlite:runs.db")
 
 
 def main() raises:

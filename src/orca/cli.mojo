@@ -15,7 +15,8 @@ For a keyed pipeline (`orca.keyed`), `--partitions` takes names: a list,
 refused, as a malformed key is, with exit code 2.
 
 With `ORCA_DATABASE_URL` set, runs are recorded in Postgres and can be
-resumed; without it, `run` records its run in memory (`MemoryStore`, run 0)
+resumed, or, for `sqlite:<path>` (`sqlite:///abs/path` for an absolute
+one), in that SQLite file (`orca.sqlite_store`); without it, `run` records its run in memory (`MemoryStore`, run 0)
 on the same path, and `resume` and `status` aren't available. `run` records the pipeline the first time; once `orca register`
 has given it a binary, `run` leaves the registration as it is, since what
 the scheduler queues and counts as done is that code's. A binary whose code
@@ -63,6 +64,7 @@ from orca.logs import (
 from orca.tasks import workers
 from orca.civil import Civil, now, parse_time
 from orca.pipeline import Pipeline
+from orca.sqlite_store import SqliteStore, sqlite_path
 from orca.state import PgStore
 from orca.store import (
     CANCELLED,
@@ -221,6 +223,9 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         if not url:
             var mem = MemoryStore()
             return _run[P](rt, mem, keys, new_code)
+        if sqlite_path(url):
+            var file = SqliteStore(sqlite_path(url))
+            return _run[P](rt, file, keys, new_code)
         var store = PgStore(url)
         return _run[P](rt, store, keys, new_code)
     if cmd == "resume":
@@ -241,11 +246,17 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         if run < 0:
             _usage("resume needs a run")
         var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
+        if sqlite_path(url):
+            var file = SqliteStore(sqlite_path(url))
+            return _resume[P](rt, file, run, allow_new_code)
         var store = PgStore(url)
         return _resume[P](rt, store, run, allow_new_code)
     if cmd == "status":
         if not url:
             _usage("status needs ORCA_DATABASE_URL")
+        if sqlite_path(url):
+            var file = SqliteStore(sqlite_path(url))
+            return _status(file, args)
         var store = PgStore(url)
         return _status(store, args)
     _usage()
