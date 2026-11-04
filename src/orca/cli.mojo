@@ -302,6 +302,8 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
                 return 2
             var info = db.run_info(run)
             print("run", run, info.pipeline, info.status, info.partitions)
+            if info.error:
+                print("error:", info.error)
             _print_steps(db, run, show_logs=True)
             return 0
     _usage()

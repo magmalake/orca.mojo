@@ -166,7 +166,10 @@ def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
         String(
             "UPDATE orca.runs SET status = 'queued', owner = NULL, heartbeat =",
             " NULL, ended = NULL, retry_at = NULL, cancel_requested = false,",
-            " allow_new_code = $2 WHERE id = $1 AND (status IN ('failed',",
+            (
+                " error = NULL, allow_new_code = $2 WHERE id = $1 AND (status"
+                " IN ('failed',"
+            ),
             " 'cancelled') OR ",
             stalled_sql(),
             ")",

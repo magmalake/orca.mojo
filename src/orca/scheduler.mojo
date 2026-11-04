@@ -50,6 +50,13 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   died (its heartbeat went stale) is started again at once, within the same
   budget. A manual run is never retried by the scheduler. A run asked to
   cancel whose process died ends `cancelled`.
+- **New code.** `orca register` of a new build moves the queued runs to it,
+  and the failed ones waiting for a retry that have no step done. A retry
+  of a run with steps done by other code would be refused by the binary's
+  `resume`, so the scheduler fails it at once instead of starting it, with
+  an error (`runs.error`) saying to resume it with `--allow-new-code`. A
+  local run whose process exits before claiming its run fails with the
+  exit code and the last line of its driver log as its error.
 
 The scheduler's clock is `orca.civil.now`, which `ORCA_NOW` fixes; fire
 times and retry times are on it. Heartbeats are on the database's clock.
@@ -515,6 +522,32 @@ def backfill(
     return len(queue_keys(db, p, partition_keys(p, keys), "backfill", rerun))
 
 
+def _last_line(path: String) -> String:
+    """The last line with text in the file at `path`, at most 300 bytes of
+    it, or empty if there's none or it can't be read."""
+    if not path or not exists(path):
+        return ""
+    try:
+        var text: String
+        with open(path, "r") as f:
+            text = f.read()
+        var lines = text.splitlines()
+        for i in range(len(lines) - 1, -1, -1):
+            var line = String(lines[i].strip())
+            if line:
+                var n = line.byte_length()
+                if n > 300:
+                    # Cut where a character starts.
+                    n = 300
+                    while n > 0 and (line.as_bytes()[n] & 0xC0) == 0x80:
+                        n -= 1
+                    return String(line[byte=:n])
+                return line^
+    except:
+        pass
+    return ""
+
+
 struct Scheduler(Movable):
     var db: State
     var stale: Float64
@@ -535,6 +568,9 @@ struct Scheduler(Movable):
     var _driver_logs: Dict[Int, String]
     """A local run's process to where its driver log goes, when that's in
     object storage: it's published once the process is reaped."""
+    var _spawned: Dict[Int, Tuple[Int, Int, String]]
+    """A local run's process to its run, the run's start count when it was
+    started, and the local file its output goes to (or empty)."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -565,6 +601,7 @@ struct Scheduler(Movable):
         self.logs = getenv("ORCA_LOGS")
         self._polled = Dict[String, Int]()
         self._driver_logs = Dict[Int, String]()
+        self._spawned = Dict[Int, Tuple[Int, Int, String]]()
 
     def register(
         mut self,
@@ -581,7 +618,8 @@ struct Scheduler(Movable):
         """Records the pipeline `binary` describes, with its path; its
         schedule counts from `now` the first time, and a sensor from now the
         first time it's one, with the snapshots its datasets have now seen.
-        Queued runs move to the new code. `min_workers`, with `workers` as the
+        Queued runs move to the new code, and so do failed ones waiting for
+        a retry with no step done. `min_workers`, with `workers` as the
         most, makes an EC2 run's workers scale between them; -1 keeps a
         fixed count. `secrets`, `NAME=ID`s, replace the pipeline's when
         given. Returns the pipeline's name."""
@@ -700,10 +738,18 @@ struct Scheduler(Movable):
                     ),
                     Params().text(name).text(c.dataset).int64(c.snapshot),
                 )
+        # A retry of a run with steps done would run the new code over the
+        # old code's outputs, which only a resume that says so may do.
         _ = self.db.conn.execute(
-            (
-                "UPDATE orca.runs SET registry_hash = $2 WHERE pipeline = $1"
-                " AND status = 'queued'"
+            String(
+                "UPDATE orca.runs r SET registry_hash = $2 WHERE pipeline =",
+                " $1 AND registry_hash <> $2 AND (status = 'queued' OR",
+                " (status = 'failed' AND ",
+                _RETRIED,
+                " AND starts BETWEEN 1 AND (SELECT coalesce((describe->>",
+                "'run_retries')::bigint, 3) FROM orca.pipelines WHERE name =",
+                " $1) AND NOT EXISTS (SELECT 1 FROM orca.steps s WHERE s.run =",
+                " r.id AND s.status = 'succeeded')))",
             ),
             Params().text(name).text(res.row(0).text("registry_hash")),
         )
@@ -714,6 +760,12 @@ struct Scheduler(Movable):
         sense new snapshots, schedule retries, and start what may start."""
         for done in reap():
             print("reaped pid", done[0], "exit", done[1])
+            var spawned = self._spawned.pop(done[0], (-1, 0, String()))
+            if spawned[0] >= 0:
+                try:
+                    self._exited(spawned, done[0], done[1])
+                except e:
+                    print("orca: can't record run", spawned[0], "exiting:", e)
             var log = self._driver_logs.pop(done[0], "")
             if log:
                 try:
@@ -760,6 +812,33 @@ struct Scheduler(Movable):
                     print("orca: pipeline", p.name, "can't sense:", e)
             self._schedule_retries(p, now)
             self._start(p, now)
+
+    def _exited(
+        mut self, spawned: Tuple[Int, Int, String], pid: Int, code: Int
+    ) raises:
+        """Fails the run a reaped process was started for, if the process
+        never claimed it: the run is still the scheduler's, at the start it
+        was given. Its error is the exit code and the last line its process
+        printed, such as `resume`'s refusal."""
+        var why = String(
+            "its process (pid ", pid, ") exited ", code, " before claiming it"
+        )
+        var last = _last_line(spawned[2])
+        if last:
+            why.write(": ", last)
+        var n = self.db.conn.execute(
+            (
+                "UPDATE orca.runs SET status = 'failed', ended = now(),"
+                " heartbeat = NULL, error = $3 WHERE id = $1 AND status ="
+                " 'running' AND owner = 'scheduler' AND starts = $2"
+            ),
+            Params()
+            .int64(Int64(spawned[0]))
+            .int64(Int64(spawned[1]))
+            .text(why),
+        )
+        if n == 1:
+            print("run", spawned[0], "failed:", why)
 
     def _sense(mut self, p: Registered, now: Int64) raises:
         """Queues a run for the snapshots of `p`'s datasets it hasn't seen:
@@ -1026,13 +1105,15 @@ struct Scheduler(Movable):
                     " pipeline = $1 AND status = 'failed' AND "
                 ),
                 _RETRIED,
-                " AND retry_at IS NULL AND starts BETWEEN 1 AND $4",
+                " AND retry_at IS NULL AND starts BETWEEN 1 AND $4 AND",
+                " (registry_hash = $5 OR allow_new_code)",
             ),
             Params()
             .text(p.name)
             .int64(now)
             .int64(self.retry_seconds)
-            .int64(Int64(p.run_retries)),
+            .int64(Int64(p.run_retries))
+            .text(p.registry_hash),
         )
 
     def _dead(self, stale_param: StaticString) -> String:
@@ -1074,6 +1155,32 @@ struct Scheduler(Movable):
                 dead,
             ),
             Params().text(p.name).float64(self.stale),
+        )
+        # A run of code that isn't the pipeline's any more would be refused
+        # by the binary's `resume`, and started again until its retries were
+        # spent, so it fails here, saying how to resume it.
+        _ = tx.execute(
+            String(
+                "UPDATE orca.runs SET status = 'failed', ended =",
+                " coalesce(ended, now()), heartbeat = NULL, retry_at = NULL,",
+                " error = 'not started: its code is ' || registry_hash || ',",
+                " and the pipeline''s binary is now ' || $4 || '; resume it",
+                " with the new code from orca ui, or with <binary> resume",
+                " ' || id || ' --allow-new-code' WHERE pipeline = $1 AND",
+                " registry_hash <> $4 AND NOT allow_new_code AND error IS NULL",
+                " AND (status = 'queued' OR (status = 'failed' AND ",
+                _RETRIED,
+                " AND starts BETWEEN 1 AND $3) OR (status = 'running' AND ",
+                _RETRIED,
+                " AND NOT cancel_requested AND ",
+                dead,
+                "))",
+            ),
+            Params()
+            .text(p.name)
+            .float64(self.stale)
+            .int64(Int64(p.run_retries))
+            .text(p.registry_hash),
         )
         # A run whose process died and has no retries left has failed.
         _ = tx.execute(
@@ -1165,8 +1272,8 @@ struct Scheduler(Movable):
                                 "UPDATE orca.runs SET status = 'running', owner"
                                 " = 'scheduler', heartbeat = NULL, started ="
                                 " now(), ended = NULL, starts = starts + 1,"
-                                " retry_at = NULL, cpu_millis = $2 WHERE id ="
-                                " $1 RETURNING starts"
+                                " retry_at = NULL, error = NULL, cpu_millis ="
+                                " $2 WHERE id = $1 RETURNING starts"
                             ),
                             Params().int64(id).int64(Int64(need)),
                         )
@@ -1196,10 +1303,10 @@ struct Scheduler(Movable):
                     _ = self.db.conn.execute(
                         (
                             "UPDATE orca.runs SET status = 'failed', ended ="
-                            " now() WHERE id = $1 AND status = 'running' AND"
-                            " heartbeat IS NULL"
+                            " now(), error = $2 WHERE id = $1 AND status ="
+                            " 'running' AND heartbeat IS NULL"
                         ),
-                        Params().int64(id),
+                        Params().int64(id).text(String("can't start: ", e)),
                     )
                 continue
             if self.ec2:
@@ -1229,10 +1336,10 @@ struct Scheduler(Movable):
                     _ = self.db.conn.execute(
                         (
                             "UPDATE orca.runs SET status = 'failed', ended ="
-                            " now() WHERE id = $1 AND status = 'running' AND"
-                            " heartbeat IS NULL"
+                            " now(), error = $2 WHERE id = $1 AND status ="
+                            " 'running' AND heartbeat IS NULL"
                         ),
-                        Params().int64(id),
+                        Params().int64(id).text(String("can't start: ", e)),
                     )
                 continue
             var log = String()
@@ -1246,6 +1353,11 @@ struct Scheduler(Movable):
             if new_code[i]:
                 argv.append("--allow-new-code")
             var pid = spawn(argv, stage_of(log) if log else log)
+            self._spawned[pid] = (
+                Int(id),
+                starts[i],
+                stage_of(log) if log else String(),
+            )
             if is_remote(log):
                 self._driver_logs[pid] = log
             print("started", p.name, "run", id, "pid", pid)

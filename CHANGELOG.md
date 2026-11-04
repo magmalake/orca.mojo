@@ -17,6 +17,17 @@
   hang the UI on `/dev/zero`. They now answer 400 without reading anything;
   `@all` and lists of names work as before. On the command line, a line of
   an `@file:` list that isn't a name is named by its number, not its text.
+- **Retries after `orca register` of a new build no longer loop.** A failed
+  run waiting for its retry kept the old registry hash, so the scheduler
+  started it, `resume` refused it (exit 3) before claiming it, and the run
+  was started again until its retries were spent, ending `failed` with no
+  error (on EC2, launching a head each time). Registration now also moves
+  failed runs waiting for a retry that have no step done to the new code.
+  One with steps done is failed at once instead of started, with an error
+  saying how to resume it with the new code. Runs have an `error` column
+  (migration 15), shown by `<binary> status <run>` and the run's page: also
+  set when a local run's process exits before claiming it (its exit code
+  and last line) and when a run's cluster or instances can't start. (#63)
 
 ## 0.3.2 (2026-11-03)
 
