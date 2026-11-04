@@ -50,8 +50,9 @@ r2=$(q "SELECT id FROM orca.runs WHERE id > $r1 AND id < $r3")
 
 [ "$(q "SELECT count(*) FROM orca.pipeline_versions")" -eq 3 ] \
     || fail "versions: $(q "SELECT commit_sha, dirty, image FROM orca.pipeline_versions")"
-[ "$(q "SELECT v.commit_sha FROM orca.pipelines p JOIN orca.pipeline_versions v ON v.id = p.version")" = "" ] \
-    || fail "the pipeline's version isn't the last binary's"
+# A run by hand records its version but leaves the registered one (#59).
+[ "$(q "SELECT v.commit_sha FROM orca.pipelines p JOIN orca.pipeline_versions v ON v.id = p.version")" = $c2 ] \
+    || fail "the pipeline's version isn't the last registered binary's"
 # A resume records the version that resumed it.
 q "UPDATE orca.runs SET status = 'failed', heartbeat = NULL WHERE id = $r3" > /dev/null
 ORCA_IMAGE=orca:c1 ./build/toy-c1 resume "$r3" >> "$log" 2>&1 || fail "resume with c1"

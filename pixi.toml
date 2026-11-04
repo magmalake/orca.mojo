@@ -78,6 +78,7 @@ test-pause = { cmd = "scripts/with-postgres.sh tests/pause.sh" }
 # The ec2 runner against a stand-in EC2 API; needs python3.
 test-versions = { cmd = "scripts/with-postgres.sh tests/versions.sh" }
 test-new-code = { cmd = "scripts/with-postgres.sh tests/new_code.sh" }
+test-manual-run = { cmd = "scripts/with-postgres.sh tests/manual_run.sh" }
 test-source = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_source.mojo -o build/test-source && ./build/test-source" }
 playground = { cmd = "scripts/playground.sh" }
 test-locate = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_locate.mojo -o build/test-locate && ./build/test-locate" }
@@ -91,7 +92,7 @@ test-datasets = { cmd = "scripts/with-postgres.sh tests/datasets.sh" }
 test-db-blip = { cmd = "scripts/with-postgres.sh tests/db_blip.sh" }
 # Needs docker, kind and kubectl; builds the image of deploy/Dockerfile.
 test-kind = { cmd = "tests/kind.sh" }
-test = { depends-on = ["test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-pause", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-versions", "test-new-code", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos"] }
+test = { depends-on = ["test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-pause", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-versions", "test-manual-run", "test-new-code", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
 orca = { cmd = "mkdir -p build && mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca" }

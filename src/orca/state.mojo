@@ -396,6 +396,18 @@ struct State(Movable):
             ),
         )
 
+    def scheduled_hash(mut self, pipeline: String) raises -> String:
+        """The registry hash `orca register` gave `pipeline`, or empty if it
+        wasn't registered with a binary."""
+        var res = self.conn.query(
+            (
+                "SELECT registry_hash FROM orca.pipelines WHERE name = $1 AND"
+                " binary_path IS NOT NULL"
+            ),
+            Params().text(pipeline),
+        )
+        return res.row(0).text("registry_hash") if len(res) > 0 else String()
+
     def version(
         mut self,
         pipeline: String,
