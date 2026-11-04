@@ -28,7 +28,7 @@ from orca import (
     Step,
     parse_months,
 )
-from orca.tables import append, dataset_of, scan, table
+from orca.tables import append, dataset_of, ensure_table, scan, table
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -120,6 +120,15 @@ def sum_all(mut ctx: Ctx, ms: Seq[Int]) raises -> Int64:
     return append(ctx, out, _rows("all", len(ms)))
 
 
+def evolve(mut ctx: Ctx, m: Month) raises -> Int:
+    """`ensure_table` on `out` with the schema in ORCA_TEST_SCHEMA; returns
+    how many schemas the table has after."""
+    var t = ensure_table(
+        ctx, "db.out", Schema.parse(getenv("ORCA_TEST_SCHEMA"))
+    )
+    return len(t.metadata.schemas)
+
+
 comptime Load = Step["load", Month, Int64, load, Mapped, writes=["db.out"]]
 comptime Loads = Pipeline["loads", Load]
 comptime CopyCount = Step[
@@ -139,6 +148,18 @@ comptime SumAll = Step[
     "sum_all", Seq[Int], Int64, sum_all, Gather, after=Key, writes=["db.out"]
 ]
 comptime Sums = Pipeline["sums", Key, SumAll]
+comptime Evolve = Step["evolve", Month, Int, evolve, Mapped, writes=["db.out"]]
+comptime Evolves = Pipeline["evolves", Evolve]
+
+# SCHEMA with a column and a struct added, ids numbered on from the table's.
+comptime WIDER = (
+    '{"schema-id":0,"type":"struct","fields":['
+    '{"id":1,"name":"id","required":true,"type":"long"},'
+    '{"id":2,"name":"month","required":true,"type":"string"},'
+    '{"id":3,"name":"note","required":false,"type":"string"},'
+    '{"id":4,"name":"geo","required":false,"type":{"type":"struct","fields":['
+    '{"id":5,"name":"lat","required":false,"type":"double"}]}}]}'
+)
 
 
 def _warehouse() raises -> FilesystemCatalog:
@@ -317,6 +338,88 @@ def test_a_table_outside_the_warehouse_needs_no_declaration() raises:
     _ = setenv("ORCA_WAREHOUSE", "build/wh-elsewhere")
     var res = Sneaky.run(parse_months("2024-01"))
     assert_true(res.succeeded())
+
+
+def _evolve_with(schema: String) raises -> RunResult:
+    _ = setenv("ORCA_TEST_SCHEMA", schema)
+    return Evolves.run(parse_months("2024-01"))
+
+
+def test_ensure_table_adds_the_columns_the_table_lacks() raises:
+    _ = _warehouse()
+    var out = _table("out")
+    _ = out.append(_rows("2024-01", 3))
+    var res = _evolve_with(WIDER)
+    assert_true(res.succeeded(), _error(res))
+    assert_equal(res.output[Int]("evolve", "2024-01"), 2)
+    var t = _table("out")
+    var s = t.metadata.schema()
+    assert_equal(s.schema_id, 1)
+    assert_equal(s.find_by_name("note").id, 3)
+    assert_equal(s.find_by_name("geo.lat").id, 5)
+    assert_equal(t.metadata.last_column_id, 5)
+    # The rows written before read the new columns as null.
+    var rows = t.scan().to_table()
+    assert_equal(rows.num_rows(), 3)
+    assert_equal(rows.num_columns(), 4)
+    for r in range(rows.num_rows()):
+        assert_true(not rows.value(r, 2).valid, "note is null")
+    # The same schema again changes nothing, and so does a narrower one
+    # that keeps the required columns: what it leaves out stays.
+    var loc = t.metadata_location
+    res = _evolve_with(WIDER)
+    assert_true(res.succeeded(), _error(res))
+    res = _evolve_with(SCHEMA)
+    assert_true(res.succeeded(), _error(res))
+    assert_equal(_table("out").metadata_location, loc)
+
+
+def test_ensure_table_refuses_an_incompatible_schema() raises:
+    _ = _warehouse()
+    var retyped = (
+        '{"schema-id":0,"type":"struct","fields":['
+        '{"id":1,"name":"id","required":true,"type":"long"},'
+        '{"id":2,"name":"month","required":true,"type":"long"}]}'
+    )
+    var res = _evolve_with(retyped)
+    assert_true(not res.succeeded())
+    assert_true(
+        "cannot change the type of 'month' from string to long" in _error(res),
+        _error(res),
+    )
+    assert_true(_error(res).startswith("orca: db.out can't take"), _error(res))
+    var dropped = (
+        '{"schema-id":0,"type":"struct","fields":['
+        '{"id":1,"name":"id","required":true,"type":"long"}]}'
+    )
+    res = _evolve_with(dropped)
+    assert_true(
+        "db.out requires column 'month', which the schema given leaves out"
+        in _error(res),
+        _error(res),
+    )
+    var required = (
+        '{"schema-id":0,"type":"struct","fields":['
+        '{"id":1,"name":"id","required":true,"type":"long"},'
+        '{"id":2,"name":"month","required":true,"type":"string"},'
+        '{"id":3,"name":"note","required":true,"type":"string"}]}'
+    )
+    res = _evolve_with(required)
+    assert_true("as a required column" in _error(res), _error(res))
+    var renumbered = (
+        '{"schema-id":0,"type":"struct","fields":['
+        '{"id":1,"name":"id","required":true,"type":"long"},'
+        '{"id":2,"name":"month","required":true,"type":"string"},'
+        '{"id":7,"name":"note","required":false,"type":"string"}]}'
+    )
+    res = _evolve_with(renumbered)
+    assert_true(
+        "'note' is field 3 in the table but 7 in the schema given"
+        in _error(res),
+        _error(res),
+    )
+    # Nothing above committed a schema.
+    assert_equal(len(_table("out").metadata.schemas), 1)
 
 
 def main() raises:
