@@ -29,7 +29,8 @@ filesystem catalog: dataset `nyc.trips` is the table at
 `<warehouse>/nyc/trips`, where the warehouse is a directory or a location
 in object storage (`s3://bucket/warehouse`, as iceberg's `FileIO` reads it,
 from the `AWS_*` environment). **`table`** loads a dataset the step declared, and
-**`ensure_table`** creates one it writes if it's missing. `scan` refuses a
+**`ensure_table`** creates one it writes if it's missing, and adds the
+columns the step's schema has and the table lacks. `scan` refuses a
 dataset the step didn't declare in `reads=`, and `append` and `commit` one it
 didn't declare in `writes=`. A table outside the warehouse (or with
 `ORCA_WAREHOUSE` unset) is used by location as before, and belongs to no
@@ -50,6 +51,11 @@ from iceberg.io import FileIO
 from iceberg.scan import TableScan
 from iceberg.schema import Schema
 from iceberg.transforms import PartitionSpec
+from iceberg.update_schema import (
+    SchemaCommit,
+    UpdateSchema,
+    prepare_schema_update,
+)
 from iceberg.write import WriteOptions, write_data_files
 from parquet import RecordBatch
 
@@ -180,7 +186,23 @@ def ensure_table(
     spec: PartitionSpec = PartitionSpec.unpartitioned(),
 ) raises -> Table:
     """The table of a dataset the step writes, created empty with `schema`
-    and `spec` if the warehouse doesn't have it yet."""
+    and `spec` if the warehouse doesn't have it yet.
+
+    A table that exists is brought up to `schema`: the columns `schema` has
+    and the table lacks, matched by name at any depth, are added in one
+    schema commit, and a column `schema` makes optional becomes optional.
+    Rows already in the table read the new columns as null. Columns the
+    table has and `schema` doesn't are kept, and written as null.
+
+    It refuses, with the dataset in the message, what that can't do: a
+    column whose type differs, a new column marked required, a required
+    column `schema` leaves out, and a field id in `schema` that isn't the
+    id the table gave that column, since batches built from `schema` carry
+    its ids and a column is matched by id first. A new column's id should be
+    the next one up: the table numbers new fields from its highest id, in
+    the order `schema` lists them, a struct's fields after the struct.
+    `spec` is only used to create the table.
+    """
     ctx.check_declared(dataset, write=True)
     var name = _split(dataset)
     var cat = _catalog()
@@ -191,7 +213,117 @@ def ensure_table(
             # Another run, started at the same time, created it first.
             if not cat.table_exists(name[0], name[1]):
                 raise e^
-    return _load(cat, name[0], name[1])
+    var t = _load(cat, name[0], name[1])
+    _evolve(ctx, t, schema, dataset)
+    return t^
+
+
+def _named(s: Schema, name: String) -> Int:
+    """Position in `s.flat` of the field named exactly `name`, or -1."""
+    for k in range(len(s.flat)):
+        if s.flat[k].name == name:
+            return k
+    return -1
+
+
+def _required_left_out(table: Schema, given: Schema) -> String:
+    """A required field of `table` that `given` leaves out, or "". A field
+    under a struct `given` leaves out as a whole doesn't count: the struct
+    is optional or it is reported itself."""
+    for k in range(len(table.flat)):
+        ref f = table.flat[k]
+        if not f.required or f.child_pos < 0:
+            continue
+        if _named(given, f.name) >= 0:
+            continue
+        if f.parent >= 0 and _named(given, table.flat[f.parent].name) < 0:
+            continue
+        return f.name
+    return ""
+
+
+def _other_id(table: Schema, given: Schema) -> String:
+    """Why a field of `given` has another id in `table`, or ""."""
+    for k in range(len(given.flat)):
+        ref g = given.flat[k]
+        var at = _named(table, g.name)
+        if at >= 0 and table.flat[at].id != g.id:
+            return String(
+                "'",
+                g.name,
+                "' is field ",
+                table.flat[at].id,
+                " in the table but ",
+                g.id,
+                " in the schema given; give it id ",
+                table.flat[at].id,
+                ", or batches built from this schema land in the wrong",
+                " column",
+            )
+    return ""
+
+
+def _evolve(
+    mut ctx: Ctx, mut table: Table, schema: Schema, dataset: String
+) raises:
+    """Adds to `table` what `schema` has and it lacks (see `ensure_table`),
+    reloading and trying again when another writer commits first."""
+    var attempt = 0
+    while True:
+        var before = table.metadata.schema()
+        var left_out = _required_left_out(before, schema)
+        if left_out:
+            raise Error(
+                "orca: ",
+                dataset,
+                " requires column '",
+                left_out,
+                "', which the schema given leaves out; a pipeline can add",
+                " columns or make them optional, not drop a required one",
+            )
+        var update = UpdateSchema()
+        update.union_by_name(schema)
+        var change: SchemaCommit
+        try:
+            change = prepare_schema_update(table.metadata, update)
+        except e:
+            raise Error(
+                "orca: ", dataset, " can't take the schema given: ", String(e)
+            )
+        # Checked against the schema the commit would make, so a schema
+        # with the wrong ids is refused before anything is committed.
+        var mismatch = _other_id(change.schema, schema)
+        if mismatch:
+            raise Error("orca: ", dataset, ": ", mismatch)
+        if change.changed:
+            try:
+                table.commit_metadata(change.metadata.copy())
+            except e:
+                attempt += 1
+                if attempt > _COMMIT_RETRIES:
+                    raise e^
+                _backoff(attempt)
+                _reload(table)
+                continue
+            var added = String("")
+            var n_added = 0
+            for f in change.schema.flat:
+                if _named(before, f.name) < 0:
+                    added += String(", " if n_added > 0 else "", f.name)
+                    n_added += 1
+            ctx.log(
+                String(
+                    "evolved ",
+                    dataset,
+                    " to schema ",
+                    change.schema.schema_id,
+                    ", adding ",
+                    n_added,
+                    " field(s): ",
+                    added,
+                )
+            )
+        return
 
 
 def scan(mut ctx: Ctx, table: Table) raises -> TableScan:

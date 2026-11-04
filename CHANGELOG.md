@@ -4,6 +4,17 @@
 
 ## 0.3.1 (2026-11-03)
 
+- **`ensure_table` adds the columns a table lacks.** Given a schema with
+  columns the existing table doesn't have, matched by name at any depth, it
+  adds them in one schema commit (iceberg-mojo's `UpdateSchema.union_by_name`)
+  instead of returning the table unchanged; old rows read them as null. A
+  column the schema marks optional becomes optional, and columns it leaves
+  out are kept. It refuses, naming the dataset, a type change, a new
+  required column, a required column left out, and a field id that isn't the
+  one the table gives that column (batches built from the schema carry its
+  ids). A concurrent commit is retried like a data commit. Needs
+  iceberg-mojo with `UpdateSchema` (magmalake/iceberg.mojo#64).
+
 - **A dated pipeline may write a keyed sensor's keys.** `orca register` no
   longer refuses a keyed sensor whose keys dataset a daily or monthly
   pipeline writes: a new snapshot of the keys dataset offers the keys it
@@ -27,7 +38,7 @@
   UI's backfill form has the same as a checkbox (`rerun=1`).
 
 - **Built against the shim-loading fix releases.** dista-mojo 0.2.1,
-  k8s-mojo 0.1.1, iceberg-mojo 0.8.5, postgres-mojo 0.3.3,
+  k8s-mojo 0.1.1, iceberg-mojo 0.8.6, postgres-mojo 0.3.3,
   objectstore-mojo 0.4.1, flare_mlake 0.13.1 and json_mlake 0.4.3 (and, in
   the data environment, zstd 0.1.5, lz4 0.1.4, brotli 0.1.4 and sqlite
   0.3.5): every library they load is found without `CONDA_PREFIX`, next to
