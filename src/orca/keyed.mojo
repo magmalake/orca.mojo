@@ -11,7 +11,8 @@ comptime Labels = Pipeline[
 The keys are the distinct values of `column` in the current snapshot of the
 warehouse dataset `dataset` (`ORCA_WAREHOUSE`), each a `Name`. They live in
 data rather than in the source because there can be thousands and they
-grow. `--partitions` takes a list of names, `@all` for every current key,
+grow. A value that isn't a name, or is null, isn't a key: it's left out,
+and `keys` says how many there were on stderr. `--partitions` takes a list of names, `@all` for every current key,
 or `@file:<path>` for a list one per line; a range is refused, and so is a
 name the dataset doesn't have, so a typo doesn't make a run of nothing.
 `<binary> keys` prints the snapshot and the keys, for the scheduler, which
@@ -21,6 +22,8 @@ A keyed pipeline has no calendar, so `schedule=` and `fills=` don't compile
 with one (`Pipeline.check`). This module imports iceberg, so only binaries
 with a keyed pipeline build it.
 """
+
+from std.sys import stderr
 
 from orca.name import Name, parse_names, sort_texts
 from orca.partitions import Partitions
@@ -111,14 +114,39 @@ struct Keyed[dataset_: StaticString, column_: StaticString](Partitions):
             raise Error(Self.dataset_, " has no column ", Self.column_)
         var seen = Dict[String, Bool]()
         var out = List[String]()
+        var bad = List[String]()
+        var n_bad = 0
         for row in range(res.num_rows()):
             var d = res.value(row, 0)
-            if not d.valid:
+            if not d.valid or d.s in seen:
                 continue
-            if d.s not in seen:
-                # Each must be a name, or it can't be a partition.
+            seen[d.s] = True
+            # Each must be a name, or it can't be a partition: one that
+            # isn't is left out, and said, rather than stopping the rest.
+            try:
                 _ = Name.parse(d.s)
-                seen[d.s] = True
-                out.append(d.s)
+            except e:
+                n_bad += 1
+                if len(bad) < 5:
+                    bad.append(String(e))
+                continue
+            out.append(d.s)
+        if n_bad > 0:
+            var why = String()
+            for i in range(len(bad)):
+                why.write("; " if i else "", bad[i])
+            print(
+                "orca: ",
+                Self.dataset_,
+                " (",
+                Self.column_,
+                ") has ",
+                n_bad,
+                " values that aren't names, left out of its keys: ",
+                why,
+                "; ..." if n_bad > len(bad) else "",
+                sep="",
+                file=stderr,
+            )
         sort_texts(out)
         return (id, out^)

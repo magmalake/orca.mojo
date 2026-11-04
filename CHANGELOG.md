@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **A snapshot a sensor can't run no longer wedges it** (#65). One whose
+  `orca.partitions` (or the keys an upstream run committed) aren't
+  partitions of the sensor's kind is recorded in `orca.sensed` with no run
+  and why (`sensed.error`), and the tick's other snapshots start their run;
+  before, the raise rolled the tick back, every tick, for good. A value of a
+  keys column that isn't a name is left out of `<binary> keys`, and counted
+  on stderr, instead of failing every keyed sensor pass, backfill and page.
+  A sensor pass that fails is kept as the pipeline's `sense_error` (printed
+  once, not every second) and shown on its page in `orca ui`, with the
+  snapshots it saw and didn't run. Migration 15.
+
 ## 0.3.2 (2026-11-03)
 
 - **Built against flare_mlake 0.13.2 and k8s-mojo 0.1.2.** flare now declares

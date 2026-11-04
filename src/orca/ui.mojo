@@ -158,6 +158,9 @@ struct PipelineRow(Copyable, Movable):
     var last_partitions: String
     var next_fire: String
     var next_partition: String
+    var sense_error: String
+    """Why the sensor's last pass failed, or empty."""
+    var sense_error_at: String
 
 
 @fieldwise_init
@@ -305,23 +308,30 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
     """Every registered pipeline, or the one named."""
     var rows = db.conn.query(
         String(
-            "SELECT p.name, p.registry_hash, coalesce(p.binary_path, '') AS"
-            " binary, coalesce(p.describe->'partitions'->>'kind', '') AS"
-            " kind, coalesce(p.describe->'partitions'->>'start', '') AS"
-            " start, coalesce(p.describe->'schedule'->>'cron', '') AS cron,"
-            " coalesce(p.describe->'schedule'->>'tz', '') AS tz,"
-            " coalesce(p.describe->'schedule'->>'fills', '') AS fills,"
-            " coalesce(p.describe->>'max_runs', '1') AS max_runs,"
-            " coalesce(p.describe->>'run_retries', '0') AS run_retries,"
-            " (SELECT count(*) FROM orca.runs r WHERE r.pipeline = p.name AND"
-            " r.status = 'running')::text AS running, (SELECT count(*) FROM"
-            " orca.runs r WHERE r.pipeline = p.name AND r.status ="
-            " 'queued')::text AS queued, coalesce(l.id, 0)::text AS last_run,"
-            " coalesce(l.status, '') AS last_status, coalesce(l.partitions,"
-            " '') AS last_partitions FROM orca.pipelines p LEFT JOIN LATERAL"
-            " (SELECT id, status, partitions FROM orca.runs r WHERE"
-            " r.pipeline = p.name ORDER BY id DESC LIMIT 1) l ON true WHERE"
-            " ($1 = '' OR p.name = $1) ORDER BY p.name"
+            (
+                "SELECT p.name, p.registry_hash, coalesce(p.binary_path, '') AS"
+                " binary, coalesce(p.describe->'partitions'->>'kind', '') AS"
+                " kind, coalesce(p.describe->'partitions'->>'start', '') AS"
+                " start, coalesce(p.describe->'schedule'->>'cron', '') AS cron,"
+                " coalesce(p.describe->'schedule'->>'tz', '') AS tz,"
+                " coalesce(p.describe->'schedule'->>'fills', '') AS fills,"
+                " coalesce(p.describe->>'max_runs', '1') AS max_runs,"
+                " coalesce(p.describe->>'run_retries', '0') AS run_retries,"
+                " (SELECT count(*) FROM orca.runs r WHERE r.pipeline = p.name"
+                " AND r.status = 'running')::text AS running, (SELECT count(*)"
+                " FROM orca.runs r WHERE r.pipeline = p.name AND r.status ="
+                " 'queued')::text AS queued, coalesce(l.id, 0)::text AS"
+                " last_run, coalesce(l.status, '') AS last_status,"
+                " coalesce(l.partitions, '') AS last_partitions,"
+                " coalesce(p.sense_error, '') AS sense_error, "
+            ),
+            _ts("p.sense_error_at"),
+            (
+                " AS sense_error_at FROM orca.pipelines p LEFT JOIN LATERAL"
+                " (SELECT id, status, partitions FROM orca.runs r WHERE"
+                " r.pipeline = p.name ORDER BY id DESC LIMIT 1) l ON true WHERE"
+                " ($1 = '' OR p.name = $1) ORDER BY p.name"
+            ),
         ),
         Params().text(name),
     )
@@ -346,6 +356,8 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
             r.text("last_partitions"),
             "",
             "",
+            r.text("sense_error"),
+            r.text("sense_error_at"),
         )
         try:
             var f = _fires(p, t, 1)
@@ -901,6 +913,17 @@ def _json_pipeline(mut out: String, p: PipelineRow):
         )
     else:
         out.write("null")
+    out.write(', "sense_error": ')
+    if p.sense_error:
+        out.write(
+            '{"at": ',
+            quote(p.sense_error_at),
+            ', "error": ',
+            quote(p.sense_error),
+            "}",
+        )
+    else:
+        out.write("null")
     out.write("}")
 
 
@@ -1418,7 +1441,40 @@ def pipeline(mut db: State, name: String) raises -> Page:
         keys = _key_counts(db, name)
         j.write(', "keys": ')
         _json_keys(j, keys.value())
-    j.write("}")
+    # Snapshots its sensor saw and couldn't run, latest first.
+    var unrun = List[Tuple[SnapshotRef, String, String]]()
+    for x in db.conn.query(
+        String(
+            "SELECT dataset, snapshot_id, error, ",
+            _ts("created"),
+            " AS at FROM orca.sensed WHERE pipeline = $1 AND error IS NOT",
+            " NULL ORDER BY created DESC, dataset LIMIT 10",
+        ),
+        Params().text(name),
+    ):
+        unrun.append(
+            (
+                SnapshotRef(x.text("dataset"), x.int64("snapshot_id")),
+                x.text("at"),
+                x.text("error"),
+            )
+        )
+    j.write(', "not_run": [')
+    for i in range(len(unrun)):
+        ref u = unrun[i]
+        j.write(
+            ", " if i else "",
+            '{"dataset": ',
+            quote(u[0].dataset),
+            ', "snapshot": ',
+            u[0].snapshot,
+            ', "at": ',
+            quote(u[1]),
+            ', "error": ',
+            quote(u[2]),
+            "}",
+        )
+    j.write("]}")
 
     var h = Html()
     h.raw('<p class="crumb"><a href="/">Pipelines</a></p><h1>')
@@ -1437,6 +1493,9 @@ def pipeline(mut db: State, name: String) raises -> Page:
     h.text(p.running, " running of ", p.max_runs, ", ", p.queued, " queued")
     h.raw("</dd><dt>Run retries</dt><dd>")
     h.text(p.run_retries)
+    if p.sense_error:
+        h.raw('</dd><dt>Sensing</dt><dd class="error">Failing since ')
+        h.text(p.sense_error_at, ": ", p.sense_error)
     h.raw("</dd><dt>Binary</dt><dd><code>")
     h.text(p.binary)
     h.raw("</code></dd><dt>Code</dt><dd><code>")
@@ -1477,6 +1536,23 @@ def pipeline(mut db: State, name: String) raises -> Page:
     h.raw("</tbody></table></div>")
     if keys:
         _keys_html(h, p.name, keys.value())
+    if len(unrun) > 0:
+        h.raw(
+            "<h2>Snapshots not run",
+            _docs("sensors"),
+            '</h2><p class="muted">Seen by its sensor, but holding keys that',
+            " aren't its partitions. A backfill runs what they should have.",
+            '</p><div class="scroll"><table><thead><tr><th>Snapshot</th>',
+            "<th>Seen</th><th>Why</th></tr></thead><tbody>",
+        )
+        for u in unrun:
+            h.raw("<tr><td>")
+            h.link(_snapshot_href(u[0]), String(u[0]))
+            h.raw("</td>")
+            h.cell(u[1])
+            h.cell(u[2])
+            h.raw("</tr>")
+        h.raw("</tbody></table></div>")
     if p.binary:
         var base = String("/pipelines/", url_encode(p.name))
         var example = String("2024-01-01" if p.kind == "daily" else "2024-01")

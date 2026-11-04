@@ -269,6 +269,14 @@ def _migrations() -> List[List[String]]:
         [
             "ALTER TABLE orca.pipelines ADD COLUMN secrets jsonb",
         ],
+        # Sensing that went wrong: why a snapshot was recorded as seen
+        # without a run (its keys aren't partitions), and the error of a
+        # sensor's last pass that failed, cleared by one that doesn't.
+        [
+            "ALTER TABLE orca.sensed ADD COLUMN error text",
+            "ALTER TABLE orca.pipelines ADD COLUMN sense_error text",
+            "ALTER TABLE orca.pipelines ADD COLUMN sense_error_at timestamptz",
+        ],
     ]
 
 
