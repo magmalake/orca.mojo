@@ -11,6 +11,13 @@
   refused. `orca lineage` follows a step's declared read of the keys dataset
   back to the pipeline that wrote it.
 
+- **Names can hold a `/`.** A keyed pipeline's keys may now be
+  `owner/name`, such as GitHub repositories: a `Name` is 1 to 128 bytes of
+  `A-Z a-z 0-9 . _ : - /`, still without `..` or a comma, and with a `/`
+  only between other bytes, one at a time. An attempt's log directory
+  writes the `/` as `%2F` (`orca.name.path_segment`), and the UI's key
+  pages are at `/pipelines/<pipeline>/keys/owner%2Fname`.
+
 - **`orca backfill --rerun`.** A backfill skips keys that are done, so
   there was no way from the command line to run a finished day or month
   again. `orca backfill --rerun <pipeline> KEYS` queues the done keys as

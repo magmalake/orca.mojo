@@ -1,9 +1,10 @@
 """Appends to a keys dataset: `log_id` and `frames` columns, `count` logs
 (default 50) named `log-<n>` from `from` (default 0), zero-padded to
 `width` digits (default 2), shuffled and each written twice, so the keys
-are the distinct values and not the rows. Prints the snapshot.
+are the distinct values and not the rows; `prefix` replaces `log-`, as in
+`org/repo-` for names with a `/`. Prints the snapshot.
 
-    names <warehouse> [<count> [<table> [<from> [<width>]]]]   (table: keys.logs)
+    names <warehouse> [<count> [<table> [<from> [<width> [<prefix>]]]]]   (table: keys.logs)
 """
 
 from std.sys import argv
@@ -32,6 +33,7 @@ def main() raises:
     var table = String(args[3]) if len(args) > 3 else String("logs")
     var start = Int(String(args[4])) if len(args) > 4 else 0
     var width = Int(String(args[5])) if len(args) > 5 else 2
+    var prefix = String(args[6]) if len(args) > 6 else String("log-")
     var cat = FilesystemCatalog.local(String(args[1]))
     var schema = Schema.parse(SCHEMA)
     if not cat.table_exists("keys", table):
@@ -48,7 +50,7 @@ def main() raises:
             var k = start + (i * 37 + copy) % n
             var digits = String(k)
             var padded = String("0") * max(width - digits.byte_length(), 0)
-            ids.add(Datum.string_(String("log-", padded, digits)))
+            ids.add(Datum.string_(String(prefix, padded, digits)))
             frames.add(Datum.long_(Int64(k * 10)))
     var files = write_data_files(
         t.io,
