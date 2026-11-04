@@ -13,6 +13,9 @@ log file as well (`orca.logs.attempt_log`).
 """
 
 
+from std.os import getenv
+from std.time import perf_counter_ns, sleep
+
 from postgres import Connection, Params
 
 from orca.logs import mask, utc_now
@@ -46,8 +49,43 @@ struct Recorder(Movable):
         self._conn = None
 
     def _insert(mut self, into: StaticString, t: TableSnapshot) raises:
+        """Retried on a new connection for `ORCA_DB_RETRY_SECONDS`, as
+        `orca.state.PgStore` is, so a blip of the server doesn't fail the
+        step that read or committed."""
         if not self.url:
             return
+        var budget: Float64
+        try:
+            budget = Float64(
+                getenv(
+                    "ORCA_DB_RETRY_SECONDS", getenv("ORCA_STALE_SECONDS", "30")
+                )
+            )
+        except:
+            budget = 30.0
+        var started = perf_counter_ns()
+        var wait = 0.25
+        while True:
+            try:
+                self._insert_once(into, t)
+                return
+            except e:
+                var spent = Float64(perf_counter_ns() - started) / 1e9
+                if spent + wait > budget:
+                    raise e^
+                print(
+                    "orca: Postgres failed (",
+                    e,
+                    "); retrying in ",
+                    wait,
+                    " s",
+                    sep="",
+                )
+                sleep(wait)
+                wait = min(wait * 2, 4.0)
+                self._conn = None
+
+    def _insert_once(mut self, into: StaticString, t: TableSnapshot) raises:
         if not self._conn:
             self._conn = Connection(self.url)
         _ = self._conn.value().execute(

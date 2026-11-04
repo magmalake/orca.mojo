@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **A Postgres blip no longer throws away a finished step** (#67). A run's
+  process retries each write to Postgres (an attempt's start and end, a
+  skip, a read or commit recorded, the run's end) on a new connection for
+  `ORCA_DB_RETRY_SECONDS`, by default the stale limit, with backoff from a
+  quarter second to 4 s. Losing the run to another process, or a cancel,
+  still stops it at once. Before, any error left the run `running` and
+  exited 3, and the step was redone on resume.
+
 ## 0.3.2 (2026-11-03)
 
 - **Built against flare_mlake 0.13.2 and k8s-mojo 0.1.2.** flare now declares

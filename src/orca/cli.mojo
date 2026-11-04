@@ -374,9 +374,10 @@ def _execute[
     """Runs what's left of `run` as its owner, with a heartbeat, then ends it.
 
     A run asked to cancel stops before its next attempt and ends
-    `cancelled`. If this raises otherwise (the database went away, or another
-    process took the run over), the run is left `running`; once its heartbeat
-    is stale it can be resumed.
+    `cancelled`. Writes to Postgres are retried on a new connection for
+    `ORCA_DB_RETRY_SECONDS` (`orca.state.DbRetry`). If this raises otherwise
+    (the database stayed away, or another process took the run over), the
+    run is left `running`; once its heartbeat is stale it can be resumed.
     """
     var b = Beat(url, run, owner, heartbeat_interval(_stale_seconds()))
     var pool = TypedPool.start[beat](1, b)
@@ -386,10 +387,10 @@ def _execute[
         res = P.execute(store, prior^, keys, run, Int(Pointer(to=rt)))
     except e:
         pool.shutdown()
-        if not store.db.cancel_requested(run):
+        if not store.cancel_requested():
             raise e^
-        store.db.finish_run(run, owner, CANCELLED)
-        _print_steps(store.db, run)
+        store.finish_run(CANCELLED)
+        _print_steps_after(store.db, run)
         print("run", CANCELLED)
         return 1
     pool.shutdown()
@@ -404,10 +405,19 @@ def _execute[
             except e:
                 print("orca: no timeline:", e)
     var ok = res.succeeded()
-    store.db.finish_run(run, owner, SUCCEEDED if ok else FAILED)
-    _print_steps(store.db, run)
+    store.finish_run(SUCCEEDED if ok else FAILED)
+    _print_steps_after(store.db, run)
     print("run", SUCCEEDED if ok else FAILED)
     return 0 if ok else 1
+
+
+def _print_steps_after(mut db: State, run: Int):
+    """`_print_steps` once the run has ended: it's recorded, so not being
+    able to list its steps doesn't change how it ended."""
+    try:
+        _print_steps(db, run)
+    except e:
+        print("orca: can't list run", run, "steps:", e)
 
 
 def _print_steps(mut db: State, run: Int, show_logs: Bool = False) raises:
