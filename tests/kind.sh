@@ -98,7 +98,7 @@ curl -fsS "$base/runs/$toy/driver.log" | grep -qx "run succeeded" || fail "the t
 # out of it.
 orca_cli sh -c "cat /var/orca/logs/toy/$toy/metrics/orca-$toy-1-*.jsonl" > build/kind-toy-metrics.jsonl \
     || fail "the toy's metrics"
-python3 tests/metrics_ok.py --rss build/kind-toy-metrics.jsonl > /dev/null || fail "the toy's metrics"
+python3 tests/metrics_ok.py build/kind-toy-metrics.jsonl > /dev/null || fail "the toy's metrics"
 ! curl -fsS "$base/runs/$toy/driver.log" | grep -q "^orca-sample" || fail "samples in the toy's driver log"
 echo "ok   the toy ran as a driver Job, its driver log and metrics were kept, and nothing of it is left"
 
@@ -132,9 +132,14 @@ kubectl -n orca-runs delete pod -l "orca.run=$f2,orca.role=driver" --wait=false 
 gone "orca.run=$f1"
 # A metrics file per pod: the driver's, the head's and the 3 workers'.
 pods=$(orca_cli sh -c "ls /var/orca/logs/fanout/$f1/metrics" | while read -r f; do
-    case "$f" in *-head.jsonl) echo head ;; *-worker-*.jsonl) echo worker ;; *) echo driver ;; esac
+    case "$f" in (*-head.jsonl) echo head ;; (*-worker-*.jsonl) echo worker ;; (*) echo driver ;; esac
 done | sort | tr '\n' ' ')
 [ "$pods" = "driver head worker worker worker " ] || fail "run $f1's metrics: $pods"
+for f in $(orca_cli sh -c "cd /var/orca/logs/fanout/$f1/metrics && ls"); do
+    orca_cli cat "/var/orca/logs/fanout/$f1/metrics/$f" > "build/kind-$f"
+    case "$f" in (*-head.jsonl | *-worker-*) rss=--rss ;; (*) rss= ;; esac
+    python3 tests/metrics_ok.py $rss "build/kind-$f" > /dev/null || fail "run $f1's $f"
+done
 echo "ok   fanout's run had its own head and 3 workers, and its tasks reached all 3, each with metrics"
 until_true "SELECT status = 'succeeded' FROM orca.runs WHERE id = $f2" 300
 [ "$(q "SELECT starts FROM orca.runs WHERE id = $f2")" -eq 2 ] || fail "run $f2 started $(q "SELECT starts FROM orca.runs WHERE id = $f2") times"
