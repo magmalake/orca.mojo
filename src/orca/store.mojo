@@ -28,6 +28,14 @@ def _record_in[S: Store](store: Int, commit: Bool, t: TableSnapshot) raises:
     Pointer[S, MutAnyOrigin](unsafe_from_address=store)[].record(commit, t)
 
 
+def _fence_nothing(store: Int) raises:
+    pass
+
+
+def _fence_in[S: Store](store: Int) raises:
+    Pointer[S, MutAnyOrigin](unsafe_from_address=store)[].fence()
+
+
 struct Recorder(Movable):
     """Records an attempt's reads and commits in the store it came from, as
     they happen, so a process killed right after a commit still leaves it on
@@ -40,16 +48,24 @@ struct Recorder(Movable):
     var _store: Int
     """The store's address; 0 when nothing is recorded."""
     var _record: def(Int, Bool, TableSnapshot) raises thin -> None
+    var _fence: def(Int) raises thin -> None
 
     def __init__(out self):
         """A recorder that records nothing."""
         self._store = 0
         self._record = _record_nothing
+        self._fence = _fence_nothing
 
     def __init__[S: Store](out self, mut store: S):
         """A recorder that records in `store`."""
         self._store = Int(Pointer(to=store))
         self._record = _record_in[S]
+        self._fence = _fence_in[S]
+
+    def fence(mut self) raises:
+        """Raises unless this process may still commit for its run: what
+        `orca.tables` checks right before each commit (`Store.fence`)."""
+        self._fence(self._store)
 
     def read(mut self, t: TableSnapshot) raises:
         self._record(self._store, False, t)
@@ -100,6 +116,14 @@ trait Store:
     def record(mut self, commit: Bool, t: TableSnapshot) raises:
         """Records that the attempt last started read `t` (or, if `commit`,
         committed it). What a `Recorder` from this store calls."""
+        ...
+
+    def fence(mut self) raises:
+        """Raises unless this process still owns the run, with a heartbeat
+        younger than half of `ORCA_STALE_SECONDS`, so no other process can
+        have claimed it nor claim it during a commit: what a commit to
+        Iceberg checks right before it's made (`orca.ctx`). Its message
+        starts `orca: not committing`."""
         ...
 
     def recorder(mut self) raises -> Recorder:
@@ -158,6 +182,9 @@ struct MemoryStore(Movable, Store):
 
     def record(mut self, commit: Bool, t: TableSnapshot) raises:
         pass
+
+    def fence(mut self) raises:
+        pass  # one process: nothing can take its run over
 
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String

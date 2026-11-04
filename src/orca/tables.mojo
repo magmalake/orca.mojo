@@ -387,6 +387,8 @@ def append(
         var result = prepare_append(
             table.io, table.metadata, files.copy(), ctx.summary(loc)
         )
+        # Not if this process may have lost its run (`Ctx.fence`).
+        ctx.fence()
         try:
             table.commit(result)
         except e:
@@ -425,6 +427,8 @@ def commit(
         var result = prepare_commit(
             table.io, table.metadata, operation, files.copy(), ctx.summary(loc)
         )
+        # Not if this process may have lost its run (`Ctx.fence`).
+        ctx.fence()
         try:
             table.commit(result)
         except e:

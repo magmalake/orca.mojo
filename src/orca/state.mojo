@@ -888,6 +888,58 @@ struct PgStore(Movable, Store):
             except e:
                 r.again(e, self.db, self.url)
 
+    def fence(mut self) raises:
+        # On the store's connection; an unreachable database is waited for
+        # while the heartbeat could still be fresh, then the commit is off.
+        var stale: Float64
+        try:
+            stale = Float64(getenv("ORCA_STALE_SECONDS", "30"))
+        except:
+            stale = 30.0
+        var r = DbRetry()
+        r.budget = stale / 2
+        while True:
+            try:
+                var row = self.db.conn.query(
+                    (
+                        "SELECT coalesce(owner, '') AS owner, status,"
+                        " coalesce(heartbeat > now() - make_interval(secs =>"
+                        " $2), false) AS fresh FROM orca.runs WHERE id = $1"
+                    ),
+                    Params().int64(Int64(self.run)).float64(stale / 2),
+                ).row(0)
+                if (
+                    row.text("owner") != self.owner
+                    or row.text("status") != RUNNING
+                ):
+                    raise Error(
+                        "orca: not committing: run ",
+                        self.run,
+                        " is ",
+                        row.text("status"),
+                        " and held by ",
+                        row.text("owner") if row.text("owner") else "nobody",
+                        ", not this process (",
+                        self.owner,
+                        ")",
+                    )
+                if not row.bool("fresh"):
+                    raise Error(
+                        "orca: not committing: run ",
+                        self.run,
+                        "'s heartbeat is older than ",
+                        stale / 2,
+                        " s, so another process may take it over",
+                    )
+                return
+            except e:
+                if String(e).startswith("orca: not committing"):
+                    raise e^
+                try:
+                    r.again(e, self.db, self.url)
+                except e2:
+                    raise Error("orca: not committing: ", e2)
+
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String
     ) raises:
