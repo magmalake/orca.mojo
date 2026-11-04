@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.3.2 (2026-11-03)
+
+- **Built against flare_mlake 0.13.2 and k8s-mojo 0.1.2.** flare now declares
+  `fcntl` variadic, as dista and orca do, so a Linux program that links
+  flare's client (or k8s) beside dista compiles. The CI checkouts and
+  `deploy/Dockerfile` pin the same revisions.
+
 ## 0.3.1 (2026-11-03)
 
 - **`ensure_table` adds the columns a table lacks.** Given a schema with
