@@ -22,14 +22,15 @@ which `interrupt` marks failed when the run is resumed.
 """
 
 from std.os import getenv
-from std.time import perf_counter_ns, sleep
 
 from postgres import Connection, Params, Transaction
 
 from orca.heartbeat import Beater, Heartbeat
 from orca.store import (
     CANCELLED,
+    FINAL,
     FAILED,
+    Backoff,
     RUNNING,
     SKIPPED,
     SUCCEEDED,
@@ -312,6 +313,12 @@ struct State(Movable):
     var conn: Connection
 
     def __init__(out self, url: String) raises:
+        if url.startswith("sqlite:"):
+            raise Error(
+                "orca: ORCA_DATABASE_URL is a SQLite file, which only a",
+                " pipeline binary's run, resume and status take; the",
+                " scheduler, the UI and orca's other commands need Postgres",
+            )
         self.conn = Connection(url)
 
     def migrate(mut self) raises:
@@ -633,58 +640,18 @@ struct State(Movable):
         return out^
 
 
-comptime FINAL = "\x1f"
-"""Starts the message of an error a retry can't help: the run was lost to
-another process, or cancelled. `DbRetry` raises it at once, without it."""
-
-
-def db_retry_seconds() -> Float64:
-    """`ORCA_DB_RETRY_SECONDS`: how long a run's process keeps retrying a
-    write to Postgres that failed, by default the stale limit
-    (`ORCA_STALE_SECONDS`, 30), past which another process may take the run
-    over anyway."""
-    try:
-        return Float64(
-            getenv("ORCA_DB_RETRY_SECONDS", getenv("ORCA_STALE_SECONDS", "30"))
-        )
-    except:
-        return 30.0
-
-
 struct DbRetry(Movable):
-    """Retries of one call to Postgres from a run's process.
+    """Retries of one call to Postgres from a run's process: `Backoff`,
+    then a new connection, so a restart or failover of the server doesn't
+    stop the run."""
 
-    `again(e, ...)` is called with what the call raised: it raises again
-    if the error is final (`FINAL`) or the time is up, else it waits, a
-    quarter of a second doubling to 4 s, and makes a new connection, so a
-    restart or failover of the server doesn't stop the run."""
-
-    var started: Int
-    var wait: Float64
-    var budget: Float64
+    var backoff: Backoff
 
     def __init__(out self):
-        self.started = perf_counter_ns()
-        self.wait = 0.25
-        self.budget = db_retry_seconds()
+        self.backoff = Backoff("Postgres")
 
     def again(mut self, e: Error, mut db: State, url: String) raises:
-        var msg = String(e)
-        if msg.startswith(FINAL):
-            raise Error(String(msg[byte = FINAL.byte_length() :]))
-        var spent = Float64(perf_counter_ns() - self.started) / 1e9
-        if spent + self.wait > self.budget:
-            raise Error(msg)
-        print(
-            "orca: Postgres failed (",
-            msg,
-            "); retrying in ",
-            self.wait,
-            " s",
-            sep="",
-        )
-        sleep(self.wait)
-        self.wait = min(self.wait * 2, 4.0)
+        self.backoff.again(e)
         try:
             db = State(url)
         except:

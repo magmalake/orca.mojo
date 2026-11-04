@@ -6,7 +6,10 @@
 #
 #   - kill -9 of the process running it, at a random moment, which takes its
 #     dista head and workers with it;
-#   - a restart of the Postgres server under it (pg_ctl -m immediate);
+#   - a restart of the Postgres server under it (pg_ctl -m immediate), or,
+#     with ORCA_DATABASE_URL=sqlite:<path>, another writer holding the
+#     file's lock for up to 1.9 s, past the store's one-second busy timeout,
+#     so the run's writes fail and are retried on the file opened again;
 #   - two `resume`s started at once, racing to claim the run;
 #   - steps that fail at random (CHAOS_FLAKY percent of attempts) and are
 #     retried, then resumed.
@@ -18,7 +21,9 @@
 # `check <run>` also runs (chaos_tables.mojo checks its Iceberg table).
 #
 # Needs ORCA_DATABASE_URL and ORCA_PGDATA (pixi run test-chaos starts a
-# throwaway server). CHAOS_TIMEOUT (default 120) seconds per seed.
+# throwaway server), or ORCA_DATABASE_URL=sqlite:<path>, a file it starts
+# afresh (pixi run test-chaos-sqlite). CHAOS_TIMEOUT (default 120) seconds
+# per seed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p build
@@ -32,7 +37,23 @@ export ORCA_WORKERS=2
 export CHAOS_NAP=${CHAOS_NAP:-0.05}
 export CHAOS_FLAKY=${CHAOS_FLAKY:-30}
 months=${CHAOS_MONTHS:-2024-01..2024-12}
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+case $ORCA_DATABASE_URL in
+sqlite:*)
+    # The same queries, on Postgres's tables without the orca schema.
+    db=${ORCA_DATABASE_URL#sqlite:}
+    db=${db#//}
+    rm -f "$db" "$db-wal" "$db-shm"
+    what="lock holds"
+    # Past the stale limit, so a write the lock held up past the busy
+    # timeout is retried on the file opened again, not given up on.
+    export ORCA_DB_RETRY_SECONDS=${ORCA_DB_RETRY_SECONDS:-5}
+    q() { sqlite3 -cmd '.timeout 5000' "$db" "$(echo "$1" | sed 's/orca\.//g')"; }
+    ;;
+*)
+    q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+    what="postgres restarts"
+    ;;
+esac
 
 # A fresh warehouse for a pipeline with tables.
 fresh_warehouse() {
@@ -124,8 +145,15 @@ for seed in ${CHAOS_SEEDS:-1 2 3}; do
             reap
         elif [ "$action" -lt 9 ]; then
             sleep "0.$((RANDOM % 8 + 1))"
-            pg_ctl -D "$ORCA_PGDATA" -m immediate -w restart > /dev/null 2>&1 \
-                || fail "postgres didn't restart"
+            if [ -n "${db:-}" ]; then
+                printf 'BEGIN EXCLUSIVE;\n.shell sleep %s\nCOMMIT;\n' \
+                    "$((RANDOM % 2)).$((RANDOM % 9 + 1))" \
+                    | sqlite3 -cmd '.timeout 5000' "$db" > /dev/null \
+                    || fail "couldn't lock the file"
+            else
+                pg_ctl -D "$ORCA_PGDATA" -m immediate -w restart > /dev/null 2>&1 \
+                    || fail "postgres didn't restart"
+            fi
             restarts=$((restarts + 1))
             reap
         else
@@ -157,6 +185,6 @@ for seed in ${CHAOS_SEEDS:-1 2 3}; do
     fi
     attempts=$(q "SELECT count(*) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $run")
     owners=$(q "SELECT count(DISTINCT a.host) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $run")
-    echo "seed $seed: run $run done in $((SECONDS - started))s: $kills kills, $restarts postgres restarts, $resumes resumes ($races raced), $attempts attempts by $owners processes"
+    echo "seed $seed: run $run done in $((SECONDS - started))s: $kills kills, $restarts $what, $resumes resumes ($races raced), $attempts attempts by $owners processes"
 done
 echo "ok   chaos"

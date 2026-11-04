@@ -14,7 +14,7 @@ The scheduler and the UI query `orca.state.State`'s SQL directly.
 
 from std.ffi import external_call
 from std.os import getenv
-from std.time import perf_counter_ns
+from std.time import perf_counter_ns, sleep
 
 from dista.codec import decode
 
@@ -99,6 +99,65 @@ struct RunResult(Movable):
             raise Error("step ", step, " for '", partition, "' ", s.status)
         var pos = 0
         return decode[T](Span(s.output), pos)
+
+
+comptime FINAL = "\x1f"
+"""Starts the message of an error a retry can't help: the run was lost to
+another process, or cancelled. `Backoff` raises it at once, without it."""
+
+
+def db_retry_seconds() -> Float64:
+    """`ORCA_DB_RETRY_SECONDS`: how long a run's process keeps retrying a
+    write to its store that failed, by default the stale limit
+    (`ORCA_STALE_SECONDS`, 30), past which another process may take the run
+    over anyway."""
+    try:
+        return Float64(
+            getenv("ORCA_DB_RETRY_SECONDS", getenv("ORCA_STALE_SECONDS", "30"))
+        )
+    except:
+        return 30.0
+
+
+struct Backoff(Movable):
+    """The waits between retries of one write to a store.
+
+    `again(e)` is called with what the write raised: it raises again if the
+    error is final (`FINAL`) or the time (`db_retry_seconds`) is up, else
+    it waits, a quarter of a second doubling to 4 s; the store then
+    reconnects and tries again."""
+
+    var what: String
+    """The store, for the message: `Postgres`, `SQLite`."""
+    var started: Int
+    var wait: Float64
+    var budget: Float64
+
+    def __init__(out self, what: String):
+        self.what = what
+        self.started = Int(perf_counter_ns())
+        self.wait = 0.25
+        self.budget = db_retry_seconds()
+
+    def again(mut self, e: Error) raises:
+        var msg = String(e)
+        if msg.startswith(FINAL):
+            raise Error(String(msg[byte = FINAL.byte_length() :]))
+        var spent = Float64(Int(perf_counter_ns()) - self.started) / 1e9
+        if spent + self.wait > self.budget:
+            raise Error(msg)
+        print(
+            "orca: ",
+            self.what,
+            " failed (",
+            msg,
+            "); retrying in ",
+            self.wait,
+            " s",
+            sep="",
+        )
+        sleep(self.wait)
+        self.wait = min(self.wait * 2, 4.0)
 
 
 @fieldwise_init
