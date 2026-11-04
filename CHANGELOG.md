@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **A dated pipeline may write a keyed sensor's keys.** `orca register` no
+  longer refuses a keyed sensor whose keys dataset a daily or monthly
+  pipeline writes: a new snapshot of the keys dataset offers the keys it
+  holds, and the sensor queues those that aren't done, so no rule from dates
+  to names is needed. A keyed sensor reading any other dataset a
+  time-partitioned pipeline writes, or the other way round, is still
+  refused. `orca lineage` follows a step's declared read of the keys dataset
+  back to the pipeline that wrote it.
+
 ## 0.3.0 (2026-11-03)
 
 A project deploys itself to AWS.
