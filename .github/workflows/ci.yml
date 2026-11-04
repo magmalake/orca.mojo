@@ -3,7 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
+  # A PR that only changes prose runs nothing: no test, build or check reads
+  # these files. (Pushes to main always run everything.)
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - LICENSE
+      - NOTICE
   # macOS runs here, nightly and by hand (Actions > CI > Run workflow), not on
   # PRs or main: its jobs weren't required, often hung for 70-100 minutes,
   # and held runners from the org's small macOS pool while they did.
