@@ -9,13 +9,13 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC examples/toy.mojo -o build/toy
+scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC examples/daily.mojo -o build/daily
+scripts/mojo-build.sh -I src $DEP_INC examples/daily.mojo -o build/daily
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout
+scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
 
 log=build/ui.log
 : > "$log"

@@ -9,7 +9,7 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
 orca=$PWD/build/orca
 root=$PWD
 python3 scripts/embed-aws.py --check

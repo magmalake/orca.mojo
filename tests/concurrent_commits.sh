@@ -8,7 +8,7 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
 # shellcheck disable=SC2086
-mojo build -I src -I tests/lineage $DEP_INC tests/lineage/ingest.mojo -o build/ln-ingest
+scripts/mojo-build.sh -I src -I tests/lineage $DEP_INC tests/lineage/ingest.mojo -o build/ln-ingest
 export ORCA_WAREHOUSE=build/commits-wh
 for round in 1 2 3 4 5; do
     rm -rf "$ORCA_WAREHOUSE"

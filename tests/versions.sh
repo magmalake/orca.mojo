@@ -11,14 +11,14 @@ repo=https://github.com/magmalake/orca.mojo
 c1=1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
 c2=2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC -D ORCA_SOURCE=$repo.git -D ORCA_COMMIT=$c1 examples/toy.mojo -o build/toy-c1
+scripts/mojo-build.sh -I src $DEP_INC -D ORCA_SOURCE=$repo.git -D ORCA_COMMIT=$c1 examples/toy.mojo -o build/toy-c1
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC -D ORCA_SOURCE=git@github.com:magmalake/orca.mojo.git -D ORCA_COMMIT=$c2 \
+scripts/mojo-build.sh -I src $DEP_INC -D ORCA_SOURCE=git@github.com:magmalake/orca.mojo.git -D ORCA_COMMIT=$c2 \
     -D ORCA_DIRTY=1 examples/toy.mojo -o build/toy-c2
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC examples/toy.mojo -o build/toy
+scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
 
 log=build/versions.log
 : > "$log"
@@ -119,7 +119,7 @@ for c in 1 2; do
     src=$repo.git
     [ "$c" = 2 ] && src=git@github.com:magmalake/orca.mojo.git
     # shellcheck disable=SC2086
-    mojo build -I src $DEP_INC -D ORCA_SOURCE=$src -D ORCA_COMMIT="$sha" tests/datasets/first.mojo -o "build/ds-first-c$c"
+    scripts/mojo-build.sh -I src $DEP_INC -D ORCA_SOURCE=$src -D ORCA_COMMIT="$sha" tests/datasets/first.mojo -o "build/ds-first-c$c"
     ./build/orca locate "./build/ds-first-c$c" --root . >> "$log" 2>&1 || fail "locate first c$c"
 done
 ./build/orca register ./build/ds-first-c1 >> "$log" 2>&1 || fail "register first c1"

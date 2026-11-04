@@ -30,7 +30,7 @@ mkdir -p build
 src=${CHAOS_SRC:-tests/chaos_pipeline.mojo}
 bin=build/$(basename "$src" .mojo)
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC "$src" -o "$bin"
+scripts/mojo-build.sh -I src $DEP_INC "$src" -o "$bin"
 
 export ORCA_STALE_SECONDS=1
 export ORCA_WORKERS=2
