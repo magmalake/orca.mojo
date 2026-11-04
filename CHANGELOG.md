@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`<binary> run` no longer re-registers the pipeline.** With
+  `ORCA_DATABASE_URL` set, a run by hand of a pipeline `orca register` gave
+  a binary left its registry hash and `describe` changed to the binary's,
+  so a dev build run once made the scheduler queue fires and backfills with
+  code the registered binary refuses, and counted no key done. `run` now
+  leaves the registration alone, and refuses, with exit code 2, a binary
+  whose code isn't the registered one's unless it's given
+  `--allow-new-code`; that run is recorded as its own code's version. Only
+  `orca register` moves a pipeline's code. (#59)
+
 ## 0.3.2 (2026-11-03)
 
 - **Built against flare_mlake 0.13.2 and k8s-mojo 0.1.2.** flare now declares
