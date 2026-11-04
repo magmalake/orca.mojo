@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   test:
-    name: ${{ matrix.env == 'default' && 'stable' || matrix.env }} / ${{ matrix.os }}
+    name: ${{ matrix.env == 'default' && 'stable' || matrix.env }} / ${{ matrix.os }} / ${{ matrix.shard }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -28,6 +28,8 @@ jobs:
       matrix:
         os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
         env: [default, nightly]
+        # pixi.toml's two halves of `test`, each on a runner of its own.
+        shard: [test-executor, test-scheduler-ui]
     defaults:
       run:
         working-directory: orca.mojo
@@ -126,13 +128,13 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
-          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
-          restore-keys: mojo-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
+          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+          restore-keys: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
 
       # The state and kill tests start a throwaway PostgreSQL server from
       # conda-forge's postgresql, on a Unix socket: no service container.
       - name: Tests
-        run: pixi run -e ${{ matrix.env }} test
+        run: pixi run -e ${{ matrix.env }} ${{ matrix.shard }}
 
       # Entries a week old go before saving, so the cache can't grow without
       # bound; one still in use is rebuilt once.
@@ -143,7 +145,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
-          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   # orca on a kind cluster (deploy/): the image, built with pixi inside
   # docker, the manifests, and the toy pipeline run by the scheduler's pod.
@@ -222,7 +224,17 @@ jobs:
   # standard library's file seek.
   data:
     if: github.event_name != 'schedule'
+    name: data / ${{ matrix.group }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # pixi.toml's test-data-<group> tasks, each on a runner of its own:
+        # tables (pinned reads, chaos over Iceberg, lineage, six concurrent
+        # writers, the taxi pipeline on fixtures), sensors (sensors and a
+        # rebuild; lineage and sensors on MinIO) and keyed (keyed partitions,
+        # backfills and sensors over 20,000 names, names with a /).
+        group: [tables, sensors, keyed]
     defaults:
       run:
         working-directory: orca.mojo
@@ -277,36 +289,10 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: orca.mojo/.pixi/envs/data/share/max/cache
-          key: mojo-${{ runner.os }}-data-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
-          restore-keys: mojo-${{ runner.os }}-data-${{ hashFiles('orca.mojo/pixi.lock') }}-
-      # orca, which most steps below run, compiled once: their own builds of
-      # it are copies (scripts/mojo-build.sh).
-      - name: Build orca
-        run: pixi run -e data build-shared
-      - name: Pinned reads and recognised commits
-        run: pixi run -e data test-tables
-      - name: Chaos over Iceberg (one snapshot per month, however often killed)
-        run: pixi run -e data test-chaos-tables
-      - name: Lineage over three pipelines' tables, back and forward
-        run: pixi run -e data test-lineage
-      - name: Sensors and a rebuild (phase 4's gate)
-        run: pixi run -e data test-sensors
-      - name: Lineage and sensors with the warehouse and logs on MinIO
-        run: pixi run -e data test-lineage-s3 && pixi run -e data test-sensors-s3
-      - name: Keyed partitions over a dataset of names
-        run: pixi run -e data test-keyed
-      - name: Keyed backfills and sensors over 20,000 names
-        run: pixi run -e data test-keyed-backfills
-      - name: A keyed sensor over keys a daily pipeline writes
-        run: pixi run -e data test-keyed-sensor
-      - name: Keyed partitions named with a /, in logs and the UI
-        run: pixi run -e data test-keyed-names
-      - name: Six writers committing to one table at once
-        run: pixi run -e data test-commits
-      # examples/taxi over two sliced TLC months in tests/fixtures/taxi; the
-      # full 24-month load is run by hand.
-      - name: The taxi pipeline, on fixtures
-        run: pixi run -e data test-taxi
+          key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+          restore-keys: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
+      - name: The ${{ matrix.group }} tests
+        run: pixi run -e data test-data-${{ matrix.group }}
       - if: always() && github.event_name != 'pull_request'
         name: Prune Mojo's compile cache
         run: find .pixi/envs/data/share/max/cache -type f -mtime +7 -delete || true
@@ -314,4 +300,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: orca.mojo/.pixi/envs/data/share/max/cache
-          key: mojo-${{ runner.os }}-data-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+          key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
