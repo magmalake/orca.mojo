@@ -429,9 +429,14 @@ trait RunStore(Store):
         `registry_hash`, against `run`, which it has created or claimed."""
         ...
 
-    def start_heartbeat(mut self, interval: Float64) raises:
+    def start_heartbeat(
+        mut self, interval: Float64, timeouts: String = ""
+    ) raises:
         """Keeps the owned run's heartbeat fresh, every `interval` seconds,
-        from a thread, until `stop_heartbeat`."""
+        from a thread, until `stop_heartbeat`. The thread is also the run's
+        watchdog (`orca.heartbeat`): `timeouts` is `step=seconds` for each
+        step with `timeout_seconds`, comma-separated
+        (`Pipeline.timeouts`)."""
         ...
 
     def stop_heartbeat(mut self):
@@ -754,8 +759,10 @@ struct MemoryStore(Movable, RunStore):
         self.owner = owner
         self.registry_hash = registry_hash
 
-    def start_heartbeat(mut self, interval: Float64) raises:
-        pass
+    def start_heartbeat(
+        mut self, interval: Float64, timeouts: String = ""
+    ) raises:
+        pass  # no thread, so no watchdog: one process, nothing to stop
 
     def stop_heartbeat(mut self):
         pass

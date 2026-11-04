@@ -248,6 +248,9 @@ struct Pipeline[
             out.write('"function": ', quote(S.function()), ", ")
             out.write('"input": ', quote(S.input_type()), ", ")
             out.write('"output": ', quote(S.output_type()), ", ")
+            # Only when set, so a step without one keeps the describe it had.
+            comptime if S.timeout() > 0:
+                out.write('"timeout_seconds": ', S.timeout(), ", ")
             out.write('"reads": ', _names(S.dataset_reads()), ", ")
             out.write('"writes": ', _names(S.dataset_writes()))
             out.write("}")
@@ -258,6 +261,19 @@ struct Pipeline[
         out.write('], "source": {"repo": ', quote(source_repo()))
         out.write(', "commit": ', quote(source_commit()))
         out.write(', "dirty": ', "true" if source_dirty() else "false", "}}")
+        return out^
+
+    @staticmethod
+    def timeouts() -> String:
+        """`step=seconds` for each step with `timeout_seconds`,
+        comma-separated, for the run's watchdog (`orca.heartbeat`)."""
+        var out = String()
+        comptime for i in range(Self.Ts.length):
+            comptime T = Self.Ts[i]
+            comptime if T.timeout() > 0:
+                if out:
+                    out.write(",")
+                out.write(T.step_name(), "=", T.timeout())
         return out^
 
     @staticmethod

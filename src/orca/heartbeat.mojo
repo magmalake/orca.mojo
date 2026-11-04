@@ -7,6 +7,25 @@ connection of its own, until the heartbeat is stopped or dropped, which
 joins it. A failed beat is retried on the next one, after `B.reset`: a run
 whose heartbeat goes stale can be resumed elsewhere, and this process then
 finds out at its next attempt (see `orca.state`).
+
+**Stopping a step.** A step runs on the main thread and can't be
+interrupted there, so the heartbeat thread is also the run's watchdog: on
+each beat the store's `Beater` (`orca.state.PgBeat`) also looks for an
+attempt of a step declared `timeout_seconds=N` that started more than N
+seconds ago, and for a cancel (`runs.cancel_requested`) whose `cancel_at`
+has passed, set to `ORCA_CANCEL_KILL_SECONDS` after the cancel by whoever
+asked. For the first, the attempt and its step are `failed` ("timed out
+after N s") and the run `failed`, with that as its error, so the scheduler
+retries it as it retries any failed run; for the second, the running
+attempt is `failed` ("cancelled") and the run `cancelled`. Each is one
+transaction, with an `orca.audit` row (user `orca`, action `stop`) saying
+why, and then the process exits at once, with code 1, taking a local run's
+dista head and workers with it. On Kubernetes the Job's pod ends, and on
+EC2 the head's script shuts its instance down; either way the scheduler's
+sweep removes the rest of the run's cluster, as for any run that isn't
+running. A commit the step made before it was stopped is recognised by the
+attempt that runs it again (DESIGN.md, "Snapshots"). `SqliteStore`'s beater
+stops a step past its timeout the same way, against its file.
 """
 
 from std.time import sleep

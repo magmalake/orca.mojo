@@ -21,6 +21,7 @@ error on both. A process killed in between leaves an attempt `running`,
 which `interrupt` marks failed when the run is resumed.
 """
 
+from std.ffi import external_call
 from std.os import getenv
 
 from postgres import Connection, Params, Transaction
@@ -306,6 +307,11 @@ def _migrations() -> List[List[String]]:
         # after it deferred, which its retry budget doesn't count.
         [
             "ALTER TABLE orca.runs ADD COLUMN deferrals int NOT NULL DEFAULT 0",
+        ],
+        # Stopping a step (orca.heartbeat): when a running run asked to
+        # cancel is stopped if its step hasn't finished by then.
+        [
+            "ALTER TABLE orca.runs ADD COLUMN cancel_at timestamptz",
         ],
     ]
 
@@ -679,18 +685,124 @@ struct DbRetry(Movable):
             pass  # the next try fails too, and comes back here
 
 
+comptime _WATCH_SQL = (
+    "SELECT 'cancel' AS why, 0::bigint AS attempt, '' AS step, '' AS"
+    " partition, 0::float8 AS secs FROM orca.runs WHERE id = $1 AND owner ="
+    " $2 AND status = 'running' AND cancel_requested AND cancel_at <= now()"
+    " UNION ALL SELECT 'timeout', a.id, s.step, s.partition, t.secs FROM"
+    " orca.attempts a JOIN orca.steps s ON s.id = a.step JOIN orca.runs r ON"
+    " r.id = s.run JOIN (SELECT split_part(x, '=', 1) AS step,"
+    " split_part(x, '=', 2)::float8 AS secs FROM unnest(string_to_array($3,"
+    " ',')) AS x) AS t ON t.step = s.step WHERE s.run = $1 AND r.owner = $2"
+    " AND r.status = 'running' AND a.status = 'running' AND a.started <= now()"
+    " - make_interval(secs => t.secs) LIMIT 1"
+)
+"""A reason to stop the run's process now, if there is one: a cancel whose
+time has come, or an attempt past its step's timeout."""
+
+
+def _stop(
+    mut conn: Connection, run: Int, owner: String, timeouts: String
+) raises -> String:
+    """Ends the run as the watchdog finds it should end, and returns why,
+    or empty if it shouldn't."""
+    var rows = conn.query(
+        _WATCH_SQL, Params().int64(Int64(run)).text(owner).text(timeouts)
+    )
+    if len(rows) == 0:
+        return ""
+    var r = rows.row(0)
+    var tx = conn.begin()
+    var why: String
+    if r.text("why") == "timeout":
+        var step = r.text("step")
+        if r.text("partition"):
+            step.write(" ", r.text("partition"))
+        why = String(
+            "timed out after ",
+            Int(r.float64("secs")),
+            " s (timeout_seconds), so its process was stopped",
+        )
+        var n = tx.execute(
+            (
+                "UPDATE orca.attempts SET status = 'failed', ended = now(),"
+                " error = $2 WHERE id = $1 AND status = 'running'"
+            ),
+            Params().int64(r.int64("attempt")).text(why),
+        )
+        if n != 1:
+            tx.rollback()
+            return ""  # it ended as we looked
+        _ = tx.execute(
+            (
+                "UPDATE orca.steps SET status = 'failed', error = $2 WHERE id ="
+                " (SELECT step FROM orca.attempts WHERE id = $1)"
+            ),
+            Params().int64(r.int64("attempt")).text(why),
+        )
+        why = String("step ", step, " ", why)
+        _ = tx.execute(
+            (
+                "UPDATE orca.runs SET status = 'failed', ended = now(),"
+                " heartbeat = NULL, error = $3 WHERE id = $1 AND owner = $2"
+            ),
+            Params().int64(Int64(run)).text(owner).text(why),
+        )
+    else:
+        why = String(
+            "cancelled: its step hadn't finished when the cancel's",
+            " ORCA_CANCEL_KILL_SECONDS ran out, so its process was stopped",
+        )
+        _ = tx.execute(
+            (
+                "UPDATE orca.attempts a SET status = 'failed', ended = now(),"
+                " error = $2 FROM orca.steps s WHERE a.step = s.id AND s.run ="
+                " $1 AND a.status = 'running'"
+            ),
+            Params().int64(Int64(run)).text(why),
+        )
+        _ = tx.execute(
+            (
+                "UPDATE orca.steps SET status = 'failed', error = $2 WHERE run"
+                " = $1 AND status = 'running'"
+            ),
+            Params().int64(Int64(run)).text(why),
+        )
+        _ = tx.execute(
+            (
+                "UPDATE orca.runs SET status = 'cancelled', ended = now(),"
+                " heartbeat = NULL WHERE id = $1 AND owner = $2"
+            ),
+            Params().int64(Int64(run)).text(owner),
+        )
+    _ = tx.execute(
+        (
+            "INSERT INTO orca.audit (username, action, run, detail) VALUES"
+            " ('orca', 'stop', $1, $2)"
+        ),
+        Params().int64(Int64(run)).text(String(owner, ": ", why)),
+    )
+    tx.commit()
+    return why^
+
+
 struct PgBeat(Beater):
     """Refreshes a run's heartbeat in Postgres, on a connection of its own."""
 
     var url: String
     var run: Int
     var owner: String
+    var timeouts: String
+    """`step=seconds` for each step with a timeout, comma-separated."""
     var _conn: Optional[Connection]
 
-    def __init__(out self, url: String, run: Int, owner: String):
+    def __init__(
+        out self, url: String, run: Int, owner: String, timeouts: String = ""
+    ):
         self.url = url
         self.run = run
         self.owner = owner
+        self.timeouts = timeouts
         self._conn = None
 
     def beat(mut self) raises:
@@ -703,6 +815,12 @@ struct PgBeat(Beater):
             ),
             Params().int64(Int64(self.run)).text(self.owner),
         )
+        # The watchdog (orca.heartbeat): a cancel whose time has come, or
+        # an attempt past its step's timeout, stops the process.
+        var why = _stop(self._conn.value(), self.run, self.owner, self.timeouts)
+        if why:
+            print("run", self.run, why, flush=True)
+            external_call["_exit", NoneType](Int32(1))
 
     def reset(mut self):
         self._conn = None
@@ -813,9 +931,11 @@ struct PgStore(Movable, RunStore):
         self.owner = owner
         self.registry_hash = registry_hash
 
-    def start_heartbeat(mut self, interval: Float64) raises:
+    def start_heartbeat(
+        mut self, interval: Float64, timeouts: String = ""
+    ) raises:
         self._heartbeat = Heartbeat(
-            PgBeat(self.url, self.run, self.owner), interval
+            PgBeat(self.url, self.run, self.owner, timeouts), interval
         )
 
     def stop_heartbeat(mut self):

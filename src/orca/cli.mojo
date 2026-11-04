@@ -455,7 +455,7 @@ def _execute[
     can be resumed.
     """
     store.own(run, owner, hex(P.registry_hash()))
-    store.start_heartbeat(heartbeat_interval(_stale_seconds()))
+    store.start_heartbeat(heartbeat_interval(_stale_seconds()), P.timeouts())
     var res: RunResult
     try:
         res = P.execute(store, prior^, keys, run, Int(Pointer(to=rt)))

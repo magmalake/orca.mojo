@@ -30,6 +30,7 @@ systems, so two machines must not share one.
 loss, not only a killed process, keeps every recorded attempt.
 """
 
+from std.ffi import external_call
 from std.os import getenv
 
 from sqlite import Database, Statement
@@ -205,12 +206,17 @@ struct SqliteBeat(Beater):
     var path: String
     var run: Int
     var owner: String
+    var timeouts: String
+    """`step=seconds` for each step with a timeout, comma-separated."""
     var _db: Optional[Database]
 
-    def __init__(out self, path: String, run: Int, owner: String):
+    def __init__(
+        out self, path: String, run: Int, owner: String, timeouts: String = ""
+    ):
         self.path = path
         self.run = run
         self.owner = owner
+        self.timeouts = timeouts
         self._db = None
 
     def beat(mut self) raises:
@@ -226,6 +232,94 @@ struct SqliteBeat(Beater):
         st.bind_int(1, self.run)
         st.bind_text(2, self.owner)
         _ = st.step()
+        # The watchdog (orca.heartbeat): an attempt past its step's
+        # timeout stops the process. There's no cancel to time out here:
+        # `orca cancel` is the scheduler's, on Postgres.
+        var why = self._timed_out()
+        if why:
+            print("run", self.run, why, flush=True)
+            external_call["_exit", NoneType](Int32(1))
+
+    def _timed_out(mut self) raises -> String:
+        """Fails the attempt past its step's timeout, its step and the run,
+        in one transaction, and says why; empty if there's none."""
+        if not self.timeouts:
+            return ""
+        ref db = self._db.value()
+        for pair in self.timeouts.split(","):
+            var eq = pair.find("=")
+            if eq <= 0:
+                continue
+            var step = String(pair[byte=:eq])
+            var secs = Float64(String(pair[byte = eq + 1 :]))
+            var st = db.prepare(
+                String(
+                    "SELECT a.id, s.partition FROM attempts a JOIN steps s ON",
+                    " s.id = a.step JOIN runs r ON r.id = s.run WHERE s.run =",
+                    " ?1 AND s.step = ?2 AND r.owner = ?3 AND r.status =",
+                    " 'running' AND a.status = 'running' AND a.started <= ",
+                    _NOW,
+                    " - ?4 LIMIT 1",
+                )
+            )
+            st.bind_int(1, self.run)
+            st.bind_text(2, step)
+            st.bind_text(3, self.owner)
+            st.bind_float(4, secs)
+            var got = st.step()
+            if not got:
+                continue
+            var attempt = got.value().int_val(0)
+            var partition = got.value().text_val(1)
+            var why = String(
+                "timed out after ",
+                Int(secs),
+                " s (timeout_seconds), so its process was stopped",
+            )
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                var a = db.prepare(
+                    String(
+                        "UPDATE attempts SET status = 'failed', ended = ",
+                        _NOW,
+                        ", error = ?2 WHERE id = ?1 AND status = 'running'",
+                    )
+                )
+                a.bind_int(1, attempt)
+                a.bind_text(2, why)
+                _ = a.step()
+                if db.changes() != 1:
+                    _rollback(db)
+                    return ""  # it ended as we looked
+                var s = db.prepare(
+                    "UPDATE steps SET status = 'failed', error = ?2 WHERE id ="
+                    " (SELECT step FROM attempts WHERE id = ?1)"
+                )
+                s.bind_int(1, attempt)
+                s.bind_text(2, why)
+                _ = s.step()
+                var named = String("step ", step)
+                if partition:
+                    named.write(" ", partition)
+                var run_why = String(named, " ", why)
+                var r = db.prepare(
+                    String(
+                        "UPDATE runs SET status = 'failed', ended = ",
+                        _NOW,
+                        ", heartbeat = NULL, error = ?3 WHERE id = ?1 AND",
+                        " owner = ?2",
+                    )
+                )
+                r.bind_int(1, self.run)
+                r.bind_text(2, self.owner)
+                r.bind_text(3, run_why)
+                _ = r.step()
+                db.execute("COMMIT")
+                return run_why^
+            except e:
+                _rollback(db)
+                raise e^
+        return ""
 
     def reset(mut self):
         self._db = None
@@ -562,9 +656,11 @@ struct SqliteStore(Movable, RunStore):
         self.owner = owner
         self.registry_hash = registry_hash
 
-    def start_heartbeat(mut self, interval: Float64) raises:
+    def start_heartbeat(
+        mut self, interval: Float64, timeouts: String = ""
+    ) raises:
         self._heartbeat = Heartbeat(
-            SqliteBeat(self.path, self.run, self.owner), interval
+            SqliteBeat(self.path, self.run, self.owner, timeouts), interval
         )
 
     def stop_heartbeat(mut self):
