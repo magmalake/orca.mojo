@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Behind an HTTPS proxy, the UI's forms work** (#57). The `Origin` check
+  compared the browser's `Origin` with `http://` + `Host`, so behind Caddy
+  terminating TLS (as `orca aws up` deploys it) every `POST`, `/login`
+  included, got 403. The UI's own origin now takes its scheme from
+  `X-Forwarded-Proto` when `ORCA_UI_TRUST_PROXY=1`, else `https` when
+  `ORCA_UI_SECURE_COOKIES=1`; scheme and host compare in any case, and a
+  default port is ignored. Another site's `Origin` is still refused, and
+  `X-Forwarded-Proto` is ignored without a trusted proxy.
 - **The UI refuses `partitions=@file:<path>`** (#58). The start and backfill
   actions passed the field to the CLI's key parser, which read the file on
   the UI's host and echoed its first line that wasn't a name in the 409, so
@@ -9,6 +17,52 @@
   hang the UI on `/dev/zero`. They now answer 400 without reading anything;
   `@all` and lists of names work as before. On the command line, a line of
   an `@file:` list that isn't a name is named by its number, not its text.
+- **Retries after `orca register` of a new build no longer loop.** A failed
+  run waiting for its retry kept the old registry hash, so the scheduler
+  started it, `resume` refused it (exit 3) before claiming it, and the run
+  was started again until its retries were spent, ending `failed` with no
+  error (on EC2, launching a head each time). Registration now also moves
+  failed runs waiting for a retry that have no step done to the new code.
+  One with steps done is failed at once instead of started, with an error
+  saying how to resume it with the new code. Runs have an `error` column
+  (migration 15), shown by `<binary> status <run>` and the run's page: also
+  set when a local run's process exits before claiming it (its exit code
+  and last line) and when a run's cluster or instances can't start. (#63)
+- **A Postgres blip no longer throws away a finished step** (#67). A run's
+  process retries each write to Postgres (an attempt's start and end, a
+  skip, a read or commit recorded, the run's end) on a new connection for
+  `ORCA_DB_RETRY_SECONDS`, by default the stale limit, with backoff from a
+  quarter second to 4 s. Losing the run to another process, or a cancel,
+  still stops it at once. Before, any error left the run `running` and
+  exited 3, and the step was redone on resume.
+- **Cancel runs in bulk, and pause a pipeline.** `orca cancel <pipeline>
+  KEYS|@all` cancels the pipeline's runs over those keys that are queued,
+  running (before their next step) or failed and due a retry, as cancelling
+  one run does; the pipeline page has the same form, empty for all. `orca
+  pause <pipeline>` and `orca unpause`, and the page's buttons, stop and
+  restart the scheduler starting its runs: fires, sensors, retries and
+  backfills still queue theirs while it's paused, and runs already going go
+  on. Migration 16 adds `pipelines.paused`; `/` and the pipeline page show
+  it, also in JSON.
+- **`<binary> run` no longer re-registers the pipeline.** With
+  `ORCA_DATABASE_URL` set, a run by hand of a pipeline `orca register` gave
+  a binary left its registry hash and `describe` changed to the binary's,
+  so a dev build run once made the scheduler queue fires and backfills with
+  code the registered binary refuses, and counted no key done. `run` now
+  leaves the registration alone, and refuses, with exit code 2, a binary
+  whose code isn't the registered one's unless it's given
+  `--allow-new-code`; that run is recorded as its own code's version. Only
+  `orca register` moves a pipeline's code. (#59)
+- **A snapshot a sensor can't run no longer wedges it** (#65). One whose
+  `orca.partitions` (or the keys an upstream run committed) aren't
+  partitions of the sensor's kind is recorded in `orca.sensed` with no run
+  and why (`sensed.error`), and the tick's other snapshots start their run;
+  before, the raise rolled the tick back, every tick, for good. A value of a
+  keys column that isn't a name is left out of `<binary> keys`, and counted
+  on stderr, instead of failing every keyed sensor pass, backfill and page.
+  A sensor pass that fails is kept as the pipeline's `sense_error` (printed
+  once, not every second) and shown on its page in `orca ui`, with the
+  snapshots it saw and didn't run. Migration 17.
 
 ## 0.3.2 (2026-11-03)
 

@@ -25,6 +25,8 @@ And the actions, each a `POST` of a form (see `orca.actions`):
 |---|---|
 | `/pipelines/<name>/runs` | start a run over `partitions` |
 | `/pipelines/<name>/backfill` | a run per partition in `partitions` that has none; `rerun=1` for done ones too |
+| `/pipelines/<name>/cancel` | cancel its queued, running and retrying runs over `partitions` (`@all` or empty: all) |
+| `/pipelines/<name>/pause`, `/unpause` | stop the scheduler starting its runs, or let it again |
 | `/runs/<id>/resume` | queue a failed, cancelled or stalled run again; `allow_new_code=1` confirms new code |
 | `/runs/<id>/rerun` | a new run from `step` on, the steps before it copied |
 | `/runs/<id>/cancel` | cancel a run, before its next attempt if it's running |
@@ -74,6 +76,8 @@ from orca.actions import (
     Outcome,
     backfill_runs,
     cancel_run,
+    cancel_runs,
+    pause_pipeline,
     rebuild_downstream,
     rerun_from,
     resume_run,
@@ -158,6 +162,11 @@ struct PipelineRow(Copyable, Movable):
     var last_partitions: String
     var next_fire: String
     var next_partition: String
+    var paused: Bool
+    """`orca pause`: the scheduler starts none of its runs."""
+    var sense_error: String
+    """Why the sensor's last pass failed, or empty."""
+    var sense_error_at: String
 
 
 @fieldwise_init
@@ -174,6 +183,8 @@ struct RunRow(Copyable, Movable):
     var cancel_requested: Bool
     var stalled: Bool
     """`running` with no live process (`orca.actions.stalled_sql`)."""
+    var error: String
+    """Why the run ended without its steps saying so (`runs.error`)."""
 
 
 @fieldwise_init
@@ -305,23 +316,30 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
     """Every registered pipeline, or the one named."""
     var rows = db.conn.query(
         String(
-            "SELECT p.name, p.registry_hash, coalesce(p.binary_path, '') AS"
-            " binary, coalesce(p.describe->'partitions'->>'kind', '') AS"
-            " kind, coalesce(p.describe->'partitions'->>'start', '') AS"
-            " start, coalesce(p.describe->'schedule'->>'cron', '') AS cron,"
-            " coalesce(p.describe->'schedule'->>'tz', '') AS tz,"
-            " coalesce(p.describe->'schedule'->>'fills', '') AS fills,"
-            " coalesce(p.describe->>'max_runs', '1') AS max_runs,"
-            " coalesce(p.describe->>'run_retries', '0') AS run_retries,"
-            " (SELECT count(*) FROM orca.runs r WHERE r.pipeline = p.name AND"
-            " r.status = 'running')::text AS running, (SELECT count(*) FROM"
-            " orca.runs r WHERE r.pipeline = p.name AND r.status ="
-            " 'queued')::text AS queued, coalesce(l.id, 0)::text AS last_run,"
-            " coalesce(l.status, '') AS last_status, coalesce(l.partitions,"
-            " '') AS last_partitions FROM orca.pipelines p LEFT JOIN LATERAL"
-            " (SELECT id, status, partitions FROM orca.runs r WHERE"
-            " r.pipeline = p.name ORDER BY id DESC LIMIT 1) l ON true WHERE"
-            " ($1 = '' OR p.name = $1) ORDER BY p.name"
+            (
+                "SELECT p.name, p.registry_hash, coalesce(p.binary_path, '') AS"
+                " binary, coalesce(p.describe->'partitions'->>'kind', '') AS"
+                " kind, coalesce(p.describe->'partitions'->>'start', '') AS"
+                " start, coalesce(p.describe->'schedule'->>'cron', '') AS cron,"
+                " coalesce(p.describe->'schedule'->>'tz', '') AS tz,"
+                " coalesce(p.describe->'schedule'->>'fills', '') AS fills,"
+                " coalesce(p.describe->>'max_runs', '1') AS max_runs,"
+                " coalesce(p.describe->>'run_retries', '0') AS run_retries,"
+                " (SELECT count(*) FROM orca.runs r WHERE r.pipeline = p.name"
+                " AND r.status = 'running')::text AS running, (SELECT count(*)"
+                " FROM orca.runs r WHERE r.pipeline = p.name AND r.status ="
+                " 'queued')::text AS queued, coalesce(l.id, 0)::text AS"
+                " last_run, coalesce(l.status, '') AS last_status,"
+                " coalesce(l.partitions, '') AS last_partitions, p.paused,"
+                " coalesce(p.sense_error, '') AS sense_error, "
+            ),
+            _ts("p.sense_error_at"),
+            (
+                " AS sense_error_at FROM orca.pipelines p LEFT JOIN LATERAL"
+                " (SELECT id, status, partitions FROM orca.runs r WHERE"
+                " r.pipeline = p.name ORDER BY id DESC LIMIT 1) l ON true WHERE"
+                " ($1 = '' OR p.name = $1) ORDER BY p.name"
+            ),
         ),
         Params().text(name),
     )
@@ -346,6 +364,9 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
             r.text("last_partitions"),
             "",
             "",
+            r.bool("paused"),
+            r.text("sense_error"),
+            r.text("sense_error_at"),
         )
         try:
             var f = _fires(p, t, 1)
@@ -375,7 +396,7 @@ def _runs(
             _ts("started"),
             " AS started, ",
             _ts("ended"),
-            " AS ended, cancel_requested, ",
+            " AS ended, cancel_requested, coalesce(error, '') AS error, ",
             stalled_sql(),
             " AS stalled FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
             " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) ORDER BY",
@@ -398,6 +419,7 @@ def _runs(
                 r.text("ended"),
                 r.bool("cancel_requested"),
                 r.bool("stalled"),
+                r.text("error"),
             )
         )
     return out^
@@ -876,6 +898,8 @@ def _json_pipeline(mut out: String, p: PipelineRow):
         p.running,
         ', "queued": ',
         p.queued,
+        ', "paused": ',
+        "true" if p.paused else "false",
         ', "last_run": ',
     )
     if p.last_run:
@@ -897,6 +921,17 @@ def _json_pipeline(mut out: String, p: PipelineRow):
             quote(p.next_fire),
             ', "partition": ',
             quote(p.next_partition),
+            "}",
+        )
+    else:
+        out.write("null")
+    out.write(', "sense_error": ')
+    if p.sense_error:
+        out.write(
+            '{"at": ',
+            quote(p.sense_error_at),
+            ', "error": ',
+            quote(p.sense_error),
             "}",
         )
     else:
@@ -928,6 +963,8 @@ def _json_run(mut out: String, r: RunRow):
         "true" if r.cancel_requested else "false",
         ', "stalled": ',
         "true" if r.stalled else "false",
+        ', "error": ',
+        quote(r.error),
         "}",
     )
 
@@ -1127,6 +1164,9 @@ def home(mut db: State) raises -> Page:
         for p in ps:
             h.raw("<tr><td>")
             h.link(String("/pipelines/", url_encode(p.name)), p.name)
+            if p.paused:
+                h.raw(" ")
+                h.status("paused")
             h.raw("</td>")
             h.cell(
                 p.kind, " from ", p.start if p.start else String("the start")
@@ -1281,6 +1321,43 @@ def _keys_html(mut h: Html, name: String, k: KeyCounts):
     )
 
 
+def _control_html(mut h: Html, p: PipelineRow):
+    """The forms that cancel a pipeline's runs in bulk and pause it."""
+    var base = String("/pipelines/", url_encode(p.name))
+    h.raw(
+        "<h2>Stop runs</h2>",
+        '<div class="actions"><form class="action" method="post" action="',
+    )
+    h.text(base, "/cancel")
+    h.raw('"><label>Of <input name="partitions" placeholder="')
+    h.text("@all, or names" if p.kind == "keyed" else "@all, or a range")
+    h.raw(
+        '"></label><button type="submit">Cancel queued runs</button></form>',
+        '<form class="action" method="post" action="',
+    )
+    if p.paused:
+        h.text(base, "/unpause")
+        h.raw('"><button type="submit">Unpause</button></form></div>')
+    else:
+        h.text(base, "/pause")
+        h.raw('"><button type="submit">Pause</button></form></div>')
+    h.raw(
+        '<p class="muted more">Cancelling stops runs that are queued or',
+        " waiting to be retried, and asks running ones to stop before their",
+        " next step. ",
+    )
+    if p.paused:
+        h.raw(
+            "Paused: the scheduler starts none of its runs; fires, sensors,",
+            " retries and backfills queue theirs until it's unpaused.</p>",
+        )
+    else:
+        h.raw(
+            "Pausing stops the scheduler starting its runs, which stay",
+            " queued; runs already going go on.</p>",
+        )
+
+
 def key_page(mut db: State, name: String, key: String) raises -> Page:
     """One key of a keyed pipeline: its steps in every run it was in."""
     var ps = _pipelines(db, name)
@@ -1418,11 +1495,47 @@ def pipeline(mut db: State, name: String) raises -> Page:
         keys = _key_counts(db, name)
         j.write(', "keys": ')
         _json_keys(j, keys.value())
-    j.write("}")
+    # Snapshots its sensor saw and couldn't run, latest first.
+    var unrun = List[Tuple[SnapshotRef, String, String]]()
+    for x in db.conn.query(
+        String(
+            "SELECT dataset, snapshot_id, error, ",
+            _ts("created"),
+            " AS at FROM orca.sensed WHERE pipeline = $1 AND error IS NOT",
+            " NULL ORDER BY created DESC, dataset LIMIT 10",
+        ),
+        Params().text(name),
+    ):
+        unrun.append(
+            (
+                SnapshotRef(x.text("dataset"), x.int64("snapshot_id")),
+                x.text("at"),
+                x.text("error"),
+            )
+        )
+    j.write(', "not_run": [')
+    for i in range(len(unrun)):
+        ref u = unrun[i]
+        j.write(
+            ", " if i else "",
+            '{"dataset": ',
+            quote(u[0].dataset),
+            ', "snapshot": ',
+            u[0].snapshot,
+            ', "at": ',
+            quote(u[1]),
+            ', "error": ',
+            quote(u[2]),
+            "}",
+        )
+    j.write("]}")
 
     var h = Html()
     h.raw('<p class="crumb"><a href="/">Pipelines</a></p><h1>')
     h.text(p.name)
+    if p.paused:
+        h.raw(" ")
+        h.status("paused")
     h.raw('</h1><dl class="facts"><dt>Partitions</dt><dd>')
     h.text(p.kind, " from ", p.start if p.start else String("the start"))
     h.raw("</dd><dt>Schedule</dt><dd>")
@@ -1437,6 +1550,9 @@ def pipeline(mut db: State, name: String) raises -> Page:
     h.text(p.running, " running of ", p.max_runs, ", ", p.queued, " queued")
     h.raw("</dd><dt>Run retries</dt><dd>")
     h.text(p.run_retries)
+    if p.sense_error:
+        h.raw('</dd><dt>Sensing</dt><dd class="error">Failing since ')
+        h.text(p.sense_error_at, ": ", p.sense_error)
     h.raw("</dd><dt>Binary</dt><dd><code>")
     h.text(p.binary)
     h.raw("</code></dd><dt>Code</dt><dd><code>")
@@ -1477,6 +1593,23 @@ def pipeline(mut db: State, name: String) raises -> Page:
     h.raw("</tbody></table></div>")
     if keys:
         _keys_html(h, p.name, keys.value())
+    if len(unrun) > 0:
+        h.raw(
+            "<h2>Snapshots not run",
+            _docs("sensors"),
+            '</h2><p class="muted">Seen by its sensor, but holding keys that',
+            " aren't its partitions. A backfill runs what they should have.",
+            '</p><div class="scroll"><table><thead><tr><th>Snapshot</th>',
+            "<th>Seen</th><th>Why</th></tr></thead><tbody>",
+        )
+        for u in unrun:
+            h.raw("<tr><td>")
+            h.link(_snapshot_href(u[0]), String(u[0]))
+            h.raw("</td>")
+            h.cell(u[1])
+            h.cell(u[2])
+            h.raw("</tr>")
+        h.raw("</tbody></table></div>")
     if p.binary:
         var base = String("/pipelines/", url_encode(p.name))
         var example = String("2024-01-01" if p.kind == "daily" else "2024-01")
@@ -1513,6 +1646,7 @@ def pipeline(mut db: State, name: String) raises -> Page:
         )
         h.text(p.max_runs)
         h.raw(" at once.</p>")
+    _control_html(h, p)
     if len(fires) > 0:
         h.raw(
             "<h2>Next runs",
@@ -1779,6 +1913,10 @@ def run(mut db: State, id: Int) raises -> Page:
                 ' <a href="https://ui.perfetto.dev" target="_blank"',
                 ' rel="noopener">Perfetto</a>)</span></dd>',
             )
+    if r.error:
+        h.raw("<dt>Error</dt><dd>")
+        h.text(r.error)
+        h.raw("</dd>")
     if r.stalled:
         h.raw(
             "<dt>Process</dt><dd>stalled: its heartbeat stopped, so it can",
@@ -2268,7 +2406,7 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
             _ts("started"),
             " AS started, ",
             _ts("ended"),
-            " AS ended, cancel_requested, ",
+            " AS ended, cancel_requested, coalesce(error, '') AS error, ",
             stalled_sql(),
             " AS stalled FROM orca.runs WHERE id = $1",
         ),
@@ -2289,6 +2427,7 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
         r.text("ended"),
         r.bool("cancel_requested"),
         r.bool("stalled"),
+        r.text("error"),
     )
 
 
@@ -2883,6 +3022,19 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
             )
             var to = String("/runs?pipeline=", url_encode(name))
             return _acted(o, back, String('{"queued": ', o.queued, "}"), to)
+        if parts[3] == "cancel":
+            var o = cancel_runs(db, name, keys if keys.strip() else "@all")
+            var to = String("/runs?pipeline=", url_encode(name))
+            return _acted(o, back, String('{"cancelled": ', o.queued, "}"), to)
+        if parts[3] == "pause" or parts[3] == "unpause":
+            var paused = parts[3] == "pause"
+            var o = pause_pipeline(db, name, paused)
+            return _acted(
+                o,
+                back,
+                String('{"paused": ', "true" if paused else "false", "}"),
+                back,
+            )
     if len(parts) == 4 and parts[1] == "datasets" and parts[3] == "rebuild":
         var name = url_decode(parts[2])
         var o = rebuild_downstream(db, name, _form(body, "partitions"))
@@ -2911,6 +3063,33 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
     return None
 
 
+def _scheme(req: Request) raises -> String:
+    """The scheme the browser used: behind a proxy (`ORCA_UI_TRUST_PROXY=1`)
+    the first of `X-Forwarded-Proto`, else `https` with
+    `ORCA_UI_SECURE_COOKIES=1` (secure cookies imply TLS in front), else
+    `http`."""
+    if getenv("ORCA_UI_TRUST_PROXY") == "1":
+        var fwd = req.headers.get("X-Forwarded-Proto")
+        if fwd:
+            var first = String(fwd.split(",")[0].strip()).lower()
+            if first == "http" or first == "https":
+                return first
+    if getenv("ORCA_UI_SECURE_COOKIES") == "1":
+        return "https"
+    return "http"
+
+
+def _without_default_port(origin: String) -> String:
+    """`origin` (`scheme://host[:port]`), lower case, without the scheme's
+    default port, which a browser leaves out of `Origin`."""
+    var o = origin.lower()
+    if o.startswith("https://") and o.endswith(":443"):
+        return String(o[byte = : o.byte_length() - 4])
+    if o.startswith("http://") and o.endswith(":80"):
+        return String(o[byte = : o.byte_length() - 3])
+    return o^
+
+
 def _bad_request(why: String) -> Page:
     """A 400: the form asked for something the UI never does."""
     var h = Html()
@@ -2924,16 +3103,23 @@ def _bad_request(why: String) -> Page:
 
 def _same_origin(req: Request) raises -> Bool:
     """Whether a `POST` came from the UI's own pages: its `Origin`, or
-    without one its `Referer`, is this server as the request addressed it."""
+    without one its `Referer`, is this server as the browser addressed it,
+    by `Host` and the scheme `_scheme` gives. Host and scheme compare in
+    any case."""
     var host = req.headers.get("Host")
     if not host:
         return False
-    var own = String("http://", host)
+    var own = _without_default_port(String(_scheme(req), "://", host))
     var origin = req.headers.get("Origin")
     if origin:
-        return origin == own
+        return _without_default_port(origin) == own
     var referer = req.headers.get("Referer")
-    return referer == own or referer.startswith(String(own, "/"))
+    if not referer:
+        return False
+    # The Referer's origin is what comes before the path's first '/'.
+    var rest = referer.find("/", referer.find("://") + 3)
+    var ref_origin = String(referer[byte=:rest]) if rest >= 0 else referer
+    return _without_default_port(ref_origin) == own
 
 
 # ── serving ──────────────────────────────────────────────────────────────────
@@ -3010,7 +3196,13 @@ def _is_action(path: String) -> Bool:
     if len(parts) != 4:
         return False
     if parts[1] == "pipelines":
-        return parts[3] == "runs" or parts[3] == "backfill"
+        return (
+            parts[3] == "runs"
+            or parts[3] == "backfill"
+            or parts[3] == "cancel"
+            or parts[3] == "pause"
+            or parts[3] == "unpause"
+        )
     if parts[1] == "datasets":
         return parts[3] == "rebuild"
     return parts[1] == "runs" and (

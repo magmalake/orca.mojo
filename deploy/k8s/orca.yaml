@@ -128,7 +128,8 @@ spec:
             # Actions need a user (orca user add, in the scheduler's
             # container); reading doesn't, so nothing should expose the
             # Service outside the cluster but through a proxy that asks for
-            # a login too. Behind HTTPS, set ORCA_UI_SECURE_COOKIES=1.
+            # a login too. Behind HTTPS, set ORCA_UI_SECURE_COOKIES=1, and
+            # ORCA_UI_TRUST_PROXY=1 if the proxy sets X-Forwarded-Proto.
             - {name: ORCA_UI_ADDR, value: "0.0.0.0:8270"}
             - {name: ORCA_UI_LOGIN, value: required}
           ports: [{containerPort: 8270}]

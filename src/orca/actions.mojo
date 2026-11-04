@@ -5,7 +5,9 @@ The UI never starts a pipeline's binary. Starting, resuming, rerunning and
 backfilling leave a `queued` run, which the scheduler starts on its next
 tick as it starts any other, within `max_runs`; cancelling sets
 `cancel_requested`, which a running run sees before its next attempt (an
-attempt already going finishes). So the UI works the same wherever the
+attempt already going finishes). Pausing a pipeline sets
+`pipelines.paused`, and the scheduler starts none of its runs until it's
+unpaused. So the UI works the same wherever the
 scheduler runs, and retries and limits stay in one place.
 
 Each action returns an `Outcome`: the run it made or acted on, or why it
@@ -17,7 +19,17 @@ from std.os import getenv
 
 from postgres import Params
 
-from orca.scheduler import Registered, backfill, partition_keys, registered
+from orca.day import Day
+from orca.key import parse_keys
+from orca.month import Month
+from orca.name import parse_names
+from orca.scheduler import (
+    RETRIED_SQL,
+    Registered,
+    backfill,
+    partition_keys,
+    registered,
+)
 from orca.sensors import rebuild
 from orca.state import State
 
@@ -27,7 +39,7 @@ struct Outcome(Movable):
     var run: Int
     """The run made or acted on; 0 when refused, or for a backfill."""
     var queued: Int
-    """How many runs a backfill queued."""
+    """How many runs a backfill queued, or a bulk cancel cancelled."""
     var refused: String
     """Why the action wasn't done, or empty."""
     var confirm: Bool
@@ -166,7 +178,10 @@ def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
         String(
             "UPDATE orca.runs SET status = 'queued', owner = NULL, heartbeat =",
             " NULL, ended = NULL, retry_at = NULL, cancel_requested = false,",
-            " allow_new_code = $2 WHERE id = $1 AND (status IN ('failed',",
+            (
+                " error = NULL, allow_new_code = $2 WHERE id = $1 AND (status"
+                " IN ('failed',"
+            ),
             " 'cancelled') OR ",
             stalled_sql(),
             ")",
@@ -272,6 +287,90 @@ def cancel_run(mut db: State, run: Int) raises -> Outcome:
         return Outcome.no(String("no run ", run))
     return Outcome.no(
         String("run ", run, " is ", st.row(0).text("status"), " already")
+    )
+
+
+def cancel_runs(
+    mut db: State, pipeline: String, keys: String
+) raises -> Outcome:
+    """What `orca cancel` does: cancels, as `cancel_run` does each, the
+    pipeline's runs that are queued, running, or failed and due to be
+    retried, over any of `keys` (a run of several keys is cancelled whole),
+    or all of them for `@all`. The outcome's `queued` is how many."""
+    var rows = db.conn.query(
+        (
+            "SELECT coalesce(describe->'partitions'->>'kind', 'monthly') AS"
+            " kind, coalesce(describe->'partitions'->>'start', '') AS start,"
+            " coalesce((describe->>'run_retries')::bigint, 3) AS run_retries"
+            " FROM orca.pipelines WHERE name = $1"
+        ),
+        Params().text(pipeline),
+    )
+    if len(rows) == 0:
+        return Outcome.no(String("no pipeline ", pipeline))
+    var kind = rows.row(0).text("kind")
+    var start = rows.row(0).text("start")
+    var retries = rows.row(0).int64("run_retries")
+    var all = keys.strip() == "@all"
+    var joined = String()
+    if not all:
+        try:
+            if kind == "keyed":
+                for n in parse_names(keys):
+                    joined.write("," if joined else "", n)
+            elif kind == "daily":
+                for k in parse_keys[Day](keys, start):
+                    joined.write("," if joined else "", k)
+            else:
+                for k in parse_keys[Month](keys, start):
+                    joined.write("," if joined else "", k)
+        except e:
+            return Outcome.no(String(e))
+    var done = db.conn.query(
+        String(
+            "UPDATE orca.runs SET cancel_requested = true, status = CASE WHEN",
+            " status = 'running' THEN status ELSE 'cancelled' END, ended =",
+            " CASE WHEN status = 'running' THEN ended ELSE now() END WHERE",
+            " pipeline = $1 AND ($2 OR string_to_array(partitions, ',') &&",
+            " string_to_array($3, ',')) AND (status = 'queued' OR (status =",
+            " 'running' AND NOT cancel_requested) OR (status = 'failed' AND ",
+            RETRIED_SQL,
+            " AND starts <= $4)) RETURNING id",
+        ),
+        Params().text(pipeline).bool(all).text(joined).int64(retries),
+    )
+    return Outcome.done(0, len(done))
+
+
+def pause_pipeline(
+    mut db: State, pipeline: String, paused: Bool
+) raises -> Outcome:
+    """What `orca pause` (or, with `paused` false, `orca unpause`) does:
+    while a pipeline is paused the scheduler starts none of its runs. Fires,
+    sensors, retries and backfills still queue theirs, which start once
+    it's unpaused; runs already going go on."""
+    var rows = db.conn.query(
+        (
+            "UPDATE orca.pipelines SET paused = $2 WHERE name = $1 AND paused"
+            " <> $2 RETURNING name"
+        ),
+        Params().text(pipeline).bool(paused),
+    )
+    if len(rows) == 1:
+        return Outcome.done(0)
+    var have = db.conn.query(
+        "SELECT 1 FROM orca.pipelines WHERE name = $1", Params().text(pipeline)
+    )
+    if len(have) == 0:
+        return Outcome.no(String("no pipeline ", pipeline))
+    return Outcome.no(
+        String(
+            "pipeline ",
+            pipeline,
+            " is ",
+            "paused" if paused else "not paused",
+            " already",
+        )
     )
 
 

@@ -2,7 +2,8 @@
 # Keyed partitions over tests/keyed/: `names` writes the dataset keys.logs,
 # 50 log names each twice, and `labels` is partitioned by its log_id column.
 #
-# - `labels keys` prints the snapshot, then the 50 names once each, sorted;
+# - `labels keys` prints the snapshot, then the 50 names once each, sorted,
+#   leaving out (and saying) a value that isn't a name;
 # - `run --partitions @all` runs the mapped step for each and the gather
 #   over all 50; a list and an @file run just theirs;
 # - a range, an unknown name and a malformed one exit 2;
@@ -71,6 +72,14 @@ echo "$out" | grep -qx "run succeeded" || fail "the resumed run"
 [ "$(labels describe | jq -c '[.partitions, .keys_per_run]')" \
     = '[{"kind":"keyed","start":null,"dataset":"keys.logs","column":"log_id"},10]' ] \
     || fail "describe: $(labels describe | jq -c .partitions)"
+
+# A value that isn't a name is left out of the keys, and said, rather than
+# making every key unreadable.
+./build/kd-names "$ORCA_WAREHOUSE" 1 logs 0 2 'not a name ' > /dev/null 2>> "$log" || fail "names with a bad value"
+./build/kd-labels keys > build/keyed-keys.txt 2> build/keyed-keys.err || fail "keys over a bad value exited $?"
+[ "$(tail -n +2 build/keyed-keys.txt)" = "$want" ] || fail "keys over a bad value: $(tail -n +2 build/keyed-keys.txt | tr '\n' ' ')"
+grep -q "keys.logs (log_id) has 1 values that aren't names, left out of its keys: not a name" build/keyed-keys.err \
+    || fail "the bad value isn't said: $(cat build/keyed-keys.err)"
 
 tests/compile_fail.sh tests/compile_fail_keyed || fail "a keyed pipeline that shouldn't compile"
 echo "ok   keyed"

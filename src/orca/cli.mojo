@@ -3,6 +3,7 @@
 ```
 taxi describe                              the DAG as JSON
 taxi run --partitions 2024-01..2024-03     starts a run and runs it
+taxi run ... --allow-new-code              ... with code the scheduler wasn't given
 taxi resume <run> [--allow-new-code]       continues a run at what's unfinished
 taxi status [<run>]                        the latest runs, or one run's steps
 taxi sense                                 the current snapshot of each dataset it reads
@@ -15,7 +16,12 @@ refused, as a malformed key is, with exit code 2.
 
 With `ORCA_DATABASE_URL` set, runs are recorded in Postgres and can be
 resumed; without it, `run` runs in memory and `resume` and `status` aren't
-available. `ORCA_STALE_SECONDS` (default 30) is how old a run's heartbeat must
+available. `run` records the pipeline the first time; once `orca register`
+has given it a binary, `run` leaves the registration as it is, since what
+the scheduler queues and counts as done is that code's. A binary whose code
+isn't the registered one's is refused (exit code 2) unless `run` is given
+`--allow-new-code`; its run then counts as that code's, not the
+pipeline's. `ORCA_STALE_SECONDS` (default 30) is how old a run's heartbeat must
 be before another process may resume it.
 
 A pipeline with dista tasks gets a runtime per run, started before anything
@@ -63,8 +69,8 @@ from orca.warehouse import current_snapshot
 
 comptime USAGE = """usage:
   <pipeline> describe
-  <pipeline> run --partitions KEY[..KEY][,...]   (YYYY-MM, or YYYY-MM-DD daily)
-  <pipeline> run --partitions NAME[,...]|@all|@file:<path>   (keyed)
+  <pipeline> run --partitions KEY[..KEY][,...] [--allow-new-code]   (YYYY-MM, or YYYY-MM-DD daily)
+  <pipeline> run --partitions NAME[,...]|@all|@file:<path> [--allow-new-code]   (keyed)
   <pipeline> resume <run> [--allow-new-code]
   <pipeline> status [<run>]
   <pipeline> sense
@@ -184,11 +190,15 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         return 0
     if cmd == "run":
         var partitions = String()
+        var new_code = False
         var i = 2
         while i < len(args):
             if args[i] == "--partitions" and i + 1 < len(args):
                 partitions = args[i + 1]
                 i += 2
+            elif args[i] == "--allow-new-code":
+                new_code = True
+                i += 1
             else:
                 _usage(String("unknown argument: ", args[i]))
         if not partitions:
@@ -203,11 +213,28 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
             var res = P.run(keys)
             report(res)
             return 0 if res.succeeded() else 1
+        var hash = hex(P.registry_hash())
         var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
         var db = State(url)
         db.migrate()
-        var hash = hex(P.registry_hash())
-        db.register(P.name, hash, P.describe())
+        # Only `orca register` moves a scheduled pipeline's code.
+        var current = db.scheduled_hash(P.name)
+        if not current:
+            db.register(P.name, hash, P.describe())
+        elif current != hash and not new_code:
+            print(
+                "orca: pipeline ",
+                P.name,
+                " is registered with code ",
+                current,
+                " and this binary is ",
+                hash,
+                "; its run wouldn't count as the pipeline's. Pass",
+                " --allow-new-code to run it anyway, or register it with",
+                " `orca register`",
+                sep="",
+            )
+            return 2
         var owner = process_owner()
         var key = String()
         for j in range(len(keys)):
@@ -302,6 +329,8 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
                 return 2
             var info = db.run_info(run)
             print("run", run, info.pipeline, info.status, info.partitions)
+            if info.error:
+                print("error:", info.error)
             _print_steps(db, run, show_logs=True)
             return 0
     _usage()
@@ -374,9 +403,10 @@ def _execute[
     """Runs what's left of `run` as its owner, with a heartbeat, then ends it.
 
     A run asked to cancel stops before its next attempt and ends
-    `cancelled`. If this raises otherwise (the database went away, or another
-    process took the run over), the run is left `running`; once its heartbeat
-    is stale it can be resumed.
+    `cancelled`. Writes to Postgres are retried on a new connection for
+    `ORCA_DB_RETRY_SECONDS` (`orca.state.DbRetry`). If this raises otherwise
+    (the database stayed away, or another process took the run over), the
+    run is left `running`; once its heartbeat is stale it can be resumed.
     """
     var b = Beat(url, run, owner, heartbeat_interval(_stale_seconds()))
     var pool = TypedPool.start[beat](1, b)
@@ -386,10 +416,10 @@ def _execute[
         res = P.execute(store, prior^, keys, run, Int(Pointer(to=rt)))
     except e:
         pool.shutdown()
-        if not store.db.cancel_requested(run):
+        if not store.cancel_requested():
             raise e^
-        store.db.finish_run(run, owner, CANCELLED)
-        _print_steps(store.db, run)
+        store.finish_run(CANCELLED)
+        _print_steps_after(store.db, run)
         print("run", CANCELLED)
         return 1
     pool.shutdown()
@@ -404,10 +434,19 @@ def _execute[
             except e:
                 print("orca: no timeline:", e)
     var ok = res.succeeded()
-    store.db.finish_run(run, owner, SUCCEEDED if ok else FAILED)
-    _print_steps(store.db, run)
+    store.finish_run(SUCCEEDED if ok else FAILED)
+    _print_steps_after(store.db, run)
     print("run", SUCCEEDED if ok else FAILED)
     return 0 if ok else 1
+
+
+def _print_steps_after(mut db: State, run: Int):
+    """`_print_steps` once the run has ended: it's recorded, so not being
+    able to list its steps doesn't change how it ended."""
+    try:
+        _print_steps(db, run)
+    except e:
+        print("orca: can't list run", run, "steps:", e)
 
 
 def _print_steps(mut db: State, run: Int, show_logs: Bool = False) raises:

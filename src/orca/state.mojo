@@ -23,6 +23,7 @@ which `interrupt` marks failed when the run is resumed.
 
 from std.ffi import external_call
 from std.os import getenv
+from std.time import perf_counter_ns, sleep
 
 from postgres import Connection, Params, Transaction
 
@@ -269,6 +270,28 @@ def _migrations() -> List[List[String]]:
         [
             "ALTER TABLE orca.pipelines ADD COLUMN secrets jsonb",
         ],
+        # Why a run ended without running, or stopped where no step could
+        # say: code its binary refuses, a process that exited before it
+        # claimed the run, a cluster that couldn't start.
+        [
+            "ALTER TABLE orca.runs ADD COLUMN error text",
+        ],
+        # `orca pause`: the scheduler starts none of a paused pipeline's
+        # runs, which stay queued (or due to retry) until `orca unpause`.
+        [
+            (
+                "ALTER TABLE orca.pipelines ADD COLUMN paused boolean NOT NULL"
+                " DEFAULT false"
+            ),
+        ],
+        # Sensing that went wrong: why a snapshot was recorded as seen
+        # without a run (its keys aren't partitions), and the error of a
+        # sensor's last pass that failed, cleared by one that doesn't.
+        [
+            "ALTER TABLE orca.sensed ADD COLUMN error text",
+            "ALTER TABLE orca.pipelines ADD COLUMN sense_error text",
+            "ALTER TABLE orca.pipelines ADD COLUMN sense_error_at timestamptz",
+        ],
     ]
 
 
@@ -294,6 +317,8 @@ struct RunInfo(Copyable, Movable):
     var partitions: String
     var status: String
     var owner: String
+    var error: String
+    """Why the run ended without its steps saying so, or empty."""
 
 
 @fieldwise_init
@@ -379,6 +404,18 @@ struct State(Movable):
             ),
         )
 
+    def scheduled_hash(mut self, pipeline: String) raises -> String:
+        """The registry hash `orca register` gave `pipeline`, or empty if it
+        wasn't registered with a binary."""
+        var res = self.conn.query(
+            (
+                "SELECT registry_hash FROM orca.pipelines WHERE name = $1 AND"
+                " binary_path IS NOT NULL"
+            ),
+            Params().text(pipeline),
+        )
+        return res.row(0).text("registry_hash") if len(res) > 0 else String()
+
     def version(
         mut self,
         pipeline: String,
@@ -450,7 +487,8 @@ struct State(Movable):
         var res = self.conn.query(
             (
                 "SELECT pipeline, registry_hash, partitions, status,"
-                " coalesce(owner, '') AS owner FROM orca.runs WHERE id = $1"
+                " coalesce(owner, '') AS owner, coalesce(error, '') AS error"
+                " FROM orca.runs WHERE id = $1"
             ),
             Params().int64(Int64(run)),
         )
@@ -464,6 +502,7 @@ struct State(Movable):
             r.text("partitions"),
             r.text("status"),
             r.text("owner"),
+            r.text("error"),
         )
 
     def claim(mut self, run: Int, owner: String, stale_seconds: Float64) raises:
@@ -476,9 +515,9 @@ struct State(Movable):
         var res = self.conn.query(
             (
                 "UPDATE orca.runs SET status = 'running', owner = $2, heartbeat"
-                " = now(), ended = NULL WHERE id = $1 AND status IN ('queued',"
-                " 'running', 'failed') AND (heartbeat IS NULL OR heartbeat <"
-                " now() - make_interval(secs => $3)) RETURNING id"
+                " = now(), ended = NULL, error = NULL WHERE id = $1 AND status"
+                " IN ('queued', 'running', 'failed') AND (heartbeat IS NULL OR"
+                " heartbeat < now() - make_interval(secs => $3)) RETURNING id"
             ),
             Params().int64(Int64(run)).text(owner).float64(stale_seconds),
         )
@@ -573,8 +612,8 @@ struct State(Movable):
         var rows = self.conn.query(
             (
                 "SELECT id, pipeline, registry_hash, partitions, status,"
-                " coalesce(owner, '') AS owner FROM orca.runs ORDER BY id DESC"
-                " LIMIT $1"
+                " coalesce(owner, '') AS owner, coalesce(error, '') AS error"
+                " FROM orca.runs ORDER BY id DESC LIMIT $1"
             ),
             Params().int64(Int64(limit)),
         )
@@ -587,6 +626,7 @@ struct State(Movable):
                     r.text("partitions"),
                     r.text("status"),
                     r.text("owner"),
+                    r.text("error"),
                 )
             )
         return out^
@@ -619,8 +659,70 @@ struct State(Movable):
         return out^
 
 
+comptime FINAL = "\x1f"
+"""Starts the message of an error a retry can't help: the run was lost to
+another process, or cancelled. `DbRetry` raises it at once, without it."""
+
+
+def db_retry_seconds() -> Float64:
+    """`ORCA_DB_RETRY_SECONDS`: how long a run's process keeps retrying a
+    write to Postgres that failed, by default the stale limit
+    (`ORCA_STALE_SECONDS`, 30), past which another process may take the run
+    over anyway."""
+    try:
+        return Float64(
+            getenv("ORCA_DB_RETRY_SECONDS", getenv("ORCA_STALE_SECONDS", "30"))
+        )
+    except:
+        return 30.0
+
+
+struct DbRetry(Movable):
+    """Retries of one call to Postgres from a run's process.
+
+    `again(e, ...)` is called with what the call raised: it raises again
+    if the error is final (`FINAL`) or the time is up, else it waits, a
+    quarter of a second doubling to 4 s, and makes a new connection, so a
+    restart or failover of the server doesn't stop the run."""
+
+    var started: Int
+    var wait: Float64
+    var budget: Float64
+
+    def __init__(out self):
+        self.started = perf_counter_ns()
+        self.wait = 0.25
+        self.budget = db_retry_seconds()
+
+    def again(mut self, e: Error, mut db: State, url: String) raises:
+        var msg = String(e)
+        if msg.startswith(FINAL):
+            raise Error(String(msg[byte = FINAL.byte_length() :]))
+        var spent = Float64(perf_counter_ns() - self.started) / 1e9
+        if spent + self.wait > self.budget:
+            raise Error(msg)
+        print(
+            "orca: Postgres failed (",
+            msg,
+            "); retrying in ",
+            self.wait,
+            " s",
+            sep="",
+        )
+        sleep(self.wait)
+        self.wait = min(self.wait * 2, 4.0)
+        try:
+            db = State(url)
+        except:
+            pass  # the next try fails too, and comes back here
+
+
 struct PgStore(Movable, Store):
-    """Records a run's attempts in Postgres, as its owner."""
+    """Records a run's attempts in Postgres, as its owner.
+
+    Every call is retried for `ORCA_DB_RETRY_SECONDS` on a new connection
+    (`DbRetry`), except when the run was lost or cancelled, so a blip of
+    the server doesn't throw away a step that finished."""
 
     var db: State
     var url: String
@@ -659,11 +761,27 @@ struct PgStore(Movable, Store):
             Params().int64(Int64(run)).text(owner),
         )
         if len(res) != 1:
-            raise Error("orca: lost run ", run, " to another process; stopping")
+            raise Error(
+                FINAL, "orca: lost run ", run, " to another process; stopping"
+            )
         if starting and res.row(0).bool("cancel_requested"):
-            raise Error("orca: run ", run, " was cancelled; stopping")
+            raise Error(FINAL, "orca: run ", run, " was cancelled; stopping")
 
     def start_attempt(
+        mut self,
+        step: String,
+        partition: String,
+        ord: Int,
+        input: Span[UInt8, _],
+    ) raises -> Int:
+        var r = DbRetry()
+        while True:
+            try:
+                return self._start_attempt(step, partition, ord, input)
+            except e:
+                r.again(e, self.db, self.url)
+
+    def _start_attempt(
         mut self,
         step: String,
         partition: String,
@@ -723,6 +841,16 @@ struct PgStore(Movable, Store):
     def pinned_reads(
         mut self, step: String, partition: String
     ) raises -> Dict[String, Int64]:
+        var r = DbRetry()
+        while True:
+            try:
+                return self._pinned_reads(step, partition)
+            except e:
+                r.again(e, self.db, self.url)
+
+    def _pinned_reads(
+        mut self, step: String, partition: String
+    ) raises -> Dict[String, Int64]:
         var out = Dict[String, Int64]()
         var rows = self.db.conn.query(
             (
@@ -744,12 +872,39 @@ struct PgStore(Movable, Store):
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String
     ) raises:
-        _ = self.db.conn.execute(
-            "UPDATE orca.attempts SET log = $2 WHERE id = $1",
-            Params().int64(self._attempt_id).text(path),
-        )
+        var r = DbRetry()
+        while True:
+            try:
+                _ = self.db.conn.execute(
+                    "UPDATE orca.attempts SET log = $2 WHERE id = $1",
+                    Params().int64(self._attempt_id).text(path),
+                )
+                return
+            except e:
+                r.again(e, self.db, self.url)
 
     def finish_attempt(
+        mut self,
+        step: String,
+        partition: String,
+        attempt: Int,
+        status: String,
+        output: Span[UInt8, _],
+        error: String,
+    ) raises:
+        # Retried whole: it sets the attempt's and the step's rows, so
+        # doing it twice leaves what doing it once does.
+        var r = DbRetry()
+        while True:
+            try:
+                self._finish_attempt(
+                    step, partition, attempt, status, output, error
+                )
+                return
+            except e:
+                r.again(e, self.db, self.url)
+
+    def _finish_attempt(
         mut self,
         step: String,
         partition: String,
@@ -794,6 +949,35 @@ struct PgStore(Movable, Store):
         tx.commit()
 
     def skip(
+        mut self, step: String, partition: String, ord: Int, reason: String
+    ) raises:
+        var r = DbRetry()
+        while True:
+            try:
+                self._skip(step, partition, ord, reason)
+                return
+            except e:
+                r.again(e, self.db, self.url)
+
+    def finish_run(mut self, status: String) raises:
+        """`State.finish_run` for this run, retried as the attempts are."""
+        var r = DbRetry()
+        while True:
+            try:
+                self.db.finish_run(self.run, self.owner, status)
+                return
+            except e:
+                r.again(e, self.db, self.url)
+
+    def cancel_requested(mut self) raises -> Bool:
+        var r = DbRetry()
+        while True:
+            try:
+                return self.db.cancel_requested(self.run)
+            except e:
+                r.again(e, self.db, self.url)
+
+    def _skip(
         mut self, step: String, partition: String, ord: Int, reason: String
     ) raises:
         var tx = self.db.conn.begin()
