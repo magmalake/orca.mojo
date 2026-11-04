@@ -10,7 +10,7 @@
   failed runs waiting for a retry that have no step done to the new code.
   One with steps done is failed at once instead of started, with an error
   saying how to resume it with the new code. Runs have an `error` column
-  (a new migration), shown by `<binary> status <run>` and the run's page: also
+  (migration 15), shown by `<binary> status <run>` and the run's page: also
   set when a local run's process exits before claiming it (its exit code
   and last line) and when a run's cluster or instances can't start. (#63)
 
