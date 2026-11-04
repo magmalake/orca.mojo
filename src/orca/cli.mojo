@@ -408,7 +408,9 @@ def _execute[
     (the database stayed away, or another process took the run over), the
     run is left `running`; once its heartbeat is stale it can be resumed.
     """
-    var b = Beat(url, run, owner, heartbeat_interval(_stale_seconds()))
+    var b = Beat(
+        url, run, owner, heartbeat_interval(_stale_seconds()), P.timeouts()
+    )
     var pool = TypedPool.start[beat](1, b)
     var store = PgStore(db^, url, run, owner, hex(P.registry_hash()))
     var res: RunResult

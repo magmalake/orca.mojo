@@ -4,8 +4,9 @@ scheduler, or the run's own process, acts on.
 The UI never starts a pipeline's binary. Starting, resuming, rerunning and
 backfilling leave a `queued` run, which the scheduler starts on its next
 tick as it starts any other, within `max_runs`; cancelling sets
-`cancel_requested`, which a running run sees before its next attempt (an
-attempt already going finishes). Pausing a pipeline sets
+`cancel_requested`, which a running run sees before its next attempt; an
+attempt still going `ORCA_CANCEL_KILL_SECONDS` (60) later is stopped, its
+process exiting (`orca.heartbeat`). Pausing a pipeline sets
 `pipelines.paused`, and the scheduler starts none of its runs until it's
 unpaused. So the UI works the same wherever the
 scheduler runs, and retries and limits stay in one place.
@@ -61,6 +62,15 @@ def stale_seconds() -> Float64:
         return Float64(getenv("ORCA_STALE_SECONDS", "30"))
     except:
         return 30.0
+
+
+def cancel_kill_seconds() -> Float64:
+    """`ORCA_CANCEL_KILL_SECONDS` (default 60): how long a running run
+    asked to cancel has to finish its step before it's stopped."""
+    try:
+        return Float64(getenv("ORCA_CANCEL_KILL_SECONDS", "60"))
+    except:
+        return 60.0
 
 
 def stalled_sql() -> String:
@@ -267,15 +277,19 @@ def rerun_from(mut db: State, run: Int, step: String) raises -> Outcome:
 
 def cancel_run(mut db: State, run: Int) raises -> Outcome:
     """Cancels a run: a queued or failed one at once (a failed one isn't
-    retried), a running one before its next attempt."""
+    retried), a running one before its next attempt, or, if its step is
+    still going `ORCA_CANCEL_KILL_SECONDS` later, by stopping its process
+    (`orca.heartbeat`)."""
     var rows = db.conn.query(
         (
             "UPDATE orca.runs SET cancel_requested = true, status = CASE WHEN"
             " status = 'running' THEN status ELSE 'cancelled' END, ended ="
-            " CASE WHEN status = 'running' THEN ended ELSE now() END WHERE id"
-            " = $1 AND status IN ('queued', 'running', 'failed') RETURNING id"
+            " CASE WHEN status = 'running' THEN ended ELSE now() END,"
+            " cancel_at = CASE WHEN status = 'running' THEN coalesce(cancel_at,"
+            " now() + make_interval(secs => $2)) END WHERE id = $1 AND status"
+            " IN ('queued', 'running', 'failed') RETURNING id"
         ),
-        Params().int64(Int64(run)),
+        Params().int64(Int64(run)).float64(cancel_kill_seconds()),
     )
     if len(rows) == 1:
         return Outcome.done(run)
@@ -330,14 +344,24 @@ def cancel_runs(
         String(
             "UPDATE orca.runs SET cancel_requested = true, status = CASE WHEN",
             " status = 'running' THEN status ELSE 'cancelled' END, ended =",
-            " CASE WHEN status = 'running' THEN ended ELSE now() END WHERE",
+            " CASE WHEN status = 'running' THEN ended ELSE now() END,",
+            (
+                " cancel_at = CASE WHEN status = 'running' THEN"
+                " coalesce(cancel_at,"
+            ),
+            " now() + make_interval(secs => $5)) END WHERE",
             " pipeline = $1 AND ($2 OR string_to_array(partitions, ',') &&",
             " string_to_array($3, ',')) AND (status = 'queued' OR (status =",
             " 'running' AND NOT cancel_requested) OR (status = 'failed' AND ",
             RETRIED_SQL,
             " AND starts <= $4)) RETURNING id",
         ),
-        Params().text(pipeline).bool(all).text(joined).int64(retries),
+        Params()
+        .text(pipeline)
+        .bool(all)
+        .text(joined)
+        .int64(retries)
+        .float64(cancel_kill_seconds()),
     )
     return Outcome.done(0, len(done))
 

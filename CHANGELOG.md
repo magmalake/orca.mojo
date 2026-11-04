@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Cancel stops a running step, and steps can time out** (#68). A
+  running run asked to cancel has `ORCA_CANCEL_KILL_SECONDS` (default 60)
+  to finish its step; past that its heartbeat thread fails the attempt,
+  ends the run `cancelled` and exits the process, so on EC2 and Kubernetes
+  the sweep removes its cluster instead of it billing until
+  `ORCA_RUN_DEADLINE`. `Step[..., timeout_seconds=N]` stops an attempt
+  older than N seconds the same way, failing the run (retried as any
+  failed run is) with the timeout as its error. Both write an `orca.audit`
+  row. The scheduler kills a local process of its own whose heartbeat
+  went stale before it acts on the run. `runs.cancel_at`, migration 18.
+
 - **Behind an HTTPS proxy, the UI's forms work** (#57). The `Origin` check
   compared the browser's `Origin` with `http://` + `Host`, so behind Caddy
   terminating TLS (as `orca aws up` deploys it) every `POST`, `/login`

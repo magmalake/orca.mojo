@@ -72,6 +72,7 @@ process is reaped if `ORCA_LOGS` is in object storage, or kept from the
 driver pod's log on Kubernetes (`orca.kube`).
 """
 
+from std.ffi import c_int, external_call
 from std.os import getenv, makedirs
 from std.os.path import exists
 from std.time import perf_counter_ns
@@ -1213,6 +1214,35 @@ struct Scheduler(Movable):
             "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
             Params().text(p.name),
         )
+        # A process of ours whose heartbeat went stale is wedged, or
+        # stopped, rather than gone (it would have been reaped): it's
+        # killed before its run is cancelled, failed or started again, so
+        # it can't go on beside a new one.
+        if len(self._spawned) > 0:
+            for r in tx.query(
+                String(
+                    "SELECT id FROM orca.runs WHERE pipeline = $1 AND status =",
+                    " 'running' AND ",
+                    dead,
+                ),
+                Params().text(p.name).float64(self.stale),
+            ):
+                var id = Int(r.int64("id"))
+                var pid = 0
+                for e in self._spawned.items():
+                    if e.value[0] == id:
+                        pid = e.key
+                if pid > 0:
+                    _ = external_call["kill", c_int](c_int(pid), c_int(9))
+                    print(
+                        "killed pid",
+                        pid,
+                        "of",
+                        p.name,
+                        "run",
+                        id,
+                        "(its heartbeat went stale)",
+                    )
         # A run asked to cancel whose process died is cancelled.
         _ = tx.execute(
             String(

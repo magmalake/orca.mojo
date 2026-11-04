@@ -38,6 +38,12 @@ comptime Clean = Step[
 ]
 ```
 
+`timeout_seconds=N` bounds an attempt: one still going N seconds after it
+started is stopped (`orca.heartbeat`), as a failed attempt, and its run
+fails, to be retried by the scheduler as any failed run is. A step can't be
+interrupted where it is, so the run's process exits: its other partitions
+and the step's own retries wait for the run's retry.
+
 `orca.tables` refuses a scan of a dataset the step didn't declare in
 `reads`, and a commit to one it didn't declare in `writes`, so the graph of
 pipelines and datasets that `describe` gives is what the steps do.
@@ -110,6 +116,11 @@ trait StepLike:
         ...
 
     @staticmethod
+    def timeout() -> Int:
+        """Seconds an attempt may take before it's stopped; 0 for no limit."""
+        ...
+
+    @staticmethod
     def upstream_function() -> StaticString:
         """The function of the step this one follows; empty for a first step."""
         ...
@@ -171,6 +182,10 @@ struct NoStep(StepLike):
         return 0
 
     @staticmethod
+    def timeout() -> Int:
+        return 0
+
+    @staticmethod
     def upstream_function() -> StaticString:
         return ""
 
@@ -212,6 +227,7 @@ struct Step[
     *,
     after: StepLike = NoStep,
     retries: Int = 0,
+    timeout_seconds: Int = 0,
     reads: List[StaticString] = [],
     writes: List[StaticString] = [],
 ](StepLike):
@@ -235,6 +251,10 @@ struct Step[
     @staticmethod
     def max_retries() -> Int:
         return Self.retries
+
+    @staticmethod
+    def timeout() -> Int:
+        return Self.timeout_seconds
 
     @staticmethod
     def upstream_function() -> StaticString:
@@ -272,6 +292,9 @@ struct Step[
     def check():
         comptime assert Self.name != "", "a step needs a name"
         comptime assert Self.retries >= 0, "retries can't be negative"
+        comptime assert (
+            Self.timeout_seconds >= 0
+        ), "timeout_seconds can't be negative"
         comptime for i in range(len(Self.reads)):
             comptime assert _is_dataset(
                 Self.reads[i]

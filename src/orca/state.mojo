@@ -292,6 +292,11 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pipelines ADD COLUMN sense_error text",
             "ALTER TABLE orca.pipelines ADD COLUMN sense_error_at timestamptz",
         ],
+        # Stopping a step (orca.heartbeat): when a running run asked to
+        # cancel is stopped if its step hasn't finished by then.
+        [
+            "ALTER TABLE orca.runs ADD COLUMN cancel_at timestamptz",
+        ],
     ]
 
 
