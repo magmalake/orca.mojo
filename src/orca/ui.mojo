@@ -963,6 +963,15 @@ polling"), which a fragment does once what it shows has ended."""
 comptime _USER_SLOT = "<!--orca-user-->"
 """Where `serve` puts who's logged in, or a link to log in."""
 
+comptime _MARK = (
+    '<svg class="top__mark" width="22" height="22" viewBox="0 0 24 24"'
+    ' fill="none" aria-hidden="true"><path d="M12 1.9 22 20.2H2L12 1.9Z"'
+    ' stroke="var(--lake)" stroke-width="1.6" stroke-linejoin="round"/>'
+    '<path d="M12 9.4 17.4 19H6.6L12 9.4Z" fill="var(--ember)"/></svg>'
+)
+"""magmalake's mark, as mlake.dev draws it: a caldera seen from above, a
+cold rim and a molten core."""
+
 
 def _page(title: String, active: StaticString, body: Html) -> String:
     var h = Html()
@@ -974,7 +983,9 @@ def _page(title: String, active: StaticString, body: Html) -> String:
     h.text(title, " · orca")
     h.raw(
         '</title><link rel="stylesheet" href="/static/orca.css"></head><body>',
-        '<header class="top"><a class="top__brand" href="/">orca</a><nav>',
+        '<header class="top"><a class="top__brand" href="/">',
+        _MARK,
+        "orca</a><nav>",
     )
     for item in [
         ("/", "Pipelines"),
@@ -1002,25 +1013,26 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
     if show_pipeline:
         h.raw("<th>Pipeline</th>")
     h.raw(
-        "<th>Partitions</th><th>Trigger</th><th>Status</th><th>Starts</th>",
+        "<th>Partitions</th><th>Trigger</th><th>Status</th>",
+        '<th class="num">Starts</th>',
         "<th>Created</th><th>Ended</th></tr></thead><tbody>",
     )
     for r in runs:
         h.raw("<tr><td>")
-        h.link(String("/runs/", r.id), String(r.id))
+        h.chip(String("/runs/", r.id), String(r.id))
         h.raw("</td>")
         if show_pipeline:
             h.raw("<td>")
             h.link(String("/pipelines/", url_encode(r.pipeline)), r.pipeline)
             h.raw("</td>")
-        h.cell(r.partitions)
+        h.mono(r.partitions)
         h.cell(r.trigger)
         h.raw("<td>")
         h.status(r.status)
         h.raw("</td>")
-        h.cell(r.starts)
-        h.cell(r.created)
-        h.cell(r.ended)
+        h.num(r.starts)
+        h.mono(r.created)
+        h.mono(r.ended)
         h.raw("</tr>")
     h.raw("</tbody></table></div>")
 
@@ -1119,10 +1131,10 @@ def home(mut db: State) raises -> Page:
         )
     else:
         h.raw(
-            '<div class="scroll"><table><thead><tr><th>Pipeline</th>',
-            "<th>Partitions</th><th>Schedule</th><th>Next run</th>",
-            "<th>Running</th><th>Queued</th><th>Last run</th></tr></thead>",
-            "<tbody>",
+            '<section class="card"><div class="scroll"><table><thead><tr>',
+            "<th>Pipeline</th><th>Partitions</th><th>Schedule</th>",
+            "<th>Next run</th><th>Running</th><th>Queued</th><th>Last run</th>",
+            "</tr></thead><tbody>",
         )
         for p in ps:
             h.raw("<tr><td>")
@@ -1137,31 +1149,43 @@ def home(mut db: State) raises -> Page:
                 h.raw("</code> ")
                 h.text(p.tz)
                 h.raw("</td>")
-                h.cell(p.next_fire, " → ", p.next_partition)
+                h.mono(p.next_fire, " → ", p.next_partition)
             else:
                 h.raw('<td class="muted">none</td><td></td>')
-            h.cell(p.running, " / ", p.max_runs)
-            h.cell(p.queued)
-            h.raw("<td>")
+            # The counts as badges, lit while they're not zero.
+            h.raw(
+                '<td><span class="badge',
+                " badge--running" if p.running > 0 else "",
+                '">',
+            )
+            h.text(p.running, " / ", p.max_runs)
+            h.raw(
+                '</span></td><td><span class="badge',
+                " badge--queued" if p.queued > 0 else "",
+                '">',
+            )
+            h.text(p.queued)
+            h.raw("</span></td><td>")
             if p.last_run:
-                h.link(String("/runs/", p.last_run), String(p.last_run))
+                h.chip(String("/runs/", p.last_run), String(p.last_run))
                 h.raw(" ")
                 h.status(p.last_status)
-                h.raw(" ")
+                h.raw(' <span class="mono muted">')
                 h.text(p.last_partitions)
+                h.raw("</span>")
             h.raw("</td></tr>")
-        h.raw("</tbody></table></div>")
+        h.raw("</tbody></table></div></section>")
     h.raw(
-        "<h2>Runs per day</h2>",
+        '<section class="card"><h2>Runs per day</h2>',
         '<p class="muted">The last 30 days, by the day each run started',
         " (UTC).</p>",
         '<div class="scroll">',
         runs_chart(per_day),
-        "</div>",
+        "</div></section>",
     )
-    h.raw("<h2>Recent runs</h2>")
+    h.raw('<section class="card"><h2>Recent runs</h2>')
     _runs_table(h, recent, True)
-    h.raw('<p class="more"><a href="/runs">All runs</a></p>')
+    h.raw('<p class="more"><a href="/runs">All runs</a></p></section>')
     return Page(200, j^, _page("Pipelines", "/", h))
 
 
@@ -1344,13 +1368,13 @@ def key_page(mut db: State, name: String, key: String) raises -> Page:
         )
         i += 1
         h.raw("<tr><td>")
-        h.link(String("/runs/", r.int64("run")), String(r.int64("run")))
+        h.chip(String("/runs/", r.int64("run")), String(r.int64("run")))
         h.raw("</td>")
         h.cell(r.text("step"))
         h.raw("<td>")
         h.status(r.text("status"))
         h.raw("</td>")
-        h.cell(r.int64("attempts"))
+        h.num(r.int64("attempts"))
         h.cell("current" if r.bool("current") else "older")
         h.cell(r.text("error"))
         h.raw("</tr>")
@@ -1522,9 +1546,9 @@ def pipeline(mut db: State, name: String) raises -> Page:
         )
         for f in fires:
             h.raw("<tr>")
-            h.cell(f.at)
-            h.cell(f.local)
-            h.cell(f.partition)
+            h.mono(f.at)
+            h.mono(f.local)
+            h.mono(f.partition)
             h.raw("</tr>")
         h.raw("</tbody></table></div>")
     if len(versions) > 0:
@@ -1533,19 +1557,19 @@ def pipeline(mut db: State, name: String) raises -> Page:
             _docs("build"),
             '</h2><div class="scroll"><table><thead><tr>',
             "<th>Commit</th><th>Image</th><th>Code</th><th>First seen</th>",
-            "<th>Last seen</th><th>Runs</th></tr></thead><tbody>",
+            '<th>Last seen</th><th class="num">Runs</th></tr></thead><tbody>',
         )
         for v in versions:
             h.raw("<tr><td>")
             _source_html(h, v)
             h.raw("</td>")
-            h.cell(v.image)
+            h.mono(v.image)
             h.raw("<td><code>")
             h.text(v.registry_hash)
             h.raw("</code></td>")
-            h.cell(v.first_seen)
-            h.cell(v.last_seen)
-            h.cell(v.runs)
+            h.mono(v.first_seen)
+            h.mono(v.last_seen)
+            h.num(v.runs)
             h.raw("</tr>")
         h.raw("</tbody></table></div>")
     h.raw("<h2>Runs</h2>")
@@ -1831,7 +1855,7 @@ def run(mut db: State, id: Int) raises -> Page:
         )
         for a in acts:
             h.raw("<tr>")
-            h.cell(a.text("at"))
+            h.mono(a.text("at"))
             h.cell(a.text("username"))
             h.cell(a.text("action"))
             h.raw("</tr>")
@@ -1938,19 +1962,20 @@ def _run_live(
     h.status(r.status)
     h.raw(
         '</h2><div class="scroll"><table><thead><tr><th>Step</th>',
-        "<th>Partition</th><th>Status</th><th>Attempts</th><th>Started</th>",
-        "<th>Ended</th><th>Log</th><th>Error</th></tr></thead><tbody>",
+        '<th>Partition</th><th>Status</th><th class="num">Attempts</th>',
+        "<th>Started</th><th>Ended</th><th>Log</th><th>Error</th></tr>",
+        "</thead><tbody>",
     )
     for s in steps:
         h.raw("<tr>")
         _step_cell(h, s.step, links)
-        h.cell(s.partition)
+        h.mono(s.partition)
         h.raw("<td>")
         h.status(s.status)
         h.raw("</td>")
-        h.cell(s.attempts)
-        h.cell(s.started)
-        h.cell(s.ended)
+        h.num(s.attempts)
+        h.mono(s.started)
+        h.mono(s.ended)
         h.raw("<td>")
         if s.attempt_id:
             h.link(
@@ -2388,7 +2413,7 @@ def datasets_page(mut db: State) raises -> Page:
     h.raw('<div class="scroll">', _flow_graph(db, ""), "</div>")
     h.raw(
         '<div class="scroll"><table><thead><tr><th>Dataset</th>',
-        "<th>Written by</th><th>Read by</th><th>Snapshots</th>",
+        '<th>Written by</th><th>Read by</th><th class="num">Snapshots</th>',
         "<th>Latest</th><th>By run</th></tr></thead><tbody>",
     )
     for d in ds:
@@ -2399,7 +2424,7 @@ def datasets_page(mut db: State) raises -> Page:
         h.raw("</td><td>")
         _pipeline_links(h, d.readers)
         h.raw("</td>")
-        h.cell(d.commits)
+        h.num(d.commits)
         h.raw("<td>")
         if d.latest >= 0:
             h.link(
@@ -2407,7 +2432,7 @@ def datasets_page(mut db: State) raises -> Page:
             )
         h.raw("</td><td>")
         if d.latest_run:
-            h.link(String("/runs/", d.latest_run), String(d.latest_run))
+            h.chip(String("/runs/", d.latest_run), String(d.latest_run))
         h.raw("</td></tr>")
     h.raw("</tbody></table></div>")
     return Page(200, j^, _page("Datasets", "/datasets", h))
@@ -2497,11 +2522,11 @@ def dataset_page(mut db: State, name: String) raises -> Page:
             h.raw("</td><td>")
             h.link(String("/pipelines/", url_encode(c.pipeline)), c.pipeline)
             h.raw("</td><td>")
-            h.link(String("/runs/", c.run), String(c.run))
+            h.chip(String("/runs/", c.run), String(c.run))
             h.raw("</td>")
             h.cell(c.step)
-            h.cell(c.partition)
-            h.cell(c.ended)
+            h.mono(c.partition)
+            h.mono(c.ended)
             h.raw("</tr>")
         h.raw("</tbody></table></div>")
     return Page(200, j^, _page(d.name, "/datasets", h))
@@ -2550,9 +2575,9 @@ def _rebuilds_table(mut h: Html, rbs: List[Rebuild]):
     )
     for r in rbs:
         h.raw("<tr><td>")
-        h.link(String("/rebuilds/", r.id), String(r.id))
+        h.chip(String("/rebuilds/", r.id), String(r.id))
         h.raw("</td>")
-        h.cell(r.partitions)
+        h.mono(r.partitions)
         h.raw("<td>")
         h.status(r.status)
         h.raw("</td><td>")
@@ -2564,7 +2589,7 @@ def _rebuilds_table(mut h: Html, rbs: List[Rebuild]):
                 r.plan[i].pipeline,
             )
         h.raw("</td>")
-        h.cell(r.created)
+        h.mono(r.created)
         h.raw("</tr>")
     h.raw("</tbody></table></div>")
 
@@ -2609,10 +2634,10 @@ def rebuild_page(mut db: State, id: Int) raises -> Page:
         h.raw("<td>")
         h.link(String("/pipelines/", url_encode(p.pipeline)), p.pipeline)
         h.raw("</td>")
-        h.cell(p.partitions)
+        h.mono(p.partitions)
         h.raw("<td>")
         if p.run:
-            h.link(String("/runs/", p.run), String(p.run))
+            h.chip(String("/runs/", p.run), String(p.run))
         h.raw("</td><td>")
         if p.status:
             h.status(p.status)
@@ -3051,7 +3076,7 @@ def _safe_next(next: String) -> String:
 
 def login_page(next: String, why: String, status: Int = 200) -> Page:
     var h = Html()
-    h.raw("<h1>Log in</h1>")
+    h.raw('<div class="auth"><h1>Log in</h1>')
     if why:
         h.raw('<p class="error">')
         h.text(why)
@@ -3066,7 +3091,7 @@ def login_page(next: String, why: String, status: Int = 200) -> Page:
         '<button type="submit">Log in</button></form>',
         '<p class="muted">Reading needs no login; starting, resuming,',
         " rerunning, backfilling, cancelling and rebuilding do. Users are",
-        " added with <code>orca user add</code>.</p>",
+        " added with <code>orca user add</code>.</p></div>",
     )
     return Page(
         status,
