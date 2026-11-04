@@ -1,7 +1,9 @@
 #!/bin/sh
 # Stands in for a sensor pipeline's binary in tests/sense_errors.sh: a
 # monthly sensor reading raw.a and raw.b. `sense` prints $FAKE_SENSE, or
-# fails while $FAKE_SENSE.fail exists; `resume` ends at once.
+# fails while $FAKE_SENSE.fail exists, or hangs (writing its pid to
+# $FAKE_SENSE.pid) while $FAKE_SENSE.slow does; `resume` ends at once.
+# tests/binary_timeouts.sh uses it too.
 case "$1" in
     describe)
         cat << 'J'
@@ -9,6 +11,10 @@ case "$1" in
 J
         ;;
     sense)
+        if [ -e "$FAKE_SENSE.slow" ]; then
+            echo $$ > "$FAKE_SENSE.pid"
+            exec sleep 1000
+        fi
         if [ -e "$FAKE_SENSE.fail" ]; then
             echo "can't reach the warehouse"
             exit 1

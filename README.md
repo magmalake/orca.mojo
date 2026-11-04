@@ -60,6 +60,7 @@ pixi run toy && ./build/toy run --partitions 2024-01..2024-03
 pixi run fanout && ./build/fanout run --partitions 2024-01   # steps calling dista
 pixi run daily && ./build/daily run --partitions 2024-02-27..2024-03-02   # by day
 ORCA_DATABASE_URL=postgresql:///orca ./build/toy run --partitions 2024-01..2024-03
+ORCA_DATABASE_URL=sqlite:build/runs.db ./build/toy run --partitions 2024-01..2024-03   # or a file: resumable, no server
 ./build/toy status
 pixi run -e data taxi && pixi run -e data ./build/taxi run --partitions 2023-01..2024-12
 pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   # needs ORCA_DATABASE_URL

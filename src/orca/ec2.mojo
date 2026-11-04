@@ -59,6 +59,10 @@ from orca.state import State
 
 comptime HEAD_PORT = 6390
 
+comptime HEAD_SECONDS = 10.0
+"""How long `<binary> dista-status` or `dista-drain` may take, asking a
+run's head, before it's killed and the run skipped this tick."""
+
 comptime _COPIED = [
     "ORCA_STALE_SECONDS",
     "ORCA_WAREHOUSE",
@@ -554,7 +558,15 @@ struct Ec2Runner(Movable):
             live[key] = True
             var head_ip = row.text("address")
             var head = String(head_ip, ":", HEAD_PORT)
-            var got_status = capture([r.binary, "dista-status", head])
+            # A head whose port black-holes mustn't hold up the tick.
+            var got_status: Tuple[Int, String]
+            try:
+                got_status = capture(
+                    [r.binary, "dista-status", head], HEAD_SECONDS
+                )
+            except e:
+                print("orca: run", r.run, "has no status from its head:", e)
+                continue
             if got_status[0] != 0:
                 continue  # its head isn't up yet, or has gone
             var demand: Demand
@@ -587,7 +599,14 @@ struct Ec2Runner(Movable):
                 self._workers(db, r, got.start, head_ip)
                 started += got.start
             for addr in got.drain:
-                var drain = capture([r.binary, "dista-drain", head, addr])
+                var drain: Tuple[Int, String]
+                try:
+                    drain = capture(
+                        [r.binary, "dista-drain", head, addr], HEAD_SECONDS
+                    )
+                except e:
+                    print("orca: run", r.run, "can't drain", addr, ":", e)
+                    continue
                 if drain[0] != 0:
                     print(
                         "orca: run", r.run, "can't drain", addr, ":", drain[1]
