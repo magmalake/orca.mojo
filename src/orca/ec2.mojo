@@ -20,7 +20,8 @@ binary itself (`direct`, for the tests' stand-in EC2), then shuts down
 instance runs `<binary> sample` (`orca.sample`; in docker mode as a
 container with `--pid host`), whose lines its script uploads to the run's
 `metrics/<role>-<instance>.jsonl` with its log (`<binary> put-log`), every
-`ORCA_CLUSTER_LOG_SECONDS` and once when it ends.
+`ORCA_CLUSTER_LOG_SECONDS` and once when it ends, after telling the
+sampler to write a last line and stop (`--until`).
 
 A pipeline registered with `--workers MIN..MAX` scales: its run starts
 `MIN` workers, which may be none, and every tick `scale` reads the head's
@@ -361,6 +362,7 @@ struct Ec2Runner(Movable):
         var name = String(r.run, "-", r.start, "-", role, "-$iid")
         var log = String("/tmp/orca-", name, ".log")
         var metrics = String("/tmp/orca-", name, ".jsonl")
+        var stop = String("/tmp/orca-", name, ".stop")
         if keeps or samples:
             s.write(self._instance_id(), "\n")
             s.write('up() { [ -z "${ORCA_LOGS:-}" ] || {')
@@ -388,7 +390,13 @@ struct Ec2Runner(Movable):
             # Beside everything else: the script's processes, and in docker
             # mode the binary's in its containers, which aren't the
             # script's children.
-            var args = String("sample --out ", metrics, " --pid $$ --dirs /tmp")
+            var args = String(
+                "sample --out ",
+                metrics,
+                " --pid $$ --until ",
+                stop,
+                " --dirs /tmp",
+            )
             var line: String
             if self.mode == "docker":
                 args.write(" --match ", _quote(r.binary))
@@ -400,6 +408,8 @@ struct Ec2Runner(Movable):
             s.write(
                 "rm -f ",
                 metrics,
+                " ",
+                stop,
                 "\n",
                 line,
                 " >/dev/null 2>&1 &\nsampler=$!\n",
@@ -463,7 +473,13 @@ struct Ec2Runner(Movable):
                 "; fi\n",
             )
         if samples:
-            s.write("kill $sampler 2>/dev/null\nwait $sampler 2>/dev/null\n")
+            # Its last line, then it ends; a wedged one isn't waited for.
+            s.write(
+                "touch ",
+                stop,
+                "\n( sleep 15; kill -9 $sampler ) 2>/dev/null &\nguard=$!\n",
+                "wait $sampler 2>/dev/null\nkill $guard 2>/dev/null\n",
+            )
         if keeps or samples:
             s.write("kill $uploader 2>/dev/null\nup\n")
         s.write(
