@@ -964,6 +964,27 @@ comptime _USER_SLOT = "<!--orca-user-->"
 """Where `serve` puts who's logged in, or a link to log in."""
 
 
+def _extra_links(mut h: Html):
+    """The deployment's own nav links after Docs, from `ORCA_UI_LINKS`:
+    `label=url` entries separated by commas, e.g. `Census ↗=https://...`.
+    Entries without an http(s) url are left out."""
+    for entry in _list(getenv("ORCA_UI_LINKS")):
+        var eq = entry.find("=")
+        if eq <= 0:
+            continue
+        var label = String(entry[byte=:eq].strip())
+        var url = String(entry[byte = eq + 1 :].strip())
+        if not label or not (
+            url.startswith("https://") or url.startswith("http://")
+        ):
+            continue
+        h.raw('<a href="')
+        h.text(url)
+        h.raw('" target="_blank" rel="noopener">')
+        h.text(label)
+        h.raw("</a>")
+
+
 def _page(title: String, active: StaticString, body: Html) -> String:
     var h = Html()
     h.raw(
@@ -988,6 +1009,7 @@ def _page(title: String, active: StaticString, body: Html) -> String:
     h.raw('<a href="')
     h.text(getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"))
     h.raw('" target="_blank" rel="noopener">Docs</a>')
+    _extra_links(h)
     h.raw("</nav>", _USER_SLOT, "</header><main>")
     h.raw(body.out)
     h.raw("</main><script>", _POLL, "</script></body></html>")
