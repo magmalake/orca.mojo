@@ -42,8 +42,18 @@ done
 
 export AWS_ACCESS_KEY_ID=$MINIO_ROOT_USER AWS_SECRET_ACCESS_KEY=$MINIO_ROOT_PASSWORD
 export AWS_REGION=us-east-1 AWS_ENDPOINT_URL="http://127.0.0.1:$port" AWS_S3_FORCE_PATH_STYLE=true
-curl -fsS --aws-sigv4 "aws:amz:us-east-1:s3" --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
-    -X PUT "$AWS_ENDPOINT_URL/orca" > /dev/null || { tail -n 30 "$work/server.log" >&2; exit 1; }
+# Ready can still answer 503 to the first PUT while MinIO settles: retry
+# for a few seconds before giving up.
+i=0
+until curl -fsS --aws-sigv4 "aws:amz:us-east-1:s3" --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+    -X PUT "$AWS_ENDPOINT_URL/orca" > /dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 50 ]; then
+        tail -n 30 "$work/server.log" >&2
+        exit 1
+    fi
+    sleep 0.2
+done
 export ORCA_S3_BUCKET=s3://orca
 
 "$@"

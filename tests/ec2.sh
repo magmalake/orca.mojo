@@ -129,6 +129,9 @@ while [ "$(running_of "$f1")" -gt 0 ]; do
     i=$((i + 1)); [ "$i" -lt 180 ] || fail "run $f1's instances are still running"; sleep 0.5
 done
 grep -q "^run succeeded" "$ORCA_LOGS/fanout/$f1/driver.log" || fail "run $f1's driver log"
+# Each instance's end recorded: the head's, which shuts itself down in its
+# grace after the run, on the sweep after it went.
+until_true "SELECT bool_and(ended IS NOT NULL) FROM orca.instances WHERE run = $f1" 60
 # Its instances, why each ended, and each one's log, the lost worker's too.
 got=$(q "SELECT string_agg(role || ' ' || instance_type || ' ' || market || ' ' || (ended IS NOT NULL)::text || ' ' || why, ',' ORDER BY role, why) FROM orca.instances WHERE run = $f1")
 # The head shuts itself down when its driver ends; the workers left wait for
