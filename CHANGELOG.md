@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **A pipeline binary depends on the `RunStore` trait alone** (#82).
+  `orca.store.RunStore` extends `Store` with what `orca.cli` asked of
+  `State` directly: `migrate`, `register`, `scheduled_hash`, `version`,
+  `create_run`, `claim`, `ran_version`, `interrupt`, `prior`, `run_info`,
+  `runs`, `steps`, and for the run it owns `own`, `start_heartbeat`,
+  `stop_heartbeat`, `finish_run` and `cancel_requested`. `PgStore`
+  implements it over `State` (`PgStore(url)` opens one), and keeps the
+  heartbeat thread itself (`orca.heartbeat.Heartbeat[B]` over a `Beater`,
+  `PgBeat` for Postgres), so `orca.cli` imports neither `State` nor
+  postgres. `RunResult`, `StepRun`, the statuses, `RunInfo`, `StepInfo`
+  and `process_owner` move to `orca.store`; the old import paths still
+  work. The scheduler and the UI stay on `State`'s SQL.
 - **A step's reads and commits are recorded through its run's `Store`**
   (#82). `Recorder` used to open a Postgres connection of its own;
   it now calls the store it came from (`Store.record`, which `PgStore`

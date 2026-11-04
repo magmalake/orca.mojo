@@ -21,17 +21,26 @@ error on both. A process killed in between leaves an attempt `running`,
 which `interrupt` marks failed when the run is resumed.
 """
 
-from std.ffi import external_call
 from std.os import getenv
 from std.time import perf_counter_ns, sleep
 
 from postgres import Connection, Params, Transaction
 
-from orca.pipeline import FAILED, SUCCEEDED, SKIPPED, RunResult, StepRun
-from orca.store import Store, TableSnapshot
-
-comptime RUNNING = "running"
-comptime CANCELLED = "cancelled"
+from orca.heartbeat import Beater, Heartbeat
+from orca.store import (
+    CANCELLED,
+    FAILED,
+    RUNNING,
+    SKIPPED,
+    SUCCEEDED,
+    RunInfo,
+    RunResult,
+    RunStore,
+    StepInfo,
+    StepRun,
+    TableSnapshot,
+    process_owner,
+)
 
 
 def _migrations() -> List[List[String]]:
@@ -295,40 +304,6 @@ def _migrations() -> List[List[String]]:
 
 
 comptime _MIGRATION_LOCK = 0x6F726361  # "orca"
-
-
-def process_owner() -> String:
-    """`host:pid`, naming this process as a run's owner."""
-    var buf = List[UInt8](length=256, fill=0)
-    _ = external_call["gethostname", Int32](buf.unsafe_ptr(), Int(255))
-    var n = 0
-    while n < 255 and buf[n] != 0:
-        n += 1
-    var host = String(from_utf8_lossy=Span(buf)[:n])
-    return String(host, ":", external_call["getpid", Int32]())
-
-
-@fieldwise_init
-struct RunInfo(Copyable, Movable):
-    var id: Int
-    var pipeline: String
-    var registry_hash: String
-    var partitions: String
-    var status: String
-    var owner: String
-    var error: String
-    """Why the run ended without its steps saying so, or empty."""
-
-
-@fieldwise_init
-struct StepInfo(Copyable, Movable):
-    var step: String
-    var partition: String
-    var status: String
-    var attempts: Int
-    var error: String
-    var log: String
-    """The latest attempt's log file, or empty."""
 
 
 struct State(Movable):
@@ -716,12 +691,43 @@ struct DbRetry(Movable):
             pass  # the next try fails too, and comes back here
 
 
-struct PgStore(Movable, Store):
-    """Records a run's attempts in Postgres, as its owner.
+struct PgBeat(Beater):
+    """Refreshes a run's heartbeat in Postgres, on a connection of its own."""
 
-    Every call is retried for `ORCA_DB_RETRY_SECONDS` on a new connection
+    var url: String
+    var run: Int
+    var owner: String
+    var _conn: Optional[Connection]
+
+    def __init__(out self, url: String, run: Int, owner: String):
+        self.url = url
+        self.run = run
+        self.owner = owner
+        self._conn = None
+
+    def beat(mut self) raises:
+        if not self._conn:
+            self._conn = Connection(self.url)
+        _ = self._conn.value().execute(
+            (
+                "UPDATE orca.runs SET heartbeat = now() WHERE id = $1 AND"
+                " owner = $2 AND status = 'running'"
+            ),
+            Params().int64(Int64(self.run)).text(self.owner),
+        )
+
+    def reset(mut self):
+        self._conn = None
+
+
+struct PgStore(Movable, RunStore):
+    """orca's runs in Postgres, `State` behind the `RunStore` trait.
+
+    The calls for the owned run (attempts, skips, reads and commits, its
+    end) are retried for `ORCA_DB_RETRY_SECONDS` on a new connection
     (`DbRetry`), except when the run was lost or cancelled, so a blip of
-    the server doesn't throw away a step that finished."""
+    the server doesn't throw away a step that finished. The others are made
+    once, before the run starts or after it ends."""
 
     var db: State
     var url: String
@@ -730,6 +736,17 @@ struct PgStore(Movable, Store):
     var registry_hash: String
     var _attempt_id: Int64
     """The `attempts` row of the attempt last started."""
+    var _heartbeat: Optional[Heartbeat[PgBeat]]
+
+    def __init__(out self, url: String) raises:
+        """Connects to `url`; `own` a run before recording attempts."""
+        self.db = State(url)
+        self.url = url
+        self.run = 0
+        self.owner = String()
+        self.registry_hash = String()
+        self._attempt_id = 0
+        self._heartbeat = None
 
     def __init__(
         out self,
@@ -739,12 +756,84 @@ struct PgStore(Movable, Store):
         owner: String,
         registry_hash: String,
     ):
+        """Over `db`, already owning `run`."""
         self.db = db^
         self.url = url
         self.run = run
         self.owner = owner
         self.registry_hash = registry_hash
         self._attempt_id = 0
+        self._heartbeat = None
+
+    # --- RunStore: State's calls, for the pipeline binary ---
+
+    def migrate(mut self) raises:
+        self.db.migrate()
+
+    def register(
+        mut self, pipeline: String, registry_hash: String, describe: String
+    ) raises:
+        self.db.register(pipeline, registry_hash, describe)
+
+    def scheduled_hash(mut self, pipeline: String) raises -> String:
+        return self.db.scheduled_hash(pipeline)
+
+    def version(
+        mut self,
+        pipeline: String,
+        registry_hash: String,
+        describe: String,
+        image: String,
+    ) raises -> Int:
+        return self.db.version(pipeline, registry_hash, describe, image)
+
+    def create_run(
+        mut self,
+        pipeline: String,
+        registry_hash: String,
+        partitions: String,
+        trigger: String,
+        owner: String,
+    ) raises -> Int:
+        return self.db.create_run(
+            pipeline, registry_hash, partitions, trigger, owner
+        )
+
+    def claim(mut self, run: Int, owner: String, stale_seconds: Float64) raises:
+        self.db.claim(run, owner, stale_seconds)
+
+    def ran_version(mut self, run: Int, version: Int) raises:
+        self.db.ran_version(run, version)
+
+    def interrupt(mut self, run: Int) raises -> Int:
+        return self.db.interrupt(run)
+
+    def prior(mut self, run: Int) raises -> RunResult:
+        return self.db.prior(run)
+
+    def run_info(mut self, run: Int) raises -> RunInfo:
+        return self.db.run_info(run)
+
+    def runs(mut self, limit: Int) raises -> List[RunInfo]:
+        return self.db.runs(limit)
+
+    def steps(mut self, run: Int) raises -> List[StepInfo]:
+        return self.db.steps(run)
+
+    def own(mut self, run: Int, owner: String, registry_hash: String) raises:
+        self.run = run
+        self.owner = owner
+        self.registry_hash = registry_hash
+
+    def start_heartbeat(mut self, interval: Float64) raises:
+        self._heartbeat = Heartbeat(
+            PgBeat(self.url, self.run, self.owner), interval
+        )
+
+    def stop_heartbeat(mut self):
+        self._heartbeat = None
+
+    # --- Store: the owned run's attempts ---
 
     @staticmethod
     def _still_owner(

@@ -24,7 +24,7 @@ partition: the steps after it for that partition, and any gather step over
 it, are skipped, while other partitions carry on.
 """
 
-from dista.codec import decode, encode, put_scalar
+from dista.codec import encode, put_scalar
 from dista.seq import Seq
 from dista.task import fnv1a64
 from std.reflection import reflect
@@ -36,7 +36,15 @@ from orca.partitions import Monthly, Partitions
 from orca.schedule import Fill, NoSchedule, Previous, Schedule, ScheduleLike
 from orca.source import source_commit, source_dirty, source_repo
 from orca.step import Gather, Mapped, StepLike
-from orca.store import MemoryStore, Store
+from orca.store import (
+    FAILED,
+    SKIPPED,
+    SUCCEEDED,
+    MemoryStore,
+    RunResult,
+    Store,
+    StepRun,
+)
 from orca.logs import attempt_log, publish, stage_of
 from orca.tasks import NoTasks, TaskSet, task_list
 from orca.tasks import workers as local_workers
@@ -49,85 +57,6 @@ def _names(names: List[String]) -> String:
         out.write(", " if i > 0 else "", quote(names[i]))
     out.write("]")
     return out^
-
-
-comptime SUCCEEDED = "succeeded"
-comptime FAILED = "failed"
-comptime SKIPPED = "skipped"
-
-
-struct StepRun(Copyable, Movable):
-    """One step for one partition (or for the run, for a gather step)."""
-
-    var step: String
-    var partition: String
-    """Empty for a gather step."""
-    var status: String
-    var output: List[UInt8]
-    """The encoded output, when the step succeeded."""
-    var error: String
-    var attempt: Int
-    """The number of the attempt that settled it; 0 for a skipped step."""
-
-    def __init__(
-        out self,
-        step: String,
-        partition: String,
-        status: String,
-        var output: List[UInt8],
-        error: String,
-        attempt: Int = 0,
-    ):
-        self.step = step
-        self.partition = partition
-        self.status = status
-        self.output = output^
-        self.error = error
-        self.attempt = attempt
-
-
-struct RunResult(Movable):
-    """What a run did: every step and partition, in the order they ran."""
-
-    var steps: List[StepRun]
-
-    def __init__(out self):
-        self.steps = List[StepRun]()
-
-    def succeeded(self) -> Bool:
-        for i in range(len(self.steps)):
-            if self.steps[i].status != SUCCEEDED:
-                return False
-        return True
-
-    def find(self, step: StringSlice, partition: StringSlice) -> Int:
-        """The index of `step` for `partition`, or -1."""
-        for i in range(len(self.steps)):
-            ref s = self.steps[i]
-            if s.step == step and s.partition == partition:
-                return i
-        return -1
-
-    def status(
-        self, step: StringSlice, partition: StringSlice
-    ) raises -> String:
-        var i = self.find(step, partition)
-        if i < 0:
-            raise Error("no step ", step, " for '", partition, "'")
-        return self.steps[i].status
-
-    def output[
-        T: Movable
-    ](self, step: StringSlice, partition: StringSlice = "") raises -> T:
-        """The decoded output of `step` for `partition`."""
-        var i = self.find(step, partition)
-        if i < 0:
-            raise Error("no step ", step, " for '", partition, "'")
-        ref s = self.steps[i]
-        if s.status != SUCCEEDED:
-            raise Error("step ", step, " for '", partition, "' ", s.status)
-        var pos = 0
-        return decode[T](Span(s.output), pos)
 
 
 struct Pipeline[
