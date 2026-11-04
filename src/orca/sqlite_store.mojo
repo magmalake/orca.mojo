@@ -36,6 +36,7 @@ from sqlite import Database, Statement
 
 from orca.heartbeat import Beater, Heartbeat
 from orca.store import (
+    DEFERRED,
     FAILED,
     FINAL,
     RUNNING,
@@ -146,6 +147,12 @@ def _migrations() -> List[List[String]]:
             "CREATE INDEX reads_attempt ON reads (attempt)",
             "CREATE INDEX commits_attempt ON commits (attempt)",
             "CREATE INDEX steps_run ON steps (run, ord)",
+        ],
+        # A run a step deferred (#66): when it may go on, and how many
+        # times it was, as Postgres's migration 18 keeps them.
+        [
+            "ALTER TABLE runs ADD COLUMN retry_at INTEGER",
+            "ALTER TABLE runs ADD COLUMN deferrals INTEGER NOT NULL DEFAULT 0",
         ],
     ]
 
@@ -395,7 +402,10 @@ struct SqliteStore(Movable, RunStore):
                 "UPDATE runs SET status = 'running', owner = ?2, heartbeat = ",
                 _NOW,
                 ", ended = NULL, error = NULL WHERE id = ?1 AND status IN",
-                " ('queued', 'running', 'failed') AND (heartbeat IS NULL OR",
+                (
+                    " ('queued', 'running', 'failed', 'deferred') AND"
+                    " (heartbeat IS NULL OR"
+                ),
                 " heartbeat < ",
                 _NOW,
                 " - ?3) RETURNING id",
@@ -410,6 +420,7 @@ struct SqliteStore(Movable, RunStore):
         if (
             info.status != RUNNING
             and info.status != FAILED
+            and info.status != DEFERRED
             and info.status != "queued"
         ):
             raise Error("orca: run ", run, " is ", info.status)
@@ -573,6 +584,27 @@ struct SqliteStore(Movable, RunStore):
                 st.bind_int(1, self.run)
                 st.bind_text(2, status)
                 st.bind_text(3, self.owner)
+                _ = st.step()
+                return
+            except e:
+                r.again(e)
+                self._reopen()
+
+    def defer_run(mut self, until: Int64) raises:
+        var r = Backoff("SQLite")
+        while True:
+            try:
+                var st = self._stmt(
+                    String(
+                        "UPDATE runs SET status = 'deferred', ended = ",
+                        _NOW,
+                        ", heartbeat = NULL, retry_at = ?3, deferrals =",
+                        " deferrals + 1 WHERE id = ?1 AND owner = ?2",
+                    )
+                )
+                st.bind_int(1, self.run)
+                st.bind_text(2, self.owner)
+                st.bind_int(3, Int(until))
                 _ = st.step()
                 return
             except e:

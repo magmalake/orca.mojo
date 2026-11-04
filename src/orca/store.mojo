@@ -25,6 +25,8 @@ comptime CANCELLED = "cancelled"
 comptime SUCCEEDED = "succeeded"
 comptime FAILED = "failed"
 comptime SKIPPED = "skipped"
+comptime DEFERRED = "deferred"
+"""A step that raised `defer`: not done, and not failed."""
 
 
 struct StepRun(Copyable, Movable):
@@ -39,6 +41,8 @@ struct StepRun(Copyable, Movable):
     var error: String
     var attempt: Int
     """The number of the attempt that settled it; 0 for a skipped step."""
+    var until: Int64
+    """When a deferred step may run again, on `orca.civil.now`'s clock."""
 
     def __init__(
         out self,
@@ -48,6 +52,7 @@ struct StepRun(Copyable, Movable):
         var output: List[UInt8],
         error: String,
         attempt: Int = 0,
+        until: Int64 = 0,
     ):
         self.step = step
         self.partition = partition
@@ -55,6 +60,7 @@ struct StepRun(Copyable, Movable):
         self.output = output^
         self.error = error
         self.attempt = attempt
+        self.until = until
 
 
 struct RunResult(Movable):
@@ -70,6 +76,24 @@ struct RunResult(Movable):
             if self.steps[i].status != SUCCEEDED:
                 return False
         return True
+
+    def deferred_until(self) -> Int64:
+        """When the run may go on, if a step deferred and none failed: the
+        latest time its deferred steps asked for. 0 otherwise."""
+        var until = Int64(0)
+        for i in range(len(self.steps)):
+            ref s = self.steps[i]
+            if s.status == FAILED:
+                return 0
+            if s.status == DEFERRED:
+                until = max(until, s.until)
+        return until
+
+    def outcome(self) -> String:
+        """`succeeded`, `deferred` or `failed`."""
+        if self.succeeded():
+            return SUCCEEDED
+        return DEFERRED if self.deferred_until() > 0 else FAILED
 
     def find(self, step: StringSlice, partition: StringSlice) -> Int:
         """The index of `step` for `partition`, or -1."""
@@ -419,6 +443,12 @@ trait RunStore(Store):
         can be resumed at once if it failed."""
         ...
 
+    def defer_run(mut self, until: Int64) raises:
+        """Ends the owned run `deferred`, to go on at `until` (on
+        `orca.civil.now`'s clock): a step raised `defer` and none failed.
+        That start isn't counted against its retries."""
+        ...
+
     def cancel_requested(mut self) raises -> Bool:
         """Whether the owned run was asked to cancel."""
         ...
@@ -617,7 +647,12 @@ struct MemoryStore(Movable, RunStore):
 
     def claim(mut self, run: Int, owner: String, stale_seconds: Float64) raises:
         ref r = self._runs[self._at(run)]
-        if r.status != RUNNING and r.status != FAILED and r.status != "queued":
+        if (
+            r.status != RUNNING
+            and r.status != FAILED
+            and r.status != DEFERRED
+            and r.status != "queued"
+        ):
             raise Error("orca: run ", run, " is ", r.status)
         var now = Int(perf_counter_ns())
         if (
@@ -730,6 +765,10 @@ struct MemoryStore(Movable, RunStore):
         if r.owner == self.owner:
             r.status = status
             r.heartbeat = -1
+
+    def defer_run(mut self, until: Int64) raises:
+        # No scheduler to start it again in one process; resume does.
+        self.finish_run(DEFERRED)
 
     def cancel_requested(mut self) raises -> Bool:
         return self._runs[self._at(self.run)].cancel_requested

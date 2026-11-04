@@ -137,7 +137,7 @@ td code { font-size: 0.8125rem; }
 .status--queued, .status--pending { color: var(--warn);
   background: color-mix(in srgb, var(--warn) 10%, transparent);
   border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
-.status--cancelled { color: var(--muted); background: var(--surface-2); border-color: var(--border-strong); }
+.status--cancelled, .status--deferred { color: var(--muted); background: var(--surface-2); border-color: var(--border-strong); }
 .status--skipped, .status--not-done { color: var(--faint); background: transparent;
   border-style: dashed; }
 h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }

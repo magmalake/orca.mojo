@@ -21,22 +21,26 @@ run lives as long as the process) or `orca.state.PgStore`, which makes a run
 resumable by another process. Each step's output is kept encoded by dista's codec, as Postgres
 holds it. A step that raises is retried up to its `retries`, then fails its
 partition: the steps after it for that partition, and any gather step over
-it, are skipped, while other partitions carry on.
+it, are skipped, while other partitions carry on. One that raises
+`orca.step.defer` ends `deferred`, with no more retries, and its downstream
+steps are skipped likewise; the run is `deferred` if no step failed.
 """
 
 from dista.codec import encode, put_scalar
 from dista.seq import Seq
 from dista.task import fnv1a64
 from std.reflection import reflect
+from std.time import sleep
 
 from orca.ctx import Ctx
 from orca.json import quote
-from orca.civil import Civil
+from orca.civil import Civil, now
 from orca.partitions import Monthly, Partitions
 from orca.schedule import Fill, NoSchedule, Previous, Schedule, ScheduleLike
 from orca.source import source_commit, source_dirty, source_repo
-from orca.step import Gather, Mapped, StepLike
+from orca.step import Gather, Mapped, StepLike, deferred_for, deferred_why
 from orca.store import (
+    DEFERRED,
     FAILED,
     SKIPPED,
     SUCCEEDED,
@@ -69,6 +73,8 @@ struct Pipeline[
     catchup: Bool = True,
     max_runs: Int = 1,
     run_retries: Int = 3,
+    retry_seconds: Int = 0,
+    max_retry_seconds: Int = 0,
     sensor: Bool = False,
     keys_per_run: Int = 1,
     workers: Int = 2,
@@ -85,7 +91,10 @@ struct Pipeline[
 
     The scheduler runs at most `max_runs` of its runs at once, and starts a
     failed scheduled or backfilled run again up to `run_retries` times, with
-    backoff (`orca.scheduler`)."""
+    backoff: `retry_seconds` (0 for the scheduler's `ORCA_RETRY_SECONDS`)
+    doubling with each start, up to `max_retry_seconds` if it's set
+    (`orca.scheduler`). `run_retries=72, retry_seconds=3600,
+    max_retry_seconds=3600` tries hourly for three days."""
 
     comptime K = Self.partitions.K
     """The partition key."""
@@ -104,6 +113,12 @@ struct Pipeline[
         comptime assert Self.Ts.length > 0, "a pipeline needs a step"
         comptime assert Self.max_runs >= 1, "max_runs must be at least 1"
         comptime assert Self.run_retries >= 0, "run_retries can't be negative"
+        comptime assert (
+            Self.retry_seconds >= 0
+        ), "retry_seconds can't be negative"
+        comptime assert (
+            Self.max_retry_seconds >= 0
+        ), "max_retry_seconds can't be negative"
         comptime assert (
             Self.keys_per_run >= 1
         ), "keys_per_run must be at least 1"
@@ -210,6 +225,11 @@ struct Pipeline[
             out.write('"schedule": null, ')
         out.write('"max_runs": ', Self.max_runs, ", ")
         out.write('"run_retries": ', Self.run_retries, ", ")
+        # Only when set, so a pipeline that sets neither keeps its describe.
+        comptime if Self.retry_seconds > 0:
+            out.write('"retry_seconds": ', Self.retry_seconds, ", ")
+        comptime if Self.max_retry_seconds > 0:
+            out.write('"max_retry_seconds": ', Self.max_retry_seconds, ", ")
         out.write('"sensor": ', "true" if Self.sensor else "false", ", ")
         out.write('"keys_per_run": ', Self.keys_per_run, ", ")
         out.write('"workers": ', Self.workers, ", ")
@@ -416,7 +436,21 @@ struct Pipeline[
             # Every attempt reads the snapshots the first one read.
             var pinned = store.pinned_reads(T.step_name(), partition)
             var code = hex(Self.registry_hash())
-            for _ in range(T.max_retries() + 1):
+            var wait = Float64(T.backoff())
+            for k in range(T.max_retries() + 1):
+                if k > 0 and wait > 0:
+                    print(
+                        "[",
+                        T.step_name(),
+                        " ",
+                        partition,
+                        "] retrying in ",
+                        Int(wait),
+                        " s",
+                        sep="",
+                    )
+                    sleep(wait)
+                    wait *= 2
                 var attempt = store.start_attempt(
                     T.step_name(), partition, ord, Span(input)
                 )
@@ -458,6 +492,33 @@ struct Pipeline[
                         publish(log)
                     except e:
                         print("orca: can't keep the log at", log, ":", e)
+                var later = deferred_for(error)
+                if later > 0:
+                    var until = now() + Int64(later)
+                    var why = String(
+                        "deferred until ",
+                        Civil.of(until),
+                        "Z: ",
+                        deferred_why(error),
+                    )
+                    store.finish_attempt(
+                        T.step_name(),
+                        partition,
+                        attempt,
+                        DEFERRED,
+                        Span(out),
+                        why,
+                    )
+                    outcome = StepRun(
+                        T.step_name(),
+                        partition,
+                        DEFERRED,
+                        List[UInt8](),
+                        why,
+                        attempt,
+                        until,
+                    )
+                    break
                 if error:
                     store.finish_attempt(
                         T.step_name(),

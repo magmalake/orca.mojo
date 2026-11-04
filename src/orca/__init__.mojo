@@ -65,5 +65,13 @@ from orca.store import (
     TableSnapshot,
 )
 from orca.tasks import NoTasks, Tasks, TaskSet, workers
-from orca.step import Gather, Mapped, NoStep, Step, StepKind, StepLike
+from orca.step import (
+    Gather,
+    Mapped,
+    NoStep,
+    Step,
+    StepKind,
+    StepLike,
+    defer,
+)
 from orca.tz import PosixTZ, Zone

@@ -1,4 +1,5 @@
-"""Which runs are live: queued, or running with their process alive.
+"""Which runs are live: queued, deferred, or running with their process
+alive.
 
 A running run's process is taken to have died when its heartbeat is older
 than the stale limit (`ORCA_STALE_SECONDS`), or, before its first beat, when
@@ -51,14 +52,16 @@ def dead_sql(stale: String, grace: Float64) -> String:
 
 def live_sql() raises -> String:
     """SQL for the keys of pipeline `$1` in a live run, each with the first
-    such run (`key`, `id`): one that's queued, or running with its process
-    alive. A run whose process died doesn't hold its keys, whatever its
+    such run (`key`, `id`): one that's queued, deferred (a step said "not
+    yet", and the scheduler starts it again at its `retry_at`), or running
+    with its process alive. A run whose process died doesn't hold its keys, whatever its
     trigger, so a backfill or a sensor may queue them again."""
     var stale = stale_limit()
     return String(
         "SELECT DISTINCT ON (k.key) k.key, r.id FROM orca.runs r,",
         " unnest(string_to_array(r.partitions, ',')) AS k(key) WHERE",
-        " r.pipeline = $1 AND (r.status = 'queued' OR (r.status = 'running'",
+        " r.pipeline = $1 AND (r.status IN ('queued', 'deferred') OR",
+        " (r.status = 'running'",
         " AND NOT ",
         dead_sql(String(stale), start_grace(stale)),
         ")) ORDER BY k.key, r.id",
