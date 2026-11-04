@@ -90,13 +90,10 @@ test-aws = { cmd = "tests/aws.sh" }
 test-lost-workers = { cmd = "scripts/with-postgres.sh tests/lost_workers.sh" }
 test-datasets = { cmd = "scripts/with-postgres.sh tests/datasets.sh" }
 test-db-blip = { cmd = "scripts/with-postgres.sh tests/db_blip.sh" }
-# Needs docker, kind and kubectl; builds the image of deploy/Dockerfile.
-test-kind = { cmd = "tests/kind.sh" }
-test = { depends-on = ["test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-pause", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-versions", "test-manual-run", "test-new-code", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos"] }
 test-sense-errors = { cmd = "scripts/with-postgres.sh tests/sense_errors.sh" }
 # Needs docker, kind and kubectl; builds the image of deploy/Dockerfile.
 test-kind = { cmd = "tests/kind.sh" }
-test = { depends-on = ["test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-versions", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-sense-errors", "test-chaos"] }
+test = { depends-on = ["test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-pause", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-versions", "test-manual-run", "test-new-code", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-sense-errors"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
 orca = { cmd = "mkdir -p build && mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca" }
