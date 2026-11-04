@@ -13,8 +13,8 @@ kube runner in each pod (`orca.kube`). The runners start it as
 `<binary> sample`, since the pipeline's binary is what every instance and
 image has; `orca sample` is the same command.
 
-Every `--seconds` (`ORCA_SAMPLE_SECONDS`, default 5; the first line after
-one second, so a short-lived instance leaves one) it reads `/proc` on Linux,
+Every `--seconds` (`ORCA_SAMPLE_SECONDS`, default 5; the first line a fifth
+of a second after it starts, so any instance it ran on leaves one) it reads `/proc` on Linux,
 or sysctls and the Mach host calls on macOS, and appends a line:
 
 ```
@@ -935,7 +935,9 @@ def sample_main(args: List[String]) -> Int:
     var written = 0
     var failed = False
     var start = Float64(perf_counter_ns()) / 1e9
-    var due = start + min(seconds, 1.0)
+    # The first line at once (a fifth of a second, for the CPU's delta),
+    # so a script that waits for it knows there's one, however short its run.
+    var due = start + min(seconds, 0.2)
     var uploaded = start
     var dirty = False
     while True:

@@ -158,7 +158,7 @@ With `ORCA_LOGS` set to a directory, each attempt writes its log to `$ORCA_LOGS/
 
 ## Machine metrics
 
-A run's logs, timeline and task spans say nothing about the machines it ran on. `orca sample` (`orca.sample`; `<binary> sample` in a pipeline binary, which is what the runners start, since every instance and image has it) runs beside each process that does a run's work and appends a JSON line every `ORCA_SAMPLE_SECONDS` (5; the first after a second) to `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`:
+A run's logs, timeline and task spans say nothing about the machines it ran on. `orca sample` (`orca.sample`; `<binary> sample` in a pipeline binary, which is what the runners start, since every instance and image has it) runs beside each process that does a run's work and appends a JSON line every `ORCA_SAMPLE_SECONDS` (5; the first a fifth of a second after it starts) to `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`:
 
 - **CPU:** user, system, iowait and steal as percentages of all cores, and the busiest core.
 - **Memory:** total, used, available, page cache, swap, and the resident set of the run's own processes (the process tree it watches, plus, on Linux, processes whose command is the pipeline's binary, which on the ec2 runner live in containers rather than under the script).
@@ -172,7 +172,7 @@ Where it runs:
 | Runner | Started by | Instance | Ends |
 |---|---|---|---|
 | local | the scheduler, beside each run's process | `local` | after a last line once the run's process has |
-| ec2 | each instance's user data, next to dista; in docker mode as a container with `--pid host` and `/tmp` mounted | `<role>-<instance id>`, beside `cluster/<role>-<instance id>.log` | after a last line once the script makes its `--until` file (a signal could come before the sampler blocks it, and a short run would keep nothing) |
+| ec2 | each instance's user data, next to dista; in docker mode as a container with `--pid host` and `/tmp` mounted | `<role>-<instance id>`, beside `cluster/<role>-<instance id>.log` | after a last line once the script makes its `--until` file; the script waits up to 10 s for its first line before starting the work, so even a run shorter than that keeps a sample |
 | kube | each pod's command, wrapped in `sh -c` so the sampler runs beside it and signals reach the command | the pod's name | after a last line once the pod's command has |
 
 On ec2 the lines go to a file in `/tmp` that the script's uploader puts under the run's `metrics/` with the instance's log, every `ORCA_CLUSTER_LOG_SECONDS` and once at the end, so a short run's samples are kept and a terminated instance keeps what it had uploaded. On Kubernetes, where run pods don't share the scheduler's `ORCA_LOGS`, the sampler prints its lines to the pod's log prefixed `orca-sample `, and the scheduler moves them to `metrics/<pod>.jsonl`, out of `driver.log`, before it deletes a finished Job: a pod deleted mid-run takes its samples with it, as it takes its log. With `ORCA_LOGS` in object storage, a local sampler stages its file and uploads the whole of it every `ORCA_SAMPLE_UPLOAD_SECONDS` (30) and when it ends.

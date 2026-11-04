@@ -41,7 +41,10 @@ the ID), exported as NAME, given to the containers, and named in
 `ORCA_SECRETS` so that every log orca writes masks them.
 
 Every tick, `sweep` terminates the instances of runs that aren't running at
-that start, and those older than `ORCA_RUN_DEADLINE` (a day). Instances get
+that start, and those older than `ORCA_RUN_DEADLINE` (a day). A head whose
+run has just ended is left `ORCA_EC2_HEAD_GRACE` seconds (60) to finish its
+script: keep the driver's log, upload its own and its samples, and shut
+itself down. Instances get
 `ORCA_EC2_DATABASE_URL` as `ORCA_DATABASE_URL` (the control instance's
 private address), the warehouse, the logs, the region and the scheduler's
 variables named in `ORCA_RUN_ENV`; `ORCA_EC2_AMI`, `ORCA_EC2_SUBNET`,
@@ -146,6 +149,9 @@ struct Ec2Runner(Movable):
     var head_type: String
     var worker_type: String
     var deadline: Int
+    var grace: Float64
+    """How long a head may go on after its run ended, to shut itself
+    down, before the sweep terminates it."""
     var env: List[String]
     var up_after: Float64
     var idle: Float64
@@ -164,6 +170,7 @@ struct Ec2Runner(Movable):
         self.head_type = getenv("ORCA_EC2_HEAD_TYPE", "c7g.large")
         self.worker_type = getenv("ORCA_EC2_WORKER_TYPE", "c7g.xlarge")
         self.deadline = Int(getenv("ORCA_RUN_DEADLINE", "86400"))
+        self.grace = Float64(getenv("ORCA_EC2_HEAD_GRACE", "60"))
         self.up_after = Float64(getenv("ORCA_SCALE_UP_AFTER", "5"))
         self.idle = Float64(getenv("ORCA_SCALE_IDLE", "60"))
         self.step = Int(getenv("ORCA_SCALE_STEP", "4"))
@@ -417,6 +424,11 @@ struct Ec2Runner(Movable):
                 "\n",
                 line,
                 " >/dev/null 2>&1 &\nsampler=$!\n",
+                # Its first line before the work, for up to 10 s: a run
+                # shorter than that still has a sample.
+                "i=0; while [ ! -s ",
+                metrics,
+                ' ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done\n',
             )
         if role == "worker":
             # The role goes to the worker alone: a binary given one serves
@@ -721,6 +733,19 @@ struct Ec2Runner(Movable):
             Params(),
         ):
             live[row.text("k")] = True
+        # A head shuts itself down once it has kept the driver's log and
+        # uploaded its own and its samples, so it gets a grace after its run
+        # ends; a run restarted elsewhere is running, and its old head isn't
+        # spared.
+        var ending = Dict[String, Bool]()
+        for row in db.conn.query(
+            (
+                "SELECT id || '-' || starts AS k FROM orca.runs WHERE status"
+                " <> 'running' AND ended > now() - make_interval(secs => $1)"
+            ),
+            Params().float64(self.grace),
+        ):
+            ending[row.text("k")] = True
         var old = (
             db.conn.query(
                 (
@@ -745,7 +770,11 @@ struct Ec2Runner(Movable):
                 i.tags.get("orca.run", ""), "-", i.tags.get("orca.start", "")
             )
             # Launch times are ISO 8601 in UTC, so they order as text.
-            if key not in live or (i.launch_time and i.launch_time < old):
+            if i.launch_time and i.launch_time < old:
+                doomed.append(i.id)
+            elif key not in live and not (
+                key in ending and i.tags.get("orca.role", "") == "head"
+            ):
                 doomed.append(i.id)
         self.ec2.terminate(doomed)
         for id in doomed:

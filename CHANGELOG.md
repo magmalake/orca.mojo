@@ -15,7 +15,9 @@
   instance's logs and at its end, so a short run keeps them; on Kubernetes
   the scheduler moves them out of the pod's log. A sampler that can't write
   never fails a run, and `ORCA_SAMPLE_SECONDS=0` turns it off. Its overhead
-  is well under 0.1% of one core.
+  is well under 0.1% of one core. On EC2, a head whose run has ended is
+  left `ORCA_EC2_HEAD_GRACE` seconds (60) to keep its logs and samples and
+  shut itself down before the sweep terminates it.
 - **Runs in a SQLite file: `ORCA_DATABASE_URL=sqlite:<path>`** (#82).
   `orca.sqlite_store.SqliteStore`, over sqlite-mojo 0.3.5, is a whole
   `RunStore`. With it, `run`, `resume` and `status` record a pipeline's
