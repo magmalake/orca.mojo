@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.1 (2026-11-03)
+
 - **A dated pipeline may write a keyed sensor's keys.** `orca register` no
   longer refuses a keyed sensor whose keys dataset a daily or monthly
   pipeline writes: a new snapshot of the keys dataset offers the keys it
@@ -23,6 +25,16 @@
   again. `orca backfill --rerun <pipeline> KEYS` queues the done keys as
   well; a key already in a queued or running run is still left to it. The
   UI's backfill form has the same as a checkbox (`rerun=1`).
+
+- **Built against the shim-loading fix releases.** dista-mojo 0.2.1,
+  k8s-mojo 0.1.1, iceberg-mojo 0.8.5, postgres-mojo 0.3.3,
+  objectstore-mojo 0.4.1, flare_mlake 0.13.1 and json_mlake 0.4.3 (and, in
+  the data environment, zstd 0.1.5, lz4 0.1.4, brotli 0.1.4 and sqlite
+  0.3.5): every library they load is found without `CONDA_PREFIX`, next to
+  the executable, in its `../lib` or on the binary's rpath, so a pipeline
+  binary built under pixi runs from a plain shell, and a missing one is an
+  Error instead of an abort. The CI checkouts and `deploy/Dockerfile` pin
+  the same revisions.
 
 ## 0.3.0 (2026-11-03)
 
