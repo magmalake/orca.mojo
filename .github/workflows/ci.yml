@@ -98,11 +98,36 @@ jobs:
           pixi-version: v0.78.0
           environments: ${{ matrix.env }}
           manifest-path: orca.mojo/pixi.toml
+          # Only main writes the environment cache. Every PR writing ~1 GB per
+          # environment kept the repository over GitHub's 10 GB cap, which
+          # evicted main's entries: the only ones every PR can read.
+          cache-write: ${{ github.event_name == 'push' }}
+
+      # Mojo's compile cache (share/max/cache in the environment) starts
+      # empty in every job. Restored from main's last run, it makes builds of
+      # code main has built already 4-6x faster. It's content-addressed, so a
+      # stale entry is never used. Saved by main only, like the environment.
+      - uses: actions/cache/restore@v4
+        with:
+          path: orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+          restore-keys: mojo-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
 
       # The state and kill tests start a throwaway PostgreSQL server from
       # conda-forge's postgresql, on a Unix socket: no service container.
       - name: Tests
         run: pixi run -e ${{ matrix.env }} test
+
+      # Entries a week old go before saving, so the cache can't grow without
+      # bound; one still in use is rebuilt once.
+      - if: always() && github.event_name == 'push'
+        name: Prune Mojo's compile cache (main only)
+        run: find .pixi/envs/${{ matrix.env }}/share/max/cache -type f -mtime +7 -delete || true
+      - if: always() && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   # orca on a kind cluster (deploy/): the image, built with pixi inside
   # docker, the manifests, and the toy pipeline run by the scheduler's pod.
@@ -137,6 +162,12 @@ jobs:
           pixi-version: v0.78.0
           environments: fuzz
           manifest-path: orca.mojo/pixi.toml
+          cache-write: ${{ github.event_name == 'push' }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: orca.mojo/.pixi/envs/fuzz/share/max/cache
+          key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+          restore-keys: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-
       - name: Fuzz
         run: FUZZ_RUNS=20000 pixi run -e fuzz fuzz
       - if: failure()
@@ -144,6 +175,14 @@ jobs:
         run: |
           for f in build/fuzz-*-last.bin; do echo "$f"; xxd "$f" | head -20; done
           ls -R build/fuzz-crashes || true
+      - if: always() && github.event_name == 'push'
+        name: Prune Mojo's compile cache (main only)
+        run: find .pixi/envs/fuzz/share/max/cache -type f -mtime +7 -delete || true
+      - if: always() && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: orca.mojo/.pixi/envs/fuzz/share/max/cache
+          key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   format:
     runs-on: ubuntu-latest
@@ -153,6 +192,7 @@ jobs:
         with:
           pixi-version: v0.78.0
           environments: fmt
+          cache-write: ${{ github.event_name == 'push' }}
       - name: mojo format leaves the tree unchanged
         run: pixi run -e fmt format-check
 
@@ -213,6 +253,12 @@ jobs:
           pixi-version: v0.78.0
           environments: data
           manifest-path: orca.mojo/pixi.toml
+          cache-write: ${{ github.event_name == 'push' }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: orca.mojo/.pixi/envs/data/share/max/cache
+          key: mojo-${{ runner.os }}-data-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+          restore-keys: mojo-${{ runner.os }}-data-${{ hashFiles('orca.mojo/pixi.lock') }}-
       - name: Pinned reads and recognised commits
         run: pixi run -e data test-tables
       - name: Chaos over Iceberg (one snapshot per month, however often killed)
@@ -237,3 +283,11 @@ jobs:
       # full 24-month load is run by hand.
       - name: The taxi pipeline, on fixtures
         run: pixi run -e data test-taxi
+      - if: always() && github.event_name == 'push'
+        name: Prune Mojo's compile cache (main only)
+        run: find .pixi/envs/data/share/max/cache -type f -mtime +7 -delete || true
+      - if: always() && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: orca.mojo/.pixi/envs/data/share/max/cache
+          key: mojo-${{ runner.os }}-data-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
