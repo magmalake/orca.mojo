@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Links to code look like links to code.** A link to a pipeline's source
+  on its host (the pipeline's declaration, a step's function, a dista task,
+  the commit and the repository, on the pipeline, run and attempt pages)
+  was styled like a link inside orca. Every one is now drawn by one helper
+  (`Html.code`): a small `</>` icon, the place in monospace and muted
+  (`pipelines/gharchive.mojo:26`), then `↗`, opening in a new tab, titled
+  `View source on GitHub at <commit>`. A DAG box that links to code says
+  `↗` and `(view source)`. Links inside orca, and the JSON, are unchanged.
+- **A dataset's page links the steps that write and read it to their
+  code.** Under *Written by* and *Read by*, each pipeline lists its steps
+  that declare the dataset in `writes=` / `reads=` or committed to (read)
+  it, each linked to its line at the commit of the newest run that did, or
+  of the version registered now if none has; each snapshot's step is linked
+  at the commit of the run that committed it. A step without a recorded
+  source has no link. An attempt's page links its step's code too.
+
 - **A step's reads and commits are recorded through its run's `Store`**
   (#82). `Recorder` used to open a Postgres connection of its own;
   it now calls the store it came from (`Store.record`, which `PgStore`

@@ -189,6 +189,16 @@ pre.error { color: var(--bad); background: var(--surface); border: 1px solid var
 .dag__name { font-size: 13px; font-weight: 600; fill: var(--text); }
 .dag__kind { font-size: 11px; fill: var(--muted); }
 .dag a:hover rect { stroke: var(--lake); }
+/* A link to source code on its host, unlike a link inside orca: an icon, the
+   file and line in monospace, and an arrow out. */
+a.src { font-family: var(--mono); font-size: 0.78rem; font-weight: 400; color: var(--muted);
+  text-decoration: none; white-space: nowrap; }
+a.src:hover { color: var(--lake); }
+a.src:hover .src__at { text-decoration: underline; text-underline-offset: 0.18em; }
+.src__icon { display: inline-block; vertical-align: -0.1em; margin-right: 0.3em; }
+.src__out { color: var(--faint); margin-left: 0.2em; }
+a.src:hover .src__out { color: inherit; }
+.steps-of { color: var(--muted); }
 .doc { font-size: 0.75rem; font-weight: 400; margin-left: 0.5rem; color: var(--faint); }
 .dag__box--succeeded rect { stroke: var(--ok); }
 .dag__box--failed rect { stroke: var(--bad); stroke-width: 2; }
