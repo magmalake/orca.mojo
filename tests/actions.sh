@@ -3,9 +3,9 @@
 # /runs, its failed attempt's log read, and resume posted; with the scheduler
 # running, the run succeeds. Then the other actions: rerun from `measure`
 # reruns measure and total and not days; a run started and a range
-# backfilled from the UI run; a running run cancelled ends `cancelled`
-# before its next step, and resumes onto new code once that's confirmed; a
-# cross-origin POST changes nothing.
+# backfilled from the UI run, and backfilled again with rerun=1; a running
+# run cancelled ends `cancelled` before its next step, and resumes onto new
+# code once that's confirmed; a cross-origin POST changes nothing.
 # Needs ORCA_DATABASE_URL (pixi run test-actions starts a throwaway server),
 # curl and jq.
 set -eu
@@ -126,6 +126,12 @@ grep -q 'Not done' "$log.body" || fail "the refusal page"
 code=$(curl -s -o "$log.body" -w '%{http_code}' -H 'Accept: application/json' -H "Origin: $base" \
     -X POST --data-urlencode partitions=2024-05..2024-06 "$base/pipelines/toy/backfill")
 [ "$code" = 200 ] && [ "$(jq .queued "$log.body")" -eq 0 ] || fail "backfilling it again queued $(cat "$log.body")"
+for r in $(json '/runs?trigger=backfill' | jq -r '.runs[].id'); do until_status "$r" succeeded; done
+# Again with rerun=1, as the form's checkbox sends: the done ones too.
+code=$(curl -s -o "$log.body" -w '%{http_code}' -H 'Accept: application/json' -H "Origin: $base" \
+    -X POST --data-urlencode partitions=2024-05..2024-06 --data-urlencode rerun=1 "$base/pipelines/toy/backfill")
+[ "$code" = 200 ] && [ "$(jq .queued "$log.body")" -eq 2 ] || fail "backfilling with rerun=1 queued $(cat "$log.body")"
+curl -fsS "$base/pipelines/toy" | grep -q 'name="rerun"' || fail "no rerun checkbox on the backfill form"
 for r in $(json '/runs?trigger=backfill' | jq -r '.runs[].id'); do until_status "$r" succeeded; done
 
 # Cancel a queued run: it never starts.

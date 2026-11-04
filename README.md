@@ -63,6 +63,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/toy run --partitions 2024-01..2024-
 pixi run -e data taxi && pixi run -e data ./build/taxi run --partitions 2023-01..2024-12
 pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   # needs ORCA_DATABASE_URL
 ./build/orca register ./build/taxi && ./build/orca backfill taxi 2011-01..2024-12   # 19 GB of TLC files
+./build/orca backfill --rerun taxi 2024-03   # queue a month again, though it succeeded
 ./build/orca ui                # http://127.0.0.1:8270: pipelines, runs and datasets, also as JSON; start, resume, rerun, backfill, cancel
 ./build/orca user add alice    # a login for the UI's actions; the password from stdin
 ./build/orca lineage lake.report   # what a dataset's latest snapshot was made from, and what was made from it

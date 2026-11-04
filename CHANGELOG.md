@@ -18,6 +18,12 @@
   writes the `/` as `%2F` (`orca.name.path_segment`), and the UI's key
   pages are at `/pipelines/<pipeline>/keys/owner%2Fname`.
 
+- **`orca backfill --rerun`.** A backfill skips keys that are done, so
+  there was no way from the command line to run a finished day or month
+  again. `orca backfill --rerun <pipeline> KEYS` queues the done keys as
+  well; a key already in a queued or running run is still left to it. The
+  UI's backfill form has the same as a checkbox (`rerun=1`).
+
 ## 0.3.0 (2026-11-03)
 
 A project deploys itself to AWS.
