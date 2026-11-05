@@ -36,6 +36,7 @@ from orca.actions import cancel_runs, pause_pipeline
 from orca.auth import add_user, remove_user, users
 from orca.aws import aws_command
 from orca.civil import now
+from orca.expiry import expirable, expire_argv, maintain_binary
 from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.locate import locate
 from orca.proc import binary_seconds, capture
@@ -64,6 +65,8 @@ comptime USAGE = """usage:
               [--seconds S] [--count N]   (machine metrics, orca.sample)
   orca lineage <dataset> [<snapshot>]
   orca rebuild <dataset> KEY[..KEY][,...]
+  orca expire <dataset>|--all [--older-than 30d|12h|90m] [--keep N]
+              [--dry-run] [--report]   (snapshot expiry, via orca_maintain)
   orca user add|remove <name>       (add reads the password from stdin)
   orca user list"""
 
@@ -255,6 +258,8 @@ def _command(args: List[String]) raises -> Int:
         for p in rebuilds(db, id)[0].plan:
             print("  level", p.level, p.pipeline, p.partitions)
         return 0
+    if cmd == "expire" and len(args) >= 3:
+        return _expire(url, args)
     if cmd == "user" and len(args) >= 3:
         var db = State(url)
         db.migrate()
@@ -285,6 +290,56 @@ def _command(args: List[String]) raises -> Int:
         return 0
     _usage()
     return 2
+
+
+def _expire(url: String, args: List[String]) raises -> Int:
+    """`orca expire`: each dataset's `orca_maintain expire`, with the
+    snapshots orca still needs retained (`orca.expiry`)."""
+    var older = String()
+    var keep = String()
+    var dry_run = False
+    var report = False
+    var i = 3
+    while i < len(args):
+        if args[i] == "--older-than" and i + 1 < len(args):
+            older = args[i + 1]
+            i += 2
+        elif args[i] == "--keep" and i + 1 < len(args):
+            keep = args[i + 1]
+            i += 2
+        elif args[i] == "--dry-run":
+            dry_run = True
+            i += 1
+        elif args[i] == "--report":
+            report = True
+            i += 1
+        else:
+            _usage(String("unknown argument: ", args[i]))
+    var binary = maintain_binary()
+    if not binary:
+        raise Error(
+            "orca: no orca_maintain binary (set ORCA_MAINTAIN, or build"
+            " bin/orca_maintain.mojo calling orca.maintain.maintain_main"
+            " beside orca)"
+        )
+    var db = State(url)
+    db.migrate()
+    var datasets = List[String]()
+    if args[2] == "--all":
+        datasets = expirable(db)
+    else:
+        datasets.append(args[2])
+    var code = 0
+    for ds in datasets:
+        var a = expire_argv(db, binary, ds, older, keep, dry_run, report)
+        var got = capture(a, 0)
+        var out = String(got[1].strip())
+        if got[0] != 0:
+            print("orca: expiring", ds, "failed:", out, file=stderr)
+            code = 1
+        elif out:
+            print(out)
+    return code
 
 
 def _print_made(ms: List[Made]):

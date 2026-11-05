@@ -52,6 +52,7 @@ pixi run -e data test-tables   # Iceberg; needs the sibling checkouts (see CI)
 pixi run -e data test-append-files   # files written in dista tasks, committed once by the step
 pixi run -e data test-taxi     # examples/taxi on two sliced TLC months
 pixi run -e data test-lineage  # lineage over three pipelines' tables
+pixi run -e data test-expire   # snapshot expiry: orca expire, orca_maintain, the scheduler's sweep
 pixi run -e data test-sensors  # sensors and a rebuild, with the scheduler running
 pixi run -e data test-lineage-s3   # lineage, and sensors (test-sensors-s3), over MinIO
 pixi run -e data test-keyed    # partitions named by a dataset's column, not dates
@@ -74,6 +75,7 @@ pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   #
 ./build/orca user add alice    # a login for the UI's actions; the password from stdin
 ./build/orca lineage lake.report   # what a dataset's latest snapshot was made from, and what was made from it
 ./build/orca rebuild raw.events 2024-03   # rerun every pipeline downstream of a dataset, in order
+./build/orca expire raw.events --older-than 7d   # drop old snapshots (or --all, by each table's policy), keeping what live runs need
 docker build -f deploy/Dockerfile -t orca:dev . && kubectl apply -f deploy/k8s/   # on Kubernetes
 tests/kind.sh                  # that, on a kind cluster: each run on a dista cluster of its own
 pixi run test-ec2              # ORCA_RUNNER=ec2 against a stand-in EC2: a head and workers per run
