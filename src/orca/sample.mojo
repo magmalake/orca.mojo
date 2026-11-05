@@ -55,12 +55,12 @@ sampler ends), or `-`, standard output with each line prefixed
 at `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`
 (`metrics_location`).
 
-It ends after a last line once the `--pid` process has, once the file
-`--until` names exists, or on SIGTERM or SIGINT, which it holds pending to
-see them; or after `--count` lines. A script that stops it with `--until`
-gets its last line however soon after starting it it stops it, which a
-signal sent before the sampler has blocked it doesn't. A line it can't write is dropped
-with one message, and it carries on: a sampler never fails a run.
+It ends after a last line once the `--pid` process has, or once the file
+`--until` names exists, or after `--count` lines. SIGTERM ends it at once,
+keeping the lines it wrote (Mojo's runtime threads take signals a blocked
+main thread wouldn't, so it can't wait for one), which is why the runners
+stop it with `--pid` or `--until`. A line it can't write is dropped with
+one message, and it carries on: a sampler never fails a run.
 """
 
 from std.ffi import c_int, external_call
@@ -345,35 +345,6 @@ def _hostname() -> String:
     while n < 255 and buf[n] != 0:
         n += 1
     return String(from_utf8_lossy=Span(buf)[:n])
-
-
-def _term_set() -> List[UInt8]:
-    """A sigset_t of SIGTERM and SIGINT (15 and 2 on Linux and macOS)."""
-    var set = List[UInt8](length=128, fill=0)
-    _ = external_call["sigemptyset", c_int](set.unsafe_ptr())
-    _ = external_call["sigaddset", c_int](set.unsafe_ptr(), c_int(15))
-    _ = external_call["sigaddset", c_int](set.unsafe_ptr(), c_int(2))
-    return set^
-
-
-def block_term():
-    """Holds SIGTERM and SIGINT pending instead of dying of them, so that
-    `term_pending` can see one and the sampler end after a last line."""
-    var set = _term_set()
-    comptime how = 1 if CompilationTarget.is_macos() else 0  # SIG_BLOCK
-    _ = external_call["sigprocmask", c_int](
-        c_int(how), set.unsafe_ptr(), Int(0)
-    )
-
-
-def term_pending() -> Bool:
-    var set = List[UInt8](length=128, fill=0)
-    if external_call["sigpending", c_int](set.unsafe_ptr()) != 0:
-        return False
-    return (
-        external_call["sigismember", c_int](set.unsafe_ptr(), c_int(15)) == 1
-        or external_call["sigismember", c_int](set.unsafe_ptr(), c_int(2)) == 1
-    )
 
 
 def alive(pid: Int) -> Bool:
@@ -948,7 +919,6 @@ def sample_main(args: List[String]) -> Int:
                 f.write_bytes(Span(before))
     except e:
         print("orca sample: can't stage", dest, ":", e)
-    block_term()
     var s = Sampler(root, argv0, dirs^)
     var written = 0
     var failed = False
@@ -959,10 +929,8 @@ def sample_main(args: List[String]) -> Int:
     var uploaded = start
     var dirty = False
     while True:
-        var gone = (
-            (root > 0 and not alive(root))
-            or (until != "" and exists(until))
-            or term_pending()
+        var gone = (root > 0 and not alive(root)) or (
+            until != "" and exists(until)
         )
         var now = Float64(perf_counter_ns()) / 1e9
         if gone or now >= due:
