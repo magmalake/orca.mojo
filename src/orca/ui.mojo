@@ -1213,11 +1213,25 @@ def _extra_links(mut h: Html):
         h.raw("</a>")
 
 
+comptime _ICON = (
+    '<link rel="icon" href="data:image/svg+xml,%3Csvg'
+    " xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect"
+    " width='16' height='16' rx='3' fill='%231d4ed8'/%3E%3Cpath d='M4.5 5L8"
+    " 11.5M11.5 5L8 11.5' stroke='%23fff' stroke-width='1.3'/%3E%3Ccircle"
+    " cx='4.5' cy='4.5' r='2' fill='%23fff'/%3E%3Ccircle cx='11.5' cy='4.5'"
+    " r='2' fill='%23fff'/%3E%3Ccircle cx='8' cy='11.5' r='2'"
+    " fill='%23fff'/%3E%3C/svg%3E\">"
+)
+"""A blue DAG of three nodes as the tab icon, so orca's tab stands apart
+from the census's amber bar chart."""
+
+
 def _page(title: String, active: StaticString, body: Html) -> String:
     var h = Html()
     h.raw(
         '<!doctype html><html lang="en"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        _ICON,
         "<title>",
     )
     h.text(title, " · orca")
