@@ -362,6 +362,8 @@ Resources:
             ORCA_PUBLIC_WAREHOUSE=s3://${PublicBucket}/warehouse
             ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE
             ORCA_LOG_STAGE=/var/lib/orca/stage
+            ORCA_CONTROL_SAMPLES=/var/lib/orca/stage/control.jsonl
+            ORCA_CONTROL_TYPE=${ControlInstanceType}
             ORCA_UI_ADDR=0.0.0.0:8270
             ORCA_UI_LOGIN=required
             ORCA_UI_SECURE_COOKIES=1
@@ -383,6 +385,13 @@ Resources:
               docker run -d --name $role --restart always --network orca --env-file /etc/orca.env \
                 -v /var/lib/orca/stage:/var/lib/orca/stage "$repo:$tag" $role
             done
+            # This instance's own samples, for the fleet page: the host's
+            # processes and network, the last hour of lines kept in a file the
+            # scheduler reads.
+            docker rm -f sampler > /dev/null 2>&1 || true
+            docker run -d --name sampler --restart always --pid host --network host \
+              -v /var/lib/orca/stage:/var/lib/orca/stage "$repo:$tag" \
+              sample --out /var/lib/orca/stage/control.jsonl --dirs /var/lib/orca/stage --keep 720
             EOS
             cat > /usr/local/bin/orca-app << 'EOS'
             #!/bin/bash

@@ -62,7 +62,8 @@ comptime USAGE = """usage:
   orca scheduler
   orca ui
   orca sample --out <location>|- [--pid PID] [--match PATH] [--dirs D,...]
-              [--seconds S] [--count N]   (machine metrics, orca.sample)
+              [--seconds S] [--count N] [--keep N]
+                                      (machine metrics, orca.sample)
   orca lineage <dataset> [<snapshot>]
   orca rebuild <dataset> KEY[..KEY][,...]
   orca expire <dataset>|--all [--older-than 30d|12h|90m] [--keep N]
