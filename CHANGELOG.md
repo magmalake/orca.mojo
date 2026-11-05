@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.6.1 - 2026-11-05
+
+### Changed
+
+- Pins dista-mojo 0.3.0.
+
 ## 0.6.0 - 2026-11-05
 
 - **Several dista worker processes per EC2 worker instance** (#130):
