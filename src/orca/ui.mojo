@@ -7,7 +7,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | Path | |
 |---|---|
 | `/` | pipelines, with their schedules, next runs and last runs |
-| `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed |
+| `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
 | `/runs` | runs, newest first, `?n=` (50, at most 500) to a page; `?pipeline=`, `?status=`, `?trigger=`; `?before=<id>`: older than that run |
 | `/runs/<id>` | a run's DAG, steps and partitions, attempts, errors, reads and commits |
@@ -16,7 +16,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
 | `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
-| `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), and its snapshots |
+| `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), what a rebuild of it runs, and its snapshots; `?preview=1&partitions=`: a rebuild's runs by level, queueing nothing |
 | `/datasets/<name>/snapshots/<id>` | a snapshot's lineage, back and forward (`orca.lineage`) |
 | `/rebuilds/<id>` | a rebuild's pipelines by level, with their runs (`orca.sensors`) |
 
@@ -38,8 +38,11 @@ A page of something still going on (a queued or running run, a running
 attempt) refreshes its live part every two seconds from a fragment path,
 `/runs/<id>/steps`, `/runs/<id>/metrics` or
 `/runs/<id>/attempts/<attempt>/log`, which answers
-286 once there's nothing more to show, and the page stops asking. That's
-the only JavaScript.
+286 once there's nothing more to show, and the page stops asking. Beyond
+that, a few lines that are conveniences only: `/runs` filters as a choice
+changes, Start runs updates its preview and command lines as you type, and
+Cancel, rerun and rebuild ask before posting. Every form works without
+them.
 
 Every path answers HTML, or JSON to `Accept: application/json` or
 `?format=json`, built from the same rows, so a script and a person see the
