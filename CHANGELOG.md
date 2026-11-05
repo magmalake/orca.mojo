@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **A Fleet page** (`/fleet`, in the nav; `/api/fleet`; a compact strip on
+  `/`). Hosts running now (heads and workers by instance type, and the
+  control instance), an estimate of what they cost an hour, runs running and
+  queued, runs and errors per hour (failed step attempts and failed runs,
+  with 24-hour sparklines), a sortable table of live hosts (CPU with a
+  10-minute sparkline, busiest core, memory, network, disk, state) that
+  refreshes every 10 s, and charts over `?range=24h|7d`: hosts over time by
+  role, runs per hour with failures overlaid, fleet CPU and network.
+  The scheduler keeps each live instance's last 30 minutes of samples in
+  Postgres (`orca.fleet_samples`) and an hourly total for 8 days
+  (`orca.fleet_hourly`; migration 21), so a page reads no files. The control
+  instance is sampled too: `orca sample --keep N` keeps a file to its last
+  lines, and the stack's user data starts a `sampler` container (an existing
+  stack needs it started by hand, see the PR). `data-poll-every` sets a fragment's refresh seconds.
+
 ## 0.4.0 - 2026-11-05
 
 - **Bounded table history** (magmalake/mojo-census GAPS #27). Commits to
