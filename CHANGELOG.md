@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.3 (2026-11-04)
+
 - **A run's page charts its machines** (#95). Under the timeline, a
   server-rendered SVG lines up each instance's CPU, memory, disk and
   network samples (`orca sample`) with a lane of the run's steps, marks
@@ -210,6 +212,11 @@
   counting it against `run_retries` (`runs.deferrals`, migration 18). The
   UI shows "until ..." and can resume or cancel a deferred run. A backfill
   doesn't queue a deferred run's keys again.
+
+- **Built against dista-mojo 0.2.2, iceberg-mojo 0.8.7 and
+  objectstore-mojo 0.4.2** (objectstore-shim 0.2.1, the S3 multipart fix).
+  The stable, nightly and data environments, the CI checkouts and
+  `deploy/Dockerfile` (`DISTA_REV`) pin the same revisions.
 
 ## 0.3.2 (2026-11-03)
 
