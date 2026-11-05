@@ -14,7 +14,7 @@
   - The UI: `POST /api/login` (JSON; the same limit on failed logins) and
     `/api/logout`, and `Authorization: Bearer <token>` on its actions,
     which take JSON as well as forms. Tokens are 256 random bits kept as
-    their SHA-256 in `orca.api_tokens` (migration 21), expiring after
+    their SHA-256 in `orca.api_tokens` (migration 22), expiring after
     `ORCA_API_TOKEN_DAYS` (30). `orca.audit` gets a `source`, `ui` or
     `cli`, shown on the run's page.
   - `orca user tokens <name>` and `orca user revoke <name> <id>|@all`; a
@@ -22,6 +22,23 @@
   - New locally as well: `orca status [<pipeline>] [--json]`, `orca start`,
     `orca resume [--allow-new-code] <run>`, `orca rerun <run> <step>`,
     `orca cancel <run>` and `orca backfill --preview`.
+
+## 0.5.0 - 2026-11-05
+
+- **A Fleet page** (`/fleet`, in the nav; `/api/fleet`; a compact strip on
+  `/`). Hosts running now (heads and workers by instance type, and the
+  control instance), an estimate of what they cost an hour, runs running and
+  queued, runs and errors per hour (failed step attempts and failed runs,
+  with 24-hour sparklines), a sortable table of live hosts (CPU with a
+  10-minute sparkline, busiest core, memory, network, disk, state) that
+  refreshes every 10 s, and charts over `?range=24h|7d`: hosts over time by
+  role, runs per hour with failures overlaid, fleet CPU and network.
+  The scheduler keeps each live instance's last 30 minutes of samples in
+  Postgres (`orca.fleet_samples`) and an hourly total for 8 days
+  (`orca.fleet_hourly`; migration 21), so a page reads no files. The control
+  instance is sampled too: `orca sample --keep N` keeps a file to its last
+  lines, and the stack's user data starts a `sampler` container (an existing
+  stack needs it started by hand, see the PR). `data-poll-every` sets a fragment's refresh seconds.
 
 ## 0.4.0 - 2026-11-05
 

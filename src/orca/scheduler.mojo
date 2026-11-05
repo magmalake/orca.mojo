@@ -109,6 +109,7 @@ from orca.cron import CronExpr
 from orca.day import Day
 from orca.key import parse_keys
 from orca.ec2 import Ec2Runner, Ec2Spec
+from orca.fleet import ingest
 from orca.kube import KubeRunner, RunSpec, cpu_millis
 from orca.live import dead_sql, live_runs, live_sql, stale_limit, start_grace
 from orca.logs import is_remote, publish, run_dir, stage_of
@@ -807,6 +808,11 @@ struct Scheduler(Movable):
     """When the next expiry sweep starts, on the monotonic clock."""
     var _expiring: List[String]
     """The datasets this sweep has still to expire, the first one going."""
+    var fleet_seconds: Float64
+    """How often the fleet page's samples are read from the instances'
+    files (`ORCA_FLEET_SECONDS`, 30; 0 turns it off)."""
+    var _fleet_next: Int
+    """When the next pass starts, on the monotonic clock."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -846,6 +852,8 @@ struct Scheduler(Movable):
             Float64(getenv("ORCA_EXPIRE_DELAY_SECONDS", "300")) * 1e9
         )
         self._expiring = List[String]()
+        self.fleet_seconds = Float64(getenv("ORCA_FLEET_SECONDS", "30"))
+        self._fleet_next = 0
 
     def register(
         mut self,
@@ -1056,6 +1064,10 @@ struct Scheduler(Movable):
                     )
             except e:
                 print("orca: can't scale run workers:", e)
+        try:
+            self._fleet()
+        except e:
+            print("orca: can't keep the fleet's samples:", e)
         advance_rebuilds(self.db)
         try:
             self._expire()
@@ -1448,6 +1460,20 @@ struct Scheduler(Movable):
             .row(0)
             .int64("id")
         )
+
+    def _fleet(mut self) raises:
+        """Every `fleet_seconds`, keeps the new samples of the live
+        instances and the control instance for the fleet page
+        (`orca.fleet`)."""
+        if self.fleet_seconds <= 0 or not (
+            self.ec2 or getenv("ORCA_CONTROL_SAMPLES")
+        ):
+            return
+        var t = Int(perf_counter_ns())
+        if t < self._fleet_next:
+            return
+        self._fleet_next = t + Int(self.fleet_seconds * 1e9)
+        _ = ingest(self.db)
 
     def _expire(mut self) raises:
         """Every `expire_seconds`, expires each dataset orca commits to by

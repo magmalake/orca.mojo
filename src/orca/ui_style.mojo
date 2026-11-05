@@ -277,4 +277,41 @@ a.src:hover .src__out { color: inherit; }
 .mx__key--disk { background: #7a5af8; } .mx__key--io { background: #b54708; }
 .mx__key--net { background: var(--lake); }
 .mx__key--warn { background: color-mix(in srgb, var(--bad) 14%, transparent); border: 1px solid var(--bad); }
+/* The fleet page (orca.fleet): summary cards, the hosts table and charts. */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr)); gap: 0.75rem;
+  margin: 0 0 1.25rem; }
+.stat { display: grid; gap: 0.15rem; align-content: start; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 0.7rem 0.9rem; color: var(--text); text-decoration: none; }
+.stat:hover { border-color: var(--lake); }
+.stat__k { font-family: var(--mono); font-size: 0.6875rem; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--faint); }
+.stat__v { font-size: 1.5rem; font-weight: 650; letter-spacing: -0.02em; line-height: 1.2;
+  font-variant-numeric: tabular-nums; }
+.stat__v small { font-size: 0.8125rem; font-weight: 400; color: var(--muted); }
+.stat__s { font-size: 0.8125rem; color: var(--muted); }
+.stat--errors .stat__v { color: var(--bad); }
+.stats--compact .stat { padding: 0.45rem 0.75rem; }
+.stats--compact .stat__v { font-size: 1.15rem; }
+.spark { display: inline-block; vertical-align: middle; }
+.spark polyline { fill: none; stroke: var(--lake); stroke-width: 1.5; stroke-linejoin: round; }
+.stat--errors .spark polyline { stroke: var(--bad); }
+table.hosts td, table.hosts th { vertical-align: middle; }
+a.sortby { color: inherit; text-decoration: none; }
+a.sortby:hover { color: var(--text); }
+th[aria-sort] { color: var(--text); }
+.range { margin: 1.25rem 0 0; font-size: 0.875rem; color: var(--muted); }
+svg.fl { display: block; width: 100%; min-width: 34rem; height: auto; font-family: var(--mono); }
+.fl--0 { fill: var(--lake); } .fl--1 { fill: var(--ember); } .fl--2 { fill: #7a5af8; }
+.fl--live { fill: var(--live); } .fl--bad { fill: var(--bad); } .fl--faint { fill: var(--faint); }
+.fl__line { fill: none; stroke-width: 1.75; stroke-linejoin: round; }
+.fl__line.fl--0 { stroke: var(--lake); } .fl__line.fl--1 { stroke: var(--ember); }
+.fl__line.fl--faint { stroke: var(--faint); stroke-dasharray: 4 3; }
+.fl__area { stroke: none; opacity: 0.22; }
+.fl__keys { margin: 0; padding: 0.4rem 1.1rem 0.8rem; font-size: 0.8125rem; color: var(--muted); }
+.fl__key { display: inline-block; width: 0.9em; height: 0.55em; margin-right: 0.3em; border-radius: 2px;
+  background: currentColor; }
+.fl__key.fl--0 { color: var(--lake); } .fl__key.fl--1 { color: var(--ember); }
+.fl__key.fl--2 { color: #7a5af8; } .fl__key.fl--live { color: var(--live); }
+.fl__key.fl--bad { color: var(--bad); } .fl__key.fl--faint { color: var(--faint); }
 """

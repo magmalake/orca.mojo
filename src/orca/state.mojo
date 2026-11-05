@@ -323,6 +323,38 @@ def _migrations() -> List[List[String]]:
             keys text NOT NULL,
             read_at timestamptz NOT NULL DEFAULT now())""",
         ],
+        # The fleet page (orca.fleet): each live host's last half hour of
+        # samples, an hour-by-hour total for the 7-day charts, and indexes
+        # for the runs and failed attempts per hour.
+        [
+            """CREATE TABLE orca.fleet_samples (
+            host text NOT NULL,
+            t timestamptz NOT NULL,
+            cores int NOT NULL,
+            cpu float8 NOT NULL,
+            busiest float8 NOT NULL,
+            mem float8 NOT NULL,
+            disk float8 NOT NULL,
+            net_in float8 NOT NULL,
+            net_out float8 NOT NULL,
+            PRIMARY KEY (host, t))""",
+            "CREATE INDEX fleet_samples_t ON orca.fleet_samples (t)",
+            """CREATE TABLE orca.fleet_hourly (
+            hour timestamptz NOT NULL,
+            role text NOT NULL,
+            seconds float8 NOT NULL,
+            core_seconds float8 NOT NULL,
+            busy_seconds float8 NOT NULL,
+            net_in_bytes float8 NOT NULL,
+            net_out_bytes float8 NOT NULL,
+            PRIMARY KEY (hour, role))""",
+            "CREATE INDEX runs_started ON orca.runs (started)",
+            "CREATE INDEX runs_ended ON orca.runs (ended)",
+            (
+                "CREATE INDEX attempts_failed ON orca.attempts (ended) WHERE"
+                " status = 'failed'"
+            ),
+        ],
         # API tokens for `orca login` (orca.tokens), kept as their SHA-256,
         # and where each audited action came from: `ui` (a session) or `cli`
         # (a token).

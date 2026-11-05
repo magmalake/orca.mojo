@@ -15,6 +15,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/runs/<id>/timeline.json` | the run's Dista timeline, for Perfetto |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
 | `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
+| `/fleet` | the machines orca is paying for: hosts running and what they cost an hour, runs and errors per hour, a table of live hosts (`?sort=` a column, `&dir=desc`) and charts over `?range=24h` or `7d` (`orca.fleet`); `/fleet/hosts` is the live part of it, and `/api/fleet` the same as JSON |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), what a rebuild of it runs, and its snapshots; `?preview=1&partitions=`: a rebuild's runs by level, queueing nothing |
 | `/datasets/<name>/snapshots/<id>` | a snapshot's lineage, back and forward (`orca.lineage`) |
@@ -37,7 +38,8 @@ And the actions, each a `POST` of a form (see `orca.actions`):
 | `/api/logout` | revokes the API token it's sent with |
 
 A page of something still going on (a queued or running run, a running
-attempt) refreshes its live part every two seconds from a fragment path,
+attempt) refreshes its live part every two seconds (the fleet page's, every
+ten) from a fragment path,
 `/runs/<id>/steps`, `/runs/<id>/metrics` or
 `/runs/<id>/attempts/<attempt>/log`, which answers
 286 once there's nothing more to show, and the page stops asking. Beyond
@@ -113,6 +115,18 @@ from orca.logs import location_exists, read_location, run_dir
 from orca.cron import CronExpr
 from orca.dag import DagStep, aggregate, dag_svg
 from orca.graph import Edge, Node, graph_svg
+from orca.fleet import (
+    charts_html,
+    charts_json,
+    fleet_charts,
+    fleet_hosts,
+    fleet_summary,
+    hosts_fragment,
+    hosts_json,
+    sort_hosts,
+    summary_html,
+    summary_json,
+)
 from orca.html import Html, escape, url_decode, url_encode
 from orca.lineage import (
     Made,
@@ -1285,17 +1299,18 @@ document.addEventListener("submit", (e) => {
   if (m && !get && !confirm(m)) e.preventDefault();
 });
 for (const el of document.querySelectorAll("[data-poll]")) {
+  const every = (parseFloat(el.dataset.pollEvery) || 2) * 1000;
   const tick = async () => {
     let r;
     try { r = await fetch(el.dataset.poll); } catch (e) { setTimeout(tick, 5000); return; }
     if (r.ok) { el.innerHTML = await r.text(); times(el); }
-    if (r.status !== 286) setTimeout(tick, 2000);
+    if (r.status !== 286) setTimeout(tick, every);
   };
-  setTimeout(tick, 2000);
+  setTimeout(tick, every);
 }
 """
 """What makes a page live: each element with `data-poll` is replaced every
-two seconds by what its path returns, until that answers 286 (htmx's "stop
+two seconds (`data-poll-every` seconds) by what its path returns, until that answers 286 (htmx's "stop
 polling"), which a fragment does once what it shows has ended. Each
 `<time class="rel">` reads as how long ago it was, in the viewer's locale,
 with the full local time in its tooltip; without scripts it stays UTC."""
@@ -1370,6 +1385,7 @@ def _page(title: String, active: StaticString, body: Html) -> String:
         ("/", "Pipelines"),
         ("/runs", "Runs"),
         ("/datasets", "Datasets"),
+        ("/fleet", "Fleet"),
     ]:
         h.raw('<a href="', item[0], '"')
         if item[0] == active:
@@ -1608,6 +1624,7 @@ def home(mut db: State) raises -> Page:
     var ps = _pipelines(db)
     var recent = _runs(db, limit=10)
     var per_day = _runs_per_day(db, 30)
+    var fleet = fleet_summary(db)
     var j = String('{"pipelines": [')
     for i in range(len(ps)):
         if i:
@@ -1630,10 +1647,11 @@ def home(mut db: State) raises -> Page:
             d.other,
             "}",
         )
-    j.write("]}")
+    j.write('], "fleet": ', summary_json(fleet), "}")
 
     var h = Html()
     h.raw("<h1>Pipelines</h1>")
+    summary_html(h, fleet, True)
     if len(ps) == 0:
         h.raw(
             '<p class="empty">No pipelines yet: <code>orca register',
@@ -1701,6 +1719,82 @@ def home(mut db: State) raises -> Page:
     _runs_table(h, recent, True)
     h.raw('<p class="more"><a href="/runs">All runs</a></p></section>')
     return Page(200, j^, _page("Pipelines", "/", h))
+
+
+def _fleet_sort(sort: String) -> String:
+    """`sort` if it names a column of the hosts table, else the default."""
+    for c in [
+        "role",
+        "type",
+        "run",
+        "uptime",
+        "cpu",
+        "busiest",
+        "mem",
+        "net",
+        "disk",
+        "state",
+    ]:
+        if sort == c:
+            return sort
+    return String()
+
+
+def fleet_page(
+    mut db: State, sort: String, dir: String, range: String
+) raises -> Page:
+    """The machines orca is paying for, and what they have been doing."""
+    var col = _fleet_sort(sort)
+    var desc = dir == "desc"
+    var span = String("7d") if range == "7d" else String("24h")
+    var summary = fleet_summary(db)
+    var hosts = fleet_hosts(db)
+    sort_hosts(hosts, col, desc)
+    var charts = fleet_charts(db, 168 if span == "7d" else 24)
+    var j = String(
+        '{"summary": ',
+        summary_json(summary),
+        ', "hosts": ',
+        hosts_json(hosts),
+        ', "charts": ',
+        charts_json(charts),
+        "}",
+    )
+    var h = Html()
+    h.raw(
+        "<h1>Fleet</h1>",
+        '<div data-poll="/fleet/hosts?sort=',
+        col,
+        "&amp;dir=",
+        "desc" if desc else "asc",
+        "&amp;range=",
+        span,
+        '" data-poll-every="10">',
+        hosts_fragment(db, col, desc, span),
+        "</div>",
+    )
+    charts_html(h, charts, span)
+    return Page(200, j^, _page("Fleet", "/fleet", h))
+
+
+def fleet_hosts_page(
+    mut db: State, sort: String, dir: String, range: String
+) raises -> Page:
+    """The live part of the fleet page, as a fragment; it never ends."""
+    var span = String("7d") if range == "7d" else String("24h")
+    return Page(
+        200,
+        String(),
+        hosts_fragment(db, _fleet_sort(sort), dir == "desc", span),
+        "text/html; charset=utf-8",
+    )
+
+
+def fleet_api(mut db: State, range: String) raises -> Page:
+    """`/api/fleet`: the fleet page's numbers as JSON, whatever is asked
+    for."""
+    var page = fleet_page(db, "", "", range)
+    return Page(200, String(), page.json.copy(), "application/json")
 
 
 @fieldwise_init
@@ -5155,6 +5249,22 @@ struct Ui(Copyable, Handler):
                     return attempt(db, id, aid)
                 if parts[3] == "log":
                     return attempt_log(db, id, aid)
+        if path == "/fleet":
+            return fleet_page(
+                db,
+                _query(url, "sort"),
+                _query(url, "dir"),
+                _query(url, "range"),
+            )
+        if path == "/fleet/hosts":
+            return fleet_hosts_page(
+                db,
+                _query(url, "sort"),
+                _query(url, "dir"),
+                _query(url, "range"),
+            )
+        if path == "/api/fleet":
+            return fleet_api(db, _query(url, "range"))
         if path == "/datasets":
             return datasets_page(db)
         if path.startswith("/datasets/"):
