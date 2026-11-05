@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.3.5 (2026-11-05)
+
+- Built against iceberg-mojo 0.9.1 (with the DataFile wire codec, #70),
+  deflate-mojo 0.2.0, avro-mojo 0.4.5 and parquet-mojo 0.12.1.
 
 - **Data files written on workers, committed by the step** (#108).
   `orca.tables.append_files(ctx, table, files)` commits data files already
