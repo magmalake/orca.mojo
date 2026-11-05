@@ -36,6 +36,40 @@ didn't declare in `writes=`. A table outside the warehouse (or with
 `ORCA_WAREHOUSE` unset) is used by location as before, and belongs to no
 dataset.
 
+**Files written on a worker.** A dista task can write a table's data
+files itself and send back only their entries, so the step commits
+metadata rather than receiving the rows:
+
+```mojo
+def write_hour(day: String, hour: Int) raises -> DataFiles:
+    # On a worker: no Ctx, nothing checked or recorded.
+    return write_files(load_dataset(EVENTS), fetch(day, hour))
+
+comptime Hour = Task2[String, Int, DataFiles, write_hour]
+
+def load_day(mut ctx: Ctx, d: Day) raises -> Int64:
+    var t = ensure_table(ctx, EVENTS, schema())
+    if find_commit(ctx, t) >= 0:  # a retry: don't write the files again
+        return append_files(ctx, t, DataFiles())
+    ref rt = ctx.runtime[Tasks[Hour]]()
+    var got = rt.get(rt.remote[Hour](String(d), 0))
+    return append_files(ctx, t, got)
+```
+
+- **`write_files`** (or a **`FileWriter`**, a batch at a time) writes
+  batches into a table's `data/` without committing them, and returns their
+  entries as **`DataFiles`**, a dista `Codec` over iceberg's
+  `DataFile.encode`. A struct holding a `DataFiles` and plain fields (row
+  counts, timings) crosses processes by dista's reflection, with no codec
+  of its own.
+- **`append_files`** commits entries written elsewhere as one `append`
+  snapshot, as `append` commits the files it writes: the same `writes=`
+  check, summary and recognition. A retry that finds its commit returns it
+  and commits nothing; a step checks `find_commit` first, as above, so a
+  retry doesn't have the workers write the files again. Files written by an
+  attempt that died before committing them are left unreferenced in
+  `data/`, as with an interrupted `append`.
+
 This module imports iceberg, so only pipelines that use tables build it;
 `orca` itself doesn't.
 """
@@ -44,10 +78,17 @@ from std.os import getenv
 from std.random import random_float64
 from std.time import sleep
 
+from dista import Codec
 from iceberg.append import prepare_append
 from iceberg.catalog.filesystem import FilesystemCatalog, Table
 from iceberg.commit import FileChanges, prepare_commit
 from iceberg.io import FileIO
+from iceberg.manifest import (
+    CONTENT_DATA,
+    DataFile,
+    decode_data_files,
+    encode_data_files,
+)
 from iceberg.scan import TableScan
 from iceberg.schema import Schema
 from iceberg.transforms import PartitionSpec
@@ -359,11 +400,106 @@ def find_commit(ctx: Ctx, table: Table) -> Int64:
     return -1
 
 
-def append(
-    mut ctx: Ctx, mut table: Table, batches: List[RecordBatch]
-) raises -> Int64:
-    """Writes `batches` to `table` as one `append` snapshot and returns its ID,
-    or returns the snapshot an earlier attempt of this step committed."""
+struct DataFiles(Codec, Copyable, Movable, Sized):
+    """Data file entries, written but not committed, as a dista task returns
+    them: `encode`/`decode` are iceberg's `encode_data_files` /
+    `decode_data_files`, which carry every field of each entry."""
+
+    var files: List[DataFile]
+
+    def __init__(out self):
+        self.files = List[DataFile]()
+
+    def __init__(out self, var files: List[DataFile]):
+        self.files = files^
+
+    def __len__(self) -> Int:
+        return len(self.files)
+
+    def add(mut self, other: DataFiles):
+        """Appends `other`'s entries, e.g. from another task."""
+        for f in other.files:
+            self.files.append(f.copy())
+
+    def encode(self, mut out: List[UInt8]):
+        encode_data_files(self.files, out)
+
+    @staticmethod
+    def decode(buf: Span[UInt8, _], mut pos: Int) raises -> Self:
+        return Self(decode_data_files(buf, pos))
+
+
+struct FileWriter(Movable):
+    """Writes batches into a table's data files as they come, without
+    committing them, and keeps their entries. For a worker that produces a
+    table's rows a batch at a time; `write_files` writes a list at once.
+
+    It holds the table's schema, spec, sort order and write properties as
+    they were when it was made: a schema change committed meanwhile isn't
+    seen, and `append_files` commits the entries all the same.
+    """
+
+    var io: FileIO
+    var location: String
+    var schema: Schema
+    var spec: PartitionSpec
+    var sort_order_id: Int
+    var options: WriteOptions
+    var files: DataFiles
+    var rows: Int
+    """The rows written so far."""
+
+    def __init__(out self, table: Table) raises:
+        self.io = table.io.copy()
+        self.location = table.metadata.location
+        self.schema = table.metadata.schema()
+        self.spec = table.metadata.spec()
+        self.sort_order_id = table.metadata.default_sort_order_id
+        self.options = WriteOptions.from_properties(table.metadata.properties)
+        self.files = DataFiles()
+        self.rows = 0
+
+    def write(mut self, batches: List[RecordBatch]) raises:
+        """Writes `batches`: a file per partition they hold."""
+        for b in batches:
+            self.rows += b.num_rows
+        var written = write_data_files(
+            self.io,
+            self.location,
+            batches,
+            self.schema,
+            self.spec,
+            self.sort_order_id,
+            self.options,
+        )
+        for i in range(len(written)):
+            self.files.files.append(written[i].copy())
+
+    def put(mut self, var batch: RecordBatch) raises:
+        """Writes one batch."""
+        var one = List[RecordBatch]()
+        one.append(batch^)
+        self.write(one)
+
+    def finish(deinit self) -> DataFiles:
+        """The entries of every file written."""
+        return self.files^
+
+
+def write_files(table: Table, batches: List[RecordBatch]) raises -> DataFiles:
+    """Writes `batches` into `table`'s data files without committing them,
+    and returns their entries, for `append_files` to commit, here or in
+    another process. Nothing is checked or recorded: it's for a dista task,
+    which has no `Ctx`, with the table from `load_dataset`."""
+    var w = FileWriter(table)
+    w.write(batches)
+    return w^.finish()
+
+
+def _found(mut ctx: Ctx, mut table: Table) raises -> Int64:
+    """What `append`, `append_files` and `commit` do first: reload `table`,
+    refuse a dataset the step didn't declare in `writes=`, and return the
+    snapshot an earlier attempt committed (recorded again), or -1."""
     _reload(table)
     var loc = table.metadata.location
     var dataset = dataset_of(loc)
@@ -372,6 +508,16 @@ def append(
     if found >= 0:
         ctx.log(String("found its commit ", found, " to ", loc))
         ctx.committed(loc, found, dataset)
+    return found
+
+
+def append(
+    mut ctx: Ctx, mut table: Table, batches: List[RecordBatch]
+) raises -> Int64:
+    """Writes `batches` to `table` as one `append` snapshot and returns its ID,
+    or returns the snapshot an earlier attempt of this step committed."""
+    var found = _found(ctx, table)
+    if found >= 0:
         return found
     var files = write_data_files(
         table.io,
@@ -382,6 +528,51 @@ def append(
         table.metadata.default_sort_order_id,
         WriteOptions.from_properties(table.metadata.properties),
     )
+    return _commit_append(ctx, table, files^)
+
+
+def append_files(
+    mut ctx: Ctx, mut table: Table, files: List[DataFile]
+) raises -> Int64:
+    """Commits data files already written, here or on a worker
+    (`write_files`), to `table` as one `append` snapshot and returns its ID,
+    or returns the snapshot an earlier attempt of this step committed, as
+    `append` does; the files are then not committed again. No files commits
+    an empty snapshot, as `append` of no batches does, so a step's commits
+    keep their numbers.
+
+    Refuses a dataset the step didn't declare in `writes=`, and an entry
+    that isn't a data file (a delete file goes through `commit`).
+    """
+    for f in files:
+        if f.content != CONTENT_DATA:
+            raise Error(
+                "orca: append_files takes data files, and ",
+                f.file_path,
+                " is a delete file (content ",
+                f.content,
+                "); commit it with orca.tables.commit",
+            )
+    var found = _found(ctx, table)
+    if found >= 0:
+        return found
+    return _commit_append(ctx, table, files.copy())
+
+
+def append_files(
+    mut ctx: Ctx, mut table: Table, files: DataFiles
+) raises -> Int64:
+    """`append_files` of the entries a task returned."""
+    return append_files(ctx, table, files.files)
+
+
+def _commit_append(
+    mut ctx: Ctx, mut table: Table, var files: List[DataFile]
+) raises -> Int64:
+    """Commits `files` to `table` as an `append` with this step's summary,
+    reloading and trying again when another writer commits first."""
+    var loc = table.metadata.location
+    var dataset = dataset_of(loc)
     var attempt = 0
     while True:
         var result = prepare_append(
@@ -413,15 +604,11 @@ def commit(
     `table` as one snapshot of `operation`, e.g. `replace` for a compaction,
     and returns its ID, or returns the snapshot an earlier attempt of this
     step committed."""
-    _reload(table)
+    var found = _found(ctx, table)
+    if found >= 0:
+        return found
     var loc = table.metadata.location
     var dataset = dataset_of(loc)
-    ctx.check_declared(dataset, write=True)
-    var found = find_commit(ctx, table)
-    if found >= 0:
-        ctx.log(String("found its commit ", found, " to ", loc))
-        ctx.committed(loc, found, dataset)
-        return found
     var attempt = 0
     while True:
         var result = prepare_commit(
