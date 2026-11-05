@@ -437,7 +437,9 @@ def kept_keys(mut db: State, pipeline: String) raises -> Optional[KeptKeys]:
     )
 
 
-def _file_names(path: String) raises -> String:
+def file_names(path: String) raises -> String:
+    """The names in the file at `path`, a line each, as `NAME,NAME,...`
+    (`@file:<path>`)."""
     var text: String
     with open(path, "r") as f:
         text = f.read()
@@ -522,7 +524,7 @@ def partition_keys(p: Registered, keys: String) raises -> List[String]:
         var have = Dict[String, Bool]()
         for k in current:
             have[k] = True
-        var list = _file_names(String(keys[byte=6:])) if keys.startswith(
+        var list = file_names(String(keys[byte=6:])) if keys.startswith(
             "@file:"
         ) else keys
         for n in parse_names(list):

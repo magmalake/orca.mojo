@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **`orca login` and `--remote`** (#111): run orca's commands from a laptop
+  against the deployed `orca ui`, without SSM or the database.
+  `orca login https://<host>` (user and password, the password without
+  echo) stores an API token in `~/.config/orca/credentials` (mode 600,
+  `ORCA_CREDENTIALS`); `orca --remote <host>` (or `ORCA_REMOTE`) then sends
+  `backfill` (and `--preview`), `start`, `cancel`, `pause`, `unpause`,
+  `resume`, `rerun` and `rebuild` to the UI's actions, as that user, and
+  reads `status` and `lineage` from its JSON; `orca logout` revokes the
+  token. Plain http is refused but to localhost.
+  - The UI: `POST /api/login` (JSON; the same limit on failed logins) and
+    `/api/logout`, and `Authorization: Bearer <token>` on its actions,
+    which take JSON as well as forms. Tokens are 256 random bits kept as
+    their SHA-256 in `orca.api_tokens` (migration 22), expiring after
+    `ORCA_API_TOKEN_DAYS` (30). `orca.audit` gets a `source`, `ui` or
+    `cli`, shown on the run's page.
+  - `orca user tokens <name>` and `orca user revoke <name> <id>|@all`; a
+    new password or a removed user revokes the user's tokens too.
+  - New locally as well: `orca status [<pipeline>] [--json]`, `orca start`,
+    `orca resume [--allow-new-code] <run>`, `orca rerun <run> <step>`,
+    `orca cancel <run>` and `orca backfill --preview`.
+
 ## 0.5.0 - 2026-11-05
 
 - **A Fleet page** (`/fleet`, in the nav; `/api/fleet`; a compact strip on

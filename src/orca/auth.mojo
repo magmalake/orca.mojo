@@ -19,8 +19,9 @@ the system's generator, given to the browser as the cookie `orca_session`
 and kept only as their SHA-256 digest, for `ORCA_UI_SESSION_HOURS` (default
 12). Every action a user takes is a row of `orca.audit`, and so is every failed
 login, which `too_many_failures` counts: after 5 for one name, or 20 from
-one address, in 15 minutes, `/login` answers 429 without checking a
-password, so a public UI can't be guessed at.
+one address, in 15 minutes, `/login` (and `/api/login`) answers 429
+without checking a password, so a public UI can't be guessed at. API
+tokens, for the `orca` command on another machine, are `orca.tokens`.
 """
 
 from std.os import getenv
@@ -65,7 +66,7 @@ def login_required(mut db: State) raises -> Bool:
 
 def add_user(mut db: State, name: String, password: String) raises -> Bool:
     """Adds the user, or sets an existing one's password (ending her
-    sessions); True if the user is new."""
+    sessions and revoking her API tokens); True if the user is new."""
     if not _name_ok(name):
         raise Error(
             "orca: a user's name is 1 to 64 of A-Z a-z 0-9 . _ - @, not '",
@@ -94,12 +95,17 @@ def add_user(mut db: State, name: String, password: String) raises -> Bool:
         _ = tx.execute(
             "DELETE FROM orca.sessions WHERE username = $1", Params().text(name)
         )
+        _ = tx.execute(
+            "DELETE FROM orca.api_tokens WHERE username = $1",
+            Params().text(name),
+        )
     tx.commit()
     return new
 
 
 def remove_user(mut db: State, name: String) raises -> Bool:
-    """Removes the user and their sessions; False if there was none."""
+    """Removes the user, their sessions and their API tokens; False if
+    there was none."""
     return (
         db.conn.execute(
             "DELETE FROM orca.users WHERE name = $1", Params().text(name)
@@ -153,14 +159,14 @@ def too_many_failures(
     )
 
 
-def login_failed(mut db: State, name: String, address: String) raises:
-    audit(db, name, "login-failed", 0, address)
+def login_failed(
+    mut db: State, name: String, address: String, source: String = "ui"
+) raises:
+    audit(db, name, "login-failed", 0, address, source)
 
 
-def open_session(
-    mut db: State, name: String, password: String
-) raises -> String:
-    """A new session's token if the password is the user's, else empty."""
+def password_ok(mut db: State, name: String, password: String) raises -> Bool:
+    """Whether `password` is the user `name`'s."""
     var ok = db.conn.query(
         (
             "SELECT password_hash = crypt($2, password_hash) AS ok FROM"
@@ -168,7 +174,14 @@ def open_session(
         ),
         Params().text(name).text(password),
     )
-    if len(ok) == 0 or not ok.row(0).bool("ok"):
+    return len(ok) == 1 and ok.row(0).bool("ok")
+
+
+def open_session(
+    mut db: State, name: String, password: String
+) raises -> String:
+    """A new session's token if the password is the user's, else empty."""
+    if not password_ok(db, name, password):
         return ""
     var token = _hex(random_bytes(32))
     var hours = Float64(getenv("ORCA_UI_SESSION_HOURS", "12"))
@@ -208,16 +221,22 @@ def close_session(mut db: State, token: String) raises:
 
 
 def audit(
-    mut db: State, user: String, action: String, run: Int, detail: String
+    mut db: State,
+    user: String,
+    action: String,
+    run: Int,
+    detail: String,
+    source: String = "ui",
 ) raises:
     """Records that `user` did `action` (the action's path), to `run` (0 for
-    none), with `detail` (what the form gave)."""
+    none), with `detail` (what the form gave), from `source`: `ui` for a
+    browser's session, `cli` for an API token (`orca.tokens`)."""
     var p = Params().text(user).text(action)
     p = p^.null() if run == 0 else p^.int64(Int64(run))
     _ = db.conn.execute(
         (
-            "INSERT INTO orca.audit (username, action, run, detail) VALUES ($1,"
-            " $2, $3, $4)"
+            "INSERT INTO orca.audit (username, action, run, detail, source)"
+            " VALUES ($1, $2, $3, $4, $5)"
         ),
-        p^.text(detail),
+        p^.text(detail).text(source),
     )

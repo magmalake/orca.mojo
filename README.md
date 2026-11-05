@@ -73,6 +73,9 @@ pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   #
 ./build/orca pause taxi        # the scheduler starts none of its runs until orca unpause taxi
 ./build/orca ui                # http://127.0.0.1:8270: pipelines, runs and datasets, also as JSON; start, resume, rerun, backfill, cancel, pause
 ./build/orca user add alice    # a login for the UI's actions; the password from stdin
+./build/orca status taxi       # its state and latest runs, as its page shows them
+./build/orca login https://orca.example.com   # from a laptop: a token for the deployed UI, kept mode 600
+./build/orca --remote orca.example.com backfill taxi 2024-03   # then backfill, pause, cancel, resume, rerun, status there
 ./build/orca lineage lake.report   # what a dataset's latest snapshot was made from, and what was made from it
 ./build/orca rebuild raw.events 2024-03   # rerun every pipeline downstream of a dataset, in order
 ./build/orca expire raw.events --older-than 7d   # drop old snapshots (or --all, by each table's policy), keeping what live runs need
