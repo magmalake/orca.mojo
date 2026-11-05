@@ -134,6 +134,39 @@ code=$(curl -s -o "$log.body" -w '%{http_code}' -H 'Accept: application/json' -H
 curl -fsS "$base/pipelines/toy" | grep -q 'name="rerun"' || fail "no rerun checkbox on the backfill form"
 for r in $(json '/runs?trigger=backfill' | jq -r '.runs[].id'); do until_status "$r" succeeded; done
 
+# The Start runs form: one range, the backfill first, and a preview (a GET)
+# that counts what each button would queue, with the same logic, queueing
+# nothing; and the same from the command line.
+page=$(curl -fsS "$base/pipelines/toy")
+echo "$page" | grep -qF '<button type="submit" class="primary">Backfill: one run per month</button>' \
+    || fail "the backfill button"
+echo "$page" | grep -qF 'formaction="/pipelines/toy/runs">Start one run over the whole range</button>' \
+    || fail "the one-run button"
+echo "$page" | grep -qF ' Include months that already succeeded (rerun them)</label>' || fail "the rerun label"
+echo "$page" | grep -qF '<code data-cmd="backfill">orca backfill toy &lt;range&gt;</code>' || fail "the empty form's command"
+before=$(psql "$ORCA_DATABASE_URL" -Atc "SELECT count(*), max(id) FROM orca.runs")
+p=$(json '/pipelines/toy?preview=1&partitions=2024-05..2024-08')
+echo "$p" | jq -e '.preview | .runs == 2 and .keys == ["2024-07", "2024-08"] and .done == ["2024-05", "2024-06"]
+    and .one_run == 4 and .refused == null
+    and .commands.backfill == "orca backfill toy 2024-05..2024-08"
+    and .commands.run == "\(.commands.run | split(" ")[0]) run --partitions 2024-05..2024-08"' > /dev/null \
+    || fail "the preview: $(echo "$p" | jq -c .preview)"
+json '/pipelines/toy?preview=1&partitions=2024-05..2024-08&rerun=1' | jq -e '.preview | .runs == 4 and .done == []
+    and .commands.backfill == "orca backfill --rerun toy 2024-05..2024-08"' > /dev/null || fail "the rerun preview"
+page=$(curl -fsS "$base/pipelines/toy?preview=1&partitions=2024-05..2024-08")
+echo "$page" | grep -qF '<p data-preview="backfill">This queues 2 runs: 2024-07 … 2024-08. 2 already done are skipped.</p>' \
+    || fail "the preview line"
+echo "$page" | grep -qF 'One run over the whole range runs all 4 months, done or not.' || fail "the one-run line"
+echo "$page" | grep -qF 'name="partitions" required placeholder="2024-01..2024-01" value="2024-05..2024-08">' \
+    || fail "the preview doesn't keep the range"
+echo "$page" | grep -qF '<code data-cmd="backfill">orca backfill toy 2024-05..2024-08</code>' || fail "the preview's command"
+curl -fsS "$base/pipelines/toy?preview=1&partitions=2024-05&rerun=1" | grep -qF 'name="rerun" value="1" checked>' \
+    || fail "the preview doesn't keep rerun"
+curl -fsS "$base/pipelines/toy?preview=1&partitions=2023-13" | grep -q '<p class="refused">' || fail "a bad range's preview"
+[ "$(psql "$ORCA_DATABASE_URL" -Atc "SELECT count(*), max(id) FROM orca.runs")" = "$before" ] \
+    || fail "a preview queued runs"
+echo "ok   the Start runs form's preview"
+
 # Partitions from a file are the CLI's: the UI refuses @file: with a 400 and
 # reads nothing, so a logged-in user can't make it echo a file's lines. The
 # keyed pipeline is a stand-in whose `keys` prints two names.
@@ -153,6 +186,18 @@ for action in runs backfill; do
     [ "$code" = 400 ] || fail "$action of toy with @file: answered $code"
 done
 [ "$(json '/runs?pipeline=names' | jq '.runs | length')" -eq 0 ] || fail "@file: queued a run"
+# A preview of @file: is refused too, and keyed commands quote what the
+# shell would split.
+p=$(json "/pipelines/names?preview=1&partitions=@file:$PWD/build/actions-secret.txt")
+echo "$p" | grep -q 'secret value' && fail "a preview of @file: echoed the file"
+echo "$p" | jq -e '.preview.refused | test("@file:")' > /dev/null || fail "a preview of @file: wasn't refused"
+json '/pipelines/names?preview=1&partitions=alice,bob' | jq -e '.preview | .runs >= 1 and .keys == ["alice", "bob"]
+    and .commands.backfill == "orca backfill names alice,bob"' > /dev/null \
+    || fail "a keyed preview: $(json '/pipelines/names?preview=1&partitions=alice,bob' | jq -c .preview)"
+want="orca backfill names 'alice bob;x'"
+got=$(json "/pipelines/names?preview=1&partitions=alice%20bob%3Bx" | jq -r .preview.commands.backfill)
+[ "$got" = "$want" ] || fail "a keyed command isn't quoted: $got"
+curl -fsS "$base/pipelines/names" | grep -qF 'Include keys that already succeeded (rerun them)' || fail "the keyed rerun label"
 
 # Cancel a queued run: it never starts.
 kill "$sched"; wait "$sched" 2> /dev/null || true; sched=

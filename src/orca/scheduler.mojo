@@ -564,12 +564,19 @@ struct Queued(Movable):
     var live: List[String]
     """Keys left because a live run has them, that run in `live_runs`."""
     var live_runs: List[Int]
+    var keys: List[String]
+    """The keys queued (or, in a preview, that would be), sorted."""
+    var batches: Int
+    """How many runs those keys make, `keys_per_run` to a run; a preview
+    counts them without queueing any."""
 
     def __init__(out self):
         self.runs = List[Int]()
         self.done = List[String]()
         self.live = List[String]()
         self.live_runs = List[Int]()
+        self.keys = List[String]()
+        self.batches = 0
 
     def skipped(self) -> List[String]:
         """A line for each reason keys were left, or none."""
@@ -636,8 +643,10 @@ def _queue(
     keys: List[String],
     trigger: String,
     rerun: Bool = False,
+    dry: Bool = False,
 ) raises -> Queued:
-    """`queue_keys` in `tx`."""
+    """`queue_keys` in `tx`; with `dry`, what it would queue, queueing
+    nothing."""
     _ = tx.query(
         "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
         Params().text(p.name),
@@ -666,6 +675,7 @@ def _queue(
         else:
             todo.append(k)
     sort_texts(todo)
+    got.keys = todo.copy()
     ref runs = got.runs
     var i = 0
     while i < len(todo):
@@ -674,6 +684,10 @@ def _queue(
         while j < len(todo) and j < i + p.keys_per_run:
             batch.write("," if j > i else "", todo[j])
             j += 1
+        got.batches += 1
+        if dry:
+            i = j
+            continue
         runs.append(
             Int(
                 tx.query(
@@ -704,6 +718,18 @@ def backfill(
     keys it left. With `rerun` (`orca backfill --rerun`) the done ones are
     queued again too, as for a day whose source has changed since."""
     return queue_keys(db, p, partition_keys(p, keys), "backfill", rerun)
+
+
+def preview_backfill(
+    mut db: State, p: Registered, keys: String, rerun: Bool = False
+) raises -> Queued:
+    """What `backfill` would queue now, queueing nothing: the keys, how many
+    runs they make, and the keys it would leave and why."""
+    var texts = partition_keys(p, keys)
+    var tx = db.conn.begin()
+    var got = _queue(tx, p, texts, "backfill", rerun, dry=True)
+    tx.rollback()
+    return got^
 
 
 def _last_line(path: String) -> String:
