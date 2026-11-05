@@ -41,7 +41,8 @@ jobs:
       contents: read
       pull-requests: read
     with:
-      # The unit tests run in the stable jobs below.
+      # The test legs below are skipped on release PRs, and the consumer build
+      # is the check (the tests build against sibling checkouts of the other tins).
       task: ""
 
   # Whether the PR changes anything but prose (*.md, docs/, the licence
@@ -69,14 +70,14 @@ jobs:
   test:
     name: ${{ matrix.env == 'default' && 'stable' || matrix.env }} / ${{ matrix.os }} / ${{ matrix.shard }}
     needs: [changes, release]
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
-        env: ${{ fromJSON(needs.release.outputs.release_only == 'true' && '["default"]' || '["default", "nightly"]') }}
+        env: [default, nightly]
         # pixi.toml's two halves of `test`, each on a runner of its own.
         shard: [test-executor, test-scheduler-ui]
     defaults:
