@@ -272,6 +272,8 @@ struct InstanceRow(Copyable, Movable):
     """Seconds from the run's start to its launch."""
     var to_end: Float64
     """Seconds from the run's start to its end, or to now."""
+    var procs: Int
+    """The dista worker processes it ran (`--worker-procs`)."""
 
 
 @fieldwise_init
@@ -853,6 +855,7 @@ def _instances(mut db: State, run: Int) raises -> List[InstanceRow]:
             " AS launched, ",
             _ts("i.ended"),
             " AS ended, coalesce(i.why, '') AS why,",
+            " coalesce(i.procs, 1) AS procs,",
             " extract(epoch FROM i.launched - coalesce(r.started,",
             " i.launched))::float8 AS from_start, extract(epoch FROM",
             " coalesce(i.ended, now()) - coalesce(r.started,",
@@ -876,6 +879,7 @@ def _instances(mut db: State, run: Int) raises -> List[InstanceRow]:
                 r.text("why"),
                 r.float64("from_start"),
                 r.float64("to_end"),
+                Int(r.int64("procs")),
             )
         )
     return out^
@@ -923,6 +927,8 @@ def _json_instances(
             quote(i.ended) if i.ended else String("null"),
             ', "why": ',
             quote(i.why) if i.why else String("null"),
+            ', "procs": ',
+            i.procs,
             ', "log": ',
             quote(String("/runs/", run, "/cluster/", _cluster_log(i))),
             ', "peaks": ',
@@ -1031,7 +1037,11 @@ def _instances_html(mut h: Html, run: Int, xs: List[InstanceRow]):
         h.raw("<td><code>")
         h.text(i.id)
         h.raw("</code></td>")
-        h.cell(i.instance_type, " Spot" if i.market == "spot" else String(""))
+        h.cell(
+            i.instance_type,
+            " Spot" if i.market == "spot" else String(""),
+            String(" x", i.procs, " workers") if i.procs > 1 else String(""),
+        )
         h.cell(i.start)
         h.cell(i.launched)
         if i.ended:
