@@ -3,6 +3,7 @@ its user already has (`aws login`, or `AWS_PROFILE` for a named profile).
 
     orca aws up --email you@example.com [--stack orca] [--hostname H]
                 [--console-hostname H] [--budget 100] [--zone us-east-2a]
+                [--public-data true|false]
     orca aws push [--tag T]                     # the project's image, to ECR
     orca aws register [--tag T] [register flags] <pipeline> [...]
     orca aws app <name> [--host H] [--port 8080] [--tag T]
@@ -42,7 +43,7 @@ from orca.proc import capture
 comptime _DIR = "build/orca-aws"
 comptime AWS_USAGE = """usage:
   orca aws up --email ADDR [--hostname H] [--console-hostname H] [--budget N]
-              [--zone AZ]
+              [--zone AZ] [--public-data true|false]
   orca aws push [--tag T]
   orca aws register [--tag T] [register flags] <pipeline> [...]
   orca aws app <name> [--host H] [--port 8080] [--tag T]
@@ -59,6 +60,7 @@ comptime _VALUED = [
     "--console-hostname",
     "--budget",
     "--zone",
+    "--public-data",
     "--host",
     "--port",
 ]
@@ -110,6 +112,9 @@ struct _Opts(Movable):
     var console_hostname: String
     var budget: String
     var zone: String
+    var public_data: String
+    """`true` lets anyone read the lake's bucket unsigned; empty keeps the
+    stack's setting (private for a new one)."""
     var host: String
     var port: String
     var yes: Bool
@@ -125,6 +130,7 @@ struct _Opts(Movable):
         self.console_hostname = String()
         self.budget = String()
         self.zone = String()
+        self.public_data = String()
         self.host = String()
         self.port = String("8080")
         self.yes = False
@@ -163,6 +169,10 @@ struct _Opts(Movable):
                 self.budget = v
             elif a == "--zone":
                 self.zone = v
+            elif a == "--public-data":
+                if v != "true" and v != "false":
+                    raise Error("orca aws: --public-data is true or false")
+                self.public_data = v
             elif a == "--host":
                 self.host = v
             else:
@@ -271,6 +281,8 @@ def _up(o: _Opts) raises -> Int:
         params.append(String("BudgetDollars=", o.budget))
     if o.zone:
         params.append(String("AvailabilityZone=", o.zone))
+    if o.public_data:
+        params.append(String("PublicData=", o.public_data))
     var cmd = o.aws(
         String(
             "cloudformation deploy --stack-name ",

@@ -14,10 +14,11 @@ comptime STACK_TEMPLATE: StaticString = """# orca on AWS with the ec2 runner (DE
 # - what runs need: a bucket for the warehouse and logs, a repository for
 #   the image, a role and profile for run instances, a security group they
 #   share;
-# - a public bucket, mlake-public-<account>, for data anyone may read
-#   unsigned (the project's resource control policy refuses other accounts'
-#   signed requests): the warehouse, ORCA_WAREHOUSE, is in it, since a
-#   demo's tables are meant to be read; orca's own bucket keeps the logs;
+# - a bucket for the lake, mlake-public-<account>: the warehouse,
+#   ORCA_WAREHOUSE, is in it; orca's own bucket keeps the logs. It's private
+#   unless PublicData is true, when anyone may read it unsigned (the
+#   project's resource control policy refuses other accounts' signed
+#   requests), billed to the project at S3's egress price;
 # - the console's hostname, served by the same Caddy from a container
 #   named console on port 8080, once one runs;
 # - a Budgets alert.
@@ -64,9 +65,17 @@ Parameters:
     AllowedPattern: "[A-Za-z0-9]+"
   BudgetEmail:
     Type: String
+  PublicData:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Whether anyone may read the lake's bucket unsigned; downloads are billed to the project
   BudgetDollars:
     Type: Number
     Default: 100
+
+Conditions:
+  Public: !Equals [!Ref PublicData, "true"]
 
 Resources:
   Vpc:
@@ -123,8 +132,8 @@ Resources:
       LifecycleConfiguration:
         Rules:
           - {Id: logs, Status: Enabled, Prefix: logs/, ExpirationInDays: 30}
-  # Data anyone may read: the lake's public tables. Account-level Block
-  # Public Access, if it's on, refuses the policy below.
+  # The lake's tables; anyone may read them when PublicData is true.
+  # Account-level Block Public Access, if it's on, refuses the policy below.
   PublicBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -134,8 +143,8 @@ Resources:
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         IgnorePublicAcls: true
-        BlockPublicPolicy: false
-        RestrictPublicBuckets: false
+        BlockPublicPolicy: !If [Public, false, true]
+        RestrictPublicBuckets: !If [Public, false, true]
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
@@ -145,6 +154,7 @@ Resources:
           - {AllowedMethods: [GET, HEAD], AllowedOrigins: ["*"], AllowedHeaders: ["*"], MaxAge: 3600}
   PublicBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    Condition: Public
     Properties:
       Bucket: !Ref PublicBucket
       PolicyDocument:
@@ -445,7 +455,7 @@ Outputs:
   Bucket:
     Value: !Ref Bucket
   PublicBucket:
-    Description: Read it unsigned, e.g. aws s3 ls --no-sign-request s3://<it>/
+    Description: The lake's bucket; with PublicData, read it unsigned, e.g. aws s3 ls --no-sign-request s3://<it>/
     Value: !Ref PublicBucket
   ControlInstance:
     Value: !Ref Control

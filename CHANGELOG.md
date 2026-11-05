@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **The lake's bucket is private unless asked** (`orca aws up`). A new stack
+  parameter, `PublicData` (default `false`), decides whether
+  `mlake-public-<account>` gets the bucket policy that lets anyone read it
+  unsigned, with Block Public Access on otherwise. Anyone could download
+  the whole lake before, billed to the project at S3's egress price. The
+  instances read and write it with their roles either way. Pass
+  `PublicData=true` to share it as before.
+
 ## 0.3.5 (2026-11-05)
 
 - Built against iceberg-mojo 0.9.1 (with the DataFile wire codec, #70),

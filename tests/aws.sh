@@ -41,6 +41,13 @@ cmp -s build/orca-aws/orca.yaml "$root/deploy/aws/orca.yaml" || fail "the templa
 # An update keeps the password: no new one.
 "$orca" aws up > /dev/null 2>&1 || fail "up again"
 if calls | grep -q DbPassword; then fail "an update made a new password"; fi
+# The lake's bucket is private unless asked; an update without the flag
+# keeps the stack's setting.
+if calls | grep -q PublicData; then fail "an update without --public-data set PublicData"; fi
+"$orca" aws up --public-data true > /dev/null 2>&1 || fail "up --public-data true"
+calls | grep -q "PublicData=true" || fail "up --public-data true didn't pass PublicData=true"
+if "$orca" aws up --public-data yes > /dev/null 2>&1; then fail "up took --public-data yes"; fi
+grep -q 'Default: "false"' build/orca-aws/orca.yaml || fail "PublicData isn't false by default"
 echo "ok   up"
 
 if "$orca" aws push > ../push.out 2>&1; then fail "push without linux-aarch64"; fi

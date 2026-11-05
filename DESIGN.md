@@ -509,7 +509,7 @@ How the history is read, cheaply: `git log --numstat` over the default branch gi
 
 ### The data is public
 
-The `mojo.*` and `gharchive.*` tables are written to a bucket of their own (`mlake-public-<account>`) with a bucket policy allowing anyone `s3:GetObject` and `s3:ListBucket`; orca's bucket, with logs and run state, stays private. The project's resource control policy denies S3 to principals of other accounts, so readers read unsigned: `aws s3 ls --no-sign-request`, DuckDB's and pyiceberg's anonymous settings, and the page says how. Downloads are billed to the project at S3's egress price, so the Budgets alert covers the bucket, and CloudFront in front of it is the step if readers turn out to download a lot.
+The `mojo.*` and `gharchive.*` tables are written to a bucket of their own (`mlake-public-<account>`); orca's bucket, with logs and run state, is separate. The lake's bucket is private by default: the instances read and write it with their roles. With the stack parameter `PublicData=true`, a bucket policy lets anyone `s3:GetObject` and `s3:ListBucket`; the project's resource control policy denies S3 to principals of other accounts, so readers read unsigned (`aws s3 ls --no-sign-request`, DuckDB's and pyiceberg's anonymous settings). Downloads are then billed to the project at S3's egress price, with only the Budgets alert as a guard; a mirror with free egress that speaks the S3 API (Cloudflare R2), which Iceberg's `s3://` paths can be pointed at with an endpoint override, is the better way to share the lake than CloudFront, whose https URLs Iceberg readers don't follow.
 
 ### What users are missing
 
