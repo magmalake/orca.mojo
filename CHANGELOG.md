@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-11-05
+
 - **Bounded table history** (magmalake/mojo-census GAPS #27). Commits to
   `gharchive.events` went from 486 ms to 1,207 ms as it reached ~889
   snapshots and metadata files; now:
