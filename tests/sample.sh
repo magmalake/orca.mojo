@@ -93,6 +93,15 @@ touch "$dir/stop"
 python3 tests/metrics_ok.py --min 1 "$dir/f.jsonl" > /dev/null || fail "f.jsonl"
 echo "ok   --until: a last line, then exit 0"
 
+# --keep: a sampler that never ends (the control instance's) keeps its file to
+# about its last N lines, whole lines, in time order.
+./build/orca sample --out "$dir/k.jsonl" --count 40 --seconds 0.02 --keep 5 || fail "--keep exited $?"
+n=$(wc -l < "$dir/k.jsonl" | tr -d ' ')
+{ [ "$n" -ge 5 ] && [ "$n" -le 10 ]; } || fail "--keep 5 left $n lines"
+python3 tests/metrics_ok.py --min 5 "$dir/k.jsonl" > /dev/null || fail "k.jsonl"
+[ ! -e "$dir/k.jsonl.tmp" ] || fail "--keep left its temporary file"
+echo "ok   --keep: the file is kept to its last lines"
+
 line=$(./build/orca sample --out - --count 1 --seconds 0.2)
 case "$line" in "orca-sample {"*"}") ;; *) fail "--out -: $line" ;; esac
 echo "ok   --out - prints prefixed lines"

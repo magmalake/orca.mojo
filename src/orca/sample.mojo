@@ -2,7 +2,7 @@
 
 ```
 orca sample --out <location> [--pid PID] [--until FILE] [--match PATH]
-            [--dirs D,...] [--seconds S] [--count N]
+            [--dirs D,...] [--seconds S] [--count N] [--keep N]
 <pipeline> sample ...                       the same, from a pipeline binary
 ```
 
@@ -55,6 +55,11 @@ sampler ends), or `-`, standard output with each line prefixed
 at `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`
 (`metrics_location`).
 
+`--keep N` keeps a file `--out` names to about its last N lines, for a
+sampler that never ends (the control instance's, which the scheduler reads
+back into the fleet page, `orca.fleet`): once the file has 2 N it's
+rewritten with its last N, atomically, so a reader sees either.
+
 It ends after a last line once the `--pid` process has, or once the file
 `--until` names exists, or after `--count` lines. SIGTERM ends it at once,
 keeping the lines it wrote (Mojo's runtime threads take signals a blocked
@@ -85,7 +90,7 @@ comptime PREFIX = "orca-sample "
 
 comptime _USAGE = """usage:
   sample --out <location>|- [--pid PID] [--until FILE] [--match PATH]
-         [--dirs D,...] [--seconds S] [--count N]"""
+         [--dirs D,...] [--seconds S] [--count N] [--keep N]"""
 
 
 def sample_seconds() -> Float64:
@@ -849,6 +854,25 @@ def _append(path: String, line: String) raises:
         raise Error("can't write ", path)
 
 
+def _trim(path: String, keep: Int) raises:
+    """Rewrites the file at `path` with its last `keep` lines, if it has more
+    than twice that; a reader sees the old file or the new, never half."""
+    var text = _read(path)
+    var lines = text.splitlines()
+    if len(lines) <= 2 * keep:
+        return
+    var out = String()
+    for i in range(len(lines) - keep, len(lines)):
+        out.write(lines[i], "\n")
+    var tmp = String(path, ".tmp")
+    with open(tmp, "w") as f:
+        f.write(out)
+    var a = _cstr(tmp)
+    var b = _cstr(path)
+    if external_call["rename", c_int](a.unsafe_ptr(), b.unsafe_ptr()) != 0:
+        raise Error("can't replace ", path)
+
+
 def _parent(path: String) -> String:
     var at = path.rfind("/")
     return String(path[byte=:at]) if at > 0 else String(".")
@@ -869,6 +893,7 @@ def sample_main(args: List[String]) -> Int:
     var dirs = default_dirs()
     var seconds = sample_seconds()
     var count = 0
+    var keep = 0
     var until = String()
     var i = 2
     try:
@@ -889,6 +914,8 @@ def sample_main(args: List[String]) -> Int:
                         dirs.append(String(d.strip()))
             elif args[i] == "--seconds":
                 seconds = Float64(v)
+            elif args[i] == "--keep":
+                keep = Int(v)
             elif args[i] == "--until":
                 until = v
             elif args[i] == "--count":
@@ -941,6 +968,8 @@ def sample_main(args: List[String]) -> Int:
                 else:
                     _append(path, line)
                     dirty = True
+                    if keep > 0 and not remote and written % keep == keep - 1:
+                        _trim(path, keep)
                 failed = False
             except e:
                 if not failed:
