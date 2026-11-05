@@ -404,7 +404,7 @@ Resources:
             docker run -d --name "$name" --restart always --network orca --env-file /var/lib/orca/app.env \
               -e PORT=$port --entrypoint /opt/orca/bin/$name "$repo:$tag"
             grep -q "^$host {" /var/lib/orca/Caddyfile \
-              || printf '%s {\n  reverse_proxy %s:%s\n}\n' "$host" "$name" "$port" >> /var/lib/orca/Caddyfile
+              || printf '%s {\n  encode zstd gzip\n  reverse_proxy %s:%s\n}\n' "$host" "$name" "$port" >> /var/lib/orca/Caddyfile
             docker exec caddy caddy reload --config /etc/caddy/Caddyfile
             EOS
             chmod +x /usr/local/bin/orca-refresh /usr/local/bin/orca-app
@@ -412,11 +412,12 @@ Resources:
             orca-refresh
             cat > /var/lib/orca/Caddyfile << EOF
             $hosts {
+              encode zstd gzip
               reverse_proxy ui:8270
             }
             EOF
             # The console, once a container named console runs on the network.
-            [ -z "${ConsoleHostname}" ] || printf '%s {\n  reverse_proxy console:8080\n}\n' "${ConsoleHostname}" >> /var/lib/orca/Caddyfile
+            [ -z "${ConsoleHostname}" ] || printf '%s {\n  encode zstd gzip\n  reverse_proxy console:8080\n}\n' "${ConsoleHostname}" >> /var/lib/orca/Caddyfile
             docker run -d --name caddy --restart always --network orca -p 80:80 -p 443:443 \
               -v /var/lib/orca/Caddyfile:/etc/caddy/Caddyfile -v /var/lib/orca/caddy:/data caddy:2.10
             echo "orca ui at https://$sslip and https://${Hostname}"
