@@ -7,7 +7,8 @@ clusters over Iceberg tables in object storage.
 
 Early days: steps and pipelines are declared and checked at compile time, and
 runs are recorded in Postgres and resume where they stopped, with Iceberg
-reads pinned and commits recognised on retry (`orca.tables`). A scheduler
+reads pinned and commits recognised on retry (`orca.tables`), including
+data files a step's dista tasks wrote (`append_files`). A scheduler
 fires cron schedules and backfills, and runs sensor pipelines when a dataset
 they read gets a snapshot; `orca ui` shows pipelines, runs, logs and the
 lineage of datasets, and starts, resumes, reruns, backfills, cancels and
@@ -48,6 +49,7 @@ is where its seams are and which are worth cutting.
 ```
 pixi run test                  # unit, CLI, compile-fail, state, kill, tasks, logs
 pixi run -e data test-tables   # Iceberg; needs the sibling checkouts (see CI)
+pixi run -e data test-append-files   # files written in dista tasks, committed once by the step
 pixi run -e data test-taxi     # examples/taxi on two sliced TLC months
 pixi run -e data test-lineage  # lineage over three pipelines' tables
 pixi run -e data test-sensors  # sensors and a rebuild, with the scheduler running

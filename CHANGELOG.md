@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Data files written on workers, committed by the step** (#108).
+  `orca.tables.append_files(ctx, table, files)` commits data files already
+  written, here or in a dista task, as one `append` snapshot, with
+  `append`'s `writes=` check, summary and recognition: a retry that finds
+  its commit returns it and commits nothing. On the worker,
+  `write_files(load_dataset(name), batches)` (or a `FileWriter`, a batch at
+  a time) writes the files uncommitted and returns `DataFiles`, a dista
+  `Codec` over iceberg's `DataFile.encode`, so a task's result can carry
+  them, alone or in a struct beside plain fields. Needs iceberg-mojo with
+  magmalake/iceberg.mojo#70.
 - **A crash's stack dump is symbolized, and a crashed attempt says where**.
   The project image (`deploy/project.Dockerfile`, which `orca aws push`
   builds) and `deploy/Dockerfile` build every binary with line tables
