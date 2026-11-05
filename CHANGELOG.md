@@ -25,6 +25,7 @@
   dataset and, for a commit, how many tries it made; a dataset whose
   snapshot `sense` can't read is named; and an EC2 call that never got an
   answer names its action.
+
 ## 0.3.4 (2026-11-04)
 
 - Built against iceberg-mojo 0.9.0 (parquet-mojo 0.12.0): data files go
