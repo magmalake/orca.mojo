@@ -47,6 +47,6 @@ echo "$err" | grep -q "^crashed: .*crashing 2024-02 as asked; at measure .*toy.m
 [ "$(q "SELECT error FROM orca.steps WHERE run = $run AND step = 'measure' AND partition = '2024-02'")" = "$err" ] \
     || fail "the step's error isn't the attempt's"
 grep -q "^--- start 1" "$ORCA_LOGS/toy/$run/driver.log" || fail "no start line in the driver log"
-grep -q "^#[0-9]* 0x[0-9a-f]* measure .*toy.mojo:" "$ORCA_LOGS/toy/$run/driver.log" \
+grep -q "^ *#[0-9]* 0x[0-9a-f]* measure .*toy.mojo:" "$ORCA_LOGS/toy/$run/driver.log" \
     || fail "no symbolized frame in the driver log"
 echo "ok   a crashed attempt failed with its stack dump's first frames: $err"
