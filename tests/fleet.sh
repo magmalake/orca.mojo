@@ -165,7 +165,8 @@ want="control head-i-head worker-i-w1 worker-i-w2 worker-i-w3 "
 want="head-i-head worker-i-w1 worker-i-w2 "
 [ "$(order '/fleet?sort=cpu&dir=desc' | cut -d' ' -f1-3 | sed 's/$/ /')" = "$want" ] || fail "by CPU, highest first: $(order '/fleet?sort=cpu&dir=desc')"
 [ "$(order '/fleet/hosts?sort=cpu&dir=desc' | cut -d' ' -f1-3 | sed 's/$/ /')" = "$want" ] || fail "the fragment's order"
-[ "$(order '/fleet?sort=cpu&dir=asc' | awk '{print $1}')" = "worker-i-w3" ] || fail "by CPU, lowest first: a host with no samples is lowest"
+# A host with no samples counts as 0%: first or second, after an idle control.
+order '/fleet?sort=cpu&dir=asc' | awk '{print $1, $2}' | grep -q "worker-i-w3" || fail "by CPU, lowest first: a host with no samples is lowest"
 [ "$(order '/fleet/hosts?sort=uptime&dir=desc' | cut -d' ' -f1)" = "head-i-head" ] || fail "by uptime, longest first"
 [ "$(order '/fleet?sort=nonsense')" = "$(order /fleet)" ] || fail "an unknown column is the default order"
 html '/fleet?sort=cpu&dir=desc' | grep -qF '<th class="num" aria-sort="descending"><a class="sortby" href="/fleet?sort=cpu&amp;dir=asc&amp;range=24h#hosts">CPU ▼</a>' \
