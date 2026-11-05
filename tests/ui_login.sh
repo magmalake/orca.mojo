@@ -69,6 +69,21 @@ loc=$(curl -s -o /dev/null -w '%{redirect_url}' -H "Origin: $base" -H "Referer: 
 [ "$(runs)" -eq 1 ] || fail "an action without a session made a run"
 curl -fs "$base/runs" > /dev/null || fail "reading needs no session"
 curl -fs "$base/" | grep -q 'href="/login">Log in' || fail "no way to log in"
+# Logged out, each inline action is a link to log in that comes back here,
+# and its POST still needs a session.
+page=$(curl -fs "$base/pipelines/toy")
+echo "$page" | grep -q '<body class="anon">' || fail "the logged-out page isn't anon"
+echo "$page" | grep -qF '<a class="act__login" href="/login?next=%2Fpipelines%2Ftoy" title="orca pause toy">Log in to pause</a>' \
+    || fail "no Log in to pause"
+page=$(curl -fs "$base/runs?status=queued")
+echo "$page" | grep -qF 'href="/login?next=%2Fruns%3Fstatus%3Dqueued"' || fail "the login link doesn't come back to /runs"
+echo "$page" | grep -qF '>Log in to cancel</a>' || fail "no Log in to cancel"
+queued_run=$(q "SELECT max(id) FROM orca.runs")
+[ "$(post "/runs/$queued_run/cancel" '' -H 'Accept: application/json')" = 401 ] || fail "the inline cancel without a session"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/runs/$queued_run/cancel")
+[ "$code" = 403 ] || fail "the inline cancel without an Origin answered $code"
+[ "$(q "SELECT cancel_requested OR status = 'cancelled' FROM orca.runs WHERE id = $queued_run")" = f ] \
+    || fail "a cancel without a session or Origin changed the run"
 
 # Logging in.
 [ "$(post /login 'name=alice&password=wrong+password&next=/runs' -c "$jar")" = 401 ] || fail "a wrong password"
@@ -88,6 +103,10 @@ run=$(q "SELECT max(id) FROM orca.runs")
     = "alice /pipelines/toy/runs $run" ] || fail "the audit: $(q "SELECT * FROM orca.audit")"
 curl -fs -b "$jar" "$base/runs/$run" | grep -q '<td>alice</td>' || fail "the run's page doesn't say who"
 curl -fs -b "$jar" "$base/" | grep -q 'class="top__user">alice' || fail "the header doesn't say who"
+page=$(curl -fs -b "$jar" "$base/pipelines/toy")
+echo "$page" | grep -q '<body>' || fail "the logged-in page is still anon"
+echo "$page" | grep -qF 'action="/pipelines/toy/pause"><button type="submit" class="act__btn" title="orca pause toy">Pause</button>' \
+    || fail "no Pause button logged in"
 [ "$(post "/runs/$run/cancel" '' -b "$jar")" = 303 ] || fail "cancel with a session"
 [ "$(q "SELECT count(*) FROM orca.audit WHERE run = $run")" -eq 2 ] || fail "the cancel's audit"
 

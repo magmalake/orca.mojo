@@ -1172,6 +1172,10 @@ def _json_runs(mut out: String, runs: List[RunRow]):
 
 
 comptime _POLL = """
+document.addEventListener("submit", (e) => {
+  const m = e.target.dataset && e.target.dataset.confirm;
+  if (m && !confirm(m)) e.preventDefault();
+});
 for (const el of document.querySelectorAll("[data-poll]")) {
   const tick = async () => {
     let r;
@@ -1244,7 +1248,10 @@ def _page(title: String, active: StaticString, body: Html) -> String:
     )
     h.text(title, " · orca")
     h.raw(
-        '</title><link rel="stylesheet" href="/static/orca.css"></head><body>',
+        '</title><link rel="stylesheet" href="/static/orca.css"></head>',
+        '<body class="',
+        _AUTH_SLOT,
+        '">',
         '<header class="top"><a class="top__brand" href="/">',
         _MARK,
         "orca</a><nav>",
@@ -1266,6 +1273,116 @@ def _page(title: String, active: StaticString, body: Html) -> String:
     h.raw(body.out)
     h.raw("</main><script>", _POLL, "</script></body></html>")
     return h^.finish()
+
+
+comptime _AUTH_SLOT = "orca-auth"
+"""The `<body>`'s class until the page is answered: `anon` when login is on
+and no one is logged in, which hides the inline action buttons and shows
+their "Log in to ..." links instead."""
+
+comptime _HERE_SLOT = "__orca_here__"
+"""Where a "Log in to ..." link comes back to: the page's own path and
+query, encoded, filled in when the page is answered."""
+
+
+def _act_button(
+    mut h: Html,
+    action: String,
+    label: StaticString,
+    verb: StaticString,
+    cli: String,
+    danger: Bool = False,
+    step: String = "",
+):
+    """A small form posting to `action`, beside the status it changes: a
+    button labelled `label` whose title is the command line that does the
+    same, with "Log in to `verb`" in its place while login is needed. A
+    `danger` one asks first, where there's JavaScript."""
+    h.raw('<form class="act" method="post" action="')
+    h.text(action)
+    h.raw('"')
+    if danger:
+        h.raw(' data-confirm="')
+        h.text(label, "?")
+        h.raw('"')
+    h.raw(">")
+    if step:
+        h.raw('<input type="hidden" name="step" value="')
+        h.text(step)
+        h.raw('">')
+    h.raw('<button type="submit" class="act__btn', " danger" if danger else "")
+    h.raw('" title="')
+    h.text(cli)
+    h.raw(
+        '">', label, '</button></form><a class="act__login" href="/login?next='
+    )
+    h.raw(_HERE_SLOT, '" title="')
+    h.text(cli)
+    h.raw('">Log in to ', verb, "</a>")
+
+
+def _pause_button(mut h: Html, name: String, paused: Bool):
+    """Resume a paused pipeline, or pause an active one."""
+    var base = String("/pipelines/", url_encode(name))
+    if paused:
+        _act_button(
+            h,
+            String(base, "/unpause"),
+            "Resume",
+            "resume",
+            String("orca unpause ", _sh(name)),
+        )
+    else:
+        _act_button(
+            h,
+            String(base, "/pause"),
+            "Pause",
+            "pause",
+            String("orca pause ", _sh(name)),
+        )
+
+
+def _cancel_cli(r: RunRow) -> String:
+    return String(
+        "orca cancel ",
+        _sh(r.pipeline),
+        " ",
+        _sh(r.partitions),
+        "  (its queued, running and retrying runs over these partitions)",
+    )
+
+
+def _retry_cli(r: RunRow) -> String:
+    return String(
+        "<",
+        r.pipeline,
+        " binary> resume ",
+        r.id,
+        "  (in that shell's process; orca has no command that queues it)",
+    )
+
+
+def _row_actions(mut h: Html, r: RunRow):
+    """A runs table row's Cancel (queued or running) or Retry (failed)."""
+    if (r.status == "queued" or r.status == "running") and not (
+        r.cancel_requested
+    ):
+        _act_button(
+            h,
+            String("/runs/", r.id, "/cancel"),
+            "Cancel",
+            "cancel",
+            _cancel_cli(r),
+            danger=True,
+        )
+    elif r.status == "failed" or r.stalled:
+        _act_button(
+            h,
+            String("/runs/", r.id, "/resume"),
+            "Retry",
+            "retry",
+            _retry_cli(r),
+        )
 
 
 comptime _TRIES = (
@@ -1307,6 +1424,7 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
             h.raw(' <span class="muted">until ')
             h.text(r.waiting_until)
             h.raw("</span>")
+        _row_actions(h, r)
         h.raw("</td>")
         # Empty for 0 and 1, so a run that took more draws the eye.
         if r.starts > 1:
@@ -1424,6 +1542,7 @@ def home(mut db: State) raises -> Page:
             if p.paused:
                 h.raw(" ")
                 h.status("paused")
+            _pause_button(h, p.name, p.paused)
             h.raw("</td>")
             h.cell(
                 p.kind, " from ", p.start if p.start else String("the start")
@@ -2214,6 +2333,7 @@ def pipeline(
     if p.paused:
         h.raw(" ")
         h.status("paused")
+    _pause_button(h, p.name, p.paused)
     h.raw('</h1><dl class="facts"><dt>Partitions</dt><dd>')
     h.text(p.kind, " from ", p.start if p.start else String("the start"))
     h.raw("</dd><dt>Schedule</dt><dd>")
@@ -2698,6 +2818,20 @@ def run(mut db: State, id: Int) raises -> Page:
     h.text(r.id)
     h.raw(" ")
     h.status(r.status)
+    if r.status == "succeeded":
+        var defs = _step_defs(db, r.pipeline)
+        if len(defs) > 0:
+            _act_button(
+                h,
+                String("/runs/", r.id, "/rerun"),
+                "Rerun",
+                "rerun",
+                "no orca command for this yet: a new run of every step",
+                danger=True,
+                step=defs[0].name,
+            )
+    else:
+        _row_actions(h, r)
     h.raw('</h1><dl class="facts"><dt>Partitions</dt><dd>')
     h.text(r.partitions)
     h.raw("</dd><dt>Trigger</dt><dd>")
@@ -3243,6 +3377,29 @@ def attempt(mut db: State, run: Int, id: Int) raises -> Page:
         h.text(" ", a.partition)
     h.text(", attempt ", a.attempt, " ")
     h.status(a.status)
+    # A new run from this step on, once the run has ended, as the run
+    # page's "Rerun from" does.
+    var ended = db.conn.query(
+        (
+            "SELECT status NOT IN ('queued', 'running') AS ended FROM orca.runs"
+            " WHERE id = $1"
+        ),
+        Params().int64(Int64(run)),
+    )
+    if len(ended) > 0 and ended.row(0).bool("ended"):
+        _act_button(
+            h,
+            String("/runs/", run, "/rerun"),
+            "Rerun from here",
+            "rerun from here",
+            String(
+                "no orca command for this yet: a new run from ",
+                a.step,
+                " on, the steps before it copied",
+            ),
+            danger=True,
+            step=a.step,
+        )
     h.raw("</h1>")
     if a.error:
         h.raw('<pre class="error">')
@@ -4419,7 +4576,11 @@ struct Ui(Copyable, Handler):
                 return out^
             if not post:
                 return self._with_user(
-                    self._page(db, req.url, path), json, user, required
+                    self._page(db, req.url, path),
+                    json,
+                    user,
+                    required,
+                    req.url,
                 )
             if required and not user:
                 return _login_needed(req, json)
@@ -4445,7 +4606,12 @@ struct Ui(Copyable, Handler):
             return resp^
 
     def _with_user(
-        self, var page: Page, json: Bool, user: String, required: Bool
+        self,
+        var page: Page,
+        json: Bool,
+        user: String,
+        required: Bool,
+        here: String = "/",
     ) -> Response:
         """The page, with who's logged in (or a way to log in) in its
         header."""
@@ -4464,6 +4630,11 @@ struct Ui(Copyable, Handler):
         else:
             slot = String()
         page.html = page.html.replace(_USER_SLOT, slot)
+        page.html = page.html.replace(
+            String('<body class="', _AUTH_SLOT, '">'),
+            '<body class="anon">' if required and not user else "<body>",
+        )
+        page.html = page.html.replace(_HERE_SLOT, url_encode(here))
         return _respond(page, json)
 
     def _page(self, mut db: State, url: String, path: String) raises -> Page:

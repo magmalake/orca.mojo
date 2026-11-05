@@ -24,6 +24,15 @@
   JSON has it as `preview`. Below, the same as `orca backfill` and the
   binary's `run --partitions`, quoted for a shell, and a line of script
   updates both and the preview as you type.
+- **Actions sit beside the statuses they change** (#113). A Pause (or,
+  paused, Resume) button by each pipeline on the home page and in its
+  page's header; Cancel by a queued or running run and Retry by a failed
+  one, in every runs table and in the run's header, where a succeeded run
+  has Rerun; Rerun from here on an ended run's attempt. Each posts to the
+  existing action, with its Origin and login checks; its title is the
+  command line that does the same. Cancel and the reruns ask first where
+  there's JavaScript. Logged out with login on, each is a "Log in to
+  pause" (and so on) link that comes back to the page.
 - **Runs tables say Tries, not Starts** (#113), with a tooltip saying what
   it counts, and show it only when a run was started more than once. The
   JSON's field is still `starts`.

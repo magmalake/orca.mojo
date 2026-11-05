@@ -277,6 +277,33 @@ page=$(html "/runs?pipeline=toy&status=succeeded&trigger=manual")
 echo "$page" | grep -qF '<td class="num"></td>' || fail "a run started once isn't empty under Tries"
 echo "$page" | grep -qF '<td class="num">1</td>' && fail "a run started once shows 1"
 [ "$(json "/runs?pipeline=toy&status=failed" | jq '.runs[0].starts')" -eq 3 ] || fail "the JSON's starts"
+# Actions beside their statuses: Pause per pipeline, Retry for a failed
+# run, Rerun for a succeeded one, Rerun from here on an ended run's attempt,
+# Cancel for a queued one; each titled with its command line.
+html / | grep -qF 'action="/pipelines/toy/pause"><button type="submit" class="act__btn" title="orca pause toy">Pause</button></form>' \
+    || fail "no Pause on the home page's row"
+html /pipelines/toy | grep -qF '<h1>toy<form class="act" method="post" action="/pipelines/toy/pause">' \
+    || fail "no Pause in the pipeline's header"
+html "/runs?pipeline=toy&status=failed" | grep -qF "action=\"/runs/$bad_run/resume\"><button type=\"submit\" class=\"act__btn\" title=\"&lt;toy binary&gt; resume $bad_run" \
+    || fail "no Retry for the failed run"
+html "/runs/$bad_run" | grep -qF '>Retry</button>' || fail "no Retry in the failed run's header"
+page=$(html "/runs/$ok_run")
+echo "$page" | grep -qF "<form class=\"act\" method=\"post\" action=\"/runs/$ok_run/rerun\" data-confirm=\"Rerun?\"><input type=\"hidden\" name=\"step\" value=\"days\">" \
+    || fail "no Rerun in the succeeded run's header"
+html "/runs/$bad_run/attempts/$failed" | grep -qF '<input type="hidden" name="step" value="measure"><button type="submit" class="act__btn danger" title="no orca command for this yet: a new run from measure on, the steps before it copied">Rerun from here</button>' \
+    || fail "no Rerun from here on the attempt"
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
+   SELECT 'toy', registry_hash, '2023-02,2023-03', 'manual', 'queued' FROM orca.runs WHERE id = $ok_run" > /dev/null
+qd=$(q "SELECT max(id) FROM orca.runs")
+html "/runs?status=queued" | grep -qF "action=\"/runs/$qd/cancel\" data-confirm=\"Cancel?\"><button type=\"submit\" class=\"act__btn danger\" title=\"orca cancel toy 2023-02,2023-03" \
+    || fail "no Cancel for the queued run"
+html "/runs/$qd" | grep -qF '>Cancel</button>' || fail "no Cancel in the queued run's header"
+html /runs | grep -q 'class="anon"' && fail "a page with login off is anon"
+q "UPDATE orca.pipelines SET paused = true WHERE name = 'toy'" > /dev/null
+html /pipelines/toy | grep -qF 'action="/pipelines/toy/unpause"><button type="submit" class="act__btn" title="orca unpause toy">Resume</button>' \
+    || fail "no Resume for the paused pipeline"
+q "UPDATE orca.pipelines SET paused = false WHERE name = 'toy'" > /dev/null
+q "DELETE FROM orca.runs WHERE id = $qd" > /dev/null
 echo "ok   /runs: dropdown filters, pages and tries"
 
 kill "$pid"
