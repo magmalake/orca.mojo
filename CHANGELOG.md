@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **A warm pool for the ec2 runner**: consecutive runs of a pipeline reuse
+  its instances instead of booting new ones. An instance whose run ended
+  waits `ORCA_EC2_POOL_SECONDS` (default 150; 0 turns the pool off, as
+  before) for a run of the same pipeline started as the same instances
+  (type, market, registry hash, image, secrets, environment, worker
+  processes: its `pool_key`), which takes it, then launches the rest. Its
+  script loops over runs: a new dista head process per run, worker
+  processes killed when their run ends (`<binary> pool-wait`), secrets read
+  again, each run's logs and samples its own; it asks for its next run
+  over Postgres (`<binary> pool-next`). Hand-over locks rows `FOR UPDATE
+  SKIP LOCKED` and checks that the instance beat lately
+  (`ORCA_EC2_POOL_LIVE_SECONDS`, 5) and that EC2 says it runs; one that
+  doesn't take its run up in `ORCA_EC2_POOL_JOIN_SECONDS` (30) is replaced.
+  Idle instances count against `ORCA_VCPU_BUDGET` and show on `/fleet` as
+  `idle (pooled)`, with their idle time (`idle_seconds` in `/api/fleet`).
+  Migration 24 keys `orca.instances` by instance, run and start, and adds
+  `pool_key`, `cpu_millis`, `idle`, `polled`, `pooled` and `joined`.
+  `tests/pool.sh` (`test-pool`).
+
 ## 0.6.1 - 2026-11-05
 
 ### Changed
