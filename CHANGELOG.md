@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-11-05
+
 - **Several dista worker processes per EC2 worker instance** (#130):
   `orca register --worker-procs N|auto` (`auto`: one per vCPU of the worker
   type; default 1; `orca aws register` passes it on; EC2 only). Each
