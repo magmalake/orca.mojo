@@ -7,7 +7,8 @@
 #   the head's address in their user data, 3 Spot worker instances
 #   (c7g.xlarge), all tagged with the run; its tasks reach all 3 workers;
 #   a worker terminated mid-run (a Spot interruption) is survived;
-# - nothing of a run is left running after it, and its driver log is kept;
+# - nothing of a run is left running after it, and its driver log is kept,
+#   and each instance's samples (orca.sample);
 # - a head terminated mid-run is restarted on new instances (start 2), which
 #   succeed;
 # - with ORCA_VCPU_BUDGET room for one fanout run's 14 vCPUs and not one
@@ -50,6 +51,7 @@ export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:
 export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
 export ORCA_STALE_SECONDS=10 ORCA_START_SECONDS=60 ORCA_VCPU_BUDGET=15
 export ORCA_LOGS=$PWD/build/ec2-logs ORCA_FANOUT_SHOW_HOST=1 ORCA_FANOUT_SLEEP=0.5 ORCA_CLUSTER_LOG_SECONDS=1
+export ORCA_SAMPLE_SECONDS=1
 export ORCA_RUN_ENV=ORCA_FANOUT_SHOW_HOST,ORCA_FANOUT_SLEEP
 python3 tests/fake_ec2.py "$port" "$dir" >> "$log" 2>&1 &
 fake=$!
@@ -127,6 +129,9 @@ while [ "$(running_of "$f1")" -gt 0 ]; do
     i=$((i + 1)); [ "$i" -lt 180 ] || fail "run $f1's instances are still running"; sleep 0.5
 done
 grep -q "^run succeeded" "$ORCA_LOGS/fanout/$f1/driver.log" || fail "run $f1's driver log"
+# Each instance's end recorded: the head's, which shuts itself down in its
+# grace after the run, on the sweep after it went.
+until_true "SELECT bool_and(ended IS NOT NULL) FROM orca.instances WHERE run = $f1" 60
 # Its instances, why each ended, and each one's log, the lost worker's too.
 got=$(q "SELECT string_agg(role || ' ' || instance_type || ' ' || market || ' ' || (ended IS NOT NULL)::text || ' ' || why, ',' ORDER BY role, why) FROM orca.instances WHERE run = $f1")
 # The head shuts itself down when its driver ends; the workers left wait for
@@ -138,7 +143,19 @@ for w in $workers; do
 done
 head_id=$(ids_of "$f1" head | head -1)
 [ -s "$ORCA_LOGS/fanout/$f1/cluster/head-$head_id.log" ] || fail "the head's log"
-echo "ok   a fanout run on a head and 3 Spot workers, its tasks on all 3, one lost, nothing left"
+# A metrics file per instance that lived, each with the instance's
+# processes resident; the worker lost mid-run keeps what it had uploaded,
+# if it lived long enough to upload any.
+m=$ORCA_LOGS/fanout/$f1/metrics
+lost=$(echo "$workers" | head -1)
+for i in "head-$head_id" $(for w in $workers; do [ "$w" = "$lost" ] || echo "worker-$w"; done); do
+    python3 tests/metrics_ok.py --rss "$m/$i.jsonl" > /dev/null || fail "run $f1's metrics of $i: $(ls "$m" | tr '\n' ' ')"
+done
+[ "$(ls "$m" | grep -cv -e "^head-$head_id.jsonl$" -e "^worker-")" -eq 0 ] || fail "run $f1's metrics: $(ls "$m" | tr '\n' ' ')"
+[ ! -e "$m/worker-$lost.jsonl" ] || python3 tests/metrics_ok.py "$m/worker-$lost.jsonl" > /dev/null \
+    || fail "the lost worker's metrics"
+python3 tests/metrics_ok.py --min 3 "$m/head-$head_id.jsonl" > /dev/null || fail "run $f1's head's metrics"
+echo "ok   a fanout run on a head and 3 Spot workers, its tasks on all 3, one lost, nothing left, metrics kept"
 
 # The second: its head instance gone mid-run.
 until_true "SELECT status = 'running' AND heartbeat IS NOT NULL FROM orca.runs WHERE id = $f2" 120
@@ -155,6 +172,13 @@ echo "ok   a run whose head instance went was restarted on new instances"
 
 # The budget, and an instance of no run.
 until_true "SELECT status = 'succeeded' FROM orca.runs WHERE pipeline = 'toy'" 120
+# A run shorter than the interval still leaves its head's samples.
+toy=$(q "SELECT id FROM orca.runs WHERE pipeline = 'toy'")
+i=0
+until ls "$ORCA_LOGS/toy/$toy/metrics/"head-*.jsonl > /dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 60 ] || fail "the toy's head left no metrics"; sleep 0.5
+done
+python3 tests/metrics_ok.py "$ORCA_LOGS/toy/$toy/metrics/"head-*.jsonl > /dev/null || fail "the toy's metrics"
 [ "$(q "SELECT count(*) FROM orca.runs t JOIN orca.runs f ON f.pipeline = 'fanout' WHERE t.pipeline = 'toy' AND t.started < f.ended AND f.started < t.ended")" -eq 0 ] \
     || fail "the toy ran beside a fanout run over the budget"
 ud=$(printf '#!/bin/sh\nsleep 600\n' | base64 | tr -d '\n')

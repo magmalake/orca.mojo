@@ -2,7 +2,9 @@
 # orca ui over the toy pipeline's runs: every page answers HTML and JSON, a
 # run's JSON says what `toy status <run>` says, values from the database are
 # escaped, and unknown paths and methods are refused; attempts' logs, the
-# DAG, a running run's page following it to the end, and a Dista timeline.
+# DAG, a running run's page following it to the end, a Dista timeline, and
+# a run's machine metrics (orca.metrics): charts, peaks and warnings from
+# recorded samples, live while the run goes on, and nothing without them.
 # Needs ORCA_DATABASE_URL (pixi run test-ui starts a throwaway server), curl
 # and jq.
 set -eu
@@ -136,6 +138,37 @@ echo "$page" | grep -q 'data-poll="' && fail "an ended run's page still polls"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$bad_run/steps")
 [ "$code" = 286 ] || fail "an ended run's fragment answered $code, not 286"
 
+# Machine metrics: none recorded, the page is as it was; then a worker's
+# (tests/fixtures/metrics-worker.jsonl: memory over 90% for 30 s, steal
+# over 20% for 10 s) and this machine's, from the sampler itself.
+html "/runs/$ok_run" | grep -q 'Machines' && fail "a run without samples shows machines"
+[ "$(json "/runs/$ok_run" | jq '.instances | length')" -eq 0 ] || fail "a run without samples has instances"
+m=$ORCA_LOGS/toy/$ok_run/metrics
+mkdir -p "$m"
+cp tests/fixtures/metrics-worker.jsonl "$m/worker-i-0001.jsonl"
+./build/orca sample --out "$m/local.jsonl" --count 2 --seconds 0.2 || fail "the sampler"
+page=$(html "/runs/$ok_run")
+echo "$page" | grep -q 'aria-label="The run&#39;s machines over time"\|aria-label="The run.s machines over time"' \
+    || fail "the run page doesn't chart its machines"
+[ "$(echo "$page" | grep -o 'class="mx__name"' | wc -l | tr -d ' ')" -eq 2 ] || fail "not a row per instance"
+echo "$page" | grep -q 'class="mx__cpu" d="M' || fail "no CPU in the charts"
+echo "$page" | grep -q 'class="mx__mem" d="M' || fail "no memory in the charts"
+echo "$page" | grep -q '>days</text>' || fail "the charts have no steps lane"
+[ "$(echo "$page" | grep -o 'class="mx__warn"' | wc -l | tr -d ' ')" -eq 2 ] || fail "not 2 warnings on the charts"
+echo "$page" | grep -q 'memory over 90%, up to 95%' || fail "the peaks table's warning"
+echo "$page" | grep -q '<td><code>worker-i-0001</code></td><td class="num">40</td>' || fail "the peaks table"
+json "/runs/$ok_run" | jq -e '[.instances[].id] == ["local", "worker-i-0001"]' > /dev/null \
+    || fail "the instances: $(json "/runs/$ok_run" | jq -c '[.instances[].id]')"
+json "/runs/$ok_run" | jq -e '.instances[1] | .role == "worker" and .peaks.samples == 40
+    and .peaks.mem_pct == 95 and .peaks.cpu == 101 and .peaks.disk_used == 29500000000
+    and ([.peaks.warnings[].kind] == ["memory", "steal"])' > /dev/null \
+    || fail "the worker's peaks: $(json "/runs/$ok_run" | jq -c '.instances[1].peaks')"
+json "/runs/$ok_run" | jq -e '.instances[0].peaks | .samples == 2 and .mem_total > 0' > /dev/null \
+    || fail "this machine's peaks: $(json "/runs/$ok_run" | jq -c '.instances[0].peaks')"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$ok_run/metrics")" = 286 ] \
+    || fail "an ended run's metrics fragment didn't answer 286"
+echo "ok   a run's machines: charts, peaks and warnings, and none without samples"
+
 # A run going on: its page polls, its fragment and its running attempt's log
 # answer 200 until they end, then 286 with the end in them.
 ORCA_TOY_SLEEP=1 ./build/toy run --partitions 2024-03 >> "$log" 2>&1 &
@@ -148,6 +181,13 @@ live=$(q "SELECT id FROM orca.runs WHERE status = 'running'")
 html "/runs/$live" | grep -q "data-poll=\"/runs/$live/steps\"" || fail "a running run's page doesn't poll"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/steps")
 [ "$code" = 200 ] || fail "a running run's fragment answered $code"
+# Its machines too: the fragment draws samples as they come.
+html "/runs/$live" | grep -q "data-poll=\"/runs/$live/metrics\"" || fail "a running run's machines don't poll"
+mkdir -p "$ORCA_LOGS/toy/$live/metrics"
+./build/orca sample --out "$ORCA_LOGS/toy/$live/metrics/local.jsonl" --count 1 --seconds 0.1 || fail "the live sampler"
+code=$(curl -s -o "$log.mx" -w '%{http_code}' "$base/runs/$live/metrics")
+[ "$code" = 200 ] || fail "a running run's metrics fragment answered $code"
+grep -q 'class="mx__now"' "$log.mx" || fail "the live fragment doesn't chart the samples"
 i=0
 until a=$(q "SELECT a.id FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $live AND a.status = 'running' LIMIT 1") && [ -n "$a" ]; do
     i=$((i + 1)); [ "$i" -lt 100 ] || fail "no running attempt"; sleep 0.05

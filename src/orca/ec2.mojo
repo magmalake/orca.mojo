@@ -16,7 +16,12 @@ the pipeline's image (`ORCA_EC2_MODE=docker`, the default: `docker run
 --network host`, after `ORCA_EC2_PREAMBLE`, such as an ECR login) or the
 binary itself (`direct`, for the tests' stand-in EC2), then shuts down
 (`ORCA_EC2_SHUTDOWN`). The head keeps the driver's output in the run's
-`driver.log` (`<binary> keep-log`) before it does.
+`driver.log` (`<binary> keep-log`) before it does. Beside its work each
+instance runs `<binary> sample` (`orca.sample`; in docker mode as a
+container with `--pid host`), whose lines its script uploads to the run's
+`metrics/<role>-<instance>.jsonl` with its log (`<binary> put-log`), every
+`ORCA_CLUSTER_LOG_SECONDS` and once when it ends, after telling the
+sampler to write a last line and stop (`--until`).
 
 A pipeline registered with `--workers MIN..MAX` scales: its run starts
 `MIN` workers, which may be none, and every tick `scale` reads the head's
@@ -36,7 +41,10 @@ the ID), exported as NAME, given to the containers, and named in
 `ORCA_SECRETS` so that every log orca writes masks them.
 
 Every tick, `sweep` terminates the instances of runs that aren't running at
-that start, and those older than `ORCA_RUN_DEADLINE` (a day). Instances get
+that start, and those older than `ORCA_RUN_DEADLINE` (a day). A head whose
+run has just ended is left `ORCA_EC2_HEAD_GRACE` seconds (60) to finish its
+script: keep the driver's log, upload its own and its samples, and shut
+itself down. Instances get
 `ORCA_EC2_DATABASE_URL` as `ORCA_DATABASE_URL` (the control instance's
 private address), the warehouse, the logs, the region and the scheduler's
 variables named in `ORCA_RUN_ENV`; `ORCA_EC2_AMI`, `ORCA_EC2_SUBNET`,
@@ -54,6 +62,7 @@ from postgres import Params
 
 from orca.awsec2 import Ec2, Instance
 from orca.proc import capture
+from orca.sample import sample_seconds
 from orca.secrets import parse_secrets
 from orca.state import State
 
@@ -69,6 +78,7 @@ comptime _COPIED = [
     "ORCA_LOGS",
     "AWS_REGION",
     "ORCA_HEAD_WAIT_SECONDS",
+    "ORCA_SAMPLE_SECONDS",
 ]
 """Variables every instance gets from the scheduler's environment."""
 
@@ -139,6 +149,9 @@ struct Ec2Runner(Movable):
     var head_type: String
     var worker_type: String
     var deadline: Int
+    var grace: Float64
+    """How long a head may go on after its run ended, to shut itself
+    down, before the sweep terminates it."""
     var env: List[String]
     var up_after: Float64
     var idle: Float64
@@ -157,6 +170,7 @@ struct Ec2Runner(Movable):
         self.head_type = getenv("ORCA_EC2_HEAD_TYPE", "c7g.large")
         self.worker_type = getenv("ORCA_EC2_WORKER_TYPE", "c7g.xlarge")
         self.deadline = Int(getenv("ORCA_RUN_DEADLINE", "86400"))
+        self.grace = Float64(getenv("ORCA_EC2_HEAD_GRACE", "60"))
         self.up_after = Float64(getenv("ORCA_SCALE_UP_AFTER", "5"))
         self.idle = Float64(getenv("ORCA_SCALE_IDLE", "60"))
         self.step = Int(getenv("ORCA_SCALE_STEP", "4"))
@@ -312,6 +326,30 @@ struct Ec2Runner(Movable):
         that read a log the script wrote there."""
         return line.replace("docker run --rm", "docker run --rm -v /tmp:/tmp")
 
+    def _put(self, r: Ec2Spec, local: String, under_run: String) -> String:
+        """A command uploading the file at `local` to `under_run` in the
+        run's directory under ORCA_LOGS, quietly: it may not be there yet."""
+        return String(
+            self._mounted(
+                self._run(
+                    r,
+                    List[String](),
+                    String(
+                        "put-log ",
+                        local,
+                        ' "$ORCA_LOGS/',
+                        r.pipeline,
+                        "/",
+                        r.run,
+                        "/",
+                        under_run,
+                        '"',
+                    ),
+                )
+            ),
+            " >/dev/null 2>&1",
+        )
+
     def _user_data(
         self, r: Ec2Spec, role: StaticString, head: String
     ) -> String:
@@ -327,37 +365,70 @@ struct Ec2Runner(Movable):
         s.write(self._exports(r, role, head))
         s.write(getenv("ORCA_EC2_PREAMBLE"), "\n")
         s.write(self._secrets(r))
-        # The head's or worker's output, uploaded while it runs and once
-        # when it ends: an instance can go without notice.
+        # The head's or worker's output, and its machine's samples
+        # (orca.sample), uploaded while it runs and once when it ends: an
+        # instance can go without notice.
         var keeps = role == "worker" or r.tasks
-        var log = String(
-            "/tmp/orca-", r.run, "-", r.start, "-", role, "-$iid.log"
-        )
-        if keeps:
+        var samples = sample_seconds() > 0 and getenv("ORCA_LOGS") != ""
+        var name = String(r.run, "-", r.start, "-", role, "-$iid")
+        var log = String("/tmp/orca-", name, ".log")
+        var metrics = String("/tmp/orca-", name, ".jsonl")
+        var stop = String("/tmp/orca-", name, ".stop")
+        if keeps or samples:
             s.write(self._instance_id(), "\n")
+            s.write('up() { [ -z "${ORCA_LOGS:-}" ] || {')
+            if keeps:
+                s.write(
+                    " ",
+                    self._put(r, log, String("cluster/", role, "-$iid.log")),
+                    ";",
+                )
+            if samples:
+                s.write(
+                    " ",
+                    self._put(
+                        r, metrics, String("metrics/", role, "-$iid.jsonl")
+                    ),
+                    ";",
+                )
             s.write(
-                'up() { [ -z "${ORCA_LOGS:-}" ] || ',
-                self._mounted(
-                    self._run(
-                        r,
-                        List[String](),
-                        String(
-                            "put-log ",
-                            log,
-                            ' "$ORCA_LOGS/',
-                            r.pipeline,
-                            "/",
-                            r.run,
-                            "/cluster/",
-                            role,
-                            '-$iid.log"',
-                        ),
-                    )
-                ),
-                " >/dev/null 2>&1; }\n",
+                " }; }\n",
                 "( while sleep ",
                 getenv("ORCA_CLUSTER_LOG_SECONDS", "30"),
                 "; do up; done ) &\nuploader=$!\n",
+            )
+        if samples:
+            # Beside everything else: the script's processes, and in docker
+            # mode the binary's in its containers, which aren't the
+            # script's children.
+            var args = String(
+                "sample --out ",
+                metrics,
+                " --pid $$ --until ",
+                stop,
+                " --dirs /tmp",
+            )
+            var line: String
+            if self.mode == "docker":
+                args.write(" --match ", _quote(r.binary))
+                line = self._mounted(
+                    self._run(r, List[String](), args)
+                ).replace("docker run --rm", "docker run --rm --pid host")
+            else:
+                line = self._run(r, List[String](), args)
+            s.write(
+                "rm -f ",
+                metrics,
+                " ",
+                stop,
+                "\n",
+                line,
+                " >/dev/null 2>&1 &\nsampler=$!\n",
+                # Its first line before the work, for up to 10 s: a run
+                # shorter than that still has a sample.
+                "i=0; while [ ! -s ",
+                metrics,
+                ' ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done\n',
             )
         if role == "worker":
             # The role goes to the worker alone: a binary given one serves
@@ -417,7 +488,15 @@ struct Ec2Runner(Movable):
                 ),
                 "; fi\n",
             )
-        if keeps:
+        if samples:
+            # Its last line, then it ends; a wedged one isn't waited for.
+            s.write(
+                "touch ",
+                stop,
+                "\n( sleep 15; kill -9 $sampler ) 2>/dev/null &\nguard=$!\n",
+                "wait $sampler 2>/dev/null\nkill $guard 2>/dev/null\n",
+            )
+        if keeps or samples:
             s.write("kill $uploader 2>/dev/null\nup\n")
         s.write(
             getenv(
@@ -654,6 +733,19 @@ struct Ec2Runner(Movable):
             Params(),
         ):
             live[row.text("k")] = True
+        # A head shuts itself down once it has kept the driver's log and
+        # uploaded its own and its samples, so it gets a grace after its run
+        # ends; a run restarted elsewhere is running, and its old head isn't
+        # spared.
+        var ending = Dict[String, Bool]()
+        for row in db.conn.query(
+            (
+                "SELECT id || '-' || starts AS k FROM orca.runs WHERE status"
+                " <> 'running' AND ended > now() - make_interval(secs => $1)"
+            ),
+            Params().float64(self.grace),
+        ):
+            ending[row.text("k")] = True
         var old = (
             db.conn.query(
                 (
@@ -678,7 +770,11 @@ struct Ec2Runner(Movable):
                 i.tags.get("orca.run", ""), "-", i.tags.get("orca.start", "")
             )
             # Launch times are ISO 8601 in UTC, so they order as text.
-            if key not in live or (i.launch_time and i.launch_time < old):
+            if i.launch_time and i.launch_time < old:
+                doomed.append(i.id)
+            elif key not in live and not (
+                key in ending and i.tags.get("orca.role", "") == "head"
+            ):
                 doomed.append(i.id)
         self.ec2.terminate(doomed)
         for id in doomed:

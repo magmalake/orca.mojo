@@ -87,7 +87,10 @@ times and retry times are on it. Heartbeats are on the database's clock.
 A run's output goes to `<ORCA_LOGS>/<pipeline>/<run>/driver.log` when
 `ORCA_LOGS` is set: written there by a local run, published there when the
 process is reaped if `ORCA_LOGS` is in object storage, or kept from the
-driver pod's log on Kubernetes (`orca.kube`).
+driver pod's log on Kubernetes (`orca.kube`). Beside a local run's process
+the scheduler starts `<binary> sample` (`orca.sample`), which writes the
+machine's metrics to `.../<run>/metrics/local.jsonl` until the process ends;
+`ORCA_SAMPLE_SECONDS=0` turns it off, on every runner.
 """
 
 from std.ffi import c_int, external_call
@@ -108,6 +111,7 @@ from orca.logs import is_remote, publish, run_dir, stage_of
 from orca.month import Month
 from orca.name import Name, parse_names, sort_texts
 from orca.proc import Capture, absolute, binary_seconds, capture, reap, spawn
+from orca.sample import metrics_location, sample_seconds
 from orca.schedule import Schedule
 from orca.secrets import parse_secrets, secrets_json
 from orca.sensors import (
@@ -1786,6 +1790,22 @@ struct Scheduler(Movable):
             if is_remote(log):
                 self._driver_logs[pid] = log
             print("started", p.name, "run", id, "pid", pid)
+            if log and sample_seconds() > 0:
+                # The machine's metrics while the run's process lives
+                # (orca.sample); it ends once that process has.
+                try:
+                    _ = spawn(
+                        [
+                            p.binary,
+                            "sample",
+                            "--out",
+                            metrics_location(p.name, Int(id), "local"),
+                            "--pid",
+                            String(pid),
+                        ]
+                    )
+                except e:
+                    print("orca: no sampler for run", id, ":", e)
 
     def backfill(
         mut self, pipeline: String, keys: String, rerun: Bool = False

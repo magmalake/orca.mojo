@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **A run's page charts its machines** (#95). Under the timeline, a
+  server-rendered SVG lines up each instance's CPU, memory, disk and
+  network samples (`orca sample`) with a lane of the run's steps, marks
+  where memory was over 90%, a disk over 90% full or CPU steal over 20%,
+  and a table gives each instance's peaks, which the run's JSON has as
+  `instances[].peaks`. A running run's charts follow it, polling
+  `/runs/<id>/metrics`. A run without samples renders as before.
+- **Each run records its machines' metrics** (#94). `orca sample` (and
+  `<binary> sample`) appends a JSON line every `ORCA_SAMPLE_SECONDS`
+  (default 5) with CPU (user, system, iowait, steal, busiest core), memory
+  (used, available, cache, swap, the run's resident set), disk (used and
+  free per file system the run writes to, read and write rates) and network
+  rates, read from `/proc` on Linux and from sysctls and Mach calls on
+  macOS. Every runner starts it beside a run's work: the local runner
+  beside each run's process, the ec2 runner from each instance's user data
+  next to dista, the kube runner in each pod. The lines go to
+  `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`, uploaded with an
+  instance's logs and at its end, so a short run keeps them; on Kubernetes
+  the scheduler moves them out of the pod's log. A sampler that can't write
+  never fails a run, and `ORCA_SAMPLE_SECONDS=0` turns it off. Its overhead
+  is well under 0.1% of one core. On EC2, a head whose run has ended is
+  left `ORCA_EC2_HEAD_GRACE` seconds (60) to keep its logs and samples and
+  shut itself down before the sweep terminates it.
 - **Runs in a SQLite file: `ORCA_DATABASE_URL=sqlite:<path>`** (#82).
   `orca.sqlite_store.SqliteStore`, over sqlite-mojo 0.3.5, is a whole
   `RunStore`. With it, `run`, `resume` and `status` record a pipeline's
