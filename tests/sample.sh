@@ -43,6 +43,22 @@ rss=$(tail -2 "$dir/a.jsonl" | head -1 | python3 -c "import json, sys; print(jso
 [ "$rss" -gt 50000000 ] || fail "the process's resident set: $rss"
 echo "ok   beside a process: $(wc -l < "$dir/a.jsonl" | tr -d ' ') lines, its 50 MB resident, ended with it"
 
+# A process that has exited but isn't reaped yet (a zombie) is gone: the
+# sampler mustn't wait for its parent to reap it.
+python3 -c "
+import os, subprocess, sys, time
+p = subprocess.Popen(['sleep', '0.3'])
+s = subprocess.Popen(['./build/orca', 'sample', '--out', sys.argv[1], '--pid', str(p.pid), '--seconds', '5'])
+t = time.time()
+while s.poll() is None and time.time() - t < 10:
+    time.sleep(0.1)
+ok = s.poll() == 0
+s.kill() if s.poll() is None else None
+p.wait()
+sys.exit(0 if ok else 1)
+" "$dir/z.jsonl" || fail "the sampler waited for a zombie to be reaped"
+echo "ok   a process that exited, not yet reaped, is gone"
+
 # Shorter than an interval.
 sleep 0.3 &
 ./build/orca sample --out "$dir/b.jsonl" --pid $! --seconds 5 || fail "the short sampler exited $?"

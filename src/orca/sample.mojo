@@ -377,8 +377,26 @@ def term_pending() -> Bool:
 
 
 def alive(pid: Int) -> Bool:
-    """Whether a process `pid` exists (a zombie counts until it's reaped)."""
-    return external_call["kill", c_int](c_int(pid), c_int(0)) == 0
+    """Whether a process `pid` is running: one that has exited is dead,
+    though its parent hasn't reaped it yet (a shell running the sampler in
+    front doesn't reap the job it watches until the sampler ends)."""
+    if external_call["kill", c_int](c_int(pid), c_int(0)) != 0:
+        return False
+    comptime if CompilationTarget.is_macos():
+        # PROC_PIDTBSDINFO: pbi_status is SZOMB (5) for a zombie, or the
+        # call fails for one.
+        var info = List[UInt8](length=160, fill=0)
+        var n = external_call["proc_pidinfo", c_int](
+            c_int(pid), c_int(3), UInt64(0), info.unsafe_ptr(), c_int(136)
+        )
+        return n >= 8 and _u32(info, 4) != 5
+    else:
+        var st = _read(String("/proc/", pid, "/stat"))
+        var close = st.rfind(")")
+        if close < 0:
+            return True
+        var f = st[byte = close + 1 :].split()
+        return not (len(f) > 0 and f[0] == "Z")
 
 
 @fieldwise_init
