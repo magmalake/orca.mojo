@@ -33,6 +33,14 @@
   command line that does the same. Cancel and the reruns ask first where
   there's JavaScript. Logged out with login on, each is a "Log in to
   pause" (and so on) link that comes back to the page.
+- **A dataset's Rebuild section says what it does and what it runs**
+  (#113). A plain line on what a rebuild is for; the chain of pipelines
+  it runs, by level, each linked and with what it reads that the rebuild
+  changes ("nothing reads this dataset" when none does; the JSON's
+  `downstream`); a Preview (`?preview=1&partitions=...`) of the runs each
+  level would queue, from the rebuild's own plan (`plan_rebuild`), which
+  writes nothing; and `orca rebuild <dataset> <range>` beside the button,
+  which asks first and, logged out, is a link to log in.
 - **Runs tables say Tries, not Starts** (#113), with a tooltip saying what
   it counts, and show it only when a run was started more than once. The
   JSON's field is still `starts`.

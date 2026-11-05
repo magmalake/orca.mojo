@@ -168,8 +168,11 @@ form.act { display: inline; margin: 0 0 0 0.4rem; }
 .act__btn { font-size: 0.75rem; padding: 0.05rem 0.45rem; vertical-align: middle; font-weight: 500; }
 h1 .act__btn { font-size: 0.8125rem; padding: 0.15rem 0.6rem; }
 .act__login { display: none; margin-left: 0.4rem; font-size: 0.75rem; font-weight: 400; }
-body.anon form.act { display: none; }
+body.anon form.act, body.anon .act__need { display: none; }
 body.anon .act__login { display: inline; }
+.chain { margin: 0.4rem 0 0.8rem; padding-left: 1.4rem; }
+.chain__level { margin: 0.2rem 0; }
+.chain__level + .chain__level::marker { content: "→ "; }
 form.start { display: grid; gap: 0.7rem; margin: 1rem 0; max-width: 46rem; }
 .start__range { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); max-width: 22rem; }
 .start__check { font-size: 0.875rem; display: flex; gap: 0.4rem; align-items: center; }

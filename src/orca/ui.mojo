@@ -120,7 +120,7 @@ from orca.scheduler import (
     preview_backfill,
     registered,
 )
-from orca.sensors import Rebuild, rebuilds
+from orca.sensors import Link, Rebuild, downstream, plan_rebuild, rebuilds
 from orca.schedule import Schedule
 from orca.source import commit_url, is_hex, web_url
 from orca.locate import function_key
@@ -1174,7 +1174,8 @@ def _json_runs(mut out: String, runs: List[RunRow]):
 comptime _POLL = """
 document.addEventListener("submit", (e) => {
   const m = e.target.dataset && e.target.dataset.confirm;
-  if (m && !confirm(m)) e.preventDefault();
+  const get = e.submitter && e.submitter.formMethod === "get";
+  if (m && !get && !confirm(m)) e.preventDefault();
 });
 for (const el of document.querySelectorAll("[data-poll]")) {
   const tick = async () => {
@@ -3702,17 +3703,202 @@ def _steps_using(
             h.raw("</span>")
 
 
-def dataset_page(mut db: State, name: String) raises -> Page:
+@fieldwise_init
+struct RebuildPreview(Copyable, Movable):
+    """What a rebuild over a range would queue, level by level, or why it's
+    refused: `plan_rebuild`, which writes nothing."""
+
+    var refused: String
+    var partitions: List[String]
+    var levels: List[List[Tuple[String, String]]]
+    """Each level's runs: the pipeline and its partitions."""
+
+
+def _rebuild_preview(
+    mut db: State, dataset: String, keys: String
+) raises -> RebuildPreview:
+    var levels = List[List[Tuple[String, String]]]()
+    try:
+        var got = plan_rebuild(db, dataset, keys)
+        for p in got[1]:
+            while len(levels) <= p.level:
+                levels.append(List[Tuple[String, String]]())
+            levels[p.level].append((p.pipeline, p.partitions))
+        return RebuildPreview("", got[0].copy(), levels^)
+    except e:
+        var why = String(e)
+        if why.startswith("orca: "):
+            var rest = String(why[byte=6:])
+            why = rest^
+        return RebuildPreview(why^, List[String](), levels^)
+
+
+def _rebuild_cmd(dataset: String, keys: String) -> String:
+    """`orca rebuild <dataset> <keys>`, as `orca` reads it."""
+    return String(
+        "orca rebuild ",
+        _sh(dataset),
+        " ",
+        _sh(keys) if keys else String("<range>"),
+    )
+
+
+def _rebuild_html(
+    mut h: Html,
+    dataset: String,
+    chain: List[Link],
+    keys: String,
+    preview: Optional[RebuildPreview],
+):
+    """The dataset page's Rebuild section: what it does, the chain of
+    pipelines it runs, a preview over a range, the button and the same from
+    the command line."""
+    h.raw("<h2>Rebuild", _docs("sensors"), "</h2>")
+    h.raw(
+        "<p>Rebuild reruns everything downstream of this dataset for the",
+        " partitions you give, in dependency order. Use it after this",
+        " dataset's data was fixed or reloaded, so the tables built from it",
+        " catch up.</p>",
+    )
+    if len(chain) == 0:
+        h.raw('<p class="empty">Nothing reads this dataset.</p>')
+        return
+    h.raw('<ol class="chain" aria-label="What a rebuild runs, in order">')
+    var at = -1
+    for i in range(len(chain)):
+        ref c = chain[i]
+        if c.level != at:
+            if at >= 0:
+                h.raw("</li>")
+            at = c.level
+            h.raw('<li class="chain__level">')
+        else:
+            h.raw('<span class="chain__and"> and </span>')
+        h.raw('<span class="chain__step">')
+        h.link(String("/pipelines/", url_encode(c.pipeline)), c.pipeline)
+        h.raw(' <span class="muted">(reads ')
+        for k in range(len(c.reads)):
+            if k:
+                h.raw(", ")
+            h.raw("<code>")
+            h.text(c.reads[k])
+            h.raw("</code>")
+        h.raw(")</span></span>")
+    h.raw("</li></ol>")
+    var href = _dataset_href(dataset)
+    h.raw('<form class="start" id="rebuild" method="post" action="', href)
+    h.raw('/rebuild" data-confirm="Rebuild?"><label class="start__range">')
+    h.raw('Partitions <input name="partitions" required')
+    h.raw(' placeholder="2024-01..2024-03" value="')
+    h.text(keys)
+    h.raw('"></label><div class="start__choices"><div class="start__choice">')
+    h.raw('<button type="submit" class="primary act__need" title="')
+    h.text(_rebuild_cmd(dataset, keys))
+    h.raw('">Rebuild downstream</button><a class="act__login" href="/login')
+    h.raw("?next=", _HERE_SLOT, '">Log in to rebuild</a><p class="muted">')
+    h.raw("Plans a run of each")
+    h.raw(" pipeline above over those partitions; each level is queued once")
+    h.raw(" the one before it has succeeded.</p></div></div>")
+    h.raw('<button type="submit" formmethod="get" formaction="', href)
+    h.raw('#rebuild" formnovalidate name="preview" value="1">Preview</button>')
+    h.raw('<div class="start__preview">')
+    if preview:
+        ref v = preview.value()
+        if v.refused:
+            h.raw('<p class="refused">')
+            h.text(v.refused)
+            h.raw("</p>")
+        else:
+            var runs = 0
+            for l in v.levels:
+                runs += len(l)
+            h.raw('<p data-preview="rebuild">')
+            h.text(
+                "This queues ",
+                runs,
+                " run" if runs == 1 else " runs",
+                " in ",
+                len(v.levels),
+                " level" if len(v.levels) == 1 else " levels",
+                ", over ",
+                len(v.partitions),
+                " partition" if len(v.partitions) == 1 else " partitions",
+                ":",
+            )
+            h.raw("</p><ol>")
+            for l in range(len(v.levels)):
+                h.raw("<li>")
+                h.text(
+                    len(v.levels[l]),
+                    " run: " if len(v.levels[l]) == 1 else " runs: ",
+                )
+                for k in range(len(v.levels[l])):
+                    if k:
+                        h.raw(", ")
+                    h.text(v.levels[l][k][0], " over ", v.levels[l][k][1])
+                h.raw("</li>")
+            h.raw("</ol>")
+    h.raw('</div><p class="muted start__cli">Same from the command line (on')
+    h.raw(" the control instance today, remotely once #111 lands):</p>")
+    h.raw('<pre class="cmd"><code data-cmd="rebuild">')
+    h.text(_rebuild_cmd(dataset, keys))
+    h.raw("</code></pre></form>")
+
+
+def dataset_page(
+    mut db: State, name: String, keys: String = "", preview: Bool = False
+) raises -> Page:
+    """A dataset's page; with `preview` and `keys`, what a rebuild over them
+    would queue (`?preview=1&partitions=...`)."""
     var ds = dataset_rows(db, name)
     if len(ds) == 0:
         return not_found(String("no dataset ", name))
     ref d = ds[0]
     var cs = commits(db, name)
     var rbs = rebuilds(db, dataset=name, limit=10)
+    var chain = downstream(db, name)
+    var rp = Optional[RebuildPreview](None)
+    if preview and keys.strip() and len(chain) > 0:
+        rp = _rebuild_preview(db, name, keys)
     var j = String('{"dataset": ', quote(d.name), ', "writers": ')
     _json_strings(j, d.writers)
     j.write(', "readers": ')
     _json_strings(j, d.readers)
+    j.write(', "downstream": [')
+    for i in range(len(chain)):
+        j.write(
+            ", " if i else "",
+            '{"pipeline": ',
+            quote(chain[i].pipeline),
+            ', "level": ',
+            chain[i].level,
+            ', "reads": ',
+        )
+        _json_strings(j, chain[i].reads)
+        j.write("}")
+    j.write("]")
+    if rp:
+        ref v = rp.value()
+        j.write(
+            ', "preview": {"partitions": ',
+            quote(keys),
+            ', "refused": ',
+            quote(v.refused) if v.refused else String("null"),
+            ', "levels": [',
+        )
+        for l in range(len(v.levels)):
+            j.write(", " if l else "", "[")
+            for k in range(len(v.levels[l])):
+                j.write(
+                    ", " if k else "",
+                    '{"pipeline": ',
+                    quote(v.levels[l][k][0]),
+                    ', "partitions": ',
+                    quote(v.levels[l][k][1]),
+                    "}",
+                )
+            j.write("]")
+        j.write('], "command": ', quote(_rebuild_cmd(name, keys)), "}")
     j.write(', "rebuilds": [')
     for i in range(len(rbs)):
         if i:
@@ -3749,16 +3935,7 @@ def dataset_page(mut db: State, name: String) raises -> Page:
     _steps_using(h, db, cache, _dataset_steps(db, name, writes=False))
     h.raw("</dd></dl>")
     h.raw('<div class="scroll">', _flow_graph(db, d.name), "</div>")
-    if len(d.readers) > 0:
-        h.raw('<div class="actions"><form class="action" method="post"')
-        h.raw(' action="', _dataset_href(d.name), '/rebuild">')
-        h.raw(
-            '<label>Rebuild downstream over <input name="partitions"',
-            ' placeholder="2024-01..2024-03" required></label>',
-            '<button type="submit">Rebuild</button><span class="muted">',
-            " every pipeline that reads it, and what reads theirs, in",
-            " order</span></form></div>",
-        )
+    _rebuild_html(h, d.name, chain, keys, rp)
     if len(rbs) > 0:
         h.raw("<h2>Rebuilds", _docs("sensors"), "</h2>")
         _rebuilds_table(h, rbs)
@@ -4684,7 +4861,12 @@ struct Ui(Copyable, Handler):
             var parts = path[byte=10:].split("/")
             var name = url_decode(parts[0])
             if len(parts) == 1 and name:
-                return dataset_page(db, name)
+                return dataset_page(
+                    db,
+                    name,
+                    _query(url, "partitions"),
+                    _query(url, "preview") == "1",
+                )
             if len(parts) == 3 and parts[1] == "snapshots":
                 var id: Int64
                 try:
