@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Several dista worker processes per EC2 worker instance** (#130):
+  `orca register --worker-procs N|auto` (`auto`: one per vCPU of the worker
+  type; default 1; `orca aws register` passes it on; EC2 only). Each
+  worker instance's script starts N supervised `DISTA_ROLE=worker`
+  processes against the run's head (each takes a port of its own and files
+  named by its process), notes one that exits, forwards SIGTERM to all, and
+  shuts the instance down when the last has gone. Scaling still counts
+  instances (`--workers MIN..MAX`, the budget, the cost): the policy runs
+  over processes, N per instance, and an instance is `drained` once all its
+  processes are. Migration 23 adds `pipelines.worker_procs` and
+  `instances.procs` / `procs_drained`; the run page and its JSON show the
+  processes of each instance. `tests/worker_procs.sh`.
 - **`orca login` and `--remote`** (#111): run orca's commands from a laptop
   against the deployed `orca ui`, without SSM or the database.
   `orca login https://<host>` (user and password, the password without

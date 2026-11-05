@@ -55,7 +55,7 @@ from orca.remote import (
     remote_target,
 )
 from orca.sample import sample_main
-from orca.scheduler import Scheduler
+from orca.scheduler import Scheduler, parse_worker_procs
 from orca.secrets import secret_problem
 from orca.sensors import rebuild, rebuilds
 from orca.state import State
@@ -66,7 +66,10 @@ comptime USAGE = """usage:
   orca locate <pipeline binary> [...] [--root <dir>]
   orca aws up|push|register|app|status|down ...   (orca aws for more)
   orca register [--image <image>] [--head-type T] [--worker-type T]
-                [--workers N|MIN..MAX] [--spot] [--secret NAME=ID ...]
+                [--workers N|MIN..MAX] [--worker-procs N|auto] [--spot]
+                [--secret NAME=ID ...]
+                (--worker-procs: dista worker processes per EC2 worker
+                instance, auto = one per vCPU; default 1)
                 <pipeline binary> [...]
   orca backfill [--rerun] [--preview] <pipeline> KEY[..KEY][,...]
                 (keyed: NAME[,...]|@all|@file:<path>; --rerun: done ones too;
@@ -169,6 +172,7 @@ def _command(args: List[String], target: String) raises -> Int:
         var worker_type = String()
         var workers = 0
         var min_workers = -1
+        var worker_procs = -1
         var spot = False
         var secrets = List[String]()
         var i = 2
@@ -191,6 +195,11 @@ def _command(args: List[String], target: String) raises -> Int:
                 if why:
                     _usage(why)
                 secrets.append(args[i + 1])
+            elif args[i] == "--worker-procs":
+                try:
+                    worker_procs = parse_worker_procs(args[i + 1])
+                except e:
+                    _usage(String(e))
             elif args[i] == "--workers":
                 # N, or MIN..MAX for autoscaling on EC2.
                 try:
@@ -226,6 +235,7 @@ def _command(args: List[String], target: String) raises -> Int:
                     spot,
                     min_workers,
                     secrets,
+                    worker_procs,
                 ),
             )
         return 0

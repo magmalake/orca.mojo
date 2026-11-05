@@ -371,6 +371,18 @@ def _migrations() -> List[List[String]]:
             "CREATE INDEX api_tokens_user ON orca.api_tokens (username)",
             "ALTER TABLE orca.audit ADD COLUMN source text",
         ],
+        # Several dista worker processes per EC2 worker instance
+        # (`orca register --worker-procs`): the count registered (0 is one
+        # per vCPU), and for each instance the processes it was started with
+        # and how many of them have been drained.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN worker_procs int",
+            "ALTER TABLE orca.instances ADD COLUMN procs int",
+            (
+                "ALTER TABLE orca.instances ADD COLUMN procs_drained int NOT"
+                " NULL DEFAULT 0"
+            ),
+        ],
     ]
 
 
