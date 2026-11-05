@@ -103,6 +103,7 @@ tbody tr:hover td { background: color-mix(in srgb, var(--ember) 3%, transparent)
 .mono { font-family: var(--mono); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.num { font-family: var(--mono); font-size: 0.78rem; }
+td.parts { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
 td.error { white-space: normal; color: var(--bad); font-family: var(--mono); font-size: 0.8rem; max-width: 32rem; }
 td code { font-size: 0.8125rem; }
 
