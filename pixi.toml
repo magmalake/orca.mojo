@@ -36,7 +36,7 @@ extra-args = ["-I", "$PREFIX/lib/mojo"]
 mojo-compiler = "==1.2.0"
 dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "27e6e88df1b79fdc424314386a835d1d08b0db2a" }
 k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "6cb83ce08e02234873f2d09c7501208eedb5589f" }
-iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "24fe93128e4acbd903880dd9b23656f5ebc73fbc" }
+iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "fc5203a8db8b2b7eaebc75d7c8f15a395ee37462" }
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
 objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "ff66975c095f392695facc1b6dd56823dec914bc" }
 arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
@@ -55,7 +55,7 @@ libpq = ">=16,<19"
 libsqlite = ">=3.45,<4"
 dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "27e6e88df1b79fdc424314386a835d1d08b0db2a" }
 k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "6cb83ce08e02234873f2d09c7501208eedb5589f" }
-iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "24fe93128e4acbd903880dd9b23656f5ebc73fbc" }
+iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "fc5203a8db8b2b7eaebc75d7c8f15a395ee37462" }
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
 objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "ff66975c095f392695facc1b6dd56823dec914bc" }
 arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
@@ -230,6 +230,8 @@ test-chaos-tables = { cmd = "CHAOS_SRC=tests/chaos_tables.mojo CHAOS_CHECK=1 scr
 test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh" }
 test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh" }
 test-commits = { cmd = "tests/concurrent_commits.sh" }
+# Snapshot expiry: orca expire, orca_maintain and the scheduler's sweep.
+test-expire = { cmd = "scripts/with-postgres.sh tests/expire.sh" }
 test-sensors = { cmd = "scripts/with-postgres.sh tests/sensors.sh" }
 # The same two over MinIO: the warehouse and logs in object storage.
 test-lineage-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/lineage.sh" }
@@ -241,7 +243,7 @@ test-keyed-backfills = { cmd = "scripts/with-postgres.sh tests/keyed_backfills.s
 test-keyed-sensor = { cmd = "scripts/with-postgres.sh tests/keyed_sensor.sh" }
 test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh" }
 # CI runs these three groups on runners of their own; test-data is all three.
-test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-chaos-tables", "test-lineage", "test-commits", "test-taxi"] }
+test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-chaos-tables", "test-lineage", "test-commits", "test-expire", "test-taxi"] }
 test-data-sensors = { depends-on = ["build-shared", "test-sensors", "test-lineage-s3", "test-sensors-s3", "test-sample-s3"] }
 test-data-keyed = { depends-on = ["build-shared", "test-keyed", "test-keyed-backfills", "test-keyed-sensor", "test-keyed-names"] }
 test-data = { depends-on = ["test-data-tables", "test-data-sensors", "test-data-keyed"] }

@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- **Bounded table history** (magmalake/mojo-census GAPS #27). Commits to
+  `gharchive.events` went from 486 ms to 1,207 ms as it reached ~889
+  snapshots and metadata files; now:
+  - `ensure_table(..., properties=)` takes Iceberg table properties, and
+    every table it creates, or finds without them, gets orca's defaults
+    (`orca.tables.table_defaults()`): old metadata files deleted after
+    each commit (`write.metadata.delete-after-commit.enabled`), a hundred
+    kept (`write.metadata.previous-versions-max`), and thirty days of
+    snapshots (`history.expire.max-snapshot-age-ms`).
+  - **`orca expire <dataset>|--all [--older-than 30d] [--keep N]
+    [--dry-run] [--report]`** expires snapshots through the project's
+    `orca_maintain` binary (`bin/orca_maintain.mojo` calling
+    `orca.maintain.maintain_main`; found as `$ORCA_MAINTAIN`, beside
+    `orca` or on `PATH`). It keeps, whatever the policy, the snapshots a
+    run that can still resume read or committed, and every snapshot of the
+    last run that committed to the dataset (`orca.expiry.retained`), so
+    retries, `resume` and `find_commit` keep working.
+  - The scheduler expires every dataset orca commits to by its own policy
+    every `ORCA_EXPIRE_HOURS` (24; 0 turns it off), the first time
+    `ORCA_EXPIRE_DELAY_SECONDS` (300) after it starts, one dataset at a
+    time in the background. A table without
+    `history.expire.max-snapshot-age-ms` (one orca didn't create) is left
+    alone.
+  - `orca aws push`'s default image builds `orca_maintain` for a project
+    whose pipelines use `orca.tables` and that has none of its own.
+  - Lineage (`orca lineage`, the UI's dataset pages) reads Postgres, so it
+    still shows an expired snapshot and what it was made from; the snapshot
+    can no longer be read from the table.
+  - Built against iceberg-mojo with linear expiry, bounded metadata logs,
+    commits that don't list the metadata directory, and merge-append.
+
 - **The lake's bucket is private unless asked** (`orca aws up`). A new stack
   parameter, `PublicData` (default `false`), decides whether
   `mlake-public-<account>` gets the bucket policy that lets anyone read it

@@ -102,6 +102,7 @@ from std.time import perf_counter_ns, sleep
 
 from postgres import Params, Transaction
 
+from orca.expiry import expirable, expire_argv, maintain_binary
 from orca.civil import Civil
 from orca.crash import crash_summary, crashed_by_signal
 from orca.cron import CronExpr
@@ -795,6 +796,15 @@ struct Scheduler(Movable):
     var wait_for_binaries: Bool
     """Whether a tick waits for the binaries it asks (`orca tick`, which
     has no later tick to collect them), rather than checking next tick."""
+    var expire_seconds: Float64
+    """How often every dataset is expired by its own policy
+    (`ORCA_EXPIRE_HOURS`, 24; 0 turns it off)."""
+    var maintain: String
+    """The `orca_maintain` binary that expires, or empty for none."""
+    var _expire_next: Int
+    """When the next expiry sweep starts, on the monotonic clock."""
+    var _expiring: List[String]
+    """The datasets this sweep has still to expire, the first one going."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -825,6 +835,15 @@ struct Scheduler(Movable):
         self.wait_for_binaries = False
         self._driver_logs = Dict[Int, String]()
         self._spawned = Dict[Int, Tuple[Int, Int, String]]()
+        self.expire_seconds = Float64(getenv("ORCA_EXPIRE_HOURS", "24")) * 3600
+        self.maintain = maintain_binary() if self.expire_seconds > 0 else ""
+        # The first sweep a few minutes after starting
+        # (`ORCA_EXPIRE_DELAY_SECONDS`, 300), not at once: a scheduler
+        # restarted in a loop shouldn't expire on every start.
+        self._expire_next = Int(perf_counter_ns()) + Int(
+            Float64(getenv("ORCA_EXPIRE_DELAY_SECONDS", "300")) * 1e9
+        )
+        self._expiring = List[String]()
 
     def register(
         mut self,
@@ -1036,6 +1055,10 @@ struct Scheduler(Movable):
             except e:
                 print("orca: can't scale run workers:", e)
         advance_rebuilds(self.db)
+        try:
+            self._expire()
+        except e:
+            print("orca: can't expire snapshots:", e)
         for p in registered(self.db):
             if p.cron:
                 try:
@@ -1423,6 +1446,43 @@ struct Scheduler(Movable):
             .row(0)
             .int64("id")
         )
+
+    def _expire(mut self) raises:
+        """Every `expire_seconds`, expires each dataset orca commits to by
+        the table's own `history.expire.*` properties, one at a time in the
+        background (`orca_maintain expire --if-policy`), with the snapshots
+        live runs need retained (`orca.expiry.retained`). `orca tick` waits
+        for the whole sweep."""
+        if self.expire_seconds <= 0 or not self.maintain:
+            return
+        while True:
+            if len(self._expiring) == 0:
+                var t = Int(perf_counter_ns())
+                if t < self._expire_next:
+                    return
+                self._expire_next = t + Int(self.expire_seconds * 1e9)
+                self._expiring = expirable(self.db)
+                if len(self._expiring) == 0:
+                    return
+            var ds = self._expiring[0]
+            var job = String("expire ", ds)
+            var argv = List[String]()
+            if job not in self._asked:
+                argv = expire_argv(self.db, self.maintain, ds)
+            var out: Optional[String]
+            try:
+                out = self._ask(job, String("orca: expire ", ds), argv)
+            except e:
+                _ = self._expiring.pop(0)
+                raise e
+            if not out:
+                return
+            _ = self._expiring.pop(0)
+            var line = String(out.value().strip())
+            if line:
+                print(line)
+            if len(self._expiring) == 0:
+                return
 
     def _ask(
         mut self, job: String, what: String, argv: List[String]

@@ -97,6 +97,7 @@ from iceberg.update_schema import (
     UpdateSchema,
     prepare_schema_update,
 )
+from iceberg.util import now_ms
 from iceberg.write import WriteOptions, write_data_files
 from parquet import RecordBatch
 
@@ -225,11 +226,86 @@ def table(mut ctx: Ctx, dataset: String) raises -> Table:
     return _load(_catalog(), name[0], name[1])
 
 
+comptime DAY_MS: Int64 = 86_400_000
+comptime DEFAULT_HISTORY_DAYS = 30
+"""How long an orca table keeps its snapshots by default."""
+
+
+def table_defaults() -> Dict[String, String]:
+    """The properties `ensure_table` gives every table it creates, and adds
+    to one that lacks them.
+
+    - `write.metadata.delete-after-commit.enabled=true` and
+      `write.metadata.previous-versions-max=100`: each commit deletes the
+      metadata files older than the last hundred, so `metadata/` stops
+      growing by one file per commit.
+    - `history.expire.max-snapshot-age-ms` (30 days): the history the
+      scheduler's expiry keeps (`orca expire`, `ORCA_EXPIRE_HOURS`). Its
+      presence is also what makes the scheduler expire the table at all;
+      a table orca didn't create keeps all its snapshots.
+    """
+    var d = Dict[String, String]()
+    d["write.metadata.delete-after-commit.enabled"] = "true"
+    d["write.metadata.previous-versions-max"] = "100"
+    d["history.expire.max-snapshot-age-ms"] = String(
+        DAY_MS * DEFAULT_HISTORY_DAYS
+    )
+    return d^
+
+
+def _wanted_properties(
+    have: Dict[String, String], given: Dict[String, String]
+) -> Dict[String, String]:
+    """What to set: the defaults a table lacks, and what `given` says
+    differently from it."""
+    var out = Dict[String, String]()
+    for e in table_defaults().items():
+        if e.key not in have and e.key not in given:
+            out[e.key] = e.value
+    for e in given.items():
+        if have.get(e.key, "\x00") != e.value:
+            out[e.key] = e.value
+    return out^
+
+
+def _settle_properties(
+    mut ctx: Ctx,
+    mut table: Table,
+    given: Dict[String, String],
+    dataset: String,
+) raises:
+    """Commits the properties `_wanted_properties` finds missing, reloading
+    and trying again when another writer commits first."""
+    var attempt = 0
+    while True:
+        var want = _wanted_properties(table.metadata.properties, given)
+        if len(want) == 0:
+            return
+        var m = table.metadata.copy()
+        var names = String()
+        for e in want.items():
+            m.properties[e.key] = e.value
+            names.write(", " if names else "", e.key, "=", e.value)
+        m.last_updated_ms = now_ms()
+        try:
+            table.commit_metadata(m^)
+        except e:
+            attempt += 1
+            if attempt > _COMMIT_RETRIES:
+                raise Error("orca: can't set ", dataset, "'s properties: ", e)
+            _backoff(attempt)
+            _reload(table)
+            continue
+        ctx.log(String("set ", dataset, " properties: ", names))
+        return
+
+
 def ensure_table(
     mut ctx: Ctx,
     dataset: String,
     schema: Schema,
     spec: PartitionSpec = PartitionSpec.unpartitioned(),
+    properties: Dict[String, String] = Dict[String, String](),
 ) raises -> Table:
     """The table of a dataset the step writes, created empty with `schema`
     and `spec` if the warehouse doesn't have it yet.
@@ -248,19 +324,29 @@ def ensure_table(
     the next one up: the table numbers new fields from its highest id, in
     the order `schema` lists them, a struct's fields after the struct.
     `spec` is only used to create the table.
+
+    `properties` are Iceberg table properties: a table is created with
+    them on top of `table_defaults()`, and an existing one gets those it
+    lacks or has with another value (one metadata commit; none when all
+    are as given). `history.expire.max-snapshot-age-ms` sets how much
+    history the scheduler's expiry keeps.
     """
     ctx.check_declared(dataset, write=True)
     var name = _split(dataset)
     var cat = _catalog()
     if not cat.table_exists(name[0], name[1]):
+        var props = table_defaults()
+        for e in properties.items():
+            props[e.key] = e.value
         try:
-            _ = cat.create_table(name[0], name[1], schema, spec)
+            _ = cat.create_table(name[0], name[1], schema, spec, props^)
         except e:
             # Another run, started at the same time, created it first.
             if not cat.table_exists(name[0], name[1]):
                 raise Error("orca: can't create ", dataset, ": ", e)
     var t = _load(cat, name[0], name[1])
     _evolve(ctx, t, schema, dataset)
+    _settle_properties(ctx, t, properties, dataset)
     return t^
 
 
