@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-11-05
+
 - **A Fleet page** (`/fleet`, in the nav; `/api/fleet`; a compact strip on
   `/`). Hosts running now (heads and workers by instance type, and the
   control instance), an estimate of what they cost an hour, runs running and
