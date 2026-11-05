@@ -156,6 +156,35 @@ This is what makes reruns safe (the vision's fourth principle).
 
 With `ORCA_LOGS` set to a directory, each attempt writes its log to `$ORCA_LOGS/<pipeline>/<run>/<step>/<partition>/<attempt>.log` (`_run` for a gather step) and records the location in `attempts.log`, which `status <run>` shows. The file always exists: orca writes the attempt's start, its end, and its error if it failed; `ctx.log` adds the step's lines, each with a UTC timestamp, and prints them to stdout too. The step's own stdout and stderr aren't captured in phase 1, since steps run in the driver process. A run of a pipeline with tasks writes its dista timeline (Chrome's trace format) beside its logs as `timeline.json`. Since phase 5, `ORCA_LOGS` can be in object storage (`s3://`), where pods don't share a disk; see phase 5's PR 4. *Verified* by `tests/logs.sh`, and over MinIO by `test-lineage-s3`.
 
+## Machine metrics
+
+A run's logs, timeline and task spans say nothing about the machines it ran on. `orca sample` (`orca.sample`; `<binary> sample` in a pipeline binary, which is what the runners start, since every instance and image has it) runs beside each process that does a run's work and appends a JSON line every `ORCA_SAMPLE_SECONDS` (5; the first a fifth of a second after it starts) to `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`:
+
+- **CPU:** user, system, iowait and steal as percentages of all cores, and the busiest core.
+- **Memory:** total, used, available, page cache, swap, and the resident set of the run's own processes (the process tree it watches, plus, on Linux, processes whose command is the pipeline's binary, which on the ec2 runner live in containers rather than under the script).
+- **Disk:** total, used and free per file system holding the temporary directory and dista's spill and store directories, and read and write bytes per second over whole disks.
+- **Network:** bytes in and out per second, loopback left out.
+
+Each line carries `v` (1), the Unix time `t`, `dt` since the previous line, the host, the core count and the sampler's own CPU seconds. Readers ignore keys they don't know: the control instance's containers (#96) and CPU counters (#97) will be added as keys of their own, without a new `v`. Linux is read from `/proc` and `statvfs`; macOS, so a local run on a laptop has metrics too, from `host_processor_info`, `host_statistics64`, `sysctl` (memory, swap), `getifaddrs` and `statfs`, with no disk rates (`io` is `null`) and iowait and steal always 0.
+
+Where it runs:
+
+| Runner | Started by | Instance | Ends |
+|---|---|---|---|
+| local | the scheduler, beside each run's process | `local` | after a last line once the run's process has |
+| ec2 | each instance's user data, next to dista; in docker mode as a container with `--pid host` and `/tmp` mounted | `<role>-<instance id>`, beside `cluster/<role>-<instance id>.log` | after a last line once the script makes its `--until` file; the script waits up to 10 s for its first line before starting the work, so even a run shorter than that keeps a sample |
+| kube | each pod's command, wrapped in `sh -c` so the sampler runs beside it and signals reach the command | the pod's name | after a last line once the pod's command has |
+
+On ec2 the lines go to a file in `/tmp` that the script's uploader puts under the run's `metrics/` with the instance's log, every `ORCA_CLUSTER_LOG_SECONDS` and once at the end, so a short run's samples are kept and a terminated instance keeps what it had uploaded. On Kubernetes, where run pods don't share the scheduler's `ORCA_LOGS`, the sampler prints its lines to the pod's log prefixed `orca-sample `, and the scheduler moves them to `metrics/<pod>.jsonl`, out of `driver.log`, before it deletes a finished Job: a pod deleted mid-run takes its samples with it, as it takes its log. With `ORCA_LOGS` in object storage, a local sampler stages its file and uploads the whole of it every `ORCA_SAMPLE_UPLOAD_SECONDS` (30) and when it ends.
+
+A sampler never fails a run: it's a process of its own, it exits 0 whatever happens, and a line it can't write is dropped with one message. `ORCA_SAMPLE_SECONDS=0` turns it off on every runner. It checks for its `--until` file and its process four times a second. SIGTERM ends it at once with its lines so far: Mojo's runtime threads would take a signal the main thread blocked, so it can't wait for one. A line is about 500 bytes, so a 1-hour run on 5 instances at 5 s keeps under 2 MB. Its CPU is about 0.4 ms a line: over 60 s at 5 s, 15 ms on Linux (arm64, 0.025% of one core) and 22 ms on an M-series Mac; `tests/sample.sh` asserts under 0.5%. CloudWatch isn't used: detailed and custom metrics cost about $0.30 per metric per month, for instances that live for one run. *Verified* by `tests/sample.sh` (the sampler itself; over MinIO in `test-sample-s3`), `tests/scheduler.sh` (local), `tests/ec2.sh` (a file per instance that lived, and a run shorter than the interval) and `tests/kind.sh` (a file per pod, none in `driver.log`).
+
+### On the run's page
+
+`orca ui` reads a run's samplers' files back (`orca.metrics`; from object storage too, listing the run's `metrics/`) and, under the timeline, draws **Machines**: one SVG, server-rendered like the DAG, with a lane per step (a bar per attempt, from `orca.attempts`) and three strips per instance on the same wall-clock axis: CPU (user and system as an area, iowait above it, steal as a line), memory used and the fullest disk's used space in percent of the instance's, and disk and network rates scaled to the instance's highest. Under it a table gives each instance's peaks: CPU, busiest core, steal, memory and disk (bytes and percent), and rates. The run's JSON has them as `instances[].peaks`, on the ec2 instances' entries (by `<role>-<instance id>`) and on entries of their own for a local run's machine and a Kubernetes run's pods. **Warnings** are stretches where memory was over 90% of the instance's, a disk over 90% full or steal over 20%: bands over the steps lane and the instance's strips, rows in the peaks table, and `peaks.warnings` in the JSON. A running run's page polls `/runs/<id>/metrics` as it polls its steps, until it answers 286. A run without samples renders as before.
+
+The axis is the run's own wall clock rather than dista's timeline's, whose times count from its first task and carry no wall-clock anchor; drawing the samples on the dista lanes needs dista to write that anchor. A page reads at most 50,000 samples per instance (69 hours at 5 s), parsing about 13 µs each, and draws the highest value in each pixel, so a peak isn't averaged away. *Verified* by `tests/test_metrics.mojo` and `tests/ui.sh`.
+
 ## Testing
 
 - **Unit tests** with `TestSuite`, as in the other tins: the DAG's order and edges, partition ranges, the codec round-trip of step outputs, cron parsing (phase 2).

@@ -14,6 +14,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error |
 | `/runs/<id>/timeline.json` | the run's Dista timeline, for Perfetto |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
+| `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), and its snapshots |
 | `/datasets/<name>/snapshots/<id>` | a snapshot's lineage, back and forward (`orca.lineage`) |
@@ -35,7 +36,8 @@ And the actions, each a `POST` of a form (see `orca.actions`):
 
 A page of something still going on (a queued or running run, a running
 attempt) refreshes its live part every two seconds from a fragment path,
-`/runs/<id>/steps` or `/runs/<id>/attempts/<attempt>/log`, which answers
+`/runs/<id>/steps`, `/runs/<id>/metrics` or
+`/runs/<id>/attempts/<attempt>/log`, which answers
 286 once there's nothing more to show, and the page stops asking. That's
 the only JavaScript.
 
@@ -102,6 +104,13 @@ from orca.lineage import (
 )
 from orca.json import quote
 from orca.live import live_sql
+from orca.metrics import (
+    InstanceMetrics,
+    StepSpan,
+    metrics_html,
+    peaks_json,
+    read_metrics,
+)
 from orca.scheduler import (
     current_keys,
     done_keys,
@@ -769,10 +778,25 @@ def _cluster_log(i: InstanceRow) -> String:
     return String(i.role, "-", i.id, ".log")
 
 
-def _json_instances(mut out: String, run: Int, xs: List[InstanceRow]):
+def _json_instances(
+    mut out: String,
+    run: Int,
+    xs: List[InstanceRow],
+    metrics: List[InstanceMetrics],
+):
+    """The run's instances, each with its samples' peaks (`orca.metrics`),
+    then those with samples and no instance row: a local run's machine and
+    a Kubernetes run's pods."""
     out.write("[")
+    var matched = List[String]()
     for k in range(len(xs)):
         ref i = xs[k]
+        var name = String(i.role, "-", i.id)
+        var peaks = String("null")
+        for m in metrics:
+            if m.name == name:
+                peaks = peaks_json(m)
+                matched.append(name)
         out.write(
             ", " if k else "",
             '{"id": ',
@@ -793,9 +817,74 @@ def _json_instances(mut out: String, run: Int, xs: List[InstanceRow]):
             quote(i.why) if i.why else String("null"),
             ', "log": ',
             quote(String("/runs/", run, "/cluster/", _cluster_log(i))),
+            ', "peaks": ',
+            peaks,
             "}",
         )
+    var n = len(xs)
+    for m in metrics:
+        if m.name in matched:
+            continue
+        out.write(
+            ", " if n else "",
+            '{"id": ',
+            quote(m.name),
+            ', "start": null, "role": ',
+            quote(_role_of(m.name)),
+            ', "type": null, "market": null, "launched": null, "ended":',
+            ' null, "why": null, "log": null, "peaks": ',
+            peaks_json(m),
+            "}",
+        )
+        n += 1
     out.write("]")
+
+
+def _role_of(name: String) -> String:
+    """A sampled instance's role, from its file's name: `local`, an ec2
+    `<role>-<id>`, or a pod's `orca-<run>-<start>-<role>[-<i>]`."""
+    if name == "local":
+        return "local"
+    if name.startswith("head-") or name.endswith("-head"):
+        return "head"
+    if name.startswith("worker-") or "-worker-" in name:
+        return "worker"
+    return "driver"
+
+
+def _step_spans(mut db: State, run: Int) raises -> List[StepSpan]:
+    """The run's attempts on the wall clock, for the machines' steps lane."""
+    var out = List[StepSpan]()
+    for r in db.conn.query(
+        (
+            "SELECT s.step, s.partition, a.status, extract(epoch FROM"
+            " a.started)::float8 AS t0, extract(epoch FROM coalesce(a.ended,"
+            " now()))::float8 AS t1 FROM orca.attempts a JOIN orca.steps s ON"
+            " s.id = a.step WHERE s.run = $1 ORDER BY s.ord, a.started"
+        ),
+        Params().int64(Int64(run)),
+    ):
+        out.append(
+            StepSpan(
+                r.text("step"),
+                r.text("partition"),
+                r.text("status"),
+                r.float64("t0"),
+                r.float64("t1"),
+            )
+        )
+    return out^
+
+
+def _machines_html(
+    mut h: Html, mut db: State, r: RunRow, metrics: List[InstanceMetrics]
+) raises:
+    """The run's machines (`orca.metrics`): nothing for a run without
+    samples."""
+    if len(metrics) == 0:
+        return
+    h.raw("<h2>Machines", _docs("metrics"), "</h2>")
+    metrics_html(h, metrics, _step_spans(db, r.id), _live(r.status))
 
 
 def _instances_html(mut h: Html, run: Int, xs: List[InstanceRow]):
@@ -1986,8 +2075,9 @@ def run(mut db: State, id: Int) raises -> Page:
     else:
         j.write("null")
     var instances = _instances(db, id)
+    var metrics = read_metrics(r.pipeline, id)
     j.write(', "instances": ')
-    _json_instances(j, id, instances)
+    _json_instances(j, id, instances, metrics)
     j.write(', "sensed": [')
     for i in range(len(sensed)):
         j.write(", " if i else "", quote(String(sensed[i])))
@@ -2165,6 +2255,15 @@ def run(mut db: State, id: Int) raises -> Page:
             h.raw('<p class="muted">The timeline can\'t be drawn: ')
             h.text(e)
             h.raw("</p>")
+    # The machines' charts, on the steps' time axis, live while it runs.
+    if _live(r.status):
+        h.raw('<div data-poll="/runs/')
+        h.text(r.id)
+        h.raw('/metrics">')
+    else:
+        h.raw("<div>")
+    _machines_html(h, db, r, metrics)
+    h.raw("</div>")
     if len(instances) > 0:
         _instances_html(h, id, instances)
     # Who did what to it from the UI (orca.auth).
@@ -2341,6 +2440,22 @@ def run_steps(mut db: State, id: Int) raises -> Page:
     var r = found.take()
     var h = Html()
     _run_live(h, db, r, _steps(db, id))
+    return Page(
+        200 if _live(r.status) else 286,
+        String(),
+        h^.finish(),
+        "text/html; charset=utf-8",
+    )
+
+
+def run_metrics(mut db: State, id: Int) raises -> Page:
+    """The run's machines, as a fragment; 286 once it's ended."""
+    var found = _runs_one(db, id)
+    if not found:
+        return not_found(String("no run ", id))
+    var r = found.take()
+    var h = Html()
+    _machines_html(h, db, r, read_metrics(r.pipeline, id))
     return Page(
         200 if _live(r.status) else 286,
         String(),
@@ -3812,6 +3927,8 @@ struct Ui(Copyable, Handler):
                 return run(db, id)
             if len(parts) == 2 and parts[1] == "steps":
                 return run_steps(db, id)
+            if len(parts) == 2 and parts[1] == "metrics":
+                return run_metrics(db, id)
             if len(parts) == 2 and parts[1] == "timeline.json":
                 return timeline(db, id)
             if len(parts) == 2 and parts[1] == "driver.log":

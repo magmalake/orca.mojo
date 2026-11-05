@@ -108,9 +108,13 @@ test-binary-timeouts = { cmd = "scripts/with-postgres.sh tests/binary_timeouts.s
 test-db-blip = { cmd = "scripts/with-postgres.sh tests/db_blip.sh" }
 test-sense-errors = { cmd = "scripts/with-postgres.sh tests/sense_errors.sh" }
 test-defer = { cmd = "scripts/with-postgres.sh tests/defer.sh" }
+# The sampler (orca.sample): its parsing, then the binary on this machine.
+test-sample = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_sample.mojo -o build/test-sample && ./build/test-sample && tests/sample.sh" }
+# A run's machines on its page (orca.metrics): peaks, warnings and charts.
+test-metrics = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_metrics.mojo -o build/test-metrics && ./build/test-metrics" }
 # Needs docker, kind and kubectl; builds the image of deploy/Dockerfile.
 test-kind = { cmd = "tests/kind.sh" }
-test = { depends-on = ["test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-pause", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
+test = { depends-on = ["test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-tasks", "test-logs", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-pause", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite", "test-sense-errors", "test-stop", "test-binary-timeouts", "test-sample", "test-metrics"] }
 toy = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "mkdir -p build && mojo build -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
 orca = { cmd = "mkdir -p build && mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca" }
@@ -215,6 +219,8 @@ test-sensors = { cmd = "scripts/with-postgres.sh tests/sensors.sh" }
 # The same two over MinIO: the warehouse and logs in object storage.
 test-lineage-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/lineage.sh" }
 test-sensors-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/sensors.sh" }
+# The sampler's lines uploaded to the bucket while it runs and when it ends.
+test-sample-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh tests/sample.sh" }
 test-keyed = { cmd = "scripts/with-postgres.sh tests/keyed.sh" }
 test-keyed-backfills = { cmd = "scripts/with-postgres.sh tests/keyed_backfills.sh" }
 test-keyed-sensor = { cmd = "scripts/with-postgres.sh tests/keyed_sensor.sh" }
