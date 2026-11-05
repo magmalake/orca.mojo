@@ -323,6 +323,22 @@ def _migrations() -> List[List[String]]:
             keys text NOT NULL,
             read_at timestamptz NOT NULL DEFAULT now())""",
         ],
+        # API tokens for `orca login` (orca.tokens), kept as their SHA-256,
+        # and where each audited action came from: `ui` (a session) or `cli`
+        # (a token).
+        [
+            """CREATE TABLE orca.api_tokens (
+            id bigserial PRIMARY KEY,
+            token_hash text NOT NULL UNIQUE,
+            username text NOT NULL REFERENCES orca.users (name) ON DELETE
+                CASCADE,
+            label text NOT NULL,
+            created timestamptz NOT NULL DEFAULT now(),
+            last_used timestamptz,
+            expires timestamptz NOT NULL)""",
+            "CREATE INDEX api_tokens_user ON orca.api_tokens (username)",
+            "ALTER TABLE orca.audit ADD COLUMN source text",
+        ],
     ]
 
 
