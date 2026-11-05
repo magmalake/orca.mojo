@@ -80,7 +80,9 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   `resume`, so the scheduler fails it at once instead of starting it, with
   an error (`runs.error`) saying to resume it with `--allow-new-code`. A
   local run whose process exits before claiming its run fails with the
-  exit code and the last line of its driver log as its error.
+  exit code and the last line of its driver log as its error; one whose
+  process crashes after (a segfault, `abort`) has the attempts it left
+  running failed with the crash's first frames (`orca.crash`).
 
 The scheduler's clock is `orca.civil.now`, which `ORCA_NOW` fixes; fire
 times and retry times are on it. Heartbeats are on the database's clock.
@@ -101,6 +103,7 @@ from std.time import perf_counter_ns, sleep
 from postgres import Params, Transaction
 
 from orca.civil import Civil
+from orca.crash import crash_summary, crashed_by_signal
 from orca.cron import CronExpr
 from orca.day import Day
 from orca.key import parse_keys
@@ -744,7 +747,7 @@ def _last_line(path: String) -> String:
         var lines = text.splitlines()
         for i in range(len(lines) - 1, -1, -1):
             var line = String(lines[i].strip())
-            if line:
+            if line and not line.startswith("--- start "):
                 var n = line.byte_length()
                 if n > 300:
                     # Cut where a character starts.
@@ -1055,7 +1058,9 @@ struct Scheduler(Movable):
         """Fails the run a reaped process was started for, if the process
         never claimed it: the run is still the scheduler's, at the start it
         was given. Its error is the exit code and the last line its process
-        printed, such as `resume`'s refusal."""
+        printed, such as `resume`'s refusal. A process that claimed it and
+        crashed has the attempts it left running failed with the crash's
+        summary (`orca.crash`)."""
         var why = String(
             "its process (pid ", pid, ") exited ", code, " before claiming it"
         )
@@ -1075,6 +1080,42 @@ struct Scheduler(Movable):
         )
         if n == 1:
             print("run", spawned[0], "failed:", why)
+        elif crashed_by_signal(code):
+            self._crashed(spawned, pid, code)
+
+    def _crashed(
+        mut self, spawned: Tuple[Int, Int, String], pid: Int, code: Int
+    ) raises:
+        """Fails the attempts a crashed process left running, if the run is
+        still its at that start, with what its driver log says of the crash
+        or, with no log or no dump in it, the signal."""
+        var held = self.db.conn.query(
+            (
+                "SELECT id FROM orca.runs WHERE id = $1 AND status ="
+                " 'running' AND starts = $2 AND owner LIKE '%:' || $3"
+            ),
+            Params()
+            .int64(Int64(spawned[0]))
+            .int64(Int64(spawned[1]))
+            .text(String(pid)),
+        )
+        if len(held) == 0:
+            return
+        var why = String()
+        if spawned[2] and exists(spawned[2]):
+            try:
+                with open(spawned[2], "r") as f:
+                    why = crash_summary(f.read())
+            except e:
+                print("orca: can't read", spawned[2], ":", e)
+        if not why:
+            why = String(
+                "crashed: killed by signal ",
+                code - 128,
+                ", with no stack dump in its output",
+            )
+        var n = self.db.interrupt(spawned[0], why)
+        print("run", spawned[0], "crashed,", n, "attempts failed:", why)
 
     def _sensed(mut self, p: Registered, error: String) raises:
         """Records how `p`'s pass went: the error of one that failed, which
@@ -1807,6 +1848,11 @@ struct Scheduler(Movable):
             var argv: List[String] = [p.binary, "resume", String(id)]
             if new_code[i]:
                 argv.append("--allow-new-code")
+            if log:
+                # Each start's output after a line of its own, as on the
+                # other runners: a crash's dump is looked for after the last.
+                with open(stage_of(log), "a") as f:
+                    f.write("--- start ", starts[i], "\n")
             var pid = spawn(argv, stage_of(log) if log else log)
             self._spawned[pid] = (
                 Int(id),

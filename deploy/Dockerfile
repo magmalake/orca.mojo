@@ -13,6 +13,10 @@
 #
 # dista and k8s compile from source at DISTA_REV and K8S_REV, the revisions
 # CI checks out, cloned next to orca as pixi.toml expects.
+#
+# As in deploy/project.Dockerfile, the binaries have line tables (-g1),
+# compressed, and the image has llvm-symbolizer, so a crash's stack dump
+# names its frames.
 FROM ghcr.io/prefix-dev/pixi:0.78.0 AS build
 ARG DISTA_REV=27e6e88df1b79fdc424314386a835d1d08b0db2a
 ARG K8S_REV=6cb83ce08e02234873f2d09c7501208eedb5589f
@@ -32,18 +36,23 @@ COPY src src
 COPY bin bin
 COPY examples examples
 RUN mkdir -p /out/bin /out/pipelines \
-    && pixi run -e default sh -c 'mojo build -I src $DEP_INC bin/scheduler.mojo -o /out/bin/orca \
+    && pixi run -e default sh -c 'mojo build -g1 -I src $DEP_INC bin/scheduler.mojo -o /out/bin/orca \
         && for p in '"${PIPELINES}"'; do n=$(basename "$p" .mojo); \
-            mojo build -I src $DEP_INC -D ORCA_SOURCE='"${ORCA_SOURCE}"' -D ORCA_COMMIT='"${ORCA_COMMIT}"' \
+            mojo build -g1 -I src $DEP_INC -D ORCA_SOURCE='"${ORCA_SOURCE}"' -D ORCA_COMMIT='"${ORCA_COMMIT}"' \
                 "$p" -o "/out/pipelines/$n" || exit 1; done \
         && /out/bin/orca locate /out/pipelines/* --root .'
+# The line tables compressed, which llvm-symbolizer reads as they are.
+RUN for b in /out/bin/* /out/pipelines/*; do [ -x "$b" ] || continue; \
+        objcopy --compress-debug-sections=zlib "$b" || exit 1; done
 # What the binaries link, and what they dlopen from $CONDA_PREFIX/lib at run
 # time (libpq for postgres.mojo, flare's shims for orca ui, objectstore's
 # for dista) with what those link: only libraries from the pixi
-# environment, as the system's are in the runtime image already.
-RUN env=/src/orca.mojo/.pixi/envs/default && mkdir -p /out/lib \
+# environment, as the system's are in the runtime image already. And
+# llvm-symbolizer, which Mojo's runtime runs to name a crash's frames.
+RUN env=/src/orca.mojo/.pixi/envs/default && mkdir -p /out/lib /out/libexec \
+    && cp -L $env/bin/llvm-symbolizer /out/libexec/ \
     && loaded=$(ls $env/lib/libpq.so* $env/lib/libflare_*.so $env/lib/libobjectstoremojo.so 2>/dev/null) \
-    && ldd /out/bin/orca /out/pipelines/* $loaded | awk -v e="$env" '$3 ~ "^"e {print $3}' \
+    && ldd /out/bin/orca /out/pipelines/* /out/libexec/* $loaded | awk -v e="$env" '$3 ~ "^"e {print $3}' \
         | sort -u | xargs -r cp -L -t /out/lib \
     && cp -L -t /out/lib $loaded
 
@@ -54,6 +63,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certi
 COPY --from=build /out/lib /opt/orca/lib
 COPY --from=build /out/bin /opt/orca/bin
 COPY --from=build /out/pipelines /opt/orca/pipelines
+COPY --from=build /out/libexec /opt/orca/libexec
 # postgres.mojo and flare find what they dlopen under $CONDA_PREFIX/lib.
-ENV CONDA_PREFIX=/opt/orca LD_LIBRARY_PATH=/opt/orca/lib PATH=/opt/orca/bin:/opt/orca/pipelines:/usr/bin:/bin
+ENV CONDA_PREFIX=/opt/orca LD_LIBRARY_PATH=/opt/orca/lib PATH=/opt/orca/bin:/opt/orca/pipelines:/usr/bin:/bin \
+    LLVM_SYMBOLIZER_PATH=/opt/orca/libexec/llvm-symbolizer
 ENTRYPOINT ["/opt/orca/bin/orca"]

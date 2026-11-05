@@ -48,6 +48,7 @@ from iceberg.append import prepare_append
 from iceberg.catalog.filesystem import FilesystemCatalog, Table
 from iceberg.commit import FileChanges, prepare_commit
 from iceberg.io import FileIO
+from iceberg.manifest import DataFile
 from iceberg.scan import TableScan
 from iceberg.schema import Schema
 from iceberg.transforms import PartitionSpec
@@ -89,7 +90,9 @@ def _reload(mut table: Table) raises:
         except e:
             attempt += 1
             if attempt > _COMMIT_RETRIES:
-                raise e^
+                raise Error(
+                    "orca: can't reload ", table.metadata.location, ": ", e
+                )
             _backoff(attempt)
 
 
@@ -102,7 +105,7 @@ def _load(cat: FilesystemCatalog, ns: String, name: String) raises -> Table:
         except e:
             attempt += 1
             if attempt > _COMMIT_RETRIES:
-                raise e^
+                raise Error("orca: can't load ", ns, ".", name, ": ", e)
             _backoff(attempt)
 
 
@@ -168,7 +171,10 @@ def load_dataset(dataset: String) raises -> Table:
     For reading what isn't a step's input, such as a keyed pipeline's keys
     (`orca.keyed`)."""
     var name = _split(dataset)
-    return _catalog().load_table(name[0], name[1])
+    try:
+        return _catalog().load_table(name[0], name[1])
+    except e:
+        raise Error("orca: can't load ", dataset, ": ", e)
 
 
 def table(mut ctx: Ctx, dataset: String) raises -> Table:
@@ -212,7 +218,7 @@ def ensure_table(
         except e:
             # Another run, started at the same time, created it first.
             if not cat.table_exists(name[0], name[1]):
-                raise e^
+                raise Error("orca: can't create ", dataset, ": ", e)
     var t = _load(cat, name[0], name[1])
     _evolve(ctx, t, schema, dataset)
     return t^
@@ -301,7 +307,14 @@ def _evolve(
             except e:
                 attempt += 1
                 if attempt > _COMMIT_RETRIES:
-                    raise e^
+                    raise Error(
+                        "orca: can't commit ",
+                        dataset,
+                        "'s new schema (",
+                        attempt,
+                        " tries): ",
+                        e,
+                    )
                 _backoff(attempt)
                 _reload(table)
                 continue
@@ -373,15 +386,19 @@ def append(
         ctx.log(String("found its commit ", found, " to ", loc))
         ctx.committed(loc, found, dataset)
         return found
-    var files = write_data_files(
-        table.io,
-        table.metadata.location,
-        batches,
-        table.metadata.schema(),
-        table.metadata.spec(),
-        table.metadata.default_sort_order_id,
-        WriteOptions.from_properties(table.metadata.properties),
-    )
+    var files: List[DataFile]
+    try:
+        files = write_data_files(
+            table.io,
+            table.metadata.location,
+            batches,
+            table.metadata.schema(),
+            table.metadata.spec(),
+            table.metadata.default_sort_order_id,
+            WriteOptions.from_properties(table.metadata.properties),
+        )
+    except e:
+        raise Error("orca: can't write data files for ", dataset, ": ", e)
     var attempt = 0
     while True:
         var result = prepare_append(
@@ -394,7 +411,14 @@ def append(
         except e:
             attempt += 1
             if attempt > _COMMIT_RETRIES:
-                raise e^
+                raise Error(
+                    "orca: can't commit to ",
+                    dataset,
+                    " (",
+                    attempt,
+                    " tries): ",
+                    e,
+                )
             _backoff(attempt)
             _reload(table)
             continue
@@ -434,7 +458,14 @@ def commit(
         except e:
             attempt += 1
             if attempt > _COMMIT_RETRIES:
-                raise e^
+                raise Error(
+                    "orca: can't commit to ",
+                    dataset,
+                    " (",
+                    attempt,
+                    " tries): ",
+                    e,
+                )
             _backoff(attempt)
             _reload(table)
             continue
