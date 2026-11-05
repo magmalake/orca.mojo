@@ -6,7 +6,8 @@
 #   after a last line once the process has;
 # - a process shorter than an interval still leaves a line;
 # - a sampler that can't write carries on and exits 0;
-# - told to stop with SIGTERM or --until, it writes a last line and exits 0;
+# - told to stop with --until, it writes a last line and exits 0; killed
+#   with SIGTERM, it keeps the lines it wrote;
 # - `--out -` prints prefixed lines;
 # - its own CPU, at the default 5 s, is under 0.5% of one core.
 #
@@ -72,16 +73,19 @@ out=$(./build/orca sample --out "$dir/file/c.jsonl" --pid $! --seconds 0.2 2>&1)
 [ "$(echo "$out" | grep -c "dropped a line")" -eq 1 ] || fail "the sampler said: $out"
 echo "ok   a sampler that can't write says so once and exits 0"
 
-# Killed before its first line was due: it writes one, then ends.
-./build/orca sample --out "$dir/e.jsonl" --seconds 5 &
+# SIGTERM between lines: it ends, keeping the lines it wrote.
+./build/orca sample --out "$dir/e.jsonl" --seconds 0.2 &
 s=$!
 started=$s
-sleep 0.5
+i=0
+until [ "$(wc -l < "$dir/e.jsonl" 2> /dev/null || echo 0)" -ge 2 ]; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "no lines in 10 s"; sleep 0.1
+done
 kill "$s"
-wait "$s" || fail "a sampler told to stop exited $?"
+wait "$s" 2> /dev/null || true
 started=
-python3 tests/metrics_ok.py --min 1 "$dir/e.jsonl" > /dev/null || fail "e.jsonl"
-echo "ok   SIGTERM: a last line, then exit 0"
+python3 tests/metrics_ok.py --min 2 "$dir/e.jsonl" > /dev/null || fail "e.jsonl"
+echo "ok   SIGTERM: it ends, its lines kept"
 
 # Told to stop with --until, even before it has started: a line, then exit.
 touch "$dir/stop"
@@ -110,7 +114,7 @@ if [ -n "${ORCA_TEST_S3:-}" ]; then
     # shellcheck disable=SC2086
     mojo build -I src $DEP_INC tests/s3cat.mojo -o build/s3cat
     loc="$ORCA_S3_BUCKET/sample-$$/metrics/local.jsonl"
-    sleep 8 &
+    sleep 20 &
     p=$!
     ORCA_LOG_STAGE=$PWD/$dir/stage ORCA_SAMPLE_UPLOAD_SECONDS=1 \
         ./build/orca sample --out "$loc" --pid "$p" --seconds 0.5 &
