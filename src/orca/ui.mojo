@@ -9,7 +9,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/` | pipelines, with their schedules, next runs and last runs |
 | `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
-| `/runs` | runs, newest first; `?pipeline=`, `?status=`, `?trigger=` |
+| `/runs` | runs, newest first, `?n=` (50, at most 500) to a page; `?pipeline=`, `?status=`, `?trigger=`; `?before=<id>`: older than that run |
 | `/runs/<id>` | a run's DAG, steps and partitions, attempts, errors, reads and commits |
 | `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error |
 | `/runs/<id>/timeline.json` | the run's Dista timeline, for Perfetto |
@@ -408,8 +408,10 @@ def _runs(
     status: String = "",
     trigger: String = "",
     limit: Int = 100,
+    before: Int = 0,
 ) raises -> List[RunRow]:
-    """Runs newest first, those of a pipeline, status or trigger if given."""
+    """Runs newest first, those of a pipeline, status or trigger if given,
+    and with ids under `before` if it's over 0."""
     var rows = db.conn.query(
         String(
             "SELECT id::text AS id, pipeline, partitions, trigger, status,",
@@ -424,10 +426,15 @@ def _runs(
             " AS stalled, ",
             _WAITING,
             " AS waiting FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
-            " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) ORDER BY",
-            " id DESC LIMIT $4",
+            " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) AND",
+            " ($5 = 0 OR id < $5) ORDER BY orca.runs.id DESC LIMIT $4",
         ),
-        Params().text(pipeline).text(status).text(trigger).int64(Int64(limit)),
+        Params()
+        .text(pipeline)
+        .text(status)
+        .text(trigger)
+        .int64(Int64(limit))
+        .int64(Int64(before)),
     )
     var out = List[RunRow]()
     for r in rows:
@@ -1260,6 +1267,13 @@ def _page(title: String, active: StaticString, body: Html) -> String:
     return h^.finish()
 
 
+comptime _TRIES = (
+    "Times the run's process was started: 1 is normal; more means retries,"
+    " a lost instance or a resume."
+)
+"""What a runs table's Tries column counts (`orca.runs.starts`)."""
+
+
 def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
     if len(runs) == 0:
         h.raw('<p class="empty">No runs.</p>')
@@ -1269,7 +1283,11 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
         h.raw("<th>Pipeline</th>")
     h.raw(
         "<th>Partitions</th><th>Trigger</th><th>Status</th>",
-        '<th class="num">Starts</th>',
+        '<th class="num"><abbr title="',
+        _TRIES,
+        '" aria-label="Tries: ',
+        _TRIES,
+        '">Tries</abbr></th>',
         "<th>Created</th><th>Ended</th></tr></thead><tbody>",
     )
     for r in runs:
@@ -1289,7 +1307,11 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
             h.text(r.waiting_until)
             h.raw("</span>")
         h.raw("</td>")
-        h.num(r.starts)
+        # Empty for 0 and 1, so a run that took more draws the eye.
+        if r.starts > 1:
+            h.num(r.starts)
+        else:
+            h.raw('<td class="num"></td>')
         h.mono(r.created)
         h.mono(r.ended)
         h.raw("</tr>")
@@ -2003,23 +2025,230 @@ def pipeline(mut db: State, name: String) raises -> Page:
     return Page(200, j^, _page(p.name, "/", h))
 
 
+comptime _RUN_STATUSES: List[String] = [
+    "queued",
+    "running",
+    "deferred",
+    "succeeded",
+    "failed",
+    "cancelled",
+]
+"""The statuses a run takes (`orca.runs.status`), in the order a run goes
+through them; a deferred run waits for its `retry_at`."""
+
+comptime _RUN_TRIGGERS: List[String] = [
+    "schedule",
+    "sensor",
+    "backfill",
+    "manual",
+    "ui",
+    "rerun",
+    "rebuild",
+]
+"""The triggers orca writes (`orca.runs.trigger`): the scheduler's fires and
+sensors, `backfill`, a binary's `run`, the UI's start button, a rerun and a
+rebuild. The filter adds any others the table has."""
+
+comptime _RUNS_PAGE = 50
+"""Runs to a page of `/runs`, unless `?n=` says (at most `_RUNS_PAGE_MAX`)."""
+comptime _RUNS_PAGE_MAX = 500
+
+comptime _SUBMIT_ON_CHANGE = (
+    '<script>document.querySelector("form.filters").addEventListener('
+    '"change", (e) => e.currentTarget.submit());</script>'
+)
+"""Filtering as soon as a choice changes; the Filter button does the same
+without JavaScript."""
+
+
+def _grouped(n: Int) -> String:
+    """`n` with commas between thousands: 1,234."""
+    var digits = String(n if n >= 0 else -n)
+    var out = String("-" if n < 0 else "")
+    var first = digits.byte_length() % 3
+    if first == 0:
+        first = 3
+    out.write(digits[byte=:first])
+    var i = first
+    while i < digits.byte_length():
+        out.write(",", digits[byte = i : i + 3])
+        i += 3
+    return out^
+
+
+def _runs_href(
+    pipeline: String, status: String, trigger: String, n: Int, before: Int
+) -> String:
+    """`/runs` with these filters, page size (unless the default) and
+    `before` (unless 0), each value encoded."""
+    var q = String()
+    for f in [("pipeline", pipeline), ("status", status), ("trigger", trigger)]:
+        if f[1]:
+            q.write("&" if q else "?", f[0], "=", url_encode(f[1]))
+    if n != _RUNS_PAGE:
+        q.write("&" if q else "?", "n=", n)
+    if before > 0:
+        q.write("&" if q else "?", "before=", before)
+    return String("/runs", q)
+
+
+def _select(
+    mut h: Html, name: StaticString, options: List[String], current: String
+):
+    """A labelled `<select>` of `options` after "any", `current` selected;
+    `current` is added if it isn't one of them, so the page says what it
+    filters by."""
+    h.raw("<label>", name, ' <select name="', name, '">')
+    h.raw(
+        '<option value=""', " selected" if not current else "", ">any</option>"
+    )
+    var found = False
+    for o in options:
+        h.raw('<option value="')
+        h.text(o)
+        h.raw('"')
+        if o == current:
+            h.raw(" selected")
+            found = True
+        h.raw(">")
+        h.text(o)
+        h.raw("</option>")
+    if current and not found:
+        h.raw('<option value="')
+        h.text(current)
+        h.raw('" selected>')
+        h.text(current)
+        h.raw("</option>")
+    h.raw("</select></label>")
+
+
+def _with_seen(
+    known: List[String], mut db: State, sql: String
+) raises -> List[String]:
+    """`known`, then the values `sql` returns (as `v`) that aren't in it."""
+    var out = known.copy()
+    for r in db.conn.query(sql):
+        var v = r.text("v")
+        if v and v not in out:
+            out.append(v)
+    return out^
+
+
 def runs(
-    mut db: State, pipeline: String, status: String, trigger: String
+    mut db: State,
+    pipeline: String,
+    status: String,
+    trigger: String,
+    before: Int = 0,
+    n: Int = 0,
 ) raises -> Page:
-    var rs = _runs(db, pipeline, status, trigger)
+    """`/runs`: a page of runs newest first, by id under `before` if it's
+    over 0, filtered; with how many match and links to the newer and older
+    pages."""
+    var size = _RUNS_PAGE if n <= 0 else min(n, _RUNS_PAGE_MAX)
+    var at = before if before > 0 else 0
+    var rs = _runs(db, pipeline, status, trigger, limit=size + 1, before=at)
+    var more = len(rs) > size
+    if more:
+        _ = rs.pop()
+    var next_before = rs[len(rs) - 1].id if more else 0
+
+    # How many match, and how many of them are newer than this page; then
+    # where the newer page starts: `size` runs above this one, or the first.
+    comptime matching = (
+        " FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND ($2 = '' OR"
+        " status = $2) AND ($3 = '' OR trigger = $3)"
+    )
+    var counts = db.conn.query(
+        String(
+            "SELECT count(*) AS total, count(*) FILTER (WHERE $4 > 0 AND id",
+            " >= $4) AS newer",
+            matching,
+        ),
+        Params().text(pipeline).text(status).text(trigger).int64(Int64(at)),
+    )
+    var total = Int(counts.row(0).int64("total"))
+    var newer = Int(counts.row(0).int64("newer"))
+    var newer_before = 0
+    if newer > size:
+        var top = db.conn.query(
+            String(
+                "SELECT id",
+                matching,
+                " AND id >= $4 ORDER BY id OFFSET $5 LIMIT 1",
+            ),
+            Params()
+            .text(pipeline)
+            .text(status)
+            .text(trigger)
+            .int64(Int64(at))
+            .int64(Int64(size - 1)),
+        )
+        newer_before = Int(top.row(0).int64("id")) + 1
+
     var j = String('{"runs": ')
     _json_runs(j, rs)
-    j.write("}")
+    j.write(
+        ', "filters": {"pipeline": ',
+        quote(pipeline),
+        ', "status": ',
+        quote(status),
+        ', "trigger": ',
+        quote(trigger),
+        '}, "n": ',
+        size,
+        ', "before": ',
+        String(at) if at > 0 else String("null"),
+        ', "total": ',
+        total,
+        ', "newer": ',
+        newer,
+        ', "next_before": ',
+        String(next_before) if more else String("null"),
+        "}",
+    )
+
+    var pipelines = List[String]()
+    for r in db.conn.query("SELECT name FROM orca.pipelines ORDER BY name"):
+        pipelines.append(r.text("name"))
+    var triggers = _with_seen(
+        materialize[_RUN_TRIGGERS](),
+        db,
+        "SELECT DISTINCT trigger AS v FROM orca.runs ORDER BY v",
+    )
 
     var h = Html()
     h.raw("<h1>Runs</h1>")
     h.raw('<form class="filters" method="get" action="/runs">')
-    for f in [("pipeline", pipeline), ("status", status), ("trigger", trigger)]:
-        h.raw("<label>", f[0], ' <input name="', f[0], '" value="')
-        h.text(f[1])
-        h.raw('"></label>')
-    h.raw('<button type="submit">Filter</button></form>')
+    _select(h, "pipeline", pipelines, pipeline)
+    _select(h, "status", materialize[_RUN_STATUSES](), status)
+    _select(h, "trigger", triggers, trigger)
+    if size != _RUNS_PAGE:
+        h.raw('<input type="hidden" name="n" value="', size, '">')
+    h.raw('<button type="submit">Filter</button></form>', _SUBMIT_ON_CHANGE)
     _runs_table(h, rs, True)
+    if len(rs) > 0:
+        h.raw('<nav class="pager" aria-label="Pages of runs">')
+        if newer > 0:
+            h.link(
+                _runs_href(pipeline, status, trigger, size, newer_before),
+                "← Newer",
+            )
+        h.raw('<span class="pager__at">')
+        h.text(
+            _grouped(newer + 1),
+            "–",
+            _grouped(newer + len(rs)),
+            " of ",
+            _grouped(total),
+        )
+        h.raw("</span>")
+        if more:
+            h.link(
+                _runs_href(pipeline, status, trigger, size, next_before),
+                "Older →",
+            )
+        h.raw("</nav>")
     return Page(200, j^, _page("Runs", "/runs", h))
 
 
@@ -2175,7 +2404,7 @@ def run(mut db: State, id: Int) raises -> Page:
         h.raw("</dd><dt>Waiting</dt><dd>until ")
         h.text(r.waiting_until)
         h.raw(", when a step asked to run again")
-    h.raw("</dd><dt>Starts</dt><dd>")
+    h.raw('</dd><dt><abbr title="', _TRIES, '">Tries</abbr></dt><dd>')
     h.text(r.starts)
     if cpu:
         h.raw("</dd><dt>CPU</dt><dd>")
@@ -3929,6 +4158,8 @@ struct Ui(Copyable, Handler):
                 _query(url, "pipeline"),
                 _query(url, "status"),
                 _query(url, "trigger"),
+                before=_int(_query(url, "before")),
+                n=_int(_query(url, "n")),
             )
         if path.startswith("/runs/"):
             var parts = path[byte=6:].split("/")

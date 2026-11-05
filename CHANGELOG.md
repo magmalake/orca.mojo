@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **`/runs` filters are dropdowns, and the runs go back further than 100**
+  (#113). Pipeline, status and trigger are `<select>`s: the registered
+  pipelines; queued, running, deferred, succeeded, failed and cancelled;
+  and the triggers orca writes plus any others in `orca.runs`; the current
+  choice stays selected, and the page filters as a choice changes (the
+  Filter button does the same without JavaScript). The page shows 50 runs
+  (`?n=`, at most 500) and pages by id: `?before=<id>` is the runs older
+  than that one, and Newer and Older links keep the filters, beside
+  "51–100 of 1,234". The JSON has `next_before` (null on the last page),
+  `newer`, `total`, `n`, `before` and `filters`.
+- **Runs tables say Tries, not Starts** (#113), with a tooltip saying what
+  it counts, and show it only when a run was started more than once. The
+  JSON's field is still `starts`.
+- Fixed: `/runs` sorted run ids as text, so past run 9 the newest weren't
+  first (run 9 came before run 64).
+
 ## 0.3.3 (2026-11-04)
 
 - **A run's page charts its machines** (#95). Under the timeline, a

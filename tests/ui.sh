@@ -214,5 +214,70 @@ curl -fsS -D - -o /dev/null "$base/runs/$fan/timeline.json" | grep -qi '^access-
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$ok_run/timeline.json")
 [ "$code" = 404 ] || fail "a run without tasks answered $code for its timeline"
 
+# /runs: the filters are dropdowns with the current choice selected, and an
+# unknown value is kept, escaped.
+page=$(html "/runs?pipeline=toy&status=failed")
+echo "$page" | grep -qF '<select name="pipeline"><option value="">any</option>' || fail "no pipeline dropdown"
+echo "$page" | grep -qF '<option value="toy" selected>toy</option>' || fail "toy isn't selected"
+echo "$page" | grep -qF '<option value="daily">daily</option>' || fail "daily isn't a pipeline option"
+echo "$page" | grep -qF '<option value="failed" selected>failed</option>' || fail "failed isn't selected"
+echo "$page" | grep -qF '<option value="cancelled">cancelled</option>' || fail "cancelled isn't a status option"
+echo "$page" | grep -qF '<select name="trigger"><option value="" selected>any</option><option value="schedule">schedule</option>' \
+    || fail "the trigger dropdown"
+echo "$page" | grep -qF '<option value="rebuild">rebuild</option>' || fail "rebuild isn't a trigger option"
+echo "$page" | grep -qF '<button type="submit">Filter</button>' || fail "the Filter button"
+html '/runs?trigger=%3Cb%3E' | grep -qF '<option value="&lt;b&gt;" selected>&lt;b&gt;</option>' \
+    || fail "an unknown trigger isn't kept, escaped"
+
+# Paging by id: 60 more runs, 25 to a page, across the boundaries with the
+# filters kept.
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, ended)
+   SELECT 'toy', registry_hash, '2023-01', 'schedule', 'succeeded', now()
+   FROM orca.runs, generate_series(1, 60) WHERE id = $ok_run" > /dev/null
+f='pipeline=toy&status=succeeded&trigger=schedule&n=25'
+p1=$(json "/runs?$f")
+echo "$p1" | jq -e '(.runs | length) == 25 and .total == 60 and .newer == 0 and .before == null and .n == 25
+    and .filters == {"pipeline": "toy", "status": "succeeded", "trigger": "schedule"}
+    and .next_before == .runs[-1].id and ([.runs[].trigger] | unique) == ["schedule"]' > /dev/null \
+    || fail "the first page's JSON: $(echo "$p1" | jq -c 'del(.runs)')"
+b2=$(echo "$p1" | jq .next_before)
+page=$(html "/runs?$f")
+echo "$page" | grep -qF '<span class="pager__at">1–25 of 60</span>' || fail "the first page's range"
+echo "$page" | grep -q 'Newer' && fail "the first page links newer runs"
+echo "$page" | grep -qF "<a href=\"/runs?pipeline=toy&amp;status=succeeded&amp;trigger=schedule&amp;n=25&amp;before=$b2\">Older →</a>" \
+    || fail "the first page's Older link"
+echo "$page" | grep -qF '<input type="hidden" name="n" value="25">' || fail "the form doesn't keep n"
+p2=$(json "/runs?$f&before=$b2")
+echo "$p2" | jq -e --argjson b "$b2" '(.runs | length) == 25 and .newer == 25 and .runs[0].id < $b
+    and .runs[0].id == ([.runs[].id] | max)' > /dev/null || fail "the second page: $(echo "$p2" | jq -c "del(.runs)")"
+[ "$(echo "$p1" "$p2" | jq -s '[.[].runs[].id] | unique | length')" -eq 50 ] || fail "pages overlap"
+page=$(html "/runs?$f&before=$b2")
+echo "$page" | grep -qF '<span class="pager__at">26–50 of 60</span>' || fail "the second page's range"
+echo "$page" | grep -qF '<a href="/runs?pipeline=toy&amp;status=succeeded&amp;trigger=schedule&amp;n=25">← Newer</a>' \
+    || fail "the second page's Newer link isn't the first page"
+b3=$(echo "$p2" | jq .next_before)
+p3=$(json "/runs?$f&before=$b3")
+echo "$p3" | jq -e '(.runs | length) == 10 and .next_before == null and .newer == 50' > /dev/null \
+    || fail "the last page: $(echo "$p3" | jq -c 'del(.runs)')"
+page=$(html "/runs?$f&before=$b3")
+echo "$page" | grep -qF '<span class="pager__at">51–60 of 60</span>' || fail "the last page's range"
+echo "$page" | grep -q 'Older' && fail "the last page links older runs"
+echo "$page" | grep -qF "before=$b2\">← Newer</a>" || fail "the last page's Newer link isn't the second page"
+[ "$(json '/runs?n=100000' | jq .n)" -eq 500 ] || fail "n isn't capped at 500"
+[ "$(json /runs | jq .n)" -eq 50 ] || fail "the default page isn't 50"
+# Tries: the header says what it counts, and a cell has a number only when
+# the run was started more than once; the JSON keeps `starts`.
+q "UPDATE orca.runs SET starts = 3 WHERE id = $bad_run" > /dev/null
+page=$(html "/runs?pipeline=toy&status=failed")
+echo "$page" | grep -qF "<th class=\"num\"><abbr title=\"Times the run's process was started: 1 is normal; more means retries, a lost instance or a resume.\"" \
+    || fail "the Tries header"
+echo "$page" | grep -q '>Starts<' && fail "a runs table still says Starts"
+echo "$page" | grep -qF '<td class="num">3</td>' || fail "a run started 3 times doesn't say 3"
+page=$(html "/runs?pipeline=toy&status=succeeded&trigger=manual")
+echo "$page" | grep -qF '<td class="num"></td>' || fail "a run started once isn't empty under Tries"
+echo "$page" | grep -qF '<td class="num">1</td>' && fail "a run started once shows 1"
+[ "$(json "/runs?pipeline=toy&status=failed" | jq '.runs[0].starts')" -eq 3 ] || fail "the JSON's starts"
+echo "ok   /runs: dropdown filters, pages and tries"
+
 kill "$pid"
 echo "ok   ui"
