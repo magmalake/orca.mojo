@@ -178,6 +178,23 @@ struct Registered(Copyable, Movable):
     """Its runs' secrets: environment variable and Secrets Manager ID."""
     var paused: Bool
     """`orca pause`: its runs are queued as ever, but none is started."""
+    var worker_procs: Int
+    """On EC2, the dista worker processes on each worker instance
+    (`orca register --worker-procs`); 0 is one per vCPU."""
+
+
+def parse_worker_procs(v: String) raises -> Int:
+    """`--worker-procs`'s value: a count of at least 1, or `auto` (returned
+    as 0), one process per vCPU of the worker type."""
+    if v == "auto":
+        return 0
+    try:
+        var n = Int(v)
+        if n >= 1 and n <= 256:
+            return n
+    except:
+        pass
+    raise Error("--worker-procs is a count from 1 to 256 or auto, not ", v)
 
 
 def fill_key(kind: String, fills: String, local: Civil) raises -> String:
@@ -249,7 +266,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " END AS workers, coalesce(head_type, '') AS head_type,"
             " coalesce(worker_type, '') AS worker_type, coalesce(spot, false)"
             " AS spot, coalesce(ec2_min_workers, -1) AS min_workers,"
-            " coalesce(secrets::text, '') AS secrets, paused FROM"
+            " coalesce(secrets::text, '') AS secrets, paused,"
+            " coalesce(worker_procs, 1) AS worker_procs FROM"
             " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
             " name = $1) ORDER BY name"
         ),
@@ -283,6 +301,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 Int(r.int64("min_workers")),
                 parse_secrets(r.text("secrets")),
                 r.bool("paused"),
+                Int(r.int64("worker_procs")),
             )
         )
     # A fixed count, or no tasks: no scaling.
@@ -437,7 +456,9 @@ def kept_keys(mut db: State, pipeline: String) raises -> Optional[KeptKeys]:
     )
 
 
-def _file_names(path: String) raises -> String:
+def file_names(path: String) raises -> String:
+    """The names in the file at `path`, a line each, as `NAME,NAME,...`
+    (`@file:<path>`)."""
     var text: String
     with open(path, "r") as f:
         text = f.read()
@@ -522,7 +543,7 @@ def partition_keys(p: Registered, keys: String) raises -> List[String]:
         var have = Dict[String, Bool]()
         for k in current:
             have[k] = True
-        var list = _file_names(String(keys[byte=6:])) if keys.startswith(
+        var list = file_names(String(keys[byte=6:])) if keys.startswith(
             "@file:"
         ) else keys
         for n in parse_names(list):
@@ -864,6 +885,7 @@ struct Scheduler(Movable):
         spot: Bool = False,
         min_workers: Int = -1,
         secrets: List[String] = List[String](),
+        worker_procs: Int = -1,
     ) raises -> String:
         """Records the pipeline `binary` describes, with its path; its
         schedule counts from `now` the first time, and a sensor from now the
@@ -871,7 +893,8 @@ struct Scheduler(Movable):
         Queued runs move to the new code, and so do failed ones waiting for
         a retry with no step done. `min_workers`, with `workers` as the
         most, makes an EC2 run's workers scale between them; -1 keeps a
-        fixed count. `secrets`, `NAME=ID`s, replace the pipeline's when
+        fixed count. `worker_procs` is the dista worker processes per EC2 worker
+        instance (0: one per vCPU); -1 keeps what was registered. `secrets`, `NAME=ID`s, replace the pipeline's when
         given. Returns the pipeline's name."""
         var path = absolute(binary)
         var got = capture([path, "describe"], binary_seconds())
@@ -914,12 +937,14 @@ struct Scheduler(Movable):
             (
                 "INSERT INTO orca.pipelines (name, registry_hash, describe,"
                 " binary_path, since, sensing_since, image, head_type,"
-                " worker_type, ec2_workers, spot, ec2_min_workers, secrets)"
+                " worker_type, ec2_workers, spot, ec2_min_workers, secrets,"
+                " worker_procs)"
                 " SELECT"
                 " d->>'pipeline',"
                 " d->>'registry_hash', d, $2, $3, CASE WHEN $4 THEN now() END,"
                 " nullif($5, ''), nullif($6, ''), nullif($7, ''), nullif($8,"
-                " 0), $9, nullif($10, -1), nullif($11, '')::jsonb"
+                " 0), $9, nullif($10, -1), nullif($11, '')::jsonb,"
+                " nullif($12, -1)"
                 " FROM (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO"
                 " UPDATE SET registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
@@ -934,7 +959,8 @@ struct Scheduler(Movable):
                 " ec2_min_workers = CASE WHEN $8 > 0 THEN"
                 " EXCLUDED.ec2_min_workers ELSE orca.pipelines.ec2_min_workers"
                 " END, secrets = coalesce(EXCLUDED.secrets,"
-                " orca.pipelines.secrets),"
+                " orca.pipelines.secrets), worker_procs = CASE WHEN $12 >= 0"
+                " THEN $12 ELSE orca.pipelines.worker_procs END,"
                 " spot = CASE WHEN $6 <> '' OR $7 <> '' OR $8 > 0 OR $9 THEN $9"
                 " ELSE orca.pipelines.spot END, last_seen"
                 " = now() RETURNING name, registry_hash, coalesce(image, '')"
@@ -951,7 +977,8 @@ struct Scheduler(Movable):
             .int64(Int64(workers))
             .bool(spot)
             .int64(Int64(min_workers))
-            .text(secrets_json(secrets)),
+            .text(secrets_json(secrets))
+            .int64(Int64(worker_procs)),
         )
         var name = res.row(0).text("name")
         var version = self.db.version(
@@ -1909,6 +1936,7 @@ struct Scheduler(Movable):
                             new_code[i],
                             p.min_workers,
                             p.secrets.copy(),
+                            p.worker_procs,
                         ),
                     )
                     print("started", p.name, "run", id, "on its instances")

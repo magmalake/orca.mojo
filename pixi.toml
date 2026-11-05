@@ -2,7 +2,7 @@
 authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
 channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
 name = "orca.mojo"
-version = "0.5.0"
+version = "0.6.0"
 description = "Orchestration for Mojo data pipelines: DAGs in Mojo, cron schedules, a web UI."
 preview = ["pixi-build"]
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
@@ -21,7 +21,7 @@ sqlite = ">=3.45,<4"
 # revisions mojoshelf published of what it imports.
 [package]
 name = "orca-mojo"
-version = "0.5.0"
+version = "0.6.0"
 
 [package.build]
 backend = { name = "pixi-build-mojo", version = "0.*" }
@@ -91,6 +91,9 @@ test-actions = { cmd = "scripts/with-postgres.sh tests/actions.sh" }
 # The fleet page (orca.fleet): samples kept in Postgres, hosts, cost, charts.
 test-fleet = { cmd = "scripts/with-postgres.sh tests/fleet.sh" }
 test-ui-login = { cmd = "scripts/with-postgres.sh tests/ui_login.sh" }
+# `orca login` and `--remote` (orca.remote, orca.tokens): tokens, URLs and
+# the credentials file, then the command against orca ui over HTTP.
+test-remote = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_remote.mojo -o build/test-remote && ./build/test-remote && scripts/with-postgres.sh tests/remote.sh" }
 test-pause = { cmd = "scripts/with-postgres.sh tests/pause.sh" }
 # The ec2 runner against a stand-in EC2 API; needs python3.
 test-versions = { cmd = "scripts/with-postgres.sh tests/versions.sh" }
@@ -104,6 +107,7 @@ test-locate = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_locate.m
 test-timeline = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_timeline.mojo -o build/test-timeline && ./build/test-timeline" }
 test-ec2 = { cmd = "scripts/with-postgres.sh tests/ec2.sh" }
 test-autoscale = { cmd = "scripts/with-postgres.sh tests/autoscale.sh" }
+test-worker-procs = { cmd = "scripts/with-postgres.sh tests/worker_procs.sh" }
 test-secrets = { cmd = "scripts/with-postgres.sh tests/secrets.sh" }
 test-aws = { cmd = "tests/aws.sh" }
 test-lost-workers = { cmd = "scripts/with-postgres.sh tests/lost_workers.sh" }
@@ -124,9 +128,9 @@ test-kind = { cmd = "tests/kind.sh" }
 build-shared = { cmd = "scripts/build-shared.sh" }
 # CI runs these two halves on runners of their own; `test` is both.
 # The executor, stores, workers, clouds and the data a run makes:
-test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
+test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-worker-procs", "test-secrets", "test-aws", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
 # The scheduler, the UI, and what a registration and its code control:
-test-scheduler-ui = { depends-on = ["build-shared", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-actions", "test-ui-login", "test-pause", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
+test-scheduler-ui = { depends-on = ["build-shared", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-actions", "test-ui-login", "test-remote", "test-pause", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
 test = { depends-on = ["test-executor", "test-scheduler-ui"] }
 toy = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout" }

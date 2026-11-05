@@ -25,6 +25,14 @@ container with `--pid host`), whose lines its script uploads to the run's
 `ORCA_CLUSTER_LOG_SECONDS` and once when it ends, after telling the
 sampler to write a last line and stop (`--until`).
 
+With `--worker-procs N` (`auto`: one per vCPU of the worker type) each
+worker instance's script starts `N` dista worker processes against the same
+head, rather than one, since a process runs one task at a time: each takes
+a port of its own, so they share the host. The script notes one that exits,
+forwards a SIGTERM to all of them, and shuts the instance down once the last
+has gone. Counts and costs stay in instances (`workers`, the budget); a
+worker's log is its processes' logs joined.
+
 A pipeline registered with `--workers MIN..MAX` scales: its run starts
 `MIN` workers, which may be none, and every tick `scale` reads the head's
 demand (`dista status --json`, from port 6390 on the head's private address,
@@ -138,6 +146,9 @@ struct Ec2Spec(Copyable, Movable):
     """The workers it starts with; fewer than `workers`, it scales."""
     var secrets: List[Tuple[String, String]]
     """Environment variable and Secrets Manager ID of each secret."""
+    var worker_procs: Int
+    """The dista worker processes on each worker instance; 0 is one per
+    vCPU of the worker type."""
 
 
 def _quote(s: String) -> String:
@@ -187,6 +198,13 @@ struct Ec2Runner(Movable):
 
     def worker_of(self, s: String) -> String:
         return s if s else self.worker_type
+
+    def procs_of(self, r: Ec2Spec) raises -> Int:
+        """The dista worker processes on each of the run's worker
+        instances: `worker_procs`, or one per vCPU for `auto` (0)."""
+        if r.worker_procs > 0:
+            return r.worker_procs
+        return max(vcpus(self.worker_of(r.worker_type)), 1)
 
     def cpu_of(
         self, tasks: Bool, head_type: String, worker_type: String, workers: Int
@@ -352,9 +370,54 @@ struct Ec2Runner(Movable):
             " >/dev/null 2>&1",
         )
 
+    def _worker_procs(
+        self, r: Ec2Spec, env: List[String], log: String, procs: Int
+    ) -> String:
+        """Lines starting `procs` dista worker processes, each with its own
+        port and files (a worker listens on a port of its own and names its
+        files by its process), and supervising them: a process that exits is
+        noticed in the log, and the lines end once all have. A SIGTERM to
+        the script goes to every process, each draining as a lone worker
+        does. Each process's output is `<log>.p<k>`, joined into `log` for
+        the upload."""
+        var s = String("pids=\nk=1\nwhile [ $k -le ", procs, " ]; do\n")
+        s.write(
+            "  ",
+            self._run(r, env, ""),
+            " > ",
+            log,
+            '.p$k 2>&1 &\n  pids="$pids $!"; k=$((k + 1))\ndone\n',
+            (
+                "trap 'for p in $pids; do kill -TERM $p 2>/dev/null; done' TERM"
+                " INT\n"
+            ),
+            'alive=$pids\nwhile [ -n "$alive" ]; do\n  sleep 1\n  left=\n',
+            "  for p in $alive; do\n",
+            '    if kill -0 $p 2>/dev/null; then left="$left $p"; else\n',
+            "      wait $p; rc=$?\n",
+            '      echo "orca: worker process $p exited with status $rc"',
+            " | tee -a ",
+            log,
+            ".sup\n    fi\n  done\n  alive=$left\ndone\n",
+        )
+        return s^
+
+    def _join_logs(self, log: String) -> String:
+        """A line joining the processes' logs into `log`."""
+        return String(
+            "joinlogs() { for f in ",
+            log,
+            ".p* ",
+            log,
+            '.sup; do [ -f $f ] || continue; echo "== ${f##*/} =="; cat $f;',
+            " done > ",
+            log,
+            "; }\n",
+        )
+
     def _user_data(
         self, r: Ec2Spec, role: StaticString, head: String
-    ) -> String:
+    ) raises -> String:
         var s = String(
             "#!/bin/bash\n# orca run ",
             r.run,
@@ -376,9 +439,14 @@ struct Ec2Runner(Movable):
         var log = String("/tmp/orca-", name, ".log")
         var metrics = String("/tmp/orca-", name, ".jsonl")
         var stop = String("/tmp/orca-", name, ".stop")
+        var procs = self.procs_of(r) if role == "worker" else 1
         if keeps or samples:
             s.write(self._instance_id(), "\n")
+            if procs > 1:
+                s.write(self._join_logs(log))
             s.write('up() { [ -z "${ORCA_LOGS:-}" ] || {')
+            if procs > 1:
+                s.write(" joinlogs;")
             if keeps:
                 s.write(
                     " ",
@@ -439,12 +507,15 @@ struct Ec2Runner(Movable):
             if self.mode == "docker":
                 env.append("DISTA_HEAD")
                 env.append("DISTA_ADVERTISE")
-            s.write(
-                self._run(r, env, ""),
-                " > ",
-                log,
-                " 2>&1\n",
-            )
+            if procs > 1:
+                s.write(self._worker_procs(r, env, log, procs))
+            else:
+                s.write(
+                    self._run(r, env, ""),
+                    " > ",
+                    log,
+                    " 2>&1\n",
+                )
         else:
             if r.tasks:
                 s.write(
@@ -574,7 +645,7 @@ struct Ec2Runner(Movable):
         var head = self.ec2.run_instances(
             self._params(r, "head", head_type, 1, False, "")
         )
-        _record(db, r, "head", head, "on-demand")
+        _record(db, r, "head", head, "on-demand", 1)
         if len(head) != 1 or not head[0].private_ip:
             raise Error(
                 "orca: RunInstances gave no head instance with an address"
@@ -592,7 +663,14 @@ struct Ec2Runner(Movable):
                 r, "worker", self.worker_of(r.worker_type), n, r.spot, head_ip
             )
         )
-        _record(db, r, "worker", workers, "spot" if r.spot else "on-demand")
+        _record(
+            db,
+            r,
+            "worker",
+            workers,
+            "spot" if r.spot else "on-demand",
+            self.procs_of(r),
+        )
 
     def scale(mut self, mut db: State) raises -> Tuple[Int, Int]:
         """Grows and shrinks the workers of every running run that scales,
@@ -606,7 +684,8 @@ struct Ec2Runner(Movable):
                 " coalesce(p.worker_type, '') AS worker_type, coalesce(p.spot,"
                 " false) AS spot, p.ec2_min_workers AS lo, coalesce("
                 "p.ec2_workers, (p.describe->>'workers')::bigint, 2) AS hi,"
-                " h.address, coalesce(p.secrets::text, '') AS secrets FROM"
+                " h.address, coalesce(p.secrets::text, '') AS secrets,"
+                " coalesce(p.worker_procs, 1) AS procs FROM"
                 " orca.runs r JOIN orca.pipelines p ON p.name ="
                 " r.pipeline JOIN orca.instances h ON h.run = r.id AND h.start"
                 " = r.starts AND h.role = 'head' AND h.ended IS NULL AND"
@@ -635,6 +714,7 @@ struct Ec2Runner(Movable):
                 row.bool("allow_new_code"),
                 lo,
                 parse_secrets(row.text("secrets")),
+                Int(row.int64("procs")),
             )
             var key = String(r.run, "-", r.start)
             live[key] = True
@@ -656,12 +736,17 @@ struct Ec2Runner(Movable):
                 demand = Demand.parse(got_status[1])
             except:
                 continue
+            # The policy counts dista worker processes; instances are what
+            # starts and costs, `per` processes each. `up` is the processes
+            # the live instances still have to offer.
+            var per = self.procs_of(r)
             var up = Int(
                 db.conn.query(
                     (
-                        "SELECT count(*) AS n FROM orca.instances WHERE run ="
-                        " $1 AND start = $2 AND role = 'worker' AND ended IS"
-                        " NULL AND drained IS NULL"
+                        "SELECT coalesce(sum(coalesce(procs, 1) -"
+                        " procs_drained), 0) AS n FROM orca.instances WHERE"
+                        " run = $1 AND start = $2 AND role = 'worker' AND"
+                        " ended IS NULL AND drained IS NULL"
                     ),
                     Params().int64(Int64(r.run)).int64(Int64(r.start)),
                 )
@@ -671,15 +756,16 @@ struct Ec2Runner(Movable):
             var pending = max(up - demand.live(), 0)
             var got = decide(
                 demand,
-                self.policy(lo, hi),
+                self.policy(lo * per, hi * per, per),
                 Float64(wall_ns()) / 1e9,
                 pending,
                 self.short_since.get(key, 0),
             )
             self.short_since[key] = got.short_since
             if got.start > 0:
-                self._workers(db, r, got.start, head_ip)
-                started += got.start
+                var instances = (got.start + per - 1) // per
+                self._workers(db, r, instances, head_ip)
+                started += instances
             for addr in got.drain:
                 var drain: Tuple[Int, String]
                 try:
@@ -698,7 +784,9 @@ struct Ec2Runner(Movable):
                 var ip = String(addr[byte = : addr.rfind(":")])
                 _ = db.conn.execute(
                     (
-                        "UPDATE orca.instances SET drained = now() WHERE id ="
+                        "UPDATE orca.instances SET procs_drained ="
+                        " procs_drained + 1, drained = CASE WHEN procs_drained"
+                        " + 1 >= coalesce(procs, 1) THEN now() END WHERE id ="
                         " (SELECT id FROM orca.instances WHERE run = $1 AND"
                         " start = $2 AND role = 'worker' AND ended IS NULL AND"
                         " drained IS NULL AND address = $3 ORDER BY launched"
@@ -715,13 +803,15 @@ struct Ec2Runner(Movable):
             _ = self.short_since.pop(k, 0)
         return (started, drained)
 
-    def policy(self, lo: Int, hi: Int) -> Policy:
+    def policy(self, lo: Int, hi: Int, per: Int = 1) -> Policy:
+        """The scaling policy over worker processes: `lo` to `hi` of them,
+        and `ORCA_SCALE_STEP` instances of `per` at most at once."""
         return Policy(
             min_workers=lo,
             max_workers=hi,
             up_after=self.up_after,
             idle_before_down=self.idle,
-            max_step=self.step,
+            max_step=self.step * per,
         )
 
     def sweep(self, mut db: State) raises -> Int:
@@ -825,13 +915,14 @@ def _record(
     role: StaticString,
     made: List[Instance],
     market: String,
+    procs: Int,
 ) raises:
     for i in made:
         _ = db.conn.execute(
             (
                 "INSERT INTO orca.instances (id, run, start, role,"
-                " instance_type, market, address) VALUES ($1, $2, $3, $4, $5,"
-                " $6, nullif($7, '')) ON CONFLICT (id) DO NOTHING"
+                " instance_type, market, address, procs) VALUES ($1, $2, $3,"
+                " $4, $5, $6, nullif($7, ''), $8) ON CONFLICT (id) DO NOTHING"
             ),
             Params()
             .text(i.id)
@@ -840,7 +931,8 @@ def _record(
             .text(String(role))
             .text(i.instance_type)
             .text(market)
-            .text(i.private_ip),
+            .text(i.private_ip)
+            .int64(Int64(procs)),
         )
 
 

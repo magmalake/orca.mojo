@@ -34,6 +34,8 @@ And the actions, each a `POST` of a form (see `orca.actions`):
 | `/runs/<id>/cancel` | cancel a run, before its next attempt if it's running |
 | `/datasets/<name>/rebuild` | rebuild every pipeline downstream over `partitions` |
 | `/login`, `/logout` | a session for the actions, as a cookie; `name`, `password`, `next` |
+| `/api/login` | JSON `name`, `password`, `label`, `days`: an API token for `orca login` (`orca.tokens`) |
+| `/api/logout` | revokes the API token it's sent with |
 
 A page of something still going on (a queued or running run, a running
 attempt) refreshes its live part every two seconds (the fleet page's, every
@@ -59,6 +61,14 @@ to it through a browser. Reading needs no login; once login is on
 (`ORCA_UI_LOGIN=required`, or any user added with `orca user add`), every
 action needs a session from `/login`, and each one is recorded as its
 user's (`orca.auth`), which a run's page shows.
+
+The `orca` command acts through the same paths from another machine
+(`orca.remote`): its actions send JSON, which is read as the form, with
+`Authorization: Bearer <token>` instead of a cookie, and are recorded as
+the token's user, from `cli`. A request with an `Authorization` header is
+answered 401 unless it's a live token, whatever cookie it has; without an
+`Origin` it needn't be the UI's own, as no browser sends one to another
+site without a preflight this server never allows.
 """
 
 from std.os import getenv
@@ -76,8 +86,16 @@ from orca.auth import (
     login_failed,
     login_required,
     open_session,
+    password_ok,
     session_user,
     too_many_failures,
+)
+from orca.tokens import (
+    clean_label,
+    issue_token,
+    revoke_token,
+    token_days,
+    token_user,
 )
 from orca.actions import (
     Outcome,
@@ -118,6 +136,7 @@ from orca.lineage import (
     datasets as dataset_rows,
     flows,
     forward,
+    latest as latest_snapshot,
 )
 from orca.json import quote
 from orca.live import live_sql
@@ -253,6 +272,8 @@ struct InstanceRow(Copyable, Movable):
     """Seconds from the run's start to its launch."""
     var to_end: Float64
     """Seconds from the run's start to its end, or to now."""
+    var procs: Int
+    """The dista worker processes it ran (`--worker-procs`)."""
 
 
 @fieldwise_init
@@ -834,6 +855,7 @@ def _instances(mut db: State, run: Int) raises -> List[InstanceRow]:
             " AS launched, ",
             _ts("i.ended"),
             " AS ended, coalesce(i.why, '') AS why,",
+            " coalesce(i.procs, 1) AS procs,",
             " extract(epoch FROM i.launched - coalesce(r.started,",
             " i.launched))::float8 AS from_start, extract(epoch FROM",
             " coalesce(i.ended, now()) - coalesce(r.started,",
@@ -857,6 +879,7 @@ def _instances(mut db: State, run: Int) raises -> List[InstanceRow]:
                 r.text("why"),
                 r.float64("from_start"),
                 r.float64("to_end"),
+                Int(r.int64("procs")),
             )
         )
     return out^
@@ -904,6 +927,8 @@ def _json_instances(
             quote(i.ended) if i.ended else String("null"),
             ', "why": ',
             quote(i.why) if i.why else String("null"),
+            ', "procs": ',
+            i.procs,
             ', "log": ',
             quote(String("/runs/", run, "/cluster/", _cluster_log(i))),
             ', "peaks": ',
@@ -1012,7 +1037,11 @@ def _instances_html(mut h: Html, run: Int, xs: List[InstanceRow]):
         h.raw("<td><code>")
         h.text(i.id)
         h.raw("</code></td>")
-        h.cell(i.instance_type, " Spot" if i.market == "spot" else String(""))
+        h.cell(
+            i.instance_type,
+            " Spot" if i.market == "spot" else String(""),
+            String(" x", i.procs, " workers") if i.procs > 1 else String(""),
+        )
         h.cell(i.start)
         h.cell(i.launched)
         if i.ended:
@@ -2271,6 +2300,8 @@ def _json_start_preview(
     out.write(
         ', "one_run": ',
         len(v.keys) + len(v.done) + len(v.live),
+        ', "summary": ',
+        quote(_preview_line(p, v)) if not v.refused else String("null"),
         ', "commands": {"backfill": ',
         quote(_backfill_cmd(p.name, keys, rerun)),
         ', "run": ',
@@ -3149,21 +3180,24 @@ def run(mut db: State, id: Int) raises -> Page:
     var acts = db.conn.query(
         (
             "SELECT to_char(at AT TIME ZONE 'UTC',"
-            ' \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') AS at, username, action FROM'
-            " orca.audit WHERE run = $1 ORDER BY id"
+            ' \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') AS at, username, action,'
+            " coalesce(source, '') AS source FROM orca.audit WHERE run = $1"
+            " ORDER BY id"
         ),
         Params().int64(Int64(id)),
     )
     if len(acts) > 0:
         h.raw(
             '<h2>Actions</h2><div class="scroll"><table><thead><tr>',
-            "<th>At</th><th>By</th><th>Action</th></tr></thead><tbody>",
+            "<th>At</th><th>By</th><th>Action</th><th>From</th></tr>",
+            "</thead><tbody>",
         )
         for a in acts:
             h.raw("<tr>")
             h.mono(a.text("at"))
             h.cell(a.text("username"))
             h.cell(a.text("action"))
+            h.cell(a.text("source"))
             h.raw("</tr>")
         h.raw("</tbody></table></div>")
     if len(touches) > 0:
@@ -4047,7 +4081,9 @@ def dataset_page(
     var rp = Optional[RebuildPreview](None)
     if preview and keys.strip() and len(chain) > 0:
         rp = _rebuild_preview(db, name, keys)
-    var j = String('{"dataset": ', quote(d.name), ', "writers": ')
+    var j = String('{"dataset": ', quote(d.name), ', "latest": ')
+    var newest = latest_snapshot(db, name)
+    j.write(String(newest) if newest >= 0 else String("null"), ', "writers": ')
     _json_strings(j, d.writers)
     j.write(', "readers": ')
     _json_strings(j, d.readers)
@@ -4534,7 +4570,10 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
                 db, name, keys, rerun=_form(body, "rerun") == "1"
             )
             var to = String("/runs?pipeline=", url_encode(name))
-            return _acted(o, back, String('{"queued": ', o.queued, "}"), to)
+            var j = String('{"queued": ', o.queued, ', "skipped": ')
+            _json_strings(j, o.skipped)
+            j.write("}")
+            return _acted(o, back, j^, to)
         if parts[3] == "cancel":
             var o = cancel_runs(db, name, keys if keys.strip() else "@all")
             var to = String("/runs?pipeline=", url_encode(name))
@@ -4704,6 +4743,8 @@ def _query(url: String, name: StringSlice) -> String:
 
 def _is_action(path: String) -> Bool:
     if path == "/login" or path == "/logout":
+        return True
+    if path == "/api/login" or path == "/api/logout":
         return True
     var parts = path.split("/")
     if len(parts) != 4:
@@ -4886,6 +4927,132 @@ def _cross_origin() -> Page:
     )
 
 
+# ── API tokens (orca.tokens) ─────────────────────────────────────────────────
+
+
+def _bearer(authorization: String) -> String:
+    """The token of `Authorization: Bearer <token>`, or empty for any other
+    header."""
+    var a = String(authorization.strip())
+    if not a.lower().startswith("bearer "):
+        return ""
+    return String(a[byte=7:].strip())
+
+
+def _content_type(req: Request) -> String:
+    """The request's media type, lower case, without its parameters, which
+    a cross-site page may set however it likes."""
+    var t = req.headers.get("Content-Type")
+    var semi = t.find(";")
+    var essence = String(t[byte=:semi]) if semi >= 0 else t
+    return String(essence.strip()).lower()
+
+
+def _json_form(body: String) raises -> String:
+    """A JSON object of strings, numbers and booleans (`orca.remote`'s
+    actions) as the form the UI's own pages post, so both go through `_act`
+    and are audited alike: true is `1`, false and null are left form."""
+    var v = loads(body if body.strip() else "{}")
+    if not v.is_object():
+        raise Error("an action's JSON is an object of its fields")
+    var form = String()
+    for kv in v.object_items():
+        var val: String
+        if kv[1].is_string():
+            val = kv[1].string_value()
+        elif kv[1].is_bool():
+            if not kv[1].bool_value():
+                continue
+            val = "1"
+        elif kv[1].is_int():
+            val = String(kv[1].int_value())
+        elif kv[1].is_null():
+            continue
+        else:
+            raise Error("an action's fields are strings, numbers or booleans")
+        form.write("&" if form else "", url_encode(kv[0]), "=", url_encode(val))
+    return form^
+
+
+def _json_error(status: Int, why: String) -> Response:
+    return _respond(
+        Page(status, String('{"error": ', quote(why), "}"), String()), True
+    )
+
+
+def _token_refused() -> Response:
+    """A request with a token that's no use: unknown, expired or revoked,
+    or an `Authorization` that isn't a bearer token. Cookies are never
+    looked at instead."""
+    var resp = _json_error(
+        401,
+        (
+            "this token is unknown, expired or revoked (orca login again), or"
+            " Authorization isn't Bearer <token>"
+        ),
+    )
+    try:
+        resp.headers.set("WWW-Authenticate", 'Bearer realm="orca"')
+    except:
+        pass
+    return resp^
+
+
+def _api_login(mut db: State, body: String, address: String) raises -> Response:
+    """`POST /api/login`: a new API token for a JSON `name` and `password`,
+    labelled `label`, lasting `days` (at most `ORCA_API_TOKEN_DAYS`).
+    Failures count against the same limit as `/login`'s, and the token is
+    in this answer only."""
+    var name: String
+    var password: String
+    var label = String()
+    var days = 0
+    try:
+        var v = loads(body)
+        name = v["name"].string_value()
+        password = v["password"].string_value()
+        if String("label") in v and v["label"].is_string():
+            label = v["label"].string_value()
+        if String("days") in v and v["days"].is_int():
+            days = Int(v["days"].int_value())
+    except:
+        return _json_error(
+            400, "a login is a JSON object with a name and a password"
+        )
+    if too_many_failures(db, name, address):
+        return _json_error(
+            429, "Too many failed logins; try again in 15 minutes."
+        )
+    if not password_ok(db, name, password):
+        login_failed(db, name, address, "cli")
+        return _json_error(401, "Wrong name or password.")
+    var got = issue_token(db, name, label, token_days(days))
+    audit(
+        db,
+        name,
+        "/api/login",
+        0,
+        String(clean_label(label), " from ", address),
+        "cli",
+    )
+    return _respond(
+        Page(
+            200,
+            String(
+                '{"user": ',
+                quote(name),
+                ', "token": ',
+                quote(got.token),
+                ', "expires": ',
+                quote(got.expires),
+                "}",
+            ),
+            String(),
+        ),
+        True,
+    )
+
+
 struct Ui(Copyable, Handler):
     """The pages, over the database at `url`."""
 
@@ -4912,14 +5079,62 @@ struct Ui(Copyable, Handler):
             return _not_allowed()
         if not post and req.method != "GET" and req.method != "HEAD":
             return _not_allowed()
-        if post and not _same_origin(req):
+        # A script's request (orca.remote): one with an `Authorization`
+        # header, or a JSON login for a token. A browser sends neither to
+        # another site without a CORS preflight, which the UI never
+        # answers, so with no `Origin` it needn't be the UI's own; the
+        # token, not a cookie, is what it acts with.
+        var authorization = req.headers.get("Authorization")
+        var api_login = path == "/api/login"
+        var scripted = (
+            (
+                authorization != ""
+                or (api_login and _content_type(req) == "application/json")
+            )
+            and path != "/login"
+            and path != "/logout"
+        )
+        if scripted or path.startswith("/api/"):
+            json = True
+        if (
+            post
+            and not (scripted and not req.headers.get("Origin"))
+            and not _same_origin(req)
+        ):
             return _respond(_cross_origin(), json)
+        if api_login and not scripted:
+            return _json_error(400, "a login for a token is JSON")
         try:
             var db = State(self.url)
-            var token = _cookie(req, SESSION_COOKIE)
-            var user = session_user(db, token)
-            var required = login_required(db)
             var body = String(from_utf8_lossy=Span(req.body))
+            if api_login:
+                return _api_login(db, body, _client(req))
+            var token = String()
+            var user: String
+            var source = String("ui")
+            if authorization:
+                var bearer = _bearer(authorization)
+                user = token_user(db, bearer)
+                if not user:
+                    return _token_refused()
+                source = "cli"
+                if path == "/api/logout":
+                    _ = revoke_token(db, bearer)
+                    audit(db, user, path, 0, "", source)
+                    return _respond(
+                        Page(200, String('{"revoked": true}'), String()), True
+                    )
+            else:
+                token = _cookie(req, SESSION_COOKIE)
+                user = session_user(db, token)
+                if path == "/api/logout":
+                    return _token_refused()
+            var required = login_required(db)
+            if post and _content_type(req) == "application/json":
+                try:
+                    body = _json_form(body)
+                except e:
+                    return _respond(_bad_request(String(e)), json)
             if path == "/login":
                 if not post:
                     return self._with_user(
@@ -4953,7 +5168,9 @@ struct Ui(Copyable, Handler):
                 return _respond(not_found(String("nothing at ", path)), json)
             var page = done.take()
             if page.status == 303 and user:
-                audit(db, user, path, _run_of(page.location, path), body)
+                audit(
+                    db, user, path, _run_of(page.location, path), body, source
+                )
             return self._with_user(page^, json, user, required)
         except e:
             var h = Html()
@@ -5098,6 +5315,21 @@ struct Ui(Copyable, Handler):
             if len(parts) == 3 and parts[1] == "keys" and name:
                 return key_page(db, name, url_decode(parts[2]))
         return not_found(String("nothing at ", path))
+
+
+def read_page(mut db: State, url: String) raises -> Page:
+    """What `GET url` answers, for `orca` commands that print a page's JSON
+    over the database (`orca.remote`)."""
+    var q = url.find("?")
+    var path = String(url[byte=:q]) if q >= 0 else url
+    return Ui("")._page(db, url, path)
+
+
+def act(mut db: State, path: String, form: String) raises -> Optional[Page]:
+    """The action `path` with the fields of `form`, as the UI's button does
+    it, or None if `path` names none (`orca.remote`). Not audited: the
+    command acts as whoever can reach the database."""
+    return _act(db, path, form)
 
 
 def serve_ui(url: String, addr: String) raises:

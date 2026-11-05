@@ -21,10 +21,15 @@ Its commands:
     ./build/orca sample --out m.jsonl --pid 1234   # machine metrics
     ./build/orca lineage lake.report [<snapshot>]
     ./build/orca rebuild raw.events 2024-03
+    ./build/orca status taxi        # its state and latest runs
+    ./build/orca login https://orca.example.com   # then --remote, below
+    ./build/orca --remote orca.example.com backfill taxi 2024-03
 
-Needs `ORCA_DATABASE_URL`. See `orca.scheduler` for what a tick does, and
-`orca.ui` for the pages, `orca.lineage` for what `lineage` prints, and
-`orca.sensors` for what `rebuild` plans.
+Needs `ORCA_DATABASE_URL`, but for the commands `--remote` (or
+`ORCA_REMOTE`) sends to a deployed `orca ui` instead (`orca.remote`). See
+`orca.scheduler` for what a tick does, and `orca.ui` for the pages,
+`orca.lineage` for what `lineage` prints, and `orca.sensors` for what
+`rebuild` plans.
 Exit codes: 0, 2 for a usage error, 3 for any other error.
 """
 
@@ -40,24 +45,43 @@ from orca.expiry import expirable, expire_argv, maintain_binary
 from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.locate import locate
 from orca.proc import binary_seconds, capture
+from orca.remote import (
+    Api,
+    api_command,
+    is_remote_command,
+    login_command,
+    logout_command,
+    remote_api,
+    remote_target,
+)
 from orca.sample import sample_main
-from orca.scheduler import Scheduler
+from orca.scheduler import Scheduler, parse_worker_procs
 from orca.secrets import secret_problem
 from orca.sensors import rebuild, rebuilds
 from orca.state import State
+from orca.tokens import revoke_user_tokens, user_tokens
 from orca.ui import DEFAULT_ADDR, serve_ui
 
 comptime USAGE = """usage:
   orca locate <pipeline binary> [...] [--root <dir>]
   orca aws up|push|register|app|status|down ...   (orca aws for more)
   orca register [--image <image>] [--head-type T] [--worker-type T]
-                [--workers N|MIN..MAX] [--spot] [--secret NAME=ID ...]
+                [--workers N|MIN..MAX] [--worker-procs N|auto] [--spot]
+                [--secret NAME=ID ...]
+                (--worker-procs: dista worker processes per EC2 worker
+                instance, auto = one per vCPU; default 1)
                 <pipeline binary> [...]
-  orca backfill [--rerun] <pipeline> KEY[..KEY][,...]
-                (keyed: NAME[,...]|@all|@file:<path>; --rerun: done ones too)
+  orca backfill [--rerun] [--preview] <pipeline> KEY[..KEY][,...]
+                (keyed: NAME[,...]|@all|@file:<path>; --rerun: done ones too;
+                --preview: what it would queue, queueing nothing)
+  orca start <pipeline> KEY[..KEY][,...]   (one run over them all)
   orca cancel <pipeline> KEY[..KEY][,...]|@all
                 (its queued, running and retrying runs over those keys)
+  orca cancel <run>
+  orca resume [--allow-new-code] <run>
+  orca rerun <run> <step>           (a new run, from that step on)
   orca pause|unpause <pipeline>     (the scheduler starts none of its runs)
+  orca status [<pipeline>] [--json]
   orca tick
   orca scheduler
   orca ui
@@ -69,7 +93,15 @@ comptime USAGE = """usage:
   orca expire <dataset>|--all [--older-than 30d|12h|90m] [--keep N]
               [--dry-run] [--report]   (snapshot expiry, via orca_maintain)
   orca user add|remove <name>       (add reads the password from stdin)
-  orca user list"""
+  orca user list
+  orca user tokens <name>           (its API tokens, from orca login)
+  orca user revoke <name> <id>|@all
+  orca login [<url>] [--user NAME] [--days N] [--label L]
+  orca logout [<url>]
+  orca --remote <url> backfill|start|cancel|pause|unpause|resume|rerun|
+                      rebuild|status|lineage ...
+                (to a deployed orca ui, as the user orca login logged in;
+                or ORCA_REMOTE=<url>)"""
 
 
 def _usage(msg: String = ""):
@@ -104,7 +136,14 @@ def _locate(args: List[String]) raises -> Int:
     return 0
 
 
-def _command(args: List[String]) raises -> Int:
+def _command(args: List[String], target: String) raises -> Int:
+    if args[1] == "login":
+        return login_command(args, target)
+    if args[1] == "logout":
+        return logout_command(args, target)
+    if target and is_remote_command(args[1]):
+        var api = remote_api(target)
+        return api_command(api, args)
     if args[1] == "locate":
         return _locate(args)
     if args[1] == "aws":
@@ -115,12 +154,25 @@ def _command(args: List[String]) raises -> Int:
     if not url:
         _usage("orca needs ORCA_DATABASE_URL")
     var cmd = args[1]
+    # Commands that print what a page of the UI shows, or do what its
+    # buttons do, over the database here as `--remote` does over HTTPS.
+    if (
+        cmd == "status"
+        or cmd == "start"
+        or cmd == "resume"
+        or cmd == "rerun"
+        or (cmd == "cancel" and len(args) == 3)
+        or (cmd == "backfill" and "--preview" in args)
+    ):
+        var api = Api(url)
+        return api_command(api, args)
     if cmd == "register" and len(args) >= 3:
         var image = String()
         var head_type = String()
         var worker_type = String()
         var workers = 0
         var min_workers = -1
+        var worker_procs = -1
         var spot = False
         var secrets = List[String]()
         var i = 2
@@ -143,6 +195,11 @@ def _command(args: List[String]) raises -> Int:
                 if why:
                     _usage(why)
                 secrets.append(args[i + 1])
+            elif args[i] == "--worker-procs":
+                try:
+                    worker_procs = parse_worker_procs(args[i + 1])
+                except e:
+                    _usage(String(e))
             elif args[i] == "--workers":
                 # N, or MIN..MAX for autoscaling on EC2.
                 try:
@@ -178,6 +235,7 @@ def _command(args: List[String]) raises -> Int:
                     spot,
                     min_workers,
                     secrets,
+                    worker_procs,
                 ),
             )
         return 0
@@ -284,6 +342,36 @@ def _command(args: List[String]) raises -> Int:
                 raise Error("orca: no user ", args[3])
             print("removed", args[3])
             return 0
+        if args[2] == "tokens" and len(args) == 4:
+            var ts = user_tokens(db, args[3])
+            if len(ts) == 0:
+                print("no tokens")
+            for t in ts:
+                print(
+                    t.id,
+                    t.label,
+                    "created",
+                    t.created,
+                    "used",
+                    t.last_used if t.last_used else String("never"),
+                    "expired" if t.expired else "expires",
+                    t.expires,
+                )
+            return 0
+        if args[2] == "revoke" and len(args) == 5:
+            var id = 0
+            if args[4] != "@all":
+                try:
+                    id = Int(args[4])
+                except:
+                    id = -1
+                if id <= 0:
+                    _usage(String("not a token's id, or @all: ", args[4]))
+            var n = revoke_user_tokens(db, args[3], id)
+            if n == 0 and id > 0:
+                raise Error("orca: ", args[3], " has no token ", id)
+            print("revoked", n, "tokens of" if n != 1 else "token of", args[3])
+            return 0
     if cmd == "ui" and len(args) == 2:
         var db = State(url)
         db.migrate()
@@ -366,13 +454,35 @@ def orca_command() raises:
     var args = List[String]()
     for a in argv():
         args.append(String(a))
+    var explicit = len(args) >= 2 and (
+        args[1].startswith("--remote") or args[1].startswith("--url")
+    )
+    var target = String()
+    try:
+        target = remote_target(args)
+    except e:
+        print(e)
+        exit(2)
     if len(args) < 2:
         _usage()
         return
+    if explicit and not is_remote_command(args[1]):
+        if args[1] != "login" and args[1] != "logout":
+            _usage(
+                String(
+                    "orca ",
+                    args[1],
+                    " needs the database (ORCA_DATABASE_URL); --remote is for",
+                    " the commands below that it lists",
+                )
+            )
     var code: Int
     try:
-        code = _command(args)
+        code = _command(args, target)
     except e:
-        print(e)
+        var msg = String(e)
+        if msg.startswith("usage: "):
+            _usage(String(msg[byte=7:]))
+        print(msg)
         code = 3
     exit(code)

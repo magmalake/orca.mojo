@@ -355,6 +355,34 @@ def _migrations() -> List[List[String]]:
                 " status = 'failed'"
             ),
         ],
+        # API tokens for `orca login` (orca.tokens), kept as their SHA-256,
+        # and where each audited action came from: `ui` (a session) or `cli`
+        # (a token).
+        [
+            """CREATE TABLE orca.api_tokens (
+            id bigserial PRIMARY KEY,
+            token_hash text NOT NULL UNIQUE,
+            username text NOT NULL REFERENCES orca.users (name) ON DELETE
+                CASCADE,
+            label text NOT NULL,
+            created timestamptz NOT NULL DEFAULT now(),
+            last_used timestamptz,
+            expires timestamptz NOT NULL)""",
+            "CREATE INDEX api_tokens_user ON orca.api_tokens (username)",
+            "ALTER TABLE orca.audit ADD COLUMN source text",
+        ],
+        # Several dista worker processes per EC2 worker instance
+        # (`orca register --worker-procs`): the count registered (0 is one
+        # per vCPU), and for each instance the processes it was started with
+        # and how many of them have been drained.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN worker_procs int",
+            "ALTER TABLE orca.instances ADD COLUMN procs int",
+            (
+                "ALTER TABLE orca.instances ADD COLUMN procs_drained int NOT"
+                " NULL DEFAULT 0"
+            ),
+        ],
     ]
 
 

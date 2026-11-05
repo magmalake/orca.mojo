@@ -69,6 +69,7 @@ comptime _REGISTER_VALUED = [
     "--head-type",
     "--worker-type",
     "--workers",
+    "--worker-procs",
     "--secret",
 ]
 

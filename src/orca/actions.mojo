@@ -46,14 +46,16 @@ struct Outcome(Movable):
     """Why the action wasn't done, or empty."""
     var confirm: Bool
     """Refused only until confirmed: a resume onto new code."""
+    var skipped: List[String]
+    """Why a backfill left keys, a line per reason (`Queued.skipped`)."""
 
     @staticmethod
     def done(run: Int, queued: Int = 0) -> Self:
-        return Self(run, queued, "", False)
+        return Self(run, queued, "", False, List[String]())
 
     @staticmethod
     def no(var why: String, confirm: Bool = False) -> Self:
-        return Self(0, 0, why^, confirm)
+        return Self(0, 0, why^, confirm, List[String]())
 
 
 def stale_seconds() -> Float64:
@@ -156,7 +158,10 @@ def backfill_runs(
     if not p:
         return Outcome.no(_unregistered(pipeline))
     try:
-        return Outcome.done(0, len(backfill(db, p.value(), keys, rerun).runs))
+        var q = backfill(db, p.value(), keys, rerun)
+        var o = Outcome.done(0, len(q.runs))
+        o.skipped = q.skipped()
+        return o^
     except e:
         return Outcome.no(String(e))
 
