@@ -264,7 +264,8 @@ scheduler
 for h in $h3 $h4; do
     pid=$(pgrep -f "$dir/$h.sh" | head -1)
     [ -n "$pid" ] || fail "no process for $h"
-    kill -STOP -- "-$pid"
+    # The instance's whole process group (dash's kill takes no group).
+    python3 -c 'import os, signal, sys; os.killpg(os.getpgid(int(sys.argv[1])), signal.SIGSTOP)' "$pid"
 done
 ./build/orca backfill toy 2024-05 >> "$log" 2>&1 || fail "backfill the toy's 2024-05"
 t5=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
