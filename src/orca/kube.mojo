@@ -42,6 +42,7 @@ from json import Value
 from k8s import JOBS, PODS, SERVICES, Client, Config
 from postgres import Params
 
+from orca.crash import crash_summary
 from orca.json import quote
 from orca.logs import location_exists, read_location, run_dir, write_location
 from orca.sample import PREFIX, metrics_location, sample_seconds
@@ -334,10 +335,12 @@ struct KubeRunner(Movable):
                 ),
             )
 
-    def _keep_logs(self, job: Value):
+    def _keep_logs(self, mut db: State, job: Value):
         """Appends the log of the Job's driver pod to the run's `driver.log`
         under `ORCA_LOGS`, and keeps each of its pods' samples in the run's
-        `metrics/<pod>.jsonl`, as the pods are about to go."""
+        `metrics/<pod>.jsonl`, as the pods are about to go. A driver that
+        crashed has the attempts it left running failed with the crash's
+        first frames (`orca.crash`), if the run is still at that start."""
         try:
             var run = Int(job.at("/metadata/labels/orca.run").string_value())
             var pipeline = job.at(
@@ -369,6 +372,21 @@ struct KubeRunner(Movable):
                 before = String(from_utf8_lossy=Span(read_location(at)))
             var all = String(before, "--- start ", start, "\n", text)
             write_location(at, all.as_bytes())
+            var why = crash_summary(text)
+            if why and (
+                len(
+                    db.conn.query(
+                        (
+                            "SELECT id FROM orca.runs WHERE id = $1 AND status"
+                            " = 'running' AND starts::text = $2"
+                        ),
+                        Params().int64(Int64(run)).text(start),
+                    )
+                )
+                > 0
+            ):
+                var n = db.interrupt(run, why)
+                print("run", run, "crashed,", n, "attempts failed:", why)
         except e:
             print("orca: can't keep a run's pod logs:", e)
 
@@ -398,7 +416,7 @@ struct KubeRunner(Movable):
                 or _count(o, "/status/failed") > 0
             )
             if finished or _key(o) not in live:
-                self._keep_logs(o)
+                self._keep_logs(db, o)
                 if self.k.delete(JOBS, _name_of(o)):
                     n += 1
         # What the Job owned goes with it, but not at once, and an orphan of

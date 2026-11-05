@@ -136,6 +136,32 @@ curl -fsS "$base/runs/$run" | grep -q "href=\"/datasets/lake.clean/snapshots/$C\
     || fail "the run's tables' datasets"
 [ "$(json /pipelines/clean | jq -c '.steps[0] | [.reads, .writes]')" = '[["lake.raw"],["lake.clean"]]' ] \
     || fail "the pipeline's steps' datasets"
+# The Rebuild section: the chain a rebuild of lake.raw runs, a preview of
+# its runs by level that queues nothing, and the same command line.
+json /datasets/lake.raw | jq -e '.downstream == [{"pipeline": "clean", "level": 0, "reads": ["lake.raw"]},
+    {"pipeline": "report", "level": 1, "reads": ["lake.clean"]}]' > /dev/null \
+    || fail "lake.raw's downstream: $(json /datasets/lake.raw | jq -c .downstream)"
+page=$(curl -fsS "$base/datasets/lake.raw")
+echo "$page" | grep -qF 'Rebuild reruns everything downstream of this dataset for the partitions you give, in dependency order.' \
+    || fail "the rebuild's explanation"
+echo "$page" | grep -qF '<li class="chain__level"><span class="chain__step"><a href="/pipelines/clean">clean</a> <span class="muted">(reads <code>lake.raw</code>)</span></span></li><li class="chain__level"><span class="chain__step"><a href="/pipelines/report">report</a>' \
+    || fail "the chain on lake.raw's page"
+curl -fsS "$base/datasets/lake.report" | grep -qF '<p class="empty">Nothing reads this dataset.</p>' \
+    || fail "lake.report's page doesn't say nothing reads it"
+before=$(q "SELECT (SELECT count(*) FROM orca.runs) || ' ' || (SELECT count(*) FROM orca.rebuilds)")
+p=$(json '/datasets/lake.raw?preview=1&partitions=2024-01..2024-02')
+echo "$p" | jq -e '.preview | .refused == null and .command == "orca rebuild lake.raw 2024-01..2024-02"
+    and .levels == [[{"pipeline": "clean", "partitions": "2024-01,2024-02"}], [{"pipeline": "report", "partitions": "2024-01,2024-02"}]]' > /dev/null \
+    || fail "the rebuild preview: $(echo "$p" | jq -c .preview)"
+page=$(curl -fsS "$base/datasets/lake.raw?preview=1&partitions=2024-01..2024-02")
+echo "$page" | grep -qF '<p data-preview="rebuild">This queues 2 runs in 2 levels, over 2 partitions:</p><ol><li>1 run: clean over 2024-01,2024-02</li><li>1 run: report over 2024-01,2024-02</li></ol>' \
+    || fail "the rebuild preview's lines"
+echo "$page" | grep -qF '<code data-cmd="rebuild">orca rebuild lake.raw 2024-01..2024-02</code>' || fail "the rebuild's command"
+echo "$page" | grep -qF 'title="orca rebuild lake.raw 2024-01..2024-02">Rebuild downstream</button>' || fail "the rebuild button"
+json '/datasets/lake.raw?preview=1&partitions=2023-13' | jq -e '.preview.refused != null' > /dev/null \
+    || fail "a bad range's rebuild preview wasn't refused"
+[ "$(q "SELECT (SELECT count(*) FROM orca.runs) || ' ' || (SELECT count(*) FROM orca.rebuilds)")" = "$before" ] \
+    || fail "a rebuild preview queued something"
 for path in /datasets/nope "/datasets/lake.raw/snapshots/1" /datasets/lake.raw/snapshots/x; do
     code=$(curl -s -o /dev/null -w '%{http_code}' "$base$path")
     [ "$code" = 404 ] || fail "$path answered $code"

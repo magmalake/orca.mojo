@@ -46,6 +46,7 @@ from orca.key import parse_keys
 from orca.lineage import flows
 from orca.live import live_runs
 from orca.month import Month, days_in
+from orca.name import sort_texts
 from orca.state import State
 from orca.warehouse import Sensed
 
@@ -194,10 +195,59 @@ def _levels(mut db: State, dataset: String) raises -> Dict[String, Int]:
     return level^
 
 
-def rebuild(mut db: State, dataset: String, keys: String) raises -> Int:
-    """Plans a rebuild downstream of `dataset` over `keys` (`KEY[..KEY][,...]`
-    of either kind) and returns its ID; `advance_rebuilds` queues its runs.
-    Raises, saying why, if there's nothing to rebuild."""
+@fieldwise_init
+struct Link(Copyable, Movable):
+    """A pipeline downstream of a dataset, as a rebuild of it runs them."""
+
+    var pipeline: String
+    var level: Int
+    """Its run's place in the rebuild: 0 reads the dataset itself, and each
+    other runs after every pipeline it reads from."""
+    var reads: List[String]
+    """The datasets it reads that the rebuild changes: the dataset, or
+    what a pipeline before it writes."""
+
+
+def downstream(mut db: State, dataset: String) raises -> List[Link]:
+    """The pipelines a rebuild of `dataset` runs, by level then name, each
+    with what it reads that the rebuild changes (`_levels`)."""
+    var level = _levels(db, dataset)
+    var changed = Dict[String, Bool]()
+    changed[dataset] = True
+    var fs = flows(db)
+    for f in fs:
+        if f.writes and f.pipeline in level:
+            changed[f.dataset] = True
+    var out = List[Link]()
+    var top = -1
+    for e in level.items():
+        top = max(top, e.value)
+    for l in range(top + 1):
+        var names = List[String]()
+        for e in level.items():
+            if e.value == l:
+                names.append(e.key)
+        sort_texts(names)
+        for name in names:
+            var reads = List[String]()
+            for f in fs:
+                if (
+                    f.pipeline == name
+                    and not f.writes
+                    and f.dataset in changed
+                    and f.dataset not in reads
+                ):
+                    reads.append(f.dataset)
+            out.append(Link(name, l, reads^))
+    return out^
+
+
+def plan_rebuild(
+    mut db: State, dataset: String, keys: String
+) raises -> Tuple[List[String], List[Planned]]:
+    """The partitions a rebuild of `dataset` over `keys` is given, and the
+    run of each pipeline downstream it would queue, by level; nothing is
+    written. Raises, saying why, if there's nothing to rebuild."""
     var given = List[String]()
     var parts = split_keys(keys)
     if len(parts) == 0:
@@ -242,6 +292,16 @@ def rebuild(mut db: State, dataset: String, keys: String) raises -> Int:
             " pipeline downstream of ",
             dataset,
         )
+    return (given^, plan^)
+
+
+def rebuild(mut db: State, dataset: String, keys: String) raises -> Int:
+    """Plans a rebuild downstream of `dataset` over `keys` (`KEY[..KEY][,...]`
+    of either kind) and returns its ID; `advance_rebuilds` queues its runs.
+    Raises, saying why, if there's nothing to rebuild."""
+    var planned = plan_rebuild(db, dataset, keys)
+    ref given = planned[0]
+    ref plan = planned[1]
     var tx = db.conn.begin()
     var id = (
         tx.query(

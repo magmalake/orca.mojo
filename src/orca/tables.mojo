@@ -130,7 +130,9 @@ def _reload(mut table: Table) raises:
         except e:
             attempt += 1
             if attempt > _COMMIT_RETRIES:
-                raise e^
+                raise Error(
+                    "orca: can't reload ", table.metadata.location, ": ", e
+                )
             _backoff(attempt)
 
 
@@ -143,7 +145,7 @@ def _load(cat: FilesystemCatalog, ns: String, name: String) raises -> Table:
         except e:
             attempt += 1
             if attempt > _COMMIT_RETRIES:
-                raise e^
+                raise Error("orca: can't load ", ns, ".", name, ": ", e)
             _backoff(attempt)
 
 
@@ -209,7 +211,10 @@ def load_dataset(dataset: String) raises -> Table:
     For reading what isn't a step's input, such as a keyed pipeline's keys
     (`orca.keyed`)."""
     var name = _split(dataset)
-    return _catalog().load_table(name[0], name[1])
+    try:
+        return _catalog().load_table(name[0], name[1])
+    except e:
+        raise Error("orca: can't load ", dataset, ": ", e)
 
 
 def table(mut ctx: Ctx, dataset: String) raises -> Table:
@@ -253,7 +258,7 @@ def ensure_table(
         except e:
             # Another run, started at the same time, created it first.
             if not cat.table_exists(name[0], name[1]):
-                raise e^
+                raise Error("orca: can't create ", dataset, ": ", e)
     var t = _load(cat, name[0], name[1])
     _evolve(ctx, t, schema, dataset)
     return t^
@@ -342,7 +347,14 @@ def _evolve(
             except e:
                 attempt += 1
                 if attempt > _COMMIT_RETRIES:
-                    raise e^
+                    raise Error(
+                        "orca: can't commit ",
+                        dataset,
+                        "'s new schema (",
+                        attempt,
+                        " tries): ",
+                        e,
+                    )
                 _backoff(attempt)
                 _reload(table)
                 continue
@@ -463,15 +475,25 @@ struct FileWriter(Movable):
         """Writes `batches`: a file per partition they hold."""
         for b in batches:
             self.rows += b.num_rows
-        var written = write_data_files(
-            self.io,
-            self.location,
-            batches,
-            self.schema,
-            self.spec,
-            self.sort_order_id,
-            self.options,
-        )
+        var written: List[DataFile]
+        try:
+            written = write_data_files(
+                self.io,
+                self.location,
+                batches,
+                self.schema,
+                self.spec,
+                self.sort_order_id,
+                self.options,
+            )
+        except e:
+            var name = dataset_of(self.location)
+            raise Error(
+                "orca: can't write data files for ",
+                name if name else self.location,
+                ": ",
+                e,
+            )
         for i in range(len(written)):
             self.files.files.append(written[i].copy())
 
@@ -519,15 +541,24 @@ def append(
     var found = _found(ctx, table)
     if found >= 0:
         return found
-    var files = write_data_files(
-        table.io,
-        table.metadata.location,
-        batches,
-        table.metadata.schema(),
-        table.metadata.spec(),
-        table.metadata.default_sort_order_id,
-        WriteOptions.from_properties(table.metadata.properties),
-    )
+    var files: List[DataFile]
+    try:
+        files = write_data_files(
+            table.io,
+            table.metadata.location,
+            batches,
+            table.metadata.schema(),
+            table.metadata.spec(),
+            table.metadata.default_sort_order_id,
+            WriteOptions.from_properties(table.metadata.properties),
+        )
+    except e:
+        raise Error(
+            "orca: can't write data files for ",
+            dataset_of(table.metadata.location),
+            ": ",
+            e,
+        )
     return _commit_append(ctx, table, files^)
 
 
@@ -585,7 +616,14 @@ def _commit_append(
         except e:
             attempt += 1
             if attempt > _COMMIT_RETRIES:
-                raise e^
+                raise Error(
+                    "orca: can't commit to ",
+                    dataset,
+                    " (",
+                    attempt,
+                    " tries): ",
+                    e,
+                )
             _backoff(attempt)
             _reload(table)
             continue
@@ -621,7 +659,14 @@ def commit(
         except e:
             attempt += 1
             if attempt > _COMMIT_RETRIES:
-                raise e^
+                raise Error(
+                    "orca: can't commit to ",
+                    dataset,
+                    " (",
+                    attempt,
+                    " tries): ",
+                    e,
+                )
             _backoff(attempt)
             _reload(table)
             continue

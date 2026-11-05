@@ -465,6 +465,12 @@ comptime PROJECT_DOCKERFILE: StaticString = """# The image `orca aws push` build
 #
 # ORCA_SOURCE and ORCA_COMMIT say what the pipelines were built from, which
 # each run records and orca ui links.
+#
+# Everything is built with line tables (-g1) and the image has
+# llvm-symbolizer, so a crash's stack dump in a run's driver.log names each
+# frame's function, file and line (orca.crash). The line tables, compressed,
+# make a binary about half as big again (mojo-census's gharchive: 4.2 MB,
+# 6.5 MB with them, 25 MB uncompressed) and leave its speed as it was.
 FROM ghcr.io/prefix-dev/pixi:0.78.0 AS build
 ARG ORCA_SOURCE=""
 ARG ORCA_COMMIT=""
@@ -478,17 +484,23 @@ RUN mkdir -p /out/bin /out/pipelines \\
     && pixi run sh -c 'inc=""; [ -d src ] && inc="-I src"; \\
         [ -f bin/scheduler.mojo ] || { echo "orca aws push: no bin/scheduler.mojo calling orca.command"; exit 1; }; \\
         for f in bin/*.mojo; do n=$(basename "$f" .mojo); [ "$n" = scheduler ] && n=orca; \\
-            mojo build $inc "$f" -o "/out/bin/$n" || exit 1; done; \\
+            mojo build -g1 $inc "$f" -o "/out/bin/$n" || exit 1; done; \\
         for p in pipelines/*.mojo; do [ -f "$p" ] || continue; n=$(basename "$p" .mojo); \\
-            mojo build $inc -D ORCA_SOURCE='"${ORCA_SOURCE}"' -D ORCA_COMMIT='"${ORCA_COMMIT}"' \\
+            mojo build -g1 $inc -D ORCA_SOURCE='"${ORCA_SOURCE}"' -D ORCA_COMMIT='"${ORCA_COMMIT}"' \\
                 "$p" -o "/out/pipelines/$n" || exit 1; done; \\
         if ls /out/pipelines/* > /dev/null 2>&1; then /out/bin/orca locate /out/pipelines/* --root .; fi'
+# The line tables compressed, which llvm-symbolizer reads as they are.
+RUN for b in /out/bin/* /out/pipelines/*; do [ -x "$b" ] || continue; \\
+        objcopy --compress-debug-sections=zlib "$b" || exit 1; done
 # Only the pixi environment's libraries the binaries link or dlopen: libpq
 # (postgres), flare's shims (orca ui, apps), and every tin's shim, such as
-# objectstore's and the codecs' (zstd, for Iceberg writes).
-RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib \\
+# objectstore's and the codecs' (zstd, for Iceberg writes); and
+# llvm-symbolizer, which Mojo's runtime runs to name a crash's frames, with
+# what it links.
+RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib /out/libexec \\
+    && cp -L $env/bin/llvm-symbolizer /out/libexec/ \\
     && loaded=$(ls $env/lib/libpq.so* $env/lib/libflare_*.so $env/lib/lib*mojo*.so 2>/dev/null) \\
-    && ldd /out/bin/* /out/pipelines/* $loaded 2> /dev/null | awk -v e="$env" '$3 ~ "^"e {print $3}' \\
+    && ldd /out/bin/* /out/pipelines/* /out/libexec/* $loaded 2> /dev/null | awk -v e="$env" '$3 ~ "^"e {print $3}' \\
         | sort -u | xargs -r cp -L -t /out/lib \\
     && cp -L -t /out/lib $loaded
 
@@ -498,6 +510,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certi
 COPY --from=build /out/lib /opt/orca/lib
 COPY --from=build /out/bin /opt/orca/bin
 COPY --from=build /out/pipelines /opt/orca/pipelines
-ENV CONDA_PREFIX=/opt/orca LD_LIBRARY_PATH=/opt/orca/lib PATH=/opt/orca/bin:/opt/orca/pipelines:/usr/bin:/bin
+COPY --from=build /out/libexec /opt/orca/libexec
+ENV CONDA_PREFIX=/opt/orca LD_LIBRARY_PATH=/opt/orca/lib PATH=/opt/orca/bin:/opt/orca/pipelines:/usr/bin:/bin \\
+    LLVM_SYMBOLIZER_PATH=/opt/orca/libexec/llvm-symbolizer
 ENTRYPOINT ["/opt/orca/bin/orca"]
 """

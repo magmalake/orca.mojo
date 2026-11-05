@@ -103,6 +103,7 @@ tbody tr:hover td { background: color-mix(in srgb, var(--ember) 3%, transparent)
 .mono { font-family: var(--mono); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.num { font-family: var(--mono); font-size: 0.78rem; }
+td.parts { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
 td.error { white-space: normal; color: var(--bad); font-family: var(--mono); font-size: 0.8rem; max-width: 32rem; }
 td code { font-size: 0.8125rem; }
 
@@ -151,6 +152,8 @@ h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
 /* Forms: filters, actions, and logging in. */
 .filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: end; margin-bottom: 1rem; }
 .filters label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
+.pager { display: flex; gap: 1rem; align-items: baseline; margin-top: 0.8rem; font-size: 0.875rem; }
+.pager__at { color: var(--muted); font-variant-numeric: tabular-nums; }
 input, button, select { font: inherit; padding: 0.35rem 0.6rem; border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }
 input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--lake);
@@ -162,6 +165,29 @@ button.danger:hover { border-color: var(--bad); background: color-mix(in srgb, v
 .actions { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; align-items: end; margin: 1rem 0; }
 form.action { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; margin: 0; }
 form.action label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
+form.act { display: inline; margin: 0 0 0 0.4rem; }
+.act__btn { font-size: 0.75rem; padding: 0.05rem 0.45rem; vertical-align: middle; font-weight: 500; }
+h1 .act__btn { font-size: 0.8125rem; padding: 0.15rem 0.6rem; }
+.act__login { display: none; margin-left: 0.4rem; font-size: 0.75rem; font-weight: 400; }
+body.anon form.act, body.anon .act__need { display: none; }
+body.anon .act__login { display: inline; }
+.chain { margin: 0.4rem 0 0.8rem; padding-left: 1.4rem; }
+.chain__level { margin: 0.2rem 0; }
+.chain__level + .chain__level::marker { content: "→ "; }
+form.start { display: grid; gap: 0.7rem; margin: 1rem 0; max-width: 46rem; }
+.start__range { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); max-width: 22rem; }
+.start__check { font-size: 0.875rem; display: flex; gap: 0.4rem; align-items: center; }
+.start__choices { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; }
+.start__choice { display: grid; gap: 0.25rem; max-width: 21rem; align-content: start; }
+.start__choice p { margin: 0; font-size: 0.8125rem; }
+form.start > button { justify-self: start; }
+button.primary { background: var(--lake); border-color: var(--lake); color: #fff; font-weight: 600; }
+button.primary:hover { filter: brightness(1.08); color: #fff; }
+.start__preview p { margin: 0.2rem 0; }
+.start__preview .refused { color: var(--bad); }
+.start__cli { margin: 0; font-size: 0.8125rem; }
+pre.cmd { margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0.5rem 0.8rem; font-size: 0.8125rem; overflow-x: auto; user-select: all; }
 .auth { max-width: 22rem; margin: 3rem auto; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.6rem 1.75rem 1.5rem; }
 .auth h1 { font-size: 1.35rem; margin: 0 0 1rem; }

@@ -214,5 +214,108 @@ curl -fsS -D - -o /dev/null "$base/runs/$fan/timeline.json" | grep -qi '^access-
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$ok_run/timeline.json")
 [ "$code" = 404 ] || fail "a run without tasks answered $code for its timeline"
 
+# /runs: the filters are dropdowns with the current choice selected, and an
+# unknown value is kept, escaped.
+page=$(html "/runs?pipeline=toy&status=failed")
+echo "$page" | grep -qF '<select name="pipeline"><option value="">any</option>' || fail "no pipeline dropdown"
+echo "$page" | grep -qF '<option value="toy" selected>toy</option>' || fail "toy isn't selected"
+echo "$page" | grep -qF '<option value="daily">daily</option>' || fail "daily isn't a pipeline option"
+echo "$page" | grep -qF '<option value="failed" selected>failed</option>' || fail "failed isn't selected"
+echo "$page" | grep -qF '<option value="cancelled">cancelled</option>' || fail "cancelled isn't a status option"
+echo "$page" | grep -qF '<select name="trigger"><option value="" selected>any</option><option value="schedule">schedule</option>' \
+    || fail "the trigger dropdown"
+echo "$page" | grep -qF '<option value="rebuild">rebuild</option>' || fail "rebuild isn't a trigger option"
+echo "$page" | grep -qF '<button type="submit">Filter</button>' || fail "the Filter button"
+html '/runs?trigger=%3Cb%3E' | grep -qF '<option value="&lt;b&gt;" selected>&lt;b&gt;</option>' \
+    || fail "an unknown trigger isn't kept, escaped"
+
+# Paging by id: 60 more runs, 25 to a page, across the boundaries with the
+# filters kept.
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, ended)
+   SELECT 'toy', registry_hash, '2023-01', 'schedule', 'succeeded', now()
+   FROM orca.runs, generate_series(1, 60) WHERE id = $ok_run" > /dev/null
+f='pipeline=toy&status=succeeded&trigger=schedule&n=25'
+p1=$(json "/runs?$f")
+echo "$p1" | jq -e '(.runs | length) == 25 and .total == 60 and .newer == 0 and .before == null and .n == 25
+    and .filters == {"pipeline": "toy", "status": "succeeded", "trigger": "schedule"}
+    and .next_before == .runs[-1].id and ([.runs[].trigger] | unique) == ["schedule"]' > /dev/null \
+    || fail "the first page's JSON: $(echo "$p1" | jq -c 'del(.runs)')"
+b2=$(echo "$p1" | jq .next_before)
+page=$(html "/runs?$f")
+echo "$page" | grep -qF '<span class="pager__at">1–25 of 60</span>' || fail "the first page's range"
+echo "$page" | grep -q 'Newer' && fail "the first page links newer runs"
+echo "$page" | grep -qF "<a href=\"/runs?pipeline=toy&amp;status=succeeded&amp;trigger=schedule&amp;n=25&amp;before=$b2\">Older →</a>" \
+    || fail "the first page's Older link"
+echo "$page" | grep -qF '<input type="hidden" name="n" value="25">' || fail "the form doesn't keep n"
+p2=$(json "/runs?$f&before=$b2")
+echo "$p2" | jq -e --argjson b "$b2" '(.runs | length) == 25 and .newer == 25 and .runs[0].id < $b
+    and .runs[0].id == ([.runs[].id] | max)' > /dev/null || fail "the second page: $(echo "$p2" | jq -c "del(.runs)")"
+[ "$(echo "$p1" "$p2" | jq -s '[.[].runs[].id] | unique | length')" -eq 50 ] || fail "pages overlap"
+page=$(html "/runs?$f&before=$b2")
+echo "$page" | grep -qF '<span class="pager__at">26–50 of 60</span>' || fail "the second page's range"
+echo "$page" | grep -qF '<a href="/runs?pipeline=toy&amp;status=succeeded&amp;trigger=schedule&amp;n=25">← Newer</a>' \
+    || fail "the second page's Newer link isn't the first page"
+b3=$(echo "$p2" | jq .next_before)
+p3=$(json "/runs?$f&before=$b3")
+echo "$p3" | jq -e '(.runs | length) == 10 and .next_before == null and .newer == 50' > /dev/null \
+    || fail "the last page: $(echo "$p3" | jq -c 'del(.runs)')"
+page=$(html "/runs?$f&before=$b3")
+echo "$page" | grep -qF '<span class="pager__at">51–60 of 60</span>' || fail "the last page's range"
+echo "$page" | grep -q 'Older' && fail "the last page links older runs"
+echo "$page" | grep -qF "before=$b2\">← Newer</a>" || fail "the last page's Newer link isn't the second page"
+[ "$(json '/runs?n=100000' | jq .n)" -eq 500 ] || fail "n isn't capped at 500"
+[ "$(json /runs | jq .n)" -eq 50 ] || fail "the default page isn't 50"
+# Tries: the header says what it counts, and a cell has a number only when
+# the run was started more than once; the JSON keeps `starts`.
+q "UPDATE orca.runs SET starts = 3 WHERE id = $bad_run" > /dev/null
+page=$(html "/runs?pipeline=toy&status=failed")
+echo "$page" | grep -qF "<th class=\"num\"><abbr title=\"Times the run's process was started: 1 is normal; more means retries, a lost instance or a resume.\"" \
+    || fail "the Tries header"
+echo "$page" | grep -q '>Starts<' && fail "a runs table still says Starts"
+echo "$page" | grep -qF '<td class="num">3</td>' || fail "a run started 3 times doesn't say 3"
+echo "$page" | grep -qF '<th>Created</th><th class="num">Took</th><th>Partitions</th>' \
+    || fail "Created and Took don't lead the runs table"
+echo "$page" | grep -qE '<td class="mono"><time class="rel" datetime="[0-9-]+T[0-9:]+Z">' \
+    || fail "a run's created time isn't a <time> the script shows as relative"
+echo "$page" | grep -qE '<td class="num">[0-9]+s</td>' || fail "an ended run's Took"
+was=$(q "SELECT partitions FROM orca.runs WHERE id = $bad_run")
+q "UPDATE orca.runs SET partitions = 'a,b,c,d,e' WHERE id = $bad_run" > /dev/null
+html "/runs?pipeline=toy&status=failed" \
+    | grep -qF '<td class="mono parts" title="a,b,c,d,e">a, b <span class="muted">+3 more</span></td>' \
+    || fail "a long list of partitions isn't cut short"
+q "UPDATE orca.runs SET partitions = '$was' WHERE id = $bad_run" > /dev/null
+page=$(html "/runs?pipeline=toy&status=succeeded&trigger=manual")
+echo "$page" | grep -qF '<td class="num"></td>' || fail "a run started once isn't empty under Tries"
+echo "$page" | grep -qF '<td class="num">1</td>' && fail "a run started once shows 1"
+[ "$(json "/runs?pipeline=toy&status=failed" | jq '.runs[0].starts')" -eq 3 ] || fail "the JSON's starts"
+# Actions beside their statuses: Pause per pipeline, Retry for a failed
+# run, Rerun for a succeeded one, Rerun from here on an ended run's attempt,
+# Cancel for a queued one; each titled with its command line.
+html / | grep -qF 'action="/pipelines/toy/pause"><button type="submit" class="act__btn" title="orca pause toy">Pause</button></form>' \
+    || fail "no Pause on the home page's row"
+html /pipelines/toy | grep -qF '<h1>toy<form class="act" method="post" action="/pipelines/toy/pause">' \
+    || fail "no Pause in the pipeline's header"
+html "/runs?pipeline=toy&status=failed" | grep -qF "action=\"/runs/$bad_run/resume\"><button type=\"submit\" class=\"act__btn\" title=\"&lt;toy binary&gt; resume $bad_run" \
+    || fail "no Retry for the failed run"
+html "/runs/$bad_run" | grep -qF '>Retry</button>' || fail "no Retry in the failed run's header"
+page=$(html "/runs/$ok_run")
+echo "$page" | grep -qF "<form class=\"act\" method=\"post\" action=\"/runs/$ok_run/rerun\" data-confirm=\"Rerun?\"><input type=\"hidden\" name=\"step\" value=\"days\">" \
+    || fail "no Rerun in the succeeded run's header"
+html "/runs/$bad_run/attempts/$failed" | grep -qF '<input type="hidden" name="step" value="measure"><button type="submit" class="act__btn danger" title="no orca command for this yet: a new run from measure on, the steps before it copied">Rerun from here</button>' \
+    || fail "no Rerun from here on the attempt"
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
+   SELECT 'toy', registry_hash, '2023-02,2023-03', 'manual', 'queued' FROM orca.runs WHERE id = $ok_run" > /dev/null
+qd=$(q "SELECT max(id) FROM orca.runs")
+html "/runs?status=queued" | grep -qF "action=\"/runs/$qd/cancel\" data-confirm=\"Cancel?\"><button type=\"submit\" class=\"act__btn danger\" title=\"orca cancel toy 2023-02,2023-03" \
+    || fail "no Cancel for the queued run"
+html "/runs/$qd" | grep -qF '>Cancel</button>' || fail "no Cancel in the queued run's header"
+html /runs | grep -q 'class="anon"' && fail "a page with login off is anon"
+q "UPDATE orca.pipelines SET paused = true WHERE name = 'toy'" > /dev/null
+html /pipelines/toy | grep -qF 'action="/pipelines/toy/unpause"><button type="submit" class="act__btn" title="orca unpause toy">Resume</button>' \
+    || fail "no Resume for the paused pipeline"
+q "UPDATE orca.pipelines SET paused = false WHERE name = 'toy'" > /dev/null
+q "DELETE FROM orca.runs WHERE id = $qd" > /dev/null
+echo "ok   /runs: dropdown filters, pages and tries"
+
 kill "$pid"
 echo "ok   ui"

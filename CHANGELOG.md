@@ -12,6 +12,79 @@
   `Codec` over iceberg's `DataFile.encode`, so a task's result can carry
   them, alone or in a struct beside plain fields. Needs iceberg-mojo with
   magmalake/iceberg.mojo#70.
+- **A crash's stack dump is symbolized, and a crashed attempt says where**.
+  The project image (`deploy/project.Dockerfile`, which `orca aws push`
+  builds) and `deploy/Dockerfile` build every binary with line tables
+  (`mojo build -g1`, then compressed with `objcopy`: mojo-census's
+  gharchive goes from 4.2 MB to 6.5 MB, 25 MB uncompressed, and parses and
+  writes an hour of GH Archive as fast as before) and carry
+  the pixi environment's `llvm-symbolizer` at
+  `/opt/orca/libexec/llvm-symbolizer`, with `LLVM_SYMBOLIZER_PATH` set,
+  so a segfault's or `abort`'s dump in `driver.log` names each frame's
+  function, file and line. The runner that sees a crashed process end
+  (the scheduler reaping a local run, `<binary> keep-log` on an EC2 head,
+  given the run as `ORCA_RUN`, and the Kubernetes runner keeping the
+  driver pod's log) fails the attempts it left `running` with the dump's
+  summary, `crashed: <abort's message>; at <function> <file:line>, ...`
+  (`orca.crash`), instead of leaving them for `resume` to call
+  interrupted. A local run's `driver.log` marks each start with a
+  `--- start <n>` line, as the other runners' do. `Store.interrupt` takes
+  the error to record (`why`). `pixi run test-crash`.
+- **Errors say what orca was doing**. A table orca can't load, create,
+  reload, write data files for or commit to (`orca.tables`) names its
+  dataset and, for a commit, how many tries it made; a dataset whose
+  snapshot `sense` can't read is named; and an EC2 call that never got an
+  answer names its action.
+
+## 0.3.4 (2026-11-04)
+
+- Built against iceberg-mojo 0.9.0 (parquet-mojo 0.12.0): data files go
+  through the streaming Parquet writer.
+
+- **`/runs` filters are dropdowns, and the runs go back further than 100**
+  (#113). Pipeline, status and trigger are `<select>`s: the registered
+  pipelines; queued, running, deferred, succeeded, failed and cancelled;
+  and the triggers orca writes plus any others in `orca.runs`; the current
+  choice stays selected, and the page filters as a choice changes (the
+  Filter button does the same without JavaScript). The page shows 50 runs
+  (`?n=`, at most 500) and pages by id: `?before=<id>` is the runs older
+  than that one, and Newer and Older links keep the filters, beside
+  "51–100 of 1,234". The JSON has `next_before` (null on the last page),
+  `newer`, `total`, `n`, `before` and `filters`.
+- **The pipeline page's Start runs is one form with a preview** (#113).
+  One range, a primary "Backfill: one run per day" (month, key; "runs of
+  up to N" with `keys_per_run`) and "Start one run over the whole range",
+  each with a line on what it queues; "Include days that already
+  succeeded (rerun them)" is `rerun=1`, as `orca backfill --rerun`.
+  Preview (`?preview=1&partitions=...`, a GET) says what the backfill
+  would queue, "This queues 30 runs: 2025-01-02 … 2025-01-31. 1 already
+  done is skipped.", and whether one run would be refused, with the same
+  logic as the backfill in a transaction it rolls back; the pipeline's
+  JSON has it as `preview`. Below, the same as `orca backfill` and the
+  binary's `run --partitions`, quoted for a shell, and a line of script
+  updates both and the preview as you type.
+- **Actions sit beside the statuses they change** (#113). A Pause (or,
+  paused, Resume) button by each pipeline on the home page and in its
+  page's header; Cancel by a queued or running run and Retry by a failed
+  one, in every runs table and in the run's header, where a succeeded run
+  has Rerun; Rerun from here on an ended run's attempt. Each posts to the
+  existing action, with its Origin and login checks; its title is the
+  command line that does the same. Cancel and the reruns ask first where
+  there's JavaScript. Logged out with login on, each is a "Log in to
+  pause" (and so on) link that comes back to the page.
+- **A dataset's Rebuild section says what it does and what it runs**
+  (#113). A plain line on what a rebuild is for; the chain of pipelines
+  it runs, by level, each linked and with what it reads that the rebuild
+  changes ("nothing reads this dataset" when none does; the JSON's
+  `downstream`); a Preview (`?preview=1&partitions=...`) of the runs each
+  level would queue, from the rebuild's own plan (`plan_rebuild`), which
+  writes nothing; and `orca rebuild <dataset> <range>` beside the button,
+  which asks first and, logged out, is a link to log in.
+- **Runs tables say Tries, not Starts** (#113), with a tooltip saying what
+  it counts, and show it only when a run was started more than once. The
+  JSON's field is still `starts`.
+- Fixed: `/runs` sorted run ids as text, so past run 9 the newest weren't
+  first (run 9 came before run 64).
 
 ## 0.3.3 (2026-11-04)
 

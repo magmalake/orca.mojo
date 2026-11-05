@@ -15,7 +15,7 @@ time and tags.
 from std.os import getenv
 
 from objectstore.crypto import sha256_hex
-from objectstore.http import Header, HttpClient
+from objectstore.http import Header, HttpClient, Response
 from objectstore.s3 import S3Credentials, instance_credentials
 from objectstore.sigv4 import AmzTime, QueryParam, sign_request
 
@@ -213,9 +213,13 @@ struct Ec2(Movable):
             when,
         )
         headers.append(Header("authorization", signed.authorization))
-        var resp = self.http.post(
-            String(self.endpoint, "/"), body.as_bytes(), headers
-        )
+        var resp: Response
+        try:
+            resp = self.http.post(
+                String(self.endpoint, "/"), body.as_bytes(), headers
+            )
+        except e:
+            raise Error("orca: EC2 ", action, ": ", e)
         var text = String(from_utf8_lossy=Span(resp.body))
         if resp.status != 200:
             raise Error(

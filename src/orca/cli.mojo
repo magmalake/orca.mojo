@@ -65,6 +65,7 @@ from orca.logs import (
 )
 from orca.tasks import workers
 from orca.civil import Civil, now, parse_time
+from orca.crash import crash_summary
 from orca.pipeline import Pipeline
 from orca.sample import sample_main
 from orca.sqlite_store import SqliteStore, sqlite_path
@@ -73,13 +74,14 @@ from orca.store import (
     CANCELLED,
     DEFERRED,
     FAILED,
+    RUNNING,
     SUCCEEDED,
     MemoryStore,
     RunResult,
     RunStore,
     process_owner,
 )
-from orca.warehouse import current_snapshot
+from orca.warehouse import Sensed, current_snapshot
 
 comptime USAGE = """usage:
   <pipeline> describe
@@ -160,6 +162,20 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         before.extend(String("--- start ", args[4], "\n").as_bytes())
         before.extend(Span(data))
         write_location(args[3], Span(before))
+        # A driver that crashed left its attempts running: they fail with
+        # the crash's first frames (orca.crash) while the run is running.
+        var why = crash_summary(String(from_utf8_lossy=Span(data)))
+        var run = getenv("ORCA_RUN")
+        if why and run and url:
+            try:
+                if sqlite_path(url):
+                    var file = SqliteStore(sqlite_path(url))
+                    _crashed(file, Int(run), why)
+                else:
+                    var store = PgStore(url)
+                    _crashed(store, Int(run), why)
+            except e:
+                print("orca: can't record run", run, "crashing:", e)
         return 0
     if cmd == "dista-status" and len(args) == 3:
         # For the scheduler, scaling a run (orca.ec2): its head's demand.
@@ -198,7 +214,11 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         if len(names) > 0 and not wh:
             raise Error("orca: sense needs ORCA_WAREHOUSE")
         for d in names:
-            var c = current_snapshot(wh, d)
+            var c: Sensed
+            try:
+                c = current_snapshot(wh, d)
+            except e:
+                raise Error("orca: can't read ", d, "'s snapshot: ", e)
             print(
                 c.dataset,
                 c.snapshot,
@@ -269,6 +289,14 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         return _status(store, args)
     _usage()
     return 2
+
+
+def _crashed[S: RunStore](mut store: S, run: Int, why: String) raises:
+    """`keep-log`'s: fails the attempts a crashed driver left running."""
+    if store.run_info(run).status != RUNNING:
+        return
+    var n = store.interrupt(run, why)
+    print("run", run, "crashed,", n, "attempts failed:", why)
 
 
 def _run[
