@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.3.4 (2026-11-04)
+
+- Built against iceberg-mojo 0.9.0 (parquet-mojo 0.12.0): data files go
+  through the streaming Parquet writer.
+
 - **`/runs` filters are dropdowns, and the runs go back further than 100**
   (#113). Pipeline, status and trigger are `<select>`s: the registered
   pipelines; queued, running, deferred, succeeded, failed and cancelled;
