@@ -177,6 +177,12 @@ psql "$ORCA_DATABASE_URL" -qc "INSERT INTO orca.pipelines (name, registry_hash, 
     \"dataset\": \"people.names\"}, \"steps\": []}', '$PWD/build/actions-keyed.sh')" > /dev/null
 [ "$(post /pipelines/names/runs partitions=carol)" = 409 ] || fail "a key the stand-in hasn't was started"
 grep -q 'a key of people.names' "$log.body" || fail "the keyed refusal: $(cat "$log.body")"
+# Keyed pipelines keep the text form: no calendar, no coverage.
+page=$(curl -fsS "$base/pipelines/names")
+echo "$page" | grep -qF 'name="partitions"' || fail "the keyed pipeline has no text field"
+echo "$page" | grep -qF 'data-calendar=' && fail "a keyed pipeline has a calendar picker"
+echo "$page" | grep -qF 'id="coverage"' && fail "a keyed pipeline has coverage"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/pipelines/names/calendar")" = 400 ] || fail "a keyed pipeline's calendar"
 printf 'secret value, line one\nalice\n' > build/actions-secret.txt
 for action in runs backfill; do
     code=$(post "/pipelines/names/$action" "partitions=@file:$PWD/build/actions-secret.txt")
