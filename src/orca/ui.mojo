@@ -117,6 +117,7 @@ from orca.scheduler import (
     keep_keys,
     kept_keys,
     fill_key,
+    preview_backfill,
     registered,
 )
 from orca.sensors import Rebuild, rebuilds
@@ -1772,11 +1773,349 @@ def key_page(mut db: State, name: String, key: String) raises -> Page:
     return Page(200, j^, _page(String(name, " · ", key), "/", h))
 
 
-def pipeline(mut db: State, name: String) raises -> Page:
+@fieldwise_init
+struct StartPreview(Copyable, Movable):
+    """What the pipeline page's Start runs form would do over a range: the
+    backfill's runs and the keys it would leave, and the one run's size, or
+    why the range is refused."""
+
+    var refused: String
+    var keys: List[String]
+    """The keys the backfill would queue, sorted."""
+    var runs: Int
+    """The runs they'd make, `keys_per_run` to a run."""
+    var keys_per_run: Int
+    var done: List[String]
+    var live: List[String]
+    var live_runs: List[Int]
+
+
+def _start_preview(
+    mut db: State, name: String, keys: String, rerun: Bool
+) raises -> Optional[StartPreview]:
+    """The Start runs preview over `keys`: `preview_backfill`, the same
+    logic as the backfill, in a transaction it rolls back."""
+    var ps = registered(db, name)
+    if len(ps) == 0:
+        return None
+    try:
+        if String(keys.strip()).startswith("@file:"):
+            raise Error(
+                "partitions from a file (@file:) are for the command line,"
+                " which reads its own files; list the names, or use @all"
+            )
+        var q = preview_backfill(db, ps[0], keys, rerun)
+        return StartPreview(
+            "",
+            q.keys.copy(),
+            q.batches,
+            ps[0].keys_per_run,
+            q.done.copy(),
+            q.live.copy(),
+            q.live_runs.copy(),
+        )
+    except e:
+        return StartPreview(
+            String(e),
+            List[String](),
+            0,
+            ps[0].keys_per_run,
+            List[String](),
+            List[String](),
+            List[Int](),
+        )
+
+
+def _unit(kind: String, n: Int) -> String:
+    """A partition of `kind`, as a word: day, month or key, plural unless
+    `n` is 1."""
+    var one = String("day") if kind == "daily" else (
+        String("month") if kind == "monthly" else String("key")
+    )
+    return one if n == 1 else String(one, "s")
+
+
+def _sh(s: StringSlice) -> String:
+    """`s` as one shell word: as it is if it's only letters, digits and
+    `-_.,:/@=+%`, else in single quotes."""
+    var plain = s.byte_length() > 0
+    for b in s.as_bytes():
+        var c = Int(b)
+        if not (
+            (c >= 48 and c <= 57)
+            or (c >= 65 and c <= 90)
+            or (c >= 97 and c <= 122)
+            or c == 45
+            or c == 95
+            or c == 46
+            or c == 44
+            or c == 58
+            or c == 47
+            or c == 64
+            or c == 61
+            or c == 43
+            or c == 37
+        ):
+            plain = False
+            break
+    if plain:
+        return String(s)
+    return String("'", String(s).replace("'", "'\\''"), "'")
+
+
+def _backfill_cmd(name: String, keys: String, rerun: Bool) -> String:
+    """`orca backfill [--rerun] <pipeline> <keys>`, as `orca` reads it."""
+    return String(
+        "orca backfill ",
+        "--rerun " if rerun else "",
+        _sh(name),
+        " ",
+        _sh(keys) if keys else String("<range>"),
+    )
+
+
+def _run_cmd(binary: String, keys: String) -> String:
+    """The binary's `run --partitions <keys>`: one run, in that process."""
+    return String(
+        _sh(binary),
+        " run --partitions ",
+        _sh(keys) if keys else String("<range>"),
+    )
+
+
+def _preview_line(p: PipelineRow, v: StartPreview) -> String:
+    """ "This queues 30 runs: 2025-01-02 … 2025-01-31. 1 already done is
+    skipped." and the like."""
+    var n = len(v.keys)
+    var out = String()
+    if v.runs == 0:
+        out.write("This queues no runs.")
+    else:
+        out.write("This queues ", v.runs, " run" if v.runs == 1 else " runs")
+        if v.keys_per_run > 1:
+            out.write(" over ", n, " ", _unit(p.kind, n))
+        out.write(": ", v.keys[0])
+        if n > 1:
+            out.write(" … ", v.keys[n - 1])
+        out.write(".")
+    if len(v.done) > 0:
+        out.write(
+            " ",
+            len(v.done),
+            " already done ",
+            "is" if len(v.done) == 1 else "are",
+            " skipped.",
+        )
+    if len(v.live) > 0:
+        out.write(
+            " ",
+            len(v.live),
+            " in a queued or running run ",
+            "is" if len(v.live) == 1 else "are",
+            " left to it (",
+            v.live[0],
+            ": run ",
+            v.live_runs[0],
+            ").",
+        )
+    return out^
+
+
+def _one_run_line(p: PipelineRow, v: StartPreview) -> String:
+    """What "Start one run" would do over the same range."""
+    var n = len(v.keys) + len(v.done) + len(v.live)
+    if len(v.live) > 0:
+        return String(
+            "One run over the whole range is refused: ",
+            v.live[0],
+            " is in run ",
+            v.live_runs[0],
+            ", which is queued or running.",
+        )
+    return String(
+        "One run over the whole range runs all ",
+        n,
+        " ",
+        _unit(p.kind, n),
+        ", done or not.",
+    )
+
+
+def _json_start_preview(
+    mut out: String,
+    p: PipelineRow,
+    v: StartPreview,
+    keys: String,
+    rerun: Bool,
+):
+    out.write(
+        '{"partitions": ',
+        quote(keys),
+        ', "rerun": ',
+        "true" if rerun else "false",
+        ', "refused": ',
+        quote(v.refused) if v.refused else String("null"),
+        ', "runs": ',
+        v.runs,
+        ', "keys": ',
+    )
+    _json_strings(out, v.keys)
+    out.write(', "done": ')
+    _json_strings(out, v.done)
+    out.write(', "live": ')
+    _json_strings(out, v.live)
+    out.write(
+        ', "one_run": ',
+        len(v.keys) + len(v.done) + len(v.live),
+        ', "commands": {"backfill": ',
+        quote(_backfill_cmd(p.name, keys, rerun)),
+        ', "run": ',
+        quote(_run_cmd(p.binary, keys)),
+        "}}",
+    )
+
+
+comptime _START_SCRIPT = """
+(() => {
+  const f = document.getElementById("start");
+  if (!f) return;
+  const sh = (s) => /^[A-Za-z0-9_.,:\\/@=+%-]+$/.test(s) ? s : "'" + s.replaceAll("'", "'\\\\''") + "'";
+  let timer;
+  const update = () => {
+    const keys = f.elements.partitions.value.trim();
+    const rerun = f.elements.rerun.checked;
+    const k = keys ? sh(keys) : "<range>";
+    f.querySelector("[data-cmd=backfill]").textContent =
+      "orca backfill " + (rerun ? "--rerun " : "") + f.dataset.pipeline + " " + k;
+    f.querySelector("[data-cmd=run]").textContent = f.dataset.binary + " run --partitions " + k;
+    clearTimeout(timer);
+    if (!keys) return;
+    timer = setTimeout(async () => {
+      const q = new URLSearchParams({ preview: "1", partitions: keys });
+      if (rerun) q.set("rerun", "1");
+      try {
+        const r = await fetch(f.dataset.page + "?" + q);
+        const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+        const got = doc.getElementById("start-preview");
+        const at = document.getElementById("start-preview");
+        if (got && at) at.replaceWith(got);
+      } catch (e) {}
+    }, 400);
+  };
+  f.addEventListener("input", update);
+  f.addEventListener("change", update);
+})();
+"""
+"""Updates the Start runs form's command lines as you type, and its
+preview a moment after; without it, the Preview button does the same."""
+
+
+def _start_html(
+    mut h: Html,
+    p: PipelineRow,
+    keys: String,
+    rerun: Bool,
+    preview: Optional[StartPreview],
+    keys_per_run: Int,
+):
+    """The pipeline page's Start runs section: one range, a backfill (the
+    primary) or one run over it, a preview of what they'd queue, and the
+    same from the command line."""
+    var base = String("/pipelines/", url_encode(p.name))
+    var unit = _unit(p.kind, 1)
+    var units = _unit(p.kind, 2)
+    var example = String("2024-01-01" if p.kind == "daily" else "2024-01")
+    h.raw("<h2>Start runs", _docs("cli"), '</h2><form class="start" id="start"')
+    h.raw(' method="post" action="')
+    h.text(base, "/backfill")
+    h.raw('" data-page="')
+    h.text(base)
+    h.raw('" data-pipeline="')
+    h.text(_sh(p.name))
+    h.raw('" data-binary="')
+    h.text(_sh(p.binary))
+    h.raw('"><label class="start__range">')
+    h.text("Keys" if p.kind == "keyed" else String("Range of ", units))
+    h.raw(' <input name="partitions" required placeholder="')
+    if p.kind == "keyed":
+        h.text("@all, or name,name")
+    else:
+        h.text(example, "..", example)
+    h.raw('" value="')
+    h.text(keys)
+    h.raw('"></label><label class="start__check"><input type="checkbox"')
+    h.raw(' name="rerun" value="1"', " checked" if rerun else "", ">")
+    h.text(" Include ", units, " that already succeeded (rerun them)")
+    h.raw('</label><div class="start__choices"><div class="start__choice">')
+    h.raw('<button type="submit" class="primary">')
+    if keys_per_run > 1:
+        h.text("Backfill: runs of up to ", keys_per_run, " ", units)
+    else:
+        h.text("Backfill: one run per ", unit)
+    h.raw('</button><p class="muted">')
+    h.text(
+        "Queues a run for each ",
+        unit if keys_per_run <= 1 else String(keys_per_run, " ", units),
+        " in the range that hasn't succeeded and isn't in a queued or",
+        " running run.",
+    )
+    h.raw('</p></div><div class="start__choice"><button type="submit"')
+    h.raw(' formaction="')
+    h.text(base, "/runs")
+    h.raw('">Start one run over the whole range</button><p class="muted">')
+    h.text(
+        "Queues a single run over every ",
+        unit,
+        " in the range, done or not; refused while a queued or running run",
+        " has one of them.",
+    )
+    h.raw("</p></div></div>")
+    h.raw('<button type="submit" formmethod="get" formaction="')
+    h.text(base, "#start")
+    h.raw('" formnovalidate name="preview" value="1">Preview</button>')
+    h.raw('<div id="start-preview" class="start__preview">')
+    if preview:
+        ref v = preview.value()
+        if v.refused:
+            h.raw('<p class="refused">')
+            h.text(v.refused)
+            h.raw("</p>")
+        else:
+            h.raw('<p data-preview="backfill">')
+            h.text(_preview_line(p, v))
+            h.raw('</p><p class="muted" data-preview="run">')
+            h.text(_one_run_line(p, v))
+            h.raw("</p>")
+    h.raw('</div><p class="muted start__cli">Same from the command line (on')
+    h.raw(" the control instance today, remotely once #111 lands):</p>")
+    h.raw('<pre class="cmd"><code data-cmd="backfill">')
+    h.text(_backfill_cmd(p.name, keys, rerun))
+    h.raw('</code>\n<code data-cmd="run">')
+    h.text(_run_cmd(p.binary, keys))
+    h.raw('</code></pre><p class="muted more">The second runs in that')
+    h.raw(" shell's process rather than queuing it; orca has no command that")
+    h.raw(" queues one run. The scheduler (<code>orca scheduler</code>) starts")
+    h.raw(" queued runs, up to ")
+    h.text(p.max_runs)
+    h.raw(" at once.</p></form><script>", _START_SCRIPT, "</script>")
+
+
+def pipeline(
+    mut db: State,
+    name: String,
+    keys_in: String = "",
+    rerun: Bool = False,
+    preview: Bool = False,
+) raises -> Page:
+    """A pipeline's page; with `preview` and `keys_in`, what its Start runs
+    form would queue over them (`?preview=1&partitions=...&rerun=1`)."""
     var ps = _pipelines(db, name)
     if len(ps) == 0:
         return not_found(String("no pipeline ", name))
     ref p = ps[0]
+    var start = _start_preview(db, name, keys_in, rerun) if (
+        preview and keys_in.strip()
+    ) else Optional[StartPreview](None)
     var steps = _step_defs(db, name)
     var fires = List[Fire]()
     try:
@@ -1863,7 +2202,11 @@ def pipeline(mut db: State, name: String) raises -> Page:
             quote(u[2]),
             "}",
         )
-    j.write("]}")
+    j.write("]")
+    if start:
+        j.write(', "preview": ')
+        _json_start_preview(j, p, start.value(), keys_in, rerun)
+    j.write("}")
 
     var h = Html()
     h.raw('<p class="crumb"><a href="/">Pipelines</a></p><h1>')
@@ -1946,41 +2289,15 @@ def pipeline(mut db: State, name: String) raises -> Page:
             h.raw("</tr>")
         h.raw("</tbody></table></div>")
     if p.binary:
-        var base = String("/pipelines/", url_encode(p.name))
-        var example = String("2024-01-01" if p.kind == "daily" else "2024-01")
-        h.raw(
-            "<h2>Start runs",
-            _docs("cli"),
-            '</h2><div class="actions">',
-            '<form class="action" method="post" action="',
+        var regs = registered(db, name)
+        _start_html(
+            h,
+            p,
+            keys_in,
+            rerun,
+            start,
+            regs[0].keys_per_run if len(regs) > 0 else 1,
         )
-        h.text(base, "/runs")
-        h.raw('"><label>One run over <input name="partitions" required')
-        h.raw(' placeholder="')
-        if p.kind == "keyed":
-            h.text("name,name")
-        else:
-            h.text(example, "..", example)
-        h.raw(
-            '"></label><button type="submit">Start</button></form>',
-            '<form class="action" method="post" action="',
-        )
-        h.text(base, "/backfill")
-        h.raw("\"><label>Runs of what isn't done <input")
-        h.raw(' name="partitions" required placeholder="')
-        if p.kind == "keyed":
-            h.text("@all, or names")
-        else:
-            h.text(example, "..", example)
-        h.raw(
-            '"></label><label><input type="checkbox" name="rerun" value="1">',
-            " and what is</label>",
-            '<button type="submit">Backfill</button></form></div>',
-            '<p class="muted more">The scheduler (<code>orca scheduler',
-            "</code>) starts queued runs, up to ",
-        )
-        h.text(p.max_runs)
-        h.raw(" at once.</p>")
     _control_html(h, p)
     if len(fires) > 0:
         h.raw(
@@ -4215,7 +4532,13 @@ struct Ui(Copyable, Handler):
             var parts = path[byte=11:].split("/")
             var name = url_decode(parts[0])
             if len(parts) == 1 and name:
-                return pipeline(db, name)
+                return pipeline(
+                    db,
+                    name,
+                    _query(url, "partitions"),
+                    _query(url, "rerun") == "1",
+                    _query(url, "preview") == "1",
+                )
             if len(parts) == 3 and parts[1] == "keys" and name:
                 return key_page(db, name, url_decode(parts[2]))
         return not_found(String("nothing at ", path))

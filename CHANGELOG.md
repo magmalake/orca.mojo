@@ -12,6 +12,18 @@
   than that one, and Newer and Older links keep the filters, beside
   "51–100 of 1,234". The JSON has `next_before` (null on the last page),
   `newer`, `total`, `n`, `before` and `filters`.
+- **The pipeline page's Start runs is one form with a preview** (#113).
+  One range, a primary "Backfill: one run per day" (month, key; "runs of
+  up to N" with `keys_per_run`) and "Start one run over the whole range",
+  each with a line on what it queues; "Include days that already
+  succeeded (rerun them)" is `rerun=1`, as `orca backfill --rerun`.
+  Preview (`?preview=1&partitions=...`, a GET) says what the backfill
+  would queue, "This queues 30 runs: 2025-01-02 … 2025-01-31. 1 already
+  done is skipped.", and whether one run would be refused, with the same
+  logic as the backfill in a transaction it rolls back; the pipeline's
+  JSON has it as `preview`. Below, the same as `orca backfill` and the
+  binary's `run --partitions`, quoted for a shell, and a line of script
+  updates both and the preview as you type.
 - **Runs tables say Tries, not Starts** (#113), with a tooltip saying what
   it counts, and show it only when a run was started more than once. The
   JSON's field is still `starts`.

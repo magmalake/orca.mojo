@@ -164,6 +164,20 @@ button.danger:hover { border-color: var(--bad); background: color-mix(in srgb, v
 .actions { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; align-items: end; margin: 1rem 0; }
 form.action { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; margin: 0; }
 form.action label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
+form.start { display: grid; gap: 0.7rem; margin: 1rem 0; max-width: 46rem; }
+.start__range { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); max-width: 22rem; }
+.start__check { font-size: 0.875rem; display: flex; gap: 0.4rem; align-items: center; }
+.start__choices { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; }
+.start__choice { display: grid; gap: 0.25rem; max-width: 21rem; align-content: start; }
+.start__choice p { margin: 0; font-size: 0.8125rem; }
+form.start > button { justify-self: start; }
+button.primary { background: var(--lake); border-color: var(--lake); color: #fff; font-weight: 600; }
+button.primary:hover { filter: brightness(1.08); color: #fff; }
+.start__preview p { margin: 0.2rem 0; }
+.start__preview .refused { color: var(--bad); }
+.start__cli { margin: 0; font-size: 0.8125rem; }
+pre.cmd { margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0.5rem 0.8rem; font-size: 0.8125rem; overflow-x: auto; user-select: all; }
 .auth { max-width: 22rem; margin: 3rem auto; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.6rem 1.75rem 1.5rem; }
 .auth h1 { font-size: 1.35rem; margin: 0 0 1rem; }
