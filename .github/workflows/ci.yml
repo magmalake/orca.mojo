@@ -4,16 +4,56 @@ on:
   push:
     branches: [main]
   pull_request:
+  # macOS runs here, nightly and by hand (Actions > CI > Run workflow), not on
+  # PRs or main: its jobs weren't required, often hung for 70-100 minutes,
+  # and held runners from the org's small macOS pool while they did.
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+# A new push to a PR cancels its runs still going: only the latest commit's
+# results matter, and the old run's jobs held runners the org shares. Pushes
+# to main each run to the end (the group is the commit there).
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Whether the PR changes anything but prose (*.md, docs/, the licence
+  # files), which no test, build or check reads: a prose-only PR skips every
+  # other job, and `ci` still reports. Pushes, the nightly, runs by hand, and
+  # a failure here all count as code.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.number }}
+        run: |
+          code=true
+          if [ "$EVENT" = pull_request ]; then
+            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
+            printf '%s\n' "$files" | grep -qvE '(\.md$|^docs/|^LICENSE$|^NOTICE$)' || code=false
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   test:
-    name: ${{ matrix.env == 'default' && 'stable' || matrix.env }} / ${{ matrix.os }}
+    name: ${{ matrix.env == 'default' && 'stable' || matrix.env }} / ${{ matrix.os }} / ${{ matrix.shard }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
         env: [default, nightly]
+        # pixi.toml's two halves of `test`, each on a runner of its own.
+        shard: [test-executor, test-scheduler-ui]
     defaults:
       run:
         working-directory: orca.mojo
@@ -98,15 +138,44 @@ jobs:
           pixi-version: v0.78.0
           environments: ${{ matrix.env }}
           manifest-path: orca.mojo/pixi.toml
+          # Only main and the nightly write the environment cache. Every PR
+          # writing ~1 GB per environment kept the repository over GitHub's
+          # 10 GB cap, which evicted main's entries: the only ones every PR can
+          # read.
+          cache-write: ${{ github.event_name != 'pull_request' }}
+
+      # Mojo's compile cache (share/max/cache in the environment) starts
+      # empty in every job. Restored from main's last run, it makes builds of
+      # code main has built already 4-6x faster. It's content-addressed, so a
+      # stale entry is never used. Saved by main and the nightly, like the
+      # environment.
+      - uses: actions/cache/restore@v4
+        with:
+          path: orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+          restore-keys: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
 
       # The state and kill tests start a throwaway PostgreSQL server from
       # conda-forge's postgresql, on a Unix socket: no service container.
       - name: Tests
-        run: pixi run -e ${{ matrix.env }} test
+        run: pixi run -e ${{ matrix.env }} ${{ matrix.shard }}
+
+      # Entries a week old go before saving, so the cache can't grow without
+      # bound; one still in use is rebuilt once.
+      - if: always() && github.event_name != 'pull_request'
+        name: Prune Mojo's compile cache
+        run: find .pixi/envs/${{ matrix.env }}/share/max/cache -type f -mtime +7 -delete || true
+      - if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v4
+        with:
+          path: orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   # orca on a kind cluster (deploy/): the image, built with pixi inside
   # docker, the manifests, and the toy pipeline run by the scheduler's pod.
   kind:
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -119,6 +188,8 @@ jobs:
   # Every fuzz harness under fuzz/, for a short session each, with all bounds
   # checks on. Longer sessions are a FUZZ_RUNS away locally.
   fuzz:
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -137,6 +208,12 @@ jobs:
           pixi-version: v0.78.0
           environments: fuzz
           manifest-path: orca.mojo/pixi.toml
+          cache-write: ${{ github.event_name != 'pull_request' }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: orca.mojo/.pixi/envs/fuzz/share/max/cache
+          key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+          restore-keys: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-
       - name: Fuzz
         run: FUZZ_RUNS=20000 pixi run -e fuzz fuzz
       - if: failure()
@@ -144,8 +221,18 @@ jobs:
         run: |
           for f in build/fuzz-*-last.bin; do echo "$f"; xxd "$f" | head -20; done
           ls -R build/fuzz-crashes || true
+      - if: always() && github.event_name != 'pull_request'
+        name: Prune Mojo's compile cache
+        run: find .pixi/envs/fuzz/share/max/cache -type f -mtime +7 -delete || true
+      - if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v4
+        with:
+          path: orca.mojo/.pixi/envs/fuzz/share/max/cache
+          key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   format:
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -153,6 +240,7 @@ jobs:
         with:
           pixi-version: v0.78.0
           environments: fmt
+          cache-write: ${{ github.event_name != 'pull_request' }}
       - name: mojo format leaves the tree unchanged
         run: pixi run -e fmt format-check
 
@@ -162,7 +250,19 @@ jobs:
   # set); memory-region at the fix that lets it share a binary with the
   # standard library's file seek.
   data:
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' }}
+    name: data / ${{ matrix.group }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # pixi.toml's test-data-<group> tasks, each on a runner of its own:
+        # tables (pinned reads, chaos over Iceberg, lineage, six concurrent
+        # writers, the taxi pipeline on fixtures), sensors (sensors and a
+        # rebuild; lineage and sensors on MinIO) and keyed (keyed partitions,
+        # backfills and sensors over 20,000 names, names with a /).
+        group: [tables, sensors, keyed]
     defaults:
       run:
         working-directory: orca.mojo
@@ -213,29 +313,37 @@ jobs:
           pixi-version: v0.78.0
           environments: data
           manifest-path: orca.mojo/pixi.toml
-      - name: Pinned reads and recognised commits
-        run: pixi run -e data test-tables
-      - name: Chaos over Iceberg (one snapshot per month, however often killed)
-        run: pixi run -e data test-chaos-tables
-      - name: Lineage over three pipelines' tables, back and forward
-        run: pixi run -e data test-lineage
-      - name: Sensors and a rebuild (phase 4's gate)
-        run: pixi run -e data test-sensors
-      - name: Lineage and sensors with the warehouse and logs on MinIO
-        run: pixi run -e data test-lineage-s3 && pixi run -e data test-sensors-s3
-      - name: The sampler's metrics uploaded to MinIO
-        run: pixi run -e data test-sample-s3
-      - name: Keyed partitions over a dataset of names
-        run: pixi run -e data test-keyed
-      - name: Keyed backfills and sensors over 20,000 names
-        run: pixi run -e data test-keyed-backfills
-      - name: A keyed sensor over keys a daily pipeline writes
-        run: pixi run -e data test-keyed-sensor
-      - name: Keyed partitions named with a /, in logs and the UI
-        run: pixi run -e data test-keyed-names
-      - name: Six writers committing to one table at once
-        run: pixi run -e data test-commits
-      # examples/taxi over two sliced TLC months in tests/fixtures/taxi; the
-      # full 24-month load is run by hand.
-      - name: The taxi pipeline, on fixtures
-        run: pixi run -e data test-taxi
+          cache-write: ${{ github.event_name != 'pull_request' }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: orca.mojo/.pixi/envs/data/share/max/cache
+          key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+          restore-keys: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
+      - name: The ${{ matrix.group }} tests
+        run: pixi run -e data test-data-${{ matrix.group }}
+      - if: always() && github.event_name != 'pull_request'
+        name: Prune Mojo's compile cache
+        run: find .pixi/envs/data/share/max/cache -type f -mtime +7 -delete || true
+      - if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@v4
+        with:
+          path: orca.mojo/.pixi/envs/data/share/max/cache
+          key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+
+  # The one check to require: every Linux job above passed, or, for a
+  # prose-only PR, was skipped. (macOS runs only on the nightly, which this
+  # gate doesn't cover.)
+  ci:
+    if: ${{ always() && github.event_name != 'schedule' }}
+    needs: [changes, test, kind, fuzz, format, data]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+          CODE: ${{ needs.changes.outputs.code }}
+        run: |
+          echo "results: $RESULTS (code: $CODE)"
+          ok='"success"'
+          [ "$CODE" = false ] && ok='"success"|"skipped"'
+          bad=$(printf '%s\n' "$RESULTS" | tr -d '[] \n' | tr ',' '\n' | grep -cvE "^($ok)$" || true)
+          [ "$bad" -eq 0 ] || { echo "$bad job(s) didn't succeed"; exit 1; }

@@ -16,9 +16,9 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC tests/defer_pipeline.mojo -o build/defer
+scripts/mojo-build.sh -I src $DEP_INC tests/defer_pipeline.mojo -o build/defer
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
 log=build/defer.log
 : > "$log"
 export ORCA_STALE_SECONDS=2 DEFER_GATE="$PWD/build/defer-gate"

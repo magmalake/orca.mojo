@@ -8,12 +8,16 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
+# The pipelines and orca compile at once (scripts/mojo-build.sh).
+pids=
 for p in first second third compacts; do
     # shellcheck disable=SC2086
-    mojo build -I src $DEP_INC "tests/datasets/$p.mojo" -o "build/ds-$p"
+    scripts/mojo-build.sh -I src $DEP_INC "tests/datasets/$p.mojo" -o "build/ds-$p" &
+    pids="$pids $!"
 done
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+for pid in $pids $!; do wait "$pid"; done
 log=build/datasets.log
 : > "$log"
 fail() {

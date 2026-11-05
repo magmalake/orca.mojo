@@ -26,12 +26,16 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
+# The pipelines and orca compile at once (scripts/mojo-build.sh).
+pids=
 for p in source clean report other; do
     # shellcheck disable=SC2086
-    mojo build -I src -I tests/sensors -I tests/lineage $DEP_INC "tests/sensors/$p.mojo" -o "build/sn-$p"
+    scripts/mojo-build.sh -I src -I tests/sensors -I tests/lineage $DEP_INC "tests/sensors/$p.mojo" -o "build/sn-$p" &
+    pids="$pids $!"
 done
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+for pid in $pids $!; do wait "$pid"; done
 log=build/sensors.log
 : > "$log"
 export ORCA_SENSE_SECONDS=1 ORCA_NOW=2024-05-15T00:00Z

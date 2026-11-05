@@ -16,9 +16,9 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC tests/stop_pipeline.mojo -o build/stop
+scripts/mojo-build.sh -I src $DEP_INC tests/stop_pipeline.mojo -o build/stop
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
 log=build/stop.log
 : > "$log"
 export ORCA_STALE_SECONDS=2

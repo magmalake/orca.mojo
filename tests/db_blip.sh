@@ -12,7 +12,7 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC examples/toy.mojo -o build/toy
+scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 log=build/db-blip.log
 : > "$log"
 q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }

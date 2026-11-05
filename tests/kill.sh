@@ -7,7 +7,7 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
 # shellcheck disable=SC2086
-mojo build -I src $DEP_INC examples/toy.mojo -o build/toy
+scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 
 runs=${KILL_RUNS:-8}
 seed=${KILL_SEED:-$$}
