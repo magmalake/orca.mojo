@@ -468,7 +468,10 @@ Outputs:
 comptime PROJECT_DOCKERFILE: StaticString = """# The image `orca aws push` builds for a project that added orca with
 # `pixi shelf add orca-mojo`: its own `orca` (bin/scheduler.mojo, the two
 # lines calling orca.command), its apps (every other bin/*.mojo, at
-# /opt/orca/bin/<name>, which `orca aws app` runs) and its pipelines (every
+# /opt/orca/bin/<name>, which `orca aws app` runs; `orca_maintain`, the
+# snapshot expiry `orca expire` runs, is made for a project whose pipelines
+# use orca.tables and that has no bin/orca_maintain.mojo of its own) and its
+# pipelines (every
 # pipelines/*.mojo, at /opt/orca/pipelines/<name>), with `src/` on the
 # import path if the project has one. A project with a Dockerfile.orca of
 # its own builds that instead.
@@ -495,6 +498,9 @@ RUN mkdir -p /out/bin /out/pipelines \\
         [ -f bin/scheduler.mojo ] || { echo "orca aws push: no bin/scheduler.mojo calling orca.command"; exit 1; }; \\
         for f in bin/*.mojo; do n=$(basename "$f" .mojo); [ "$n" = scheduler ] && n=orca; \\
             mojo build -g1 $inc "$f" -o "/out/bin/$n" || exit 1; done; \\
+        if [ ! -f bin/orca_maintain.mojo ] && grep -rqs "orca.tables" pipelines src; then \\
+            printf "from orca.maintain import maintain_main\\n\\n\\ndef main() raises:\\n    maintain_main()\\n" > /tmp/orca_maintain.mojo; \\
+            mojo build -g1 $inc /tmp/orca_maintain.mojo -o /out/bin/orca_maintain || exit 1; fi; \\
         for p in pipelines/*.mojo; do [ -f "$p" ] || continue; n=$(basename "$p" .mojo); \\
             mojo build -g1 $inc -D ORCA_SOURCE='"${ORCA_SOURCE}"' -D ORCA_COMMIT='"${ORCA_COMMIT}"' \\
                 "$p" -o "/out/pipelines/$n" || exit 1; done; \\
