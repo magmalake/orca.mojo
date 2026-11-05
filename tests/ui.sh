@@ -273,6 +273,17 @@ echo "$page" | grep -qF "<th class=\"num\"><abbr title=\"Times the run's process
     || fail "the Tries header"
 echo "$page" | grep -q '>Starts<' && fail "a runs table still says Starts"
 echo "$page" | grep -qF '<td class="num">3</td>' || fail "a run started 3 times doesn't say 3"
+echo "$page" | grep -qF '<th>Created</th><th class="num">Took</th><th>Partitions</th>' \
+    || fail "Created and Took don't lead the runs table"
+echo "$page" | grep -qE '<td class="mono"><time class="rel" datetime="[0-9-]+T[0-9:]+Z">' \
+    || fail "a run's created time isn't a <time> the script shows as relative"
+echo "$page" | grep -qE '<td class="num">[0-9]+s</td>' || fail "an ended run's Took"
+was=$(q "SELECT partitions FROM orca.runs WHERE id = $bad_run")
+q "UPDATE orca.runs SET partitions = 'a,b,c,d,e' WHERE id = $bad_run" > /dev/null
+html "/runs?pipeline=toy&status=failed" \
+    | grep -qF '<td class="mono parts" title="a,b,c,d,e">a, b <span class="muted">+3 more</span></td>' \
+    || fail "a long list of partitions isn't cut short"
+q "UPDATE orca.runs SET partitions = '$was' WHERE id = $bad_run" > /dev/null
 page=$(html "/runs?pipeline=toy&status=succeeded&trigger=manual")
 echo "$page" | grep -qF '<td class="num"></td>' || fail "a run started once isn't empty under Tries"
 echo "$page" | grep -qF '<td class="num">1</td>' && fail "a run started once shows 1"

@@ -202,6 +202,8 @@ struct RunRow(Copyable, Movable):
     """Why the run ended without its steps saying so (`runs.error`)."""
     var waiting_until: String
     """When a deferred run starts again; empty for any other."""
+    var seconds: Int
+    """How long it ran (so far, if it's running); -1 before it started."""
 
 
 @fieldwise_init
@@ -406,6 +408,65 @@ def _waiting(t: Int64) -> String:
     return _epoch(t) if t > 0 else String()
 
 
+comptime _SECONDS = (
+    "coalesce(extract(epoch FROM coalesce(ended, now()) - started)::bigint, -1)"
+)
+"""SQL for how long a run ran, up to now if it hasn't ended; -1 before it
+started."""
+
+
+def _took(seconds: Int) -> String:
+    """A duration as `42s`, `3m 07s` or `2h 05m`; empty for a negative one."""
+    if seconds < 0:
+        return String()
+    if seconds < 60:
+        return String(seconds, "s")
+    if seconds < 3600:
+        return String(seconds // 60, "m ", _two(seconds % 60), "s")
+    return String(seconds // 3600, "h ", _two(seconds % 3600 // 60), "m")
+
+
+def _two(n: Int) -> String:
+    return String("0", n) if n < 10 else String(n)
+
+
+def _when_cell(mut h: Html, utc: String):
+    """A `YYYY-MM-DDTHH:MM:SSZ` time as a table cell that the page's script
+    shows as how long ago it was, the full local time on hover."""
+    h.raw('<td class="mono"><time class="rel" datetime="')
+    h.text(utc)
+    h.raw('">')
+    h.text(utc)
+    h.raw("</time></td>")
+
+
+comptime _SHOWN_PARTITIONS = 2
+"""How many of a run's partitions its row in a table of runs names before
+saying how many more there are."""
+
+
+def _partitions_cell(mut h: Html, partitions: String):
+    """A run's partitions as a table cell: the first few, then `+N more`, with
+    the whole list in the tooltip."""
+    var parts = partitions.split(",")
+    h.raw('<td class="mono parts" title="')
+    h.text(partitions)
+    h.raw('">')
+    if len(parts) <= _SHOWN_PARTITIONS + 1:
+        h.text(partitions)
+    else:
+        for i in range(_SHOWN_PARTITIONS):
+            if i > 0:
+                h.raw(", ")
+            h.text(parts[i])
+        h.raw(
+            ' <span class="muted">+',
+            len(parts) - _SHOWN_PARTITIONS,
+            " more</span>",
+        )
+    h.raw("</td>")
+
+
 def _runs(
     mut db: State,
     pipeline: String = "",
@@ -429,7 +490,9 @@ def _runs(
             stalled_sql(),
             " AS stalled, ",
             _WAITING,
-            " AS waiting FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
+            " AS waiting, ",
+            _SECONDS,
+            " AS seconds FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
             " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) AND",
             " ($5 = 0 OR id < $5) ORDER BY orca.runs.id DESC LIMIT $4",
         ),
@@ -457,6 +520,7 @@ def _runs(
                 r.bool("stalled"),
                 r.text("error"),
                 _waiting(r.int64("waiting")),
+                Int(r.int64("seconds")),
             )
         )
     return out^
@@ -1175,6 +1239,27 @@ def _json_runs(mut out: String, runs: List[RunRow]):
 
 
 comptime _POLL = """
+const ago = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+const full = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium", timeZoneName: "short" });
+function relative(t) {
+  const s = (t - Date.now()) / 1000, a = Math.abs(s);
+  if (a < 45) return ago.format(Math.round(s), "second");
+  if (a < 2700) return ago.format(Math.round(s / 60), "minute");
+  if (a < 79200) return ago.format(Math.round(s / 3600), "hour");
+  if (a < 2592000) return ago.format(Math.round(s / 86400), "day");
+  if (a < 31536000) return ago.format(Math.round(s / 2592000), "month");
+  return ago.format(Math.round(s / 31536000), "year");
+}
+function times(root) {
+  for (const el of root.querySelectorAll("time.rel")) {
+    const t = Date.parse(el.dateTime);
+    if (isNaN(t)) continue;
+    el.textContent = relative(t);
+    el.title = full.format(t) + " (" + el.dateTime + ")";
+  }
+}
+times(document);
+setInterval(() => times(document), 30000);
 document.addEventListener("submit", (e) => {
   const m = e.target.dataset && e.target.dataset.confirm;
   const get = e.submitter && e.submitter.formMethod === "get";
@@ -1184,7 +1269,7 @@ for (const el of document.querySelectorAll("[data-poll]")) {
   const tick = async () => {
     let r;
     try { r = await fetch(el.dataset.poll); } catch (e) { setTimeout(tick, 5000); return; }
-    if (r.ok) el.innerHTML = await r.text();
+    if (r.ok) { el.innerHTML = await r.text(); times(el); }
     if (r.status !== 286) setTimeout(tick, 2000);
   };
   setTimeout(tick, 2000);
@@ -1192,7 +1277,9 @@ for (const el of document.querySelectorAll("[data-poll]")) {
 """
 """What makes a page live: each element with `data-poll` is replaced every
 two seconds by what its path returns, until that answers 286 (htmx's "stop
-polling"), which a fragment does once what it shows has ended."""
+polling"), which a fragment does once what it shows has ended. Each
+`<time class="rel">` reads as how long ago it was, in the viewer's locale,
+with the full local time in its tooltip; without scripts it stays UTC."""
 
 
 comptime _USER_SLOT = "<!--orca-user-->"
@@ -1404,13 +1491,13 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
     if show_pipeline:
         h.raw("<th>Pipeline</th>")
     h.raw(
+        '<th>Created</th><th class="num">Took</th>',
         "<th>Partitions</th><th>Trigger</th><th>Status</th>",
         '<th class="num"><abbr title="',
         _TRIES,
         '" aria-label="Tries: ',
         _TRIES,
-        '">Tries</abbr></th>',
-        "<th>Created</th><th>Ended</th></tr></thead><tbody>",
+        '">Tries</abbr></th></tr></thead><tbody>',
     )
     for r in runs:
         h.raw("<tr><td>")
@@ -1420,7 +1507,9 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
             h.raw("<td>")
             h.link(String("/pipelines/", url_encode(r.pipeline)), r.pipeline)
             h.raw("</td>")
-        h.mono(r.partitions)
+        _when_cell(h, r.created)
+        h.num(_took(r.seconds))
+        _partitions_cell(h, r.partitions)
         h.cell(r.trigger)
         h.raw("<td>")
         h.status(r.status)
@@ -1435,8 +1524,6 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
             h.num(r.starts)
         else:
             h.raw('<td class="num"></td>')
-        h.mono(r.created)
-        h.mono(r.ended)
         h.raw("</tr>")
     h.raw("</tbody></table></div>")
 
@@ -3481,7 +3568,9 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
             stalled_sql(),
             " AS stalled, ",
             _WAITING,
-            " AS waiting FROM orca.runs WHERE id = $1",
+            " AS waiting, ",
+            _SECONDS,
+            " AS seconds FROM orca.runs WHERE id = $1",
         ),
         Params().int64(Int64(id)),
     )
@@ -3502,6 +3591,7 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
         r.bool("stalled"),
         r.text("error"),
         _waiting(r.int64("waiting")),
+        Int(r.int64("seconds")),
     )
 
 
