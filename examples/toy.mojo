@@ -9,11 +9,13 @@ from 2024-01, with at most two runs at once: tests/scheduler.sh drives it
 through the `orca` scheduler.
 
 A partition whose month is in ORCA_TOY_FAIL (e.g. `2024-02`) fails its
-`measure` step, to show the rest of the run carrying on. ORCA_TOY_SLEEP makes
+`measure` step, to show the rest of the run carrying on; one in
+ORCA_TOY_CRASH aborts the process there, as a crash would (tests/crash.sh).
+ORCA_TOY_SLEEP makes
 every step take that many seconds, so tests/kill.sh has time to kill it.
 """
 
-from std.os import getenv
+from std.os import abort, getenv
 from std.time import sleep
 
 from dista import Seq
@@ -59,6 +61,8 @@ def measure(mut ctx: Ctx, m: Measured) raises -> Measured:
     _nap()
     if String(m.month) in getenv("ORCA_TOY_FAIL"):
         raise Error("failing ", m.month, " as asked")
+    if String(m.month) in getenv("ORCA_TOY_CRASH"):
+        abort(String("crashing ", m.month, " as asked"))
     ctx.log(String(m.month, " has ", m.days, " days"))
     return Measured(m.month.copy(), m.days * 24)
 

@@ -77,6 +77,9 @@ test-compile-fail = { cmd = "tests/compile_fail.sh" }
 test-store = { cmd = "scripts/mojo-build.sh -I src -I tests $DEP_INC tests/test_store.mojo -o build/test-store && ./build/test-store" }
 test-state = { cmd = "scripts/mojo-build.sh -I src -I tests $DEP_INC tests/test_state.mojo -o build/test-state && scripts/with-postgres.sh ./build/test-state" }
 test-kill = { cmd = "scripts/with-postgres.sh tests/kill.sh" }
+# A crash's stack dump: orca.crash's summary of one, then a run whose
+# process aborts mid-step under the scheduler.
+test-crash = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_crash.mojo -o build/test-crash && ./build/test-crash && scripts/with-postgres.sh tests/crash.sh" }
 test-tasks = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_tasks.mojo -o build/test-tasks && ./build/test-tasks" }
 test-logs = { cmd = "rm -f build/logs.db build/logs.db-wal build/logs.db-shm && ORCA_DATABASE_URL=sqlite:build/logs.db tests/logs.sh" }
 test-scheduler = { cmd = "scripts/with-postgres.sh tests/scheduler.sh" }
@@ -119,7 +122,7 @@ test-kind = { cmd = "tests/kind.sh" }
 build-shared = { cmd = "scripts/build-shared.sh" }
 # CI runs these two halves on runners of their own; `test` is both.
 # The executor, stores, workers, clouds and the data a run makes:
-test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
+test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-secrets", "test-aws", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
 # The scheduler, the UI, and what a registration and its code control:
 test-scheduler-ui = { depends-on = ["build-shared", "test-metrics", "test-scheduler", "test-ui", "test-actions", "test-ui-login", "test-pause", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
 test = { depends-on = ["test-executor", "test-scheduler-ui"] }

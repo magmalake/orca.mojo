@@ -32,6 +32,7 @@ from orca.store import (
     DEFERRED,
     FINAL,
     FAILED,
+    INTERRUPTED,
     Backoff,
     RUNNING,
     SKIPPED,
@@ -544,25 +545,28 @@ struct State(Movable):
             " s",
         )
 
-    def interrupt(mut self, run: Int) raises -> Int:
+    def interrupt(mut self, run: Int, why: String = "") raises -> Int:
         """Marks attempts left `running` by a process that died as failed,
-        and returns how many there were."""
+        and returns how many there were. `why` is their error and their
+        steps', such as a crash's (`orca.crash`); empty, it's
+        `INTERRUPTED`."""
         var tx = self.conn.begin()
         var n = tx.execute(
             (
                 "UPDATE orca.attempts a SET status = 'failed', ended = now(),"
-                " error = 'interrupted: the process running it stopped' FROM"
-                " orca.steps s WHERE a.step = s.id AND s.run = $1 AND a.status"
-                " = 'running'"
+                " error = $2 FROM orca.steps s WHERE a.step = s.id AND s.run ="
+                " $1 AND a.status = 'running'"
             ),
-            Params().int64(Int64(run)),
+            Params().int64(Int64(run)).text(why if why else INTERRUPTED),
         )
         _ = tx.execute(
             (
-                "UPDATE orca.steps SET status = 'failed', error = 'interrupted'"
+                "UPDATE orca.steps SET status = 'failed', error = $2"
                 " WHERE run = $1 AND status = 'running'"
             ),
-            Params().int64(Int64(run)),
+            Params()
+            .int64(Int64(run))
+            .text(why if why else String("interrupted")),
         )
         tx.commit()
         return n
@@ -920,8 +924,8 @@ struct PgStore(Movable, RunStore):
     def ran_version(mut self, run: Int, version: Int) raises:
         self.db.ran_version(run, version)
 
-    def interrupt(mut self, run: Int) raises -> Int:
-        return self.db.interrupt(run)
+    def interrupt(mut self, run: Int, why: String = "") raises -> Int:
+        return self.db.interrupt(run, why)
 
     def prior(mut self, run: Int) raises -> RunResult:
         return self.db.prior(run)

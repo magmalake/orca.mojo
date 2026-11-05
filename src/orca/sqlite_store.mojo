@@ -40,6 +40,7 @@ from orca.store import (
     DEFERRED,
     FAILED,
     FINAL,
+    INTERRUPTED,
     RUNNING,
     SKIPPED,
     SUCCEEDED,
@@ -534,26 +535,27 @@ struct SqliteStore(Movable, RunStore):
         st.bind_int(2, version)
         _ = st.step()
 
-    def interrupt(mut self, run: Int) raises -> Int:
+    def interrupt(mut self, run: Int, why: String = "") raises -> Int:
         self.db.execute("BEGIN IMMEDIATE")
         try:
             var st = self._stmt(
                 String(
                     "UPDATE attempts SET status = 'failed', ended = ",
                     _NOW,
-                    ", error = 'interrupted: the process running it stopped'",
-                    " WHERE status = 'running' AND step IN (SELECT id FROM",
-                    " steps WHERE run = ?1)",
+                    ", error = ?2 WHERE status = 'running' AND step IN",
+                    " (SELECT id FROM steps WHERE run = ?1)",
                 )
             )
             st.bind_int(1, run)
+            st.bind_text(2, why if why else INTERRUPTED)
             _ = st.step()
             var n = self.db.changes()
             var steps = self._stmt(
-                "UPDATE steps SET status = 'failed', error = 'interrupted'"
+                "UPDATE steps SET status = 'failed', error = ?2"
                 " WHERE run = ?1 AND status = 'running'"
             )
             steps.bind_int(1, run)
+            steps.bind_text(2, why if why else String("interrupted"))
             _ = steps.step()
             self.db.execute("COMMIT")
             return n

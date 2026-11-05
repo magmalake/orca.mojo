@@ -16,7 +16,9 @@ the pipeline's image (`ORCA_EC2_MODE=docker`, the default: `docker run
 --network host`, after `ORCA_EC2_PREAMBLE`, such as an ECR login) or the
 binary itself (`direct`, for the tests' stand-in EC2), then shuts down
 (`ORCA_EC2_SHUTDOWN`). The head keeps the driver's output in the run's
-`driver.log` (`<binary> keep-log`) before it does. Beside its work each
+`driver.log` (`<binary> keep-log`) before it does, and if the driver
+crashed, fails the attempts it left running with the crash's first frames
+(`orca.crash`). Beside its work each
 instance runs `<binary> sample` (`orca.sample`; in docker mode as a
 container with `--pid host`), whose lines its script uploads to the run's
 `metrics/<role>-<instance>.jsonl` with its log (`<binary> put-log`), every
@@ -473,7 +475,8 @@ struct Ec2Runner(Movable):
                 self._mounted(
                     self._run(
                         r,
-                        List[String](),
+                        # Which run's attempts a crash fails (orca.crash).
+                        [String("ORCA_RUN=", r.run)],
                         String(
                             "keep-log ",
                             out,

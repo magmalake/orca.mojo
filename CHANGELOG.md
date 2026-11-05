@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **A crash's stack dump is symbolized, and a crashed attempt says where**.
+  The project image (`deploy/project.Dockerfile`, which `orca aws push`
+  builds) and `deploy/Dockerfile` build every binary with line tables
+  (`mojo build -g1`, then compressed with `objcopy`: mojo-census's
+  gharchive goes from 4.2 MB to 6.5 MB, 25 MB uncompressed, and parses and
+  writes an hour of GH Archive as fast as before) and carry
+  the pixi environment's `llvm-symbolizer` at
+  `/opt/orca/libexec/llvm-symbolizer`, with `LLVM_SYMBOLIZER_PATH` set,
+  so a segfault's or `abort`'s dump in `driver.log` names each frame's
+  function, file and line. The runner that sees a crashed process end
+  (the scheduler reaping a local run, `<binary> keep-log` on an EC2 head,
+  given the run as `ORCA_RUN`, and the Kubernetes runner keeping the
+  driver pod's log) fails the attempts it left `running` with the dump's
+  summary, `crashed: <abort's message>; at <function> <file:line>, ...`
+  (`orca.crash`), instead of leaving them for `resume` to call
+  interrupted. A local run's `driver.log` marks each start with a
+  `--- start <n>` line, as the other runners' do. `Store.interrupt` takes
+  the error to record (`why`). `pixi run test-crash`.
+- **Errors say what orca was doing**. A table orca can't load, create,
+  reload, write data files for or commit to (`orca.tables`) names its
+  dataset and, for a commit, how many tries it made; a dataset whose
+  snapshot `sense` can't read is named; and an EC2 call that never got an
+  answer names its action.
+
 ## 0.3.4 (2026-11-04)
 
 - Built against iceberg-mojo 0.9.0 (parquet-mojo 0.12.0): data files go

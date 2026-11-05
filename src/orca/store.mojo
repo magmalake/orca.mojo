@@ -27,6 +27,8 @@ comptime FAILED = "failed"
 comptime SKIPPED = "skipped"
 comptime DEFERRED = "deferred"
 """A step that raised `defer`: not done, and not failed."""
+comptime INTERRUPTED = "interrupted: the process running it stopped"
+"""The error of an attempt whose process died without saying why."""
 
 
 struct StepRun(Copyable, Movable):
@@ -403,9 +405,11 @@ trait RunStore(Store):
         """Records that `run` is running `version`'s code."""
         ...
 
-    def interrupt(mut self, run: Int) raises -> Int:
+    def interrupt(mut self, run: Int, why: String = "") raises -> Int:
         """Marks attempts left `running` by a process that died as failed,
-        and returns how many there were."""
+        and returns how many there were. `why` is their error and their
+        steps', such as a crash's (`orca.crash`); empty, it's `interrupted:
+        the process running it stopped`."""
         ...
 
     def prior(mut self, run: Int) raises -> RunResult:
@@ -681,17 +685,17 @@ struct MemoryStore(Movable, RunStore):
     def ran_version(mut self, run: Int, version: Int) raises:
         self._runs[self._at(run)].version = version
 
-    def interrupt(mut self, run: Int) raises -> Int:
+    def interrupt(mut self, run: Int, why: String = "") raises -> Int:
         var n = 0
         for ref a in self._attempts:
             if self._steps[a.step].run == run and a.status == RUNNING:
                 a.status = FAILED
-                a.error = "interrupted: the process running it stopped"
+                a.error = why if why else INTERRUPTED
                 n += 1
         for ref s in self._steps:
             if s.run == run and s.status == RUNNING:
                 s.status = FAILED
-                s.error = "interrupted"
+                s.error = why if why else String("interrupted")
         return n
 
     def prior(mut self, run: Int) raises -> RunResult:
