@@ -17,6 +17,11 @@ workers = "0..4"
 worker_procs = 1
 max_runs = 2
 env = { DISTA_WORKER_SLOTS = "4", GHARCHIVE_PARALLEL = "16" }
+fills = "all"                # fill 2023-01-01 to yesterday by itself
+fill_order = "oldest"
+fill_max_runs = 2
+fill_budget_per_day = 5.0    # estimated US dollars a UTC day
+fill_window = "22..6"        # UTC hours fill runs start in
 
 [pipelines.mojo_repos]
 placement = "control"
@@ -50,8 +55,14 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 | `max_runs` | integer from 1 to 10000 | the code's `Pipeline[..., max_runs=]`, else 1 | `--max-runs` (new) | Overrides the code's value. |
 | `secrets` | table of `NAME = "orca/<id>"` | none | `--secret NAME=ID` | Secrets Manager IDs only, never values. A `--secret` flag replaces the whole set. |
 | `env` | table of `NAME = "value"` (numbers and booleans become text) | none | none (it replaces `ORCA_RUN_ENV` for pipeline settings) | See [env](#env-orca_run_env-and-the-warm-pool) below. |
+| `fills` | string: `"all"` or `"since_registration"` | `since_registration` | none | `all`: the scheduler fills the pipeline's whole range by itself. See [Fills](#fills). |
+| `fill_order` | string: `"oldest"` or `"newest"` | `oldest` | none | Which end of the range fills first. |
+| `fill_max_runs` | integer from 1 to 10000 | 1 | none | Fill runs at once, on top of `max_runs`. |
+| `fill_budget_per_day` | number from 0 to 100000, US dollars | none | none | Estimated spend of fill runs a UTC day. Fill runs on EC2 or Kubernetes don't start without it. |
+| `fill_window` | string `"A..B"`, UTC hours: A from 0 to 23, B from 1 to 24 | `"0..24"`, all day | none | Fill runs start from hour A up to hour B. `"22..6"` wraps past midnight. |
 
-`image` (`--image`) and `--spot` stay flags only.
+`image` (`--image`) and `--spot` stay flags only. The `fill*` keys are
+the file's only: no flag sets them.
 
 ### What is refused
 
@@ -59,6 +70,8 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 - A value of the wrong type.
 - A `workers` range like `4..2`.
 - A secret ID outside `orca/`.
+- A `fill_window` like `"6..6"` or `"1..30"`, a negative `fill_budget_per_day`, or `fill_max_runs = 0`.
+- `fills = "all"` for a keyed pipeline, a sensor, or one with no first partition. `orca register` refuses it with the file and line, because it has to see the pipeline first; see [Fills](#fills).
 - An `env` name that isn't a valid variable name.
 - An `env` name that looks like a secret (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*DATABASE_URL*`). Put those in `secrets` instead.
 - An `env` variable that orca sets itself: `ORCA_DATABASE_URL`, `ORCA_IMAGE`, `ORCA_SECRETS`, `ORCA_WORKERS`, `DISTA_ROLE`, `DISTA_HEAD`, `DISTA_ADVERTISE`.
@@ -66,7 +79,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 Each refusal names the file and line, and nothing is registered:
 
 ```text
-orca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, secrets and env)
+orca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, fills, fill_order, fill_max_runs, fill_budget_per_day, fill_window, secrets and env)
 orca.toml:3: [pipelines.toy] workers: not a count or a range MIN..MAX: 4..2
 ```
 
@@ -196,19 +209,75 @@ The export has a table for every registered pipeline, holding what is registered
 
 From then on a flag is a one-off, such as `--workers 0..8` for a backfill. The next registration without it goes back to the file.
 
-## Reserved for #155
+## Fills
 
-The self-driving fills in #155 plan to add these per-pipeline keys. They are **planned, not implemented**: today orca refuses them as unknown keys.
+With `fills = "all"` a pipeline fills its whole range by itself, within limits (#155, `src/orca/fill.mojo`). People change the limits; nobody has to drive a long backfill by hand.
 
-| Key | Planned meaning |
+The default, `fills = "since_registration"`, is what orca did before. A schedule fills from the pipeline's registration on, and `orca backfill` fills the rest by hand.
+
+### What the scheduler does
+
+On every tick, after a pipeline's other runs have started, the scheduler queues and starts fill runs for it:
+
+- **The range** is the pipeline's first partition through the last one that has ended on its schedule's wall clock (UTC without a schedule): yesterday for a daily pipeline, last month for a monthly one. The partition still going is the schedule's.
+- **One partition per fill run**, in `fill_order`. The run's trigger is `fill` (`orca.runs.trigger`), so the runs page can filter for them.
+- **A partition is taken** when it's done in a run of any of the pipeline's code, when a live run has it, or when a fill run of it was ever queued. A fill never runs a partition twice. A fill run that fails is retried like a scheduled run, up to `run_retries`. A partition whose fill run failed past its retries, or was cancelled, is left to a person: `orca backfill`, or resume in the UI. Running done partitions again stays `orca backfill --rerun`.
+- **Fill runs don't count against `max_runs`.** At most `fill_max_runs` fill runs are going, beside up to `max_runs` other runs.
+- **Fill runs never starve scheduled runs.** While any of the pipeline's scheduled, backfill or other runs are queued, no fill run starts. Fill runs still take room in the stack-wide limits (`ORCA_VCPU_BUDGET`, the control instance's slots) once they're going.
+
+### What stops a fill
+
+The pipeline page and `/api/pipelines/<name>` say which of these stopped it, in this order:
+
+| Idle because | |
 |---|---|
-| `fills` | which keys a pipeline fills by itself |
-| `fill_order` | the order it fills them in |
-| `fill_max_runs` | how many fill runs at once |
-| `fill_budget_per_day` | how much fills may spend a day |
-| `fill_window` | when fills may run |
+| `complete` | Every partition of the range is done, or the last ones are running. |
+| `paused` | `orca pause`, the UI's Pause button, or the watchdog (#153) tripping: it pauses the pipeline, and a fill stops like everything else. The reason names the watchdog's rule when the watchdog paused it. |
+| `outside its window` | The UTC hour is outside `fill_window`. A fill run that has started goes on past the window's end. |
+| `no budget` | The runs cost money (EC2 or Kubernetes) and `fill_budget_per_day` isn't set. |
+| `price unknown` | Neither orca.fleet's price table nor a Kubernetes cluster can price the run. The [cost estimate](#the-cost-estimate) fails closed. |
+| `budget` | Today's estimated spend plus what the next run may cost would go over `fill_budget_per_day`. It starts again at 00:00 UTC. |
+| `waiting` | Other runs of the pipeline are queued, and they start first. |
+| `at fill_max_runs` | As many fill runs are going as `fill_max_runs` allows. |
 
-Adding a key takes a name in `SCALAR_KEYS` and its check in `_canonical` (`src/orca/config.mojo`). Arrays and floats already parse. After that the key is merged, overridden, recorded, shown and exported like the others.
+### The cost estimate
+
+The estimate is conservative and fails closed. The AWS project's spend limit pauses the whole project, so a fill must stop well before it.
+
+- **Price.** A run's price is an hour of its head instance plus its most workers, at on-demand prices from orca.fleet's table (`hourly_price` in `src/orca/fleet.mojo`). That's the us-east-2 on-demand price for the types orca uses. The estimate is multiplied by 1.2 for what the table leaves out: EBS, transfer and requests.
+- **Spend today.** It sums each fill run's instances (`orca.instances`) since 00:00 UTC, at their own types' prices. An instance still up counts to now, including its idle time in the warm pool.
+- **Before starting a run**, orca adds what the fill runs going and the new one may still cost. The expected time of a run is the longest of the pipeline's last 20 ended fill runs, or an hour before any has ended. It is at least a minute (EC2's minimum), plus `ORCA_EC2_POOL_SECONDS` of idle time in the pool. A run already going is charged that time less what it has run. The run starts only if the spend plus that is within `fill_budget_per_day`.
+- **Unknown prices.** No fill run starts on a budget when the price isn't known: an instance type that isn't in the table (today's runs' or the next run's), or a run on Kubernetes. The reason says which type.
+- **Free runs.** A run on the control host (`placement = "control"`) or a local process costs nothing beyond the machine already running. Its fill needs no budget.
+
+The budget is per pipeline, so a `fill_budget_per_day` in `[defaults]` gives each pipeline in the file that much. The estimate can't see a run that lasts longer than every earlier one until it has. The watchdog's `cost` rule (`ORCA_WATCHDOG_COST_DAY`, $25) is the stack-wide backstop: it pauses everything.
+
+### Progress
+
+The pipeline page has a **Fill** line: partitions done of the range's total, fill runs going, partitions in live runs, waiting for a retry and failed. It also gives the rate (partitions an hour over the fill runs that ended in the last six hours), the ETA at that rate, and today's estimated spend against the budget. When the fill is idle, the line says why. `/api/pipelines/<name>` is the page's JSON, with a `fill` object:
+
+```json
+{"on": true, "total": 1405, "done": 380, "live": 2, "failed": 0, "retrying": 0, "left": 1023,
+ "running": 2, "rate_per_hour": 41.5, "eta_seconds": 88770, "spent_today": 1.734,
+ "budget_per_day": 5.0, "price_per_hour": 0.6134, "expected_run_seconds": 210,
+ "cost_is_estimate": true, "idle": null}
+```
+
+`orca config show` lists the `fill*` keys, with their defaults, for a pipeline that fills.
+
+### Keyed pipelines and sensors don't fill
+
+`orca register` refuses `fills = "all"` for them, with the file and line:
+
+- **Keyed pipelines.** Their keys come from a dataset, so there's no range to fill. Their sensor or `orca backfill <p> @all` queues the keys that aren't done.
+- **Sensors.** Their runs follow their inputs' snapshots. Filling their range by itself would run partitions whose input may not be there.
+- **No first partition.** A pipeline whose partitions have no first one has no range.
+
+If `fills = "all"` is in `[defaults]`, set `fills = "since_registration"` in such a pipeline's own table.
+
+### Operating a fill
+
+Operations go through the UI or the remote CLI (`orca login` and `orca --remote`, #128), which write audit rows: pause, unpause, cancel, backfill and resume. To change a limit, edit `orca.toml`, commit it, and register again (`orca aws register <pipeline>`). SSM `sudo docker exec scheduler ...` is for debugging only.
 
 ## Not yet
 

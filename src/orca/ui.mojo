@@ -7,7 +7,8 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | Path | |
 |---|---|
 | `/` | pipelines, with their schedules, next runs and last runs |
-| `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing |
+| `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`orca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing |
+| `/api/pipelines/<name>` | the same as JSON, whatever is asked for |
 | `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=`) and as the Start runs form's date picker |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
 | `/runs` | runs, newest first, `?n=` (50, at most 500) to a page; `?pipeline=`, `?status=`, `?trigger=`; `?before=<id>`: older than that run |
@@ -171,9 +172,11 @@ from orca.scheduler import (
     keep_keys,
     kept_keys,
     fill_key,
+    fill_pipeline,
     preview_backfill,
     registered,
 )
+from orca.fill import FillStatus, eta_text, fill_status, money, status_json
 from orca.sensors import Link, Rebuild, downstream, plan_rebuild, rebuilds
 from orca.schedule import Schedule
 from orca.source import commit_url, is_hex, web_url
@@ -2829,6 +2832,65 @@ def _start_html(
     h.raw("</script>")
 
 
+def _fill_of(mut db: State, name: String) raises -> Optional[FillStatus]:
+    """`name`'s fill (`orca.fill`), if it fills its range or has fill runs
+    from when it did."""
+    var regs = registered(db, name)
+    if len(regs) == 0:
+        return None
+    if not regs[0].fill.all:
+        var any = db.conn.query(
+            (
+                "SELECT 1 FROM orca.runs WHERE pipeline = $1 AND trigger ="
+                " 'fill' LIMIT 1"
+            ),
+            Params().text(name),
+        )
+        if len(any) == 0:
+            return None
+    var tx = db.conn.begin()
+    var s = fill_status(tx, fill_pipeline(regs[0]), now(), regs[0].run_retries)
+    tx.rollback()
+    return s^
+
+
+def _fill_html(mut h: Html, s: FillStatus):
+    """The pipeline page's fill line: done of total, what's going, the
+    rate and ETA, today's spend against the budget, and why it's idle."""
+    h.raw("</dd><dt>Fill</dt><dd>")
+    var pct = (s.done * 100 // s.total) if s.total > 0 else 100
+    h.text(s.done, " / ", s.total, " done (", pct, "%)")
+    if s.running > 0:
+        h.text(", ", s.running, " fill runs going")
+    if s.live > 0:
+        h.text(", ", s.live, " in live runs")
+    if s.retrying > 0:
+        h.text(", ", s.retrying, " waiting for a retry")
+    if s.failed > 0:
+        h.text(", ", s.failed, " failed")
+    if s.rate > 0:
+        h.text(
+            "; ",
+            Float64(Int(s.rate * 10.0 + 0.5)) / 10.0,
+            " an hour, ETA ",
+            eta_text(s.eta_seconds),
+        )
+    h.text("; today ")
+    if s.spent < 0:
+        h.text("unknown")
+    else:
+        h.text(money(s.spent))
+    if s.budget >= 0:
+        h.text(" of ", money(s.budget))
+    else:
+        h.text(", no budget")
+    h.raw(' <span class="muted">(estimated)</span>')
+    if s.idle:
+        h.raw('<br><span class="muted">Idle: ')
+        h.text(s.idle)
+        h.raw("</span>")
+
+
 def pipeline(
     mut db: State,
     name: String,
@@ -2856,9 +2918,11 @@ def pipeline(
     except:
         pass
     var runs = _runs(db, pipeline=name, limit=20)
+    var fill = _fill_of(db, name)
 
     var j = String('{"pipeline": ')
     _json_pipeline(j, p)
+    j.write(', "fill": ', status_json(fill.value()) if fill else "null")
     j.write(', "steps": [')
     for i in range(len(steps)):
         if i:
@@ -2960,6 +3024,8 @@ def pipeline(
         h.raw('<span class="muted">none</span>')
     h.raw("</dd><dt>Runs at once</dt><dd>")
     h.text(p.running, " running of ", p.max_runs, ", ", p.queued, " queued")
+    if fill:
+        _fill_html(h, fill.value())
     h.raw("</dd><dt>Run retries</dt><dd>")
     h.text(p.run_retries)
     h.raw("</dd><dt>Placement</dt><dd>")
@@ -3105,10 +3171,11 @@ comptime _RUN_TRIGGERS: List[String] = [
     "ui",
     "rerun",
     "rebuild",
+    "fill",
 ]
 """The triggers orca writes (`orca.runs.trigger`): the scheduler's fires and
-sensors, `backfill`, a binary's `run`, the UI's start button, a rerun and a
-rebuild. The filter adds any others the table has."""
+sensors, `backfill`, a binary's `run`, the UI's start button, a rerun, a
+rebuild and a fill (`orca.fill`). The filter adds any others the table has."""
 
 comptime _RUNS_PAGE = 50
 """Runs to a page of `/runs`, unless `?n=` says (at most `_RUNS_PAGE_MAX`)."""
@@ -5728,6 +5795,9 @@ struct Ui(Copyable, Handler):
     def _page(self, mut db: State, url: String, path: String) raises -> Page:
         if path == "/" or path == "":
             return home(db)
+        if path.startswith("/api/pipelines/"):
+            # A pipeline's page as JSON, the fill among it.
+            return self._page(db, url, String(path[byte=4:]))
         if path == "/runs":
             return runs(
                 db,

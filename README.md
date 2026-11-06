@@ -91,6 +91,7 @@ pixi run test-placement        # that, within the control instance's limits, bes
 ./build/orca register ./build/toy   # with ./orca.toml if there is one: how each pipeline runs, checked in (below)
 ./build/orca config show toy   # its effective settings and where each came from (--json for scripts)
 ./build/orca config export     # an orca.toml from what's registered, to adopt one without retyping flags
+pixi run test-fill             # fills = "all": a pipeline filling its whole range by itself, within its limits
 mojo build -D ORCA_SOURCE=$(git remote get-url origin) -D ORCA_COMMIT=$(git rev-parse HEAD) ...   # each run links the commit it ran
 ```
 
@@ -112,6 +113,10 @@ worker_procs = 1             # or "auto"
 max_runs = 2                 # over the code's Pipeline max_runs
 env = { DISTA_WORKER_SLOTS = "4", GHARCHIVE_PARALLEL = "16" }
 secrets = { GITHUB_TOKEN = "orca/github-token" }   # Secrets Manager IDs, never values
+fills = "all"                # fill the whole range by itself (below)
+fill_max_runs = 2            # fill runs at once, beside max_runs
+fill_budget_per_day = 5.0    # estimated US dollars a UTC day
+fill_window = "22..6"        # UTC hours fill runs start in
 ```
 
 A pipeline the file names is registered with exactly what `[defaults]`,
@@ -124,6 +129,28 @@ The registration keeps the file's SHA-256 and git commit. `--config F`
 reads another file, `--no-config` none; `orca config show` prints each
 value with its source (code default, orca.toml, flag, environment). Every key, the
 precedence and migrating from flags: [docs/orca-toml.md](docs/orca-toml.md).
+
+**Fills.** With `fills = "all"` the scheduler fills the pipeline's whole
+range by itself, from its first partition through the last one that has
+ended. The default is `"since_registration"`, where a schedule fills from
+registration on. Each fill run takes one partition, trigger `fill`, in
+`fill_order` (`oldest` or `newest`). A fill never runs a done partition
+again; that stays `orca backfill --rerun`. It waits for the pipeline's
+queued runs, starts at most `fill_max_runs` runs on top of `max_runs`, and
+only in `fill_window`. It stops when the pipeline is paused, by a person or
+by the watchdog.
+
+The budget is an estimate from orca.fleet's on-demand price table, and it
+fails closed: fill runs on EC2 or Kubernetes don't start without a budget,
+nor when a price is unknown. The pipeline page's Fill line and
+`/api/pipelines/<name>` show done of total, rate, ETA, today's spend
+against the budget, and why the fill is idle. Keyed pipelines and sensors
+don't fill. See [Fills](docs/orca-toml.md#fills).
+
+**Operations go through the UI or the remote CLI** (`orca login`, `orca
+--remote <url> backfill|pause|unpause|cancel|resume`), which keep audit
+rows. Change a fill's limits in `orca.toml` and register again. On AWS,
+SSM `sudo docker exec scheduler orca ...` is for debugging only.
 
 ## Developing locally
 

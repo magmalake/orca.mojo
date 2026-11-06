@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- **Fills: a pipeline fills its whole range by itself, within limits**
+  (#155, `orca.fill`, migration 30). In `orca.toml` (no register flags):
+  `fills = "all"` (the default `"since_registration"` is what orca did
+  before), `fill_order` (`"oldest"` or `"newest"`), `fill_max_runs` (fill
+  runs at once, on top of `max_runs`), `fill_budget_per_day` (estimated US
+  dollars a UTC day) and `fill_window` (UTC hours fill runs start in,
+  `"22..6"`). Bad values are refused with the file's line, and the keys
+  are shown by `orca config show` and written by `orca config export`.
+  Each tick, after the pipeline's other runs, the scheduler starts fill
+  runs (trigger `fill`, one partition each) over the partitions of its
+  range that no run took: from its first partition through the last that
+  has ended, never one done in any of its code, live, or filled before.
+  A fill waits while other runs of the pipeline are queued. It doesn't
+  start while the pipeline is paused (the watchdog's trips included) or
+  outside its window. Fill runs are retried like scheduled ones.
+  `orca register` refuses `fills = "all"` for keyed pipelines, sensors and
+  pipelines with no first partition.
+  - The cost estimate is the fill runs' instances today (`orca.instances`)
+    at orca.fleet's on-demand prices × 1.2, plus what the runs going and
+    one more may cost (the longest recent fill run, an hour before there's
+    one). It fails closed: no fill run starts on a budget with a price
+    unknown (a type not in the table, Kubernetes), nor on EC2 or
+    Kubernetes without a budget.
+  - The pipeline page gets a Fill line (done / total, rate, ETA, today's
+    spend against the budget, and why it's idle), and
+    `/api/pipelines/<name>` serves the pipeline page's JSON with a `fill`
+    object.
+  - The README and docs/orca-toml.md say that operations go through the
+    UI or the remote CLI, and that SSM `docker exec` is for debugging.
+  - `examples/daily.mojo` takes `ORCA_DAILY_SLEEP`. `tests/fill.sh`
+    (`pixi run test-fill`) covers it all on the local runner and against
+    the stand-in EC2.
+
 - **`orca.toml`: one checked-in file for how each pipeline runs** (#145,
   `orca.config`, `orca.toml`, migration 29). `[defaults]` and
   `[pipelines.<name>]` take `placement`, `head_type`, `worker_type`,

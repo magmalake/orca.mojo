@@ -12,6 +12,8 @@ runs (#145), read by `orca register` and `orca aws register`.
     max_runs = 2                 # over the code's Pipeline max_runs
     env = { DISTA_WORKER_SLOTS = "4", GHARCHIVE_PARALLEL = "16" }
     secrets = { GITHUB_TOKEN = "orca/github-token" }   # Secrets Manager IDs
+    fills = "all"                # fill the range by itself (orca.fill)
+    fill_budget_per_day = 5.0    # and the rest of the fill* keys
 
     [stack]                      # for `orca aws up`; not read yet
 
@@ -29,10 +31,11 @@ it had changes not committed) in `orca.pipelines.config`, with where each
 value came from, for `orca config show`. `orca config export` writes the
 file back from what's registered.
 
-**Adding a key** (#155's `fills` and the rest): a name in `SCALAR_KEYS` and
-its check in `_canonical`, which gives the value as text; it is then read,
-merged, overridden, recorded, shown and exported like the others, and only
-its consumer is new.
+**Adding a key**: a name in `SCALAR_KEYS` and its check in `_canonical`
+(and its types in `_canonical_toml`), which gives the value as text; it is
+then read, merged, overridden, recorded, shown and exported like the
+others, and only its consumer is new. The `fill*` keys (#155, `orca.fill`)
+were added this way, with no flag.
 """
 
 from std.base64 import b64decode
@@ -41,9 +44,17 @@ from std.os.path import exists
 
 from json import Value, loads
 from objectstore.crypto import sha256_hex
-from postgres import Params
+from postgres import Params, Row
 
 from orca.control import parse_placement
+from orca.fill import (
+    SINCE_REGISTRATION,
+    parse_fill_budget,
+    parse_fill_max_runs,
+    parse_fill_order,
+    parse_fill_window,
+    parse_fills,
+)
 from orca.json import quote
 from orca.proc import absolute, capture
 from orca.secrets import parse_secrets, secret_problem
@@ -73,8 +84,14 @@ comptime SCALAR_KEYS = [
     "workers",
     "worker_procs",
     "max_runs",
+    "fills",
+    "fill_order",
+    "fill_max_runs",
+    "fill_budget_per_day",
+    "fill_window",
 ]
-"""The keys of `[defaults]` and `[pipelines.<name>]` with one value."""
+"""The keys of `[defaults]` and `[pipelines.<name>]` with one value. The
+`fill*` keys (`orca.fill`) are the file's only: no flag sets them."""
 comptime MAP_KEYS = ["secrets", "env"]
 """The keys whose value is a table of names."""
 
@@ -171,6 +188,17 @@ def _canonical(key: String, text: String) raises -> String:
         return String("auto") if n == 0 else String(n)
     if key == "max_runs":
         return String(parse_max_runs(text))
+    if key == "fills":
+        return parse_fills(text)
+    if key == "fill_order":
+        return parse_fill_order(text)
+    if key == "fill_max_runs":
+        return String(parse_fill_max_runs(text))
+    if key == "fill_budget_per_day":
+        return String(parse_fill_budget(text))
+    if key == "fill_window":
+        var w = parse_fill_window(text)
+        return String(w[0], "..", w[1])
     raise Error("unknown key ", key)
 
 
@@ -181,6 +209,18 @@ def canonical_flag(key: String, text: String) raises -> String:
 
 def _canonical_toml(key: String, v: TomlValue) raises -> String:
     """`key`'s value in the file, checked: the types each takes."""
+    if key == "fill_max_runs":
+        if v.kind != INTEGER:
+            raise Error("is a count, not ", v.kind)
+        return _canonical(key, v.text)
+    if key == "fill_budget_per_day":
+        if v.kind != INTEGER and v.kind != FLOAT:
+            raise Error("is US dollars a day, a number, not ", v.kind)
+        return _canonical(key, v.text)
+    if key == "fills" or key == "fill_order" or key == "fill_window":
+        if v.kind != STRING:
+            raise Error("is a string, not ", v.kind)
+        return _canonical(key, v.text)
     var numeric = key == "workers" or key == "worker_procs" or key == "max_runs"
     if v.kind == INTEGER and numeric:
         return _canonical(key, v.text)
@@ -339,6 +379,14 @@ struct ProjectConfig(Movable):
 
     def pipelines(self) -> List[String]:
         return self.doc.tables(["pipelines"])
+
+    def where(self, pipeline: String, key: String, s: Setting) -> String:
+        """`file:line: [table]` of `key`'s value `s` from this file, for
+        a refusal that needs the pipeline (`fills` on a keyed one)."""
+        var p: List[String] = ["defaults", key]
+        if s.detail != "[defaults]":
+            p = ["pipelines", pipeline, key]
+        return String(self.path, ":", self._line(p), ": ", s.detail)
 
     def _fail(self, line: Int, table: String, msg: String) raises:
         raise Error(self.path, ":", line, ": ", table, " ", msg)
@@ -780,7 +828,11 @@ comptime _SHOWN_SQL = (
     " jsonb_array_length(coalesce(describe->'tasks', '[]')) > 0 AS tasks,"
     " coalesce(secrets::text, '') AS secrets, coalesce(env::text, '') AS env,"
     " coalesce(config::text, '') AS config, coalesce(image, '') AS image,"
-    " coalesce(spot, false) AS spot FROM orca.pipelines WHERE binary_path IS"
+    " coalesce(spot, false) AS spot, coalesce(fills, '') AS fills,"
+    " coalesce(fill_order, '') AS fill_order, coalesce(fill_max_runs, 0) AS"
+    " fill_max_runs, coalesce(fill_budget_per_day, -1) AS fill_budget,"
+    " coalesce(fill_window, '') AS fill_window FROM orca.pipelines WHERE"
+    " binary_path IS"
     " NOT NULL AND ($1 = '' OR name = $1) ORDER BY name"
 )
 
@@ -904,6 +956,7 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
         else:
             var w = _source(sources, "max_runs")
             s.add("max_runs", String(r.int64("max_runs")), w[0], w[1])
+        _show_fills(s, r, sources)
         if r.text("image"):
             s.add("image", r.text("image"), FROM_FLAG, "--image")
         if r.bool("spot"):
@@ -926,6 +979,53 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
                 s.add(String("env.", n), getenv(n), FROM_ENV, "ORCA_RUN_ENV")
         out.append(s^)
     return out^
+
+
+def _show_fills(mut s: Shown, r: Row, sources: Optional[Value]) raises:
+    """The `fill*` keys (`orca.fill`): `fills` always, the others when the
+    pipeline fills or sets them."""
+    var fills = r.text("fills")
+    if fills:
+        var w = _source(sources, "fills")
+        s.add("fills", fills, w[0], w[1])
+    else:
+        s.add("fills", SINCE_REGISTRATION, CODE_DEFAULT, "")
+    var any = (
+        fills == "all"
+        or r.text("fill_order") != ""
+        or r.int64("fill_max_runs") > 0
+        or r.float64("fill_budget") >= 0
+        or r.text("fill_window") != ""
+    )
+    if not any:
+        return
+    if r.text("fill_order"):
+        var w = _source(sources, "fill_order")
+        s.add("fill_order", r.text("fill_order"), w[0], w[1])
+    else:
+        s.add("fill_order", "oldest", CODE_DEFAULT, "")
+    if r.int64("fill_max_runs") > 0:
+        var w = _source(sources, "fill_max_runs")
+        s.add("fill_max_runs", String(r.int64("fill_max_runs")), w[0], w[1])
+    else:
+        s.add("fill_max_runs", "1", CODE_DEFAULT, "")
+    if r.float64("fill_budget") >= 0:
+        var w = _source(sources, "fill_budget_per_day")
+        s.add(
+            "fill_budget_per_day", String(r.float64("fill_budget")), w[0], w[1]
+        )
+    else:
+        s.add(
+            "fill_budget_per_day",
+            "none",
+            CODE_DEFAULT,
+            "fill runs on ec2 or kubernetes don't start without one",
+        )
+    if r.text("fill_window"):
+        var w = _source(sources, "fill_window")
+        s.add("fill_window", r.text("fill_window"), w[0], w[1])
+    else:
+        s.add("fill_window", "0..24", CODE_DEFAULT, "all day")
 
 
 def show_json(items: List[Shown], one: Bool) -> String:
@@ -990,6 +1090,20 @@ def export_toml(mut db: State) raises -> String:
                 out.write("worker_procs = ", n, "\n")
         if not r.is_null("max_runs"):
             out.write("max_runs = ", r.int64("max_runs"), "\n")
+        if r.text("fills"):
+            out.write("fills = ", toml_string(r.text("fills")), "\n")
+        if r.text("fill_order"):
+            out.write("fill_order = ", toml_string(r.text("fill_order")), "\n")
+        if r.int64("fill_max_runs") > 0:
+            out.write("fill_max_runs = ", r.int64("fill_max_runs"), "\n")
+        if r.float64("fill_budget") >= 0:
+            out.write(
+                "fill_budget_per_day = ", String(r.float64("fill_budget")), "\n"
+            )
+        if r.text("fill_window"):
+            out.write(
+                "fill_window = ", toml_string(r.text("fill_window")), "\n"
+            )
         var env = parse_env(r.text("env"))
         if len(env) > 0:
             out.write("env = ", _inline(env), "\n")
