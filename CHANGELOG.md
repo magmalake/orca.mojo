@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **The control instance's own health** (#96): a `/system` page (24 hours,
+  7 or 14 days of its CPU, memory, disk and network, and each container's
+  memory), Prometheus gauges on `/metrics`, and a warning on `/` when its
+  disk is over 85% or memory over 90%. The control sampler gets
+  `--cgroup` / `--names` to read containers' memory from the host's cgroup
+  files, read-only; the scheduler keeps a row a minute for 14 days
+  (migration 24) and a file a day under `<ORCA_LOGS>/control/`.
+  `deploy/aws/orca.yaml` mounts the cgroup files into the sampler and
+  expires `logs/control/` after 14 days (new stacks; the PR has the steps for
+  a running one). `tests/system.sh`.
+
 - **A warm pool for the ec2 runner**: consecutive runs of a pipeline reuse
   its instances instead of booting new ones. An instance whose run ended
   waits `ORCA_EC2_POOL_SECONDS` (default 150; 0 turns the pool off, as

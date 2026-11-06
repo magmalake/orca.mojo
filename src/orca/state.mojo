@@ -411,6 +411,32 @@ def _migrations() -> List[List[String]]:
                 " ended IS NULL AND idle IS NOT NULL"
             ),
         ],
+        # The control instance's own health (orca.system): a row a minute of
+        # its CPU, memory, fullest disk and network, and one a minute for
+        # each container's memory, kept 14 days.
+        [
+            """CREATE TABLE orca.system_minutes (
+            minute timestamptz PRIMARY KEY,
+            n int NOT NULL,
+            last_t timestamptz NOT NULL,
+            cpu_sum float8 NOT NULL,
+            cpu_max float8 NOT NULL,
+            mem_sum float8 NOT NULL,
+            mem_max float8 NOT NULL,
+            mem_used int8 NOT NULL,
+            mem_total int8 NOT NULL,
+            disk_max float8 NOT NULL,
+            disk_used int8 NOT NULL,
+            disk_total int8 NOT NULL,
+            disk_path text NOT NULL,
+            net_in_sum float8 NOT NULL,
+            net_out_sum float8 NOT NULL)""",
+            """CREATE TABLE orca.system_containers (
+            minute timestamptz NOT NULL,
+            name text NOT NULL,
+            mem int8 NOT NULL,
+            PRIMARY KEY (minute, name))""",
+        ],
     ]
 
 
