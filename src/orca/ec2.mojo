@@ -127,6 +127,7 @@ from objectstore.crypto import sha256_hex
 from postgres import Params
 
 from orca.awsec2 import Ec2, Instance
+from orca.config import env_json, parse_env
 from orca.json import quote
 from orca.proc import capture
 from orca.sample import sample_seconds
@@ -199,7 +200,8 @@ comptime _SPEC_COLUMNS = (
     " coalesce((r.spec->>'min_workers')::bigint, p.ec2_min_workers, -1) AS lo,"
     " coalesce((r.spec->'secrets')::text, p.secrets::text, '') AS secrets,"
     " coalesce((r.spec->>'worker_procs')::bigint, p.worker_procs, 1) AS procs,"
-    " coalesce(r.spec->>'registry_hash', p.registry_hash) AS registry_hash"
+    " coalesce(r.spec->>'registry_hash', p.registry_hash) AS registry_hash,"
+    " coalesce((r.spec->'env')::text, p.env::text, '') AS env"
 )
 """A run's `Ec2Spec` as SQL over `orca.runs r` and `orca.pipelines p`: the
 registration its start was given (`orca.runs.spec`, kept by `Ec2Runner.start`),
@@ -240,6 +242,8 @@ def _snapshot(mut db: State, r: Ec2Spec) raises:
         r.worker_procs,
         ', "registry_hash": ',
         quote(r.registry_hash),
+        ', "env": ',
+        env_json(r.env) if len(r.env) > 0 else String("{}"),
         "}",
     )
     _ = db.conn.execute(
@@ -277,6 +281,18 @@ struct Ec2Spec(Copyable, Movable):
     var registry_hash: String
     """The pipeline's code, which an instance from the pool must have been
     started with."""
+    var env: List[Tuple[String, String]]
+    """The pipeline's own variables (orca.toml's `env`), exported on every
+    instance over those `ORCA_RUN_ENV` names, and so part of the pool's
+    key."""
+
+
+def _sets(r: Ec2Spec, name: String) -> Bool:
+    """Whether the pipeline's own `env` has `name`."""
+    for kv in r.env:
+        if kv[0] == name:
+            return True
+    return False
 
 
 def _quote(s: String) -> String:
@@ -378,8 +394,10 @@ struct Ec2Runner(Movable):
             names.append(n)
         for n in names:
             var v = getenv(n)
-            if v:
+            if v and not _sets(r, n):
                 out.write("export ", n, "=", _quote(v), "\n")
+        for kv in r.env:
+            out.write("export ", kv[0], "=", _quote(kv[1]), "\n")
         if role == "worker":
             # The worker's address is the instance's private one, which
             # `orca.instances` keeps: the scheduler finds the instance of a
@@ -415,7 +433,10 @@ struct Ec2Runner(Movable):
         for n in materialize[_COPIED]():
             names.append(String(n))
         for n in self.env:
-            names.append(n)
+            if not _sets(r, n):
+                names.append(n)
+        for kv in r.env:
+            names.append(kv[0])
         if len(r.secrets) > 0:
             names.append("ORCA_SECRETS")
         for s in r.secrets:
@@ -1205,6 +1226,7 @@ struct Ec2Runner(Movable):
                 parse_secrets(row.text("secrets")),
                 Int(row.int64("procs")),
                 row.text("registry_hash"),
+                parse_env(row.text("env")),
             )
             var key = String(r.run, "-", r.start)
             live[key] = True
@@ -1618,6 +1640,7 @@ struct Ec2Runner(Movable):
             parse_secrets(row.text("secrets")),
             Int(row.int64("procs")),
             row.text("registry_hash"),
+            parse_env(row.text("env")),
         )
 
     def _ended_since(self, mut db: State, up: List[String]) raises:

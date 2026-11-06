@@ -474,6 +474,15 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.runs ADD COLUMN placement text",
             "ALTER TABLE orca.runs ADD COLUMN held text",
         ],
+        # orca.toml (orca.config): a pipeline's own environment for its
+        # runs, its max_runs over the code's, and what it was registered
+        # from: the file's hash and commit, where each value came from, and
+        # the flags that overrode the file.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN env jsonb",
+            "ALTER TABLE orca.pipelines ADD COLUMN max_runs int",
+            "ALTER TABLE orca.pipelines ADD COLUMN config jsonb",
+        ],
     ]
 
 
