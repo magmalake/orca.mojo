@@ -78,9 +78,10 @@ sched=$!
 run=$(q "SELECT id FROM orca.runs WHERE pipeline = 'fanout'")
 until_true "SELECT status IN ('succeeded', 'failed') FROM orca.runs WHERE id = $run" 300
 [ "$(q "SELECT status FROM orca.runs WHERE id = $run")" = succeeded ] || fail "run $run"
-# Its last logs are uploaded as its instances end.
+# Its last logs are uploaded as its instances end, or go idle in the warm
+# pool (orca.ec2).
 i=0
-until [ "$(q "SELECT count(*) FROM orca.instances WHERE run = $run AND ended IS NULL")" -eq 0 ]; do
+until [ "$(q "SELECT count(*) FROM orca.instances WHERE run = $run AND ended IS NULL AND idle IS NULL")" -eq 0 ]; do
     i=$((i + 1)); [ "$i" -lt 120 ] || fail "run $run's instances are still up"; sleep 0.5
 done
 

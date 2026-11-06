@@ -16,6 +16,8 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/runs/<id>/timeline.json` | the run's Dista timeline, for Perfetto |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
 | `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
+| `/system` | the control instance's own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`); `/api/system` is the same as JSON |
+| `/metrics` | Prometheus gauges: the control instance's CPU, memory, disk, network and containers' memory, runs running and queued, hosts, and errors in the last hour; open like the other pages (reads need no login) |
 | `/fleet` | the machines orca is paying for: hosts running and what they cost an hour, runs and errors per hour, a table of live hosts (`?sort=` a column, `&dir=desc`) and charts over `?range=24h` or `7d` (`orca.fleet`); `/fleet/hosts` is the live part of it, and `/api/fleet` the same as JSON |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), what a rebuild of it runs, and its snapshots; `?preview=1&partitions=`: a rebuild's runs by level, queueing nothing |
@@ -117,6 +119,18 @@ from orca.logs import location_exists, read_location, run_dir
 from orca.cron import CronExpr
 from orca.dag import DagStep, aggregate, dag_svg
 from orca.graph import Edge, Node, graph_svg
+from orca.system import (
+    alert_html,
+    now_json,
+    prometheus,
+    range_hours,
+    system_charts,
+    system_html,
+    system_json,
+    system_now,
+    warnings,
+    warnings_json,
+)
 from orca.fleet import (
     charts_html,
     charts_json,
@@ -1398,6 +1412,7 @@ def _page(title: String, active: StaticString, body: Html) -> String:
         ("/runs", "Runs"),
         ("/datasets", "Datasets"),
         ("/fleet", "Fleet"),
+        ("/system", "System"),
     ]:
         h.raw('<a href="', item[0], '"')
         if item[0] == active:
@@ -1637,7 +1652,8 @@ def home(mut db: State) raises -> Page:
     var recent = _runs(db, limit=10)
     var per_day = _runs_per_day(db, 30)
     var fleet = fleet_summary(db)
-    var j = String('{"pipelines": [')
+    var alerts = warnings(system_now(db))
+    var j = String('{"warnings": ', warnings_json(alerts), ', "pipelines": [')
     for i in range(len(ps)):
         if i:
             j.write(", ")
@@ -1663,6 +1679,7 @@ def home(mut db: State) raises -> Page:
 
     var h = Html()
     h.raw("<h1>Pipelines</h1>")
+    alert_html(h, alerts)
     summary_html(h, fleet, True)
     if len(ps) == 0:
         h.raw(
@@ -1807,6 +1824,33 @@ def fleet_api(mut db: State, range: String) raises -> Page:
     for."""
     var page = fleet_page(db, "", "", range)
     return Page(200, String(), page.json.copy(), "application/json")
+
+
+def _system_range(range: String) -> String:
+    return range if range == "7d" or range == "14d" else String("24h")
+
+
+def system_page(mut db: State, range: String) raises -> Page:
+    """The control instance's own health: CPU, memory, the disk Postgres is
+    on and the network over `range`, and each container's memory."""
+    var span = _system_range(range)
+    var now = system_now(db)
+    var charts = system_charts(db, range_hours(span))
+    var h = Html()
+    h.raw("<h1>System</h1>")
+    system_html(h, now, charts, span)
+    return Page(200, system_json(now, charts), _page("System", "/system", h))
+
+
+def metrics_page(mut db: State) raises -> Page:
+    """`/metrics`: Prometheus' gauges for the control instance and the
+    fleet's counts."""
+    return Page(
+        200,
+        String(),
+        prometheus(system_now(db), fleet_summary(db)),
+        "text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @fieldwise_init
@@ -5635,6 +5679,13 @@ struct Ui(Copyable, Handler):
             )
         if path == "/api/fleet":
             return fleet_api(db, _query(url, "range"))
+        if path == "/system":
+            return system_page(db, _query(url, "range"))
+        if path == "/api/system":
+            var page = system_page(db, _query(url, "range"))
+            return Page(200, String(), page.json.copy(), "application/json")
+        if path == "/metrics":
+            return metrics_page(db)
         if path == "/datasets":
             return datasets_page(db)
         if path.startswith("/datasets/"):

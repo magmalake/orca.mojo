@@ -3,6 +3,7 @@
 ```
 orca sample --out <location> [--pid PID] [--until FILE] [--match PATH]
             [--dirs D,...] [--seconds S] [--count N] [--keep N]
+            [--cgroup DIR] [--names DIR]
 <pipeline> sample ...                       the same, from a pipeline binary
 ```
 
@@ -24,7 +25,7 @@ or sysctls and the Mach host calls on macOS, and appends a line:
          "cache": 2147483648, "swap_total": 0, "swap_used": 0, "rss": 2952790016},
  "disk": [{"path": "/tmp", "total": 53687091200, "used": 9663676416, "free": 44023414784}],
  "io": {"read": 1048576, "write": 52428800}, "net": {"in": 1310720, "out": 655360},
- "self_cpu": 0.42}
+ "containers": [{"name": "postgres", "mem": 412000000}], "self_cpu": 0.42}
 ```
 
 - `t` is the Unix time, `dt` the seconds since the previous line.
@@ -41,10 +42,10 @@ or sysctls and the Mach host calls on macOS, and appends a line:
   per file system, in bytes; `free` is what an unprivileged process can use.
 - `io` and `net`: bytes per second over `dt`, summed over whole disks and
   over interfaces other than loopback. `io` is `null` on macOS.
+- `containers`: only with `--cgroup`; see below.
 - `self_cpu`: the sampler's own CPU seconds so far, for its overhead.
 
-Later fields may be added (the control instance's containers, CPU
-counters), so readers ignore keys they don't know; `v` changes only if one
+Later fields may be added (CPU counters), so readers ignore keys they don't know; `v` changes only if one
 that's here changes meaning.
 
 `--out` is where the lines go: a file, a location in object storage (lines
@@ -59,6 +60,17 @@ at `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`
 sampler that never ends (the control instance's, which the scheduler reads
 back into the fleet page, `orca.fleet`): once the file has 2 N it's
 rewritten with its last N, atomically, so a reader sees either.
+
+`--cgroup DIR` (the control instance's sampler) adds `containers`: the
+memory of each Docker container, in bytes, as `docker stats` counts it
+(`memory.current` less the page cache's inactive files), read from the
+cgroup files under `DIR`, the host's `/sys/fs/cgroup` mounted read-only
+(`system.slice/docker-<id>.scope` with the systemd driver, `docker/<id>` with
+cgroupfs; cgroup v2 only). `--names DIR` is the host's
+`/var/lib/docker/containers`, also read-only, whose `<id>/config.v2.json`
+gives a container its name; without it a container is its first 12
+characters of id. Reading files, not the Docker socket, keeps the sampler
+unprivileged: the socket is root on the host, these mounts are not.
 
 It ends after a last line once the `--pid` process has, or once the file
 `--until` names exists, or after `--count` lines. SIGTERM ends it at once,
@@ -76,6 +88,8 @@ from std.sys import exit
 from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns, sleep
 
+from json import loads
+
 from orca.logs import (
     is_remote,
     location_exists,
@@ -90,7 +104,8 @@ comptime PREFIX = "orca-sample "
 
 comptime _USAGE = """usage:
   sample --out <location>|- [--pid PID] [--until FILE] [--match PATH]
-         [--dirs D,...] [--seconds S] [--count N] [--keep N]"""
+         [--dirs D,...] [--seconds S] [--count N] [--keep N]
+         [--cgroup DIR] [--names DIR]"""
 
 
 def sample_seconds() -> Float64:
@@ -375,6 +390,61 @@ def alive(pid: Int) -> Bool:
         return not (len(f) > 0 and f[0] == "Z")
 
 
+def container_mem(current: String, stat: String) -> Int:
+    """A container's memory as `docker stats` counts it: a cgroup v2
+    `memory.current` less `inactive_file` from `memory.stat`; -1 if
+    `current` isn't a number."""
+    var used: Int
+    try:
+        used = Int(current.strip())
+    except:
+        return -1
+    for line in stat.splitlines():
+        if line.startswith("inactive_file "):
+            try:
+                used -= Int(line[byte=14:].strip())
+            except:
+                pass
+    return max(used, 0)
+
+
+def container_name(config: String) -> String:
+    """The name in a container's `config.v2.json` (`/postgres`), without the
+    slash; empty if there is none."""
+    try:
+        var v = loads(config)
+        var got = v.try_at("/Name")
+        if got:
+            return String(got.value().string_or("").lstrip("/"))
+    except:
+        pass
+    return String()
+
+
+def container_ids(root: String) -> List[Tuple[String, String]]:
+    """The Docker containers' cgroups under `root`, as (id, directory): the
+    systemd driver's `system.slice/docker-<id>.scope` and cgroupfs's
+    `docker/<id>`."""
+    var out = List[Tuple[String, String]]()
+    var base = String(root.rstrip("/"))
+    try:
+        var slice = String(base, "/system.slice")
+        for d in listdir(slice):
+            if d.startswith("docker-") and d.endswith(".scope"):
+                var id = String(d[byte = 7 : d.byte_length() - 6])
+                out.append((id, String(slice, "/", d)))
+    except:
+        pass
+    try:
+        var plain = String(base, "/docker")
+        for d in listdir(plain):
+            if d.byte_length() == 64:
+                out.append((String(d), String(plain, "/", d)))
+    except:
+        pass
+    return out^
+
+
 @fieldwise_init
 struct Disk(Copyable, Movable):
     var path: String
@@ -463,8 +533,24 @@ struct Sampler(Movable):
     var net_total: Tuple[Int, Int]
     var at: Int
     """perf_counter_ns of the readings."""
+    var cgroup: String
+    """`--cgroup`: where the containers' cgroups are; empty for none."""
+    var names: String
+    """`--names`: where the containers' config files are."""
+    var known: Dict[String, String]
+    """Container ids and the names read for them."""
 
-    def __init__(out self, root: Int, argv0: String, var dirs: List[String]):
+    def __init__(
+        out self,
+        root: Int,
+        argv0: String,
+        var dirs: List[String],
+        cgroup: String = "",
+        names: String = "",
+    ):
+        self.cgroup = cgroup
+        self.names = names
+        self.known = Dict[String, String]()
         self.root = root
         self.argv0 = argv0
         self.dirs = dirs^
@@ -712,6 +798,44 @@ struct Sampler(Movable):
                     total += e.value
             return total
 
+    def _containers(mut self) -> String:
+        """`[{"name": ..., "mem": bytes}, ...]` for the containers under
+        `--cgroup`, by name."""
+        var out = String("[")
+        var n = 0
+        for c in container_ids(self.cgroup):
+            var id = c[0]
+            var mem = container_mem(
+                _read(String(c[1], "/memory.current")),
+                _read(String(c[1], "/memory.stat")),
+            )
+            if mem < 0:
+                continue
+            var name = self.known.get(id, "")
+            if not name and self.names:
+                name = container_name(
+                    _read(
+                        String(
+                            self.names.rstrip("/"), "/", id, "/config.v2.json"
+                        )
+                    )
+                )
+                if name:
+                    self.known[id] = name
+            if not name:
+                name = String(id[byte = : min(12, id.byte_length())])
+            out.write(
+                ", " if n else "",
+                '{"name": "',
+                _json_safe(name),
+                '", "mem": ',
+                mem,
+                "}",
+            )
+            n += 1
+        out.write("]")
+        return out^
+
     def line(mut self) -> String:
         """A JSON line covering the time since the last one."""
         var now = Int(perf_counter_ns())
@@ -801,10 +925,11 @@ struct Sampler(Movable):
             Int(Float64(dnet[0]) / dt),
             ', "out": ',
             Int(Float64(dnet[1]) / dt),
-            '}, "self_cpu": ',
-            _fixed3(_self_cpu()),
             "}",
         )
+        if self.cgroup:
+            s.write(', "containers": ', self._containers())
+        s.write(', "self_cpu": ', _fixed3(_self_cpu()), "}")
         return s^
 
 
@@ -838,7 +963,7 @@ def default_dirs() -> List[String]:
     return out^
 
 
-def _append(path: String, line: String) raises:
+def append_line(path: String, line: String) raises:
     """Appends `line` and a newline to the file at `path`."""
     var c = _cstr(path)
     var mode = _cstr("a")
@@ -895,6 +1020,8 @@ def sample_main(args: List[String]) -> Int:
     var count = 0
     var keep = 0
     var until = String()
+    var cgroup = String()
+    var names = String()
     var i = 2
     try:
         while i < len(args):
@@ -918,6 +1045,10 @@ def sample_main(args: List[String]) -> Int:
                 keep = Int(v)
             elif args[i] == "--until":
                 until = v
+            elif args[i] == "--cgroup":
+                cgroup = v
+            elif args[i] == "--names":
+                names = v
             elif args[i] == "--count":
                 count = Int(v)
             else:
@@ -946,7 +1077,7 @@ def sample_main(args: List[String]) -> Int:
                 f.write_bytes(Span(before))
     except e:
         print("orca sample: can't stage", dest, ":", e)
-    var s = Sampler(root, argv0, dirs^)
+    var s = Sampler(root, argv0, dirs^, cgroup, names)
     var written = 0
     var failed = False
     var start = Float64(perf_counter_ns()) / 1e9
@@ -966,7 +1097,7 @@ def sample_main(args: List[String]) -> Int:
                 if dest == "-":
                     print(PREFIX, line, sep="", flush=True)
                 else:
-                    _append(path, line)
+                    append_line(path, line)
                     dirty = True
                     if keep > 0 and not remote and written % keep == keep - 1:
                         _trim(path, keep)

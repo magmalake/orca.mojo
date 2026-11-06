@@ -126,6 +126,8 @@ Resources:
       LifecycleConfiguration:
         Rules:
           - {Id: logs, Status: Enabled, Prefix: logs/, ExpirationInDays: 30}
+          # The control instance's samples, a file a day (orca.system).
+          - {Id: control, Status: Enabled, Prefix: logs/control/, ExpirationInDays: 14}
   # The lake's tables; anyone may read them when PublicData is true.
   # Account-level Block Public Access, if it's on, refuses the policy below.
   PublicBucket:
@@ -385,13 +387,17 @@ Resources:
               docker run -d --name $role --restart always --network orca --env-file /etc/orca.env \
                 -v /var/lib/orca/stage:/var/lib/orca/stage "$repo:$tag" $role
             done
-            # This instance's own samples, for the fleet page: the host's
-            # processes and network, the last hour of lines kept in a file the
-            # scheduler reads.
+            # This instance's own samples, for the fleet and system pages: the
+            # host's processes and network, the last hour of lines kept in a
+            # file the scheduler reads. The host's cgroup files and Docker's
+            # container configs, read-only, give each container's memory by
+            # name without the Docker socket.
             docker rm -f sampler > /dev/null 2>&1 || true
             docker run -d --name sampler --restart always --pid host --network host \
-              -v /var/lib/orca/stage:/var/lib/orca/stage "$repo:$tag" \
-              sample --out /var/lib/orca/stage/control.jsonl --dirs /var/lib/orca/stage --keep 720
+              -v /var/lib/orca/stage:/var/lib/orca/stage \
+              -v /sys/fs/cgroup:/host/cgroup:ro -v /var/lib/docker/containers:/host/containers:ro "$repo:$tag" \
+              sample --out /var/lib/orca/stage/control.jsonl --dirs /var/lib/orca/stage --keep 720 \
+              --cgroup /host/cgroup --names /host/containers
             EOS
             cat > /usr/local/bin/orca-app << 'EOS'
             #!/bin/bash
