@@ -73,7 +73,8 @@ def test_cost_sustained_and_day() raises:
     assert_false(eval_cost(c, spike, _all()).tripped)
     # Under the rate but over $25 in 24 hours: 2 x $0.58 for 24 h = $27.84.
     var steady: List[Lease] = [
-        Lease("c7g.4xlarge", 90000.0, -1.0), Lease("c7g.4xlarge", 90000.0, -1.0)
+        Lease("c7g.4xlarge", 90000.0, -1.0),
+        Lease("c7g.4xlarge", 90000.0, -1.0),
     ]
     var day = eval_cost(c, steady, _all())
     assert_true(day.tripped)
@@ -118,7 +119,9 @@ def test_failing_is_per_pipeline() raises:
 def test_stuck_scopes_to_the_pipeline() raises:
     var c = default_config()
     var runs: List[Quiet] = [
-        Quiet("a", 7, 31.0), Quiet("a", 8, 45.0), Quiet("b", 9, 29.9)
+        Quiet("a", 7, 31.0),
+        Quiet("a", 8, 45.0),
+        Quiet("b", 9, 29.9),
     ]
     var r = eval_stuck(c, runs)
     assert_true(r.tripped)

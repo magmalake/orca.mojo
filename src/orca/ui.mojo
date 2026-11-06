@@ -5735,9 +5735,7 @@ struct Ui(Copyable, Handler):
             return metrics_page(db)
         if path == "/watchdog":
             var h = Html()
-            watchdog_html(
-                h, rule_rows(db, watchdog_config()), active_trips(db)
-            )
+            watchdog_html(h, rule_rows(db, watchdog_config()), active_trips(db))
             return Page(
                 200,
                 watchdog_json(db, watchdog_config()),

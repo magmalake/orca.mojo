@@ -727,7 +727,9 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
     var json_out = False
     var rest = List[String]()
     for i in range(2, n):
-        if args[i] == "--json" and (cmd == "status" or cmd == "lineage" or cmd == "watchdog"):
+        if args[i] == "--json" and (
+            cmd == "status" or cmd == "lineage" or cmd == "watchdog"
+        ):
             json_out = True
         else:
             rest.append(args[i])

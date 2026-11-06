@@ -92,7 +92,22 @@ struct Config(Copyable, Movable):
 
 def default_config() -> Config:
     return Config(
-        60.0, 200, 3.0, 15, 25.0, 15.0, 10, 4, 20, 50.0, 10, 30, 5.0, 90.0, 85.0, 0.0
+        60.0,
+        200,
+        3.0,
+        15,
+        25.0,
+        15.0,
+        10,
+        4,
+        20,
+        50.0,
+        10,
+        30,
+        5.0,
+        90.0,
+        85.0,
+        0.0,
     )
 
 
@@ -229,9 +244,9 @@ def cost_spent(
         var from_ = min(l.start_ago, window)
         var to = max(l.end_ago, 0.0)
         if from_ > to:
-            total += max(hourly_price(l.instance_type), 0.0) * (
-                from_ - to
-            ) / 3600.0
+            total += (
+                max(hourly_price(l.instance_type), 0.0) * (from_ - to) / 3600.0
+            )
     return total
 
 
@@ -243,7 +258,9 @@ def eval_cost(
     var now_rate = cost_rate(leases, 0.0, c.control_price)
     var lowest = now_rate
     for m in range(1, c.cost_minutes + 1):
-        lowest = min(lowest, cost_rate(leases, Float64(m * 60), c.control_price))
+        lowest = min(
+            lowest, cost_rate(leases, Float64(m * 60), c.control_price)
+        )
     var day = cost_spent(leases, 86400.0, c.control_price)
     var detail = String()
     if lowest > c.cost_hour:
@@ -370,9 +387,7 @@ def eval_stuck(c: Config, runs: List[Quiet]) -> Reading:
             )
     if len(out) == 0:
         return _ok("stuck", worst, Float64(c.stuck_minutes))
-    return Reading(
-        "stuck", worst, Float64(c.stuck_minutes), True, detail, out^
-    )
+    return Reading("stuck", worst, Float64(c.stuck_minutes), True, detail, out^)
 
 
 def eval_control(
@@ -390,7 +405,11 @@ def eval_control(
     var detail = String()
     if mem > c.memory:
         detail = String(
-            "control instance memory ", _fx(mem), "% (limit ", _fx(c.memory, 0), "%)"
+            "control instance memory ",
+            _fx(mem),
+            "% (limit ",
+            _fx(c.memory, 0),
+            "%)",
         )
     if disk > c.disk:
         detail.write(
@@ -444,7 +463,9 @@ def gather_leases(mut db: State) raises -> List[Lease]:
         ),
         Params(),
     ):
-        out.append(Lease(r.text("instance_type"), r.float64("s"), r.float64("e")))
+        out.append(
+            Lease(r.text("instance_type"), r.float64("s"), r.float64("e"))
+        )
     return out^
 
 
@@ -465,9 +486,11 @@ def gather_idle(
         String(
             "WITH w AS (",
             _IDLE_WORKERS,
-            ") SELECT count(DISTINCT s.host) AS n, avg(s.cpu)::float8 AS cpu"
-            " FROM orca.fleet_samples s JOIN w ON w.id = s.host WHERE s.t >"
-            " now() - make_interval(mins => $1::int)",
+            (
+                ") SELECT count(DISTINCT s.host) AS n, avg(s.cpu)::float8 AS"
+                " cpu FROM orca.fleet_samples s JOIN w ON w.id = s.host WHERE"
+                " s.t > now() - make_interval(mins => $1::int)"
+            ),
         ),
         Params().int32(Int32(c.idle_minutes)),
     ).row(0)
@@ -476,9 +499,11 @@ def gather_idle(
         String(
             "WITH w AS (",
             _IDLE_WORKERS,
-            ") SELECT DISTINCT w.pipeline FROM w WHERE EXISTS (SELECT 1 FROM"
-            " orca.fleet_samples s WHERE s.host = w.id AND s.t > now() -"
-            " make_interval(mins => $1::int)) ORDER BY 1",
+            (
+                ") SELECT DISTINCT w.pipeline FROM w WHERE EXISTS (SELECT 1"
+                " FROM orca.fleet_samples s WHERE s.host = w.id AND s.t > now()"
+                " - make_interval(mins => $1::int)) ORDER BY 1"
+            ),
         ),
         Params().int32(Int32(c.idle_minutes)),
     ):
@@ -585,7 +610,11 @@ def _record(mut db: State, r: Reading) raises:
             " EXCLUDED.threshold, detail = EXCLUDED.detail, checked ="
             " EXCLUDED.checked"
         ),
-        Params().text(r.rule).float64(r.value).float64(r.threshold).text(r.detail),
+        Params()
+        .text(r.rule)
+        .float64(r.value)
+        .float64(r.threshold)
+        .text(r.detail),
     )
 
 
@@ -807,7 +836,17 @@ def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
             Params().text(name),
         )
         if len(rows) == 0 or not rows.row(0).bool("seen"):
-            out.append(RuleRow(name, -1.0, _limit(c, name), False, String(), String(), tripped))
+            out.append(
+                RuleRow(
+                    name,
+                    -1.0,
+                    _limit(c, name),
+                    False,
+                    String(),
+                    String(),
+                    tripped,
+                )
+            )
             continue
         var r = rows.row(0)
         var live = (not r.is_null("live")) and r.bool("live")
@@ -888,7 +927,10 @@ def banner_html(mut h: Html, trips: List[Trip]):
         h.text(t.detail, " (", _ago(t.ago), ", ", t.at, "). Paused: ")
         for i in range(len(t.pipelines)):
             h.raw(", " if i else "")
-            h.link(String("/pipelines/", url_encode(t.pipelines[i])), t.pipelines[i])
+            h.link(
+                String("/pipelines/", url_encode(t.pipelines[i])),
+                t.pipelines[i],
+            )
         h.raw(". ")
         h.link(_rule_link(t), "See why")
         h.raw("</div>")
@@ -1026,7 +1068,11 @@ def prometheus(mut db: State, c: Config) raises -> String:
     for r in rows:
         if r.value >= 0:
             out.write(
-                'orca_watchdog_value{rule="', r.rule, '"} ', _fx(r.value, 3), "\n"
+                'orca_watchdog_value{rule="',
+                r.rule,
+                '"} ',
+                _fx(r.value, 3),
+                "\n",
             )
     out.write(
         "# HELP orca_watchdog_threshold The rule's limit.\n",
