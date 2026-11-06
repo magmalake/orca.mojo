@@ -1,26 +1,88 @@
 #!/bin/sh
-# Stands in for the aws command in tests/aws.sh: records each call to
-# $FAKE_AWS_LOG and answers what orca aws asks. A stack exists once deployed.
-echo "aws $*" >> "$FAKE_AWS_LOG"
+# Stands in for the aws command in tests/aws.sh and tests/replace_control.sh:
+# records each call to $FAKE_AWS_LOG and answers what orca aws asks. A stack
+# exists once deployed; its control slots follow the parameters deployed
+# (blue is i-0control, green i-0green), and a file `preslot` makes it one
+# from before the slots. On the control instance, `live` makes a run
+# running (`drain` in it: for one check only), `unpaused` a pipeline not
+# paused, and `unhealthy` the replacement's check fail.
+printf "%s\n" "aws $*" >> "$FAKE_AWS_LOG"
 state=$FAKE_AWS_STATE
+active() { if [ -f "$state/active" ]; then cat "$state/active"; else echo blue; fi; }
+outputs() {
+    printf '[{"OutputKey": "Repository", "OutputValue": "123456789012.dkr.ecr.us-east-2.amazonaws.com/orca"},\n'
+    if [ "$(active)" = green ]; then id=i-0green; else id=i-0control; fi
+    printf ' {"OutputKey": "ControlInstance", "OutputValue": "%s"},\n' "$id"
+    if [ ! -f "$state/preslot" ]; then
+        printf ' {"OutputKey": "ActiveControl", "OutputValue": "%s"},\n' "$(active)"
+        [ -f "$state/blue-off" ] || printf ' {"OutputKey": "BlueInstance", "OutputValue": "i-0control"},\n'
+        [ ! -f "$state/green" ] || printf ' {"OutputKey": "GreenInstance", "OutputValue": "i-0green"},\n'
+    fi
+    printf ' {"OutputKey": "AddressAllocation", "OutputValue": "eipalloc-0orca"},\n'
+    printf ' {"OutputKey": "Bucket", "OutputValue": "orca-123456789012-us-east-2"},\n'
+    printf ' {"OutputKey": "SslipUrl", "OutputValue": "https://3-14-15-92.sslip.io"},\n'
+    printf ' {"OutputKey": "ConsoleHostname", "OutputValue": "libs.mlake.dev"},\n'
+    printf ' {"OutputKey": "PublicBucket", "OutputValue": "mlake-public-123456789012"}]\n'
+}
+step() { cat "$state/step" 2> /dev/null || echo register; }
 case "$*" in
     *"cloudformation describe-stacks"*"Stacks[0].Outputs"*)
         [ -f "$state/stack" ] || exit 254
-        cat << 'J'
-[{"OutputKey": "Repository", "OutputValue": "123456789012.dkr.ecr.us-east-2.amazonaws.com/orca"},
- {"OutputKey": "ControlInstance", "OutputValue": "i-0control"},
- {"OutputKey": "ConsoleHostname", "OutputValue": "libs.mlake.dev"},
- {"OutputKey": "PublicBucket", "OutputValue": "mlake-public-123456789012"}]
-J
+        outputs
         ;;
+    *"cloudformation describe-stacks"*"ParameterKey=='Ami'"*)
+        echo /aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id ;;
     *"cloudformation describe-stacks"*) [ -f "$state/stack" ] || exit 254 ;;
-    *"cloudformation deploy"*) touch "$state/stack" ;;
+    *"cloudformation deploy"*)
+        touch "$state/stack"
+        rm -f "$state/preslot"
+        for a in "$@"; do
+            case "$a" in
+                GreenSlot=true) touch "$state/green" ;;
+                GreenSlot=false) rm -f "$state/green" ;;
+                BlueSlot=true) rm -f "$state/blue-off" ;;
+                BlueSlot=false) touch "$state/blue-off" ;;
+                ActiveControl=*) echo "${a#ActiveControl=}" > "$state/active" ;;
+            esac
+        done
+        ;;
     *"cloudformation delete-stack"*) rm -f "$state/stack" ;;
     *"cloudformation wait"*) ;;
+    *"ssm get-parameter"*) echo ami-0new ;;
+    *"ec2 describe-instances"*"i-0control"*) echo ami-0old ;;
+    *"ec2 describe-instances"*"i-0green"*) echo ami-0new ;;
+    *"ec2 describe-addresses"*)
+        if [ "$(active)" = green ]; then echo i-0green; else echo i-0control; fi ;;
+    *"ec2 stop-instances"* | *"ec2 start-instances"* | *"ec2 wait"* | *"s3 rm"*) ;;
     *"ecr get-login-password"*) echo password ;;
-    *"ssm send-command"*) echo cmd-1 ;;
-    *"get-command-invocation"*"Status"*) echo Success ;;
-    *"get-command-invocation"*"StandardOutputContent"*) echo "registered on the control instance" ;;
+    *"ssm send-command"*)
+        s=$(echo "$*" | sed -n 's/.*# orca-replace \([a-z-]*\).*/\1/p')
+        echo "${s:-register}" > "$state/step"
+        echo cmd-1
+        ;;
+    *"get-command-invocation"*"Status"*)
+        case $(step) in
+            quiet | rollback-quiet)
+                if [ -f "$state/unpaused" ] || [ -f "$state/live" ]; then echo Failed; else echo Success; fi ;;
+            check) if [ -f "$state/unhealthy" ]; then echo Failed; else echo Success; fi ;;
+            *) echo Success ;;
+        esac
+        ;;
+    *"get-command-invocation"*"StandardOutputContent"*)
+        case $(step) in
+            quiet | rollback-quiet)
+                [ ! -f "$state/unpaused" ] || echo "not paused: hourly"
+                if [ -f "$state/live" ]; then
+                    echo "running: daily run 7"
+                    if grep -q drain "$state/live"; then rm -f "$state/live"; fi
+                fi
+                [ -f "$state/unpaused" ] || [ -f "$state/live" ] || echo quiet
+                ;;
+            check) if [ -f "$state/unhealthy" ]; then echo "FAIL: the UI does not answer"; else echo healthy; fi ;;
+            register) echo "registered on the control instance" ;;
+            *) echo "$(step): ok" ;;
+        esac
+        ;;
     *"get-command-invocation"*"StandardErrorContent"*) echo None ;;
     *) echo "fake aws: unexpected: $*" >&2; exit 1 ;;
 esac

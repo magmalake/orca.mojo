@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stands in for curl in tests/replace_control.sh: records each call to
+# $FAKE_AWS_LOG, and the page answers.
+echo "curl $*" >> "$FAKE_AWS_LOG"
+exit 0
