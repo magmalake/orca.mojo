@@ -153,6 +153,10 @@ don't fill. See [Fills](docs/orca-toml.md#fills).
 rows. Change a fill's limits in `orca.toml` and register again. On AWS,
 SSM `sudo docker exec scheduler orca ...` is for debugging only.
 
+## Releasing and operations
+
+Releasing and operations: https://mlake.dev/getting-started/maintain
+
 ## Developing locally
 
 The tests and examples above run from a checkout of this repository, with the
