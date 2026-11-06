@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **A calendar for dated pipelines in the UI** (#112). A daily pipeline's page
+  has a month grid (a monthly one a year of months) on the Start runs form:
+  click a first and a last day to fill the range field, ctrl- or cmd-click to
+  add another range, arrow keys to move. Each day is coloured and marked by
+  its state, from Postgres only: done, failed, running or queued, not run, or
+  outside the pipeline's range. The same grid is the page's read-only
+  Coverage, which works without scripts (`?cal=2023-01`), and
+  `/pipelines/<name>/calendar?month=2023-01` serves it as JSON. Without
+  scripts the text field is the form as before; keyed pipelines keep it.
+  Hourly partitions don't exist yet, so there is no hourly grid.
+
 ## 0.7.0 - 2026-11-05
 
 ## 0.6.1 - 2026-11-05
