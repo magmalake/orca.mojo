@@ -483,6 +483,22 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pipelines ADD COLUMN max_runs int",
             "ALTER TABLE orca.pipelines ADD COLUMN config jsonb",
         ],
+        # Fills (orca.fill): whether a pipeline fills its whole range by
+        # itself (`fills`; null, since registration), in which order, with
+        # how many fill runs at once, a budget a UTC day in US dollars and
+        # the UTC hours fill runs start in. Its fill runs are runs with
+        # trigger `fill`.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN fills text",
+            "ALTER TABLE orca.pipelines ADD COLUMN fill_order text",
+            "ALTER TABLE orca.pipelines ADD COLUMN fill_max_runs int",
+            "ALTER TABLE orca.pipelines ADD COLUMN fill_budget_per_day float8",
+            "ALTER TABLE orca.pipelines ADD COLUMN fill_window text",
+            (
+                "CREATE INDEX runs_fill ON orca.runs (pipeline) WHERE trigger ="
+                " 'fill'"
+            ),
+        ],
     ]
 
 

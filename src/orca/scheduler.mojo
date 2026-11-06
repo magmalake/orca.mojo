@@ -65,7 +65,13 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   the others the tick saw are run. A pass that fails, such as a `sense` that
   exits non-zero, is kept as the pipeline's `sense_error`, which `orca ui`
   shows, and printed once rather than on every tick.
-- **Retries.** A scheduled, backfilled or sensed run that failed is started again
+- **Fills** (`orca.fill`). A pipeline registered with `fills = "all"` in
+  orca.toml has a second pass after its other runs': runs with trigger
+  `fill`, one partition each, over the partitions of its range no run has
+  taken (`fill_status`), up to `fill_max_runs` beside `max_runs`, none
+  while its other runs are queued, it's paused, outside `fill_window` or
+  over `fill_budget_per_day`.
+- **Retries.** A scheduled, backfilled, sensed or fill run that failed is started again
   after the pipeline's `retry_seconds` (else `ORCA_RETRY_SECONDS`, default
   60) doubling with each start, at most its `max_retry_seconds` if set,
   plus up to a tenth more as jitter, up to `run_retries` times. One whose process
@@ -127,6 +133,15 @@ from orca.config import (
     resolve,
 )
 from orca.crash import crash_summary, crashed_by_signal
+from orca.fill import (
+    Fill,
+    FillPipeline,
+    FillStatus,
+    fill_refusal,
+    fill_status,
+    parse_fill_budget,
+    parse_fill_max_runs,
+)
 from orca.cron import CronExpr
 from orca.day import Day
 from orca.key import parse_keys
@@ -165,7 +180,7 @@ comptime _CONTROL_LOCK = 0x6F726363  # "orcc"
 """Held while a control-placed start is weighed against
 `ORCA_CONTROL_MAX_RUNS`."""
 
-comptime _RETRIED = "trigger IN ('schedule', 'backfill', 'sensor')"
+comptime _RETRIED = "trigger IN ('schedule', 'backfill', 'sensor', 'fill')"
 """The runs the scheduler retries."""
 comptime RETRIED_SQL = _RETRIED
 """`_RETRIED`, for `orca.actions`."""
@@ -221,6 +236,8 @@ struct Registered(Copyable, Movable):
     var env: List[Tuple[String, String]]
     """Its runs' own variables (`env` in orca.toml, `orca.config`), given
     to its runs alone, over those `ORCA_RUN_ENV` names."""
+    var fill: Fill
+    """How it fills its range by itself (`orca.fill`)."""
 
 
 def _ec2_spec(p: Registered, run: Int, start: Int, new_code: Bool) -> Ec2Spec:
@@ -295,31 +312,32 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             "SELECT name, binary_path, registry_hash, coalesce(since, 0) AS"
             " since, coalesce(describe->'schedule'->>'cron', '') AS cron,"
             " coalesce(describe->'schedule'->>'tz', 'UTC') AS tz,"
-            " coalesce(describe->'schedule'->>'fills', 'previous') AS"
-            " fills, coalesce((describe->'schedule'->>'catchup')::boolean,"
-            " true) AS catchup, coalesce(describe->'partitions'->>'kind',"
-            " 'monthly') AS kind, coalesce(describe->'partitions'->>"
-            "'start', '') AS start, coalesce(max_runs, (describe->>"
-            "'max_runs')::bigint, 1) AS max_runs, coalesce((describe->>"
-            "'run_retries')::bigint, 3) AS run_retries,"
-            " coalesce((describe->>'retry_seconds')::bigint, 0) AS"
-            " retry_seconds, coalesce((describe->>'max_retry_seconds')"
-            "::bigint, 0) AS max_retry_seconds,"
-            " coalesce((describe->>'sensor')::boolean, false) AS sensor,"
-            " coalesce((describe->>'keys_per_run')::bigint, 1) AS"
-            " keys_per_run, coalesce(describe->'partitions'->>'dataset', '')"
-            " AS keys_dataset, coalesce(image, '') AS image, CASE WHEN"
+            " coalesce(describe->'schedule'->>'fills', 'previous') AS fills,"
+            " coalesce((describe->'schedule'->>'catchup')::boolean, true) AS"
+            " catchup, coalesce(describe->'partitions'->>'kind', 'monthly') AS"
+            " kind, coalesce(describe->'partitions'->>'start', '') AS start,"
+            " coalesce(max_runs, (describe->>'max_runs')::bigint, 1) AS"
+            " max_runs, coalesce((describe->>'run_retries')::bigint, 3) AS"
+            " run_retries, coalesce((describe->>'retry_seconds')::bigint, 0) AS"
+            " retry_seconds, coalesce((describe->>'max_retry_seconds')::bigint,"
+            " 0) AS max_retry_seconds, coalesce((describe->>'sensor')::boolean,"
+            " false) AS sensor, coalesce((describe->>'keys_per_run')::bigint,"
+            " 1) AS keys_per_run, coalesce(describe->'partitions'->>'dataset',"
+            " '') AS keys_dataset, coalesce(image, '') AS image, CASE WHEN"
             " jsonb_array_length(coalesce(describe->'tasks', '[]')) > 0 THEN"
             " coalesce(ec2_workers, (describe->>'workers')::bigint, 2) ELSE 0"
             " END AS workers, coalesce(head_type, '') AS head_type,"
             " coalesce(worker_type, '') AS worker_type, coalesce(spot, false)"
             " AS spot, coalesce(ec2_min_workers, -1) AS min_workers,"
             " coalesce(secrets::text, '') AS secrets, paused,"
-            " coalesce(worker_procs, 1) AS worker_procs,"
-            " coalesce(placement, '') AS placement, coalesce(env::text, '')"
-            " AS env FROM"
-            " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
-            " name = $1) ORDER BY name"
+            " coalesce(worker_procs, 1) AS worker_procs, coalesce(placement,"
+            " '') AS placement, coalesce(env::text, '') AS env, coalesce(fills,"
+            " '') AS fill_mode, coalesce(fill_order, '') AS fill_order,"
+            " coalesce(fill_max_runs, 0) AS fill_max_runs,"
+            " coalesce(fill_budget_per_day, -1) AS fill_budget,"
+            " coalesce(fill_window, '') AS fill_window FROM orca.pipelines"
+            " WHERE binary_path IS NOT NULL AND ($1 = '' OR name = $1) ORDER BY"
+            " name"
         ),
         Params().text(only),
     )
@@ -354,6 +372,13 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 Int(r.int64("worker_procs")),
                 r.text("placement"),
                 parse_env(r.text("env")),
+                Fill.of(
+                    r.text("fill_mode"),
+                    r.text("fill_order"),
+                    Int(r.int64("fill_max_runs")),
+                    r.float64("fill_budget"),
+                    r.text("fill_window"),
+                ),
             )
         )
     # A fixed count, or no tasks: no scaling.
@@ -362,6 +387,44 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             p.min_workers = p.workers
         p.min_workers = min(p.min_workers, p.workers)
     return out^
+
+
+def placed_of(p: Registered) -> String:
+    """Where `p`'s runs start under a scheduler with this process's
+    `ORCA_RUNNER`: `control`, `ec2`, `kubernetes` or `local`."""
+    if p.placement == CONTROL:
+        return String(CONTROL)
+    var runner = getenv("ORCA_RUNNER", "local")
+    if p.placement == "ec2":
+        return "ec2"
+    return runner
+
+
+def fill_pipeline(
+    p: Registered, placed: String = "", pool_seconds: Int = -1
+) -> FillPipeline:
+    """What `orca.fill.fill_status` needs of `p`; where its runs start and
+    the warm pool's seconds from this process's environment unless
+    given."""
+    var pool = pool_seconds
+    if pool < 0:
+        try:
+            pool = Int(Float64(getenv("ORCA_EC2_POOL_SECONDS", "150")))
+        except:
+            pool = 150
+    return FillPipeline(
+        p.name,
+        p.fill.copy(),
+        p.kind,
+        p.start,
+        p.tz,
+        p.paused,
+        placed if placed else placed_of(p),
+        p.head_type,
+        p.worker_type,
+        p.workers,
+        pool,
+    )
 
 
 def dataset_cycle(mut db: State, describe: String) raises -> String:
@@ -1092,7 +1155,9 @@ struct Scheduler(Movable):
                 " coalesce(($1::jsonb->>'sensor')::boolean, false) AS"
                 " sensor, NOT EXISTS (SELECT 1 FROM orca.pipelines WHERE name"
                 " = $1::jsonb->>'pipeline' AND sensing_since IS NOT NULL) AS"
-                " new_sensor"
+                " new_sensor, coalesce($1::jsonb->'partitions'->>'kind',"
+                " 'monthly') AS kind, coalesce($1::jsonb->'partitions'->>"
+                "'start', '') AS start"
             ),
             Params().text(got[1]),
         ).row(0)
@@ -1110,6 +1175,27 @@ struct Scheduler(Movable):
         var max_runs = -1
         if r.text("max_runs"):
             max_runs = parse_max_runs(r.text("max_runs"))
+        # Fills (orca.fill): only from the file.
+        if r.text("fills") == "all":
+            var why = fill_refusal(
+                info.text("kind"), info.text("start"), sensor, r.name
+            )
+            if why:
+                var at = file.where(r.name, "fills", r.values["fills"].copy())
+                raise Error(
+                    "orca: ",
+                    at,
+                    ' fills = "all" can\'t be registered: ',
+                    why,
+                    '. Set fills = "since_registration" for it in its',
+                    " own table",
+                )
+        var fill_max_runs = -1
+        if r.text("fill_max_runs"):
+            fill_max_runs = parse_fill_max_runs(r.text("fill_max_runs"))
+        var fill_budget = -1.0
+        if r.text("fill_budget_per_day"):
+            fill_budget = parse_fill_budget(r.text("fill_budget_per_day"))
         var seen = String()
         if sensor:
             var sensed = capture([path, "sense"], binary_seconds())
@@ -1132,14 +1218,17 @@ struct Scheduler(Movable):
                 "INSERT INTO orca.pipelines (name, registry_hash, describe,"
                 " binary_path, since, sensing_since, image, head_type,"
                 " worker_type, ec2_workers, spot, ec2_min_workers, secrets,"
-                " worker_procs, placement, max_runs, env, config)"
+                " worker_procs, placement, max_runs, env, config, fills,"
+                " fill_order, fill_max_runs, fill_budget_per_day, fill_window)"
                 " SELECT"
                 " d->>'pipeline',"
                 " d->>'registry_hash', d, $2, $3, CASE WHEN $4 THEN now() END,"
                 " nullif($5, ''), nullif($6, ''), nullif($7, ''), nullif($8,"
                 " 0), $9, nullif($10, -1), nullif($11, '')::jsonb,"
                 " nullif($12, -1), nullif(nullif($13, ''), 'default'),"
-                " nullif($15, -1), nullif($16, '')::jsonb, $17::jsonb"
+                " nullif($15, -1), nullif($16, '')::jsonb, $17::jsonb,"
+                " nullif($18, ''), nullif($19, ''), nullif($20, -1),"
+                " nullif($21, -1::float8), nullif($22, '')"
                 " FROM (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO"
                 " UPDATE SET registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
@@ -1169,7 +1258,16 @@ struct Scheduler(Movable):
                 " coalesce(orca.pipelines.config->'sources', '{}'::jsonb) ||"
                 " coalesce(EXCLUDED.config->'sources', '{}'::jsonb)) END,"
                 " spot = CASE WHEN $6 <> '' OR $7 <> '' OR $8 > 0 OR $9 THEN $9"
-                " ELSE orca.pipelines.spot END, last_seen"
+                " ELSE orca.pipelines.spot END, fills = CASE WHEN $14 THEN"
+                " EXCLUDED.fills ELSE orca.pipelines.fills END, fill_order ="
+                " CASE WHEN $14 THEN EXCLUDED.fill_order ELSE"
+                " orca.pipelines.fill_order END, fill_max_runs = CASE WHEN $14"
+                " THEN EXCLUDED.fill_max_runs ELSE orca.pipelines.fill_max_runs"
+                " END, fill_budget_per_day = CASE WHEN $14 THEN"
+                " EXCLUDED.fill_budget_per_day ELSE"
+                " orca.pipelines.fill_budget_per_day END, fill_window = CASE"
+                " WHEN $14 THEN EXCLUDED.fill_window ELSE"
+                " orca.pipelines.fill_window END, last_seen"
                 " = now() RETURNING name, registry_hash, coalesce(image, '')"
                 " AS image"
             ),
@@ -1190,7 +1288,12 @@ struct Scheduler(Movable):
             .bool(r.in_file)
             .int64(Int64(max_runs))
             .text(r.env_json())
-            .text(r.config_json(file)),
+            .text(r.config_json(file))
+            .text(r.text("fills"))
+            .text(r.text("fill_order"))
+            .int64(Int64(fill_max_runs))
+            .float64(fill_budget)
+            .text(r.text("fill_window")),
         )
         var name = res.row(0).text("name")
         var version = self.db.version(
@@ -1231,6 +1334,15 @@ struct Scheduler(Movable):
             var twice = repeated_fill(q, now)
             if twice:
                 print("orca: warning:", twice)
+            if q.fill.all and q.fill.budget < 0:
+                print(
+                    "orca: warning:",
+                    q.name,
+                    "fills its range with no fill_budget_per_day: its fill",
+                    "runs start only where they cost nothing (placement",
+                    "control, or the local runner); on ec2 or kubernetes",
+                    "they wait for a budget",
+                )
         # A retry of a run with steps done would run the new code over the
         # old code's outputs, which only a resume that says so may do.
         _ = self.db.conn.execute(
@@ -1349,6 +1461,9 @@ struct Scheduler(Movable):
                 self._sensed(p, error)
             self._schedule_retries(p, now)
             self._start(p, now)
+            # After its other runs, so a fill never takes their place.
+            if p.fill.all:
+                self._start(p, now, fill=True)
 
     def _exited(
         mut self,
@@ -2006,92 +2121,14 @@ struct Scheduler(Movable):
         none and was started longer ago than the start grace."""
         return dead_sql(String(stale_param), self.start_grace)
 
-    def _start(mut self, p: Registered, now: Int64) raises:
-        """Starts queued runs, retries that are due and runs whose process
-        died, up to `max_runs` live at once; none while `p` is paused, when
-        they wait (runs already going go on). A control-placed pipeline's
-        runs start here (`orca.control`), within the control instance's
-        limits; a queued run those hold, or that's placed on a runner this
-        scheduler hasn't, is `held` with the reason."""
-        var dead = self._dead("$2")
-        var control = p.placement == CONTROL
-        var placed = String(CONTROL) if control else (
-            String("ec2") if self.ec2 else (
-                String("kubernetes") if self.runner else String("local")
-            )
-        )
-        var hold = String()
-        if p.placement == "ec2" and not self.ec2:
-            hold = String(
-                "held: placed on ec2, but this scheduler's runner",
-                " (ORCA_RUNNER) is ",
-                placed,
-            )
-        var pressure = String()
-        if control:
-            try:
-                pressure = pressure_reason(system_now(self.db))
-            except e:
-                print("orca: can't read the control instance's samples:", e)
-        if (
-            not control
-            and not hold
-            and (self.runner or self.ec2)
-            and not p.image
-        ):
-            print(
-                "orca: pipeline",
-                p.name,
-                "has no image (orca register --image), so its runs wait",
-            )
-            return
-        # On EC2 with the warm pool, the keys of the instances its runs may
-        # take, and whether some are still on their way to the pool from a
-        # run that just ended: then nothing starts this tick, so the next
-        # run takes them rather than new ones.
-        var keys = List[String]()
-        var settling = False
-        if self.ec2 and not control:
-            keys = self.ec2.value().pool_keys(_ec2_spec(p, 0, 0, False))
-            settling = self.ec2.value().settling(self.db, keys)
-        var tx = self.db.conn.begin()
-        _ = tx.query(
-            "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
-            Params().text(p.name),
-        )
-        # A process of ours whose heartbeat went stale is wedged, or
-        # stopped, rather than gone (it would have been reaped): it's
-        # killed before its run is cancelled, failed or started again, so
-        # it can't go on beside a new one.
-        if len(self._spawned) > 0:
-            for r in tx.query(
-                String(
-                    "SELECT id FROM orca.runs WHERE pipeline = $1 AND status =",
-                    " 'running' AND ",
-                    dead,
-                ),
-                Params().text(p.name).float64(self.stale),
-            ):
-                var id = Int(r.int64("id"))
-                var pid = 0
-                for e in self._spawned.items():
-                    if e.value[0] == id:
-                        pid = e.key
-                if pid > 0:
-                    if pid in self._control:
-                        # Its own process group: its forked workers too.
-                        _ = external_call["kill", c_int](c_int(-pid), c_int(9))
-                    _ = external_call["kill", c_int](c_int(pid), c_int(9))
-                    print(
-                        "killed pid",
-                        pid,
-                        "of",
-                        p.name,
-                        "run",
-                        id,
-                        "(its heartbeat went stale)",
-                    )
-        # A run asked to cancel whose process died is cancelled.
+    def _end_dead(
+        mut self, mut tx: Transaction, p: Registered, dead: String
+    ) raises:
+        """Ends what of `p`'s runs can't go on: a run asked to cancel whose
+        process died is cancelled; one of code that isn't the pipeline's
+        any more fails, saying how to resume it; one whose process died
+        with no retries left, or that the scheduler doesn't retry, fails
+        (and so does a fill run's while fills are off)."""
         _ = tx.execute(
             String(
                 "UPDATE orca.runs SET status = 'cancelled', ended = now(),",
@@ -2144,19 +2181,121 @@ struct Scheduler(Movable):
                 dead,
                 " AND (starts - deferrals > $3 OR NOT ",
                 _RETRIED,
-                ")",
+                " OR (trigger = 'fill' AND NOT $4))",
             ),
             Params()
             .text(p.name)
             .float64(self.stale)
-            .int64(Int64(p.run_retries)),
+            .int64(Int64(p.run_retries))
+            .bool(p.fill.all),
         )
+
+    def _start(mut self, p: Registered, now: Int64, fill: Bool = False) raises:
+        """Starts queued runs, retries that are due and runs whose process
+        died, up to `max_runs` live at once; none while `p` is paused, when
+        they wait (runs already going go on). A control-placed pipeline's
+        runs start here (`orca.control`), within the control instance's
+        limits; a queued run those hold, or that's placed on a runner this
+        scheduler hasn't, is `held` with the reason.
+
+        With `fill`, the same for its fill runs (trigger `fill`), up to
+        `fill_max_runs` beside the others: due retries first, then new
+        runs over the partitions `orca.fill.fill_status` gives, within its
+        window and budget."""
+        var dead = self._dead("$2")
+        # Which runs this pass is for: its fill runs, or all the others.
+        var which = String(" AND trigger = 'fill'") if fill else String(
+            " AND trigger <> 'fill'"
+        )
+        var control = p.placement == CONTROL
+        var placed = String(CONTROL) if control else (
+            String("ec2") if self.ec2 else (
+                String("kubernetes") if self.runner else String("local")
+            )
+        )
+        var hold = String()
+        if p.placement == "ec2" and not self.ec2:
+            hold = String(
+                "held: placed on ec2, but this scheduler's runner",
+                " (ORCA_RUNNER) is ",
+                placed,
+            )
+        var pressure = String()
+        if control:
+            try:
+                pressure = pressure_reason(system_now(self.db))
+            except e:
+                print("orca: can't read the control instance's samples:", e)
+        if (
+            not control
+            and not hold
+            and (self.runner or self.ec2)
+            and not p.image
+        ):
+            if fill:
+                return  # said once, by the pass for its other runs
+            print(
+                "orca: pipeline",
+                p.name,
+                "has no image (orca register --image), so its runs wait",
+            )
+            return
+        # On EC2 with the warm pool, the keys of the instances its runs may
+        # take, and whether some are still on their way to the pool from a
+        # run that just ended: then nothing starts this tick, so the next
+        # run takes them rather than new ones.
+        var keys = List[String]()
+        var settling = False
+        if self.ec2 and not control:
+            keys = self.ec2.value().pool_keys(_ec2_spec(p, 0, 0, False))
+            settling = self.ec2.value().settling(self.db, keys)
+        var tx = self.db.conn.begin()
+        _ = tx.query(
+            "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
+            Params().text(p.name),
+        )
+        # A process of ours whose heartbeat went stale is wedged, or
+        # stopped, rather than gone (it would have been reaped): it's
+        # killed before its run is cancelled, failed or started again, so
+        # it can't go on beside a new one. (The pass for its other runs
+        # does this for its fill runs too.)
+        if len(self._spawned) > 0 and not fill:
+            for r in tx.query(
+                String(
+                    "SELECT id FROM orca.runs WHERE pipeline = $1 AND status =",
+                    " 'running' AND ",
+                    dead,
+                ),
+                Params().text(p.name).float64(self.stale),
+            ):
+                var id = Int(r.int64("id"))
+                var pid = 0
+                for e in self._spawned.items():
+                    if e.value[0] == id:
+                        pid = e.key
+                if pid > 0:
+                    if pid in self._control:
+                        # Its own process group: its forked workers too.
+                        _ = external_call["kill", c_int](c_int(-pid), c_int(9))
+                    _ = external_call["kill", c_int](c_int(pid), c_int(9))
+                    print(
+                        "killed pid",
+                        pid,
+                        "of",
+                        p.name,
+                        "run",
+                        id,
+                        "(its heartbeat went stale)",
+                    )
+        if not fill:
+            self._end_dead(tx, p, dead)
         var live = Int(
             tx.query(
                 String(
                     "SELECT count(*) AS n FROM orca.runs WHERE pipeline = $1",
                     " AND status = 'running' AND NOT ",
                     dead,
+                    which,
                 ),
                 Params().text(p.name).float64(self.stale),
             )
@@ -2164,6 +2303,19 @@ struct Scheduler(Movable):
             .int64("n")
         )
         var free = 0 if p.paused or settling or hold else p.max_runs - live
+        var status = Optional[FillStatus](None)
+        if fill:
+            status = fill_status(
+                tx,
+                fill_pipeline(
+                    p,
+                    placed,
+                    Int(self.ec2.value().pool_seconds) if self.ec2 else 0,
+                ),
+                now,
+                p.run_retries,
+            )
+            free = 0 if settling or hold else status.value().slots
         var need = 0
         if control:
             need = 0  # no instance: nothing of the budget
@@ -2202,10 +2354,14 @@ struct Scheduler(Movable):
                     free = min(free, self.limits.max_runs - used)
         # Its queued runs say why they wait, or no longer do.
         _ = tx.execute(
-            (
-                "UPDATE orca.runs SET held = nullif($2, '') WHERE pipeline = $1"
-                " AND status = 'queued' AND held IS DISTINCT FROM nullif($2,"
-                " '')"
+            String(
+                (
+                    "UPDATE orca.runs SET held = nullif($2, '') WHERE pipeline"
+                    " = $1"
+                ),
+                " AND status = 'queued' AND held IS DISTINCT FROM nullif($2,",
+                " '')",
+                which,
             ),
             Params().text(p.name).text(hold),
         )
@@ -2272,7 +2428,9 @@ struct Scheduler(Movable):
                     _RETRIED,
                     " AND ",
                     dead,
-                    " AND starts - deferrals <= $3)) ORDER BY id LIMIT $5",
+                    " AND starts - deferrals <= $3))",
+                    which,
+                    " ORDER BY id LIMIT $5",
                 ),
                 Params()
                 .text(p.name)
@@ -2284,6 +2442,28 @@ struct Scheduler(Movable):
             for r in rows:
                 ids.append(r.int64("id"))
                 new_code.append(r.bool("allow_new_code"))
+            if status:
+                # New fill runs, over the partitions nothing has filled.
+                ref next = status.value().next_keys
+                for i in range(min(free - len(ids), len(next))):
+                    ids.append(
+                        tx.query(
+                            (
+                                "INSERT INTO orca.runs (pipeline,"
+                                " registry_hash, partitions, trigger, status)"
+                                " VALUES ($1, $2, $3, 'fill', 'queued')"
+                                " RETURNING id"
+                            ),
+                            Params()
+                            .text(p.name)
+                            .text(p.registry_hash)
+                            .text(next[i]),
+                        )
+                        .row(0)
+                        .int64("id")
+                    )
+                    new_code.append(False)
+                    print("fill", p.name, next[i], "run", ids[len(ids) - 1])
             for id in ids:
                 starts.append(
                     Int(

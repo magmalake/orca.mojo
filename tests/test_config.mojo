@@ -141,11 +141,56 @@ def test_values_are_checked() raises:
     _refused('[pipelines.a]\nenv = { DISTA_ROLE = "x" }\n', "by orca")
     _refused("[pipelines.a]\nenv = { X = [1] }\n", "a string, a number")
     _refused("[pipelines.a]\nenv = { X = { Y = 1 } }\n", "a string, a number")
+    # The fill keys (orca.fill).
+    _refused('[pipelines.a]\nfills = "some"\n', "since_registration")
+    _refused('[defaults]\nfills = ["x"]\n', "fills: is a string")
+    _refused('[pipelines.a]\nfill_order = "random"\n', '"oldest" or "newest"')
+    _refused("[pipelines.a]\nfill_max_runs = 0\n", "from 1 to 10000")
+    _refused('[pipelines.a]\nfill_max_runs = "2"\n', "is a count")
+    _refused("[pipelines.a]\nfill_budget_per_day = -2\n", "from 0")
+    _refused('[pipelines.a]\nfill_budget_per_day = "5"\n', "a number")
+    _refused('[pipelines.a]\nfill_window = "6..6"\n', "UTC hours")
+    _refused("[pipelines.a]\nfill_window = 6\n", "is a string")
+    try:
+        _ = ProjectConfig(
+            '[pipelines.a]\nfills = "all"\n\nfill_window = "1..30"\n',
+            "orca.toml",
+        )
+    except e:
+        assert_true(
+            String(e).startswith("orca.toml:4: [pipelines.a] fill_window:"),
+            String(e),
+        )
+
+
+def test_fill_keys() raises:
+    var f = ProjectConfig(
+        String(
+            '[defaults]\nfills = "all"\nfill_budget_per_day = 5\n',
+            '[pipelines.a]\nfill_order = "newest"\nfill_max_runs = 3\n',
+            'fill_window = "22..6"\nfill_budget_per_day = 2.5\n',
+            "[pipelines.b]\n",
+        ),
+        "orca.toml",
+    )
+    var a = resolve("a", RegisterFlags(), f)
+    assert_equal(a.text("fills"), "all")
+    assert_equal(a.text("fill_order"), "newest")
+    assert_equal(a.text("fill_max_runs"), "3")
+    assert_equal(a.text("fill_budget_per_day"), "2.5")
+    assert_equal(a.text("fill_window"), "22..6")
+    var b = resolve("b", RegisterFlags(), f)
+    assert_equal(b.text("fill_budget_per_day"), "5.0")
+    assert_equal(b.text("fill_order"), "")
+    assert_equal(
+        f.where("b", "fills", b.values["fills"].copy()),
+        "orca.toml:2: [defaults]",
+    )
 
 
 def test_keys_and_tables_are_checked() raises:
     _refused("[pipelines.a]\nworkrs = 4\n", "has no key workrs")
-    _refused('[defaults]\nfills = ["x"]\n', "has no key fills")
+    _refused('[defaults]\nfils = "all"\n', "has no key fils")
     _refused("[pipeline.a]\n", "isn't a table orca knows")
     _refused("x = 1\n", "is a key at the top")
     _refused("[pipelines]\na = 1\n", "isn't a table")
