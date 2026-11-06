@@ -214,7 +214,7 @@ b64=$(base64 < orca.toml | tr -d '\n')
 dir=$root/build/fake-ec2-config
 rm -rf "$dir"
 mkdir -p "$dir"
-port=$((40000 + $$ % 2000))
+port=$((42000 + $$ % 2000))
 export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
 export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
 export ORCA_STALE_SECONDS=10 ORCA_START_SECONDS=60 ORCA_EC2_POOL_SECONDS=60
