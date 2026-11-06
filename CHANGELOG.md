@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-11-06
+
 - **One Hetzner server: scripts, runbook, and the local runner as a
   production setup** (#166). `deploy/hetzner/` (`up.sh`, `deploy.sh`,
   `rescale.sh up|down`, `backup.sh` with a systemd timer on the server,
