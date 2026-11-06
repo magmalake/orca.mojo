@@ -56,6 +56,7 @@ fail() {
     stop
     exit 1
 }
+. "$PWD/tests/wait_log.sh"
 q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
 export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
 export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
@@ -136,9 +137,9 @@ idle_ok "$r3"
 for x in "$r1 31" "$r2 29" "$r3 31"; do
     set -- $x
     [ "$(trips_of "$1" fanout)" -eq "$2" ] || fail "run $1's worker logs have $(trips_of "$1" fanout) tasks, not $2"
-    grep -q "^run succeeded" "$ORCA_LOGS/fanout/$1/driver.log" || fail "run $1's driver log"
+    wait_log "$ORCA_LOGS/fanout/$1/driver.log" "^run succeeded" || fail "run $1's driver log"
     [ "$(grep -c "^--- start" "$ORCA_LOGS/fanout/$1/driver.log")" -eq 1 ] || fail "run $1's driver log has more than its start"
-    [ -s "$ORCA_LOGS/fanout/$1/cluster/head-$head.log" ] || fail "run $1's head log"
+    wait_log "$ORCA_LOGS/fanout/$1/cluster/head-$head.log" || fail "run $1's head log"
     for i in "head-$head" $(echo "$workers" | tr ',' '\n' | sed 's/^/worker-/'); do
         python3 tests/metrics_ok.py "$ORCA_LOGS/fanout/$1/metrics/$i.jsonl" > /dev/null || fail "run $1's metrics of $i"
     done

@@ -17,6 +17,18 @@
   resumes anything. `orca watchdog status` and `orca watchdog snooze <rule>
   <duration>` (also `--remote`, and the form on `/watchdog`) read and
   silence it. Email through SES is not part of this change.
+
+- **A run whose tasks wait for workers that never come fails its attempt**
+  (#148): on the ec2 runner, a run whose head has had tasks waiting and no
+  worker for `ORCA_NO_WORKERS_SECONDS` (default 600; 0 turns it off) has its
+  running attempts fail with `no workers joined in 10 min (tasks waiting:
+  N)` and its instances terminated, and is started again as a run whose
+  process died is, while its retries last. The run's page shows "Waiting for
+  workers since ...". A live run's workers are now started from the
+  registration its start was given (kept in `orca.runs.spec`, migration 26),
+  not the pipeline's current one, so registering a pipeline again mid-run
+  no longer strands the run without workers. `tests/no_workers.sh`.
+
 - **Steps that replace their partitions** (#120): `Step[..., replaces=[...]]`
   declares datasets whose partitions a new run replaces. `append` and
   `append_files` to them, and the new `replace_partitions` /

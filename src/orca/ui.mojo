@@ -3554,6 +3554,22 @@ def run(mut db: State, id: Int) raises -> Page:
         h.raw("<div>")
     _machines_html(h, db, r, metrics)
     h.raw("</div>")
+    if _live(r.status):
+        var waiting = db.conn.query(
+            (
+                "SELECT to_char(waiting_since AT TIME ZONE 'UTC',"
+                ' \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') AS since FROM orca.runs'
+                " WHERE id = $1 AND waiting_since IS NOT NULL"
+            ),
+            Params().int64(Int64(id)),
+        )
+        if len(waiting) > 0:
+            h.raw('<p class="muted">Waiting for workers since ')
+            h.text(waiting.row(0).text("since"))
+            h.raw(
+                ": its head has tasks and no worker; the attempt fails when"
+                " that has lasted <code>ORCA_NO_WORKERS_SECONDS</code>.</p>"
+            )
     if len(instances) > 0:
         _instances_html(h, id, instances)
     # Who did what to it from the UI (orca.auth).

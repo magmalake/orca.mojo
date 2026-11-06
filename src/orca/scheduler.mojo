@@ -2063,7 +2063,8 @@ struct Scheduler(Movable):
                                 "UPDATE orca.runs SET status = 'running', owner"
                                 " = 'scheduler', heartbeat = NULL, started ="
                                 " now(), ended = NULL, starts = starts + 1,"
-                                " retry_at = NULL, error = NULL, cpu_millis ="
+                                " retry_at = NULL, error = NULL, waiting_since"
+                                " = NULL, cpu_millis ="
                                 " $2 WHERE id = $1 RETURNING starts"
                             ),
                             Params().int64(id).int64(Int64(need)),

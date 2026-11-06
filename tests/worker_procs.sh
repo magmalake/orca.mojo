@@ -39,6 +39,7 @@ fail() {
     stop
     exit 1
 }
+. "$PWD/tests/wait_log.sh"
 q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
 export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
 export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
@@ -82,7 +83,7 @@ sched=$!
 run=$(q "SELECT id FROM orca.runs WHERE pipeline = 'fanout'")
 until_true "SELECT status IN ('succeeded', 'failed') FROM orca.runs WHERE id = $run" 300
 [ "$(q "SELECT status FROM orca.runs WHERE id = $run")" = succeeded ] || fail "run $run"
-grep -q "trips in 1 months" "$ORCA_LOGS/fanout/$run/driver.log" || fail "run $run's driver log"
+wait_log "$ORCA_LOGS/fanout/$run/driver.log" "trips in 1 months" || fail "run $run's driver log"
 
 # Instances, not processes, are what's started and counted: at most 3, each
 # with 2 processes in its script and its record.
@@ -96,7 +97,8 @@ for w in $ids; do
     grep -q 'while \[ \$k -le 2 \]' "$dir/$w.sh" || fail "worker $w's script doesn't start 2 processes"
     grep -q 'kill -TERM \$p' "$dir/$w.sh" || fail "worker $w's script doesn't forward SIGTERM"
     l=$ORCA_LOGS/fanout/$run/cluster/worker-$w.log
-    [ -f "$l" ] || fail "worker $w's log wasn't kept"
+    # A worker uploads its log as it exits, after the run.
+    wait_log "$l" 'worker process .* exited with status 0' 300 || fail "worker $w's log wasn't kept"
     grep -q '^== orca-.*\.p1 ==$' "$l" && grep -q '^== orca-.*\.p2 ==$' "$l" || fail "worker $w's log lacks a process: $(head -5 "$l")"
     # Both processes of an instance were exited and noticed.
     [ "$(grep -c 'worker process .* exited with status 0' "$l")" -eq 2 ] || fail "worker $w's processes' exits: $(grep 'exited' "$l")"
