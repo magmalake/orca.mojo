@@ -120,7 +120,7 @@ test-secrets = { cmd = "scripts/with-postgres.sh tests/secrets.sh" }
 # Placement (orca.control): runs on the scheduler's own host, within its
 # limits, beside runs on the stand-in EC2.
 test-placement = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_control.mojo -o build/test-control && ./build/test-control && scripts/with-postgres.sh tests/placement.sh" }
-test-aws = { cmd = "tests/aws.sh" }
+test-aws = { cmd = "tests/aws.sh && tests/replace_control.sh" }
 test-lost-workers = { cmd = "scripts/with-postgres.sh tests/lost_workers.sh" }
 test-datasets = { cmd = "scripts/with-postgres.sh tests/datasets.sh" }
 test-stop = { cmd = "scripts/with-postgres.sh tests/stop.sh" }

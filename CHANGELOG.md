@@ -17,6 +17,25 @@
   (`placement`, `held`). `deploy/aws/orca.yaml` lets the control role read
   `orca/*` secrets (stack update needed). `tests/placement.sh`.
 
+- **`orca aws replace-control`** (#154, `orca.aws_replace`): a blue/green
+  replacement of the control instance from a clean boot of the current
+  template. It refuses unless every pipeline is paused and no run is running
+  (`--wait` waits), stops the old scheduler and UI, backs up orca's database
+  (`pg_dump -Fc`, verified by a restore into a scratch database) with the
+  image tag, Caddy's data and the apps to `s3://<bucket>/backups/<stack>/`,
+  boots a new instance in the stack's other slot that restores it, checks it
+  (the restore, counts, schema version, the UI and apps, `/system` samples,
+  `orca status`, the old settings and hostnames, `--smoke P=KEY`), moves the
+  Elastic IP and keeps the old instance stopped for `--keep-old` (24h);
+  `--resume`, `--rollback` and `--plan`. `deploy/aws/orca.yaml` now has two
+  control slots (`BlueSlot`, `GreenSlot`, `ActiveControl`), each with its
+  AMI pinned (`BlueAmi`, `GreenAmi`), the boot script in a launch template
+  (`ControlBoot`) so a change to it stops no running instance, and
+  `ControlEnv` for `/etc/orca.env` settings (`orca aws up --env K=V`);
+  `orca-app` records the apps it starts. `orca aws up` on a stack from
+  before the slots needs `--yes` (its instance restarts once).
+  `docs/replace-control.md` is the runbook. `tests/replace_control.sh`.
+
 - **A watchdog** (#151, `orca.watchdog`, migration 26): every
   `ORCA_WATCHDOG_SECONDS` (60; 0 turns it off) the scheduler checks, from
   Postgres only, instance launches (more than 200 an hour), estimated cost

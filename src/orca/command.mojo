@@ -40,6 +40,7 @@ from std.time import sleep
 from orca.actions import cancel_runs, pause_pipeline
 from orca.auth import add_user, remove_user, users
 from orca.aws import aws_command
+from orca.aws_replace import replace_control
 from orca.civil import now
 from orca.expiry import expirable, expire_argv, maintain_binary
 from orca.lineage import Made, SnapshotRef, back, forward, latest
@@ -67,7 +68,8 @@ from orca.ui import DEFAULT_ADDR, serve_ui
 
 comptime USAGE = """usage:
   orca locate <pipeline binary> [...] [--root <dir>]
-  orca aws up|push|register|app|status|down ...   (orca aws for more)
+  orca aws up|push|register|app|status|replace-control|down ...
+                                    (orca aws for more)
   orca register [--image <image>] [--head-type T] [--worker-type T]
                 [--workers N|MIN..MAX] [--worker-procs N|auto] [--spot]
                 [--secret NAME=ID ...] [--placement control|ec2|default]
@@ -174,6 +176,8 @@ def _command(args: List[String], target: String) raises -> Int:
     if args[1] == "locate":
         return _locate(args)
     if args[1] == "aws":
+        if len(args) > 2 and args[2] == "replace-control":
+            return replace_control(args)
         return aws_command(args)
     if args[1] == "sample":
         return sample_main(args)

@@ -11,6 +11,9 @@ comptime STACK_TEMPLATE: StaticString = """# orca on AWS with the ec2 runner (DE
 #   gateway endpoint for S3;
 # - the control instance: the scheduler (ORCA_RUNNER=ec2), Postgres and
 #   orca ui as containers, Caddy in front with a Let's Encrypt certificate;
+#   in one of two slots, blue and green, so that orca aws replace-control
+#   can boot a new one from this template beside it and move the Elastic
+#   IP (DESIGN.md, "Replacing the control instance");
 # - what runs need: a bucket for the warehouse and logs, a repository for
 #   the image, a role and profile for run instances, a security group they
 #   share;
@@ -73,9 +76,51 @@ Parameters:
   BudgetDollars:
     Type: Number
     Default: 100
+  ControlEnv:
+    Type: String
+    Default: ""
+    # It goes into a shell script in single quotes.
+    AllowedPattern: "[^']*"
+    Description: The control instance's settings beyond the template's, KEY=VALUE entries separated by ";" (orca aws up --env); never a secret
+  ActiveControl:
+    Type: String
+    Default: blue
+    AllowedValues: [blue, green]
+    Description: The control slot the Elastic IP is on (orca aws replace-control moves it)
+  BlueSlot:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Whether slot blue (Control) has an instance
+  GreenSlot:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Whether slot green (ControlGreen) has an instance
+  BlueAmi:
+    Type: String
+    Default: ""
+    Description: Slot blue's image id, pinned; empty for Ami's
+  GreenAmi:
+    Type: String
+    Default: ""
+    Description: Slot green's image id, pinned; empty for Ami's
+
+Rules:
+  ActiveSlotHasAnInstance:
+    Assertions:
+      - Assert: !Or
+          - !And [!Equals [!Ref ActiveControl, blue], !Equals [!Ref BlueSlot, "true"]]
+          - !And [!Equals [!Ref ActiveControl, green], !Equals [!Ref GreenSlot, "true"]]
+        AssertDescription: The slot ActiveControl names has to have an instance (BlueSlot or GreenSlot true)
 
 Conditions:
   Public: !Equals [!Ref PublicData, "true"]
+  BlueOn: !Equals [!Ref BlueSlot, "true"]
+  GreenOn: !Equals [!Ref GreenSlot, "true"]
+  GreenActive: !Equals [!Ref ActiveControl, green]
+  BlueAmiPinned: !Not [!Equals [!Ref BlueAmi, ""]]
+  GreenAmiPinned: !Not [!Equals [!Ref GreenAmi, ""]]
 
 Resources:
   Vpc:
@@ -233,6 +278,11 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
                 Resource: [!Sub "${Bucket.Arn}/*", !Sub "${PublicBucket.Arn}/*"]
+              # The control instance's backups (orca aws replace-control)
+              # hold the database and Caddy's keys: no run reads them.
+              - Effect: Deny
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "${Bucket.Arn}/backups/*"
               - Effect: Allow
                 Action: s3:ListBucket
                 Resource: [!GetAtt Bucket.Arn, !GetAtt PublicBucket.Arn]
@@ -291,8 +341,9 @@ Resources:
                 Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
                 Condition:
                   "Null": {"aws:ResourceTag/orca.run": "false"}
+              # Its instances, and the boot script it runs (ControlBoot).
               - Effect: Allow
-                Action: ec2:DescribeInstances
+                Action: [ec2:DescribeInstances, ec2:DescribeLaunchTemplateVersions]
                 Resource: "*"
               - Effect: Allow
                 Action: iam:PassRole
@@ -319,11 +370,189 @@ Resources:
   ControlAddress:
     Type: AWS::EC2::EIP
     Properties: {Domain: vpc}
+  # The control instance's boot script, kept as the user data of a launch
+  # template that launches nothing: each control instance's own user data
+  # runs the latest version of it, so changing it (or a parameter it uses)
+  # stops no running instance. A new instance gets it: orca aws
+  # replace-control, which boots one in the other slot.
+  ControlBoot:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        UserData:
+          Fn::Base64: !Sub
+            - |
+              #!/bin/bash
+              # orca-boot SLOT: orca's control instance, in slot blue or
+              # green: Postgres, the scheduler, the UI and Caddy, as
+              # containers that restart with the instance.
+              set -eux
+              slot=$1
+              # Docker without ECS: this AMI's agent would look for a cluster.
+              systemctl disable --now ecs || true
+              systemctl enable --now docker
+              command -v aws || dnf install -y awscli
+              token=$(curl -sX PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')
+              md() { curl -s -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/$1; }
+              ip=$(md local-ipv4)
+              # The Elastic IP's sslip.io name works at once; the hostname once
+              # its A record points here. Caddy gets a certificate for each.
+              sslip="$(echo ${PublicIp} | tr . -).sslip.io"
+              hosts="$sslip"
+              [ -z "${Hostname}" ] || hosts="${Hostname}, $sslip"
+              registry=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+              image=$registry/orca:${ImageTag}
+              login="command -v aws >/dev/null || dnf install -y awscli; systemctl disable --now ecs || true; aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin $registry"
+              # The image is pushed after the stack is made, so wait for it.
+              until sh -c "$login" && docker pull $image; do sleep 30; done
+              docker network create orca || true
+              mkdir -p /var/lib/orca/pg /var/lib/orca/caddy /var/lib/orca/stage
+              docker run -d --name postgres --restart always --network orca -p 5432:5432 \\
+                -e POSTGRES_USER=orca -e POSTGRES_DB=orca -e POSTGRES_PASSWORD='${DbPassword}' \\
+                -v /var/lib/orca/pg:/var/lib/postgresql/data postgres:17-bookworm -c synchronous_commit=on
+              # Over TCP: the server that initialises the database listens on
+              # its socket only, and restarts once it's done.
+              until docker exec postgres pg_isready -h 127.0.0.1 -U orca -d orca; do sleep 2; done
+              # A replacement (orca aws replace-control) points this slot at
+              # the backup of the instance it replaces: its database, image
+              # tag, Caddy's certificates and apps come back before anything
+              # starts on them.
+              backups=s3://${Bucket}/backups/${AWS::StackName}
+              if aws s3 cp --region ${AWS::Region} $backups/restore-$slot /var/lib/orca/restore-from; then
+                from=$(cat /var/lib/orca/restore-from)
+                aws s3 cp --region ${AWS::Region} "$from.dump" /var/lib/orca/restore.dump
+                docker exec -i postgres pg_restore -U orca -d orca --no-owner --exit-on-error < /var/lib/orca/restore.dump
+                rm -f /var/lib/orca/restore.dump
+                aws s3 cp --region ${AWS::Region} "$from.tag" /var/lib/orca/tag
+                aws s3 cp --region ${AWS::Region} "$from.caddy.tgz" - | tar -xz -C /var/lib/orca/caddy
+                aws s3 cp --region ${AWS::Region} "$from.apps" /var/lib/orca/apps
+                echo "$from" > /var/lib/orca/restored
+              fi
+              [ -f /var/lib/orca/tag ] || echo ${ImageTag} > /var/lib/orca/tag
+              cat > /etc/orca.env << EOF
+              ORCA_DATABASE_URL=postgresql://orca:${DbPassword}@postgres:5432/orca
+              ORCA_EC2_DATABASE_URL=postgresql://orca:${DbPassword}@$ip:5432/orca
+              ORCA_RUNNER=ec2
+              AWS_REGION=${AWS::Region}
+              ORCA_EC2_AMI=${Ami}
+              ORCA_EC2_SUBNET=${Subnet}
+              ORCA_EC2_SECURITY_GROUP=${RunGroup}
+              ORCA_EC2_PROFILE=${RunProfile}
+              ORCA_EC2_PREAMBLE=$login
+              ORCA_WAREHOUSE=s3://${PublicBucket}/warehouse
+              ORCA_LOGS=s3://${Bucket}/logs
+              ORCA_PUBLIC_WAREHOUSE=s3://${PublicBucket}/warehouse
+              ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE
+              ORCA_LOG_STAGE=/var/lib/orca/stage
+              ORCA_CONTROL_SAMPLES=/var/lib/orca/stage/control.jsonl
+              ORCA_CONTROL_TYPE=${ControlInstanceType}
+              ORCA_UI_ADDR=0.0.0.0:8270
+              ORCA_UI_LOGIN=required
+              ORCA_UI_SECURE_COOKIES=1
+              ORCA_UI_TRUST_PROXY=1
+              EOF
+              # The stack's own settings (ControlEnv; orca aws up --env K=V),
+              # each in place of the line above with its key.
+              printf '%s;' '${ControlEnv}' | tr ';' '\\n' | while IFS= read -r kv; do
+                [ -n "$kv" ] || continue
+                k=$(printf '%s' "$kv" | cut -d= -f1)
+                grep -v "^$k=" /etc/orca.env > /etc/orca.env.new || true
+                printf '%s\\n' "$kv" >> /etc/orca.env.new
+                mv /etc/orca.env.new /etc/orca.env
+              done
+              chmod 600 /etc/orca.env
+              # orca aws register and orca aws app run these over SSM.
+              cat > /usr/local/bin/orca-refresh << 'EOS'
+              #!/bin/bash
+              # orca-refresh [TAG]: pull the orca image at TAG (else the last
+              # one) and run the scheduler and the UI from it again.
+              set -eu
+              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+              [ $# -gt 0 ] && echo "$1" > /var/lib/orca/tag
+              tag=$(cat /var/lib/orca/tag)
+              aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
+              docker pull -q "$repo:$tag"
+              for role in scheduler ui; do
+                docker rm -f $role > /dev/null 2>&1 || true
+                docker run -d --name $role --restart always --network orca --env-file /etc/orca.env \\
+                  -v /var/lib/orca/stage:/var/lib/orca/stage "$repo:$tag" $role
+              done
+              # This instance's own samples, for the fleet and system pages: the
+              # host's processes and network, the last hour of lines kept in a
+              # file the scheduler reads. The host's cgroup files and Docker's
+              # container configs, read-only, give each container's memory by
+              # name without the Docker socket.
+              docker rm -f sampler > /dev/null 2>&1 || true
+              docker run -d --name sampler --restart always --pid host --network host \\
+                -v /var/lib/orca/stage:/var/lib/orca/stage \\
+                -v /sys/fs/cgroup:/host/cgroup:ro -v /var/lib/docker/containers:/host/containers:ro "$repo:$tag" \\
+                sample --out /var/lib/orca/stage/control.jsonl --dirs /var/lib/orca/stage --keep 720 \\
+                --cgroup /host/cgroup --names /host/containers
+              EOS
+              cat > /usr/local/bin/orca-app << 'EOS'
+              #!/bin/bash
+              # orca-app NAME HOST [PORT]: run the image's /opt/orca/bin/NAME as
+              # an app beside the UI, at https://HOST through Caddy, with the
+              # region, the warehouse and PORT (default 8080). It's recorded in
+              # /var/lib/orca/apps, which a replacement instance runs again.
+              set -eu
+              name=$1
+              host=$2
+              port=8080
+              [ $# -gt 2 ] && port=$3
+              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+              tag=$(cat /var/lib/orca/tag)
+              aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
+              docker pull -q "$repo:$tag"
+              docker rm -f "$name" > /dev/null 2>&1 || true
+              # An app reads the lake, not orca's database: it gets no password.
+              grep -E '^(AWS_REGION|ORCA_WAREHOUSE|ORCA_PUBLIC_WAREHOUSE)=' /etc/orca.env > /var/lib/orca/app.env
+              docker run -d --name "$name" --restart always --network orca --env-file /var/lib/orca/app.env \\
+                -e PORT=$port --entrypoint /opt/orca/bin/$name "$repo:$tag"
+              { grep -v "^$name " /var/lib/orca/apps 2> /dev/null || true; echo "$name $host $port"; } > /var/lib/orca/apps.new
+              mv /var/lib/orca/apps.new /var/lib/orca/apps
+              grep -q "^$host {" /var/lib/orca/Caddyfile \\
+                || printf '%s {\\n  encode zstd gzip\\n  reverse_proxy %s:%s\\n}\\n' "$host" "$name" "$port" >> /var/lib/orca/Caddyfile
+              # Caddy may still be starting.
+              for _ in $(seq 30); do
+                docker exec caddy caddy reload --config /etc/caddy/Caddyfile && exit 0
+                sleep 2
+              done
+              exit 1
+              EOS
+              chmod +x /usr/local/bin/orca-refresh /usr/local/bin/orca-app
+              orca-refresh
+              cat > /var/lib/orca/Caddyfile << EOF
+              $hosts {
+                encode zstd gzip
+                reverse_proxy ui:8270
+              }
+              EOF
+              # The console, once a container named console runs on the network.
+              [ -z "${ConsoleHostname}" ] || printf '%s {\\n  encode zstd gzip\\n  reverse_proxy console:8080\\n}\\n' "${ConsoleHostname}" >> /var/lib/orca/Caddyfile
+              docker run -d --name caddy --restart always --network orca -p 80:80 -p 443:443 \\
+                -v /var/lib/orca/Caddyfile:/etc/caddy/Caddyfile -v /var/lib/orca/caddy:/data caddy:2.10
+              # The apps the replaced instance ran.
+              if [ -f /var/lib/orca/apps ]; then
+                cp /var/lib/orca/apps /var/lib/orca/apps.boot
+                while read -r name host port; do orca-app "$name" "$host" "$port"; done < /var/lib/orca/apps.boot
+              fi
+              echo "orca ui at https://$sslip and https://${Hostname}"
+              date -u +%FT%TZ > /var/lib/orca/booted
+            - {PublicIp: !Ref ControlAddress}
+  # Two slots for the control instance, blue (Control, the stack's first)
+  # and green; the Elastic IP is on the active one. orca aws
+  # replace-control turns the other slot on with a fresh instance, moves
+  # ActiveControl to it once it's healthy, and turns the old slot off at the
+  # end of the rollback window. Each slot's AMI is pinned (BlueAmi,
+  # GreenAmi): the Ami parameter resolves again on every update, and a new
+  # image id would replace the running instance, its database with it.
   Control:
     Type: AWS::EC2::Instance
+    Condition: BlueOn
     DependsOn: DefaultRoute
     Properties:
-      ImageId: !Ref Ami
+      ImageId: !If [BlueAmiPinned, !Ref BlueAmi, !Ref Ami]
       InstanceType: !Ref ControlInstanceType
       SubnetId: !Ref Subnet
       SecurityGroupIds: [!Ref ControlGroup]
@@ -332,128 +561,52 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs: {VolumeSize: 40, VolumeType: gp3, Encrypted: true}
-      Tags: [{Key: Name, Value: orca-control}]
+      Tags: [{Key: Name, Value: orca-control}, {Key: orca.slot, Value: blue}]
       UserData:
-        Fn::Base64: !Sub
-          - |
-            #!/bin/bash
-            # orca's control instance: Postgres, the scheduler, the UI and
-            # Caddy, as containers that restart with the instance.
-            set -eux
-            # Docker without ECS: this AMI's agent would look for a cluster.
-            systemctl disable --now ecs || true
-            systemctl enable --now docker
-            command -v aws || dnf install -y awscli
-            token=$(curl -sX PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')
-            md() { curl -s -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/$1; }
-            ip=$(md local-ipv4)
-            # The Elastic IP's sslip.io name works at once; the hostname once
-            # its A record points here. Caddy gets a certificate for each.
-            sslip="$(echo ${PublicIp} | tr . -).sslip.io"
-            hosts="$sslip"
-            [ -z "${Hostname}" ] || hosts="${Hostname}, $sslip"
-            registry=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
-            image=$registry/orca:${ImageTag}
-            login="command -v aws >/dev/null || dnf install -y awscli; systemctl disable --now ecs || true; aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin $registry"
-            # The image is pushed after the stack is made, so wait for it.
-            until sh -c "$login" && docker pull $image; do sleep 30; done
-            docker network create orca || true
-            mkdir -p /var/lib/orca/pg /var/lib/orca/caddy /var/lib/orca/stage
-            docker run -d --name postgres --restart always --network orca -p 5432:5432 \\
-              -e POSTGRES_USER=orca -e POSTGRES_DB=orca -e POSTGRES_PASSWORD='${DbPassword}' \\
-              -v /var/lib/orca/pg:/var/lib/postgresql/data postgres:17-bookworm -c synchronous_commit=on
-            until docker exec postgres pg_isready -U orca -d orca; do sleep 2; done
-            cat > /etc/orca.env << EOF
-            ORCA_DATABASE_URL=postgresql://orca:${DbPassword}@postgres:5432/orca
-            ORCA_EC2_DATABASE_URL=postgresql://orca:${DbPassword}@$ip:5432/orca
-            ORCA_RUNNER=ec2
-            AWS_REGION=${AWS::Region}
-            ORCA_EC2_AMI=${Ami}
-            ORCA_EC2_SUBNET=${Subnet}
-            ORCA_EC2_SECURITY_GROUP=${RunGroup}
-            ORCA_EC2_PROFILE=${RunProfile}
-            ORCA_EC2_PREAMBLE=$login
-            ORCA_WAREHOUSE=s3://${PublicBucket}/warehouse
-            ORCA_LOGS=s3://${Bucket}/logs
-            ORCA_PUBLIC_WAREHOUSE=s3://${PublicBucket}/warehouse
-            ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE
-            ORCA_LOG_STAGE=/var/lib/orca/stage
-            ORCA_CONTROL_SAMPLES=/var/lib/orca/stage/control.jsonl
-            ORCA_CONTROL_TYPE=${ControlInstanceType}
-            ORCA_UI_ADDR=0.0.0.0:8270
-            ORCA_UI_LOGIN=required
-            ORCA_UI_SECURE_COOKIES=1
-            ORCA_UI_TRUST_PROXY=1
-            EOF
-            # orca aws register and orca aws app run these over SSM.
-            cat > /usr/local/bin/orca-refresh << 'EOS'
-            #!/bin/bash
-            # orca-refresh [TAG]: pull the orca image at TAG (else the last
-            # one) and run the scheduler and the UI from it again.
-            set -eu
-            repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
-            [ $# -gt 0 ] && echo "$1" > /var/lib/orca/tag
-            tag=$(cat /var/lib/orca/tag)
-            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
-            docker pull -q "$repo:$tag"
-            for role in scheduler ui; do
-              docker rm -f $role > /dev/null 2>&1 || true
-              docker run -d --name $role --restart always --network orca --env-file /etc/orca.env \\
-                -v /var/lib/orca/stage:/var/lib/orca/stage "$repo:$tag" $role
-            done
-            # This instance's own samples, for the fleet and system pages: the
-            # host's processes and network, the last hour of lines kept in a
-            # file the scheduler reads. The host's cgroup files and Docker's
-            # container configs, read-only, give each container's memory by
-            # name without the Docker socket.
-            docker rm -f sampler > /dev/null 2>&1 || true
-            docker run -d --name sampler --restart always --pid host --network host \\
-              -v /var/lib/orca/stage:/var/lib/orca/stage \\
-              -v /sys/fs/cgroup:/host/cgroup:ro -v /var/lib/docker/containers:/host/containers:ro "$repo:$tag" \\
-              sample --out /var/lib/orca/stage/control.jsonl --dirs /var/lib/orca/stage --keep 720 \\
-              --cgroup /host/cgroup --names /host/containers
-            EOS
-            cat > /usr/local/bin/orca-app << 'EOS'
-            #!/bin/bash
-            # orca-app NAME HOST [PORT]: run the image's /opt/orca/bin/NAME as
-            # an app beside the UI, at https://HOST through Caddy, with the
-            # region, the warehouse and PORT (default 8080).
-            set -eu
-            name=$1
-            host=$2
-            port=8080
-            [ $# -gt 2 ] && port=$3
-            repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
-            tag=$(cat /var/lib/orca/tag)
-            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
-            docker pull -q "$repo:$tag"
-            docker rm -f "$name" > /dev/null 2>&1 || true
-            # An app reads the lake, not orca's database: it gets no password.
-            grep -E '^(AWS_REGION|ORCA_WAREHOUSE|ORCA_PUBLIC_WAREHOUSE)=' /etc/orca.env > /var/lib/orca/app.env
-            docker run -d --name "$name" --restart always --network orca --env-file /var/lib/orca/app.env \\
-              -e PORT=$port --entrypoint /opt/orca/bin/$name "$repo:$tag"
-            grep -q "^$host {" /var/lib/orca/Caddyfile \\
-              || printf '%s {\\n  encode zstd gzip\\n  reverse_proxy %s:%s\\n}\\n' "$host" "$name" "$port" >> /var/lib/orca/Caddyfile
-            docker exec caddy caddy reload --config /etc/caddy/Caddyfile
-            EOS
-            chmod +x /usr/local/bin/orca-refresh /usr/local/bin/orca-app
-            echo ${ImageTag} > /var/lib/orca/tag
-            orca-refresh
-            cat > /var/lib/orca/Caddyfile << EOF
-            $hosts {
-              encode zstd gzip
-              reverse_proxy ui:8270
-            }
-            EOF
-            # The console, once a container named console runs on the network.
-            [ -z "${ConsoleHostname}" ] || printf '%s {\\n  encode zstd gzip\\n  reverse_proxy console:8080\\n}\\n' "${ConsoleHostname}" >> /var/lib/orca/Caddyfile
-            docker run -d --name caddy --restart always --network orca -p 80:80 -p 443:443 \\
-              -v /var/lib/orca/Caddyfile:/etc/caddy/Caddyfile -v /var/lib/orca/caddy:/data caddy:2.10
-            echo "orca ui at https://$sslip and https://${Hostname}"
-          - {PublicIp: !Ref ControlAddress}
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # orca's control instance, slot blue: the latest version of the
+          # stack's boot script (ControlBoot).
+          set -eux
+          command -v aws || dnf install -y awscli
+          until aws ec2 describe-launch-template-versions --region ${AWS::Region} --launch-template-id ${ControlBoot} \\
+              --versions '$Latest' --query 'LaunchTemplateVersions[0].LaunchTemplateData.UserData' --output text > /root/orca-boot.b64; do sleep 10; done
+          base64 -d /root/orca-boot.b64 > /usr/local/bin/orca-boot
+          chmod 700 /usr/local/bin/orca-boot
+          exec /usr/local/bin/orca-boot blue
+  ControlGreen:
+    Type: AWS::EC2::Instance
+    Condition: GreenOn
+    DependsOn: DefaultRoute
+    Properties:
+      ImageId: !If [GreenAmiPinned, !Ref GreenAmi, !Ref Ami]
+      InstanceType: !Ref ControlInstanceType
+      SubnetId: !Ref Subnet
+      SecurityGroupIds: [!Ref ControlGroup]
+      IamInstanceProfile: !Ref ControlProfile
+      MetadataOptions: {HttpTokens: required, HttpPutResponseHopLimit: 2}
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 40, VolumeType: gp3, Encrypted: true}
+      Tags: [{Key: Name, Value: orca-control}, {Key: orca.slot, Value: green}]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # orca's control instance, slot green: the latest version of the
+          # stack's boot script (ControlBoot).
+          set -eux
+          command -v aws || dnf install -y awscli
+          until aws ec2 describe-launch-template-versions --region ${AWS::Region} --launch-template-id ${ControlBoot} \\
+              --versions '$Latest' --query 'LaunchTemplateVersions[0].LaunchTemplateData.UserData' --output text > /root/orca-boot.b64; do sleep 10; done
+          base64 -d /root/orca-boot.b64 > /usr/local/bin/orca-boot
+          chmod 700 /usr/local/bin/orca-boot
+          exec /usr/local/bin/orca-boot green
+  # Its own resource, so moving the address is a change to it alone.
   ControlAddressAssociation:
     Type: AWS::EC2::EIPAssociation
-    Properties: {InstanceId: !Ref Control, AllocationId: !GetAtt ControlAddress.AllocationId}
+    Properties:
+      InstanceId: !If [GreenActive, !Ref ControlGreen, !Ref Control]
+      AllocationId: !GetAtt ControlAddress.AllocationId
 
   Budget:
     Type: AWS::Budgets::Budget
@@ -482,7 +635,18 @@ Outputs:
     Description: The lake's bucket; with PublicData, read it unsigned, e.g. aws s3 ls --no-sign-request s3://<it>/
     Value: !Ref PublicBucket
   ControlInstance:
+    Description: The active control instance, which has the Elastic IP
+    Value: !If [GreenActive, !Ref ControlGreen, !Ref Control]
+  ActiveControl:
+    Value: !Ref ActiveControl
+  BlueInstance:
+    Condition: BlueOn
     Value: !Ref Control
+  GreenInstance:
+    Condition: GreenOn
+    Value: !Ref ControlGreen
+  AddressAllocation:
+    Value: !GetAtt ControlAddress.AllocationId
   ConsoleHostname:
     Value: !Ref ConsoleHostname
   PublicAddress:

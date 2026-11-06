@@ -3,11 +3,13 @@ its user already has (`aws login`, or `AWS_PROFILE` for a named profile).
 
     orca aws up --email you@example.com [--stack orca] [--hostname H]
                 [--console-hostname H] [--budget 100] [--zone us-east-2a]
-                [--public-data true|false]
+                [--public-data true|false] [--env KEY=VALUE ...]
     orca aws push [--tag T]                     # the project's image, to ECR
     orca aws register [--tag T] [register flags] <pipeline> [...]
     orca aws app <name> [--host H] [--port 8080] [--tag T]
     orca aws status
+    orca aws replace-control [--plan] [--wait] [--keep-old 24h] [--smoke P=KEY]
+                             [--env KEY=VALUE ...] | --resume | --rollback
     orca aws down --yes
 
 `up` creates or updates the stack from the template orca carries
@@ -22,8 +24,14 @@ moves the scheduler and the UI to the image (`orca-refresh`) and registers
 each pipeline, `/opt/orca/pipelines/<pipeline>`, with the flags given, as
 `orca register` takes them; `app` runs the image's `/opt/orca/bin/<name>`
 beside the UI, at `https://<host>` (for `console`, the stack's
-`ConsoleHostname`). `down` deletes the stack, which fails while its buckets
-hold objects.
+`ConsoleHostname`). `--env KEY=VALUE` (repeated) sets the control
+instance's settings beyond the template's (`ControlEnv`, all of them at
+once; never a secret). An update changes no running control instance: its
+boot script is the stack's `ControlBoot`, which a new one runs, and each
+slot's AMI is pinned to the one its instance has. `replace-control`
+(`orca.aws_replace`) boots a new control instance from the template, with
+the old one's database, and moves the Elastic IP to it. `down` deletes the
+stack, which fails while its buckets hold objects.
 
 Files go to `build/orca-aws/`. `--stack` (default `orca`) and `--region`
 (default `AWS_REGION`, else the `aws` command's own) go anywhere.
@@ -43,11 +51,13 @@ from orca.proc import capture
 comptime _DIR = "build/orca-aws"
 comptime AWS_USAGE = """usage:
   orca aws up --email ADDR [--hostname H] [--console-hostname H] [--budget N]
-              [--zone AZ] [--public-data true|false]
+              [--zone AZ] [--public-data true|false] [--env KEY=VALUE ...]
   orca aws push [--tag T]
   orca aws register [--tag T] [register flags] <pipeline> [...]
   orca aws app <name> [--host H] [--port 8080] [--tag T]
   orca aws status
+  orca aws replace-control [--plan] [--wait] [--keep-old 24h] [--smoke P=KEY]
+                           [--env KEY=VALUE ...] | --resume | --rollback
   orca aws down --yes
   (each takes --stack NAME, default orca, and --region R)"""
 
@@ -63,6 +73,9 @@ comptime _VALUED = [
     "--public-data",
     "--host",
     "--port",
+    "--env",
+    "--keep-old",
+    "--smoke",
 ]
 """`orca aws`'s own options with a value; any other is `register`'s."""
 comptime _REGISTER_VALUED = [
@@ -78,6 +91,34 @@ comptime _REGISTER_VALUED = [
 def _q(s: String) -> String:
     """`s` as one shell word."""
     return String("'", s.replace("'", "'\\''"), "'")
+
+
+def env_problem(kv: String) -> String:
+    """Why `kv` can't be one of the control instance's settings
+    (`--env KEY=VALUE`, the stack's `ControlEnv`), or empty if it can."""
+    var eq = kv.find("=")
+    if eq <= 0:
+        return String("is KEY=VALUE, not ", kv)
+    var key = String(kv[byte=:eq])
+    var i = 0
+    for b in key.as_bytes():
+        var c = Int(b)
+        var ok = (c >= ord("A") and c <= ord("Z")) or c == ord("_")
+        if i > 0 and c >= ord("0") and c <= ord("9"):
+            ok = True
+        if not ok:
+            return String("has a key of A-Z, 0-9 and _: ", key)
+        i += 1
+    if "'" in kv or ";" in kv or "\n" in kv:
+        return String("can't hold ', ; or a newline: ", key)
+    for word in ["PASSWORD", "SECRET", "TOKEN", "DATABASE_URL"]:
+        if word in key:
+            return String(
+                "is for settings, not secrets (",
+                key,
+                "): the stack's parameters are plain text",
+            )
+    return ""
 
 
 def _system(cmd: String) raises -> Int:
@@ -120,6 +161,14 @@ struct _Opts(Movable):
     var host: String
     var port: String
     var yes: Bool
+    var env: List[String]
+    """`--env KEY=VALUE`, in order: the stack's `ControlEnv`."""
+    var keep_old: String
+    var smoke: String
+    var plan: Bool
+    var wait: Bool
+    var rollback: Bool
+    var resume: Bool
     var rest: List[String]
     """The arguments that aren't `orca aws`'s own options, in order."""
 
@@ -136,12 +185,31 @@ struct _Opts(Movable):
         self.host = String()
         self.port = String("8080")
         self.yes = False
+        self.env = List[String]()
+        self.keep_old = String()
+        self.smoke = String()
+        self.plan = False
+        self.wait = False
+        self.rollback = False
+        self.resume = False
         self.rest = List[String]()
         var i = start
         while i < len(args):
             var a = args[i]
-            if a == "--yes":
-                self.yes = True
+            if a == "--yes" or a == "--plan" or a == "--wait":
+                if a == "--yes":
+                    self.yes = True
+                elif a == "--plan":
+                    self.plan = True
+                else:
+                    self.wait = True
+                i += 1
+                continue
+            if a == "--rollback" or a == "--resume":
+                if a == "--rollback":
+                    self.rollback = True
+                else:
+                    self.resume = True
                 i += 1
                 continue
             var ours = False
@@ -177,6 +245,15 @@ struct _Opts(Movable):
                 self.public_data = v
             elif a == "--host":
                 self.host = v
+            elif a == "--env":
+                var why = env_problem(v)
+                if why:
+                    raise Error("orca aws: --env ", why)
+                self.env.append(v)
+            elif a == "--keep-old":
+                self.keep_old = v
+            elif a == "--smoke":
+                self.smoke = v
             else:
                 self.port = v
             i += 2
@@ -257,8 +334,6 @@ def _tag(o: _Opts) -> String:
 
 
 def _up(o: _Opts) raises -> Int:
-    var template = String(_DIR, "/orca.yaml")
-    _write(template, STACK_TEMPLATE)
     var params = List[String]()
     if not _stack_exists(o):
         if not o.email:
@@ -285,6 +360,43 @@ def _up(o: _Opts) raises -> Int:
         params.append(String("AvailabilityZone=", o.zone))
     if o.public_data:
         params.append(String("PublicData=", o.public_data))
+    if len(o.env) > 0:
+        params.append(control_env(o))
+    if _stack_exists(o):
+        var outs = _outputs(o)
+        if "ActiveControl" not in outs and not o.yes:
+            print(
+                "orca aws up: the stack",
+                o.stack,
+                (
+                    "predates the control instance's slots: this update"
+                    " moves its boot script out of its user data, so"
+                    " CloudFormation stops and starts it once. Pause its"
+                    " pipelines and run it again with --yes, or let orca aws"
+                    " replace-control make the update with a new instance."
+                ),
+            )
+            return 2
+        for p in slot_pins(o, outs):
+            params.append(p)
+    # The command line holds the password: run it without echoing it.
+    deploy(o, params, False)
+    return _status(o)
+
+
+def control_env(o: _Opts) -> String:
+    """The `ControlEnv` parameter `--env` gives."""
+    var out = String("ControlEnv=")
+    for i in range(len(o.env)):
+        out.write("" if i == 0 else ";", o.env[i])
+    return out^
+
+
+def deploy(o: _Opts, params: List[String], show: Bool) raises:
+    """`cloudformation deploy` of the template orca carries with `params`
+    (the others keep their values), printing them if `show`."""
+    var template = String(_DIR, "/orca.yaml")
+    _write(template, STACK_TEMPLATE)
     var cmd = o.aws(
         String(
             "cloudformation deploy --stack-name ",
@@ -294,16 +406,50 @@ def _up(o: _Opts) raises -> Int:
             " --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset",
         )
     )
+    var shown = String("+ aws cloudformation deploy --stack-name ", o.stack)
     if len(params) > 0:
         cmd.write(" --parameter-overrides")
         for p in params:
             cmd.write(" ", _q(p))
-    # The command line holds the password: run it without echoing it.
-    print("+ aws cloudformation deploy --stack-name", o.stack, "...")
+        if show:
+            shown.write(" --parameter-overrides")
+            for p in params:
+                shown.write(" ", _q(p))
+        else:
+            shown.write(" ...")
+    print(shown)
     var code = _system(cmd)
     if code != 0:
         raise Error("orca aws: cloudformation deploy exited ", code)
-    return _status(o)
+
+
+def image_of(o: _Opts, instance: String) raises -> String:
+    """The AMI `instance` was started from."""
+    return _out(
+        o.aws(
+            String(
+                "ec2 describe-instances --instance-ids ",
+                _q(instance),
+                " --query 'Reservations[0].Instances[0].ImageId' --output text",
+            )
+        )
+    )
+
+
+def slot_pins(o: _Opts, outs: Dict[String, String]) raises -> List[String]:
+    """`BlueAmi=` and `GreenAmi=` the images the slots' instances have, so
+    that an update, whose `Ami` resolves again, replaces neither."""
+    var out = List[String]()
+    var blue = outs.get("BlueInstance", "")
+    if not blue and "ActiveControl" not in outs:
+        # A stack from before the slots: its instance is blue's.
+        blue = outs.get("ControlInstance", "")
+    if blue:
+        out.append(String("BlueAmi=", image_of(o, blue)))
+    var green = outs.get("GreenInstance", "")
+    if green:
+        out.append(String("GreenAmi=", image_of(o, green)))
+    return out^
 
 
 def _status(o: _Opts) raises -> Int:
@@ -384,12 +530,20 @@ def _push(o: _Opts) raises -> Int:
 def _ssm(o: _Opts, instance: String, commands: List[String]) raises -> Int:
     """Runs `commands` on `instance` through SSM, prints what they wrote,
     and returns 0 if they succeeded."""
+    for c in commands:
+        print("+ on the control instance:", c)
+    return ssm_run(o, instance, commands)[0]
+
+
+def ssm_run(
+    o: _Opts, instance: String, commands: List[String]
+) raises -> Tuple[Int, String]:
+    """Runs `commands` on `instance` through SSM and prints what they wrote;
+    0 and their output if they succeeded, else 3 and it."""
     var params = String('{"commands": [')
     for i in range(len(commands)):
         params.write("" if i == 0 else ", ", quote(commands[i]))
     params.write("]}")
-    for c in commands:
-        print("+ on the control instance:", c)
     var id = _out(
         o.aws(
             String(
@@ -425,14 +579,15 @@ def _ssm(o: _Opts, instance: String, commands: List[String]) raises -> Int:
         ):
             break
         sleep(2.0)
-    print(_out(String(ask, " --query StandardOutputContent --output text")))
+    var text = _out(String(ask, " --query StandardOutputContent --output text"))
+    print(text)
     var err = _out(String(ask, " --query StandardErrorContent --output text"))
     if err and err != "None":
         print(err)
     if status != "Success":
-        print("orca aws: the command on the control instance:", status)
-        return 3
-    return 0
+        print("orca aws: the command on", instance, "", status)
+        return (3, text^)
+    return (0, text^)
 
 
 def _register(o: _Opts) raises -> Int:
