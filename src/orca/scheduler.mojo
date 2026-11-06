@@ -128,6 +128,7 @@ from orca.sensors import (
     split_keys,
 )
 from orca.state import State
+from orca.watchdog import check as check_watchdog, config as watchdog_config
 from orca.tz import Zone
 
 comptime _BUDGET_LOCK = 0x6F726362  # "orcb"
@@ -946,6 +947,11 @@ struct Scheduler(Movable):
     """When the next pass starts, on the monotonic clock."""
     var _archive: Archive
     """The control instance's day files between passes (`orca.system`)."""
+    var watchdog_seconds: Float64
+    """How often the watchdog's rules are checked
+    (`ORCA_WATCHDOG_SECONDS`, 60; 0 turns it off): `orca.watchdog`."""
+    var _watchdog_next: Int
+    """When the next check starts, on the monotonic clock."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -988,6 +994,8 @@ struct Scheduler(Movable):
         self.fleet_seconds = Float64(getenv("ORCA_FLEET_SECONDS", "30"))
         self._fleet_next = 0
         self._archive = Archive()
+        self.watchdog_seconds = Float64(getenv("ORCA_WATCHDOG_SECONDS", "60"))
+        self._watchdog_next = 0
 
     def register(
         mut self,
@@ -1208,6 +1216,10 @@ struct Scheduler(Movable):
             self._fleet()
         except e:
             print("orca: can't keep the fleet's samples:", e)
+        try:
+            self._watchdog()
+        except e:
+            print("orca: can't check the watchdog's rules:", e)
         advance_rebuilds(self.db)
         try:
             self._expire()
@@ -1625,6 +1637,17 @@ struct Scheduler(Movable):
             if text:
                 _ = keep_system(self.db, text, self._archive)
             trim_system(self.db)
+
+    def _watchdog(mut self) raises:
+        """Every `watchdog_seconds`, checks the watchdog's rules and pauses
+        the pipelines of those over their limits (`orca.watchdog`)."""
+        if self.watchdog_seconds <= 0:
+            return
+        var t = Int(perf_counter_ns())
+        if t < self._watchdog_next:
+            return
+        self._watchdog_next = t + Int(self.watchdog_seconds * 1e9)
+        _ = check_watchdog(self.db, watchdog_config())
 
     def _expire(mut self) raises:
         """Every `expire_seconds`, expires each dataset orca commits to by

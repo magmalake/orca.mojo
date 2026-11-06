@@ -25,6 +25,7 @@ from orca.key import parse_keys
 from orca.live import live_runs
 from orca.month import Month
 from orca.name import parse_names
+from orca.pause import set_paused
 from orca.scheduler import (
     ALLOW_APPEND_HOW,
     RETRIED_SQL,
@@ -442,29 +443,10 @@ def pause_pipeline(
     while a pipeline is paused the scheduler starts none of its runs. Fires,
     sensors, retries and backfills still queue theirs, which start once
     it's unpaused; runs already going go on."""
-    var rows = db.conn.query(
-        (
-            "UPDATE orca.pipelines SET paused = $2 WHERE name = $1 AND paused"
-            " <> $2 RETURNING name"
-        ),
-        Params().text(pipeline).bool(paused),
-    )
-    if len(rows) == 1:
-        return Outcome.done(0)
-    var have = db.conn.query(
-        "SELECT 1 FROM orca.pipelines WHERE name = $1", Params().text(pipeline)
-    )
-    if len(have) == 0:
-        return Outcome.no(String("no pipeline ", pipeline))
-    return Outcome.no(
-        String(
-            "pipeline ",
-            pipeline,
-            " is ",
-            "paused" if paused else "not paused",
-            " already",
-        )
-    )
+    var why = set_paused(db, pipeline, paused)
+    if why:
+        return Outcome.no(why^)
+    return Outcome.done(0)
 
 
 def rebuild_downstream(

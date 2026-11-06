@@ -314,6 +314,8 @@ svg.fl { display: block; width: 100%; min-width: 34rem; height: auto; font-famil
   color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); }
 .alert a { color: inherit; font-weight: 600; }
+.alert--trip { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent);
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
 .fl__area { stroke: none; opacity: 0.22; }
 .fl__keys { margin: 0; padding: 0.4rem 1.1rem 0.8rem; font-size: 0.8125rem; color: var(--muted); }
 .fl__key { display: inline-block; width: 0.9em; height: 0.55em; margin-right: 0.3em; border-radius: 2px;

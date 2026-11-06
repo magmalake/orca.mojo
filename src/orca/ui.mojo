@@ -19,6 +19,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/system` | the control instance's own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`); `/api/system` is the same as JSON |
 | `/metrics` | Prometheus gauges: the control instance's CPU, memory, disk, network and containers' memory, runs running and queued, hosts, and errors in the last hour; open like the other pages (reads need no login) |
 | `/fleet` | the machines orca is paying for: hosts running and what they cost an hour, runs and errors per hour, a table of live hosts (`?sort=` a column, `&dir=desc`) and charts over `?range=24h` or `7d` (`orca.fleet`); `/fleet/hosts` is the live part of it, and `/api/fleet` the same as JSON |
+| `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`orca.watchdog`); also the red banner on `/` and `/fleet` |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), what a rebuild of it runs, and its snapshots; `?preview=1&partitions=`: a rebuild's runs by level, queueing nothing |
 | `/datasets/<name>/snapshots/<id>` | a snapshot's lineage, back and forward (`orca.lineage`) |
@@ -32,6 +33,7 @@ And the actions, each a `POST` of a form (see `orca.actions`):
 | `/pipelines/<name>/backfill` | a run per partition in `partitions` that has none; `rerun=1` for done ones too |
 | `/pipelines/<name>/cancel` | cancel its queued, running and retrying runs over `partitions` (`@all` or empty: all) |
 | `/pipelines/<name>/pause`, `/unpause` | stop the scheduler starting its runs, or let it again |
+| `/watchdog/<rule>/snooze` | silence a watchdog rule for `duration` (`2h`, `30m`, `1d`; `off` ends it) |
 | `/runs/<id>/resume` | queue a failed, cancelled or stalled run again; `allow_new_code=1` confirms new code |
 | `/runs/<id>/rerun` | a new run from `step` on, the steps before it copied |
 | `/runs/<id>/cancel` | cancel a run, before its next attempt if it's running |
@@ -184,6 +186,17 @@ from orca.timeline import (
 )
 from orca.state import State
 from orca.tz import Zone
+from orca.watchdog import (
+    active_trips,
+    banner_html,
+    config as watchdog_config,
+    prometheus as watchdog_prometheus,
+    rule_rows,
+    snooze as snooze_rule,
+    trips_json,
+    watchdog_html,
+    watchdog_json,
+)
 from orca.ui_style import STYLE
 
 comptime DEFAULT_ADDR = "127.0.0.1:8270"
@@ -1653,7 +1666,14 @@ def home(mut db: State) raises -> Page:
     var per_day = _runs_per_day(db, 30)
     var fleet = fleet_summary(db)
     var alerts = warnings(system_now(db))
-    var j = String('{"warnings": ', warnings_json(alerts), ', "pipelines": [')
+    var trips = active_trips(db)
+    var j = String(
+        '{"warnings": ',
+        warnings_json(alerts),
+        ', "watchdog": ',
+        trips_json(trips),
+        ', "pipelines": [',
+    )
     for i in range(len(ps)):
         if i:
             j.write(", ")
@@ -1679,6 +1699,7 @@ def home(mut db: State) raises -> Page:
 
     var h = Html()
     h.raw("<h1>Pipelines</h1>")
+    banner_html(h, trips)
     alert_html(h, alerts)
     summary_html(h, fleet, True)
     if len(ps) == 0:
@@ -1780,8 +1801,11 @@ def fleet_page(
     var hosts = fleet_hosts(db)
     sort_hosts(hosts, col, desc)
     var charts = fleet_charts(db, 168 if span == "7d" else 24)
+    var trips = active_trips(db)
     var j = String(
-        '{"summary": ',
+        '{"watchdog": ',
+        trips_json(trips),
+        ', "summary": ',
         summary_json(summary),
         ', "hosts": ',
         hosts_json(hosts),
@@ -1790,8 +1814,9 @@ def fleet_page(
         "}",
     )
     var h = Html()
+    h.raw("<h1>Fleet</h1>")
+    banner_html(h, trips)
     h.raw(
-        "<h1>Fleet</h1>",
         '<div data-poll="/fleet/hosts?sort=',
         col,
         "&amp;dir=",
@@ -1848,7 +1873,10 @@ def metrics_page(mut db: State) raises -> Page:
     return Page(
         200,
         String(),
-        prometheus(system_now(db), fleet_summary(db)),
+        String(
+            prometheus(system_now(db), fleet_summary(db)),
+            watchdog_prometheus(db, watchdog_config()),
+        ),
         "text/plain; version=0.0.4; charset=utf-8",
     )
 
@@ -4993,6 +5021,23 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
                 String('{"paused": ', "true" if paused else "false", "}"),
                 back,
             )
+    if len(parts) == 4 and parts[1] == "watchdog" and parts[3] == "snooze":
+        var duration = _form(body, "duration")
+        try:
+            var secs = snooze_rule(db, url_decode(parts[2]), duration, "ui")
+            return _acted(
+                Outcome.done(0),
+                String("/watchdog"),
+                String('{"snoozed_seconds": ', secs, "}"),
+                String("/watchdog"),
+            )
+        except e:
+            return _acted(
+                Outcome.no(String(e)),
+                String("/watchdog"),
+                String(),
+                String("/watchdog"),
+            )
     if len(parts) == 4 and parts[1] == "datasets" and parts[3] == "rebuild":
         var name = url_decode(parts[2])
         var o = rebuild_downstream(db, name, _form(body, "partitions"))
@@ -5179,6 +5224,8 @@ def _is_action(path: String) -> Bool:
         )
     if parts[1] == "datasets":
         return parts[3] == "rebuild"
+    if parts[1] == "watchdog":
+        return parts[3] == "snooze"
     return parts[1] == "runs" and (
         parts[3] == "resume" or parts[3] == "rerun" or parts[3] == "cancel"
     )
@@ -5702,6 +5749,17 @@ struct Ui(Copyable, Handler):
             return Page(200, String(), page.json.copy(), "application/json")
         if path == "/metrics":
             return metrics_page(db)
+        if path == "/watchdog":
+            var h = Html()
+            watchdog_html(h, rule_rows(db, watchdog_config()), active_trips(db))
+            return Page(
+                200,
+                watchdog_json(db, watchdog_config()),
+                _page("Watchdog", "", h),
+            )
+        if path == "/api/watchdog":
+            var j = watchdog_json(db, watchdog_config())
+            return Page(200, j.copy(), j^, "application/json")
         if path == "/datasets":
             return datasets_page(db)
         if path.startswith("/datasets/"):
