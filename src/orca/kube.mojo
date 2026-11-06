@@ -104,6 +104,54 @@ struct RunSpec(Copyable, Movable):
     var workers: Int
     """0 for a pipeline without dista tasks: no head, no workers."""
     var allow_new_code: Bool
+    var env: List[Tuple[String, String]]
+    """The pipeline's own variables (orca.toml's `env`), given to every pod
+    over those `ORCA_RUN_ENV` names."""
+
+
+def pod_env(
+    copied: List[String], own: List[Tuple[String, String]], extra: String
+) -> String:
+    """A container's `env`: the scheduler's variables named in `copied`
+    (`ORCA_RUN_ENV`) but those the pipeline sets itself, the pipeline's own
+    (`own`), then `extra`, JSON entries."""
+    var out = String("[")
+    var first = True
+    var names = copied.copy()
+    # The sampler's interval, as the scheduler has it.
+    if "ORCA_SAMPLE_SECONDS" not in names:
+        names.append("ORCA_SAMPLE_SECONDS")
+    for n in names:
+        var mine = False
+        for kv in own:
+            if kv[0] == n:
+                mine = True
+        var v = getenv(n)
+        if not v or mine:
+            continue
+        out.write(
+            "" if first else ", ",
+            '{"name": ',
+            quote(n),
+            ', "value": ',
+            quote(v),
+            "}",
+        )
+        first = False
+    for kv in own:
+        out.write(
+            "" if first else ", ",
+            '{"name": ',
+            quote(kv[0]),
+            ', "value": ',
+            quote(kv[1]),
+            "}",
+        )
+        first = False
+    if extra:
+        out.write("" if first else ", ", extra)
+    out.write("]")
+    return out^
 
 
 struct KubeRunner(Movable):
@@ -157,31 +205,10 @@ struct KubeRunner(Movable):
             '"}',
         )
 
-    def _env(self, extra: String) -> String:
-        """A container's `env`: the copied variables, then `extra`."""
-        var out = String("[")
-        var first = True
-        var names = self.env.copy()
-        # The sampler's interval, as the scheduler has it.
-        if "ORCA_SAMPLE_SECONDS" not in names:
-            names.append("ORCA_SAMPLE_SECONDS")
-        for n in names:
-            var v = getenv(n)
-            if not v:
-                continue
-            out.write(
-                "" if first else ", ",
-                '{"name": ',
-                quote(n),
-                ', "value": ',
-                quote(v),
-                "}",
-            )
-            first = False
-        if extra:
-            out.write("" if first else ", ", extra)
-        out.write("]")
-        return out^
+    def _env(self, r: RunSpec, extra: String) -> String:
+        """A container's `env`: the copied variables, the pipeline's own,
+        then `extra`."""
+        return pod_env(self.env, r.env, extra)
 
     def _resources(self, cpu: Int) -> String:
         return String(
@@ -215,7 +242,7 @@ struct KubeRunner(Movable):
             ', "imagePullPolicy": "IfNotPresent", "command": ',
             command,
             ', "env": ',
-            self._env(env),
+            self._env(r, env),
             ', "resources": ',
             self._resources(cpu),
             "}]}}",
@@ -264,7 +291,7 @@ struct KubeRunner(Movable):
             ', "imagePullPolicy": "IfNotPresent", "command": ',
             argv,
             ', "env": ',
-            self._env(driver_env),
+            self._env(r, driver_env),
             ', "resources": ',
             self._resources(self.driver_cpu),
             "}]}}}}",

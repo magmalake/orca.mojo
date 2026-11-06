@@ -88,8 +88,42 @@ tests/kind.sh                  # that, on a kind cluster: each run on a dista cl
 pixi run test-ec2              # ORCA_RUNNER=ec2 against a stand-in EC2: a head and workers per run
 ./build/orca register --placement control ./build/toy   # a small pipeline's runs on the scheduler's own host, no instance (orca.control)
 pixi run test-placement        # that, within the control instance's limits, beside runs on the stand-in EC2
+./build/orca register ./build/toy   # with ./orca.toml if there is one: how each pipeline runs, checked in (below)
+./build/orca config show toy   # its effective settings and where each came from (--json for scripts)
+./build/orca config export     # an orca.toml from what's registered, to adopt one without retyping flags
 mojo build -D ORCA_SOURCE=$(git remote get-url origin) -D ORCA_COMMIT=$(git rev-parse HEAD) ...   # each run links the commit it ran
 ```
+
+## orca.toml: how each pipeline runs
+
+What a pipeline does stays in its code; where and how much it runs with
+goes in `orca.toml` at the root of the project, which `orca register` and
+`orca aws register` read (`orca.config`):
+
+```toml
+[defaults]
+placement = "ec2"
+head_type = "t4g.medium"
+
+[pipelines.gharchive]
+worker_type = "c7g.xlarge"
+workers = "0..4"             # or a fixed count, 4
+worker_procs = 1             # or "auto"
+max_runs = 2                 # over the code's Pipeline max_runs
+env = { DISTA_WORKER_SLOTS = "4", GHARCHIVE_PARALLEL = "16" }
+secrets = { GITHUB_TOKEN = "orca/github-token" }   # Secrets Manager IDs, never values
+```
+
+A pipeline the file names is registered with exactly what `[defaults]`,
+its own table and any flags say (flags win, and are recorded as
+overrides; a key taken out of the file goes back to its default). One it
+doesn't name is registered as before. Its `env` goes to its runs alone, on
+every runner, and is part of the EC2 warm pool's key; `ORCA_RUN_ENV` still
+copies the scheduler's variables to every run, under the pipeline's own.
+The registration keeps the file's SHA-256 and git commit. `--config F`
+reads another file, `--no-config` none; `orca config show` prints each
+value with its source (code default, orca.toml, flag, environment). Every key, the
+precedence and migrating from flags: [docs/orca-toml.md](docs/orca-toml.md).
 
 ## Developing locally
 

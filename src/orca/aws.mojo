@@ -5,7 +5,8 @@ its user already has (`aws login`, or `AWS_PROFILE` for a named profile).
                 [--console-hostname H] [--budget 100] [--zone us-east-2a]
                 [--public-data true|false] [--env KEY=VALUE ...]
     orca aws push [--tag T]                     # the project's image, to ECR
-    orca aws register [--tag T] [register flags] <pipeline> [...]
+    orca aws register [--tag T] [--config F|--no-config] [register flags]
+                      <pipeline> [...]
     orca aws app <name> [--host H] [--port 8080] [--tag T]
     orca aws status
     orca aws replace-control [--plan] [--wait] [--keep-old 24h] [--smoke P=KEY]
@@ -22,7 +23,8 @@ commit (or `--tag`) and `latest`, and pushes it to the stack's repository.
 `register` and `app` run on the control instance through SSM: `register`
 moves the scheduler and the UI to the image (`orca-refresh`) and registers
 each pipeline, `/opt/orca/pipelines/<pipeline>`, with the flags given, as
-`orca register` takes them; `app` runs the image's `/opt/orca/bin/<name>`
+`orca register` takes them, and the project's `orca.toml` (or `--config`'s
+file; `orca.config`), which it checks and sends whole with its git commit; `app` runs the image's `/opt/orca/bin/<name>`
 beside the UI, at `https://<host>` (for `console`, the stack's
 `ConsoleHostname`). `--env KEY=VALUE` (repeated) sets the control
 instance's settings beyond the template's (`ControlEnv`, all of them at
@@ -37,6 +39,7 @@ Files go to `build/orca-aws/`. `--stack` (default `orca`) and `--region`
 (default `AWS_REGION`, else the `aws` command's own) go anywhere.
 """
 
+from std.base64 import b64encode
 from std.ffi import c_int, external_call
 from std.os import getenv
 from std.os.path import exists
@@ -45,6 +48,7 @@ from std.time import sleep
 from json import loads
 
 from orca.aws_assets import PROJECT_DOCKERFILE, STACK_TEMPLATE
+from orca.config import ProjectConfig
 from orca.json import quote
 from orca.proc import capture
 
@@ -53,7 +57,8 @@ comptime AWS_USAGE = """usage:
   orca aws up --email ADDR [--hostname H] [--console-hostname H] [--budget N]
               [--zone AZ] [--public-data true|false] [--env KEY=VALUE ...]
   orca aws push [--tag T]
-  orca aws register [--tag T] [register flags] <pipeline> [...]
+  orca aws register [--tag T] [--config F|--no-config] [register flags]
+                    <pipeline> [...]
   orca aws app <name> [--host H] [--port 8080] [--tag T]
   orca aws status
   orca aws replace-control [--plan] [--wait] [--keep-old 24h] [--smoke P=KEY]
@@ -85,6 +90,7 @@ comptime _REGISTER_VALUED = [
     "--worker-procs",
     "--secret",
     "--placement",
+    "--max-runs",
 ]
 
 
@@ -593,12 +599,22 @@ def ssm_run(
 def _register(o: _Opts) raises -> Int:
     var flags = String()
     var pipelines = List[String]()
+    var config_path = String()
+    var no_config = False
     var i = 0
     while i < len(o.rest):
         var a = o.rest[i]
         if a == "--image":
             print("orca aws register: the image is the project's, from push")
             return 2
+        if a == "--config" and i + 1 < len(o.rest):
+            config_path = o.rest[i + 1]
+            i += 2
+            continue
+        if a == "--no-config":
+            no_config = True
+            i += 1
+            continue
         var valued = False
         for v in materialize[_REGISTER_VALUED]():
             if a == v:
@@ -623,6 +639,36 @@ def _register(o: _Opts) raises -> Int:
         _q(String(repo, ":", tag)),
         flags,
     )
+    # The project's orca.toml (orca.config), read and checked here and sent
+    # whole, with its commit: the control instance has no checkout.
+    if not no_config:
+        if not config_path:
+            config_path = getenv("ORCA_CONFIG")
+        if not config_path and exists("orca.toml"):
+            config_path = String("orca.toml")
+    if config_path:
+        var file = ProjectConfig.load(config_path)
+        var text: String
+        with open(config_path, "r") as f:
+            text = f.read()
+        var slash = config_path.rfind("/")
+        reg.write(
+            " --config-b64 ",
+            _q(b64encode(text)),
+            " --config-name ",
+            _q(String(config_path[byte = slash + 1 :])),
+        )
+        if file.commit:
+            reg.write(" --config-commit ", _q(file.commit))
+        if file.dirty:
+            reg.write(" --config-dirty")
+        print(
+            "orca aws register: with",
+            config_path,
+            String("(sha256 ", file.hash[byte=:12], ")"),
+        )
+    else:
+        reg.write(" --no-config")
     for p in pipelines:
         reg.write(" ", _q(String("/opt/orca/pipelines/", p)))
     var cmds: List[String] = [String("orca-refresh ", _q(tag)), reg^]
