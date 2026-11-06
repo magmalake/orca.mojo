@@ -8,6 +8,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 |---|---|
 | `/` | pipelines, with their schedules, next runs and last runs |
 | `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing |
+| `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=`) and as the Start runs form's date picker |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
 | `/runs` | runs, newest first, `?n=` (50, at most 500) to a page; `?pipeline=`, `?status=`, `?trigger=`; `?before=<id>`: older than that run |
 | `/runs/<id>` | a run's DAG, steps and partitions, attempts, errors, reads and commits |
@@ -111,6 +112,7 @@ from orca.actions import (
     start_run,
     stalled_sql,
 )
+from orca.calendar import Calendar, calendar, calendar_json
 from orca.chart import DayRuns, runs_chart
 from orca.civil import Civil, now
 from orca.logs import location_exists, read_location, run_dir
@@ -2354,6 +2356,292 @@ def _json_start_preview(
     )
 
 
+def calendar_page(mut db: State, name: String, month: String) raises -> Page:
+    """`/pipelines/<name>/calendar?month=2023-01`: each day (or, for a
+    monthly pipeline, each month of the year) with its state, as JSON alone."""
+    var ps = _pipelines(db, name)
+    if len(ps) == 0:
+        return not_found(String("no pipeline ", name))
+    try:
+        var c = calendar(db, name, ps[0].kind, ps[0].start, month)
+        var j = calendar_json(c)
+        return Page(200, j.copy(), j^, "application/json")
+    except e:
+        return _bad_request(String(e))
+
+
+def _month_name(month: Int) -> String:
+    var names = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ]
+    return String(names[month - 1])
+
+
+def _state_words(state: String) -> String:
+    if state == "live":
+        return "running or queued"
+    if state == "open":
+        return "not run"
+    if state == "outside":
+        return "outside the pipeline's range"
+    return state
+
+
+def _cal_title(c: Calendar) raises -> String:
+    if c.kind == "monthly":
+        return c.period
+    var y = c.period[byte=:4]
+    var m = Int(c.period[byte=5:7])
+    return String(_month_name(m), " ", y)
+
+
+def _coverage_html(
+    mut h: Html, mut db: State, p: PipelineRow, cal: String
+) raises:
+    """The pipeline page's coverage: its calendar with each day's state,
+    read-only, a month (or year) at a time with links to the next, so it
+    needs no scripts."""
+    var daily = p.kind == "daily"
+    var base = String("/pipelines/", url_encode(p.name))
+    h.raw('<h2 id="coverage">Coverage</h2><div class="cal cal--static"')
+    h.raw(' role="group" aria-label="')
+    h.text("Days" if daily else "Months", " of ", p.name)
+    h.raw('">')
+    var c: Calendar
+    try:
+        c = calendar(db, p.name, p.kind, p.start, cal)
+    except e:
+        h.raw('<p class="refused">')
+        h.text(String(e))
+        h.raw("</p></div>")
+        return
+    h.raw('<div class="cal__head">')
+    if c.prev:
+        h.raw('<a rel="prev" href="')
+        h.text(base, "?cal=", c.prev, "#coverage")
+        h.raw(
+            '" aria-label="Previous ', "month" if daily else "year", '">‹</a>'
+        )
+    else:
+        h.raw('<span aria-hidden="true">‹</span>')
+    h.raw('<strong aria-live="polite">')
+    h.text(_cal_title(c))
+    h.raw("</strong>")
+    if c.next:
+        h.raw('<a rel="next" href="')
+        h.text(base, "?cal=", c.next, "#coverage")
+        h.raw('" aria-label="Next ', "month" if daily else "year", '">›</a>')
+    else:
+        h.raw('<span aria-hidden="true">›</span>')
+    h.raw('</div><ul class="cal__grid')
+    h.raw(" cal__grid--days" if daily else " cal__grid--months", '">')
+    if daily:
+        for w in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]:
+            h.raw('<li class="cal__dow" aria-hidden="true">', w, "</li>")
+        for _ in range(c.weekday):
+            h.raw('<li class="cal__pad" aria-hidden="true"></li>')
+    for i in range(len(c.cells)):
+        ref cell = c.cells[i]
+        h.raw('<li class="cal__day cal--', cell.state, '" data-key="')
+        h.text(cell.key)
+        h.raw('" title="')
+        h.text(cell.key, ": ", _state_words(cell.state))
+        h.raw('">')
+        if daily:
+            h.text(i + 1)
+        else:
+            h.text(_month_name(i + 1)[byte=:3])
+        h.raw('<span class="sr">')
+        h.text(", ", cell.key, " ", _state_words(cell.state))
+        h.raw("</span></li>")
+    h.raw('</ul><p class="muted cal__legend">')
+    var first = True
+    for s in ["done", "failed", "live", "open", "outside"]:
+        var n = c.count(String(s))
+        h.raw("" if first else " · ")
+        first = False
+        h.raw('<span class="cal__key cal--', s, '"></span> ')
+        h.text(n, " ", _state_words(String(s)))
+    h.raw("</p></div>")
+
+
+comptime _CAL_SCRIPT = """
+(() => {
+  const root = document.querySelector("[data-calendar]");
+  const f = document.getElementById("start");
+  if (!root || !f) return;
+  const field = f.elements.partitions;
+  const words = { done: "done", failed: "failed", live: "running or queued", open: "not run", outside: "outside the pipeline's range" };
+  const names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const two = (n) => String(n).padStart(2, "0");
+  const cache = {};
+  let data = null, focus = "", anchor = "", base = "", mine = false;
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  };
+  const ranges = () => field.value.split(",").map((s) => s.trim()).filter(Boolean).map((s) => {
+    const p = s.split("..");
+    return [p[0], p[1] || p[0]];
+  });
+  const marks = () => {
+    const rs = ranges();
+    for (const b of root.querySelectorAll("button.cal__day")) {
+      const k = b.dataset.key;
+      const on = rs.some((r) => k >= r[0] && k <= r[1]);
+      b.classList.toggle("cal--sel", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.classList.toggle("cal--anchor", k === anchor);
+    }
+    const hint = root.querySelector(".cal__hint");
+    if (hint) hint.textContent = anchor ? "Now pick the last " + data.unit + " (the same one again for just that one)." : "Pick the first " + data.unit + ", then the last. Hold ctrl or cmd to add another range.";
+  };
+  const render = () => {
+    root.replaceChildren();
+    const daily = data.unit === "day";
+    const title = daily ? names[+data.period.slice(5, 7) - 1] + " " + data.period.slice(0, 4) : data.period;
+    const head = el("div", "cal__head");
+    const nav = (to, label, glyph) => {
+      const b = el("button", "", glyph);
+      b.type = "button";
+      b.setAttribute("aria-label", label);
+      b.disabled = !to;
+      b.addEventListener("click", () => load(to));
+      return b;
+    };
+    const t = el("strong", "", title);
+    t.setAttribute("aria-live", "polite");
+    head.append(nav(data.prev, "Previous " + data.unit + (daily ? " month" : " year"), "‹"), t, nav(data.next, "Next " + (daily ? "month" : "year"), "›"));
+    const grid = el("div", "cal__grid " + (daily ? "cal__grid--days" : "cal__grid--months"));
+    grid.setAttribute("role", "group");
+    grid.setAttribute("aria-label", title);
+    if (daily) {
+      for (const w of ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]) grid.append(el("span", "cal__dow", w));
+      for (let i = 0; i < data.weekday; i++) grid.append(el("span", "cal__pad"));
+    }
+    const keys = data.cells.map((c) => c.key);
+    if (!keys.includes(focus)) {
+      const sel = ranges().map((r) => r[0]).find((k) => keys.includes(k));
+      focus = sel || (keys.includes(data.today) ? data.today : (data.cells.find((c) => c.state !== "outside") || data.cells[0]).key);
+    }
+    data.cells.forEach((c, i) => {
+      const b = el("button", "cal__day cal--" + c.state, daily ? String(i + 1) : names[i].slice(0, 3));
+      b.type = "button";
+      b.dataset.key = c.key;
+      b.setAttribute("aria-label", c.key + ": " + words[c.state]);
+      b.tabIndex = c.key === focus ? 0 : -1;
+      if (c.state === "outside") b.setAttribute("aria-disabled", "true");
+      grid.append(b);
+    });
+    const legend = el("p", "muted cal__legend");
+    for (const s of ["done", "failed", "live", "open", "outside"]) {
+      legend.append(el("span", "cal__key cal--" + s), " " + data.counts[s] + " " + words[s] + " ");
+    }
+    const hint = el("p", "muted cal__hint");
+    hint.setAttribute("aria-live", "polite");
+    root.append(head, grid, legend, hint);
+    marks();
+  };
+  const load = async (period, then) => {
+    try {
+      if (!cache[period || ""]) {
+        const r = await fetch(root.dataset.calendar + (period ? "?month=" + encodeURIComponent(period) : ""));
+        if (!r.ok) throw new Error(r.status);
+        cache[period || ""] = await r.json();
+      }
+      data = cache[period || ""];
+      if (then) focus = then;
+      render();
+      if (then) root.querySelector('button[data-key="' + then + '"]').focus();
+    } catch (e) {
+      if (period) return load("");
+      root.replaceChildren(el("p", "muted", "The calendar couldn't be loaded; type the range instead."));
+    }
+  };
+  const pick = (b, e) => {
+    if (b.getAttribute("aria-disabled")) return;
+    const k = b.dataset.key;
+    focus = k;
+    if (!anchor) {
+      base = (e.ctrlKey || e.metaKey) && field.value.trim() ? field.value.trim() + "," : "";
+      anchor = k;
+      field.value = base + k;
+    } else {
+      const lo = anchor < k ? anchor : k, hi = anchor < k ? k : anchor;
+      field.value = base + (lo === hi ? lo : lo + ".." + hi);
+      anchor = "";
+    }
+    mine = true;
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    mine = false;
+    marks();
+  };
+  const step = (k, dx, dy) => {
+    if (data.unit === "day") {
+      const d = new Date(Date.UTC(+k.slice(0, 4), +k.slice(5, 7) - 1, +k.slice(8, 10) + dx + 7 * dy));
+      return d.getUTCFullYear() + "-" + two(d.getUTCMonth() + 1) + "-" + two(d.getUTCDate());
+    }
+    const d = new Date(Date.UTC(+k.slice(0, 4), +k.slice(5, 7) - 1 + dx + 4 * dy, 1));
+    return d.getUTCFullYear() + "-" + two(d.getUTCMonth() + 1);
+  };
+  root.addEventListener("click", (e) => {
+    const b = e.target.closest("button.cal__day");
+    if (b) pick(b, e);
+  });
+  root.addEventListener("keydown", (e) => {
+    const b = e.target.closest("button.cal__day");
+    if (!b) return;
+    const move = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (!move) {
+      if (e.key === "PageUp" || e.key === "PageDown") {
+        e.preventDefault();
+        const to = e.key === "PageUp" ? data.prev : data.next;
+        if (to) load(to);
+      }
+      return;
+    }
+    e.preventDefault();
+    const to = step(b.dataset.key, move[0], move[1]);
+    const at = root.querySelector('button[data-key="' + to + '"]');
+    if (at) {
+      focus = to;
+      for (const x of root.querySelectorAll("button.cal__day")) x.tabIndex = x === at ? 0 : -1;
+      at.focus();
+    } else {
+      const p = data.unit === "day" ? to.slice(0, 7) : to.slice(0, 4);
+      if ((to < b.dataset.key ? data.prev : data.next) === p) load(p, to);
+    }
+  });
+  field.addEventListener("input", () => {
+    if (!mine) anchor = "";
+    if (data) marks();
+  });
+  const first = ranges()[0];
+  root.hidden = false;
+  root.textContent = "Loading calendar…";
+  load(first ? first[0].slice(0, data_len(first[0])) : "");
+  function data_len(k) { return k.length === 4 ? 4 : 7; }
+})();
+"""
+"""The Start runs form's calendar: a month of days (a year of months for a
+monthly pipeline) from `<pipeline>/calendar`, each coloured by its state.
+Two clicks fill the range field, which the preview and command lines already
+follow; the arrows move between days, Page Up and Down between months."""
+
+
 comptime _START_SCRIPT = """
 (() => {
   const f = document.getElementById("start");
@@ -2422,7 +2710,14 @@ def _start_html(
         h.text(example, "..", example)
     h.raw('" value="')
     h.text(keys)
-    h.raw('"></label><label class="start__check"><input type="checkbox"')
+    h.raw('"></label>')
+    if p.kind == "daily" or p.kind == "monthly":
+        # Filled in by _CAL_SCRIPT; without scripts it stays hidden and the
+        # field above is the form.
+        h.raw('<div class="cal" hidden data-calendar="')
+        h.text(base, "/calendar")
+        h.raw('"></div>')
+    h.raw('<label class="start__check"><input type="checkbox"')
     h.raw(' name="rerun" value="1"', " checked" if rerun else "", ">")
     h.text(" Include ", units, " that already succeeded (rerun them)")
     h.raw('</label><div class="start__choices"><div class="start__choice">')
@@ -2476,7 +2771,10 @@ def _start_html(
     h.raw(" queues one run. The scheduler (<code>orca scheduler</code>) starts")
     h.raw(" queued runs, up to ")
     h.text(p.max_runs)
-    h.raw(" at once.</p></form><script>", _START_SCRIPT, "</script>")
+    h.raw(" at once.</p></form><script>", _START_SCRIPT)
+    if p.kind == "daily" or p.kind == "monthly":
+        h.raw(_CAL_SCRIPT)
+    h.raw("</script>")
 
 
 def pipeline(
@@ -2485,9 +2783,11 @@ def pipeline(
     keys_in: String = "",
     rerun: Bool = False,
     preview: Bool = False,
+    cal: String = "",
 ) raises -> Page:
     """A pipeline's page; with `preview` and `keys_in`, what its Start runs
-    form would queue over them (`?preview=1&partitions=...&rerun=1`)."""
+    form would queue over them (`?preview=1&partitions=...&rerun=1`); `cal`
+    is the month (or year) its coverage calendar shows."""
     var ps = _pipelines(db, name)
     if len(ps) == 0:
         return not_found(String("no pipeline ", name))
@@ -2668,6 +2968,8 @@ def pipeline(
             h.cell(u[2])
             h.raw("</tr>")
         h.raw("</tbody></table></div>")
+    if p.kind == "daily" or p.kind == "monthly":
+        _coverage_html(h, db, p, cal)
     if p.binary:
         var regs = registered(db, name)
         _start_html(
@@ -5362,7 +5664,10 @@ struct Ui(Copyable, Handler):
                     _query(url, "partitions"),
                     _query(url, "rerun") == "1",
                     _query(url, "preview") == "1",
+                    _query(url, "cal"),
                 )
+            if len(parts) == 2 and parts[1] == "calendar" and name:
+                return calendar_page(db, name, _query(url, "month"))
             if len(parts) == 3 and parts[1] == "keys" and name:
                 return key_page(db, name, url_decode(parts[2]))
         return not_found(String("nothing at ", path))

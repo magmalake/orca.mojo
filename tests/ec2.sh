@@ -52,6 +52,8 @@ export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test OR
 export ORCA_STALE_SECONDS=10 ORCA_START_SECONDS=60 ORCA_VCPU_BUDGET=15
 export ORCA_LOGS=$PWD/build/ec2-logs ORCA_FANOUT_SHOW_HOST=1 ORCA_FANOUT_SLEEP=0.5 ORCA_CLUSTER_LOG_SECONDS=1
 export ORCA_SAMPLE_SECONDS=1
+# Without the warm pool (tests/pool.sh): every instance ends with its run.
+export ORCA_EC2_POOL_SECONDS=0
 export ORCA_RUN_ENV=ORCA_FANOUT_SHOW_HOST,ORCA_FANOUT_SLEEP
 python3 tests/fake_ec2.py "$port" "$dir" >> "$log" 2>&1 &
 fake=$!

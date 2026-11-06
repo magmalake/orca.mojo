@@ -184,6 +184,27 @@ struct Registered(Copyable, Movable):
     (`orca register --worker-procs`); 0 is one per vCPU."""
 
 
+def _ec2_spec(p: Registered, run: Int, start: Int, new_code: Bool) -> Ec2Spec:
+    """Start `start` of `p`'s run `run`, as the ec2 runner starts it."""
+    return Ec2Spec(
+        run,
+        start,
+        p.name,
+        p.image,
+        p.binary,
+        p.workers > 0,
+        p.head_type,
+        p.worker_type,
+        p.workers,
+        p.spot,
+        new_code,
+        p.min_workers,
+        p.secrets.copy(),
+        p.worker_procs,
+        p.registry_hash,
+    )
+
+
 def parse_worker_procs(v: String) raises -> Int:
     """`--worker-procs`'s value: a count of at least 1, or `auto` (returned
     as 0), one process per vCPU of the worker type."""
@@ -1723,6 +1744,15 @@ struct Scheduler(Movable):
                 "has no image (orca register --image), so its runs wait",
             )
             return
+        # On EC2 with the warm pool, the keys of the instances its runs may
+        # take, and whether some are still on their way to the pool from a
+        # run that just ended: then nothing starts this tick, so the next
+        # run takes them rather than new ones.
+        var keys = List[String]()
+        var settling = False
+        if self.ec2:
+            keys = self.ec2.value().pool_keys(_ec2_spec(p, 0, 0, False))
+            settling = self.ec2.value().settling(self.db, keys)
         var tx = self.db.conn.begin()
         _ = tx.query(
             "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
@@ -1829,7 +1859,7 @@ struct Scheduler(Movable):
             .row(0)
             .int64("n")
         )
-        var free = 0 if p.paused else p.max_runs - live
+        var free = 0 if p.paused or settling else p.max_runs - live
         var need = 0
         if self.runner:
             need = self.runner.value().cpu_of(p.workers)
@@ -1855,7 +1885,31 @@ struct Scheduler(Movable):
                 .row(0)
                 .int64("n")
             )
-            free = min(free, (self.budget - used) // need if need > 0 else free)
+            # The pool's idle instances count too, but those a run of `p`
+            # would take are its own: k runs fit if the budget holds the
+            # others and k runs' worth or those, whichever is more.
+            var others = 0
+            var mine = 0
+            if len(keys) > 0:
+                var b = keys[1] if len(keys) > 1 else keys[0]
+                var pr = tx.query(
+                    (
+                        "SELECT coalesce(sum(i.cpu_millis), 0) AS n,"
+                        " coalesce(sum(i.cpu_millis) FILTER (WHERE i.pool_key"
+                        " IN ($1, $2)), 0) AS mine FROM orca.instances i JOIN"
+                        " orca.runs r ON r.id = i.run WHERE i.ended IS NULL AND"
+                        " i.pool_key IS NOT NULL AND NOT (r.status = 'running'"
+                        " AND r.starts = i.start)"
+                    ),
+                    Params().text(keys[0]).text(b),
+                ).row(0)
+                mine = Int(pr.int64("mine"))
+                others = Int(pr.int64("n")) - mine
+            var room = self.budget - used - others
+            if room < mine:
+                free = 0
+            else:
+                free = min(free, room // need if need > 0 else free)
         var ids = List[Int64]()
         var new_code = List[Bool]()
         var starts = List[Int]()
@@ -1936,23 +1990,7 @@ struct Scheduler(Movable):
             if self.ec2:
                 try:
                     self.ec2.value().start(
-                        self.db,
-                        Ec2Spec(
-                            Int(id),
-                            starts[i],
-                            p.name,
-                            p.image,
-                            p.binary,
-                            p.workers > 0,
-                            p.head_type,
-                            p.worker_type,
-                            p.workers,
-                            p.spot,
-                            new_code[i],
-                            p.min_workers,
-                            p.secrets.copy(),
-                            p.worker_procs,
-                        ),
+                        self.db, _ec2_spec(p, Int(id), starts[i], new_code[i])
                     )
                     print("started", p.name, "run", id, "on its instances")
                 except e:

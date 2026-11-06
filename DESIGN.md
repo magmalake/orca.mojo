@@ -483,6 +483,15 @@ About $60 a month always on, plus the runs. The project's spend limit is set hig
 
 As built in 5a (`orca.ec2`, `orca.awsec2`): the head instance's script runs the head in the background and the driver in front, then keeps the driver's output with `<binary> keep-log`, which appends it to the run's `driver.log` wherever `ORCA_LOGS` is; a worker's script exports `DISTA_ADVERTISE` from `hostname -I`. Instances are told `ORCA_EC2_DATABASE_URL` as their `ORCA_DATABASE_URL`, which goes in their user data: anyone in the account allowed `ec2:DescribeInstanceAttribute` can read it, so the demo's database password is for that database alone. `DescribeInstances` is read without paging, which holds up to a thousand instances. `tests/ec2.sh` (`test-ec2`) is 5a's gate, against `tests/fake_ec2.py`.
 
+**A warm pool** (`orca.ec2`, `orca.pool`; migration 24), added once the census import measured it: its runs did 60–70 s of work each after waiting 30–40 s for a head and workers to boot and join, and EC2 bills at least a minute per start. With `ORCA_EC2_POOL_SECONDS` (150; 0 is the old behaviour), an instance whose run ended waits, idle, for the next run of the same pipeline started as the same instances, and that run takes it rather than launching one. The choices:
+
+- **The key is what the instance was started as**: a digest of its role, type, market, network, profile, the registry hash and its script but for the first run's line (so the image, binary, secrets' IDs, environment and worker processes). The script is the same for every run of a key, which is why it can serve them all.
+- **The instance asks Postgres for its next run**, through the pipeline's binary (`pool-next`), every second; it reaches Postgres already, so there's nothing else to run, open or permit (SSM, a port on the instance, S3 polling). The scheduler hands it over by ending its row and inserting the new run's in one transaction, rows locked `FOR UPDATE SKIP LOCKED`, so two starts can't take one instance; `orca.instances` is keyed by instance, run and start, with one live row per instance.
+- **A run's reset is a new pass of the script**: a new dista head process (so no task, result or actor carries over), new worker processes, secrets read again, logs and samples named by the new run. A worker learns its run ended from `pool-wait`, since dista workers don't end with their head, and its processes are killed.
+- **Liveness before hand-over**: a beat within 5 s and EC2's `running`; one that then doesn't take the run up within 30 s is replaced by new instances, well inside the start grace. Idle instances count against `ORCA_VCPU_BUDGET` and show on `/fleet` as `idle (pooled)`.
+
+*Verified* by `tests/pool.sh`: three runs on one launch, each run's logs its own; another pipeline, a new registration and killed idle instances not reused; the grace; scaling from 1 pooled worker to 3, and the rest left pooled; two runs at once not sharing; a stopped pooled head replaced; the pool off. `tests/ec2.sh` runs with it off.
+
 **The PRs:**
 
 | # | PR | Gate | Size |
@@ -573,7 +582,7 @@ The order is 1, 2, 3, dista's autoscaling, 4, 5, 6, 7, 8, 9. Paid resources beyo
 | How a DAG is declared | Compile-time, `Step` and `Pipeline` types | It's the only way an edge's types are checked by the compiler, and it's what dista does. Composition comes from pipelines sharing step declarations from a module. |
 | Where step code runs | In the pipeline's own binary, as the run's dista driver and workers; the scheduler is a separate generic binary | The scheduler links no pipeline's dependencies, and runs survive a scheduler restart. |
 | The UI's stack | Server-rendered HTML from flare, a little JavaScript, JSON at the same paths | One process, nothing to build, API and UI from the same handlers. |
-| Cluster start time | Local runtime per run until phase 5, then measure; warm pool only if needed | No data yet. |
+| Cluster start time | Local runtime per run until phase 5, then measure; warm pool only if needed | Measured on the census import: a day's work took 60–70 s and its cluster 30–40 s to boot and join, so the `ec2` runner has a warm pool (`ORCA_EC2_POOL_SECONDS`, 150 s), below. |
 | Restate | Not needed: runs are processes that record their own progress in Postgres, and the scheduler is restartable from Postgres alone | Revisit if orca grows long-lived workflows. |
 
 ## Defaults to confirm

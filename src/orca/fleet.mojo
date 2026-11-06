@@ -305,7 +305,9 @@ struct Host(Copyable, Movable):
     """The run it serves; 0 for the control instance."""
     var uptime: Float64
     var state: String
-    """`starting`, `running`, `draining` or `control`."""
+    """`starting`, `running`, `draining`, `idle (pooled)` (its run ended,
+    and it waits in the EC2 runner's warm pool for another) or
+    `control`."""
     var sampled: Bool
     var age: Float64
     """Seconds since its last sample."""
@@ -318,6 +320,8 @@ struct Host(Copyable, Movable):
     var spark_x: List[Float64]
     """Its CPU over the last 10 minutes, as (0 = then, 1 = now) and percent."""
     var spark_y: List[Float64]
+    var idle: Float64
+    """Seconds it has been idle in the pool; 0 when it isn't."""
 
 
 def _control_type() -> String:
@@ -347,6 +351,8 @@ def fleet_hosts(mut db: State) raises -> List[Host]:
     var sql = (
         "SELECT i.id, i.role, i.instance_type, i.run, extract(epoch FROM now()"
         " - i.launched)::float8 AS up, i.drained IS NOT NULL AS draining,"
+        " i.idle IS NOT NULL AS idle, coalesce(extract(epoch FROM now() -"
+        " i.idle), 0)::float8 AS idle_for,"
         " s.cpu, s.busiest, s.mem, s.disk, s.net_in, s.net_out, s.ago FROM"
         " orca.instances i LEFT JOIN LATERAL (SELECT cpu, busiest, mem, disk,"
         " net_in, net_out, extract(epoch FROM now() - t)::float8 AS ago FROM"
@@ -363,8 +369,10 @@ def fleet_hosts(mut db: State) raises -> List[Host]:
                 r.text("instance_type"),
                 Int(r.int64("run")),
                 r.float64("up"),
-                "draining" if r.bool("draining") else (
-                    "running" if sampled else "starting"
+                "idle (pooled)" if r.bool("idle") else (
+                    "draining" if r.bool("draining") else (
+                        "running" if sampled else "starting"
+                    )
                 ),
                 sampled,
                 r.float64("ago") if sampled else 0.0,
@@ -376,6 +384,7 @@ def fleet_hosts(mut db: State) raises -> List[Host]:
                 r.float64("net_out") if sampled else 0.0,
                 sparks_x.pop(id, List[Float64]()),
                 sparks_y.pop(id, List[Float64]()),
+                r.float64("idle_for") if r.bool("idle") else 0.0,
             )
         )
     var c = db.conn.query(
@@ -406,6 +415,7 @@ def fleet_hosts(mut db: State) raises -> List[Host]:
                 r.float64("net_out"),
                 sparks_x.pop(_CONTROL, List[Float64]()),
                 sparks_y.pop(_CONTROL, List[Float64]()),
+                0.0,
             )
         )
     return out^
@@ -1132,6 +1142,10 @@ def hosts_html(
             h.raw('<td class="muted" colspan="6">no samples yet</td>')
         h.raw("<td>")
         h.status(x.state)
+        if x.idle > 0:
+            h.raw(' <span class="muted" title="Idle in the pool for">')
+            h.text(_age(x.idle))
+            h.raw("</span>")
         if x.sampled and x.age > 180:
             h.raw(' <span class="muted" title="No sample for this long">')
             h.text(_age(x.age), " ago")
@@ -1281,6 +1295,8 @@ def hosts_json(hosts: List[Host]) -> String:
             Int(x.uptime) if x.role != _CONTROL else 0,
             ', "state": ',
             quote(x.state),
+            ', "idle_seconds": ',
+            Int(x.idle),
             ', "sampled": ',
             "true" if x.sampled else "false",
         )
