@@ -6,7 +6,7 @@ appended to a log file if one is given; `reap` collects the ones that ended.
 what it printed; `Capture` is the same started without waiting, for the
 scheduler to check on from tick to tick. Everything a child needs is
 prepared before `fork`, so the child calls only `setpgid`, `fopen`, `dup2`,
-`setenv`, `setpriority`, `open`/`write` (Linux), `execv` (or `execvp`)
+`setenv`, `setpriority`, `fwrite` (Linux), `execv` (or `execvp`)
 and `_exit`.
 """
 
@@ -62,6 +62,7 @@ def spawn(
     var mode = _cstr("a")
     var oom_path = _cstr("/proc/self/oom_score_adj")
     var oom_value = _cstr("1000")
+    var oom_mode = _cstr("w")
     var pid = external_call["fork", c_int]()
     if pid < 0:
         raise Error("spawn: fork failed")
@@ -87,15 +88,17 @@ def spawn(
             )
         comptime if CompilationTarget.is_linux():
             if first_to_go:
-                # O_WRONLY; raising one's own score needs no privilege.
-                var fd = external_call["open", c_int](
-                    oom_path.unsafe_ptr(), c_int(1)
+                # Raising one's own score needs no privilege. stdio, as
+                # for the log: `open` is declared elsewhere with another
+                # signature.
+                var f = external_call["fopen", Int](
+                    oom_path.unsafe_ptr(), oom_mode.unsafe_ptr()
                 )
-                if fd >= 0:
-                    _ = external_call["write", Int](
-                        fd, oom_value.unsafe_ptr(), Int(4)
+                if f != 0:
+                    _ = external_call["fwrite", Int](
+                        oom_value.unsafe_ptr(), Int(1), Int(4), f
                     )
-                    _ = external_call["close", c_int](fd)
+                    _ = external_call["fclose", c_int](f)
         _ = external_call["execv", c_int](
             args[0].unsafe_ptr(), ptrs.unsafe_ptr()
         )
@@ -106,6 +109,7 @@ def spawn(
     _ = values^
     _ = oom_path^
     _ = oom_value^
+    _ = oom_mode^
     return Int(pid)
 
 
