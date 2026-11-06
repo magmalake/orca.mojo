@@ -113,6 +113,9 @@ test-worker-procs = { cmd = "scripts/with-postgres.sh tests/worker_procs.sh" }
 # The ec2 runner's warm pool: runs of one pipeline on the same instances.
 test-pool = { cmd = "scripts/with-postgres.sh tests/pool.sh" }
 test-secrets = { cmd = "scripts/with-postgres.sh tests/secrets.sh" }
+# Placement (orca.control): runs on the scheduler's own host, within its
+# limits, beside runs on the stand-in EC2.
+test-placement = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_control.mojo -o build/test-control && ./build/test-control && scripts/with-postgres.sh tests/placement.sh" }
 test-aws = { cmd = "tests/aws.sh" }
 test-lost-workers = { cmd = "scripts/with-postgres.sh tests/lost_workers.sh" }
 test-datasets = { cmd = "scripts/with-postgres.sh tests/datasets.sh" }
@@ -132,7 +135,7 @@ test-kind = { cmd = "tests/kind.sh" }
 build-shared = { cmd = "scripts/build-shared.sh" }
 # CI runs these two halves on runners of their own; `test` is both.
 # The executor, stores, workers, clouds and the data a run makes:
-test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-worker-procs", "test-pool", "test-secrets", "test-aws", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
+test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-worker-procs", "test-pool", "test-secrets", "test-placement", "test-aws", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
 # The scheduler, the UI, and what a registration and its code control:
 test-scheduler-ui = { depends-on = ["build-shared", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-system", "test-actions", "test-calendar", "test-ui-login", "test-remote", "test-pause", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
 test = { depends-on = ["test-executor", "test-scheduler-ui"] }

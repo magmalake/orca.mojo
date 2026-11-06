@@ -43,6 +43,9 @@ cmp -s build/orca-aws/orca.yaml "$root/deploy/aws/orca.yaml" || fail "the templa
 grep -qF -- '-v /sys/fs/cgroup:/host/cgroup:ro' build/orca-aws/orca.yaml || fail "the sampler doesn't mount the cgroup files read-only"
 grep -qF -- '--cgroup /host/cgroup --names /host/containers' build/orca-aws/orca.yaml || fail "the sampler isn't told where they are"
 grep -q 'docker.sock' build/orca-aws/orca.yaml && fail "a container gets the Docker socket"
+# Control-placed runs (orca.control) read their secrets with the control
+# instance's role.
+grep -A16 'ControlRole:' build/orca-aws/orca.yaml | grep -q 'secretsmanager:GetSecretValue' || fail "the control role can't read runs' secrets"
 grep -qF 'Prefix: logs/control/, ExpirationInDays: 14' build/orca-aws/orca.yaml || fail "the control samples don't expire in 14 days"
 # An update keeps the password: no new one.
 "$orca" aws up > /dev/null 2>&1 || fail "up again"
@@ -72,11 +75,11 @@ grep -q "pixi shelf add orca-mojo" build/orca-aws/Dockerfile || fail "the Docker
 echo "ok   push"
 
 if "$orca" aws register --tag v1 --image x daily > /dev/null 2>&1; then fail "register took --image"; fi
-"$orca" aws register --tag v1 --workers 0..4 --worker-procs auto --secret GITHUB_TOKEN=orca/github-token daily > ../reg.out 2>&1 || fail "register: $(cat ../reg.out)"
+"$orca" aws register --tag v1 --workers 0..4 --worker-procs auto --secret GITHUB_TOKEN=orca/github-token --placement control daily > ../reg.out 2>&1 || fail "register: $(cat ../reg.out)"
 got=$(calls)
 echo "$got" | grep -q "ssm send-command --instance-ids i-0control --document-name AWS-RunShellScript" || fail "register's send-command: $got"
 echo "$got" | grep -qF "orca-refresh 'v1'" || fail "register's refresh: $got"
-echo "$got" | grep -qF "docker exec scheduler orca register --image '$repo:v1' '--workers' '0..4' '--worker-procs' 'auto' '--secret' 'GITHUB_TOKEN=orca/github-token' '/opt/orca/pipelines/daily'" \
+echo "$got" | grep -qF "docker exec scheduler orca register --image '$repo:v1' '--workers' '0..4' '--worker-procs' 'auto' '--secret' 'GITHUB_TOKEN=orca/github-token' '--placement' 'control' '/opt/orca/pipelines/daily'" \
     || fail "register's command: $got"
 grep -q "registered on the control instance" ../reg.out || fail "register didn't print the output"
 echo "ok   register"

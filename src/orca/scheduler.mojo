@@ -47,6 +47,9 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
 - **Where runs run.** `ORCA_RUNNER` is `local` (a process here, the
   default), `kubernetes` (a dista cluster of pods per run, `orca.kube`) or
   `ec2` (a head instance and worker instances per run, `orca.ec2`).
+  A pipeline registered with `--placement control` runs here whatever the
+  runner, within the control instance's limits (`orca.control`); one with
+  `--placement ec2` waits on a scheduler whose runner isn't `ec2`.
 - **Sensors and rebuilds** (`orca.sensors`). A sensor pipeline's pass
   looks for snapshots of the datasets it reads, in `orca.commits` on every
   tick and from `<binary> sense` every `ORCA_SENSE_SECONDS` (asked in a
@@ -96,7 +99,7 @@ machine's metrics to `.../<run>/metrics/local.jsonl` until the process ends;
 """
 
 from std.ffi import c_int, external_call
-from std.os import getenv, makedirs
+from std.os import getenv, makedirs, remove
 from std.os.path import exists
 from std.time import perf_counter_ns, sleep
 
@@ -104,20 +107,34 @@ from postgres import Params, Transaction
 
 from orca.expiry import expirable, expire_argv, maintain_binary
 from orca.civil import Civil
+from orca.control import (
+    CONTROL,
+    ControlLimits,
+    control_stage,
+    fetch_secret,
+    pressure_reason,
+    run_env,
+    slots_reason,
+)
 from orca.crash import crash_summary, crashed_by_signal
 from orca.cron import CronExpr
 from orca.day import Day
 from orca.key import parse_keys
 from orca.ec2 import Ec2Runner, Ec2Spec
 from orca.fleet import ingest
-from orca.system import Archive, keep as keep_system, trim as trim_system
+from orca.system import (
+    Archive,
+    keep as keep_system,
+    system_now,
+    trim as trim_system,
+)
 from orca.kube import KubeRunner, RunSpec, cpu_millis
 from orca.live import dead_sql, live_runs, live_sql, stale_limit, start_grace
 from orca.logs import is_remote, publish, read_location, run_dir, stage_of
 from orca.month import Month
 from orca.name import Name, parse_names, sort_texts
 from orca.proc import Capture, absolute, binary_seconds, capture, reap, spawn
-from orca.sample import metrics_location, sample_seconds
+from orca.sample import metrics_location, sample_seconds, tree_rss
 from orca.schedule import Schedule
 from orca.secrets import parse_secrets, secrets_json
 from orca.sensors import (
@@ -132,6 +149,10 @@ from orca.tz import Zone
 
 comptime _BUDGET_LOCK = 0x6F726362  # "orcb"
 """Held while a start is weighed against `ORCA_VCPU_BUDGET`."""
+
+comptime _CONTROL_LOCK = 0x6F726363  # "orcc"
+"""Held while a control-placed start is weighed against
+`ORCA_CONTROL_MAX_RUNS`."""
 
 comptime _RETRIED = "trigger IN ('schedule', 'backfill', 'sensor')"
 """The runs the scheduler retries."""
@@ -182,6 +203,10 @@ struct Registered(Copyable, Movable):
     var worker_procs: Int
     """On EC2, the dista worker processes on each worker instance
     (`orca register --worker-procs`); 0 is one per vCPU."""
+    var placement: String
+    """Where its runs run (`orca register --placement`): `control` (the
+    scheduler's host, `orca.control`), `ec2`, or empty for the scheduler's
+    runner."""
 
 
 def _ec2_spec(p: Registered, run: Int, start: Int, new_code: Bool) -> Ec2Spec:
@@ -289,7 +314,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " coalesce(worker_type, '') AS worker_type, coalesce(spot, false)"
             " AS spot, coalesce(ec2_min_workers, -1) AS min_workers,"
             " coalesce(secrets::text, '') AS secrets, paused,"
-            " coalesce(worker_procs, 1) AS worker_procs FROM"
+            " coalesce(worker_procs, 1) AS worker_procs,"
+            " coalesce(placement, '') AS placement FROM"
             " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
             " name = $1) ORDER BY name"
         ),
@@ -324,6 +350,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 parse_secrets(r.text("secrets")),
                 r.bool("paused"),
                 Int(r.int64("worker_procs")),
+                r.text("placement"),
             )
         )
     # A fixed count, or no tasks: no scaling.
@@ -806,6 +833,24 @@ def _last_line(path: String) -> String:
     return ""
 
 
+@fieldwise_init
+struct _ControlProc(Copyable, Movable):
+    """A control-placed run's process, as the scheduler keeps it."""
+
+    var run: Int
+    var binary: String
+    var stage: String
+    """Where its output goes, or empty without `ORCA_LOGS`."""
+    var location: String
+    """The run's `driver.log`, which `keep-log` appends `stage` to."""
+    var start: Int
+    var env: List[String]
+    """What it was given beside the scheduler's environment: its secrets'
+    values among them, which `keep-log` masks."""
+    var over: String
+    """Why the scheduler killed it, over its memory cap, or empty."""
+
+
 struct Scheduler(Movable):
     var db: State
     var stale: Float64
@@ -856,6 +901,13 @@ struct Scheduler(Movable):
     """When the next pass starts, on the monotonic clock."""
     var _archive: Archive
     """The control instance's day files between passes (`orca.system`)."""
+    var limits: ControlLimits
+    """What a control-placed run may use (`orca.control`)."""
+    var _control: Dict[Int, _ControlProc]
+    """A control-placed run's process to what its end needs."""
+    var _keeping: Dict[Int, String]
+    """A `keep-log` still going to the staging file it keeps, removed once
+    it has ended."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -898,6 +950,9 @@ struct Scheduler(Movable):
         self.fleet_seconds = Float64(getenv("ORCA_FLEET_SECONDS", "30"))
         self._fleet_next = 0
         self._archive = Archive()
+        self.limits = ControlLimits.from_env()
+        self._control = Dict[Int, _ControlProc]()
+        self._keeping = Dict[Int, String]()
 
     def register(
         mut self,
@@ -911,6 +966,7 @@ struct Scheduler(Movable):
         min_workers: Int = -1,
         secrets: List[String] = List[String](),
         worker_procs: Int = -1,
+        placement: String = "",
     ) raises -> String:
         """Records the pipeline `binary` describes, with its path; its
         schedule counts from `now` the first time, and a sensor from now the
@@ -920,7 +976,9 @@ struct Scheduler(Movable):
         most, makes an EC2 run's workers scale between them; -1 keeps a
         fixed count. `worker_procs` is the dista worker processes per EC2 worker
         instance (0: one per vCPU); -1 keeps what was registered. `secrets`, `NAME=ID`s, replace the pipeline's when
-        given. Returns the pipeline's name."""
+        given. `placement` is `control`, `ec2` or `default` (the scheduler's
+        runner); empty keeps what was registered. Returns the pipeline's
+        name."""
         var path = absolute(binary)
         var got = capture([path, "describe"], binary_seconds())
         if got[0] != 0 or not got[1].startswith('{"pipeline": '):
@@ -963,13 +1021,13 @@ struct Scheduler(Movable):
                 "INSERT INTO orca.pipelines (name, registry_hash, describe,"
                 " binary_path, since, sensing_since, image, head_type,"
                 " worker_type, ec2_workers, spot, ec2_min_workers, secrets,"
-                " worker_procs)"
+                " worker_procs, placement)"
                 " SELECT"
                 " d->>'pipeline',"
                 " d->>'registry_hash', d, $2, $3, CASE WHEN $4 THEN now() END,"
                 " nullif($5, ''), nullif($6, ''), nullif($7, ''), nullif($8,"
                 " 0), $9, nullif($10, -1), nullif($11, '')::jsonb,"
-                " nullif($12, -1)"
+                " nullif($12, -1), nullif(nullif($13, ''), 'default')"
                 " FROM (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO"
                 " UPDATE SET registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
@@ -986,6 +1044,8 @@ struct Scheduler(Movable):
                 " END, secrets = coalesce(EXCLUDED.secrets,"
                 " orca.pipelines.secrets), worker_procs = CASE WHEN $12 >= 0"
                 " THEN $12 ELSE orca.pipelines.worker_procs END,"
+                " placement = CASE WHEN $13 = '' THEN orca.pipelines.placement"
+                " ELSE nullif($13, 'default') END,"
                 " spot = CASE WHEN $6 <> '' OR $7 <> '' OR $8 > 0 OR $9 THEN $9"
                 " ELSE orca.pipelines.spot END, last_seen"
                 " = now() RETURNING name, registry_hash, coalesce(image, '')"
@@ -1003,7 +1063,8 @@ struct Scheduler(Movable):
             .bool(spot)
             .int64(Int64(min_workers))
             .text(secrets_json(secrets))
-            .int64(Int64(worker_procs)),
+            .int64(Int64(worker_procs))
+            .text(placement),
         )
         var name = res.row(0).text("name")
         var version = self.db.version(
@@ -1075,13 +1136,29 @@ struct Scheduler(Movable):
                 c.code = done[1]
                 self._asked[asked] = c^
                 continue
+            if done[0] in self._keeping:
+                var stage = self._keeping.pop(done[0])
+                if done[1] != 0:
+                    print("orca: keep-log exited", done[1], "keeping", stage)
+                try:
+                    remove(stage)
+                except:
+                    pass
+                continue
             print("reaped pid", done[0], "exit", done[1])
             var spawned = self._spawned.pop(done[0], (-1, 0, String()))
+            var over = String()
+            var ctl = Optional[_ControlProc](None)
+            if done[0] in self._control:
+                ctl = self._control.pop(done[0])
+                over = ctl.value().over
             if spawned[0] >= 0:
                 try:
-                    self._exited(spawned, done[0], done[1])
+                    self._exited(spawned, done[0], done[1], over)
                 except e:
                     print("orca: can't record run", spawned[0], "exiting:", e)
+            if ctl:
+                self._keep_control_log(ctl.value())
             var log = self._driver_logs.pop(done[0], "")
             if log:
                 try:
@@ -1115,6 +1192,10 @@ struct Scheduler(Movable):
             except e:
                 print("orca: can't scale run workers:", e)
         try:
+            self._check_control_memory()
+        except e:
+            print("orca: can't check control-placed runs' memory:", e)
+        try:
             self._fleet()
         except e:
             print("orca: can't keep the fleet's samples:", e)
@@ -1140,18 +1221,23 @@ struct Scheduler(Movable):
             self._start(p, now)
 
     def _exited(
-        mut self, spawned: Tuple[Int, Int, String], pid: Int, code: Int
+        mut self,
+        spawned: Tuple[Int, Int, String],
+        pid: Int,
+        code: Int,
+        over: String = "",
     ) raises:
         """Fails the run a reaped process was started for, if the process
         never claimed it: the run is still the scheduler's, at the start it
         was given. Its error is the exit code and the last line its process
         printed, such as `resume`'s refusal. A process that claimed it and
         crashed has the attempts it left running failed with the crash's
-        summary (`orca.crash`)."""
+        summary (`orca.crash`), or with `over` if the scheduler killed it
+        for its memory (`orca.control`)."""
         var why = String(
             "its process (pid ", pid, ") exited ", code, " before claiming it"
         )
-        var last = _last_line(spawned[2])
+        var last = over if over else _last_line(spawned[2])
         if last:
             why.write(": ", last)
         var n = self.db.conn.execute(
@@ -1167,11 +1253,15 @@ struct Scheduler(Movable):
         )
         if n == 1:
             print("run", spawned[0], "failed:", why)
-        elif crashed_by_signal(code):
-            self._crashed(spawned, pid, code)
+        elif crashed_by_signal(code) or over:
+            self._crashed(spawned, pid, code, over)
 
     def _crashed(
-        mut self, spawned: Tuple[Int, Int, String], pid: Int, code: Int
+        mut self,
+        spawned: Tuple[Int, Int, String],
+        pid: Int,
+        code: Int,
+        over: String = "",
     ) raises:
         """Fails the attempts a crashed process left running, if the run is
         still its at that start, with what its driver log says of the crash
@@ -1188,8 +1278,8 @@ struct Scheduler(Movable):
         )
         if len(held) == 0:
             return
-        var why = String()
-        if spawned[2] and exists(spawned[2]):
+        var why = over
+        if not why and spawned[2] and exists(spawned[2]):
             try:
                 with open(spawned[2], "r") as f:
                     why = crash_summary(f.read())
@@ -1203,6 +1293,49 @@ struct Scheduler(Movable):
             )
         var n = self.db.interrupt(spawned[0], why)
         print("run", spawned[0], "crashed,", n, "attempts failed:", why)
+
+    def _keep_control_log(mut self, c: _ControlProc):
+        """Appends a control-placed run's output to its `driver.log`, masked
+        (`<binary> keep-log`, given the run's secrets as the run was); the
+        staging file is removed once that has ended."""
+        if not c.location:
+            return
+        try:
+            var pid = spawn(
+                [c.binary, "keep-log", c.stage, c.location, String(c.start)],
+                env=c.env,
+            )
+            self._keeping[pid] = c.stage
+        except e:
+            print("orca: can't keep run", c.run, "driver log:", e)
+
+    def _check_control_memory(mut self) raises:
+        """Kills each control-placed run's processes once they hold more
+        than `ORCA_CONTROL_MEMORY_MB` resident; the reap fails its attempts
+        saying so."""
+        if len(self._control) == 0:
+            return
+        var cap = self.limits.memory_mb * 1024 * 1024
+        var pids = List[Int]()
+        for e in self._control.items():
+            if not e.value.over:
+                pids.append(e.key)
+        for pid in pids:
+            var rss = tree_rss(pid)
+            if rss <= cap:
+                continue
+            var c = self._control.pop(pid)
+            c.over = String(
+                "killed: its processes held ",
+                rss // (1024 * 1024),
+                " MB, over the control instance's cap of ",
+                self.limits.memory_mb,
+                " MB a run (ORCA_CONTROL_MEMORY_MB)",
+            )
+            _ = external_call["kill", c_int](c_int(-pid), c_int(9))
+            _ = external_call["kill", c_int](c_int(pid), c_int(9))
+            print("run", c.run, "pid", pid, c.over)
+            self._control[pid] = c^
 
     def _sensed(mut self, p: Registered, error: String) raises:
         """Records how `p`'s pass went: the error of one that failed, which
@@ -1735,9 +1868,36 @@ struct Scheduler(Movable):
     def _start(mut self, p: Registered, now: Int64) raises:
         """Starts queued runs, retries that are due and runs whose process
         died, up to `max_runs` live at once; none while `p` is paused, when
-        they wait (runs already going go on)."""
+        they wait (runs already going go on). A control-placed pipeline's
+        runs start here (`orca.control`), within the control instance's
+        limits; a queued run those hold, or that's placed on a runner this
+        scheduler hasn't, is `held` with the reason."""
         var dead = self._dead("$2")
-        if (self.runner or self.ec2) and not p.image:
+        var control = p.placement == CONTROL
+        var placed = String(CONTROL) if control else (
+            String("ec2") if self.ec2 else (
+                String("kubernetes") if self.runner else String("local")
+            )
+        )
+        var hold = String()
+        if p.placement == "ec2" and not self.ec2:
+            hold = String(
+                "held: placed on ec2, but this scheduler's runner",
+                " (ORCA_RUNNER) is ",
+                placed,
+            )
+        var pressure = String()
+        if control:
+            try:
+                pressure = pressure_reason(system_now(self.db))
+            except e:
+                print("orca: can't read the control instance's samples:", e)
+        if (
+            not control
+            and not hold
+            and (self.runner or self.ec2)
+            and not p.image
+        ):
             print(
                 "orca: pipeline",
                 p.name,
@@ -1750,7 +1910,7 @@ struct Scheduler(Movable):
         # run takes them rather than new ones.
         var keys = List[String]()
         var settling = False
-        if self.ec2:
+        if self.ec2 and not control:
             keys = self.ec2.value().pool_keys(_ec2_spec(p, 0, 0, False))
             settling = self.ec2.value().settling(self.db, keys)
         var tx = self.db.conn.begin()
@@ -1777,6 +1937,9 @@ struct Scheduler(Movable):
                     if e.value[0] == id:
                         pid = e.key
                 if pid > 0:
+                    if pid in self._control:
+                        # Its own process group: its forked workers too.
+                        _ = external_call["kill", c_int](c_int(-pid), c_int(9))
                     _ = external_call["kill", c_int](c_int(pid), c_int(9))
                     print(
                         "killed pid",
@@ -1859,15 +2022,53 @@ struct Scheduler(Movable):
             .row(0)
             .int64("n")
         )
-        var free = 0 if p.paused or settling else p.max_runs - live
+        var free = 0 if p.paused or settling or hold else p.max_runs - live
         var need = 0
-        if self.runner:
+        if control:
+            need = 0  # no instance: nothing of the budget
+        elif self.runner:
             need = self.runner.value().cpu_of(p.workers)
         elif self.ec2:
             need = self.ec2.value().cpu_of(
                 p.workers > 0, p.head_type, p.worker_type, p.workers
             )
-        if self.budget > 0 and free > 0:
+        if control and free > 0:
+            if pressure:
+                hold = pressure
+                free = 0
+            else:
+                # Across pipelines: one start at a time counts the slots.
+                _ = tx.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    Params().int64(_CONTROL_LOCK),
+                )
+                var used = Int(
+                    tx.query(
+                        String(
+                            "SELECT count(*) AS n FROM orca.runs WHERE status",
+                            " = 'running' AND placement = 'control' AND NOT ",
+                            self._dead("$1"),
+                        ),
+                        Params().float64(self.stale),
+                    )
+                    .row(0)
+                    .int64("n")
+                )
+                if used >= self.limits.max_runs:
+                    hold = slots_reason(used, self.limits.max_runs)
+                    free = 0
+                else:
+                    free = min(free, self.limits.max_runs - used)
+        # Its queued runs say why they wait, or no longer do.
+        _ = tx.execute(
+            (
+                "UPDATE orca.runs SET held = nullif($2, '') WHERE pipeline = $1"
+                " AND status = 'queued' AND held IS DISTINCT FROM nullif($2,"
+                " '')"
+            ),
+            Params().text(p.name).text(hold),
+        )
+        if self.budget > 0 and free > 0 and not control:
             # Across pipelines: one start at a time weighs the budget.
             _ = tx.execute(
                 "SELECT pg_advisory_xact_lock($1)",
@@ -1951,9 +2152,10 @@ struct Scheduler(Movable):
                                 " = 'scheduler', heartbeat = NULL, started ="
                                 " now(), ended = NULL, starts = starts + 1,"
                                 " retry_at = NULL, error = NULL, cpu_millis ="
-                                " $2 WHERE id = $1 RETURNING starts"
+                                " $2, placement = $3, held = NULL WHERE id = $1"
+                                " RETURNING starts"
                             ),
-                            Params().int64(id).int64(Int64(need)),
+                            Params().int64(id).int64(Int64(need)).text(placed),
                         )
                         .row(0)
                         .int64("starts")
@@ -1962,6 +2164,9 @@ struct Scheduler(Movable):
         tx.commit()
         for i in range(len(ids)):
             var id = ids[i]
+            if control:
+                self._start_control(p, Int(id), starts[i], new_code[i])
+                continue
             if self.runner:
                 try:
                     self.runner.value().start(
@@ -2045,6 +2250,78 @@ struct Scheduler(Movable):
                     )
                 except e:
                     print("orca: no sampler for run", id, ":", e)
+
+    def _start_control(
+        mut self, p: Registered, id: Int, start: Int, new_code: Bool
+    ):
+        """Starts start `start` of `p`'s run `id` on this host
+        (`orca.control`): its binary's `resume`, in a process group of its
+        own, at a lower CPU priority, first to go if memory runs out, with
+        its secrets read now and given to it alone, and its output staged
+        for `keep-log`. A run that can't start fails, and is retried as a
+        run whose process failed is."""
+        var c: _ControlProc
+        var pid: Int
+        try:
+            var secrets = List[Tuple[String, String]]()
+            for s in p.secrets:
+                secrets.append((s[0], fetch_secret(s[1])))
+            var env = run_env(self.limits, p.image, secrets)
+            var location = String()
+            var stage = String()
+            if self.logs:
+                location = String(run_dir(p.name, id), "/driver.log")
+                stage = control_stage(p.name, id, start)
+                makedirs(
+                    String(stage[byte = : stage.rfind("/")]), exist_ok=True
+                )
+                with open(stage, "w") as f:
+                    f.write("")
+            var argv: List[String] = [p.binary, "resume", String(id)]
+            if new_code:
+                argv.append("--allow-new-code")
+            pid = spawn(
+                argv,
+                stage,
+                env=env,
+                nice=self.limits.nice,
+                group=True,
+                first_to_go=True,
+            )
+            c = _ControlProc(id, p.binary, stage, location, start, env^, "")
+        except e:
+            print("orca: run", id, "of", p.name, "can't start:", e)
+            try:
+                _ = self.db.conn.execute(
+                    (
+                        "UPDATE orca.runs SET status = 'failed', ended ="
+                        " now(), error = $2 WHERE id = $1 AND status ="
+                        " 'running' AND heartbeat IS NULL"
+                    ),
+                    Params().int64(Int64(id)).text(String("can't start: ", e)),
+                )
+            except e2:
+                print("orca: can't record run", id, "failing:", e2)
+            return
+        self._spawned[pid] = (id, start, c.stage)
+        var sampled = c.location != ""
+        self._control[pid] = c^
+        print("started", p.name, "run", id, "pid", pid, "on the control host")
+        if sampled and sample_seconds() > 0:
+            try:
+                _ = spawn(
+                    [
+                        p.binary,
+                        "sample",
+                        "--out",
+                        metrics_location(p.name, id, CONTROL),
+                        "--pid",
+                        String(pid),
+                    ],
+                    nice=self.limits.nice,
+                )
+            except e:
+                print("orca: no sampler for run", id, ":", e)
 
     def backfill(
         mut self, pipeline: String, keys: String, rerun: Bool = False

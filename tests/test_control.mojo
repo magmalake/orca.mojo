@@ -1,0 +1,147 @@
+"""Placement and the control runner's rules (orca.control): the
+`--placement` values, the limits from the environment, when the control
+instance's samples hold a run, what a run's process is given, and secrets
+read with `ORCA_SECRET_FETCH`. tests/placement.sh runs it all under the
+scheduler.
+"""
+
+from std.os import getenv, setenv, unsetenv
+from std.testing import (
+    TestSuite,
+    assert_equal,
+    assert_raises,
+    assert_true,
+)
+
+from orca.control import (
+    ControlLimits,
+    control_stage,
+    fetch_secret,
+    parse_placement,
+    pressure_reason,
+    run_env,
+    slots_reason,
+)
+from orca.system import Container, Now
+
+
+def _now(age: Float64, mem: Float64, disk: Float64) -> Now:
+    return Now(
+        age,
+        10.0,
+        20.0,
+        mem,
+        1,
+        2,
+        disk,
+        3,
+        4,
+        "/var/lib/orca/stage",
+        0.0,
+        0.0,
+        List[Container](),
+    )
+
+
+def test_placements() raises:
+    assert_equal(parse_placement("control"), "control")
+    assert_equal(parse_placement("ec2"), "ec2")
+    assert_equal(parse_placement("default"), "default")
+    for bad in ["", "Control", "local", "kubernetes"]:
+        with assert_raises(contains="control, ec2 or default"):
+            _ = parse_placement(bad)
+
+
+def test_limits() raises:
+    for n in [
+        "ORCA_CONTROL_MAX_RUNS",
+        "ORCA_CONTROL_MEMORY_MB",
+        "ORCA_CONTROL_WORKERS",
+        "ORCA_CONTROL_NICE",
+    ]:
+        _ = unsetenv(n)
+    var d = ControlLimits.from_env()
+    assert_equal(d.max_runs, 2)
+    assert_equal(d.memory_mb, 1024)
+    assert_equal(d.workers, 1)
+    assert_equal(d.nice, 10)
+    _ = setenv("ORCA_CONTROL_MAX_RUNS", "0")
+    _ = setenv("ORCA_CONTROL_WORKERS", "3")
+    var l = ControlLimits.from_env()
+    assert_equal(l.max_runs, 0)
+    assert_equal(l.workers, 3)
+    _ = setenv("ORCA_CONTROL_WORKERS", "0")
+    with assert_raises(contains="ORCA_CONTROL_WORKERS"):
+        _ = ControlLimits.from_env()
+    _ = setenv("ORCA_CONTROL_WORKERS", "lots")
+    with assert_raises(contains="ORCA_CONTROL_WORKERS"):
+        _ = ControlLimits.from_env()
+    _ = unsetenv("ORCA_CONTROL_WORKERS")
+    _ = unsetenv("ORCA_CONTROL_MAX_RUNS")
+
+
+def test_pressure() raises:
+    # No samples, or old ones, hold nothing.
+    assert_equal(pressure_reason(None), "")
+    assert_equal(pressure_reason(_now(601.0, 99.0, 99.0)), "")
+    assert_equal(pressure_reason(_now(5.0, 85.0, 85.0)), "")
+    var mem = pressure_reason(_now(5.0, 91.4, 10.0))
+    assert_equal(
+        mem, "held: the control instance's memory is 91% used, over 85%"
+    )
+    var disk = pressure_reason(_now(5.0, 30.0, 86.0))
+    assert_equal(
+        disk,
+        (
+            "held: the control instance's disk /var/lib/orca/stage is 86%"
+            " full, over 85%"
+        ),
+    )
+    assert_true("2 of 2 control-placed runs" in slots_reason(2, 2))
+
+
+def test_run_env() raises:
+    var l = ControlLimits(2, 512, 1, 10)
+    var none = run_env(l, "", List[Tuple[String, String]]())
+    assert_equal(len(none), 1)
+    assert_equal(none[0], "ORCA_WORKERS=1")
+    var e = run_env(
+        l, "repo/orca:v1", [("GITHUB_TOKEN", "tok"), ("API_KEY", "key")]
+    )
+    assert_equal(len(e), 5)
+    assert_equal(e[1], "ORCA_IMAGE=repo/orca:v1")
+    assert_equal(e[2], "GITHUB_TOKEN=tok")
+    assert_equal(e[3], "API_KEY=key")
+    assert_equal(e[4], "ORCA_SECRETS=GITHUB_TOKEN,API_KEY")
+
+
+def test_stage() raises:
+    _ = setenv("ORCA_LOG_STAGE", "/var/lib/orca/stage")
+    assert_equal(
+        control_stage("toy", 12, 3),
+        "/var/lib/orca/stage/control/toy-12-3-driver.log",
+    )
+    _ = unsetenv("ORCA_LOG_STAGE")
+    var tmp = getenv("TMPDIR")
+    _ = setenv("TMPDIR", "/tmp/x/")
+    assert_equal(
+        control_stage("toy", 1, 1),
+        "/tmp/x/orca-logs/control/toy-1-1-driver.log",
+    )
+    if tmp:
+        _ = setenv("TMPDIR", tmp)
+    else:
+        _ = unsetenv("TMPDIR")
+
+
+def test_fetch() raises:
+    _ = setenv("ORCA_SECRET_FETCH", "printf '%s-value\\n\\n'")
+    assert_equal(fetch_secret("orca/it's"), "orca/it's-value")
+    _ = setenv("ORCA_SECRET_FETCH", "false")
+    with assert_raises(contains="can't read secret orca/x: exit 1"):
+        _ = fetch_secret("orca/x")
+    _ = unsetenv("ORCA_SECRET_FETCH")
+
+
+def main() raises:
+    TestSuite.discover_tests[__functions_in_module()]().run()

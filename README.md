@@ -82,6 +82,8 @@ pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   #
 docker build -f deploy/Dockerfile -t orca:dev . && kubectl apply -f deploy/k8s/   # on Kubernetes
 tests/kind.sh                  # that, on a kind cluster: each run on a dista cluster of its own
 pixi run test-ec2              # ORCA_RUNNER=ec2 against a stand-in EC2: a head and workers per run
+./build/orca register --placement control ./build/toy   # a small pipeline's runs on the scheduler's own host, no instance (orca.control)
+pixi run test-placement        # that, within the control instance's limits, beside runs on the stand-in EC2
 mojo build -D ORCA_SOURCE=$(git remote get-url origin) -D ORCA_COMMIT=$(git rev-parse HEAD) ...   # each run links the commit it ran
 ```
 

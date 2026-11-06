@@ -17,7 +17,9 @@ of it per instance per pass in effect, and keeps those it hasn't got. The
 control instance's sampler (`orca sample --out <file> --keep N`, started by
 the stack's user data) writes a file `ORCA_CONTROL_SAMPLES` names, and
 `ORCA_CONTROL_TYPE` says what the instance is. Without them the control
-instance has no row; without `ORCA_LOGS` no instance has one.
+instance has no row, unless runs placed on it (`orca register --placement
+control`, orca.control) are running, which its row lists; without
+`ORCA_LOGS` no instance has one.
 
 Prices are a small table of us-east-2 on-demand rates for the types orca
 runs on: an estimate (Spot hosts cost less, and a stopped-and-started clock
@@ -31,6 +33,7 @@ from postgres import Params
 
 from orca.html import Html, escape, url_encode
 from orca.json import quote
+from orca.live import dead_sql, stale_limit, start_grace
 from orca.logs import read_location
 from orca.metrics import bytes_text
 from orca.sample import metrics_location
@@ -322,6 +325,10 @@ struct Host(Copyable, Movable):
     var spark_y: List[Float64]
     var idle: Float64
     """Seconds it has been idle in the pool; 0 when it isn't."""
+    var runs: List[Int]
+    """The runs it serves: its `run`, or for the control instance the
+    control-placed runs running there (`orca register --placement
+    control`)."""
 
 
 def _control_type() -> String:
@@ -385,8 +392,23 @@ def fleet_hosts(mut db: State) raises -> List[Host]:
                 sparks_x.pop(id, List[Float64]()),
                 sparks_y.pop(id, List[Float64]()),
                 r.float64("idle_for") if r.bool("idle") else 0.0,
+                [Int(r.int64("run"))],
             )
         )
+    # Runs placed on the control instance, live: running with a process
+    # that hasn't gone stale.
+    var stale = stale_limit()
+    var runs = List[Int]()
+    for r in db.conn.query(
+        String(
+            "SELECT id FROM orca.runs WHERE status = 'running' AND placement",
+            " = 'control' AND NOT ",
+            dead_sql(String(stale), start_grace(stale)),
+            " ORDER BY id",
+        ),
+        Params(),
+    ):
+        runs.append(Int(r.int64("id")))
     var c = db.conn.query(
         (
             "SELECT cpu, busiest, mem, disk, net_in, net_out,"
@@ -395,8 +417,24 @@ def fleet_hosts(mut db: State) raises -> List[Host]:
         ),
         Params().text(_CONTROL),
     )
-    if len(c) > 0:
-        var r = c.row(0)
+    if len(c) > 0 or len(runs) > 0:
+        var sampled = len(c) > 0
+        var ago = 0.0
+        var cpu = 0.0
+        var busiest = 0.0
+        var mem = 0.0
+        var disk = 0.0
+        var net_in = 0.0
+        var net_out = 0.0
+        if sampled:
+            var r = c.row(0)
+            ago = r.float64("ago")
+            cpu = r.float64("cpu")
+            busiest = r.float64("busiest")
+            mem = r.float64("mem")
+            disk = r.float64("disk")
+            net_in = r.float64("net_in")
+            net_out = r.float64("net_out")
         out.append(
             Host(
                 _CONTROL,
@@ -405,17 +443,18 @@ def fleet_hosts(mut db: State) raises -> List[Host]:
                 0,
                 0.0,
                 _CONTROL,
-                True,
-                r.float64("ago"),
-                r.float64("cpu"),
-                r.float64("busiest"),
-                r.float64("mem"),
-                r.float64("disk"),
-                r.float64("net_in"),
-                r.float64("net_out"),
+                sampled,
+                ago,
+                cpu,
+                busiest,
+                mem,
+                disk,
+                net_in,
+                net_out,
                 sparks_x.pop(_CONTROL, List[Float64]()),
                 sparks_y.pop(_CONTROL, List[Float64]()),
                 0.0,
+                runs^,
             )
         )
     return out^
@@ -1121,8 +1160,13 @@ def hosts_html(
         h.raw("</code></td>")
         h.mono(x.instance_type)
         h.raw("<td>")
-        if x.run > 0:
-            h.chip(String("/runs/", x.run), String(x.run))
+        var first = True
+        for r in x.runs:
+            if r > 0:
+                if not first:
+                    h.raw(" ")
+                h.chip(String("/runs/", r), String(r))
+                first = False
         h.raw("</td>")
         h.num(_age(x.uptime) if x.role != _CONTROL else String("—"))
         if x.sampled:
@@ -1291,6 +1335,15 @@ def hosts_json(hosts: List[Host]) -> String:
             quote(x.instance_type),
             ', "run": ',
             String(x.run) if x.run > 0 else String("null"),
+            ', "runs": [',
+        )
+        var first = True
+        for r in x.runs:
+            if r > 0:
+                out.write("" if first else ", ", r)
+                first = False
+        out.write(
+            "]",
             ', "uptime_seconds": ',
             Int(x.uptime) if x.role != _CONTROL else 0,
             ', "state": ',

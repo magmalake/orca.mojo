@@ -231,6 +231,9 @@ struct PipelineRow(Copyable, Movable):
     var sense_error: String
     """Why the sensor's last pass failed, or empty."""
     var sense_error_at: String
+    var placement: String
+    """`orca register --placement`: `control`, `ec2`, or empty for the
+    scheduler's runner."""
 
 
 @fieldwise_init
@@ -253,6 +256,11 @@ struct RunRow(Copyable, Movable):
     """When a deferred run starts again; empty for any other."""
     var seconds: Int
     """How long it ran (so far, if it's running); -1 before it started."""
+    var placement: String
+    """Where its latest start ran: `control` (the scheduler's host), `ec2`,
+    `kubernetes` or `local`; empty before its first."""
+    var held: String
+    """Why the scheduler keeps it queued (`orca.control`), or empty."""
 
 
 @fieldwise_init
@@ -401,7 +409,8 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
                 " 'queued')::text AS queued, coalesce(l.id, 0)::text AS"
                 " last_run, coalesce(l.status, '') AS last_status,"
                 " coalesce(l.partitions, '') AS last_partitions, p.paused,"
-                " coalesce(p.sense_error, '') AS sense_error, "
+                " coalesce(p.sense_error, '') AS sense_error,"
+                " coalesce(p.placement, '') AS placement, "
             ),
             _ts("p.sense_error_at"),
             (
@@ -437,6 +446,7 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
             r.bool("paused"),
             r.text("sense_error"),
             r.text("sense_error_at"),
+            r.text("placement"),
         )
         try:
             var f = _fires(p, t, 1)
@@ -543,7 +553,9 @@ def _runs(
             _WAITING,
             " AS waiting, ",
             _SECONDS,
-            " AS seconds FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND",
+            " AS seconds, coalesce(placement, '') AS placement,",
+            " coalesce(held, '') AS held FROM orca.runs WHERE ($1 = '' OR",
+            " pipeline = $1) AND",
             " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) AND",
             " ($5 = 0 OR id < $5) ORDER BY orca.runs.id DESC LIMIT $4",
         ),
@@ -572,6 +584,8 @@ def _runs(
                 r.text("error"),
                 _waiting(r.int64("waiting")),
                 Int(r.int64("seconds")),
+                r.text("placement"),
+                r.text("held"),
             )
         )
     return out^
@@ -1214,6 +1228,8 @@ def _json_pipeline(mut out: String, p: PipelineRow):
         p.queued,
         ', "paused": ',
         "true" if p.paused else "false",
+        ', "placement": ',
+        quote(p.placement if p.placement else String("default")),
         ', "last_run": ',
     )
     if p.last_run:
@@ -1281,6 +1297,10 @@ def _json_run(mut out: String, r: RunRow):
         quote(r.error),
         ', "waiting_until": ',
         quote(r.waiting_until) if r.waiting_until else String("null"),
+        ', "placement": ',
+        quote(r.placement) if r.placement else String("null"),
+        ', "held": ',
+        quote(r.held) if r.held and r.status == "queued" else String("null"),
         "}",
     )
 
@@ -2908,6 +2928,14 @@ def pipeline(
     h.text(p.running, " running of ", p.max_runs, ", ", p.queued, " queued")
     h.raw("</dd><dt>Run retries</dt><dd>")
     h.text(p.run_retries)
+    h.raw("</dd><dt>Placement</dt><dd>")
+    if p.placement == "control":
+        h.text("control")
+        h.raw(' <span class="muted">(on the scheduler\'s host)</span>')
+    elif p.placement:
+        h.text(p.placement)
+    else:
+        h.raw('<span class="muted">default (the scheduler\'s runner)</span>')
     if p.sense_error:
         h.raw('</dd><dt>Sensing</dt><dd class="error">Failing since ')
         h.text(p.sense_error_at, ": ", p.sense_error)
@@ -3417,6 +3445,15 @@ def run(mut db: State, id: Int) raises -> Page:
         h.raw("</dd><dt>Waiting</dt><dd>until ")
         h.text(r.waiting_until)
         h.raw(", when a step asked to run again")
+    if r.held and r.status == "queued":
+        h.raw('</dd><dt>Held</dt><dd class="error">')
+        h.text(r.held.removeprefix("held: "))
+    if r.placement:
+        h.raw("</dd><dt>Placed</dt><dd>")
+        if r.placement == "control":
+            h.raw("on the control host")
+        else:
+            h.text(r.placement)
     h.raw('</dd><dt><abbr title="', _TRIES, '">Tries</abbr></dt><dd>')
     h.text(r.starts)
     if cpu:
@@ -4044,7 +4081,8 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
             _WAITING,
             " AS waiting, ",
             _SECONDS,
-            " AS seconds FROM orca.runs WHERE id = $1",
+            " AS seconds, coalesce(placement, '') AS placement,",
+            " coalesce(held, '') AS held FROM orca.runs WHERE id = $1",
         ),
         Params().int64(Int64(id)),
     )
@@ -4066,6 +4104,8 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
         r.text("error"),
         _waiting(r.int64("waiting")),
         Int(r.int64("seconds")),
+        r.text("placement"),
+        r.text("held"),
     )
 
 

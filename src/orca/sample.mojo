@@ -716,87 +716,7 @@ struct Sampler(Movable):
     def _rss(self) -> Int:
         """The resident bytes of `root`'s process tree, and on Linux of the
         processes whose command is `argv0`."""
-        if self.root <= 0 and not self.argv0:
-            return 0
-        comptime if CompilationTarget.is_macos():
-            var total = 0
-            var todo: List[Int] = [self.root]
-            var buf = List[Int32](length=4096, fill=0)
-            var info = List[UInt8](length=128, fill=0)
-            var n = 0
-            while len(todo) > 0 and n < 10000:
-                var pid = todo.pop()
-                n += 1
-                if (
-                    external_call["proc_pidinfo", c_int](
-                        c_int(pid),
-                        c_int(4),  # PROC_PIDTASKINFO
-                        UInt64(0),
-                        info.unsafe_ptr(),
-                        c_int(96),
-                    )
-                    == 96
-                ):
-                    total += _u64(info, 8)
-                # PROC_PPID_ONLY: the children's pids, as bytes.
-                var got = Int(
-                    external_call["proc_listpids", c_int](
-                        UInt32(6),
-                        UInt32(pid),
-                        buf.unsafe_ptr(),
-                        c_int(4096 * 4),
-                    )
-                )
-                for k in range(got // 4):
-                    if buf[k] > 0:
-                        todo.append(Int(buf[k]))
-            return total
-        else:
-            var page = Int(external_call["getpagesize", c_int]())
-            var parent = Dict[Int, Int]()
-            var rss = Dict[Int, Int]()
-            var matched = List[Int]()
-            var pids: List[String]
-            try:
-                pids = listdir("/proc")
-            except:
-                return 0
-            for name in pids:
-                var pid: Int
-                try:
-                    pid = Int(name)
-                except:
-                    continue
-                var st = parse_pid_stat(_read(String("/proc/", pid, "/stat")))
-                if st[0] < 0:
-                    continue
-                parent[pid] = st[0]
-                rss[pid] = st[1] * page
-                if self.argv0:
-                    var cmd = _read(String("/proc/", pid, "/cmdline"))
-                    var nul = cmd.find("\0")
-                    var first = String(cmd[byte=:nul]) if nul >= 0 else cmd
-                    if first == self.argv0:
-                        matched.append(pid)
-            var total = 0
-            for e in rss.items():
-                var p = e.key
-                var hops = 0
-                var counted = False
-                while p > 0 and hops < 64:
-                    if p == self.root:
-                        counted = True
-                        break
-                    for m in matched:
-                        if m == p:
-                            counted = True
-                    if counted:
-                        break
-                    p = parent.get(p, 0)
-                    hops += 1
-                if counted:
-                    total += e.value
-            return total
+        return tree_rss(self.root, self.argv0)
 
     def _containers(mut self) -> String:
         """`[{"name": ..., "mem": bytes}, ...]` for the containers under
@@ -951,6 +871,93 @@ def _json_safe(s: String) -> String:
         else:
             out.write(c)
     return out^
+
+
+def tree_rss(root: Int, argv0: String = "") -> Int:
+    """The resident bytes of `root`'s process tree, and on Linux of the
+    processes whose command is `argv0`; the scheduler checks a control-placed
+    run's against its cap with it (orca.control)."""
+    if root <= 0 and not argv0:
+        return 0
+    comptime if CompilationTarget.is_macos():
+        var total = 0
+        var todo: List[Int] = [root]
+        var buf = List[Int32](length=4096, fill=0)
+        var info = List[UInt8](length=128, fill=0)
+        var n = 0
+        while len(todo) > 0 and n < 10000:
+            var pid = todo.pop()
+            n += 1
+            if (
+                external_call["proc_pidinfo", c_int](
+                    c_int(pid),
+                    c_int(4),  # PROC_PIDTASKINFO
+                    UInt64(0),
+                    info.unsafe_ptr(),
+                    c_int(96),
+                )
+                == 96
+            ):
+                total += _u64(info, 8)
+            # PROC_PPID_ONLY: the children's pids, as bytes.
+            var got = Int(
+                external_call["proc_listpids", c_int](
+                    UInt32(6),
+                    UInt32(pid),
+                    buf.unsafe_ptr(),
+                    c_int(4096 * 4),
+                )
+            )
+            for k in range(got // 4):
+                if buf[k] > 0:
+                    todo.append(Int(buf[k]))
+        return total
+    else:
+        var page = Int(external_call["getpagesize", c_int]())
+        var parent = Dict[Int, Int]()
+        var rss = Dict[Int, Int]()
+        var matched = List[Int]()
+        var pids: List[String]
+        try:
+            pids = listdir("/proc")
+        except:
+            return 0
+        for name in pids:
+            var pid: Int
+            try:
+                pid = Int(name)
+            except:
+                continue
+            var st = parse_pid_stat(_read(String("/proc/", pid, "/stat")))
+            if st[0] < 0:
+                continue
+            parent[pid] = st[0]
+            rss[pid] = st[1] * page
+            if argv0:
+                var cmd = _read(String("/proc/", pid, "/cmdline"))
+                var nul = cmd.find("\0")
+                var first = String(cmd[byte=:nul]) if nul >= 0 else cmd
+                if first == argv0:
+                    matched.append(pid)
+        var total = 0
+        for e in rss.items():
+            var p = e.key
+            var hops = 0
+            var counted = False
+            while p > 0 and hops < 64:
+                if p == root:
+                    counted = True
+                    break
+                for m in matched:
+                    if m == p:
+                        counted = True
+                if counted:
+                    break
+                p = parent.get(p, 0)
+                hops += 1
+            if counted:
+                total += e.value
+        return total
 
 
 def default_dirs() -> List[String]:
