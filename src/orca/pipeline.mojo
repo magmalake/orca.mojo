@@ -183,6 +183,8 @@ struct Pipeline[
                 all.write("\treads ", d)
             for d in Self.Ts[i].dataset_writes():
                 all.write("\twrites ", d)
+            for d in Self.Ts[i].dataset_replaces():
+                all.write("\treplaces ", d)
             all.write("\n")
         for t in Self.tasks.names():
             all.write("task\t", t, "\n")
@@ -253,6 +255,11 @@ struct Pipeline[
                 out.write('"timeout_seconds": ', S.timeout(), ", ")
             out.write('"reads": ', _names(S.dataset_reads()), ", ")
             out.write('"writes": ', _names(S.dataset_writes()))
+            # Only when declared, as for the timeout: a step without them
+            # appends to what it writes (`orca.scheduler.appending_writes`).
+            var replaces = S.dataset_replaces()
+            if len(replaces) > 0:
+                out.write(', "replaces": ', _names(replaces))
             out.write("}")
         out.write('], "tasks": [')
         var names = Self.tasks.names()
@@ -490,6 +497,7 @@ struct Pipeline[
                     holds,
                     T.dataset_reads(),
                     T.dataset_writes(),
+                    T.dataset_replaces(),
                 )
                 ctx.log_to_file(String("attempt ", attempt, " started"))
                 var out = List[UInt8]()

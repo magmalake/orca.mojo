@@ -8,7 +8,9 @@ clusters over Iceberg tables in object storage.
 Early days: steps and pipelines are declared and checked at compile time, and
 runs are recorded in Postgres and resume where they stopped, with Iceberg
 reads pinned and commits recognised on retry (`orca.tables`), including
-data files a step's dista tasks wrote (`append_files`). A scheduler
+data files a step's dista tasks wrote (`append_files`), and steps that
+replace their partitions so a rerun doesn't duplicate rows (`replaces=`).
+A scheduler
 fires cron schedules and backfills, and runs sensor pipelines when a dataset
 they read gets a snapshot; `orca ui` shows pipelines, runs, logs and the
 lineage of datasets, and starts, resumes, reruns, backfills, cancels and
@@ -68,7 +70,7 @@ ORCA_DATABASE_URL=sqlite:build/runs.db ./build/toy run --partitions 2024-01..202
 pixi run -e data taxi && pixi run -e data ./build/taxi run --partitions 2023-01..2024-12
 pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   # needs ORCA_DATABASE_URL
 ./build/orca register ./build/taxi && ./build/orca backfill taxi 2011-01..2024-12   # 19 GB of TLC files
-./build/orca backfill --rerun taxi 2024-03   # queue a month again, though it succeeded
+./build/orca backfill --rerun --allow-append taxi 2024-03   # queue a month again, though it succeeded; taxi's load appends, so say so
 ./build/orca cancel taxi @all  # cancel its queued, running and retrying runs (or KEYS)
 ./build/orca pause taxi        # the scheduler starts none of its runs until orca unpause taxi
 ./build/orca ui                # http://127.0.0.1:8270: pipelines, runs and datasets, also as JSON; start, resume, rerun, backfill, cancel, pause
@@ -86,5 +88,28 @@ pixi run test-ec2              # ORCA_RUNNER=ec2 against a stand-in EC2: a head 
 pixi run test-placement        # that, within the control instance's limits, beside runs on the stand-in EC2
 mojo build -D ORCA_SOURCE=$(git remote get-url origin) -D ORCA_COMMIT=$(git rev-parse HEAD) ...   # each run links the commit it ran
 ```
+
+## Reruns that replace a partition
+
+A new run of a key (`orca backfill --rerun`, `orca rerun`, the UI's rerun)
+appends again to what its steps append to, beside the rows earlier runs
+committed. A step that recomputes a key's rows declares the dataset in
+`replaces=` instead of `writes=`:
+
+```mojo
+comptime LoadDay = Step[
+    "load_day", Day, Int64, load_day, Mapped, replaces=["gharchive.events"],
+]
+```
+
+Its `append` and `append_files` to that dataset then make the run's first
+commit to each partition an `overwrite` that removes the files earlier
+runs left there; its later commits append, and a retried attempt still
+finds what it committed. Two runs replacing one partition at once don't
+both keep their rows: the one that finds the other's files after its own
+first commit fails instead of committing. `replace_partitions` and
+`replace_partition_files` do the same per call. A rerun of done keys of a
+pipeline whose steps append is refused unless `--allow-append` (in the UI,
+a confirm button). See `orca.tables` and DESIGN.md.
 
 Part of [magmalake](https://magmalake.dev).
