@@ -11,7 +11,7 @@
 #   or a disk over 85%, and starts once it hasn't;
 # - control-placed runs start no instance, while daily's run starts one; at
 #   most ORCA_CONTROL_MAX_RUNS (2) run at once, a third held until one ends;
-#   /fleet lists them on the control host, and the pages and JSON say where
+#   /ops/fleet lists them on the control host, and the pages and JSON say where
 #   each run was placed;
 # - fanout's secret, read from the stand-in's Secrets Manager, reaches its
 #   step and its tasks (forked locally), and no log holds its value;
@@ -81,7 +81,7 @@ export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test OR
 export ORCA_STALE_SECONDS=4 ORCA_START_SECONDS=60 ORCA_EC2_POOL_SECONDS=0
 export ORCA_LOGS=$PWD/build/placement-logs ORCA_LOG_STAGE=$PWD/build/placement-stage
 export ORCA_CLUSTER_LOG_SECONDS=1 ORCA_FLEET_SECONDS=0
-# The memory-pressure hold below seeds a 95 % /system minute, which would
+# The memory-pressure hold below seeds a 95 % /ops/control minute, which would
 # also trip the watchdog's control rule (orca.watchdog) and pause every
 # pipeline before placement could hold the run: this test is placement's.
 export ORCA_WATCHDOG_SECONDS=0
@@ -175,7 +175,7 @@ while [ "$(q "SELECT count(*) FROM orca.runs WHERE status NOT IN ('succeeded', '
 done
 [ "$most" -eq 2 ] || fail "$most control-placed runs ran at once"
 [ "$held" -eq 1 ] || fail "no run was held for a control slot"
-[ "$fleet" -eq 1 ] || fail "/fleet didn't list the control host's runs"
+[ "$fleet" -eq 1 ] || fail "/ops/fleet didn't list the control host's runs"
 [ "$(q "SELECT count(*) FROM orca.runs WHERE status <> 'succeeded'")" -eq 0 ] \
     || fail "runs that didn't succeed: $(q "SELECT id, pipeline, status, error FROM orca.runs WHERE status <> 'succeeded'")"
 [ "$(q "SELECT count(*) FROM orca.instances i JOIN orca.runs r ON r.id = i.run WHERE r.pipeline <> 'daily'")" -eq 0 ] \
@@ -188,7 +188,7 @@ daily=$(q "SELECT id FROM orca.runs WHERE pipeline = 'daily'")
 json "/runs/$daily" | jq -e '.run.placement == "ec2" and .run.held == null' > /dev/null || fail "daily's run's JSON"
 json "/runs/$first" | jq -e '.run.placement == "control"' > /dev/null || fail "run $first's JSON"
 curl -fsS "$base/runs/$first" | grep -q "on the control host" || fail "run $first's page doesn't say where it ran"
-echo "ok   control-placed runs start no instance, two at a time, listed on /fleet's control host"
+echo "ok   control-placed runs start no instance, two at a time, listed on /ops/fleet's control host"
 
 fanout=$(q "SELECT id FROM orca.runs WHERE pipeline = 'fanout'")
 wait_file "$ORCA_LOGS/fanout/$fanout/driver.log"

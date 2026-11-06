@@ -1,4 +1,4 @@
-"""The control instance's own health: `/system`, the gauges on `/metrics`,
+"""The control instance's own health: `/ops/control`, the gauges on `/metrics`,
 and the warning on the home page.
 
 The control instance (Postgres, the scheduler, the UI, Caddy, the apps) runs
@@ -561,7 +561,7 @@ def warnings(now: Optional[Now]) -> List[String]:
 
 
 def alert_html(mut h: Html, w: List[String]):
-    """The warnings as a box linking to `/system`, or nothing."""
+    """The warnings as a box linking to `/ops/control`, or nothing."""
     if len(w) == 0:
         return
     h.raw('<div class="alert" role="alert">')
@@ -569,7 +569,7 @@ def alert_html(mut h: Html, w: List[String]):
         h.raw("<div>")
         h.text(text)
         h.raw("</div>")
-    h.raw('<div><a href="/system">System health</a></div></div>')
+    h.raw('<div><a href="/ops/control">Control health</a></div></div>')
 
 
 def warnings_json(w: List[String]) -> String:
@@ -828,7 +828,7 @@ def system_html(mut h: Html, now: Optional[Now], c: Charts, range: String):
         if r == range:
             h.raw("<strong>", r, "</strong> ")
         else:
-            h.raw('<a href="/system?range=', r, '">', r, "</a> ")
+            h.raw('<a href="/ops/control?range=', r, '">', r, "</a> ")
     h.raw(
         "(UTC, every ",
         c.bucket // 60,

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **UI: an Ops menu with Control and Fleet.** "System" and "Fleet" read as
+  the same thing, so the nav has one "Ops" item with two pages under it:
+  `/ops/control` (was `/system`: the one machine running the scheduler, the
+  UI, Postgres and control-placed runs) and `/ops/fleet` (was `/fleet`: the
+  EC2 instances orca launches for runs). Each page's first line says what it
+  shows and links to the other; Control also shows the watchdog's banner
+  and links `/watchdog`. `/ops` redirects to Control. `/system`, `/fleet`
+  and `/fleet/hosts` redirect permanently (301, query kept); `/api/system`
+  and `/api/fleet` are unchanged. The menu is plain links (hover and
+  keyboard focus open it; on a phone it is always shown inline), so it
+  needs no JavaScript. `tests/ui.sh`, `tests/fleet.sh`, `tests/system.sh`.
+
 ## 0.9.0 - 2026-11-06
 
 - **`orca.toml`: one checked-in file for how each pipeline runs** (#145,
