@@ -162,6 +162,10 @@ Cloudflare Tunnel, with scripts in `deploy/hetzner/`. On the `local` runner
 the watchdog's cost rule reads "fixed price" and Ops > Fleet says no
 instances are launched.
 
+## Releasing and operations
+
+Releasing and operations: https://mlake.dev/getting-started/maintain
+
 ## Developing locally
 
 The tests and examples above run from a checkout of this repository, with the
