@@ -117,7 +117,7 @@ test-no-workers = { cmd = "scripts/with-postgres.sh tests/no_workers.sh" }
 # The ec2 runner's warm pool: runs of one pipeline on the same instances.
 test-pool = { cmd = "scripts/with-postgres.sh tests/pool.sh" }
 test-secrets = { cmd = "scripts/with-postgres.sh tests/secrets.sh" }
-test-aws = { cmd = "tests/aws.sh" }
+test-aws = { cmd = "tests/aws.sh && tests/replace_control.sh" }
 test-lost-workers = { cmd = "scripts/with-postgres.sh tests/lost_workers.sh" }
 test-datasets = { cmd = "scripts/with-postgres.sh tests/datasets.sh" }
 test-stop = { cmd = "scripts/with-postgres.sh tests/stop.sh" }
