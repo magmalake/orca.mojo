@@ -36,6 +36,7 @@ fail() {
     stop
     exit 1
 }
+. "$PWD/tests/wait_log.sh"
 q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
 export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
 export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
@@ -71,7 +72,8 @@ until_true "SELECT count(*) > 0 FROM orca.instances WHERE run = $run" 120
     || fail "run $run started with workers"
 until_true "SELECT status IN ('succeeded', 'failed') FROM orca.runs WHERE id = $run" 300
 [ "$(q "SELECT status FROM orca.runs WHERE id = $run")" = succeeded ] || fail "run $run"
-grep -q "trips in 1 months" "$ORCA_LOGS/fanout/$run/driver.log" || fail "run $run's driver log"
+# The head uploads its log in its grace after the run: wait for it.
+wait_log "$ORCA_LOGS/fanout/$run/driver.log" "trips in 1 months" || fail "run $run's driver log"
 
 # At most 3 workers at once, each started by a decision; all drained.
 most=$(q "SELECT max(n) FROM (SELECT (SELECT count(*) FROM orca.instances j WHERE j.run = $run AND j.role = 'worker' AND j.launched <= i.launched AND (j.ended IS NULL OR j.ended > i.launched)) AS n FROM orca.instances i WHERE i.run = $run AND i.role = 'worker') x")
