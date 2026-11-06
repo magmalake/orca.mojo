@@ -122,7 +122,8 @@ every runner, and is part of the EC2 warm pool's key; `ORCA_RUN_ENV` still
 copies the scheduler's variables to every run, under the pipeline's own.
 The registration keeps the file's SHA-256 and git commit. `--config F`
 reads another file, `--no-config` none; `orca config show` prints each
-value with its source (code default, orca.toml, flag, environment).
+value with its source (code default, orca.toml, flag, environment). Every key, the
+precedence and migrating from flags: [docs/orca-toml.md](docs/orca-toml.md).
 
 ## Developing locally
 
