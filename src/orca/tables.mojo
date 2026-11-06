@@ -70,6 +70,34 @@ def load_day(mut ctx: Ctx, d: Day) raises -> Int64:
   attempt that died before committing them are left unreferenced in
   `data/`, as with an interrupted `append`.
 
+**Replacing partitions.** A new run of a key (`orca backfill --rerun`)
+isn't a retry: `find_commit` doesn't recognise an earlier run's commits, so
+`append` adds the key's rows a second time. A step that recomputes a key's
+rows declares the dataset in `replaces=` rather than `writes=`, and its
+`append` and `append_files` to it then replace:
+
+```mojo
+comptime LoadDay = Step[
+    "load_day", Day, Int64, load_day, Mapped, replaces=[EVENTS],
+]
+```
+
+- The run's first commit to a partition is an `overwrite` that removes the
+  files this run didn't commit from the partitions its new files land in,
+  and adds them; its later commits find only the run's files there and
+  append. A retry recognises its commits as before, so nothing is
+  overwritten twice or lost.
+- Another writer's file in such a partition, added after the run's first
+  commit to the table, means two runs are replacing it at once: the commit
+  raises, committing nothing, and only one run keeps its rows.
+- `replace_partitions` and `replace_partition_files` do the same for one
+  call, to any table. The summary has `orca.replaced-files` and
+  `orca.replaced-records`.
+
+`commit` refuses to remove files that aren't all in the current snapshot,
+on every try: a removal planned before another writer replaced them
+would otherwise keep both writers' rows.
+
 This module imports iceberg, so only pipelines that use tables build it;
 `orca` itself doesn't.
 """
@@ -79,16 +107,21 @@ from std.random import random_float64
 from std.time import sleep
 
 from dista import Codec
-from iceberg.append import prepare_append
+from iceberg.append import AppendResult, prepare_append
 from iceberg.catalog.filesystem import FilesystemCatalog, Table
 from iceberg.commit import FileChanges, prepare_commit
 from iceberg.io import FileIO
+from iceberg.expressions import FieldSummary
 from iceberg.manifest import (
     CONTENT_DATA,
     DataFile,
+    ManifestFile,
     decode_data_files,
     encode_data_files,
+    read_manifest_io,
+    read_manifest_list_io,
 )
+from iceberg.metadata import TableMetadata
 from iceberg.scan import TableScan
 from iceberg.schema import Schema
 from iceberg.transforms import PartitionSpec
@@ -98,7 +131,8 @@ from iceberg.update_schema import (
     prepare_schema_update,
 )
 from iceberg.util import now_ms
-from iceberg.write import WriteOptions, write_data_files
+from iceberg.values import Datum, compare, datum_from_bytes_prim
+from iceberg.write import WriteOptions, _partition_key, write_data_files
 from parquet import RecordBatch
 
 from orca.ctx import Ctx
@@ -623,7 +657,23 @@ def append(
     mut ctx: Ctx, mut table: Table, batches: List[RecordBatch]
 ) raises -> Int64:
     """Writes `batches` to `table` as one `append` snapshot and returns its ID,
-    or returns the snapshot an earlier attempt of this step committed."""
+    or returns the snapshot an earlier attempt of this step committed.
+
+    To a dataset the step declared in `replaces=`, it's `replace_partitions`:
+    the partitions the rows land in lose what earlier runs left there."""
+    return _append(ctx, table, batches, ctx.replaces(_dataset(table)))
+
+
+def _dataset(table: Table) -> String:
+    try:
+        return dataset_of(table.metadata.location)
+    except:
+        return ""
+
+
+def _append(
+    mut ctx: Ctx, mut table: Table, batches: List[RecordBatch], replace: Bool
+) raises -> Int64:
     var found = _found(ctx, table)
     if found >= 0:
         return found
@@ -645,6 +695,8 @@ def append(
             ": ",
             e,
         )
+    if replace:
+        return _commit_replace(ctx, table, files^)
     return _commit_append(ctx, table, files^)
 
 
@@ -660,7 +712,16 @@ def append_files(
 
     Refuses a dataset the step didn't declare in `writes=`, and an entry
     that isn't a data file (a delete file goes through `commit`).
+
+    To a dataset the step declared in `replaces=`, it's
+    `replace_partition_files`.
     """
+    return _append_files(ctx, table, files, ctx.replaces(_dataset(table)))
+
+
+def _append_files(
+    mut ctx: Ctx, mut table: Table, files: List[DataFile], replace: Bool
+) raises -> Int64:
     for f in files:
         if f.content != CONTENT_DATA:
             raise Error(
@@ -673,6 +734,8 @@ def append_files(
     var found = _found(ctx, table)
     if found >= 0:
         return found
+    if replace:
+        return _commit_replace(ctx, table, files.copy())
     return _commit_append(ctx, table, files.copy())
 
 
@@ -727,17 +790,26 @@ def commit(
     """Commits `files` (data files added and removed, already written) to
     `table` as one snapshot of `operation`, e.g. `replace` for a compaction,
     and returns its ID, or returns the snapshot an earlier attempt of this
-    step committed."""
+    step committed.
+
+    Every file `files` removes must be in the table's current snapshot, on
+    the first try and on each retry after another writer committed first:
+    if one isn't, another writer removed or replaced it since the caller
+    read it, and the commit raises, committing nothing, rather than remove
+    the rest and keep both writers' rows. The step's retry plans the change
+    again. (`replace_partitions` plans it again itself on each try.)"""
     var found = _found(ctx, table)
     if found >= 0:
         return found
     var loc = table.metadata.location
     var dataset = dataset_of(loc)
+    var removing = _distinct(files.removed)
     var attempt = 0
     while True:
         var result = prepare_commit(
             table.io, table.metadata, operation, files.copy(), ctx.summary(loc)
         )
+        _check_removed(result, removing, dataset if dataset else loc)
         # Not if this process may have lost its run (`Ctx.fence`).
         ctx.fence()
         try:
@@ -757,5 +829,317 @@ def commit(
             _reload(table)
             continue
         ctx.committed(loc, result.snapshot_id, dataset)
+        _reload(table)
+        return result.snapshot_id
+
+
+def _distinct(paths: List[String]) -> Int:
+    var seen = Dict[String, Bool]()
+    for p in paths:
+        seen[p] = True
+    return len(seen)
+
+
+def _summary_int(s: Dict[String, String], key: String) -> Int:
+    try:
+        return Int(s.get(key, "0"))
+    except:
+        return 0
+
+
+def _check_removed(result: AppendResult, removing: Int, name: String) raises:
+    """Raises unless the prepared commit removes all `removing` files: the
+    ones it doesn't find aren't in the snapshot it was planned on."""
+    if removing == 0:
+        return
+    ref m = result.metadata
+    var s = m.snapshots[len(m.snapshots) - 1].summary.copy()
+    var found = _summary_int(s, "deleted-data-files") + _summary_int(
+        s, "removed-delete-files"
+    )
+    if found < removing:
+        raise Error(
+            "orca: ",
+            removing - found,
+            " of the ",
+            removing,
+            " files this commit to ",
+            name,
+            " removes aren't in its current snapshot: another writer removed",
+            " or replaced them since they were read. Nothing was committed;",
+            " plan the change again (the step's retry does)",
+        )
+
+
+# ── replacing partitions ─────────────────────────────────────────────────────
+
+
+def replace_partitions(
+    mut ctx: Ctx, mut table: Table, batches: List[RecordBatch]
+) raises -> Int64:
+    """Writes `batches` to `table` as one snapshot that also removes the
+    files earlier runs left in the partitions the rows land in, and returns
+    its ID, or the snapshot an earlier attempt of this step committed.
+
+    What `append` does to a dataset the step declared in `replaces=`; this
+    is for a table outside the warehouse, or a step that replaces one table
+    and appends to another it declares in `writes=`.
+
+    - The run's first commit to a partition is an `overwrite` that removes
+      every data and delete file in it that this run didn't commit, and
+      adds the new files. Later commits of the run to the partition find
+      only its own files there and append; files of this run, from any of
+      its steps and attempts, are never removed.
+    - The partitions are those of the new files under the table's current
+      spec: no rows replace nothing. Files written under an older spec are
+      left alone. An unpartitioned table is one partition: the run replaces
+      the whole table.
+    - What to remove is planned against the snapshot each try commits on
+      top of, again on every retry after another writer committed first.
+    - A file in a partition being replaced that another writer committed
+      after this run's first commit to the table means two writers are
+      replacing (or writing) the partition at once. The commit raises,
+      committing nothing, so only one of them keeps its rows: the other's
+      attempt fails, and a rerun of it once the first has finished replaces
+      the partition again.
+
+    The snapshot's summary has `orca.replaced-files` and
+    `orca.replaced-records`: the data files and rows it removed.
+    """
+    return _append(ctx, table, batches, True)
+
+
+def replace_partition_files(
+    mut ctx: Ctx, mut table: Table, files: List[DataFile]
+) raises -> Int64:
+    """`replace_partitions` of data files already written, here or on a
+    worker (`write_files`), as `append_files` commits them."""
+    return _append_files(ctx, table, files, True)
+
+
+def replace_partition_files(
+    mut ctx: Ctx, mut table: Table, files: DataFiles
+) raises -> Int64:
+    """`replace_partition_files` of the entries a task returned."""
+    return _append_files(ctx, table, files.files, True)
+
+
+struct _Replaced(Movable):
+    """What a replace removes: the paths, and the data files and rows."""
+
+    var removed: List[String]
+    var files: Int
+    var records: Int64
+
+    def __init__(out self):
+        self.removed = List[String]()
+        self.files = 0
+        self.records = 0
+
+
+def _within(
+    sums: List[FieldSummary],
+    spec: PartitionSpec,
+    ptype: Schema,
+    value: List[Datum],
+) raises -> Bool:
+    """Whether a manifest with partition summaries `sums` may hold files of
+    the partition `value`."""
+    if len(value) != len(spec.fields) or len(sums) != len(spec.fields):
+        return True
+    for k in range(len(spec.fields)):
+        ref sum = sums[k]
+        ref v = value[k]
+        if not v.valid:
+            if not sum.contains_null:
+                return False
+            continue
+        if not sum.has_lower or not sum.has_upper:
+            return False
+        ref tn = ptype.store.nodes[
+            ptype.find_field(spec.fields[k].field_id).type
+        ]
+        var lo = datum_from_bytes_prim(
+            tn.prim, tn.precision, tn.scale, tn.length, sum.lower_bound
+        )
+        var hi = datum_from_bytes_prim(
+            tn.prim, tn.precision, tn.scale, tn.length, sum.upper_bound
+        )
+        if compare(lo, v) > 0 or compare(hi, v) < 0:
+            return False
+    return True
+
+
+def _may_hold(
+    mf: ManifestFile,
+    spec: PartitionSpec,
+    ptype: Schema,
+    values: List[List[Datum]],
+) -> Bool:
+    """Whether manifest `mf` may hold files of any of the partitions
+    `values`, by its partition summaries: the others aren't read."""
+    if len(spec.fields) == 0 or not mf.has_partitions:
+        return True
+    try:
+        for v in values:
+            if _within(mf.partitions, spec, ptype, v):
+                return True
+        return False
+    except:
+        return True
+
+
+def _by_whom(m: TableMetadata, at: Int) -> String:
+    """Who committed snapshot `at` (an index into `m.snapshots`)."""
+    if at < 0:
+        return "a snapshot no longer in the table's history"
+    ref s = m.snapshots[at].summary
+    var run = s.get("orca.run")
+    if run:
+        return String(
+            "run ",
+            run.value(),
+            " of ",
+            s.get("orca.pipeline", "?"),
+            ", step ",
+            s.get("orca.step", "?"),
+        )
+    return String("snapshot ", m.snapshots[at].snapshot_id, ", not orca's")
+
+
+def _plan_replace(
+    ctx: Ctx, table: Table, added: List[DataFile]
+) raises -> _Replaced:
+    """The files a replace adding `added` removes from `table`'s current
+    snapshot (see `replace_partitions`), or raises if another writer is
+    writing one of its partitions."""
+    var out = _Replaced()
+    ref m = table.metadata
+    if not m.has_current_snapshot or len(added) == 0:
+        return out^
+    var current = m.current_snapshot()
+    if current.manifest_list == "":
+        return out^
+    var spec = m.spec()
+    var ptype = spec.partition_type(m.schema())
+    var keys = Dict[String, Bool]()
+    var values = List[List[Datum]]()
+    for f in added:
+        var k = _partition_key(f.partition)
+        if k not in keys:
+            keys[k] = True
+            values.append(f.partition.copy())
+    # This run's snapshots, and where its first one is in the history.
+    var loc = m.location
+    var mine = Dict[Int64, Bool]()
+    for c in ctx.commits:
+        if c.table == loc:
+            mine[c.snapshot_id] = True
+    var index = Dict[Int64, Int]()
+    var first_mine = -1
+    for i in range(len(m.snapshots)):
+        ref s = m.snapshots[i]
+        index[s.snapshot_id] = i
+        if ctx.same_run(s.summary):
+            mine[s.snapshot_id] = True
+        if s.snapshot_id in mine and first_mine < 0:
+            first_mine = i
+    var name = dataset_of(loc)
+    for mf in read_manifest_list_io(table.io, current.manifest_list):
+        if mf.partition_spec_id != spec.spec_id:
+            continue
+        if not _may_hold(mf, spec, ptype, values):
+            continue
+        var manifest = read_manifest_io(table.io, mf.manifest_path, mf)
+        for e in manifest.entries:
+            if not e.is_live():
+                continue
+            if _partition_key(e.data_file.partition) not in keys:
+                continue
+            if e.snapshot_id in mine:
+                continue
+            var at = index.get(e.snapshot_id, -1)
+            if first_mine >= 0 and at > first_mine:
+                raise Error(
+                    "orca: another writer is writing a partition of ",
+                    name if name else loc,
+                    " that this run replaces: ",
+                    _by_whom(m, at),
+                    " committed ",
+                    e.data_file.file_path,
+                    " after this run's first commit to it. Nothing was",
+                    " committed; rerun once the other has finished",
+                )
+            out.removed.append(e.data_file.file_path)
+            if e.data_file.content == CONTENT_DATA:
+                out.files += 1
+                out.records += e.data_file.record_count
+    return out^
+
+
+def _commit_replace(
+    mut ctx: Ctx, mut table: Table, var files: List[DataFile]
+) raises -> Int64:
+    """Commits `files` to `table` replacing their partitions (see
+    `replace_partitions`), planned again and tried again when another writer
+    commits first."""
+    var loc = table.metadata.location
+    var dataset = dataset_of(loc)
+    var attempt = 0
+    while True:
+        # Planned against the snapshot this try builds on, never one an
+        # earlier try saw: a stale list of files would leave another
+        # writer's rows beside these.
+        var plan = _plan_replace(ctx, table, files)
+        var summary = ctx.summary(loc)
+        summary["orca.replaced-files"] = String(plan.files)
+        summary["orca.replaced-records"] = String(plan.records)
+        var result: AppendResult
+        if len(plan.removed) == 0:
+            result = prepare_append(
+                table.io, table.metadata, files.copy(), summary^
+            )
+        else:
+            var change = FileChanges()
+            change.added_data = files.copy()
+            change.removed = plan.removed.copy()
+            result = prepare_commit(
+                table.io, table.metadata, "overwrite", change^, summary^
+            )
+            _check_removed(
+                result, len(plan.removed), dataset if dataset else loc
+            )
+        # Not if this process may have lost its run (`Ctx.fence`).
+        ctx.fence()
+        try:
+            table.commit(result)
+        except e:
+            attempt += 1
+            if attempt > _COMMIT_RETRIES:
+                raise Error(
+                    "orca: can't commit to ",
+                    dataset,
+                    " (",
+                    attempt,
+                    " tries): ",
+                    e,
+                )
+            _backoff(attempt)
+            _reload(table)
+            continue
+        ctx.committed(loc, result.snapshot_id, dataset)
+        if len(plan.removed) > 0:
+            ctx.log(
+                String(
+                    "replaced ",
+                    plan.files,
+                    " files (",
+                    plan.records,
+                    " rows) of ",
+                    dataset if dataset else loc,
+                    " that earlier runs committed, in snapshot ",
+                    result.snapshot_id,
+                )
+            )
         _reload(table)
         return result.snapshot_id

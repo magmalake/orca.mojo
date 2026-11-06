@@ -71,15 +71,18 @@ comptime USAGE = """usage:
                 (--worker-procs: dista worker processes per EC2 worker
                 instance, auto = one per vCPU; default 1)
                 <pipeline binary> [...]
-  orca backfill [--rerun] [--preview] <pipeline> KEY[..KEY][,...]
-                (keyed: NAME[,...]|@all|@file:<path>; --rerun: done ones too;
+  orca backfill [--rerun [--allow-append]] [--preview] <pipeline>
+                KEY[..KEY][,...]
+                (keyed: NAME[,...]|@all|@file:<path>; --rerun: done ones too,
+                refused for steps that append unless --allow-append;
                 --preview: what it would queue, queueing nothing)
   orca start <pipeline> KEY[..KEY][,...]   (one run over them all)
   orca cancel <pipeline> KEY[..KEY][,...]|@all
                 (its queued, running and retrying runs over those keys)
   orca cancel <run>
   orca resume [--allow-new-code] <run>
-  orca rerun <run> <step>           (a new run, from that step on)
+  orca rerun [--allow-append] <run> <step>
+                                    (a new run, from that step on)
   orca pause|unpause <pipeline>     (the scheduler starts none of its runs)
   orca status [<pipeline>] [--json]
   orca tick
@@ -102,6 +105,23 @@ comptime USAGE = """usage:
                       rebuild|status|lineage ...
                 (to a deployed orca ui, as the user orca login logged in;
                 or ORCA_REMOTE=<url>)"""
+
+
+def _backfill_flags(args: List[String]) -> Bool:
+    """Whether `orca backfill` has its two arguments after flags it knows
+    here: `--rerun`, and `--allow-append` with it."""
+    if len(args) < 4:
+        return False
+    var rerun = False
+    var allow = False
+    for i in range(2, len(args) - 2):
+        if args[i] == "--rerun" and not rerun:
+            rerun = True
+        elif args[i] == "--allow-append" and not allow:
+            allow = True
+        else:
+            return False
+    return rerun or not allow
 
 
 def _usage(msg: String = ""):
@@ -239,14 +259,18 @@ def _command(args: List[String], target: String) raises -> Int:
                 ),
             )
         return 0
-    if cmd == "backfill" and (
-        len(args) == 4 or (len(args) == 5 and args[2] == "--rerun")
-    ):
+    if cmd == "backfill" and _backfill_flags(args):
         # --rerun queues keys that are done as well; a key in a queued or
-        # running run is still left to it.
-        var rerun = len(args) == 5
+        # running run is still left to it. --allow-append lets a rerun
+        # append again to what its steps don't replace.
+        var rerun = "--rerun" in args
         var s = Scheduler(url)
-        var got = s.backfill(args[len(args) - 2], args[len(args) - 1], rerun)
+        var got = s.backfill(
+            args[len(args) - 2],
+            args[len(args) - 1],
+            rerun,
+            "--allow-append" in args,
+        )
         # Why keys weren't queued goes to stderr, so the count stays the
         # one line of output.
         for line in got.skipped():
