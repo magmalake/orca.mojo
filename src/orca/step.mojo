@@ -38,6 +38,20 @@ comptime Clean = Step[
 ]
 ```
 
+A dataset in `replaces=` instead is one the step writes whose partitions a
+new run *replaces* rather than appends to: `orca.tables.append` and
+`append_files` to it make the run's first commit to each partition an
+`overwrite` that removes what earlier runs left there, so
+`orca backfill --rerun` leaves one copy of a key's rows (`orca.tables`,
+"Replacing partitions"). A dataset in `replaces=` counts as written; it
+needn't be in `writes=` as well.
+
+```mojo
+comptime Load = Step[
+    "load", Day, Int64, load, Mapped, replaces=["gharchive.events"],
+]
+```
+
 A step that fails is tried again up to `retries` times in the same run,
 at once, or after `backoff_seconds` doubling with each retry:
 
@@ -196,7 +210,13 @@ trait StepLike:
 
     @staticmethod
     def dataset_writes() -> List[String]:
-        """The datasets the step declared in `writes=`."""
+        """The datasets the step declared in `writes=` or `replaces=`."""
+        ...
+
+    @staticmethod
+    def dataset_replaces() -> List[String]:
+        """The datasets the step declared in `replaces=`: written, with a new
+        run replacing their partitions."""
         ...
 
     @staticmethod
@@ -265,6 +285,10 @@ struct NoStep(StepLike):
         return List[String]()
 
     @staticmethod
+    def dataset_replaces() -> List[String]:
+        return List[String]()
+
+    @staticmethod
     def check():
         pass
 
@@ -286,6 +310,7 @@ struct Step[
     timeout_seconds: Int = 0,
     reads: List[StaticString] = [],
     writes: List[StaticString] = [],
+    replaces: List[StaticString] = [],
 ](StepLike):
     """A step named `name` running `f` on an `A_` to make an `R_`."""
 
@@ -346,6 +371,18 @@ struct Step[
         comptime for i in range(len(Self.writes)):
             comptime d = Self.writes[i]
             out.append(String(d))
+        comptime for i in range(len(Self.replaces)):
+            comptime d = Self.replaces[i]
+            if String(d) not in out:
+                out.append(String(d))
+        return out^
+
+    @staticmethod
+    def dataset_replaces() -> List[String]:
+        var out = List[String]()
+        comptime for i in range(len(Self.replaces)):
+            comptime d = Self.replaces[i]
+            out.append(String(d))
         return out^
 
     @staticmethod
@@ -365,6 +402,10 @@ struct Step[
         comptime for i in range(len(Self.writes)):
             comptime assert _is_dataset(
                 Self.writes[i]
+            ), "a dataset is named namespace.table"
+        comptime for i in range(len(Self.replaces)):
+            comptime assert _is_dataset(
+                Self.replaces[i]
             ), "a dataset is named namespace.table"
         comptime a = reflect[Self.A_].name()
         comptime if Self.after.step_name() == "":

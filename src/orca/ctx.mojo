@@ -43,6 +43,10 @@ struct Ctx(Movable):
     var declared_reads: List[String]
     """The datasets the step declared it reads."""
     var declared_writes: List[String]
+    """The datasets it declared it writes, in `writes=` or `replaces=`."""
+    var declared_replaces: List[String]
+    """The datasets whose partitions a new run of it replaces (`replaces=`):
+    `orca.tables.append` and `append_files` replace rather than append."""
     var attempt: Int
     var code: String
     """The pipeline's registry hash, in hex."""
@@ -75,6 +79,7 @@ struct Ctx(Movable):
         partitions: String = "",
         var declared_reads: List[String] = List[String](),
         var declared_writes: List[String] = List[String](),
+        var declared_replaces: List[String] = List[String](),
     ):
         self.pipeline = pipeline
         self.run = run
@@ -83,6 +88,10 @@ struct Ctx(Movable):
         self.partitions = partitions if partitions else partition
         self.declared_reads = declared_reads^
         self.declared_writes = declared_writes^
+        for d in declared_replaces:
+            if d not in self.declared_writes:
+                self.declared_writes.append(d)
+        self.declared_replaces = declared_replaces^
         self.attempt = attempt
         self.code = code
         self.pinned = pinned^
@@ -208,6 +217,19 @@ struct Ctx(Movable):
         s["orca.code"] = self.code
         s["orca.reads"] = reads^
         return s^
+
+    def replaces(self, dataset: String) -> Bool:
+        """Whether the step declared it replaces `dataset`'s partitions."""
+        return Bool(dataset) and dataset in self.declared_replaces
+
+    def same_run(self, summary: Dict[String, String]) -> Bool:
+        """Whether a snapshot with `summary` was committed by any step of
+        this run: the same pipeline and run. Never for an in-memory run."""
+        if self.run <= 0:
+            return False
+        return _has(summary, "orca.pipeline", self.pipeline) and _has(
+            summary, "orca.run", String(self.run)
+        )
 
     def made(self, table: String, summary: Dict[String, String]) -> Bool:
         """Whether a snapshot with `summary` is this step's next commit to

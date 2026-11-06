@@ -759,21 +759,111 @@ def _queue(
     return got^
 
 
+comptime APPENDING_SQL = (
+    "SELECT x.st->>'name' AS step, w.ds FROM orca.pipelines p,"
+    " jsonb_array_elements(p.describe->'steps') WITH ORDINALITY AS x(st, n),"
+    " jsonb_array_elements_text(coalesce(x.st->'writes', '[]'::jsonb)) AS"
+    " w(ds) WHERE p.name = $1 AND x.n > $2 AND NOT coalesce(x.st->'replaces',"
+    " '[]'::jsonb) ? w.ds ORDER BY x.n, w.ds"
+)
+"""`step` and `ds` for each dataset a step of pipeline `$1` after its
+first `$2` declares in `writes=` and not in `replaces=`."""
+
+
+def appending_writes(
+    mut db: State, pipeline: String, from_step: Int = 0
+) raises -> List[String]:
+    """`step <name> writes <dataset>` for each dataset a step of `pipeline`
+    writes without replacing it (in `writes=`, not `replaces=`), from its
+    `from_step`th step on (0, the first): what a new run over a key that
+    already has rows appends to again. A pipeline registered before
+    `replaces=` existed appends to all it writes."""
+    var out = List[String]()
+    for r in db.conn.query(
+        APPENDING_SQL, Params().text(pipeline).int64(Int64(from_step))
+    ):
+        out.append(String("step ", r.text("step"), " writes ", r.text("ds")))
+    return out^
+
+
+def append_again(
+    pipeline: String, what: String, writes: List[String], how: String
+) -> String:
+    """Why a rerun of `what` is refused: it appends again (`writes`, from
+    `appending_writes`). `how` says how to rerun anyway."""
+    var line = String(
+        "orca: rerunning ",
+        what,
+        " appends again to what ",
+        pipeline,
+        " appended to before, duplicating those rows: ",
+    )
+    _list(line, writes)
+    line.write(
+        ". Declare a dataset in its step's replaces= to have a new run",
+        " replace its partitions (orca.tables), or ",
+        how,
+    )
+    return line^
+
+
+comptime ALLOW_APPEND_HOW = "pass --allow-append to append anyway"
+
+
+def rerun_refusal(mut db: State, p: Registered, keys: String) raises -> String:
+    """Why `orca backfill --rerun` of `keys` is refused without
+    `--allow-append`, or empty: some are done, and the pipeline's steps
+    append to datasets (`appending_writes`), so a new run of them would
+    leave their rows twice."""
+    var writes = appending_writes(db, p.name)
+    if len(writes) == 0:
+        return ""
+    var done = done_keys(db, p.name, partition_keys(p, keys))
+    if len(done) == 0:
+        return ""
+    var names = List[String]()
+    for k in done.keys():
+        names.append(k)
+    sort_texts(names)
+    var what = String()
+    _list(what, names)
+    what.write(" (done)")
+    return append_again(p.name, what, writes, ALLOW_APPEND_HOW)
+
+
 def backfill(
-    mut db: State, p: Registered, keys: String, rerun: Bool = False
+    mut db: State,
+    p: Registered,
+    keys: String,
+    rerun: Bool = False,
+    allow_append: Bool = False,
 ) raises -> Queued:
     """Queues runs for the keys in `keys` that aren't done and aren't in a
     live run, `keys_per_run` to a run; returns the runs it queued and the
     keys it left. With `rerun` (`orca backfill --rerun`) the done ones are
-    queued again too, as for a day whose source has changed since."""
+    queued again too, as for a day whose source has changed since; unless
+    `allow_append`, that's refused for a pipeline whose steps append to
+    what they write (`rerun_refusal`)."""
+    if rerun and not allow_append:
+        var why = rerun_refusal(db, p, keys)
+        if why:
+            raise Error(why)
     return queue_keys(db, p, partition_keys(p, keys), "backfill", rerun)
 
 
 def preview_backfill(
-    mut db: State, p: Registered, keys: String, rerun: Bool = False
+    mut db: State,
+    p: Registered,
+    keys: String,
+    rerun: Bool = False,
+    allow_append: Bool = False,
 ) raises -> Queued:
     """What `backfill` would queue now, queueing nothing: the keys, how many
-    runs they make, and the keys it would leave and why."""
+    runs they make, and the keys it would leave and why; or its refusal."""
+    if rerun and not allow_append:
+        var why = rerun_refusal(db, p, keys)
+        if why:
+            raise Error(why)
     var texts = partition_keys(p, keys)
     var tx = db.conn.begin()
     var got = _queue(tx, p, texts, "backfill", rerun, dry=True)
@@ -2070,11 +2160,15 @@ struct Scheduler(Movable):
                     print("orca: no sampler for run", id, ":", e)
 
     def backfill(
-        mut self, pipeline: String, keys: String, rerun: Bool = False
+        mut self,
+        pipeline: String,
+        keys: String,
+        rerun: Bool = False,
+        allow_append: Bool = False,
     ) raises -> Queued:
         """Queues a run for each partition in `keys` that has none; see
         `backfill`."""
         var ps = registered(self.db, pipeline)
         if len(ps) == 0:
             raise Error("orca: pipeline ", pipeline, " isn't registered")
-        return backfill(self.db, ps[0], keys, rerun)
+        return backfill(self.db, ps[0], keys, rerun, allow_append)

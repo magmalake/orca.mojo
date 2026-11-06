@@ -2198,7 +2198,11 @@ struct StartPreview(Copyable, Movable):
 
 
 def _start_preview(
-    mut db: State, name: String, keys: String, rerun: Bool
+    mut db: State,
+    name: String,
+    keys: String,
+    rerun: Bool,
+    allow_append: Bool = False,
 ) raises -> Optional[StartPreview]:
     """The Start runs preview over `keys`: `preview_backfill`, the same
     logic as the backfill, in a transaction it rolls back."""
@@ -2211,7 +2215,7 @@ def _start_preview(
                 "partitions from a file (@file:) are for the command line,"
                 " which reads its own files; list the names, or use @all"
             )
-        var q = preview_backfill(db, ps[0], keys, rerun)
+        var q = preview_backfill(db, ps[0], keys, rerun, allow_append)
         return StartPreview(
             "",
             q.keys.copy(),
@@ -2812,15 +2816,17 @@ def pipeline(
     rerun: Bool = False,
     preview: Bool = False,
     cal: String = "",
+    allow_append: Bool = False,
 ) raises -> Page:
     """A pipeline's page; with `preview` and `keys_in`, what its Start runs
-    form would queue over them (`?preview=1&partitions=...&rerun=1`); `cal`
-    is the month (or year) its coverage calendar shows."""
+    form would queue over them (`?preview=1&partitions=...&rerun=1`, and
+    `&allow_append=1` for a rerun that appends again); `cal` is the month
+    (or year) its coverage calendar shows."""
     var ps = _pipelines(db, name)
     if len(ps) == 0:
         return not_found(String("no pipeline ", name))
     ref p = ps[0]
-    var start = _start_preview(db, name, keys_in, rerun) if (
+    var start = _start_preview(db, name, keys_in, rerun, allow_append) if (
         preview and keys_in.strip()
     ) else Optional[StartPreview](None)
     var steps = _step_defs(db, name)
@@ -4888,17 +4894,38 @@ def _form(body: String, name: StringSlice) -> String:
 
 
 def _acted(
-    o: Outcome, back: String, var json: String, location: String
+    o: Outcome,
+    back: String,
+    var json: String,
+    location: String,
+    again: String = "",
+    again_fields: List[Tuple[String, String]] = [],
+    again_label: String = "",
 ) -> Page:
     """The answer to an action: to `location` if it was done, or a 409
-    saying why not, with a way back to `back`, and to confirm if it asks."""
+    saying why not, with a way back to `back`, and to confirm if it asks:
+    posting `again_fields` to `again` with `again_label` on the button, or,
+    without `again`, resuming the run at `back` onto new code."""
     if not o.refused:
         return Page(303, json^, String(), location=location)
     var h = Html()
     h.raw("<h1>Not done</h1><p>")
     h.text(o.refused)
     h.raw("</p>")
-    if o.confirm:
+    if o.confirm and again:
+        h.raw('<form class="action" method="post" action="')
+        h.text(again)
+        h.raw('">')
+        for f in again_fields:
+            h.raw('<input type="hidden" name="')
+            h.text(f[0])
+            h.raw('" value="')
+            h.text(f[1])
+            h.raw('">')
+        h.raw('<button type="submit">')
+        h.text(again_label)
+        h.raw("</button></form>")
+    elif o.confirm:
         h.raw('<form class="action" method="post" action="')
         h.text(back, "/resume")
         h.raw(
@@ -4940,14 +4967,31 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
             var to = String("/runs/", o.run)
             return _acted(o, back, String('{"run": ', o.run, "}"), to)
         if parts[3] == "backfill":
+            var rerun = _form(body, "rerun") == "1"
             var o = backfill_runs(
-                db, name, keys, rerun=_form(body, "rerun") == "1"
+                db,
+                name,
+                keys,
+                rerun=rerun,
+                allow_append=_form(body, "allow_append") == "1",
             )
             var to = String("/runs?pipeline=", url_encode(name))
             var j = String('{"queued": ', o.queued, ', "skipped": ')
             _json_strings(j, o.skipped)
             j.write("}")
-            return _acted(o, back, j^, to)
+            return _acted(
+                o,
+                back,
+                j^,
+                to,
+                String(back, "/backfill"),
+                [
+                    (String("partitions"), keys),
+                    (String("rerun"), String("1")),
+                    (String("allow_append"), String("1")),
+                ],
+                "Rerun them, appending again",
+            )
         if parts[3] == "cancel":
             var o = cancel_runs(db, name, keys if keys.strip() else "@all")
             var to = String("/runs?pipeline=", url_encode(name))
@@ -4996,7 +5040,21 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
         if parts[3] == "resume":
             o = resume_run(db, id, _form(body, "allow_new_code") == "1")
         elif parts[3] == "rerun":
-            o = rerun_from(db, id, _form(body, "step"))
+            var step = _form(body, "step")
+            o = rerun_from(db, id, step, _form(body, "allow_append") == "1")
+            if o.refused and o.confirm:
+                return _acted(
+                    o,
+                    back,
+                    String('{"run": 0}'),
+                    back,
+                    String(back, "/rerun"),
+                    [
+                        (String("step"), step),
+                        (String("allow_append"), String("1")),
+                    ],
+                    "Rerun it, appending again",
+                )
         elif parts[3] == "cancel":
             o = cancel_run(db, id)
         else:
@@ -5725,6 +5783,7 @@ struct Ui(Copyable, Handler):
                     _query(url, "rerun") == "1",
                     _query(url, "preview") == "1",
                     _query(url, "cal"),
+                    _query(url, "allow_append") == "1",
                 )
             if len(parts) == 2 and parts[1] == "calendar" and name:
                 return calendar_page(db, name, _query(url, "month"))
