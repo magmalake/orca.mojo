@@ -184,6 +184,19 @@ def _load(cat: FilesystemCatalog, ns: String, name: String) raises -> Table:
             _backoff(attempt)
 
 
+def _landed(table: Table, snapshot_id: Int64) -> Bool:
+    """Whether a commit that raised is in `table` after all. With
+    iceberg-mojo 0.11.0 and earlier, another writer could load a clashing
+    writer's metadata file before it was deleted and commit on top of it,
+    so retrying appended the same rows twice (#164). That iceberg race
+    can also drop a commit that won, which this can't see; the fix is
+    iceberg.mojo#88."""
+    for s in table.metadata.snapshots:
+        if s.snapshot_id == snapshot_id:
+            return True
+    return False
+
+
 def warehouse() -> String:
     """`ORCA_WAREHOUSE`: the root datasets are found under, or empty."""
     return getenv("ORCA_WAREHOUSE")
@@ -775,7 +788,9 @@ def _commit_append(
                 )
             _backoff(attempt)
             _reload(table)
-            continue
+            # A commit that landed after all is done, not tried again.
+            if not _landed(table, result.snapshot_id):
+                continue
         ctx.committed(loc, result.snapshot_id, dataset)
         _reload(table)
         return result.snapshot_id
@@ -827,7 +842,9 @@ def commit(
                 )
             _backoff(attempt)
             _reload(table)
-            continue
+            # A commit that landed after all is done, not tried again.
+            if not _landed(table, result.snapshot_id):
+                continue
         ctx.committed(loc, result.snapshot_id, dataset)
         _reload(table)
         return result.snapshot_id
@@ -1126,7 +1143,9 @@ def _commit_replace(
                 )
             _backoff(attempt)
             _reload(table)
-            continue
+            # A commit that landed after all is done, not tried again.
+            if not _landed(table, result.snapshot_id):
+                continue
         ctx.committed(loc, result.snapshot_id, dataset)
         if len(plan.removed) > 0:
             ctx.log(
