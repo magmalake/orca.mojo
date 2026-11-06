@@ -6,7 +6,7 @@
 # - three runs of fanout, one after another, all run on the first run's head
 #   and 2 workers, launched once; each run's worker logs hold its own tasks
 #   only, and each instance's samples are under each run;
-# - /api/fleet shows the idle instances as "idle (pooled)", with their idle
+# - /api/ops/fleet shows the idle instances as "idle (pooled)", with their idle
 #   time;
 # - a toy run beside them gets an instance of its own (another pipeline);
 # - the idle instances shut down after ORCA_EC2_POOL_SECONDS;
@@ -156,10 +156,10 @@ until curl -fs "http://127.0.0.1:$uport/" > /dev/null 2>&1; do
 done
 curl -fsS "http://127.0.0.1:$uport/api/fleet" | jq -e '[.hosts[] | select(.state == "idle (pooled)" and .idle_seconds >= 0)] | length == 3' > /dev/null \
     || fail "/api/fleet: $(curl -fsS "http://127.0.0.1:$uport/api/fleet" | jq -c '[.hosts[] | {id, state, idle_seconds}]')"
-curl -fsS "http://127.0.0.1:$uport/fleet" | grep -q 'idle (pooled)' || fail "/fleet shows no idle host"
+curl -fsS "http://127.0.0.1:$uport/ops/fleet" | grep -q 'idle (pooled)' || fail "/ops/fleet shows no idle host"
 kill "$ui"
 ui=
-echo "ok   /fleet shows the idle instances as idle (pooled)"
+echo "ok   /ops/fleet shows the idle instances as idle (pooled)"
 
 # Another pipeline: a toy run gets a head of its own.
 before=$(launches)

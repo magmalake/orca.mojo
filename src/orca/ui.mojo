@@ -17,10 +17,11 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/runs/<id>/timeline.json` | the run's Dista timeline, for Perfetto |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
 | `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
-| `/system` | the control instance's own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`); `/api/system` is the same as JSON |
+| `/ops` | redirects to `/ops/control`; "Ops" in the nav has Control and Fleet under it |
+| `/ops/control` | Control, the one machine running the scheduler, this UI, Postgres and control-placed runs: its own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`), and the watchdog's banner; `/api/system` is the same as JSON; `/system` redirects here (301) |
 | `/metrics` | Prometheus gauges: the control instance's CPU, memory, disk, network and containers' memory, runs running and queued, hosts, and errors in the last hour; open like the other pages (reads need no login) |
-| `/fleet` | the machines orca is paying for: hosts running and what they cost an hour, runs and errors per hour, a table of live hosts (`?sort=` a column, `&dir=desc`) and charts over `?range=24h` or `7d` (`orca.fleet`); `/fleet/hosts` is the live part of it, and `/api/fleet` the same as JSON |
-| `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`orca.watchdog`); also the red banner on `/` and `/fleet` |
+| `/ops/fleet` | Fleet, the EC2 instances orca launches for runs, the machines it is paying for: hosts running and what they cost an hour, runs and errors per hour, a table of live hosts (`?sort=` a column, `&dir=desc`) and charts over `?range=24h` or `7d` (`orca.fleet`); `/ops/fleet/hosts` is the live part of it, and `/api/fleet` the same as JSON; `/fleet` and `/fleet/hosts` redirect here (301) |
+| `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`orca.watchdog`); also the red banner on `/`, `/ops/fleet` and `/ops/control` |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), what a rebuild of it runs, and its snapshots; `?preview=1&partitions=`: a rebuild's runs by level, queueing nothing |
 | `/datasets/<name>/snapshots/<id>` | a snapshot's lineage, back and forward (`orca.lineage`) |
@@ -1447,13 +1448,24 @@ def _page(title: String, active: StaticString, body: Html) -> String:
         ("/", "Pipelines"),
         ("/runs", "Runs"),
         ("/datasets", "Datasets"),
-        ("/fleet", "Fleet"),
-        ("/system", "System"),
     ]:
         h.raw('<a href="', item[0], '"')
         if item[0] == active:
             h.raw(' aria-current="page"')
         h.raw(">", item[1], "</a>")
+    # Ops: a link to Control, with Control and Fleet under it. The menu is
+    # plain links, shown by CSS (hover, keyboard focus) and, on a phone,
+    # always, so it needs no JavaScript.
+    h.raw('<div class="menu"><a href="/ops"')
+    if active.startswith("/ops/"):
+        h.raw(' aria-current="page"')
+    h.raw(' aria-haspopup="true">Ops</a><div class="menu__sub">')
+    for item in [("/ops/control", "Control"), ("/ops/fleet", "Fleet")]:
+        h.raw('<a href="', item[0], '"')
+        if item[0] == active:
+            h.raw(' aria-current="page"')
+        h.raw(">", item[1], "</a>")
+    h.raw("</div></div>")
     h.raw('<a href="')
     h.text(getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"))
     h.raw('" target="_blank" rel="noopener">Docs</a>')
@@ -1838,9 +1850,15 @@ def fleet_page(
     )
     var h = Html()
     h.raw("<h1>Fleet</h1>")
+    h.raw(
+        '<p class="muted">The EC2 instances orca launches for runs: head and',
+        " worker hosts, their uptime, load and network. The one machine that",
+        ' runs the scheduler, this UI and Postgres is <a href="/ops/control">',
+        "Control</a>.</p>",
+    )
     banner_html(h, trips)
     h.raw(
-        '<div data-poll="/fleet/hosts?sort=',
+        '<div data-poll="/ops/fleet/hosts?sort=',
         col,
         "&amp;dir=",
         "desc" if desc else "asc",
@@ -1851,7 +1869,7 @@ def fleet_page(
         "</div>",
     )
     charts_html(h, charts, span)
-    return Page(200, j^, _page("Fleet", "/fleet", h))
+    return Page(200, j^, _page("Fleet", "/ops/fleet", h))
 
 
 def fleet_hosts_page(
@@ -1885,9 +1903,21 @@ def system_page(mut db: State, range: String) raises -> Page:
     var now = system_now(db)
     var charts = system_charts(db, range_hours(span))
     var h = Html()
-    h.raw("<h1>System</h1>")
+    h.raw("<h1>Control</h1>")
+    h.raw(
+        (
+            '<p class="muted">The one machine running the scheduler, this UI,'
+            " Postgres and control-placed runs: its CPU, memory, disk and"
+            " network. The EC2 instances orca launches for runs are on"
+            ' <a href="/ops/fleet">Fleet</a>; <a href="/watchdog">Watchdog</a>'
+            " lists the rules that pause pipelines.</p>"
+        ),
+    )
+    banner_html(h, active_trips(db))
     system_html(h, now, charts, span)
-    return Page(200, system_json(now, charts), _page("System", "/system", h))
+    return Page(
+        200, system_json(now, charts), _page("Control", "/ops/control", h)
+    )
 
 
 def metrics_page(mut db: State) raises -> Page:
@@ -5254,6 +5284,10 @@ def _reason(status: Int) -> String:
         return "OK"
     if status == 286:
         return "Done"
+    if status == 301:
+        return "Moved Permanently"
+    if status == 302:
+        return "Found"
     if status == 303:
         return "See Other"
     if status == 400:
@@ -5274,14 +5308,16 @@ def _reason(status: Int) -> String:
 def _respond(page: Page, json: Bool) -> Response:
     var raw = page.content_type != ""
     var body = page.json if json and not raw else page.html
-    var status = 200 if page.location and json else page.status
+    var status = (
+        200 if page.location and json and page.status == 303 else (page.status)
+    )
     var resp = Response(
         status=status,
         reason=_reason(status),
         body=List[UInt8](body.as_bytes()),
     )
     try:
-        if page.location and not json:
+        if page.location and (not json or page.status != 303):
             resp.headers.set("Location", page.location)
         resp.headers.set(
             "Content-Type",
@@ -5836,14 +5872,30 @@ struct Ui(Copyable, Handler):
                     return attempt(db, id, aid)
                 if parts[3] == "log":
                     return attempt_log(db, id, aid)
-        if path == "/fleet":
+        if path == "/ops":
+            return Page(302, String(), String(), location="/ops/control")
+        if path == "/system" or path == "/fleet" or path == "/fleet/hosts":
+            # The pages' old homes: moved for good, query kept.
+            var q = url.find("?")
+            var to = String("/ops/control") if path == "/system" else String(
+                "/ops", path
+            )
+            return Page(
+                301,
+                String(),
+                String(),
+                location=String(
+                    to, String(url[byte=q:]) if q >= 0 else String("")
+                ),
+            )
+        if path == "/ops/fleet":
             return fleet_page(
                 db,
                 _query(url, "sort"),
                 _query(url, "dir"),
                 _query(url, "range"),
             )
-        if path == "/fleet/hosts":
+        if path == "/ops/fleet/hosts":
             return fleet_hosts_page(
                 db,
                 _query(url, "sort"),
@@ -5852,7 +5904,7 @@ struct Ui(Copyable, Handler):
             )
         if path == "/api/fleet":
             return fleet_api(db, _query(url, "range"))
-        if path == "/system":
+        if path == "/ops/control":
             return system_page(db, _query(url, "range"))
         if path == "/api/system":
             var page = system_page(db, _query(url, "range"))
