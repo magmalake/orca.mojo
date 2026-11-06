@@ -767,19 +767,23 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
     if cmd == "backfill":
         var rerun = False
         var preview = False
+        var allow_append = False
         var pos = List[String]()
         for a in rest:
             if a == "--rerun":
                 rerun = True
             elif a == "--preview":
                 preview = True
+            elif a == "--allow-append":
+                allow_append = True
             elif a.startswith("--"):
                 raise Error("usage: unknown option: ", a)
             else:
                 pos.append(a)
         if len(pos) != 2:
             raise Error(
-                "usage: orca backfill [--rerun] [--preview] <pipeline> KEYS"
+                "usage: orca backfill [--rerun [--allow-append]] [--preview]",
+                " <pipeline> KEYS",
             )
         var keys = _keys_arg(pos[1])
         if preview:
@@ -791,6 +795,7 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
                         "?preview=1&partitions=",
                         url_encode(keys),
                         "&rerun=1" if rerun else "",
+                        "&allow_append=1" if allow_append else "",
                     )
                 )
             )
@@ -807,6 +812,8 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
         var fields: List[Tuple[String, String]] = [(String("partitions"), keys)]
         if rerun:
             fields.append((String("rerun"), String("1")))
+        if allow_append:
+            fields.append((String("allow_append"), String("1")))
         var v = loads(
             api.post(String("/pipelines/", _seg(pos[0]), "/backfill"), fields)
         )
@@ -873,20 +880,28 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
             raise Error(why)
         print("resumed run", run)
         return 0
-    if cmd == "rerun" and len(rest) == 2:
-        var run = _run_arg(rest[0])
-        var v = loads(
-            api.post(
-                String("/runs/", run, "/rerun"), [(String("step"), rest[1])]
-            )
-        )
+    if cmd == "rerun" and (len(rest) == 2 or len(rest) == 3):
+        var allow_append = False
+        var pos = List[String]()
+        for a in rest:
+            if a == "--allow-append":
+                allow_append = True
+            else:
+                pos.append(a)
+        if len(pos) != 2:
+            raise Error("usage: orca rerun [--allow-append] <run> <step>")
+        var run = _run_arg(pos[0])
+        var fields: List[Tuple[String, String]] = [(String("step"), pos[1])]
+        if allow_append:
+            fields.append((String("allow_append"), String("1")))
+        var v = loads(api.post(String("/runs/", run, "/rerun"), fields))
         print(
             "queued run",
             _int_of(v, "run"),
             "rerunning run",
             run,
             "from step",
-            rest[1],
+            pos[1],
         )
         return 0
     if cmd == "rebuild" and len(rest) == 2:
