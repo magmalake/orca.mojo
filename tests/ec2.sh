@@ -46,6 +46,7 @@ fail() {
     stop
     exit 1
 }
+. "$PWD/tests/wait_log.sh"
 q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
 export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
 export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
@@ -130,7 +131,7 @@ i=0
 while [ "$(running_of "$f1")" -gt 0 ]; do
     i=$((i + 1)); [ "$i" -lt 180 ] || fail "run $f1's instances are still running"; sleep 0.5
 done
-grep -q "^run succeeded" "$ORCA_LOGS/fanout/$f1/driver.log" || fail "run $f1's driver log"
+wait_log "$ORCA_LOGS/fanout/$f1/driver.log" "^run succeeded" || fail "run $f1's driver log"
 # Each instance's end recorded: the head's, which shuts itself down in its
 # grace after the run, on the sweep after it went.
 until_true "SELECT bool_and(ended IS NOT NULL) FROM orca.instances WHERE run = $f1" 60
