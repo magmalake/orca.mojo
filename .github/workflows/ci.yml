@@ -309,7 +309,7 @@ jobs:
         with: {repository: magmalake/parquet.mojo, ref: 5d265f9004fdad1522b80c8770c8a7a7f5f9f089, path: parquet.mojo}
       - uses: actions/checkout@v4
         # iceberg-mojo 0.11.0.
-        with: {repository: magmalake/iceberg.mojo, ref: ad91f13aea00f2b41427d163e9e550da83f59fc7, path: iceberg.mojo}
+        with: {repository: magmalake/iceberg.mojo, ref: bb361f975f9f56d33218850a5f3d048202a85f02, path: iceberg.mojo}
       - uses: actions/checkout@v4
         with: {repository: magmalake/threads.mojo, ref: f45e780a8de77278c140cee36904e46e93e0ca1c, path: threads.mojo}
       - uses: actions/checkout@v4
