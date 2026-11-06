@@ -20,6 +20,8 @@
   `--allow-append` (`allow_append=1` in the UI and API, with a confirm
   button on the refusal).
 
+## 0.8.0 - 2026-11-06
+
 - **Caddy compresses what it serves.** Every site block of the control
   instance's Caddyfile in `deploy/aws/orca.yaml` (the UI's, the console's
   and those `orca-app` adds) has `encode zstd gzip`. An existing stack's
