@@ -437,6 +437,13 @@ def _migrations() -> List[List[String]]:
             mem int8 NOT NULL,
             PRIMARY KEY (minute, name))""",
         ],
+        # A run's EC2 registration as its start was given it (so a later
+        # `orca register` doesn't change how a live run's workers start),
+        # and since when its head has had tasks and no worker.
+        [
+            "ALTER TABLE orca.runs ADD COLUMN spec jsonb",
+            "ALTER TABLE orca.runs ADD COLUMN waiting_since timestamptz",
+        ],
     ]
 
 

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **A run whose tasks wait for workers that never come fails its attempt**
+  (#148): on the ec2 runner, a run whose head has had tasks waiting and no
+  worker for `ORCA_NO_WORKERS_SECONDS` (default 600; 0 turns it off) has its
+  running attempts fail with `no workers joined in 10 min (tasks waiting:
+  N)` and its instances terminated, and is started again as a run whose
+  process died is, while its retries last. The run's page shows "Waiting for
+  workers since ...". A live run's workers are now started from the
+  registration its start was given (kept in `orca.runs.spec`, migration 26),
+  not the pipeline's current one, so registering a pipeline again mid-run
+  no longer strands the run without workers. `tests/no_workers.sh`.
+
 ## 0.8.0 - 2026-11-06
 
 - **Caddy compresses what it serves.** Every site block of the control
