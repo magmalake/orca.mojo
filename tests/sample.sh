@@ -102,6 +102,30 @@ python3 tests/metrics_ok.py --min 5 "$dir/k.jsonl" > /dev/null || fail "k.jsonl"
 [ ! -e "$dir/k.jsonl.tmp" ] || fail "--keep left its temporary file"
 echo "ok   --keep: the file is kept to its last lines"
 
+# --cgroup / --names: each container's memory by name, from files alone (a
+# cgroup v2 tree and Docker's config files, here made up).
+cg=$dir/cgroup
+names=$dir/containers
+rm -rf "$cg" "$names"
+id1=$(printf 'a%.0s' $(seq 64))
+id2=$(printf 'b%.0s' $(seq 64))
+mkdir -p "$cg/system.slice/docker-$id1.scope" "$cg/system.slice/docker-$id2.scope" "$cg/system.slice/sshd.service" "$names/$id1"
+printf '10000000\n' > "$cg/system.slice/docker-$id1.scope/memory.current"
+printf 'anon 1\ninactive_file 4000000\n' > "$cg/system.slice/docker-$id1.scope/memory.stat"
+printf '{"ID": "%s", "Name": "/postgres"}' "$id1" > "$names/$id1/config.v2.json"
+printf '2000000\n' > "$cg/system.slice/docker-$id2.scope/memory.current"
+./build/orca sample --out "$dir/c.jsonl" --count 2 --seconds 0.05 --cgroup "$cg" --names "$names" || fail "--cgroup exited $?"
+python3 - "$dir/c.jsonl" "$id2" << 'PY' || fail "containers"
+import json, sys
+for l in open(sys.argv[1]):
+    c = {x["name"]: x["mem"] for x in json.loads(l)["containers"]}
+    # A named container less its cache; an unnamed one by its short id.
+    assert c == {"postgres": 6000000, sys.argv[2][:12]: 2000000}, c
+PY
+./build/orca sample --out "$dir/c2.jsonl" --count 1 --seconds 0.05 || fail "no --cgroup"
+python3 -c "import json,sys; assert 'containers' not in json.loads(open(sys.argv[1]).readline())" "$dir/c2.jsonl" || fail "containers without --cgroup"
+echo "ok   --cgroup: containers' memory by name, from the cgroup files"
+
 line=$(./build/orca sample --out - --count 1 --seconds 0.2)
 case "$line" in "orca-sample {"*"}") ;; *) fail "--out -: $line" ;; esac
 echo "ok   --out - prints prefixed lines"

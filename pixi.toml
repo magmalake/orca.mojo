@@ -2,7 +2,7 @@
 authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
 channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
 name = "orca.mojo"
-version = "0.6.0"
+version = "0.7.0"
 description = "Orchestration for Mojo data pipelines: DAGs in Mojo, cron schedules, a web UI."
 preview = ["pixi-build"]
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
@@ -21,7 +21,7 @@ sqlite = ">=3.45,<4"
 # revisions mojoshelf published of what it imports.
 [package]
 name = "orca-mojo"
-version = "0.6.0"
+version = "0.7.0"
 
 [package.build]
 backend = { name = "pixi-build-mojo", version = "0.*" }
@@ -34,7 +34,7 @@ extra-args = ["-I", "$PREFIX/lib/mojo"]
 
 [package.host-dependencies]
 mojo-compiler = "==1.2.0"
-dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "27e6e88df1b79fdc424314386a835d1d08b0db2a" }
+dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "5b2a9b18674b9bc5d7fa03fb6f72f07967f7d871" }
 k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "6cb83ce08e02234873f2d09c7501208eedb5589f" }
 iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "ab62e59fbf3f54e86f8832c6a545c8831e99e333" }
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
@@ -53,7 +53,7 @@ mojo-compiler = "==1.2.0"
 mojo-compiler = ">=1.2.0,<2"
 libpq = ">=16,<19"
 libsqlite = ">=3.45,<4"
-dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "27e6e88df1b79fdc424314386a835d1d08b0db2a" }
+dista-mojo = { git = "https://github.com/magmalake/dista.mojo", rev = "5b2a9b18674b9bc5d7fa03fb6f72f07967f7d871" }
 k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "6cb83ce08e02234873f2d09c7501208eedb5589f" }
 iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "ab62e59fbf3f54e86f8832c6a545c8831e99e333" }
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
@@ -90,6 +90,7 @@ test-ui = { cmd = "scripts/with-postgres.sh tests/ui.sh" }
 test-actions = { cmd = "scripts/with-postgres.sh tests/actions.sh" }
 # The fleet page (orca.fleet): samples kept in Postgres, hosts, cost, charts.
 test-fleet = { cmd = "scripts/with-postgres.sh tests/fleet.sh" }
+test-system = { cmd = "scripts/with-postgres.sh tests/system.sh" }
 test-ui-login = { cmd = "scripts/with-postgres.sh tests/ui_login.sh" }
 # `orca login` and `--remote` (orca.remote, orca.tokens): tokens, URLs and
 # the credentials file, then the command against orca ui over HTTP.
@@ -98,6 +99,7 @@ test-pause = { cmd = "scripts/with-postgres.sh tests/pause.sh" }
 # The ec2 runner against a stand-in EC2 API; needs python3.
 test-versions = { cmd = "scripts/with-postgres.sh tests/versions.sh" }
 test-new-code = { cmd = "scripts/with-postgres.sh tests/new_code.sh" }
+test-calendar = { cmd = "scripts/with-postgres.sh tests/calendar.sh" }
 test-manual-run = { cmd = "scripts/with-postgres.sh tests/manual_run.sh" }
 test-dead-runs = { cmd = "scripts/with-postgres.sh tests/dead_runs.sh" }
 test-one-run-per-key = { cmd = "scripts/with-postgres.sh tests/one_run_per_key.sh" }
@@ -108,6 +110,8 @@ test-timeline = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_timeli
 test-ec2 = { cmd = "scripts/with-postgres.sh tests/ec2.sh" }
 test-autoscale = { cmd = "scripts/with-postgres.sh tests/autoscale.sh" }
 test-worker-procs = { cmd = "scripts/with-postgres.sh tests/worker_procs.sh" }
+# The ec2 runner's warm pool: runs of one pipeline on the same instances.
+test-pool = { cmd = "scripts/with-postgres.sh tests/pool.sh" }
 test-secrets = { cmd = "scripts/with-postgres.sh tests/secrets.sh" }
 test-aws = { cmd = "tests/aws.sh" }
 test-lost-workers = { cmd = "scripts/with-postgres.sh tests/lost_workers.sh" }
@@ -128,9 +132,9 @@ test-kind = { cmd = "tests/kind.sh" }
 build-shared = { cmd = "scripts/build-shared.sh" }
 # CI runs these two halves on runners of their own; `test` is both.
 # The executor, stores, workers, clouds and the data a run makes:
-test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-worker-procs", "test-secrets", "test-aws", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
+test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-worker-procs", "test-pool", "test-secrets", "test-aws", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
 # The scheduler, the UI, and what a registration and its code control:
-test-scheduler-ui = { depends-on = ["build-shared", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-actions", "test-ui-login", "test-remote", "test-pause", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
+test-scheduler-ui = { depends-on = ["build-shared", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-system", "test-actions", "test-calendar", "test-ui-login", "test-remote", "test-pause", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
 test = { depends-on = ["test-executor", "test-scheduler-ui"] }
 toy = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout" }

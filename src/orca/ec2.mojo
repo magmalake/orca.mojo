@@ -61,6 +61,47 @@ variables named in `ORCA_RUN_ENV`; `ORCA_EC2_AMI`, `ORCA_EC2_SUBNET`,
 `ORCA_EC2_SECURITY_GROUP` and `ORCA_EC2_PROFILE` say where and as what they
 run. `cpu_millis` is a run's instances' vCPUs, which the scheduler checks
 against `ORCA_VCPU_BUDGET` first.
+
+**The warm pool** (`ORCA_EC2_POOL_SECONDS`, 150; 0 turns it off). An
+instance's script is then a loop over runs, and the next run of the same
+pipeline, started as the same instances, takes its head and workers rather
+than launching new ones:
+
+- **The key.** Each instance's row has a digest of what it was started as
+  (`pool_key`): role, type, market, AMI, subnet, security group, profile,
+  the pipeline's registry hash, and its script but for the first run's
+  line, which holds the image, binary, secrets' IDs, the environment it was
+  given and its worker processes. A run takes only instances of its own
+  keys, so a new registration, image or setting never reuses old ones.
+- **Back to the pool.** A head's driver exits; a worker's `<binary>
+  pool-wait` (`orca.pool`) sees its run end and the script kills its dista
+  processes, which don't end with their head. Each uploads that run's logs
+  and samples and runs `<binary> pool-next`, which marks the run's row
+  `idle` and beats `polled` every second until it's handed a run. Its run's
+  row stays live meanwhile, so idle instances count against the budget (a
+  run of the same keys counts them as its own), and `/fleet` shows them as
+  `idle (pooled)`. A start of a pipeline waits while instances of its keys
+  are still on their way there (at most the head's grace).
+- **Hand-over** (`_take`). In one transaction, the idle rows of the key
+  whose run has ended, that weren't drained and that beat within
+  `ORCA_EC2_POOL_LIVE_SECONDS` (5) are locked `FOR UPDATE SKIP LOCKED`,
+  checked with `DescribeInstances`, ended (`pooled: on to run N`) and
+  replaced by rows of the new run (`pooled`); `pool-next` sees its new row,
+  records that it `joined`, and the next pass runs it: a new dista head
+  process for the head, new worker processes pointed at the run's head,
+  secrets read again, and logs and samples under the new run. A run takes
+  pooled workers up to what it starts (`MIN`, and what `scale` adds), then
+  launches the rest; the others stay pooled.
+- **Failure.** One handed a run that hasn't joined within
+  `ORCA_EC2_POOL_JOIN_SECONDS` (30) is terminated (`pooled: never took the
+  run up`) and replaced: a worker by a new worker, a head by new instances
+  for the same start. The sweep ends idle instances after
+  `ORCA_EC2_POOL_SECONDS` (`pooled: idle N s, shut down`), those that stop
+  beating, and those that don't reach the pool within the head's grace;
+  their rows end before they're terminated, so one handed on meanwhile
+  isn't. An instance's tags keep its first run; the sweep goes by its live
+  row. A run that's restarted, or a worker that was drained, ends as
+  before.
 """
 
 from std.base64 import b64encode
@@ -68,6 +109,7 @@ from std.os import getenv
 
 from dista.scale import Demand, Policy, decide
 from dista.socket import wall_ns
+from objectstore.crypto import sha256_hex
 from postgres import Params
 
 from orca.awsec2 import Ec2, Instance
@@ -77,6 +119,9 @@ from orca.secrets import parse_secrets
 from orca.state import State
 
 comptime HEAD_PORT = 6390
+
+comptime _POOL_BODY = "# the pool's key is from here"
+"""The line after the first run's in a pooled instance's script."""
 
 comptime HEAD_SECONDS = 10.0
 """How long `<binary> dista-status` or `dista-drain` may take, asking a
@@ -149,6 +194,9 @@ struct Ec2Spec(Copyable, Movable):
     var worker_procs: Int
     """The dista worker processes on each worker instance; 0 is one per
     vCPU of the worker type."""
+    var registry_hash: String
+    """The pipeline's code, which an instance from the pool must have been
+    started with."""
 
 
 def _quote(s: String) -> String:
@@ -172,6 +220,16 @@ struct Ec2Runner(Movable):
     var short_since: Dict[String, Float64]
     """For each scaling run, `run-start`, since when it's been short of
     workers: `decide`'s memory between ticks."""
+    var pool_seconds: Float64
+    """`ORCA_EC2_POOL_SECONDS` (150): how long an instance whose run ended
+    waits, idle, to be handed another; 0 turns the pool off, and every
+    instance ends with its run."""
+    var pool_live: Float64
+    """`ORCA_EC2_POOL_LIVE_SECONDS` (5): how recently an idle instance must
+    have asked for a run (`pool-next`) to be handed one."""
+    var pool_join: Float64
+    """`ORCA_EC2_POOL_JOIN_SECONDS` (30): how long an instance handed a run
+    has to take it up before it's terminated and replaced by a new one."""
 
     def __init__(out self) raises:
         self.ec2 = Ec2()
@@ -188,6 +246,9 @@ struct Ec2Runner(Movable):
         self.idle = Float64(getenv("ORCA_SCALE_IDLE", "60"))
         self.step = Int(getenv("ORCA_SCALE_STEP", "4"))
         self.short_since = Dict[String, Float64]()
+        self.pool_seconds = Float64(getenv("ORCA_EC2_POOL_SECONDS", "150"))
+        self.pool_live = Float64(getenv("ORCA_EC2_POOL_LIVE_SECONDS", "5"))
+        self.pool_join = Float64(getenv("ORCA_EC2_POOL_JOIN_SECONDS", "30"))
         self.env = List[String]()
         for n in getenv("ORCA_RUN_ENV").split(","):
             if n.strip():
@@ -215,7 +276,9 @@ struct Ec2Runner(Movable):
             n += workers * vcpus(self.worker_of(worker_type))
         return n * 1000
 
-    def _exports(self, r: Ec2Spec, role: StaticString, head: String) -> String:
+    def _exports(
+        self, r: Ec2Spec, role: StaticString, head: String, pool: Bool
+    ) -> String:
         """The script's environment: what every instance gets, and its
         role's own."""
         var out = String()
@@ -246,15 +309,10 @@ struct Ec2Runner(Movable):
                     ' "X-aws-ec2-metadata-token: $t"',
                     " http://169.254.169.254/latest/meta-data/local-ipv4)",
                 )
-            out.write(
-                "export DISTA_HEAD=",
-                head,
-                ":",
-                HEAD_PORT,
-                "\nexport DISTA_ADVERTISE=",
-                advertise,
-                "\n",
-            )
+            # A pooled worker's head is its run's, set for each run.
+            if not pool:
+                out.write("export DISTA_HEAD=", head, ":", HEAD_PORT, "\n")
+            out.write("export DISTA_ADVERTISE=", advertise, "\n")
         return out^
 
     def _run(self, r: Ec2Spec, env: List[String], args: String) -> String:
@@ -346,9 +404,12 @@ struct Ec2Runner(Movable):
         that read a log the script wrote there."""
         return line.replace("docker run --rm", "docker run --rm -v /tmp:/tmp")
 
-    def _put(self, r: Ec2Spec, local: String, under_run: String) -> String:
-        """A command uploading the file at `local` to `under_run` in the
-        run's directory under ORCA_LOGS, quietly: it may not be there yet."""
+    def _put(
+        self, r: Ec2Spec, run: String, local: String, under_run: String
+    ) -> String:
+        """A command uploading the file at `local` to `under_run` in run
+        `run`'s directory under ORCA_LOGS, quietly: it may not be there
+        yet."""
         return String(
             self._mounted(
                 self._run(
@@ -360,7 +421,7 @@ struct Ec2Runner(Movable):
                         ' "$ORCA_LOGS/',
                         r.pipeline,
                         "/",
-                        r.run,
+                        run,
                         "/",
                         under_run,
                         '"',
@@ -415,9 +476,91 @@ struct Ec2Runner(Movable):
             "; }\n",
         )
 
+    def _pool_workers(
+        self,
+        r: Ec2Spec,
+        env: List[String],
+        log: String,
+        procs: Int,
+        run: String,
+        start: String,
+    ) -> String:
+        """A pooled worker's lines for one run: its `procs` processes as
+        `_worker_procs` starts them (a lone one's output straight into
+        `log`), and `<binary> pool-wait` beside them. When that returns, the
+        run is over: the processes are killed, since dista workers don't end
+        with their head, and `over` is set, so the instance goes back to the
+        pool. A process that exits on its own (drained, or lost) is noticed
+        as before, and once all have, the instance shuts down."""
+        var docker = self.mode == "docker"
+        var line = self._run(r, env, "")
+        if docker:
+            # Named, so that the run's end removes them whatever they do.
+            line = line.replace(
+                "docker run --rm", "docker run --rm --name orca-worker-$k"
+            )
+        var out = String(" > ", log, ".p$k") if procs > 1 else String(
+            " > ", log
+        )
+        # A pass's files are its run's; ones a pass of an earlier instance
+        # of this ID left (as under the stand-in) aren't added to.
+        var s = String("rm -f ", log, ".p* ", log, ".sup\n")
+        s.write("over=\npids=\nk=1\nwhile [ $k -le ", procs, " ]; do\n")
+        s.write(
+            "  ",
+            line,
+            out,
+            ' 2>&1 &\n  pids="$pids $!"; k=$((k + 1))\ndone\n',
+            (
+                "trap 'for p in $pids; do kill -TERM $p 2>/dev/null; done' TERM"
+                " INT\n"
+            ),
+            self._run(
+                r,
+                List[String](),
+                String("pool-wait $iid ", run, " ", start),
+            ),
+            " >/dev/null 2>&1 &\nwatch=$!\n",
+            'alive=$pids\nwhile [ -n "$alive" ]; do\n  sleep 1\n',
+            "  left=\n  for p in $alive; do\n",
+            '    if kill -0 $p 2>/dev/null; then left="$left $p"; else\n',
+            "      wait $p; rc=$?\n",
+            '      echo "orca: worker process $p exited with status $rc"',
+            " | tee -a ",
+            log,
+            ".sup\n    fi\n  done\n  alive=$left\n",
+            # Those that exited first are noted, then the rest killed.
+            '  if [ -n "$alive" ] && ! kill -0 $watch 2>/dev/null; then\n',
+            (
+                "    over=1\n    for p in $alive; do kill -9 $p 2>/dev/null;"
+                " done\n"
+            ),
+        )
+        if docker:
+            s.write(
+                "    k=1; while [ $k -le ",
+                procs,
+                " ]; do docker rm -f orca-worker-$k >/dev/null 2>&1;",
+                " k=$((k + 1)); done\n",
+            )
+        s.write(
+            "    for p in $alive; do wait $p 2>/dev/null; done\n    break\n",
+            "  fi\ndone\nkill $watch 2>/dev/null\n",
+        )
+        return s^
+
     def _user_data(
         self, r: Ec2Spec, role: StaticString, head: String
     ) raises -> String:
+        """The instance's script. With the pool on, its work is a loop: run
+        `run` at `start`, then, back in the pool, wait for the next with
+        `<binary> pool-next` (`orca.pool`), which sets the run, start, head
+        and new-code flag the next pass uses, or shuts down. Everything a
+        pass writes and uploads is named by its run, so each run's logs and
+        samples hold its own part only, and its secrets are read again."""
+        var pool = self.pool_seconds > 0
+        var run = String("${run}") if pool else String(r.run)
+        var start = String("${start}") if pool else String(r.start)
         var s = String(
             "#!/bin/bash\n# orca run ",
             r.run,
@@ -427,21 +570,42 @@ struct Ec2Runner(Movable):
             role,
             "\n",
         )
-        s.write(self._exports(r, role, head))
+        if pool:
+            # The first run's; the rest of the script is the same for every
+            # run, which is what makes it the pool's key.
+            s.write(
+                "run=",
+                r.run,
+                "; start=",
+                r.start,
+                "; head=",
+                head if head else String("-"),
+                "; newcode=",
+                1 if r.allow_new_code else 0,
+                "\n",
+                _POOL_BODY,
+                "\n",
+            )
+        s.write(self._exports(r, role, head, pool))
         s.write(getenv("ORCA_EC2_PREAMBLE"), "\n")
+        if pool:
+            s.write(self._instance_id(), "\nwhile :; do\n")
+            if role == "worker":
+                s.write('export DISTA_HEAD="$head:', HEAD_PORT, '"\n')
         s.write(self._secrets(r))
         # The head's or worker's output, and its machine's samples
         # (orca.sample), uploaded while it runs and once when it ends: an
         # instance can go without notice.
         var keeps = role == "worker" or r.tasks
         var samples = sample_seconds() > 0 and getenv("ORCA_LOGS") != ""
-        var name = String(r.run, "-", r.start, "-", role, "-$iid")
+        var name = String(run, "-", start, "-", role, "-$iid")
         var log = String("/tmp/orca-", name, ".log")
         var metrics = String("/tmp/orca-", name, ".jsonl")
         var stop = String("/tmp/orca-", name, ".stop")
         var procs = self.procs_of(r) if role == "worker" else 1
         if keeps or samples:
-            s.write(self._instance_id(), "\n")
+            if not pool:
+                s.write(self._instance_id(), "\n")
             if procs > 1:
                 s.write(self._join_logs(log))
             s.write('up() { [ -z "${ORCA_LOGS:-}" ] || {')
@@ -450,14 +614,19 @@ struct Ec2Runner(Movable):
             if keeps:
                 s.write(
                     " ",
-                    self._put(r, log, String("cluster/", role, "-$iid.log")),
+                    self._put(
+                        r, run, log, String("cluster/", role, "-$iid.log")
+                    ),
                     ";",
                 )
             if samples:
                 s.write(
                     " ",
                     self._put(
-                        r, metrics, String("metrics/", role, "-$iid.jsonl")
+                        r,
+                        run,
+                        metrics,
+                        String("metrics/", role, "-$iid.jsonl"),
                     ),
                     ";",
                 )
@@ -507,7 +676,9 @@ struct Ec2Runner(Movable):
             if self.mode == "docker":
                 env.append("DISTA_HEAD")
                 env.append("DISTA_ADVERTISE")
-            if procs > 1:
+            if pool:
+                s.write(self._pool_workers(r, env, log, procs, run, start))
+            elif procs > 1:
                 s.write(self._worker_procs(r, env, log, procs))
             else:
                 s.write(
@@ -518,45 +689,50 @@ struct Ec2Runner(Movable):
                 )
         else:
             if r.tasks:
-                s.write(
-                    self._run(
-                        r,
-                        [
-                            String("DISTA_ROLE=head"),
-                            String("DISTA_PORT=", HEAD_PORT),
-                        ],
-                        "",
-                    ),
-                    " > ",
-                    log,
-                    " 2>&1 &\nhead=$!\n",
+                var line = self._run(
+                    r,
+                    [
+                        String("DISTA_ROLE=head"),
+                        String("DISTA_PORT=", HEAD_PORT),
+                    ],
+                    "",
                 )
-            var args = String("resume ", r.run)
-            if r.allow_new_code:
+                if pool and self.mode == "docker":
+                    line = line.replace(
+                        "docker run --rm", "docker run --rm --name orca-head"
+                    )
+                s.write(line, " > ", log, " 2>&1 &\nhead=$!\n")
+            var args = String("resume ", run)
+            if pool:
+                args.write(' $([ "$newcode" = 1 ] && echo --allow-new-code)')
+            elif r.allow_new_code:
                 args.write(" --allow-new-code")
             var env = List[String]()
             if r.tasks:
                 env.append(String("DISTA_HEAD=127.0.0.1:", HEAD_PORT))
-            var out = String("/tmp/orca-", r.run, "-", r.start, "-driver.log")
+            var out = String("/tmp/orca-", run, "-", start, "-driver.log")
             s.write(self._run(r, env, args), " > ", out, " 2>&1\n")
             if r.tasks:
                 s.write("kill $head 2>/dev/null\nwait $head 2>/dev/null\n")
+                if pool and self.mode == "docker":
+                    # Gone before the next run's head takes its port.
+                    s.write("docker rm -f orca-head >/dev/null 2>&1\n")
             s.write(
                 'if [ -n "${ORCA_LOGS:-}" ]; then ',
                 self._mounted(
                     self._run(
                         r,
                         # Which run's attempts a crash fails (orca.crash).
-                        [String("ORCA_RUN=", r.run)],
+                        [String("ORCA_RUN=", run)],
                         String(
                             "keep-log ",
                             out,
                             ' "$ORCA_LOGS/',
                             r.pipeline,
                             "/",
-                            r.run,
+                            run,
                             '/driver.log" ',
-                            r.start,
+                            start,
                         ),
                     )
                 ),
@@ -572,6 +748,31 @@ struct Ec2Runner(Movable):
             )
         if keeps or samples:
             s.write("kill $uploader 2>/dev/null\nup\n")
+        if pool:
+            # A worker whose processes all ended on their own (drained, or
+            # lost) shuts down as before; one whose run ended, and a head
+            # whose driver did, wait for the next run.
+            if role == "worker":
+                s.write('[ -n "$over" ] || break\n')
+            s.write(
+                "next=$(",
+                self._run(
+                    r,
+                    List[String](),
+                    String(
+                        "pool-next $iid ",
+                        run,
+                        " ",
+                        start,
+                        " ",
+                        Int(self.pool_seconds),
+                    ),
+                ),
+                ") || break\n",
+                'set -- $(echo "$next" | grep "^next " | tail -1)\n',
+                '[ "${1:-}" = next ] || break\n',
+                "run=$2; start=$3; head=$4; newcode=$5\ndone\n",
+            )
         s.write(
             getenv(
                 "ORCA_EC2_SHUTDOWN",
@@ -580,6 +781,57 @@ struct Ec2Runner(Movable):
             "\n",
         )
         return s^
+
+    def pool_key(
+        self, r: Ec2Spec, role: StaticString, itype: String, spot: Bool
+    ) raises -> String:
+        """What an instance of `r`'s in `role` is started as, as a digest:
+        its type, market, image, network and profile, the pipeline's code,
+        and its script but for the first run's line (the image, binary,
+        secrets' IDs, environment, worker processes and the rest). An idle
+        instance is handed only to a run whose key is its own, so a new
+        registration, image or setting never reuses one; empty with the pool
+        off."""
+        if self.pool_seconds <= 0:
+            return ""
+        var ud = self._user_data(r, role, "-")
+        var body = ud.find(_POOL_BODY)
+        return sha256_hex(
+            String(
+                role,
+                "\n",
+                itype,
+                "\n",
+                "spot" if spot else "on-demand",
+                "\n",
+                getenv("ORCA_EC2_AMI"),
+                "\n",
+                getenv("ORCA_EC2_SUBNET"),
+                "\n",
+                getenv("ORCA_EC2_SECURITY_GROUP"),
+                "\n",
+                getenv("ORCA_EC2_PROFILE"),
+                "\n",
+                r.registry_hash,
+                "\n",
+                ud[byte=body:],
+            )
+        )
+
+    def pool_keys(self, r: Ec2Spec) raises -> List[String]:
+        """The keys of the head and, for a pipeline with tasks, the workers
+        of `r`'s runs; none with the pool off."""
+        var out = List[String]()
+        if self.pool_seconds <= 0:
+            return out^
+        out.append(self.pool_key(r, "head", self.head_of(r.head_type), False))
+        if r.tasks:
+            out.append(
+                self.pool_key(
+                    r, "worker", self.worker_of(r.worker_type), r.spot
+                )
+            )
+        return out^
 
     def _params(
         self,
@@ -638,30 +890,58 @@ struct Ec2Runner(Movable):
             )
         return p^
 
-    def start(self, mut db: State, r: Ec2Spec) raises:
+    def start(self, mut db: State, r: Ec2Spec, fresh: Bool = False) raises:
         """Starts the run's head instance, then its workers, and records
-        them in `orca.instances`."""
+        them in `orca.instances`: from the pool first, where an idle
+        instance of the same key is (unless `fresh`), else new ones."""
         var head_type = self.head_of(r.head_type)
-        var head = self.ec2.run_instances(
-            self._params(r, "head", head_type, 1, False, "")
+        var key = String() if fresh else self.pool_key(
+            r, "head", head_type, False
         )
-        _record(db, r, "head", head, "on-demand", 1)
-        if len(head) != 1 or not head[0].private_ip:
-            raise Error(
-                "orca: RunInstances gave no head instance with an address"
+        var head_ip: String
+        var took = self._take(db, r, "head", key, 1)
+        if len(took) == 1:
+            head_ip = took[0]
+        else:
+            var head = self.ec2.run_instances(
+                self._params(r, "head", head_type, 1, False, "")
             )
+            _record(
+                db,
+                r,
+                "head",
+                head,
+                "on-demand",
+                1,
+                self.pool_key(r, "head", head_type, False),
+            )
+            if len(head) != 1 or not head[0].private_ip:
+                raise Error(
+                    "orca: RunInstances gave no head instance with an address"
+                )
+            head_ip = head[0].private_ip
         var n = min(r.min_workers, r.workers)
         if not r.tasks or n <= 0:
             return
-        self._workers(db, r, n, head[0].private_ip)
+        self._workers(db, r, n, head_ip, fresh)
 
     def _workers(
-        self, mut db: State, r: Ec2Spec, n: Int, head_ip: String
+        self,
+        mut db: State,
+        r: Ec2Spec,
+        n: Int,
+        head_ip: String,
+        fresh: Bool = False,
     ) raises:
+        """Gives the run `n` more worker instances: idle ones from the pool,
+        then new ones for the rest."""
+        var itype = self.worker_of(r.worker_type)
+        var key = self.pool_key(r, "worker", itype, r.spot)
+        var took = 0 if fresh else len(self._take(db, r, "worker", key, n))
+        if took >= n:
+            return
         var workers = self.ec2.run_instances(
-            self._params(
-                r, "worker", self.worker_of(r.worker_type), n, r.spot, head_ip
-            )
+            self._params(r, "worker", itype, n - took, r.spot, head_ip)
         )
         _record(
             db,
@@ -670,6 +950,122 @@ struct Ec2Runner(Movable):
             workers,
             "spot" if r.spot else "on-demand",
             self.procs_of(r),
+            key,
+        )
+
+    def _take(
+        self, mut db: State, r: Ec2Spec, role: StaticString, key: String, n: Int
+    ) raises -> List[String]:
+        """Hands up to `n` idle instances of `key` to the run, returning
+        their addresses. Only one that asked for a run lately, whose run
+        has ended, that wasn't drained, and that EC2 says is running, is
+        handed out; its row is locked (`SKIP LOCKED`), so two starts can't
+        take the same one, and its row for the old run ends as the new
+        one's is made, in one transaction, which is what the instance's
+        `pool-next` waits for."""
+        var out = List[String]()
+        if not key or n <= 0:
+            return out^
+        var tx = db.conn.begin()
+        var rows = tx.query(
+            (
+                "SELECT i.id, i.run, i.start, i.instance_type, i.market,"
+                " coalesce(i.address, '') AS address, coalesce(i.procs, 1) AS"
+                " procs, coalesce(i.cpu_millis, 0) AS cpu FROM orca.instances i"
+                " JOIN orca.runs r ON r.id = i.run WHERE i.ended IS NULL AND"
+                " i.pool_key = $1 AND i.role = $2 AND i.idle IS NOT NULL AND"
+                " i.drained IS NULL AND i.polled > now() - make_interval(secs"
+                " => $3) AND r.status <> 'running' ORDER BY i.idle DESC, i.id"
+                " LIMIT $4 FOR UPDATE OF i SKIP LOCKED"
+            ),
+            Params()
+            .text(key)
+            .text(String(role))
+            .float64(self.pool_live)
+            .int64(Int64(n)),
+        )
+        if len(rows) == 0:
+            tx.rollback()
+            return out^
+        var ids = List[String]()
+        for row in rows:
+            ids.append(row.text("id"))
+        # The database's word that it's alive, then EC2's.
+        var running = Dict[String, Bool]()
+        var filters = List[Tuple[String, List[String]]]()
+        filters.append((String("instance-id"), ids.copy()))
+        for i in self.ec2.describe(filters):
+            if i.state == "running":
+                running[i.id] = True
+        for row in rows:
+            var id = row.text("id")
+            if id not in running:
+                continue
+            _ = tx.execute(
+                (
+                    "UPDATE orca.instances SET ended = now(), why = 'pooled: on"
+                    " to run ' || $4 WHERE id = $1 AND run = $2 AND start = $3"
+                ),
+                Params()
+                .text(id)
+                .int64(row.int64("run"))
+                .int64(row.int64("start"))
+                .text(String(r.run)),
+            )
+            _ = tx.execute(
+                (
+                    "INSERT INTO orca.instances (id, run, start, role,"
+                    " instance_type, market, address, procs, pool_key,"
+                    " cpu_millis, pooled) VALUES ($1, $2, $3, $4, $5, $6,"
+                    " nullif($7, ''), $8, $9, $10, true)"
+                ),
+                Params()
+                .text(id)
+                .int64(Int64(r.run))
+                .int64(Int64(r.start))
+                .text(String(role))
+                .text(row.text("instance_type"))
+                .text(row.text("market"))
+                .text(row.text("address"))
+                .int64(row.int64("procs"))
+                .text(key)
+                .int64(row.int64("cpu")),
+            )
+            out.append(row.text("address"))
+        tx.commit()
+        if len(out) > 0:
+            print(
+                "run",
+                r.run,
+                "took",
+                len(out),
+                String(role),
+                "instance(s) from the pool",
+            )
+        return out^
+
+    def settling(self, mut db: State, keys: List[String]) raises -> Bool:
+        """Whether instances of `keys` whose run just ended are still on
+        their way to the pool (finishing the run's logs, stopping its
+        processes): a start waits for them, a few seconds, rather than
+        launching new ones beside them. At most the head's grace: after
+        that the sweep terminates them."""
+        if self.pool_seconds <= 0 or len(keys) == 0:
+            return False
+        var b = keys[1] if len(keys) > 1 else keys[0]
+        return (
+            db.conn.query(
+                (
+                    "SELECT count(*) > 0 AS any FROM orca.instances i JOIN"
+                    " orca.runs r ON r.id = i.run WHERE i.ended IS NULL AND"
+                    " i.pool_key IN ($1, $2) AND i.idle IS NULL AND i.drained"
+                    " IS NULL AND r.status <> 'running' AND r.ended > now() -"
+                    " make_interval(secs => $3)"
+                ),
+                Params().text(keys[0]).text(b).float64(self.grace),
+            )
+            .row(0)
+            .bool("any")
         )
 
     def scale(mut self, mut db: State) raises -> Tuple[Int, Int]:
@@ -685,7 +1081,7 @@ struct Ec2Runner(Movable):
                 " false) AS spot, p.ec2_min_workers AS lo, coalesce("
                 "p.ec2_workers, (p.describe->>'workers')::bigint, 2) AS hi,"
                 " h.address, coalesce(p.secrets::text, '') AS secrets,"
-                " coalesce(p.worker_procs, 1) AS procs FROM"
+                " coalesce(p.worker_procs, 1) AS procs, p.registry_hash FROM"
                 " orca.runs r JOIN orca.pipelines p ON p.name ="
                 " r.pipeline JOIN orca.instances h ON h.run = r.id AND h.start"
                 " = r.starts AND h.role = 'head' AND h.ended IS NULL AND"
@@ -715,6 +1111,7 @@ struct Ec2Runner(Movable):
                 lo,
                 parse_secrets(row.text("secrets")),
                 Int(row.int64("procs")),
+                row.text("registry_hash"),
             )
             var key = String(r.run, "-", r.start)
             live[key] = True
@@ -816,7 +1213,10 @@ struct Ec2Runner(Movable):
 
     def sweep(self, mut db: State) raises -> Int:
         """Terminates the instances of runs that aren't running at their
-        start, and those older than the deadline; returns how many."""
+        start, and those older than the deadline, but for the pool's: an
+        instance whose run ended goes to the pool, and is terminated once
+        it has been idle `ORCA_EC2_POOL_SECONDS`, or has stopped asking for
+        a run. Returns how many it terminated."""
         var live = Dict[String, Bool]()
         for row in db.conn.query(
             (
@@ -839,6 +1239,45 @@ struct Ec2Runner(Movable):
             Params().float64(self.grace),
         ):
             ending[row.text("k")] = True
+        # The run each instance serves is its live row's: one the pool
+        # handed on still has its first run's tags. The pool's are kept
+        # while they wait (on their way there, for the head's grace).
+        var serves = Dict[String, String]()
+        var pooled = Dict[String, String]()  # each of the pool's to go: why
+        var kept = Dict[String, Bool]()
+        for row in db.conn.query(
+            (
+                "SELECT i.id, i.run || '-' || i.start AS k, i.pool_key IS NOT"
+                " NULL AND i.drained IS NULL AND r.status <> 'running' AS"
+                " pooling, i.idle IS NOT NULL AS idle, coalesce(extract(epoch"
+                " FROM now() - i.idle), 0)::float8 AS idle_for,"
+                " coalesce(extract(epoch FROM now() - i.polled),"
+                " 1e9)::float8 AS since_poll, coalesce(extract(epoch FROM"
+                " now() - r.ended), 1e9)::float8 AS since_end FROM"
+                " orca.instances i JOIN orca.runs r ON r.id = i.run WHERE"
+                " i.ended IS NULL"
+            ),
+            Params(),
+        ):
+            var id = row.text("id")
+            serves[id] = row.text("k")
+            if self.pool_seconds <= 0 or not row.bool("pooling"):
+                continue
+            if not row.bool("idle"):
+                if row.float64("since_end") < self.grace:
+                    kept[id] = True
+                else:
+                    pooled[id] = String(
+                        "terminated by orca: it didn't go back to the pool"
+                    )
+            elif row.float64("idle_for") >= self.pool_seconds:
+                pooled[id] = String(
+                    "pooled: idle ", Int(self.pool_seconds), " s, shut down"
+                )
+            elif row.float64("since_poll") >= max(self.pool_live * 3, 15.0):
+                pooled[id] = String("pooled: stopped asking for a run")
+            else:
+                kept[id] = True
         var old = (
             db.conn.query(
                 (
@@ -856,24 +1295,162 @@ struct Ec2Runner(Movable):
         filters.append((String("tag-key"), tag^))
         filters.append((String("instance-state-name"), states^))
         var doomed = List[String]()
+        # The pool's doomed: their rows end before they're terminated, so
+        # one handed to a run meanwhile isn't.
+        var leaving = List[String]()
         var up = List[String]()
         for i in self.ec2.describe(filters):
             up.append(i.id)
-            var key = String(
-                i.tags.get("orca.run", ""), "-", i.tags.get("orca.start", "")
+            var key = serves.get(
+                i.id,
+                String(
+                    i.tags.get("orca.run", ""),
+                    "-",
+                    i.tags.get("orca.start", ""),
+                ),
             )
             # Launch times are ISO 8601 in UTC, so they order as text.
             if i.launch_time and i.launch_time < old:
                 doomed.append(i.id)
-            elif key not in live and not (
-                key in ending and i.tags.get("orca.role", "") == "head"
-            ):
+            elif key in live:
+                continue
+            elif i.id in pooled:
+                leaving.append(i.id)
+            elif i.id in kept:
+                continue
+            elif not (key in ending and i.tags.get("orca.role", "") == "head"):
                 doomed.append(i.id)
+        for id in leaving:
+            var k = serves[id]
+            var dash = k.find("-")
+            var n = db.conn.execute(
+                (
+                    "UPDATE orca.instances SET ended = now(), why = $4 WHERE id"
+                    " = $1 AND run = $2 AND start = $3 AND ended IS NULL"
+                ),
+                Params()
+                .text(id)
+                .int64(Int64(Int(k[byte=:dash])))
+                .int64(Int64(Int(k[byte = dash + 1 :])))
+                .text(pooled[id]),
+            )
+            if n > 0:
+                doomed.append(id)
         self.ec2.terminate(doomed)
         for id in doomed:
             _ended(db, id, "terminated by orca: its run had ended")
         self._ended_since(db, up)
+        self._rescue(db)
         return len(doomed)
+
+    def _rescue(self, mut db: State) raises:
+        """Replaces the instances the pool handed to a run that haven't
+        taken it up within `ORCA_EC2_POOL_JOIN_SECONDS`: such a worker with a
+        new one, and such a head with a new head and workers for the same
+        start, well within the start grace."""
+        if self.pool_seconds <= 0:
+            return
+        var rows = db.conn.query(
+            (
+                "SELECT i.id, i.run, i.start, i.role FROM orca.instances i JOIN"
+                " orca.runs r ON r.id = i.run AND r.starts = i.start AND"
+                " r.status = 'running' WHERE i.ended IS NULL AND i.pooled AND"
+                " i.joined IS NULL AND i.launched < now() - make_interval(secs"
+                " => $1) ORDER BY i.role, i.id"
+            ),
+            Params().float64(self.pool_join),
+        )
+        for row in rows:
+            var id = row.text("id")
+            var run = Int(row.int64("run"))
+            var start = Int(row.int64("start"))
+            var role = row.text("role")
+            var n = db.conn.execute(
+                (
+                    "UPDATE orca.instances SET ended = now(), why = 'pooled:"
+                    " never took the run up' WHERE id = $1 AND run = $2 AND"
+                    " start = $3 AND ended IS NULL"
+                ),
+                Params().text(id).int64(Int64(run)).int64(Int64(start)),
+            )
+            if n == 0:
+                continue
+            self.ec2.terminate([id])
+            print("orca: run", run, "replaces pooled", role, id, "(no answer)")
+            var spec = self._spec_of(db, run, start)
+            if not spec:
+                continue
+            if role == "worker":
+                var head = db.conn.query(
+                    (
+                        "SELECT coalesce(address, '') AS a FROM orca.instances"
+                        " WHERE run = $1 AND start = $2 AND role = 'head' AND"
+                        " ended IS NULL"
+                    ),
+                    Params().int64(Int64(run)).int64(Int64(start)),
+                )
+                if len(head) > 0 and head.row(0).text("a"):
+                    self._workers(
+                        db, spec.value(), 1, head.row(0).text("a"), True
+                    )
+                continue
+            # Its workers were told the lost head's address: they go too.
+            var others = List[String]()
+            for o in db.conn.query(
+                (
+                    "UPDATE orca.instances SET ended = now(), why = 'its pooled"
+                    " head never took the run up' WHERE run = $1 AND start = $2"
+                    " AND ended IS NULL RETURNING id"
+                ),
+                Params().int64(Int64(run)).int64(Int64(start)),
+            ):
+                others.append(o.text("id"))
+            self.ec2.terminate(others)
+            self.start(db, spec.value(), fresh=True)
+
+    def _spec_of(
+        self, mut db: State, run: Int, start: Int
+    ) raises -> Optional[Ec2Spec]:
+        """Run `run`'s start `start`, as `start` was given it."""
+        var rows = db.conn.query(
+            (
+                "SELECT r.pipeline, r.allow_new_code, coalesce(p.image, '') AS"
+                " image, p.binary_path,"
+                " jsonb_array_length(coalesce(p.describe->'tasks', '[]')) > 0"
+                " AS tasks, coalesce(p.head_type, '') AS head_type,"
+                " coalesce(p.worker_type, '') AS worker_type,"
+                " coalesce(p.ec2_workers, (p.describe->>'workers')::bigint, 2)"
+                " AS hi, coalesce(p.spot, false) AS spot,"
+                " coalesce(p.ec2_min_workers, -1) AS lo,"
+                " coalesce(p.secrets::text, '') AS secrets,"
+                " coalesce(p.worker_procs, 1) AS procs, p.registry_hash FROM"
+                " orca.runs r JOIN orca.pipelines p ON p.name = r.pipeline"
+                " WHERE r.id = $1 AND r.starts = $2"
+            ),
+            Params().int64(Int64(run)).int64(Int64(start)),
+        )
+        if len(rows) == 0:
+            return None
+        var row = rows.row(0)
+        var hi = Int(row.int64("hi"))
+        var lo = Int(row.int64("lo"))
+        return Ec2Spec(
+            run,
+            start,
+            row.text("pipeline"),
+            row.text("image"),
+            row.text("binary_path"),
+            row.bool("tasks"),
+            row.text("head_type"),
+            row.text("worker_type"),
+            hi,
+            row.bool("spot"),
+            row.bool("allow_new_code"),
+            hi if lo < 0 else min(lo, hi),
+            parse_secrets(row.text("secrets")),
+            Int(row.int64("procs")),
+            row.text("registry_hash"),
+        )
 
     def _ended_since(self, mut db: State, up: List[String]) raises:
         """Records the end of every instance `orca.instances` has as live
@@ -916,13 +1493,20 @@ def _record(
     made: List[Instance],
     market: String,
     procs: Int,
+    key: String,
 ) raises:
     for i in made:
+        var cpu = 0
+        try:
+            cpu = vcpus(i.instance_type) * 1000
+        except:
+            pass
         _ = db.conn.execute(
             (
                 "INSERT INTO orca.instances (id, run, start, role,"
-                " instance_type, market, address, procs) VALUES ($1, $2, $3,"
-                " $4, $5, $6, nullif($7, ''), $8) ON CONFLICT (id) DO NOTHING"
+                " instance_type, market, address, procs, pool_key, cpu_millis)"
+                " VALUES ($1, $2, $3, $4, $5, $6, nullif($7, ''), $8,"
+                " nullif($9, ''), $10) ON CONFLICT DO NOTHING"
             ),
             Params()
             .text(i.id)
@@ -932,7 +1516,9 @@ def _record(
             .text(i.instance_type)
             .text(market)
             .text(i.private_ip)
-            .int64(Int64(procs)),
+            .int64(Int64(procs))
+            .text(key)
+            .int64(Int64(cpu)),
         )
 
 

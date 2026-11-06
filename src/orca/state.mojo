@@ -383,6 +383,60 @@ def _migrations() -> List[List[String]]:
                 " NULL DEFAULT 0"
             ),
         ],
+        # A warm pool on EC2 (orca.ec2, `ORCA_EC2_POOL_SECONDS`): an
+        # instance serves one run after another, a row for each, so an ID
+        # is unique among the live rows only. Each row has what the
+        # instance was started as (`pool_key`), its vCPUs, when it went
+        # idle after its run and last asked for another (`<binary>
+        # pool-next`), whether the pool handed it to this run, and when it
+        # took that run up.
+        [
+            "ALTER TABLE orca.instances DROP CONSTRAINT instances_pkey",
+            "ALTER TABLE orca.instances ADD PRIMARY KEY (id, run, start)",
+            (
+                "CREATE UNIQUE INDEX instances_one_live ON orca.instances (id)"
+                " WHERE ended IS NULL"
+            ),
+            "ALTER TABLE orca.instances ADD COLUMN pool_key text",
+            "ALTER TABLE orca.instances ADD COLUMN cpu_millis int",
+            "ALTER TABLE orca.instances ADD COLUMN idle timestamptz",
+            "ALTER TABLE orca.instances ADD COLUMN polled timestamptz",
+            (
+                "ALTER TABLE orca.instances ADD COLUMN pooled boolean NOT NULL"
+                " DEFAULT false"
+            ),
+            "ALTER TABLE orca.instances ADD COLUMN joined timestamptz",
+            (
+                "CREATE INDEX instances_pool ON orca.instances (pool_key) WHERE"
+                " ended IS NULL AND idle IS NOT NULL"
+            ),
+        ],
+        # The control instance's own health (orca.system): a row a minute of
+        # its CPU, memory, fullest disk and network, and one a minute for
+        # each container's memory, kept 14 days.
+        [
+            """CREATE TABLE orca.system_minutes (
+            minute timestamptz PRIMARY KEY,
+            n int NOT NULL,
+            last_t timestamptz NOT NULL,
+            cpu_sum float8 NOT NULL,
+            cpu_max float8 NOT NULL,
+            mem_sum float8 NOT NULL,
+            mem_max float8 NOT NULL,
+            mem_used int8 NOT NULL,
+            mem_total int8 NOT NULL,
+            disk_max float8 NOT NULL,
+            disk_used int8 NOT NULL,
+            disk_total int8 NOT NULL,
+            disk_path text NOT NULL,
+            net_in_sum float8 NOT NULL,
+            net_out_sum float8 NOT NULL)""",
+            """CREATE TABLE orca.system_containers (
+            minute timestamptz NOT NULL,
+            name text NOT NULL,
+            mem int8 NOT NULL,
+            PRIMARY KEY (minute, name))""",
+        ],
     ]
 
 
