@@ -20,6 +20,13 @@
   `--allow-append` (`allow_append=1` in the UI and API, with a confirm
   button on the refusal).
 
+- **Caddy compresses what it serves.** Every site block of the control
+  instance's Caddyfile in `deploy/aws/orca.yaml` (the UI's, the console's
+  and those `orca-app` adds) has `encode zstd gzip`. An existing stack's
+  Caddyfile is hand-edited on the instance; a template update doesn't change
+  it without replacing the control instance, so see the PR for the live
+  steps.
+
 - **The control instance's own health** (#96): a `/system` page (24 hours,
   7 or 14 days of its CPU, memory, disk and network, and each container's
   memory), Prometheus gauges on `/metrics`, and a warning on `/` when its
