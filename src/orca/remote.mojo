@@ -51,6 +51,7 @@ from orca.lineage import SnapshotRef
 from orca.scheduler import file_names
 from orca.state import State
 from orca.ui import act, read_page
+from orca.watchdog import status_lines
 
 
 def is_remote_command(cmd: String) -> Bool:
@@ -66,6 +67,7 @@ def is_remote_command(cmd: String) -> Bool:
         or cmd == "rebuild"
         or cmd == "status"
         or cmd == "lineage"
+        or cmd == "watchdog"
     )
 
 
@@ -725,7 +727,9 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
     var json_out = False
     var rest = List[String]()
     for i in range(2, n):
-        if args[i] == "--json" and (cmd == "status" or cmd == "lineage"):
+        if args[i] == "--json" and (
+            cmd == "status" or cmd == "lineage" or cmd == "watchdog"
+        ):
             json_out = True
         else:
             rest.append(args[i])
@@ -738,6 +742,14 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
             print(got)
         else:
             print_status(got, one)
+        return 0
+    if cmd == "watchdog" and len(rest) == 1 and rest[0] == "status":
+        var got = api.get("/api/watchdog")
+        if json_out:
+            print(got)
+        else:
+            for line in status_lines(got):
+                print(line)
         return 0
     if cmd == "lineage" and (len(rest) == 1 or len(rest) == 2):
         var ds = rest[0]
@@ -853,6 +865,13 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
             List[Tuple[String, String]](),
         )
         print(cmd + "d", rest[0])
+        return 0
+    if cmd == "watchdog" and len(rest) == 3 and rest[0] == "snooze":
+        _ = api.post(
+            String("/watchdog/", _seg(rest[1]), "/snooze"),
+            [(String("duration"), rest[2])],
+        )
+        print("snoozed", rest[1], "for", rest[2])
         return 0
     if cmd == "resume" and (len(rest) == 1 or len(rest) == 2):
         var allow = False

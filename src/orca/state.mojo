@@ -437,6 +437,34 @@ def _migrations() -> List[List[String]]:
             mem int8 NOT NULL,
             PRIMARY KEY (minute, name))""",
         ],
+        # A run's EC2 registration as its start was given it (so a later
+        # `orca register` doesn't change how a live run's workers start),
+        # and since when its head has had tasks and no worker.
+        [
+            "ALTER TABLE orca.runs ADD COLUMN spec jsonb",
+            "ALTER TABLE orca.runs ADD COLUMN waiting_since timestamptz",
+        ],
+        # The watchdog (orca.watchdog): each rule's last reading and the
+        # snooze it may have, and the trips: when a rule paused which
+        # pipelines, and the numbers it paused them for.
+        [
+            """CREATE TABLE orca.watchdog_rules (
+            rule text PRIMARY KEY,
+            value float8,
+            threshold float8,
+            detail text,
+            checked timestamptz,
+            snoozed_until timestamptz,
+            snoozed_by text)""",
+            """CREATE TABLE orca.watchdog_trips (
+            id bigserial PRIMARY KEY,
+            rule text NOT NULL,
+            at timestamptz NOT NULL DEFAULT now(),
+            value float8 NOT NULL,
+            threshold float8 NOT NULL,
+            detail text NOT NULL,
+            pipelines text NOT NULL)""",
+        ],
         # Where a pipeline's runs run (`orca register --placement`): null
         # for the scheduler's runner, `control` for the scheduler's own host
         # (orca.control), `ec2` for instances of their own. Each run keeps

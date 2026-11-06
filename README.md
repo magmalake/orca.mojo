@@ -73,6 +73,8 @@ pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   #
 ./build/orca backfill --rerun --allow-append taxi 2024-03   # queue a month again, though it succeeded; taxi's load appends, so say so
 ./build/orca cancel taxi @all  # cancel its queued, running and retrying runs (or KEYS)
 ./build/orca pause taxi        # the scheduler starts none of its runs until orca unpause taxi
+./build/orca watchdog status   # the watchdog pauses pipelines on a launch storm, runaway cost, idle workers,
+                               # failures or stuck runs; orca watchdog snooze launches 2h silences a rule
 ./build/orca ui                # http://127.0.0.1:8270: pipelines, runs and datasets, also as JSON; start, resume, rerun, backfill, cancel, pause
 ./build/orca user add alice    # a login for the UI's actions; the password from stdin
 ./build/orca status taxi       # its state and latest runs, as its page shows them

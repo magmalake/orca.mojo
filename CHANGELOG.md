@@ -17,6 +17,33 @@
   (`placement`, `held`). `deploy/aws/orca.yaml` lets the control role read
   `orca/*` secrets (stack update needed). `tests/placement.sh`.
 
+- **A watchdog** (#151, `orca.watchdog`, migration 26): every
+  `ORCA_WATCHDOG_SECONDS` (60; 0 turns it off) the scheduler checks, from
+  Postgres only, instance launches (more than 200 an hour), estimated cost
+  (over $3/h for 15 minutes, or $25 in 24 hours), idle workers (4 or more
+  averaging under 15% CPU for 10 minutes), failing attempts (more than 20
+  an hour, or over half of at least 10, per pipeline), stuck runs (nothing
+  moved for 30 minutes on sampled instances) and the control instance
+  (memory over 90%, disk over 85%), each overridable
+  (`ORCA_WATCHDOG_*`). A rule over its limit pauses its pipelines as the
+  Pause button does, audited as user `watchdog`, shows a red banner on `/`
+  and `/fleet`, `/watchdog`, `/api/watchdog` and
+  `orca_watchdog_{tripped,value,threshold}{rule}` on `/metrics`, and never
+  resumes anything. `orca watchdog status` and `orca watchdog snooze <rule>
+  <duration>` (also `--remote`, and the form on `/watchdog`) read and
+  silence it. Email through SES is not part of this change.
+
+- **A run whose tasks wait for workers that never come fails its attempt**
+  (#148): on the ec2 runner, a run whose head has had tasks waiting and no
+  worker for `ORCA_NO_WORKERS_SECONDS` (default 600; 0 turns it off) has its
+  running attempts fail with `no workers joined in 10 min (tasks waiting:
+  N)` and its instances terminated, and is started again as a run whose
+  process died is, while its retries last. The run's page shows "Waiting for
+  workers since ...". A live run's workers are now started from the
+  registration its start was given (kept in `orca.runs.spec`, migration 26),
+  not the pipeline's current one, so registering a pipeline again mid-run
+  no longer strands the run without workers. `tests/no_workers.sh`.
+
 - **Steps that replace their partitions** (#120): `Step[..., replaces=[...]]`
   declares datasets whose partitions a new run replaces. `append` and
   `append_files` to them, and the new `replace_partitions` /

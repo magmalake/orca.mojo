@@ -1,0 +1,298 @@
+#!/bin/sh
+# The watchdog (orca.watchdog, ORCA_WATCHDOG_SECONDS), over toy and fanout.
+#
+# Against the stand-in EC2 API (tests/fake_ec2.py), with a limit of 2
+# launches an hour:
+#
+# - a run of fanout launches 3 instances, which trips "launches": both
+#   pipelines are paused (the run going on finishes), with audit rows from
+#   `watchdog`, a trip row, a red banner on / and /fleet, /watchdog,
+#   /api/watchdog, `orca watchdog status`, and /metrics gauges;
+# - a run queued for a paused pipeline stays queued;
+# - snoozing the rule (the command, and the UI's form) is audited, and
+#   unpausing then clears the banner and the gauge, and the rule doesn't
+#   trip again while snoozed; a snooze can be ended.
+#
+# Then rows seeded in Postgres, ticked by `orca tick` with the local runner:
+#
+# - idle workers pause the pipeline that owns them only;
+# - failing attempts pause the pipeline they belong to only;
+# - a run quiet for 30 minutes on sampled instances pauses its pipeline;
+# - a cost over $3 an hour pauses everything;
+# - a snoozed rule doesn't trip, a pipeline paused already isn't recorded
+#   again, and with ORCA_WATCHDOG_SECONDS=0 nothing is checked.
+#
+# Needs ORCA_DATABASE_URL (pixi run test-watchdog starts a throwaway
+# server), python3, curl and jq.
+set -eu
+cd "$(dirname "$0")/.."
+mkdir -p build
+# shellcheck disable=SC2086
+scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
+# shellcheck disable=SC2086
+scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
+# shellcheck disable=SC2086
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+log=build/watchdog.log
+: > "$log"
+dir=$PWD/build/fake-ec2-watchdog
+rm -rf "$dir" build/watchdog-logs
+mkdir -p "$dir"
+port=$((38000 + $$ % 2000))
+uport=$((18000 + $$ % 2000))
+base="http://127.0.0.1:$uport"
+fake=
+sched=
+ui=
+stop() {
+    [ -z "$sched" ] || kill "$sched" 2> /dev/null || true
+    [ -z "$ui" ] || kill "$ui" 2> /dev/null || true
+    [ -z "$fake" ] || kill "$fake" 2> /dev/null || true
+    sched=
+    ui=
+    fake=
+}
+fail() {
+    echo "FAIL: $*"
+    tail -30 "$log"
+    stop
+    exit 1
+}
+q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+until_true() {
+    i=0
+    until [ "$(q "$1")" = t ]; do
+        i=$((i + 1)); [ "$i" -lt "$2" ] || fail "waited for: $1"; sleep 0.5
+    done
+}
+paused() { q "SELECT paused FROM orca.pipelines WHERE name = '$1'"; }
+tripped() { curl -fsS "$base/metrics" | grep "^orca_watchdog_tripped{rule=\"$1\"}" | cut -d' ' -f2; }
+export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
+export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
+export ORCA_STALE_SECONDS=10 ORCA_START_SECONDS=60
+export ORCA_LOGS=$PWD/build/watchdog-logs ORCA_CLUSTER_LOG_SECONDS=1 ORCA_SAMPLE_SECONDS=1
+export ORCA_FANOUT_SLEEP=0.2 ORCA_TOY_SLEEP=0
+export ORCA_RUN_ENV=ORCA_FANOUT_SLEEP,ORCA_TOY_SLEEP
+export ORCA_EC2_POOL_SECONDS=0
+export ORCA_WATCHDOG_SECONDS=1 ORCA_WATCHDOG_LAUNCHES=2
+python3 tests/fake_ec2.py "$port" "$dir" >> "$log" 2>&1 &
+fake=$!
+i=0
+until curl -s -o /dev/null "$ORCA_EC2_ENDPOINT/"; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "the stand-in EC2 didn't start"; sleep 0.1
+done
+ORCA_UI_ADDR="127.0.0.1:$uport" ./build/orca ui >> "$log" 2>&1 &
+ui=$!
+i=0
+until curl -fs "$base/" > /dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+done
+./build/orca register --image orca:test ./build/toy >> "$log" 2>&1 || fail "register the toy"
+./build/orca register --image orca:test --workers 2 ./build/fanout >> "$log" 2>&1 || fail "register fanout"
+# Nothing yet: the rules are fine and nothing is shown.
+curl -fsS "$base/" | grep -q 'alert--trip' && fail "a banner with nothing tripped"
+./build/orca scheduler >> "$log" 2>&1 &
+sched=$!
+
+# A launch storm.
+./build/orca backfill fanout 2024-01 >> "$log" 2>&1 || fail "backfill fanout"
+r1=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
+until_true "SELECT count(*) = 2 FROM orca.pipelines WHERE paused" 120
+[ "$(q "SELECT count(*) FROM orca.watchdog_trips WHERE rule = 'launches'")" -eq 1 ] || fail "the trip rows"
+[ "$(q "SELECT count(*) FROM orca.audit WHERE username = 'watchdog' AND action IN ('/pipelines/toy/pause', '/pipelines/fanout/pause') AND detail LIKE 'watchdog rule launches: 3 instances launched in the last hour (limit 2)' AND source = 'watchdog'")" -eq 2 ] \
+    || fail "the audit rows: $(q "SELECT username, action, detail FROM orca.audit")"
+echo "ok   a launch storm pauses every pipeline, audited as watchdog"
+
+# The run going on finishes; a new one stays queued behind the pause.
+until_true "SELECT status IN ('succeeded', 'failed') FROM orca.runs WHERE id = $r1" 240
+[ "$(q "SELECT status FROM orca.runs WHERE id = $r1")" = succeeded ] || fail "run $r1: $(q "SELECT status || ' ' || coalesce(error, '') FROM orca.runs WHERE id = $r1")"
+./build/orca backfill toy 2024-01 >> "$log" 2>&1 || fail "backfill the toy"
+sleep 4
+[ "$(q "SELECT status FROM orca.runs WHERE pipeline = 'toy'")" = queued ] || fail "the toy's run isn't queued"
+[ "$(q "SELECT count(*) FROM orca.watchdog_trips")" -eq 1 ] || fail "paused pipelines were recorded again"
+echo "ok   a run going on finishes; a new one waits behind the pause"
+
+# What it looks like.
+for p in / /fleet; do
+    page=$(curl -fsS "$base$p")
+    echo "$page" | grep -q 'class="alert alert--trip"' || fail "no banner on $p"
+    echo "$page" | grep -q 'Watchdog paused pipelines: launches' || fail "the banner on $p names no rule"
+    echo "$page" | grep -q '3 instances launched in the last hour (limit 2)' || fail "the banner on $p has no numbers"
+    echo "$page" | grep -q 'href="/pipelines/fanout"' || fail "the banner on $p doesn't link fanout"
+    echo "$page" | grep -q 'href="/pipelines/toy"' || fail "the banner on $p doesn't link toy"
+done
+curl -fsS -H 'Accept: application/json' "$base/" | jq -e '.watchdog | length == 1 and .[0].rule == "launches" and (.[0].pipelines | sort) == ["fanout", "toy"]' > /dev/null || fail "/ JSON"
+curl -fsS "$base/watchdog" | grep -q 'tripped' || fail "/watchdog"
+api=$(curl -fsS "$base/api/watchdog")
+echo "$api" | jq -e '(.rules | map(.rule)) == ["launches", "cost", "idle", "failing", "stuck", "control"]
+    and (.rules[0] | .tripped and .value == 3 and .threshold == 2) and (.rules | map(select(.tripped)) | length) == 1' > /dev/null \
+    || fail "/api/watchdog: $api"
+m=$(curl -fsS "$base/metrics")
+[ "$(tripped launches)" = 1 ] && [ "$(tripped cost)" = 0 ] && [ "$(tripped failing)" = 0 ] || fail "the tripped gauges: $(echo "$m" | grep watchdog_tripped)"
+echo "$m" | grep -q '^orca_watchdog_value{rule="launches"} 3' || fail "the value gauge"
+echo "$m" | grep -q '^orca_watchdog_threshold{rule="launches"} 2' || fail "the threshold gauge"
+out=$(./build/orca watchdog status 2>&1) || fail "orca watchdog status: $out"
+echo "$out" | grep -q '^launches .*TRIPPED' || fail "orca watchdog status: $out"
+echo "$out" | grep -q '^trip launches at .*paused fanout toy' || fail "orca watchdog status trips: $out"
+./build/orca --remote "$base" watchdog status | grep -q '^launches .*TRIPPED' || fail "orca --remote watchdog status"
+./build/orca watchdog status --json | jq -e '.trips | length == 1' > /dev/null || fail "orca watchdog status --json"
+echo "ok   the banner on / and /fleet, /watchdog, /metrics and the status command show the trip"
+
+# Snoozing, and unpausing clears.
+./build/orca watchdog snooze nope 1h > /dev/null 2>&1 && fail "snoozing no rule"
+./build/orca watchdog snooze launches 1x > /dev/null 2>&1 && fail "snoozing for 1x"
+./build/orca watchdog snooze launches 1h >> "$log" 2>&1 || fail "snooze launches"
+[ "$(q "SELECT count(*) FROM orca.audit WHERE action = '/watchdog/launches/snooze' AND detail = 'duration=1h' AND source = 'local'")" -eq 1 ] || fail "the snooze isn't audited"
+curl -fsS -o /dev/null -H "Origin: $base" -d duration=30m "$base/watchdog/cost/snooze" || fail "the UI's snooze"
+[ "$(q "SELECT snoozed_until > now() + interval '25 minutes' AND snoozed_until < now() + interval '31 minutes' FROM orca.watchdog_rules WHERE rule = 'cost'")" = t ] || fail "the UI's snooze isn't stored"
+curl -s -o /dev/null -w '%{http_code}' -H "Origin: $base" -d duration=nonsense "$base/watchdog/cost/snooze" | grep -q 409 || fail "a bad duration"
+curl -fsS "$base/api/watchdog" | jq -e '(.rules[] | select(.rule == "launches") | .snoozed_until != null)' > /dev/null || fail "the snooze isn't shown"
+./build/orca watchdog status | grep -q '^cost .*snoozed until' || fail "status shows no snooze"
+./build/orca unpause toy > /dev/null || fail "unpause toy"
+curl -fsS "$base/" | grep -q 'Paused: <a href="/pipelines/fanout">fanout</a>\. ' || fail "toy unpaused: the trip should list only fanout"
+./build/orca unpause fanout > /dev/null || fail "unpause fanout"
+curl -fsS "$base/" | grep -q 'alert--trip' && fail "the banner stays after unpausing"
+curl -fsS "$base/fleet" | grep -q 'alert--trip' && fail "the banner stays on /fleet"
+[ "$(tripped launches)" = 0 ] || fail "the gauge stays 1"
+# The toy's queued run starts, and nothing pauses again while snoozed.
+t1=$(q "SELECT id FROM orca.runs WHERE pipeline = 'toy'")
+until_true "SELECT status IN ('succeeded', 'failed') FROM orca.runs WHERE id = $t1" 240
+[ "$(q "SELECT status FROM orca.runs WHERE id = $t1")" = succeeded ] || fail "the toy's run"
+[ "$(q "SELECT count(*) FROM orca.pipelines WHERE paused")" -eq 0 ] || fail "a snoozed rule paused again"
+[ "$(q "SELECT count(*) FROM orca.watchdog_trips")" -eq 1 ] || fail "a snoozed rule recorded a trip"
+echo "ok   snoozing is audited and stops the rule; unpausing clears the banner and the gauge"
+
+# A snooze ended trips it again (the launches are still in the hour).
+./build/orca watchdog snooze launches off >> "$log" 2>&1 || fail "snooze off"
+until_true "SELECT count(*) = 2 FROM orca.pipelines WHERE paused" 60
+curl -fsS "$base/" | grep -q 'alert--trip' || fail "no banner after the snooze ended"
+echo "ok   a snooze that ends lets the rule trip again"
+stop
+grep -q "can't check the watchdog" "$log" && fail "the watchdog raised"
+
+# ---- Seeded rows, ticked locally ----------------------------------------
+export ORCA_RUNNER=local
+unset ORCA_EC2_MODE ORCA_EC2_ENDPOINT ORCA_EC2_AMI ORCA_LOGS ORCA_RUN_ENV
+export ORCA_WATCHDOG_LAUNCHES=1000 ORCA_STALE_SECONDS=3600
+reset() {
+    q "DELETE FROM orca.fleet_samples; DELETE FROM orca.instances; DELETE FROM orca.attempts WHERE host = 'seed';
+       DELETE FROM orca.steps WHERE step LIKE 'seed%'; DELETE FROM orca.runs WHERE trigger = 'seed';
+       DELETE FROM orca.watchdog_trips; DELETE FROM orca.watchdog_rules; DELETE FROM orca.audit;
+       UPDATE orca.pipelines SET paused = false" > /dev/null
+}
+tick() { ORCA_WATCHDOG_SECONDS=1 ./build/orca tick >> "$log" 2>&1 || fail "tick"; }
+tick_off() { ORCA_WATCHDOG_SECONDS=0 ./build/orca tick >> "$log" 2>&1 || fail "tick"; }
+only() {  # the paused pipelines, comma-separated
+    q "SELECT coalesce(string_agg(name, ',' ORDER BY name), '') FROM orca.pipelines WHERE paused"
+}
+run_of() { q "SELECT max(id) FROM orca.runs WHERE pipeline = '$1' AND trigger <> 'seed'"; }
+toyrun=$(run_of toy)
+fanrun=$(run_of fanout)
+hash=$(q "SELECT registry_hash FROM orca.pipelines WHERE name = 'toy'")
+
+# Off: nothing is checked, however far over.
+reset
+q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched)
+   SELECT 'i-seed-' || n, $fanrun, 1, 'worker', 'c7g.4xlarge', 'on-demand', now() - interval '20 minutes' FROM generate_series(1, 8) n" > /dev/null
+tick_off
+[ "$(only)" = "" ] || fail "paused with the watchdog off"
+[ "$(q "SELECT count(*) FROM orca.watchdog_rules")" -eq 0 ] || fail "the watchdog off kept readings"
+[ "$(q "SELECT count(*) FROM orca.audit")" -eq 0 ] || fail "the watchdog off audited"
+echo "ok   ORCA_WATCHDOG_SECONDS=0: nothing checked, nothing paused"
+
+# Cost: 8 x $0.58 up for 20 minutes is over $3 an hour, sustained: everything.
+tick
+[ "$(only)" = "fanout,toy" ] || fail "cost paused: $(only)"
+[ "$(q "SELECT count(*) FROM orca.watchdog_trips WHERE rule = 'cost' AND detail LIKE 'estimated \$4.64/h, over \$3.00/h for 15 minutes%'")" -eq 1 ] \
+    || fail "the cost trip: $(q "SELECT rule, detail FROM orca.watchdog_trips")"
+# Up for 5 minutes only: a spike, not sustained.
+reset
+q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched)
+   SELECT 'i-seed-' || n, $fanrun, 1, 'worker', 'c7g.4xlarge', 'on-demand', now() - interval '5 minutes' FROM generate_series(1, 8) n" > /dev/null
+tick
+[ "$(only)" = "" ] || fail "a spike paused: $(only)"
+# Snoozed: not even sustained.
+reset
+q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched)
+   SELECT 'i-seed-' || n, $fanrun, 1, 'worker', 'c7g.4xlarge', 'on-demand', now() - interval '20 minutes' FROM generate_series(1, 8) n" > /dev/null
+./build/orca watchdog snooze cost 1h >> "$log" 2>&1
+tick
+[ "$(only)" = "" ] || fail "a snoozed rule paused: $(only)"
+[ "$(q "SELECT value > 4.6 AND value < 4.7 FROM orca.watchdog_rules WHERE rule = 'cost'")" = t ] || fail "the cost reading"
+echo "ok   cost: sustained over the rate pauses all; a spike or a snoozed rule doesn't"
+
+# Idle: 4 workers of fanout idle for 10 minutes; toy's untouched.
+reset
+q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched)
+   SELECT 'i-seed-' || n, $fanrun, 1, 'worker', 'c7g.large', 'spot', now() - interval '20 minutes' FROM generate_series(1, 4) n;
+   INSERT INTO orca.fleet_samples (host, t, cores, cpu, busiest, mem, disk, net_in, net_out)
+   SELECT 'i-seed-' || n, now() - make_interval(secs => s * 30), 2, 4, 6, 30, 30, 0, 0
+   FROM generate_series(1, 4) n, generate_series(0, 20) s" > /dev/null
+tick
+[ "$(only)" = "fanout" ] || fail "idle paused: '$(only)'"
+[ "$(q "SELECT count(*) FROM orca.audit WHERE username = 'watchdog' AND action = '/pipelines/fanout/pause' AND detail LIKE 'watchdog rule idle: 4 workers averaged 4.0% CPU for 10 minutes%'")" -eq 1 ] \
+    || fail "the idle audit: $(q "SELECT action, detail FROM orca.audit")"
+# Busy enough, and 3 workers, don't trip.
+reset
+q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched)
+   SELECT 'i-seed-' || n, $fanrun, 1, 'worker', 'c7g.large', 'spot', now() - interval '20 minutes' FROM generate_series(1, 4) n;
+   INSERT INTO orca.fleet_samples (host, t, cores, cpu, busiest, mem, disk, net_in, net_out)
+   SELECT 'i-seed-' || n, now() - make_interval(secs => s * 30), 2, CASE WHEN n = 1 THEN 90 ELSE 4 END, 6, 30, 30, 0, 0
+   FROM generate_series(1, 4) n, generate_series(0, 20) s" > /dev/null
+tick
+[ "$(only)" = "" ] || fail "a fleet averaging 25% paused: $(only)"
+echo "ok   idle: workers under 15% CPU pause the pipeline that owns them"
+
+# Failing: 12 attempts of toy in the last hour, 11 failed; fanout has none.
+reset
+q "INSERT INTO orca.steps (run, step, partition, ord, status)
+   SELECT $toyrun, 'seed' || n, '', 100 + n, 'failed' FROM generate_series(1, 12) n;
+   INSERT INTO orca.attempts (step, attempt, status, host, registry_hash, started, ended, error)
+   SELECT s.id, 1, CASE WHEN s.step = 'seed1' THEN 'succeeded' ELSE 'failed' END, 'seed', '$hash',
+          now() - interval '5 minutes', now() - interval '4 minutes', 'boom'
+   FROM orca.steps s WHERE s.step LIKE 'seed%'" > /dev/null
+tick
+[ "$(only)" = "toy" ] || fail "failing paused: '$(only)'"
+[ "$(q "SELECT detail LIKE 'toy: 11 of 1_ attempts failed in the last hour' FROM orca.watchdog_trips WHERE rule = 'failing'")" = t ] \
+    || fail "the failing trip: $(q "SELECT detail FROM orca.watchdog_trips")"
+# Ticking again records nothing more for a pipeline paused already.
+tick
+[ "$(q "SELECT count(*) FROM orca.watchdog_trips")" -eq 1 ] || fail "a trip was recorded twice"
+[ "$(q "SELECT count(*) FROM orca.audit WHERE username = 'watchdog'")" -eq 1 ] || fail "audited twice"
+echo "ok   failing: only the failing pipeline is paused, once"
+
+# Stuck: a run on sampled instances, nothing moving for 40 minutes.
+reset
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, owner, heartbeat, created, started, starts)
+   VALUES ('fanout', '$hash', '2024-09', 'seed', 'running', 'seed:1', now() + interval '1 hour', now() - interval '40 minutes', now() - interval '40 minutes', 1);
+   INSERT INTO orca.steps (run, step, partition, ord, status)
+   SELECT max(id), 'seed-s', '', 1, 'running' FROM orca.runs WHERE trigger = 'seed';
+   INSERT INTO orca.attempts (step, attempt, status, host, registry_hash, started)
+   SELECT id, 1, 'running', 'seed', '$hash', now() - interval '40 minutes' FROM orca.steps WHERE step = 'seed-s';
+   INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched)
+   SELECT 'i-seed-head', max(id), 1, 'head', 'c7g.large', 'on-demand', now() - interval '40 minutes' FROM orca.runs WHERE trigger = 'seed';
+   INSERT INTO orca.fleet_samples (host, t, cores, cpu, busiest, mem, disk, net_in, net_out)
+   SELECT 'i-seed-head', now() - make_interval(secs => s * 30), 2, 1, 2, 30, 30, 0, 0 FROM generate_series(0, 20) s" > /dev/null
+tick
+[ "$(only)" = "fanout" ] || fail "stuck paused: '$(only)'"
+[ "$(q "SELECT detail LIKE 'fanout run %: no progress for 4_ minutes' FROM orca.watchdog_trips WHERE rule = 'stuck'")" = t ] \
+    || fail "the stuck trip: $(q "SELECT detail FROM orca.watchdog_trips")"
+# The same host busy a few minutes ago is progress.
+reset
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, owner, heartbeat, created, started, starts)
+   VALUES ('fanout', '$hash', '2024-09', 'seed', 'running', 'seed:1', now() + interval '1 hour', now() - interval '40 minutes', now() - interval '40 minutes', 1);
+   INSERT INTO orca.steps (run, step, partition, ord, status)
+   SELECT max(id), 'seed-s', '', 1, 'running' FROM orca.runs WHERE trigger = 'seed';
+   INSERT INTO orca.attempts (step, attempt, status, host, registry_hash, started)
+   SELECT id, 1, 'running', 'seed', '$hash', now() - interval '40 minutes' FROM orca.steps WHERE step = 'seed-s';
+   INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched)
+   SELECT 'i-seed-head', max(id), 1, 'head', 'c7g.large', 'on-demand', now() - interval '40 minutes' FROM orca.runs WHERE trigger = 'seed';
+   INSERT INTO orca.fleet_samples (host, t, cores, cpu, busiest, mem, disk, net_in, net_out)
+   SELECT 'i-seed-head', now() - make_interval(secs => s * 30), 2, CASE WHEN s < 20 THEN 1 ELSE 80 END, 2, 30, 30, 0, 0 FROM generate_series(0, 20) s" > /dev/null
+tick
+[ "$(only)" = "" ] || fail "a run busy 10 minutes ago paused: $(only)"
+echo "ok   stuck: a run with nothing moving pauses its pipeline; a busy host is progress"
+
+reset
+grep -q "can't check the watchdog" "$log" && fail "the watchdog raised"
+echo "ok   watchdog"

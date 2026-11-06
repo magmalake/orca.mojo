@@ -10,8 +10,10 @@ environment has HOSTNAME set to its ID, so a test can tell instances apart.
 All instances share 127.0.0.1 as their private address. A process that
 exits is an instance that terminated, as `InstanceInitiatedShutdownBehavior
 =terminate` makes one; TerminateInstances kills its process group. A
-terminated instance's state reason says which, as EC2's does. Requests
-aren't checked for a signature.
+terminated instance's state reason says which, as EC2's does. While the file
+<dir>/no-workers exists, the instances tagged `orca.role=worker` that are
+launched only sleep, so never join their run's head (tests/no_workers.sh).
+Requests aren't checked for a signature.
 
 It also stands in for Secrets Manager's GetSecretValue (a JSON POST with
 `X-Amz-Target: secretsmanager.GetSecretValue`), as tests/fake_secret.sh
@@ -68,6 +70,8 @@ def _run(p):
         tags[p[f"TagSpecification.1.Tag.{n}.Key"]] = p[f"TagSpecification.1.Tag.{n}.Value"]
         n += 1
     script = base64.b64decode(p["UserData"]).decode()
+    if tags.get("orca.role") == "worker" and os.path.exists(os.path.join(DIR, "no-workers")):
+        script = "#!/bin/sh\nsleep 3600\n"
     launch = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     items = []
     for _ in range(count):

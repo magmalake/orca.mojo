@@ -44,6 +44,20 @@ exits once its work and results have moved, and its instance's script shuts
 it down. `ORCA_SCALE_UP_AFTER` (5 s), `ORCA_SCALE_IDLE` (60 s) and
 `ORCA_SCALE_STEP` (4) tune the policy. The budget counts `MAX`.
 
+A run is scaled, and its workers are started, as its pipeline was registered
+when the run started (`orca.runs.spec`, kept at each start), so registering
+the pipeline again meanwhile doesn't strand a live run on settings it never
+had; its next start takes the new registration.
+
+A run that needs workers (`MAX` above 0) whose head has tasks waiting and no
+worker for `ORCA_NO_WORKERS_SECONDS` (600; 0 turns it off) has the attempt
+that waits fail with `no workers joined in 10 min (tasks waiting: N)`, and
+its instances terminated. Its driver stops beating with them, so the
+scheduler starts it again as it does a run whose process died, until its
+retries are spent. Since when it has waited is `orca.runs.waiting_since`,
+which the run's page shows. `timeout_seconds` on a step bounds an attempt
+whatever it waits for.
+
 A pipeline's secrets (`--secret NAME=ID`) are read by each instance's
 script at start, after the preamble, with `aws secretsmanager
 get-secret-value` (`ORCA_SECRET_FETCH` replaces the command, which is given
@@ -113,6 +127,7 @@ from objectstore.crypto import sha256_hex
 from postgres import Params
 
 from orca.awsec2 import Ec2, Instance
+from orca.json import quote
 from orca.proc import capture
 from orca.sample import sample_seconds
 from orca.secrets import parse_secrets
@@ -171,6 +186,71 @@ def vcpus(instance_type: String) raises -> Int:
     )
 
 
+comptime _SPEC_COLUMNS = (
+    "coalesce(r.spec->>'image', p.image, '') AS image,"
+    " coalesce(r.spec->>'binary', p.binary_path) AS binary_path,"
+    " coalesce((r.spec->>'tasks')::boolean,"
+    " jsonb_array_length(coalesce(p.describe->'tasks', '[]')) > 0) AS tasks,"
+    " coalesce(r.spec->>'head_type', p.head_type, '') AS head_type,"
+    " coalesce(r.spec->>'worker_type', p.worker_type, '') AS worker_type,"
+    " coalesce((r.spec->>'workers')::bigint, p.ec2_workers,"
+    " (p.describe->>'workers')::bigint, 2) AS hi,"
+    " coalesce((r.spec->>'spot')::boolean, p.spot, false) AS spot,"
+    " coalesce((r.spec->>'min_workers')::bigint, p.ec2_min_workers, -1) AS lo,"
+    " coalesce((r.spec->'secrets')::text, p.secrets::text, '') AS secrets,"
+    " coalesce((r.spec->>'worker_procs')::bigint, p.worker_procs, 1) AS procs,"
+    " coalesce(r.spec->>'registry_hash', p.registry_hash) AS registry_hash"
+)
+"""A run's `Ec2Spec` as SQL over `orca.runs r` and `orca.pipelines p`: the
+registration its start was given (`orca.runs.spec`, kept by `Ec2Runner.start`),
+else, for a run from before that was kept, the pipeline's now."""
+
+
+def _snapshot(mut db: State, r: Ec2Spec) raises:
+    """Keeps with run `r.run` what its start `r.start` was given."""
+    var secrets = String("{")
+    for i in range(len(r.secrets)):
+        secrets.write(
+            "" if i == 0 else ", ",
+            quote(r.secrets[i][0]),
+            ": ",
+            quote(r.secrets[i][1]),
+        )
+    secrets.write("}")
+    var spec = String(
+        '{"image": ',
+        quote(r.image),
+        ', "binary": ',
+        quote(r.binary),
+        ', "tasks": ',
+        "true" if r.tasks else "false",
+        ', "head_type": ',
+        quote(r.head_type),
+        ', "worker_type": ',
+        quote(r.worker_type),
+        ', "workers": ',
+        r.workers,
+        ', "spot": ',
+        "true" if r.spot else "false",
+        ', "min_workers": ',
+        min(r.min_workers, r.workers),
+        ', "secrets": ',
+        secrets,
+        ', "worker_procs": ',
+        r.worker_procs,
+        ', "registry_hash": ',
+        quote(r.registry_hash),
+        "}",
+    )
+    _ = db.conn.execute(
+        (
+            "UPDATE orca.runs SET spec = $3::text::jsonb WHERE id = $1 AND"
+            " starts = $2"
+        ),
+        Params().int64(Int64(r.run)).int64(Int64(r.start)).text(spec),
+    )
+
+
 @fieldwise_init
 struct Ec2Spec(Copyable, Movable):
     """One start of a run, as the instances it needs."""
@@ -220,6 +300,10 @@ struct Ec2Runner(Movable):
     var short_since: Dict[String, Float64]
     """For each scaling run, `run-start`, since when it's been short of
     workers: `decide`'s memory between ticks."""
+    var no_workers: Int
+    """`ORCA_NO_WORKERS_SECONDS` (600): how long a run whose head has tasks
+    waiting and no worker may go on before its attempt is failed; 0 turns
+    it off."""
     var pool_seconds: Float64
     """`ORCA_EC2_POOL_SECONDS` (150): how long an instance whose run ended
     waits, idle, to be handed another; 0 turns the pool off, and every
@@ -246,6 +330,7 @@ struct Ec2Runner(Movable):
         self.idle = Float64(getenv("ORCA_SCALE_IDLE", "60"))
         self.step = Int(getenv("ORCA_SCALE_STEP", "4"))
         self.short_since = Dict[String, Float64]()
+        self.no_workers = Int(getenv("ORCA_NO_WORKERS_SECONDS", "600"))
         self.pool_seconds = Float64(getenv("ORCA_EC2_POOL_SECONDS", "150"))
         self.pool_live = Float64(getenv("ORCA_EC2_POOL_LIVE_SECONDS", "5"))
         self.pool_join = Float64(getenv("ORCA_EC2_POOL_JOIN_SECONDS", "30"))
@@ -893,7 +978,11 @@ struct Ec2Runner(Movable):
     def start(self, mut db: State, r: Ec2Spec, fresh: Bool = False) raises:
         """Starts the run's head instance, then its workers, and records
         them in `orca.instances`: from the pool first, where an idle
-        instance of the same key is (unless `fresh`), else new ones."""
+        instance of the same key is (unless `fresh`), else new ones. What `r`
+        is, the pipeline's registration now, is kept with the run, so its
+        workers are started as its head was however the pipeline is
+        registered later."""
+        _snapshot(db, r)
         var head_type = self.head_of(r.head_type)
         var key = String() if fresh else self.pool_key(
             r, "head", head_type, False
@@ -1074,19 +1163,18 @@ struct Ec2Runner(Movable):
         var started = 0
         var drained = 0
         var rows = db.conn.query(
-            (
-                "SELECT r.id, r.starts, r.pipeline, r.allow_new_code,"
-                " coalesce(p.image, '') AS image, p.binary_path,"
-                " coalesce(p.worker_type, '') AS worker_type, coalesce(p.spot,"
-                " false) AS spot, p.ec2_min_workers AS lo, coalesce("
-                "p.ec2_workers, (p.describe->>'workers')::bigint, 2) AS hi,"
-                " h.address, coalesce(p.secrets::text, '') AS secrets,"
-                " coalesce(p.worker_procs, 1) AS procs, p.registry_hash FROM"
-                " orca.runs r JOIN orca.pipelines p ON p.name ="
-                " r.pipeline JOIN orca.instances h ON h.run = r.id AND h.start"
-                " = r.starts AND h.role = 'head' AND h.ended IS NULL AND"
-                " h.address IS NOT NULL WHERE r.status = 'running' AND"
-                " p.ec2_min_workers IS NOT NULL"
+            String(
+                "SELECT r.id, r.starts, r.pipeline, r.allow_new_code,",
+                (
+                    " coalesce(extract(epoch FROM now() -"
+                    " r.waiting_since)::float8, -1)"
+                ),
+                " AS waited, h.address, ",
+                _SPEC_COLUMNS,
+                " FROM orca.runs r JOIN orca.pipelines p ON p.name =",
+                " r.pipeline JOIN orca.instances h ON h.run = r.id AND h.start",
+                " = r.starts AND h.role = 'head' AND h.ended IS NULL AND",
+                " h.address IS NOT NULL WHERE r.status = 'running'",
             ),
             Params(),
         )
@@ -1094,7 +1182,12 @@ struct Ec2Runner(Movable):
         for row in rows:
             var lo = Int(row.int64("lo"))
             var hi = Int(row.int64("hi"))
-            if lo >= hi:
+            # From the run's own registration; a run that scales has fewer
+            # workers at the start than at most, one that needs workers
+            # at all is watched for their coming.
+            var scales = lo >= 0 and lo < hi
+            var watched = self.no_workers > 0 and row.bool("tasks") and hi > 0
+            if not scales and not watched:
                 continue
             var r = Ec2Spec(
                 Int(row.int64("id")),
@@ -1103,12 +1196,12 @@ struct Ec2Runner(Movable):
                 row.text("image"),
                 row.text("binary_path"),
                 True,
-                "",
+                row.text("head_type"),
                 row.text("worker_type"),
                 hi,
                 row.bool("spot"),
                 row.bool("allow_new_code"),
-                lo,
+                lo if lo >= 0 else hi,
                 parse_secrets(row.text("secrets")),
                 Int(row.int64("procs")),
                 row.text("registry_hash"),
@@ -1132,6 +1225,37 @@ struct Ec2Runner(Movable):
             try:
                 demand = Demand.parse(got_status[1])
             except:
+                continue
+            if watched:
+                var waiting = (
+                    demand.tasks_ready
+                    + demand.tasks_waiting
+                    + demand.actors_waiting
+                )
+                var stuck = waiting > 0 and len(demand.workers) == 0
+                var waited = row.float64("waited")
+                if stuck and waited < 0:
+                    _ = db.conn.execute(
+                        (
+                            "UPDATE orca.runs SET waiting_since = now() WHERE"
+                            " id = $1 AND starts = $2 AND waiting_since IS"
+                            " NULL"
+                        ),
+                        Params().int64(Int64(r.run)).int64(Int64(r.start)),
+                    )
+                    waited = 0
+                elif not stuck and waited >= 0:
+                    _ = db.conn.execute(
+                        (
+                            "UPDATE orca.runs SET waiting_since = NULL WHERE"
+                            " id = $1 AND starts = $2"
+                        ),
+                        Params().int64(Int64(r.run)).int64(Int64(r.start)),
+                    )
+                if stuck and waited > Float64(self.no_workers):
+                    self._give_up(db, r, waiting)
+                    continue
+            if not scales:
                 continue
             # The policy counts dista worker processes; instances are what
             # starts and costs, `per` processes each. `up` is the processes
@@ -1199,6 +1323,56 @@ struct Ec2Runner(Movable):
         for k in gone:
             _ = self.short_since.pop(k, 0)
         return (started, drained)
+
+    def _give_up(mut self, mut db: State, r: Ec2Spec, waiting: Int) raises:
+        """Fails the attempt of a run whose head has had `waiting` tasks and
+        no worker for `ORCA_NO_WORKERS_SECONDS`: its running attempts fail
+        with why, and its instances are terminated. Its driver stops beating
+        with them, and the scheduler starts it again as it does a run whose
+        process died, while its retries last."""
+        var limit = self.no_workers
+        var why = String(
+            "no workers joined in ",
+            String(limit // 60, " min") if limit % 60
+            == 0 else String(limit, " s"),
+            " (tasks waiting: ",
+            waiting,
+            ")",
+        )
+        var n = db.interrupt(r.run, why)
+        var ids = List[String]()
+        for o in db.conn.query(
+            (
+                "UPDATE orca.instances SET ended = now(), why = $3 WHERE run ="
+                " $1 AND start = $2 AND ended IS NULL RETURNING id"
+            ),
+            Params()
+            .int64(Int64(r.run))
+            .int64(Int64(r.start))
+            .text(String("terminated by orca: ", why)),
+        ):
+            ids.append(o.text("id"))
+        _ = db.conn.execute(
+            (
+                "UPDATE orca.runs SET waiting_since = NULL WHERE id = $1 AND"
+                " starts = $2"
+            ),
+            Params().int64(Int64(r.run)).int64(Int64(r.start)),
+        )
+        self.ec2.terminate(ids)
+        print(
+            "orca: run",
+            r.run,
+            "start",
+            r.start,
+            "failed,",
+            n,
+            "attempts:",
+            why,
+            "(",
+            len(ids),
+            "instances terminated)",
+        )
 
     def policy(self, lo: Int, hi: Int, per: Int = 1) -> Policy:
         """The scaling policy over worker processes: `lo` to `hi` of them,
@@ -1413,19 +1587,13 @@ struct Ec2Runner(Movable):
     ) raises -> Optional[Ec2Spec]:
         """Run `run`'s start `start`, as `start` was given it."""
         var rows = db.conn.query(
-            (
-                "SELECT r.pipeline, r.allow_new_code, coalesce(p.image, '') AS"
-                " image, p.binary_path,"
-                " jsonb_array_length(coalesce(p.describe->'tasks', '[]')) > 0"
-                " AS tasks, coalesce(p.head_type, '') AS head_type,"
-                " coalesce(p.worker_type, '') AS worker_type,"
-                " coalesce(p.ec2_workers, (p.describe->>'workers')::bigint, 2)"
-                " AS hi, coalesce(p.spot, false) AS spot,"
-                " coalesce(p.ec2_min_workers, -1) AS lo,"
-                " coalesce(p.secrets::text, '') AS secrets,"
-                " coalesce(p.worker_procs, 1) AS procs, p.registry_hash FROM"
-                " orca.runs r JOIN orca.pipelines p ON p.name = r.pipeline"
-                " WHERE r.id = $1 AND r.starts = $2"
+            String(
+                "SELECT r.pipeline, r.allow_new_code, ",
+                _SPEC_COLUMNS,
+                (
+                    " FROM orca.runs r JOIN orca.pipelines p ON p.name ="
+                    " r.pipeline WHERE r.id = $1 AND r.starts = $2"
+                ),
             ),
             Params().int64(Int64(run)).int64(Int64(start)),
         )
