@@ -26,11 +26,15 @@ from orca.live import live_runs
 from orca.month import Month
 from orca.name import parse_names
 from orca.scheduler import (
+    ALLOW_APPEND_HOW,
     RETRIED_SQL,
     Registered,
+    append_again,
+    appending_writes,
     backfill,
     partition_keys,
     registered,
+    rerun_refusal,
 )
 from orca.sensors import rebuild
 from orca.state import State
@@ -147,18 +151,27 @@ def start_run(mut db: State, pipeline: String, keys: String) raises -> Outcome:
 
 
 def backfill_runs(
-    mut db: State, pipeline: String, keys: String, rerun: Bool = False
+    mut db: State,
+    pipeline: String,
+    keys: String,
+    rerun: Bool = False,
+    allow_append: Bool = False,
 ) raises -> Outcome:
     """What `orca backfill` does: queued runs, `keys_per_run` keys each, of
     the keys in `keys` that aren't done and aren't in a live run; for time
     keys, by default a run for each partition in `keys`
     that has none queued, running or succeeded. With `rerun`, done keys are
-    queued too."""
+    queued too: refused until `allow_append` confirms it if the pipeline's
+    steps append to what they write (`rerun_refusal`)."""
     var p = _pipeline(db, pipeline)
     if not p:
         return Outcome.no(_unregistered(pipeline))
     try:
-        var q = backfill(db, p.value(), keys, rerun)
+        if rerun and not allow_append:
+            var why = rerun_refusal(db, p.value(), keys)
+            if why:
+                return Outcome.no(why^, confirm=True)
+        var q = backfill(db, p.value(), keys, rerun, True)
         var o = Outcome.done(0, len(q.runs))
         o.skipped = q.skipped()
         return o^
@@ -240,12 +253,18 @@ def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
     return Outcome.done(run)
 
 
-def rerun_from(mut db: State, run: Int, step: String) raises -> Outcome:
+def rerun_from(
+    mut db: State, run: Int, step: String, allow_append: Bool = False
+) raises -> Outcome:
     """A new queued run over the same partitions, trigger `rerun`, with the
     steps before `step` that succeeded copied from `run` (their outputs, and
     `copied_from` naming the step they came from, whose attempts, reads and
     commits stay with it). Resuming it runs `step` and what follows. `run`
-    is left as it was."""
+    is left as it was.
+
+    Refused until `allow_append` confirms it if `step` or one after it
+    appends to a dataset (`appending_writes`): the new run would append
+    again beside what `run` committed."""
     var rows = db.conn.query(
         (
             "SELECT r.pipeline, r.partitions, r.status, r.registry_hash,"
@@ -270,6 +289,18 @@ def rerun_from(mut db: State, run: Int, step: String) raises -> Outcome:
     var ord = r.int64("ord")
     if not _pipeline(db, pipeline):
         return Outcome.no(_unregistered(pipeline))
+    if not allow_append:
+        var writes = appending_writes(db, pipeline, Int(ord))
+        if len(writes) > 0:
+            return Outcome.no(
+                append_again(
+                    pipeline,
+                    String("run ", run, " from step ", step),
+                    writes,
+                    ALLOW_APPEND_HOW,
+                ),
+                confirm=True,
+            )
     if ord > 0 and r.text("registry_hash") != r.text("current"):
         return Outcome.no(
             String(

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Steps that replace their partitions** (#120): `Step[..., replaces=[...]]`
+  declares datasets whose partitions a new run replaces. `append` and
+  `append_files` to them, and the new `replace_partitions` /
+  `replace_partition_files` to any table, make a run's first commit to a
+  partition an `overwrite` removing the files earlier runs left there; later
+  commits of the run append, and retries still recognise their commits. Two
+  runs replacing one partition at once don't both keep rows: a commit that
+  finds another writer's files in the partition after its run's first
+  commit raises. Summaries carry `orca.replaced-files` and
+  `orca.replaced-records`; `describe` lists `replaces`.
+- `orca.tables.commit` refuses a removal of files that aren't all in the
+  current snapshot, on its first try and on retries (mojo-census GAPS #29),
+  instead of committing a partly stale overwrite.
+- `orca backfill --rerun` of done keys, and `orca rerun`, are refused for a
+  pipeline whose steps append to a dataset, naming the steps, unless
+  `--allow-append` (`allow_append=1` in the UI and API, with a confirm
+  button on the refusal).
+
 ## 0.7.0 - 2026-11-05
 
 ## 0.6.1 - 2026-11-05

@@ -232,6 +232,10 @@ build-shared = { cmd = "scripts/build-shared.sh orca" }
 test-tables = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_tables.mojo -o build/test-tables && scripts/with-postgres.sh ./build/test-tables" }
 # Data files written in dista tasks, committed once by the step (append_files).
 test-append-files = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_append_files.mojo -o build/test-append-files && scripts/with-postgres.sh ./build/test-append-files" }
+# Steps that replace their partitions (replaces=, replace_partitions): reruns,
+# retries, runs racing over one partition, and stale removals.
+test-replace = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_replace.mojo -o build/test-replace && scripts/with-postgres.sh ./build/test-replace" }
+test-replace-concurrent = { cmd = "tests/replace_concurrent.sh" }
 test-chaos-tables = { cmd = "CHAOS_SRC=tests/chaos_tables.mojo CHAOS_CHECK=1 scripts/with-postgres.sh tests/chaos.sh" }
 test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh" }
 test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh" }
@@ -249,7 +253,7 @@ test-keyed-backfills = { cmd = "scripts/with-postgres.sh tests/keyed_backfills.s
 test-keyed-sensor = { cmd = "scripts/with-postgres.sh tests/keyed_sensor.sh" }
 test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh" }
 # CI runs these three groups on runners of their own; test-data is all three.
-test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-chaos-tables", "test-lineage", "test-commits", "test-expire", "test-taxi"] }
+test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-replace", "test-replace-concurrent", "test-chaos-tables", "test-lineage", "test-commits", "test-expire", "test-taxi"] }
 test-data-sensors = { depends-on = ["build-shared", "test-sensors", "test-lineage-s3", "test-sensors-s3", "test-sample-s3"] }
 test-data-keyed = { depends-on = ["build-shared", "test-keyed", "test-keyed-backfills", "test-keyed-sensor", "test-keyed-names"] }
 test-data = { depends-on = ["test-data-tables", "test-data-sensors", "test-data-keyed"] }
