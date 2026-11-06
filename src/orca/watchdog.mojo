@@ -88,6 +88,9 @@ struct Config(Copyable, Movable):
     var disk: Float64
     var control_price: Float64
     """Dollars an hour of the control instance (`ORCA_CONTROL_TYPE`), or 0."""
+    var fixed_price: Bool
+    """The runner launches no instances (`ORCA_RUNNER=local`), so the cost
+    rule has nothing to price: it reads "fixed price" and never trips."""
 
 
 def default_config() -> Config:
@@ -108,6 +111,7 @@ def default_config() -> Config:
         90.0,
         85.0,
         0.0,
+        False,
     )
 
 
@@ -154,6 +158,7 @@ def config() raises -> Config:
     var control = getenv("ORCA_CONTROL_TYPE")
     if control:
         c.control_price = max(hourly_price(control), 0.0)
+    c.fixed_price = getenv("ORCA_RUNNER") == "local"
     return c^
 
 
@@ -254,7 +259,12 @@ def eval_cost(
     c: Config, leases: List[Lease], everything: List[String]
 ) -> Reading:
     """The rate now (the reading's value), the lowest it was at each minute
-    of the sustain period, and the last 24 hours' spend."""
+    of the sustain period, and the last 24 hours' spend. On the local
+    runner (`fixed_price`) there is nothing to price: no reading, no trip."""
+    if c.fixed_price:
+        return Reading(
+            "cost", -1.0, c.cost_hour, False, "fixed price", List[String]()
+        )
     var now_rate = cost_rate(leases, 0.0, c.control_price)
     var lowest = now_rate
     for m in range(1, c.cost_minutes + 1):
@@ -813,6 +823,8 @@ struct RuleRow(Copyable, Movable):
     """UTC, or empty."""
     var snoozed_by: String
     var tripped: Bool
+    var note: String
+    """Why the rule has no reading ("fixed price"), or empty."""
 
 
 def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
@@ -825,6 +837,9 @@ def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
         for t in trips:
             if t.rule == name:
                 tripped = True
+        var note = String()
+        if name == "cost" and c.fixed_price:
+            note = "fixed price"
         var rows = db.conn.query(
             (
                 "SELECT value, threshold, checked IS NOT NULL AS seen,"
@@ -845,6 +860,7 @@ def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
                     String(),
                     String(),
                     tripped,
+                    note,
                 )
             )
             continue
@@ -859,6 +875,7 @@ def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
                 r.text("until") if live else String(),
                 r.text("by") if live else String(),
                 tripped,
+                note,
             )
         )
     return out^
@@ -979,6 +996,8 @@ def rules_json(rows: List[RuleRow]) -> String:
             _fx(r.value, 2) if r.value >= 0 else String("null"),
             ', "threshold": ',
             _fx(r.threshold, 2),
+            ', "note": ',
+            quote(r.note) if r.note else String("null"),
             ', "tripped": ',
             "true" if r.tripped else "false",
             ', "snoozed_until": ',
@@ -1024,6 +1043,8 @@ def watchdog_html(mut h: Html, rows: List[RuleRow], trips: List[Trip]):
         h.raw("</td><td>")
         if r.tripped:
             h.raw('<span class="error">tripped</span>')
+        elif r.note:
+            h.text(r.note)
         elif r.snoozed_until:
             h.text("snoozed until ", r.snoozed_until)
             if r.snoozed_by:
@@ -1108,6 +1129,8 @@ def status_lines(json: String) raises -> List[String]:
         )
         if r["tripped"].bool_value():
             line.write("TRIPPED")
+        elif not r["note"].is_null():
+            line.write(r["note"].string_value())
         elif not r["snoozed_until"].is_null():
             line.write("snoozed until ", r["snoozed_until"].string_value())
         else:
