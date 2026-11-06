@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-11-06
+
 - **`orca.toml`: one checked-in file for how each pipeline runs** (#145,
   `orca.config`, `orca.toml`, migration 29). `[defaults]` and
   `[pipelines.<name>]` take `placement`, `head_type`, `worker_type`,
