@@ -49,7 +49,7 @@ it will run on Kubernetes and AWS; [docs/future-directions.md](docs/future-direc
 is where its seams are and which are worth cutting.
 
 ```
-pixi run test                  # unit, CLI, compile-fail, state, kill, tasks, logs
+pixi run -e default test       # unit, CLI, compile-fail, state, kill, tasks, logs (plain `pixi run test` is ambiguous)
 pixi run -e data test-tables   # Iceberg; needs the sibling checkouts (see CI)
 pixi run -e data test-append-files   # files written in dista tasks, committed once by the step
 pixi run -e data test-taxi     # examples/taxi on two sliced TLC months
@@ -64,7 +64,7 @@ pixi run -e data test-keyed-names   # keys such as owner/repo, in logs and the U
 pixi run toy && ./build/toy run --partitions 2024-01..2024-03
 pixi run fanout && ./build/fanout run --partitions 2024-01   # steps calling dista
 pixi run daily && ./build/daily run --partitions 2024-02-27..2024-03-02   # by day
-ORCA_DATABASE_URL=postgresql:///orca ./build/toy run --partitions 2024-01..2024-03
+ORCA_DATABASE_URL=postgresql:///orca ./build/toy run --partitions 2024-01..2024-03   # a server you run; scripts/with-postgres.sh starts a throwaway one
 ORCA_DATABASE_URL=sqlite:build/runs.db ./build/toy run --partitions 2024-01..2024-03   # or a file: resumable, no server
 ./build/toy status
 pixi run -e data taxi && pixi run -e data ./build/taxi run --partitions 2023-01..2024-12
@@ -123,6 +123,19 @@ copies the scheduler's variables to every run, under the pipeline's own.
 The registration keeps the file's SHA-256 and git commit. `--config F`
 reads another file, `--no-config` none; `orca config show` prints each
 value with its source (code default, orca.toml, flag, environment).
+
+## Developing locally
+
+The tests and examples above run from a checkout of this repository, with the
+repositories it compiles from next to it (`../dista.mojo` and `../k8s.mojo`
+for `pixi run toy` and the default tests, many more for `-e data`), at the
+commits `.github/workflows/ci.yml` pins. [Develop
+locally](https://mlake.dev/getting-started/develop) has the whole layout, a
+loop that clones it from the workflow, the examples, a local Postgres,
+scheduler and UI, the test suites and their timings, and how to try a change
+inside [mojo-census](https://github.com/magmalake/mojo-census) before it is
+released. `pixi run -e default test` is the whole default suite (`pixi run
+test` stops with "the task 'build-shared' is ambiguous"), about 12 minutes.
 
 ## Reruns that replace a partition
 
