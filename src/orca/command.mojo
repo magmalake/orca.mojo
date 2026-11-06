@@ -57,6 +57,7 @@ from orca.remote import (
 )
 from orca.sample import sample_main
 from orca.scheduler import Scheduler, parse_worker_procs
+from orca.control import parse_placement
 from orca.secrets import secret_problem
 from orca.sensors import rebuild, rebuilds
 from orca.state import State
@@ -71,9 +72,11 @@ comptime USAGE = """usage:
                                     (orca aws for more)
   orca register [--image <image>] [--head-type T] [--worker-type T]
                 [--workers N|MIN..MAX] [--worker-procs N|auto] [--spot]
-                [--secret NAME=ID ...]
+                [--secret NAME=ID ...] [--placement control|ec2|default]
                 (--worker-procs: dista worker processes per EC2 worker
-                instance, auto = one per vCPU; default 1)
+                instance, auto = one per vCPU; default 1. --placement
+                control: runs on the scheduler's own host, orca.control;
+                default: the scheduler's runner)
                 <pipeline binary> [...]
   orca backfill [--rerun [--allow-append]] [--preview] <pipeline>
                 KEY[..KEY][,...]
@@ -221,6 +224,7 @@ def _command(args: List[String], target: String) raises -> Int:
         var workers = 0
         var min_workers = -1
         var worker_procs = -1
+        var placement = String()
         var spot = False
         var secrets = List[String]()
         var i = 2
@@ -243,6 +247,11 @@ def _command(args: List[String], target: String) raises -> Int:
                 if why:
                     _usage(why)
                 secrets.append(args[i + 1])
+            elif args[i] == "--placement":
+                try:
+                    placement = parse_placement(args[i + 1])
+                except e:
+                    _usage(String(e))
             elif args[i] == "--worker-procs":
                 try:
                     worker_procs = parse_worker_procs(args[i + 1])
@@ -284,6 +293,7 @@ def _command(args: List[String], target: String) raises -> Int:
                     min_workers,
                     secrets,
                     worker_procs,
+                    placement,
                 ),
             )
         return 0

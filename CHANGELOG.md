@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Placement: small pipelines on the control instance** (#144).
+  `orca register --placement control|ec2|default` (forwarded by
+  `orca aws register`; stored with the registration, migration 26):
+  `control` runs a pipeline's runs as children of the scheduler on its own
+  host, with no instance to boot, at most `ORCA_CONTROL_MAX_RUNS` (2) at
+  once, each at `nice` `ORCA_CONTROL_NICE` (10), killed over
+  `ORCA_CONTROL_MEMORY_MB` (1024) resident, with `ORCA_CONTROL_WORKERS` (1)
+  local dista workers, and none started while `/system`'s newest minute has
+  memory or a disk over 85% (the run is held, saying why). Secrets are read
+  by the scheduler (`ORCA_SECRET_FETCH`, else Secrets Manager's API) for that
+  run alone; the driver's output is kept with `keep-log`, masked. Shown on
+  the pipeline and run pages, `/fleet`'s control host and the JSON
+  (`placement`, `held`). `deploy/aws/orca.yaml` lets the control role read
+  `orca/*` secrets (stack update needed). `tests/placement.sh`.
+
 - **`orca aws replace-control`** (#154, `orca.aws_replace`): a blue/green
   replacement of the control instance from a clean boot of the current
   template. It refuses unless every pipeline is paused and no run is running

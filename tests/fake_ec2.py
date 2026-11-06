@@ -14,6 +14,11 @@ terminated instance's state reason says which, as EC2's does. While the file
 <dir>/no-workers exists, the instances tagged `orca.role=worker` that are
 launched only sleep, so never join their run's head (tests/no_workers.sh).
 Requests aren't checked for a signature.
+
+It also stands in for Secrets Manager's GetSecretValue (a JSON POST with
+`X-Amz-Target: secretsmanager.GetSecretValue`), as tests/fake_secret.sh
+does: the value of ID is `s3cr3t-<ID with / as ->-value`, and orca/missing
+isn't found.
 """
 
 import base64
@@ -135,8 +140,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def _secret(self, body):
+        sid = json.loads(body).get("SecretId", "")
+        with LOCK:
+            with open(os.path.join(DIR, "calls.jsonl"), "a") as f:
+                f.write(json.dumps({"action": "GetSecretValue", "params": {"SecretId": sid}}) + "\n")
+        if sid == "orca/missing":
+            status, out = 400, {"__type": "ResourceNotFoundException", "message": "no such secret"}
+        else:
+            status, out = 200, {"Name": sid, "SecretString": "s3cr3t-" + sid.replace("/", "-") + "-value"}
+        data = json.dumps(out).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/x-amz-json-1.1")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
+        if self.headers.get("X-Amz-Target") == "secretsmanager.GetSecretValue":
+            self._secret(body)
+            return
         p = {k: v[0] for k, v in urllib.parse.parse_qs(body, keep_blank_values=True).items()}
         action = p.get("Action", "")
         with LOCK:

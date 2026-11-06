@@ -465,6 +465,15 @@ def _migrations() -> List[List[String]]:
             detail text NOT NULL,
             pipelines text NOT NULL)""",
         ],
+        # Where a pipeline's runs run (`orca register --placement`): null
+        # for the scheduler's runner, `control` for the scheduler's own host
+        # (orca.control), `ec2` for instances of their own. Each run keeps
+        # where its latest start was placed, and why a queued one is held.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN placement text",
+            "ALTER TABLE orca.runs ADD COLUMN placement text",
+            "ALTER TABLE orca.runs ADD COLUMN held text",
+        ],
     ]
 
 

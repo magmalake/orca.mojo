@@ -142,7 +142,7 @@ got=$(q "SELECT string_agg(role || ' ' || instance_type || ' ' || market || ' ' 
 [ "$got" = "head c7g.large on-demand true shut itself down,worker c7g.xlarge spot true terminated,worker c7g.xlarge spot true terminated by orca: its run had ended,worker c7g.xlarge spot true terminated by orca: its run had ended" ] \
     || fail "run $f1's instances: $got"
 for w in $workers; do
-    grep -q "trips on $w" "$ORCA_LOGS/fanout/$f1/cluster/worker-$w.log" || fail "worker $w's log"
+    wait_log "$ORCA_LOGS/fanout/$f1/cluster/worker-$w.log" "trips on $w" 300 || fail "worker $w's log"
 done
 head_id=$(ids_of "$f1" head | head -1)
 [ -s "$ORCA_LOGS/fanout/$f1/cluster/head-$head_id.log" ] || fail "the head's log"

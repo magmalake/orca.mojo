@@ -79,8 +79,9 @@ touch "$dir/no-workers"
 ./build/orca backfill fanout 2024-01 >> "$log" 2>&1 || fail "backfill fanout"
 r1=$(q "SELECT id FROM orca.runs WHERE pipeline = 'fanout' AND partitions = '2024-01'")
 until_true "SELECT waiting_since IS NOT NULL FROM orca.runs WHERE id = $r1" 240
-[ "$(q "SELECT count(*) FROM orca.instances WHERE run = $r1 AND role = 'worker'")" -ge 1 ] \
-    || fail "run $r1 started no worker to wait for"
+# The scheduler notes the run waiting, then starts the workers it can't see
+# yet, in the same pass: their rows come a moment after waiting_since.
+until_true "SELECT count(*) > 0 FROM orca.instances WHERE run = $r1 AND role = 'worker'" 20
 until_true "SELECT count(*) > 0 FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r1 AND a.error LIKE 'no workers joined in 6 s (tasks waiting: %)'" 240
 rm "$dir/no-workers"
 until_true "SELECT status IN ('succeeded', 'failed') FROM orca.runs WHERE id = $r1" 300
