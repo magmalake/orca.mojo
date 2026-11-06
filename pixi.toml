@@ -2,7 +2,7 @@
 authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
 channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
 name = "orca.mojo"
-version = "0.6.1"
+version = "0.7.0"
 description = "Orchestration for Mojo data pipelines: DAGs in Mojo, cron schedules, a web UI."
 preview = ["pixi-build"]
 platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
@@ -21,7 +21,7 @@ sqlite = ">=3.45,<4"
 # revisions mojoshelf published of what it imports.
 [package]
 name = "orca-mojo"
-version = "0.6.1"
+version = "0.7.0"
 
 [package.build]
 backend = { name = "pixi-build-mojo", version = "0.*" }
@@ -98,6 +98,7 @@ test-pause = { cmd = "scripts/with-postgres.sh tests/pause.sh" }
 # The ec2 runner against a stand-in EC2 API; needs python3.
 test-versions = { cmd = "scripts/with-postgres.sh tests/versions.sh" }
 test-new-code = { cmd = "scripts/with-postgres.sh tests/new_code.sh" }
+test-calendar = { cmd = "scripts/with-postgres.sh tests/calendar.sh" }
 test-manual-run = { cmd = "scripts/with-postgres.sh tests/manual_run.sh" }
 test-dead-runs = { cmd = "scripts/with-postgres.sh tests/dead_runs.sh" }
 test-one-run-per-key = { cmd = "scripts/with-postgres.sh tests/one_run_per_key.sh" }
@@ -132,7 +133,7 @@ build-shared = { cmd = "scripts/build-shared.sh" }
 # The executor, stores, workers, clouds and the data a run makes:
 test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-worker-procs", "test-pool", "test-secrets", "test-aws", "test-source", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
 # The scheduler, the UI, and what a registration and its code control:
-test-scheduler-ui = { depends-on = ["build-shared", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-actions", "test-ui-login", "test-remote", "test-pause", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
+test-scheduler-ui = { depends-on = ["build-shared", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-actions", "test-calendar", "test-ui-login", "test-remote", "test-pause", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
 test = { depends-on = ["test-executor", "test-scheduler-ui"] }
 toy = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout" }

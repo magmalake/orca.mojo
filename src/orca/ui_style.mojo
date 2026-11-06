@@ -314,4 +314,32 @@ svg.fl { display: block; width: 100%; min-width: 34rem; height: auto; font-famil
 .fl__key.fl--0 { color: var(--lake); } .fl__key.fl--1 { color: var(--ember); }
 .fl__key.fl--2 { color: #7a5af8; } .fl__key.fl--live { color: var(--live); }
 .fl__key.fl--bad { color: var(--bad); } .fl__key.fl--faint { color: var(--faint); }
+.cal { display: grid; gap: 0.4rem; max-width: 22rem; margin: 0.3rem 0; }
+.cal[hidden] { display: none; }
+.cal__head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.cal__head a, .cal__head button { min-width: 2.25rem; text-align: center; padding: 0.2rem 0.5rem; }
+.cal__grid { display: grid; gap: 0.2rem; list-style: none; margin: 0; padding: 0; }
+.cal__grid--days { grid-template-columns: repeat(7, 1fr); }
+.cal__grid--months { grid-template-columns: repeat(4, 1fr); }
+.cal__dow { text-align: center; font-size: 0.7rem; color: var(--faint); }
+.cal__day { display: flex; align-items: center; justify-content: center; position: relative; min-height: 2.25rem;
+  font: inherit; font-size: 0.8125rem; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); }
+button.cal__day { cursor: pointer; }
+.cal__day::after { position: absolute; top: 1px; right: 3px; font-size: 0.6rem; line-height: 1; }
+.cal--done { background: color-mix(in srgb, var(--ok) 22%, var(--surface)); border-color: var(--ok); }
+.cal--done::after { content: "\\2713"; color: var(--ok); }
+.cal--failed { background: color-mix(in srgb, var(--bad) 22%, var(--surface)); border-color: var(--bad); }
+.cal--failed::after { content: "\\2715"; color: var(--bad); }
+.cal--live { background: color-mix(in srgb, var(--live) 22%, var(--surface)); border-color: var(--live); }
+.cal--live::after { content: "\\25CF"; color: var(--live); }
+.cal--outside { color: var(--faint); background: var(--bg-alt); border-style: dashed; opacity: 0.6; cursor: default; }
+.cal--sel { outline: 2px solid var(--lake); outline-offset: -2px; font-weight: 700; }
+.cal--anchor { box-shadow: 0 0 0 2px var(--ember); }
+button.cal__day:focus-visible { outline: 2px solid var(--lake-soft); outline-offset: 1px; }
+.cal__legend, .cal__hint { margin: 0; font-size: 0.75rem; }
+.cal__key { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px; vertical-align: middle; }
+.cal__key::after { content: none; }
+.cal--static .cal__day { cursor: default; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 """
