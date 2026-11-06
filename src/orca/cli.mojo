@@ -67,6 +67,7 @@ from orca.tasks import workers
 from orca.civil import Civil, now, parse_time
 from orca.crash import crash_summary
 from orca.pipeline import Pipeline
+from orca.pool import pool_next_main, pool_wait_main
 from orca.sample import sample_main
 from orca.sqlite_store import SqliteStore, sqlite_path
 from orca.state import PgStore
@@ -198,6 +199,12 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         var data = read_location(args[2])
         write_location(args[3], Span(data))
         return 0
+    if cmd == "pool-wait" and len(args) == 5:
+        # For the ec2 runner's warm pool (orca.pool): a worker's run ending.
+        return pool_wait_main(args)
+    if cmd == "pool-next" and len(args) == 6:
+        # ... and the next run an idle instance is handed.
+        return pool_next_main(args)
     if cmd == "keys" and len(args) == 2:
         comptime if P.partitions.kind() != "keyed":
             _usage(String("pipeline ", P.name, " isn't keyed"))
