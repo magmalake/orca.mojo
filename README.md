@@ -153,6 +153,15 @@ don't fill. See [Fills](docs/orca-toml.md#fills).
 rows. Change a fill's limits in `orca.toml` and register again. On AWS,
 SSM `sudo docker exec scheduler orca ...` is for debugging only.
 
+## Running it on one server
+
+[docs/hetzner.md](docs/hetzner.md) is the runbook for a fixed-price setup: one
+Hetzner Cloud ARM server, the `local` runner, S3-compatible Object Storage
+(`AWS_ENDPOINT_URL_S3`), secrets from files (`ORCA_SECRET_FETCH`), and
+Cloudflare Tunnel, with scripts in `deploy/hetzner/`. On the `local` runner
+the watchdog's cost rule reads "fixed price" and Ops > Fleet says no
+instances are launched.
+
 ## Developing locally
 
 The tests and examples above run from a checkout of this repository, with the

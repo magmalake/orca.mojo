@@ -202,5 +202,21 @@ json /ops/fleet | jq -e '.summary.hosts == 5 and (.hosts | length) == 5' > /dev/
 q "UPDATE orca.instances SET instance_type = '<b>x</b>' WHERE id = 'i-w3'" > /dev/null
 html /ops/fleet | grep -qF '<b>x</b>' && fail "an instance type's markup reached the page"
 html /ops/fleet | grep -qF '&lt;b&gt;x&lt;/b&gt;' || fail "the escaped instance type"
+# On the local runner the page says that no instances are launched; on others
+# it doesn't.
+html /ops/fleet | grep -q 'launches no instances' && fail "the local-runner notice on a scheduler with no runner set"
+lport=$((port + 1))
+ORCA_RUNNER=local ORCA_UI_ADDR="127.0.0.1:$lport" ./build/orca ui >> "$log" 2>&1 &
+lpid=$!
+i=0
+until curl -fs "http://127.0.0.1:$lport/" > /dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || { kill "$lpid"; fail "the second orca ui didn't start"; }; sleep 0.1
+done
+lpage=$(curl -fsS "http://127.0.0.1:$lport/ops/fleet")
+kill "$lpid"
+wait "$lpid" 2> /dev/null || true
+echo "$lpage" | grep -q 'runner is <code>local</code>: it runs every run on its own machine and launches no instances' \
+    || fail "no local-runner notice on /ops/fleet"
+echo "ok   Ops > Fleet says the local runner launches no instances"
 kill "$pid"
 echo "ok   fleet"

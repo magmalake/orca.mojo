@@ -150,6 +150,21 @@ Each value comes from the first of these that sets it, highest first:
 - **On EC2 the env is part of the warm pool's key** (#134). An instance from the pool is only handed to a run of the same pipeline started with the same env. Changing a value and registering again launches new instances, and the old ones shut down after `ORCA_EC2_POOL_SECONDS`. The env is also kept in the run's spec (`orca.runs.spec`), so workers started later in a live run get the env its start had.
 - **Settings for the whole stack stay in `/etc/orca.env`**: the database URL, warehouse, logs, runner, `ORCA_VCPU_BUDGET` and so on. Pipeline settings, such as `DISTA_WORKER_SLOTS` for one pipeline, belong in orca.toml.
 
+## Secrets without Secrets Manager
+
+`secrets` ids are read with `ORCA_SECRET_FETCH` when it is set: the
+scheduler runs `<ORCA_SECRET_FETCH> <id>` through `sh -c` and uses what it
+prints (trailing newlines dropped). To keep them in files, as on a single
+server (see [hetzner.md](hetzner.md)), set it to a command that reads one:
+
+```sh
+ORCA_SECRET_FETCH='sh /etc/orca/secret-fetch'   # prints /etc/orca/secrets/<id>, mode 600, root only
+```
+
+The ids still start with `orca/`; the script must refuse `..`. For an
+S3-compatible store instead of S3, set `AWS_ENDPOINT_URL_S3` (and
+`AWS_REGION`, the keys) in the scheduler's environment file, not in `env`.
+
 ## orca config show
 
 ```text

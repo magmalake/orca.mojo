@@ -84,6 +84,18 @@ def test_cost_sustained_and_day() raises:
     assert_false(eval_cost(c, List[Lease](), _all()).tripped)
 
 
+def test_cost_fixed_price_on_local() raises:
+    var c = default_config()
+    c.fixed_price = True
+    var up = List[Lease]()
+    for _ in range(6):
+        up.append(Lease("c7g.4xlarge", 1200.0, -1.0))
+    var r = eval_cost(c, up, _all())
+    assert_false(r.tripped)
+    assert_equal(r.detail, "fixed price")
+    assert_true(r.value < 0)
+
+
 def test_idle() raises:
     var c = default_config()
     var owners: List[String] = [String("a")]

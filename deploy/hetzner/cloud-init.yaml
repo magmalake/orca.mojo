@@ -1,0 +1,39 @@
+#cloud-config
+# The server's first boot (deploy/hetzner/up.sh fills in the @@...@@ words and
+# passes this as the server's user data). It only gets the machine ready:
+# Docker, and the Volume mounted where Postgres keeps its data. It holds no
+# secret, because the metadata service hands user data to anything on the
+# server; up.sh sends the settings and secrets over ssh afterwards.
+hostname: @@HOSTNAME@@
+timezone: UTC
+ssh_pwauth: false
+package_update: true
+packages:
+  - docker.io
+  - ca-certificates
+  - curl
+  - jq
+  - openssl
+
+write_files:
+  # Docker, and so every container, waits for the Volume: Postgres must never
+  # initialise a database on the root disk by starting before the mount.
+  - path: /etc/systemd/system/docker.service.d/orca-volume.conf
+    content: |
+      [Unit]
+      RequiresMountsFor=/mnt/orca-data
+  - path: /etc/docker/daemon.json
+    content: |
+      {"log-driver": "json-file", "log-opts": {"max-size": "50m", "max-file": "3"}}
+
+# The Volume, formatted when it was created (never here: this must not wipe a
+# Volume that has a database on it). Hetzner names the device by its id.
+mounts:
+  - ["/dev/disk/by-id/scsi-0HC_Volume_@@VOLUME_ID@@", "/mnt/orca-data", "ext4", "discard,nofail,defaults", "0", "0"]
+
+runcmd:
+  - [mkdir, -p, /mnt/orca-data, /etc/orca/secrets, /var/lib/orca/stage, /var/lib/orca/backup]
+  - [chmod, "700", /etc/orca]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, docker]
+  - [sh, -c, "date -u +%FT%TZ > /var/lib/orca/booted"]

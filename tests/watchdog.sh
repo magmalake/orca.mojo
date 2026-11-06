@@ -171,7 +171,9 @@ stop
 grep -q "can't check the watchdog" "$log" && fail "the watchdog raised"
 
 # ---- Seeded rows, ticked locally ----------------------------------------
-export ORCA_RUNNER=local
+# ORCA_RUNNER unset is the local runner too, with the cost rule on; set to
+# local, the cost rule is off (the last section below).
+unset ORCA_RUNNER
 unset ORCA_EC2_MODE ORCA_EC2_ENDPOINT ORCA_EC2_AMI ORCA_LOGS ORCA_RUN_ENV
 export ORCA_WATCHDOG_LAUNCHES=1000 ORCA_STALE_SECONDS=3600
 reset() {
@@ -292,6 +294,18 @@ q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, 
 tick
 [ "$(only)" = "" ] || fail "a run busy 10 minutes ago paused: $(only)"
 echo "ok   stuck: a run with nothing moving pauses its pipeline; a busy host is progress"
+
+# ORCA_RUNNER=local: no instances, a fixed price. The cost rule reads "fixed
+# price" and never trips, with the same seeded instances that tripped it above.
+reset
+q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched)
+   SELECT 'i-seed-' || n, $fanrun, 1, 'worker', 'c7g.4xlarge', 'on-demand', now() - interval '20 minutes' FROM generate_series(1, 8) n" > /dev/null
+ORCA_RUNNER=local ORCA_WATCHDOG_SECONDS=1 ./build/orca tick >> "$log" 2>&1 || fail "tick"
+[ "$(only)" = "" ] || fail "the cost rule tripped on the local runner: $(only)"
+[ "$(q "SELECT detail FROM orca.watchdog_rules WHERE rule = 'cost'")" = "fixed price" ] || fail "the cost rule's detail"
+[ "$(q "SELECT count(*) FROM orca.watchdog_rules WHERE rule <> 'cost'")" -ge 5 ] || fail "the other rules weren't checked"
+ORCA_RUNNER=local ./build/orca watchdog status 2>&1 | grep -q '^cost .*fixed price' || fail "status doesn't say fixed price"
+echo "ok   ORCA_RUNNER=local: the cost rule reads fixed price and doesn't trip; the others run"
 
 reset
 grep -q "can't check the watchdog" "$log" && fail "the watchdog raised"

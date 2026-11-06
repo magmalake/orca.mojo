@@ -1857,6 +1857,14 @@ def fleet_page(
         "Control</a>.</p>",
     )
     banner_html(h, trips)
+    if getenv("ORCA_RUNNER") == "local":
+        h.raw(
+            '<p class="alert">This scheduler\'s runner is',
+            " <code>local</code>: it runs every run on its own machine and",
+            " launches no instances, so there are none to list and no",
+            ' per-instance cost. The machine is <a href="/ops/control">',
+            "Control</a>; its price is the server's fixed price.</p>",
+        )
     h.raw(
         '<div data-poll="/ops/fleet/hosts?sort=',
         col,

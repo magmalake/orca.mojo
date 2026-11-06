@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **One Hetzner server: scripts, runbook, and the local runner as a
+  production setup** (#166). `deploy/hetzner/` (`up.sh`, `deploy.sh`,
+  `rescale.sh up|down`, `backup.sh` with a systemd timer on the server,
+  `down.sh`, `cloud-init.yaml`, `hetzner.env.example`) runs orca and the
+  census on one `hcloud` ARM server with a Volume for Postgres, Object
+  Storage, and Cloudflare Tunnel; `--dry-run` prints the commands.
+  `docs/hetzner.md` is the runbook (setup, deploy, rescaling for an import,
+  backups and restore, teardown, costs, the census `orca.toml`), with
+  `AWS_ENDPOINT_URL_S3` for S3-compatible stores and `ORCA_SECRET_FETCH`
+  reading files. With `ORCA_RUNNER=local` the watchdog's cost rule reads
+  "fixed price" and never trips (the other rules stay), and Ops > Fleet says
+  the runner launches no instances. `tests/watchdog.sh`, `tests/fleet.sh`,
+  `tests/test_watchdog.mojo`.
+
 - **Fills: a pipeline fills its whole range by itself, within limits**
   (#155, `orca.fill`, migration 30). In `orca.toml` (no register flags):
   `fills = "all"` (the default `"since_registration"` is what orca did
