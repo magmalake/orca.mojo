@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **`orca.toml`: one checked-in file for how each pipeline runs** (#145,
+  `orca.config`, `orca.toml`, migration 29). `[defaults]` and
+  `[pipelines.<name>]` take `placement`, `head_type`, `worker_type`,
+  `workers` (`N` or `"MIN..MAX"`), `worker_procs`, `max_runs` (over the
+  code's), `secrets` (`NAME = "orca/<id>"`, references only) and `env`.
+  `orca register` reads `./orca.toml` (or `--config F`, `ORCA_CONFIG`;
+  `--no-config` for none); `orca aws register` checks the project's file
+  and sends it whole, with its git commit, to the control instance's
+  `orca register`. A pipeline the file names is registered with exactly
+  `[defaults]`, its table and the flags (which win, recorded as
+  overrides): a key taken out of the file goes back to its default. One it
+  doesn't name keeps today's behaviour. Unknown keys and bad values are
+  refused with the file's line. A pipeline's `env` goes to its runs alone
+  (local, control, Kubernetes and EC2 runners), over the same names from
+  `ORCA_RUN_ENV`, which still applies to every run, and on EC2 it's part of
+  the warm pool's key (#134) and of a run's kept spec. `orca register
+  --max-runs N` is new. The registration keeps the file's SHA-256, commit
+  and whether it had uncommitted changes, with where each value came from
+  (`orca.pipelines.config`; also `env`, `max_runs`). `orca config show
+  [<pipeline>] [--json]` prints the effective configuration with each
+  value's source: code default, orca.toml, flag or environment. `orca
+  config export [--out F|-] [--force]` writes an `orca.toml` from what's
+  registered. orca has its own TOML subset parser (mojoshelf's `mojo-toml`
+  is built for Mojo before 1.0); `fuzz/fuzz_toml.mojo`. `tests/config.sh`.
+
 - **Placement: small pipelines on the control instance** (#144).
   `orca register --placement control|ec2|default` (forwarded by
   `orca aws register`; stored with the registration, migration 26):

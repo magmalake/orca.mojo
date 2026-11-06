@@ -116,6 +116,16 @@ from orca.control import (
     run_env,
     slots_reason,
 )
+from orca.config import (
+    ProjectConfig,
+    RegisterFlags,
+    env_json,
+    parse_env,
+    parse_max_runs,
+    parse_worker_procs,
+    parse_workers,
+    resolve,
+)
 from orca.crash import crash_summary, crashed_by_signal
 from orca.cron import CronExpr
 from orca.day import Day
@@ -208,6 +218,9 @@ struct Registered(Copyable, Movable):
     """Where its runs run (`orca register --placement`): `control` (the
     scheduler's host, `orca.control`), `ec2`, or empty for the scheduler's
     runner."""
+    var env: List[Tuple[String, String]]
+    """Its runs' own variables (`env` in orca.toml, `orca.config`), given
+    to its runs alone, over those `ORCA_RUN_ENV` names."""
 
 
 def _ec2_spec(p: Registered, run: Int, start: Int, new_code: Bool) -> Ec2Spec:
@@ -228,21 +241,8 @@ def _ec2_spec(p: Registered, run: Int, start: Int, new_code: Bool) -> Ec2Spec:
         p.secrets.copy(),
         p.worker_procs,
         p.registry_hash,
+        p.env.copy(),
     )
-
-
-def parse_worker_procs(v: String) raises -> Int:
-    """`--worker-procs`'s value: a count of at least 1, or `auto` (returned
-    as 0), one process per vCPU of the worker type."""
-    if v == "auto":
-        return 0
-    try:
-        var n = Int(v)
-        if n >= 1 and n <= 256:
-            return n
-    except:
-        pass
-    raise Error("--worker-procs is a count from 1 to 256 or auto, not ", v)
 
 
 def fill_key(kind: String, fills: String, local: Civil) raises -> String:
@@ -299,8 +299,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " fills, coalesce((describe->'schedule'->>'catchup')::boolean,"
             " true) AS catchup, coalesce(describe->'partitions'->>'kind',"
             " 'monthly') AS kind, coalesce(describe->'partitions'->>"
-            "'start', '') AS start, coalesce((describe->>'max_runs')"
-            "::bigint, 1) AS max_runs, coalesce((describe->>"
+            "'start', '') AS start, coalesce(max_runs, (describe->>"
+            "'max_runs')::bigint, 1) AS max_runs, coalesce((describe->>"
             "'run_retries')::bigint, 3) AS run_retries,"
             " coalesce((describe->>'retry_seconds')::bigint, 0) AS"
             " retry_seconds, coalesce((describe->>'max_retry_seconds')"
@@ -316,7 +316,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " AS spot, coalesce(ec2_min_workers, -1) AS min_workers,"
             " coalesce(secrets::text, '') AS secrets, paused,"
             " coalesce(worker_procs, 1) AS worker_procs,"
-            " coalesce(placement, '') AS placement FROM"
+            " coalesce(placement, '') AS placement, coalesce(env::text, '')"
+            " AS env FROM"
             " orca.pipelines WHERE binary_path IS NOT NULL AND ($1 = '' OR"
             " name = $1) ORDER BY name"
         ),
@@ -352,6 +353,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 r.bool("paused"),
                 Int(r.int64("worker_procs")),
                 r.text("placement"),
+                parse_env(r.text("env")),
             )
         )
     # A fixed count, or no tasks: no scaling.
@@ -1056,27 +1058,22 @@ struct Scheduler(Movable):
         mut self,
         binary: String,
         now: Int64,
-        image: String = "",
-        head_type: String = "",
-        worker_type: String = "",
-        workers: Int = 0,
-        spot: Bool = False,
-        min_workers: Int = -1,
-        secrets: List[String] = List[String](),
-        worker_procs: Int = -1,
-        placement: String = "",
+        flags: RegisterFlags = RegisterFlags(),
+        file: ProjectConfig = ProjectConfig(),
     ) raises -> String:
         """Records the pipeline `binary` describes, with its path; its
         schedule counts from `now` the first time, and a sensor from now the
         first time it's one, with the snapshots its datasets have now seen.
         Queued runs move to the new code, and so do failed ones waiting for
-        a retry with no step done. `min_workers`, with `workers` as the
-        most, makes an EC2 run's workers scale between them; -1 keeps a
-        fixed count. `worker_procs` is the dista worker processes per EC2 worker
-        instance (0: one per vCPU); -1 keeps what was registered. `secrets`, `NAME=ID`s, replace the pipeline's when
-        given. `placement` is `control`, `ec2` or `default` (the scheduler's
-        runner); empty keeps what was registered. Returns the pipeline's
-        name."""
+        a retry with no step done. How its runs run is `flags` over what
+        `file`, the project's orca.toml (`orca.config`), says for it: for a
+        pipeline the file names, exactly that, a setting neither gives
+        going back to its default; for one it doesn't, the flags given,
+        each left out keeping what was registered (`--workers MIN..MAX`
+        scales an EC2 run's workers, `--worker-procs` is the dista worker
+        processes per EC2 worker instance, `--secret`s replace the
+        pipeline's, `--placement` is `control`, `ec2` or `default`).
+        Returns the pipeline's name."""
         var path = absolute(binary)
         var got = capture([path, "describe"], binary_seconds())
         if got[0] != 0 or not got[1].startswith('{"pipeline": '):
@@ -1091,7 +1088,8 @@ struct Scheduler(Movable):
             raise Error("orca: ", path, " can't be registered: ", mismatch)
         var info = self.db.conn.query(
             (
-                "SELECT coalesce(($1::jsonb->>'sensor')::boolean, false) AS"
+                "SELECT $1::jsonb->>'pipeline' AS name,"
+                " coalesce(($1::jsonb->>'sensor')::boolean, false) AS"
                 " sensor, NOT EXISTS (SELECT 1 FROM orca.pipelines WHERE name"
                 " = $1::jsonb->>'pipeline' AND sensing_since IS NOT NULL) AS"
                 " new_sensor"
@@ -1099,6 +1097,19 @@ struct Scheduler(Movable):
             Params().text(got[1]),
         ).row(0)
         var sensor = info.bool("sensor")
+        var r = resolve(info.text("name"), flags, file)
+        var workers = 0
+        var min_workers = -1
+        if r.text("workers"):
+            var w = parse_workers(r.text("workers"))
+            min_workers = w[0]
+            workers = w[1]
+        var worker_procs = -1
+        if r.text("worker_procs"):
+            worker_procs = parse_worker_procs(r.text("worker_procs"))
+        var max_runs = -1
+        if r.text("max_runs"):
+            max_runs = parse_max_runs(r.text("max_runs"))
         var seen = String()
         if sensor:
             var sensed = capture([path, "sense"], binary_seconds())
@@ -1114,18 +1125,21 @@ struct Scheduler(Movable):
                 )
             if info.bool("new_sensor"):
                 seen = sensed[1]
+        # $14: the file names it, so what it and the flags say is all of
+        # it; otherwise a value not given keeps what was registered.
         var res = self.db.conn.query(
             (
                 "INSERT INTO orca.pipelines (name, registry_hash, describe,"
                 " binary_path, since, sensing_since, image, head_type,"
                 " worker_type, ec2_workers, spot, ec2_min_workers, secrets,"
-                " worker_procs, placement)"
+                " worker_procs, placement, max_runs, env, config)"
                 " SELECT"
                 " d->>'pipeline',"
                 " d->>'registry_hash', d, $2, $3, CASE WHEN $4 THEN now() END,"
                 " nullif($5, ''), nullif($6, ''), nullif($7, ''), nullif($8,"
                 " 0), $9, nullif($10, -1), nullif($11, '')::jsonb,"
-                " nullif($12, -1), nullif(nullif($13, ''), 'default')"
+                " nullif($12, -1), nullif(nullif($13, ''), 'default'),"
+                " nullif($15, -1), nullif($16, '')::jsonb, $17::jsonb"
                 " FROM (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO"
                 " UPDATE SET registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
@@ -1133,17 +1147,27 @@ struct Scheduler(Movable):
                 " sensing_since = CASE WHEN $4 THEN"
                 " coalesce(orca.pipelines.sensing_since, now()) END, image ="
                 " coalesce(EXCLUDED.image, orca.pipelines.image), head_type ="
-                " coalesce(EXCLUDED.head_type, orca.pipelines.head_type),"
-                " worker_type = coalesce(EXCLUDED.worker_type,"
-                " orca.pipelines.worker_type), ec2_workers ="
-                " coalesce(EXCLUDED.ec2_workers, orca.pipelines.ec2_workers),"
-                " ec2_min_workers = CASE WHEN $8 > 0 THEN"
-                " EXCLUDED.ec2_min_workers ELSE orca.pipelines.ec2_min_workers"
-                " END, secrets = coalesce(EXCLUDED.secrets,"
-                " orca.pipelines.secrets), worker_procs = CASE WHEN $12 >= 0"
-                " THEN $12 ELSE orca.pipelines.worker_procs END,"
-                " placement = CASE WHEN $13 = '' THEN orca.pipelines.placement"
-                " ELSE nullif($13, 'default') END,"
+                " CASE WHEN $14 THEN EXCLUDED.head_type ELSE"
+                " coalesce(EXCLUDED.head_type, orca.pipelines.head_type) END,"
+                " worker_type = CASE WHEN $14 THEN EXCLUDED.worker_type ELSE"
+                " coalesce(EXCLUDED.worker_type, orca.pipelines.worker_type)"
+                " END, ec2_workers = CASE WHEN $14 THEN EXCLUDED.ec2_workers"
+                " ELSE coalesce(EXCLUDED.ec2_workers,"
+                " orca.pipelines.ec2_workers) END, ec2_min_workers = CASE WHEN"
+                " $14 OR $8 > 0 THEN EXCLUDED.ec2_min_workers ELSE"
+                " orca.pipelines.ec2_min_workers END, secrets = CASE WHEN $14"
+                " THEN EXCLUDED.secrets ELSE coalesce(EXCLUDED.secrets,"
+                " orca.pipelines.secrets) END, worker_procs = CASE WHEN $14"
+                " THEN EXCLUDED.worker_procs WHEN $12 >= 0 THEN $12 ELSE"
+                " orca.pipelines.worker_procs END, placement = CASE WHEN $14"
+                " THEN EXCLUDED.placement WHEN $13 = '' THEN"
+                " orca.pipelines.placement ELSE nullif($13, 'default') END,"
+                " max_runs = CASE WHEN $14 OR $15 > 0 THEN EXCLUDED.max_runs"
+                " ELSE orca.pipelines.max_runs END, env = CASE WHEN $14 THEN"
+                " EXCLUDED.env ELSE orca.pipelines.env END, config = CASE WHEN"
+                " $14 THEN EXCLUDED.config ELSE jsonb_build_object('sources',"
+                " coalesce(orca.pipelines.config->'sources', '{}'::jsonb) ||"
+                " coalesce(EXCLUDED.config->'sources', '{}'::jsonb)) END,"
                 " spot = CASE WHEN $6 <> '' OR $7 <> '' OR $8 > 0 OR $9 THEN $9"
                 " ELSE orca.pipelines.spot END, last_seen"
                 " = now() RETURNING name, registry_hash, coalesce(image, '')"
@@ -1154,15 +1178,19 @@ struct Scheduler(Movable):
             .text(path)
             .int64(now)
             .bool(sensor)
-            .text(image)
-            .text(head_type)
-            .text(worker_type)
+            .text(flags.image)
+            .text(r.text("head_type"))
+            .text(r.text("worker_type"))
             .int64(Int64(workers))
-            .bool(spot)
+            .bool(flags.spot)
             .int64(Int64(min_workers))
-            .text(secrets_json(secrets))
+            .text(secrets_json(r.secret_specs()))
             .int64(Int64(worker_procs))
-            .text(placement),
+            .text(r.text("placement"))
+            .bool(r.in_file)
+            .int64(Int64(max_runs))
+            .text(r.env_json())
+            .text(r.config_json(file)),
         )
         var name = res.row(0).text("name")
         var version = self.db.version(
@@ -2291,6 +2319,7 @@ struct Scheduler(Movable):
                             p.binary,
                             p.workers,
                             new_code[i],
+                            p.env.copy(),
                         )
                     )
                     print("started", p.name, "run", id, "on its cluster")
@@ -2338,7 +2367,11 @@ struct Scheduler(Movable):
                 # other runners: a crash's dump is looked for after the last.
                 with open(stage_of(log), "a") as f:
                     f.write("--- start ", starts[i], "\n")
-            var pid = spawn(argv, stage_of(log) if log else log)
+            # Its own variables, from orca.toml; the rest it inherits.
+            var env = List[String]()
+            for kv in p.env:
+                env.append(String(kv[0], "=", kv[1]))
+            var pid = spawn(argv, stage_of(log) if log else log, env=env)
             self._spawned[pid] = (
                 Int(id),
                 starts[i],
@@ -2379,7 +2412,10 @@ struct Scheduler(Movable):
             var secrets = List[Tuple[String, String]]()
             for s in p.secrets:
                 secrets.append((s[0], fetch_secret(s[1])))
-            var env = run_env(self.limits, p.image, secrets)
+            var env = List[String]()
+            for kv in p.env:
+                env.append(String(kv[0], "=", kv[1]))
+            env.extend(run_env(self.limits, p.image, secrets))
             var location = String()
             var stage = String()
             if self.logs:

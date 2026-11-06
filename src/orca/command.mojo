@@ -10,7 +10,9 @@ Its commands:
 
     pixi run orca
     ./build/orca locate ./build/taxi --root .   # taxi.source.json, for the UI's links
-    ./build/orca register ./build/taxi [...]
+    ./build/orca register ./build/taxi [...]   # with ./orca.toml (orca.config)
+    ./build/orca config show taxi   # its settings, and where each came from
+    ./build/orca config export      # an orca.toml from the registrations
     ./build/orca backfill taxi 2011-01..2024-12
     ./build/orca backfill --rerun taxi 2024-03     # again, though it succeeded
     ./build/orca cancel taxi @all   # its queued, running and retrying runs
@@ -34,6 +36,7 @@ Exit codes: 0, 2 for a usage error, 3 for any other error.
 """
 
 from std.os import getenv
+from std.os.path import exists
 from std.sys import argv, exit, stderr
 from std.time import sleep
 
@@ -56,8 +59,15 @@ from orca.remote import (
     remote_target,
 )
 from orca.sample import sample_main
-from orca.scheduler import Scheduler, parse_worker_procs
-from orca.control import parse_placement
+from orca.config import (
+    ProjectConfig,
+    RegisterFlags,
+    canonical_flag,
+    export_toml,
+    show_json,
+    shown,
+)
+from orca.scheduler import Scheduler
 from orca.secrets import secret_problem
 from orca.sensors import rebuild, rebuilds
 from orca.state import State
@@ -73,6 +83,10 @@ comptime USAGE = """usage:
   orca register [--image <image>] [--head-type T] [--worker-type T]
                 [--workers N|MIN..MAX] [--worker-procs N|auto] [--spot]
                 [--secret NAME=ID ...] [--placement control|ec2|default]
+                [--max-runs N] [--config <orca.toml>|--no-config]
+                (how its runs run comes from orca.toml, ./orca.toml or
+                ORCA_CONFIG unless --config names another, flags over it;
+                orca config show)
                 (--worker-procs: dista worker processes per EC2 worker
                 instance, auto = one per vCPU; default 1. --placement
                 control: runs on the scheduler's own host, orca.control;
@@ -92,6 +106,11 @@ comptime USAGE = """usage:
                                     (a new run, from that step on)
   orca pause|unpause <pipeline>     (the scheduler starts none of its runs)
   orca status [<pipeline>] [--json]
+  orca config show [<pipeline>] [--json]
+                (how each runs, and where each value came from: code
+                default, orca.toml, flag, environment)
+  orca config export [--out <path>|-] [--force]
+                (an orca.toml from what's registered; default ./orca.toml)
   orca watchdog status [--json]     (rules, values, limits, active trips)
   orca watchdog snooze <rule> <duration>   (2h, 30m, 1d; off ends it)
   orca tick
@@ -218,85 +237,9 @@ def _command(args: List[String], target: String) raises -> Int:
         var api = Api(url)
         return api_command(api, args)
     if cmd == "register" and len(args) >= 3:
-        var image = String()
-        var head_type = String()
-        var worker_type = String()
-        var workers = 0
-        var min_workers = -1
-        var worker_procs = -1
-        var placement = String()
-        var spot = False
-        var secrets = List[String]()
-        var i = 2
-        while i < len(args) and args[i].startswith("--"):
-            if args[i] == "--spot":
-                spot = True
-                i += 1
-                continue
-            if i + 1 >= len(args):
-                _usage(String(args[i], " needs a value"))
-            if args[i] == "--image":
-                image = args[i + 1]
-            elif args[i] == "--head-type":
-                head_type = args[i + 1]
-            elif args[i] == "--worker-type":
-                worker_type = args[i + 1]
-            elif args[i] == "--secret":
-                # NAME=ID: the run's NAME is Secrets Manager's secret ID.
-                var why = secret_problem(args[i + 1])
-                if why:
-                    _usage(why)
-                secrets.append(args[i + 1])
-            elif args[i] == "--placement":
-                try:
-                    placement = parse_placement(args[i + 1])
-                except e:
-                    _usage(String(e))
-            elif args[i] == "--worker-procs":
-                try:
-                    worker_procs = parse_worker_procs(args[i + 1])
-                except e:
-                    _usage(String(e))
-            elif args[i] == "--workers":
-                # N, or MIN..MAX for autoscaling on EC2.
-                try:
-                    var v = args[i + 1]
-                    var dots = v.find("..")
-                    if dots >= 0:
-                        min_workers = Int(v[byte=:dots])
-                        workers = Int(v[byte = dots + 2 :])
-                        if min_workers < 0 or workers < max(min_workers, 1):
-                            raise Error("bad range")
-                    else:
-                        workers = Int(v)
-                except:
-                    _usage(
-                        String("not a count or a range MIN..MAX: ", args[i + 1])
-                    )
-            else:
-                _usage(String("unknown option: ", args[i]))
-            i += 2
-        if i >= len(args):
-            _usage("register needs a pipeline binary")
-        var s = Scheduler(url)
-        for k in range(i, len(args)):
-            print(
-                "registered",
-                s.register(
-                    args[k],
-                    now(),
-                    image,
-                    head_type,
-                    worker_type,
-                    workers,
-                    spot,
-                    min_workers,
-                    secrets,
-                    worker_procs,
-                    placement,
-                ),
-            )
-        return 0
+        return _register(url, args)
+    if cmd == "config" and len(args) >= 3:
+        return _config(url, args)
     if cmd == "backfill" and _backfill_flags(args):
         # --rerun queues keys that are done as well; a key in a queued or
         # running run is still left to it. --allow-append lets a rerun
@@ -491,6 +434,164 @@ def _expire(url: String, args: List[String]) raises -> Int:
         elif out:
             print(out)
     return code
+
+
+comptime _FLAG_KEYS = [
+    ("--head-type", "head_type"),
+    ("--worker-type", "worker_type"),
+    ("--workers", "workers"),
+    ("--worker-procs", "worker_procs"),
+    ("--placement", "placement"),
+    ("--max-runs", "max_runs"),
+]
+"""`orca register`'s flags for orca.toml's keys (`orca.config`)."""
+
+
+def _register(url: String, args: List[String]) raises -> Int:
+    """`orca register`: each binary's pipeline, with how its runs run from
+    the project's orca.toml and the flags (`orca.config`)."""
+    var flags = RegisterFlags()
+    var config_path = String()
+    var no_config = False
+    var b64 = String()
+    var commit = String()
+    var dirty = False
+    var name = String("orca.toml")
+    var i = 2
+    while i < len(args) and args[i].startswith("--"):
+        var a = args[i]
+        if a == "--spot" or a == "--no-config" or a == "--config-dirty":
+            if a == "--spot":
+                flags.spot = True
+            elif a == "--no-config":
+                no_config = True
+            else:
+                dirty = True
+            i += 1
+            continue
+        if i + 1 >= len(args):
+            _usage(String(a, " needs a value"))
+        var v = args[i + 1]
+        var key = String()
+        for fk in materialize[_FLAG_KEYS]():
+            if a == fk[0]:
+                key = String(fk[1])
+        if key:
+            try:
+                flags.values[key] = canonical_flag(key, v)
+            except e:
+                if key == "workers":
+                    _usage(String("not a count or a range MIN..MAX: ", v))
+                _usage(String(e))
+        elif a == "--image":
+            flags.image = v
+        elif a == "--secret":
+            # NAME=ID: the run's NAME is Secrets Manager's secret ID.
+            var why = secret_problem(v)
+            if why:
+                _usage(why)
+            flags.secrets.append(v)
+        elif a == "--config":
+            config_path = v
+        elif a == "--config-b64":
+            # The file itself, from `orca aws register` on another machine.
+            b64 = v
+        elif a == "--config-commit":
+            commit = v
+        elif a == "--config-name":
+            name = v
+        else:
+            _usage(String("unknown option: ", a))
+        i += 2
+    if i >= len(args):
+        _usage("register needs a pipeline binary")
+    var file: ProjectConfig
+    if b64:
+        file = ProjectConfig.from_b64(b64, name, commit, dirty)
+    elif no_config:
+        file = ProjectConfig()
+    elif config_path:
+        file = ProjectConfig.load(config_path)
+    elif getenv("ORCA_CONFIG"):
+        file = ProjectConfig.load(getenv("ORCA_CONFIG"))
+    elif exists("orca.toml"):
+        file = ProjectConfig.load("orca.toml")
+    else:
+        file = ProjectConfig()
+    if file.is_file():
+        print(
+            "orca: registering with",
+            file.path,
+            "(sha256 " + String(file.hash[byte=:12]) + ")",
+            file=stderr,
+        )
+    var s = Scheduler(url)
+    for k in range(i, len(args)):
+        var got = s.register(args[k], now(), flags, file)
+        if file.is_file() and not file.has(got):
+            print(
+                String(
+                    "orca: warning: ",
+                    got,
+                    " isn't in ",
+                    file.path,
+                    "; flags left out keep what it was registered with",
+                ),
+                file=stderr,
+            )
+        print("registered", got)
+    return 0
+
+
+def _config(url: String, args: List[String]) raises -> Int:
+    """`orca config show [<pipeline>] [--json]` and `orca config export
+    [--out <path>|-] [--force]`."""
+    var db = State(url)
+    db.migrate()
+    if args[2] == "show":
+        var json = False
+        var only = String()
+        for k in range(3, len(args)):
+            if args[k] == "--json":
+                json = True
+            elif not only and not args[k].startswith("--"):
+                only = args[k]
+            else:
+                _usage(String("unknown argument: ", args[k]))
+        var items = shown(db, only)
+        if only and len(items) == 0:
+            raise Error("orca: no pipeline ", only, " is registered")
+        if json:
+            print(show_json(items, only != ""))
+        else:
+            for k in range(len(items)):
+                print(("\n" if k > 0 else "") + items[k].text(), end="")
+        return 0
+    if args[2] == "export":
+        var out = String("orca.toml")
+        var force = False
+        var k = 3
+        while k < len(args):
+            if args[k] == "--out" and k + 1 < len(args):
+                out = args[k + 1]
+                k += 2
+            elif args[k] == "--force":
+                force = True
+                k += 1
+            else:
+                _usage(String("unknown argument: ", args[k]))
+        var text = export_toml(db)
+        if out == "-":
+            print(text, end="")
+            return 0
+        if exists(out) and not force:
+            raise Error("orca: ", out, " exists; --force replaces it")
+        with open(out, "w") as f:
+            f.write(text)
+        print("wrote", out)
+        return 0
+    _usage()
+    return 2
 
 
 def _print_made(ms: List[Made]):

@@ -79,9 +79,23 @@ if "$orca" aws register --tag v1 --image x daily > /dev/null 2>&1; then fail "re
 got=$(calls)
 echo "$got" | grep -q "ssm send-command --instance-ids i-0control --document-name AWS-RunShellScript" || fail "register's send-command: $got"
 echo "$got" | grep -qF "orca-refresh 'v1'" || fail "register's refresh: $got"
-echo "$got" | grep -qF "docker exec scheduler orca register --image '$repo:v1' '--workers' '0..4' '--worker-procs' 'auto' '--secret' 'GITHUB_TOKEN=orca/github-token' '--placement' 'control' '/opt/orca/pipelines/daily'" \
+echo "$got" | grep -qF "docker exec scheduler orca register --image '$repo:v1' '--workers' '0..4' '--worker-procs' 'auto' '--secret' 'GITHUB_TOKEN=orca/github-token' '--placement' 'control' --no-config '/opt/orca/pipelines/daily'" \
     || fail "register's command: $got"
 grep -q "registered on the control instance" ../reg.out || fail "register didn't print the output"
+# The project's orca.toml (orca.config) goes whole, base64, with its name;
+# a bad one is refused before anything is sent.
+printf '[pipelines.daily]\nworkers = "0..2"\nenv = { A = "b" }\n' > orca.toml
+"$orca" aws register --tag v1 daily > ../reg.out 2>&1 || fail "register with orca.toml: $(cat ../reg.out)"
+b64=$(base64 < orca.toml | tr -d '\n')
+got=$(calls)
+# (with --config-commit too: the project here is inside orca's checkout)
+echo "$got" | grep -qF "docker exec scheduler orca register --image '$repo:v1' --config-b64 '$b64' --config-name 'orca.toml'" \
+    && echo "$got" | grep -qF "'/opt/orca/pipelines/daily'" || fail "register didn't send orca.toml: $got"
+printf '[pipelines.daily]\nworkrs = 2\n' > orca.toml
+if "$orca" aws register --tag v1 daily > ../reg.out 2>&1; then fail "register sent a bad orca.toml"; fi
+grep -q "orca.toml:2: \[pipelines.daily\] has no key workrs" ../reg.out || fail "the bad file's message: $(cat ../reg.out)"
+if calls | grep -q "send-command"; then fail "a bad orca.toml was sent"; fi
+rm orca.toml
 echo "ok   register"
 
 "$orca" aws app console > ../app.out 2>&1 || fail "app: $(cat ../app.out)"
