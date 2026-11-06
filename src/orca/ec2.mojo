@@ -93,7 +93,7 @@ than launching new ones:
   and samples and runs `<binary> pool-next`, which marks the run's row
   `idle` and beats `polled` every second until it's handed a run. Its run's
   row stays live meanwhile, so idle instances count against the budget (a
-  run of the same keys counts them as its own), and `/fleet` shows them as
+  run of the same keys counts them as its own), and `/ops/fleet` shows them as
   `idle (pooled)`. A start of a pipeline waits while instances of its keys
   are still on their way there (at most the head's grace).
 - **Hand-over** (`_take`). In one transaction, the idle rows of the key

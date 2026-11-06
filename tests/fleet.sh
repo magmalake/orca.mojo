@@ -2,7 +2,7 @@
 # The fleet page (orca.fleet): the scheduler keeps the last half hour of
 # each live instance's samples, and the control instance's, in Postgres
 # (a pass again adds nothing, an instance whose file is missing is skipped,
-# old samples go); /fleet, its fragment and /api/fleet render hosts, cost,
+# old samples go); /ops/fleet, its fragment and /api/fleet render hosts, cost,
 # runs and errors from those rows and from `orca.instances`, with no S3 or
 # file reads of their own; the home page has a strip of the same.
 # Needs ORCA_DATABASE_URL (pixi run test-fleet starts a throwaway server),
@@ -132,9 +132,12 @@ echo "$api" | jq -e '.charts | .hours == 24 and (.labels_utc | length) == 24 and
 curl -fsS "$base/api/fleet?range=7d" | jq -e '.charts.hours == 168 and (.charts.labels_utc | length) == 168' > /dev/null || fail "?range=7d"
 echo "ok   /api/fleet"
 
-page=$(html /fleet)
-echo "$page" | grep -qF '<a href="/fleet" aria-current="page">Fleet</a>' || fail "Fleet isn't in the nav, current"
-echo "$page" | grep -qF 'data-poll="/fleet/hosts?sort=&amp;dir=asc&amp;range=24h" data-poll-every="10"' || fail "the hosts don't poll every 10 s"
+page=$(html /ops/fleet)
+echo "$page" | grep -qF '<a href="/ops/fleet" aria-current="page">Fleet</a>' || fail "Fleet isn't in the Ops menu, current"
+echo "$page" | grep -qF '<a href="/ops" aria-current="page" aria-haspopup="true">Ops</a>' || fail "Ops isn't current"
+echo "$page" | grep -qF '<a href="/ops/control">Control</a>' || fail "the intro and menu don't link Control"
+echo "$page" | grep -q 'EC2 instances orca launches for runs' || fail "the Fleet intro"
+echo "$page" | grep -qF 'data-poll="/ops/fleet/hosts?sort=&amp;dir=asc&amp;range=24h" data-poll-every="10"' || fail "the hosts don't poll every 10 s"
 echo "$page" | grep -qF '<span class="stat__v">5</span>' || fail "hosts running"
 echo "$page" | grep -qF '1 head, 3 workers, control' || fail "heads and workers"
 echo "$page" | grep -qF 'c7g.large x2' || fail "the instance types"
@@ -153,40 +156,51 @@ echo "$page" | grep -qF 'aria-label="Runs per hour"' || fail "no runs chart"
 echo "$page" | grep -qF 'aria-label="Fleet CPU"' || fail "no CPU chart"
 echo "$page" | grep -qF 'aria-label="Fleet network"' || fail "no network chart"
 echo "$page" | grep -qF 'class="fl--bad"' || fail "no failures overlaid on the runs"
-echo "$page" | grep -qF '<strong>24h</strong> <a href="/fleet?range=7d">7d</a>' || fail "the range choice"
-html '/fleet?range=7d' | grep -qF '<strong>7d</strong>' || fail "the 7d range"
-echo "ok   /fleet"
+echo "$page" | grep -qF '<strong>24h</strong> <a href="/ops/fleet?range=7d">7d</a>' || fail "the range choice"
+html '/ops/fleet?range=7d' | grep -qF '<strong>7d</strong>' || fail "the 7d range"
+echo "ok   /ops/fleet"
+
+# The old URLs moved for good (the query kept); the API paths didn't move.
+for pair in '/fleet|/ops/fleet' '/fleet?range=7d&sort=cpu|/ops/fleet?range=7d&sort=cpu' '/fleet/hosts?sort=cpu|/ops/fleet/hosts?sort=cpu' '/system?range=7d|/ops/control?range=7d' '/ops|/ops/control'; do
+    from=${pair%%|*}
+    to=${pair##*|}
+    got=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$base$from")
+    code=301
+    [ "$from" != /ops ] || code=302
+    [ "$got" = "$code $base$to" ] || fail "$from redirects to: $got"
+done
+echo "ok   /fleet, /fleet/hosts and /system redirect; /ops goes to Control"
 
 # Sorting, by query parameter, in the page and its fragment.
 order() { html "$1" | grep -o '<code>[a-z]*-\{0,1\}[a-z0-9-]*</code>' | sed 's/<[^>]*>//g' | tr '\n' ' '; }
 want="control head-i-head worker-i-w1 worker-i-w2 worker-i-w3 "
-[ "$(order /fleet)" = "$want" ] || fail "default order: $(order /fleet)"
+[ "$(order /ops/fleet)" = "$want" ] || fail "default order: $(order /ops/fleet)"
 # The control instance's CPU is this machine's, so only the rest is fixed.
 want="head-i-head worker-i-w1 worker-i-w2 "
-[ "$(order '/fleet?sort=cpu&dir=desc' | cut -d' ' -f1-3 | sed 's/$/ /')" = "$want" ] || fail "by CPU, highest first: $(order '/fleet?sort=cpu&dir=desc')"
-[ "$(order '/fleet/hosts?sort=cpu&dir=desc' | cut -d' ' -f1-3 | sed 's/$/ /')" = "$want" ] || fail "the fragment's order"
+[ "$(order '/ops/fleet?sort=cpu&dir=desc' | cut -d' ' -f1-3 | sed 's/$/ /')" = "$want" ] || fail "by CPU, highest first: $(order '/ops/fleet?sort=cpu&dir=desc')"
+[ "$(order '/ops/fleet/hosts?sort=cpu&dir=desc' | cut -d' ' -f1-3 | sed 's/$/ /')" = "$want" ] || fail "the fragment's order"
 # A host with no samples counts as 0%: first or second, after an idle control.
-order '/fleet?sort=cpu&dir=asc' | awk '{print $1, $2}' | grep -q "worker-i-w3" || fail "by CPU, lowest first: a host with no samples is lowest"
-[ "$(order '/fleet/hosts?sort=uptime&dir=desc' | cut -d' ' -f1)" = "head-i-head" ] || fail "by uptime, longest first"
-[ "$(order '/fleet?sort=nonsense')" = "$(order /fleet)" ] || fail "an unknown column is the default order"
-html '/fleet?sort=cpu&dir=desc' | grep -qF '<th class="num" aria-sort="descending"><a class="sortby" href="/fleet?sort=cpu&amp;dir=asc&amp;range=24h#hosts">CPU ▼</a>' \
+order '/ops/fleet?sort=cpu&dir=asc' | awk '{print $1, $2}' | grep -q "worker-i-w3" || fail "by CPU, lowest first: a host with no samples is lowest"
+[ "$(order '/ops/fleet/hosts?sort=uptime&dir=desc' | cut -d' ' -f1)" = "head-i-head" ] || fail "by uptime, longest first"
+[ "$(order '/ops/fleet?sort=nonsense')" = "$(order /ops/fleet)" ] || fail "an unknown column is the default order"
+html '/ops/fleet?sort=cpu&dir=desc' | grep -qF '<th class="num" aria-sort="descending"><a class="sortby" href="/ops/fleet?sort=cpu&amp;dir=asc&amp;range=24h#hosts">CPU ▼</a>' \
     || fail "the sorted header"
-html '/fleet?sort=cpu&dir=desc' | grep -qF 'data-poll="/fleet/hosts?sort=cpu&amp;dir=desc&amp;range=24h"' || fail "the poll keeps the sort"
-[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/fleet/hosts")" = 200 ] || fail "the fragment doesn't answer 200 forever"
-html /fleet/hosts | grep -q '<html' && fail "the fragment is a page"
+html '/ops/fleet?sort=cpu&dir=desc' | grep -qF 'data-poll="/ops/fleet/hosts?sort=cpu&amp;dir=desc&amp;range=24h"' || fail "the poll keeps the sort"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/ops/fleet/hosts")" = 200 ] || fail "the fragment doesn't answer 200 forever"
+html /ops/fleet/hosts | grep -q '<html' && fail "the fragment is a page"
 echo "ok   /fleet sorts, and its fragment keeps the sort"
 
 # The home page: a strip of the same numbers, each linking to its detail.
 page=$(html /)
 echo "$page" | grep -qF '<div class="stats stats--compact">' || fail "no strip on /"
-echo "$page" | grep -qF '<a class="stat" href="/fleet#hosts"><span class="stat__k">Hosts' || fail "the strip's hosts link"
+echo "$page" | grep -qF '<a class="stat" href="/ops/fleet#hosts"><span class="stat__k">Hosts' || fail "the strip's hosts link"
 echo "$page" | grep -qF 'href="/runs?status=failed"' || fail "the strip's errors link"
 json / | jq -e '.fleet.hosts == 5' > /dev/null || fail "/'s JSON has no fleet"
-json /fleet | jq -e '.summary.hosts == 5 and (.hosts | length) == 5' > /dev/null || fail "/fleet's JSON via Accept"
+json /ops/fleet | jq -e '.summary.hosts == 5 and (.hosts | length) == 5' > /dev/null || fail "/fleet's JSON via Accept"
 
 # A value from the database is escaped.
 q "UPDATE orca.instances SET instance_type = '<b>x</b>' WHERE id = 'i-w3'" > /dev/null
-html /fleet | grep -qF '<b>x</b>' && fail "an instance type's markup reached the page"
-html /fleet | grep -qF '&lt;b&gt;x&lt;/b&gt;' || fail "the escaped instance type"
+html /ops/fleet | grep -qF '<b>x</b>' && fail "an instance type's markup reached the page"
+html /ops/fleet | grep -qF '&lt;b&gt;x&lt;/b&gt;' || fail "the escaped instance type"
 kill "$pid"
 echo "ok   fleet"

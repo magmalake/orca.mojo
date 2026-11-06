@@ -1,4 +1,4 @@
-"""The fleet: every machine orca is paying for, on one page (`/fleet`).
+"""The fleet: every machine orca is paying for, on one page (`/ops/fleet`).
 
 What the page shows comes from three places, none of which reads the
 samplers' files when a page is viewed:
@@ -1001,7 +1001,7 @@ def summary_html(mut h: Html, s: Summary, compact: Bool):
     """The summary cards; each links to where its detail is."""
     h.raw('<div class="stats', " stats--compact" if compact else "", '">')
     # Hosts.
-    h.raw('<a class="stat" href="/fleet#hosts"><span class="stat__k">Hosts')
+    h.raw('<a class="stat" href="/ops/fleet#hosts"><span class="stat__k">Hosts')
     h.raw('</span><span class="stat__v">', s.hosts(), "</span>")
     h.raw('<span class="stat__s">')
     h.text(
@@ -1019,7 +1019,9 @@ def summary_html(mut h: Html, s: Summary, compact: Bool):
         h.text(_type_text(s.types))
     h.raw("</span></a>")
     # Cost.
-    h.raw('<a class="stat" href="/fleet#hosts"><span class="stat__k">Cost now')
+    h.raw(
+        '<a class="stat" href="/ops/fleet#hosts"><span class="stat__k">Cost now'
+    )
     h.raw('</span><span class="stat__v">~$', _fixed(s.cost, 2), "/h</span>")
     h.raw('<span class="stat__s">estimate, on-demand us-east-2')
     if s.unpriced > 0:
@@ -1031,7 +1033,7 @@ def summary_html(mut h: Html, s: Summary, compact: Bool):
     h.raw(s.running, " <small>running</small></span>")
     h.raw('<span class="stat__s">', s.queued, " queued</span></a>")
     # Runs and errors per hour.
-    h.raw('<a class="stat" href="/fleet#runs"><span class="stat__k">')
+    h.raw('<a class="stat" href="/ops/fleet#runs"><span class="stat__k">')
     h.raw('Runs per hour</span><span class="stat__v">', s.runs_hour, "</span>")
     h.raw(
         '<span class="stat__s">',
@@ -1125,7 +1127,7 @@ def _th(
     h.raw("<th", ' class="num"' if num else "")
     if here:
         h.raw(' aria-sort="', "descending" if desc else "ascending", '"')
-    h.raw('><a class="sortby" href="/fleet?sort=', col)
+    h.raw('><a class="sortby" href="/ops/fleet?sort=', col)
     h.raw("&amp;dir=", "asc" if here and desc else "desc" if here else "asc")
     h.raw("&amp;range=", url_encode(range), '#hosts">')
     h.text(label)
@@ -1219,7 +1221,7 @@ def charts_html(mut h: Html, c: Charts, range: String):
         if r == range:
             h.raw("<strong>", r, "</strong> ")
         else:
-            h.raw('<a href="/fleet?range=', r, '">', r, "</a> ")
+            h.raw('<a href="/ops/fleet?range=', r, '">', r, "</a> ")
     h.raw("(UTC, by the hour)</p>")
     h.raw('<section class="card" id="hours"><h2>Hosts over time</h2>')
     h.raw(

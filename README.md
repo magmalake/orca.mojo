@@ -75,7 +75,8 @@ pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   #
 ./build/orca pause taxi        # the scheduler starts none of its runs until orca unpause taxi
 ./build/orca watchdog status   # the watchdog pauses pipelines on a launch storm, runaway cost, idle workers,
                                # failures or stuck runs; orca watchdog snooze launches 2h silences a rule
-./build/orca ui                # http://127.0.0.1:8270: pipelines, runs and datasets, also as JSON; start, resume, rerun, backfill, cancel, pause
+./build/orca ui                # http://127.0.0.1:8270: pipelines, runs and datasets, also as JSON; start, resume, rerun, backfill, cancel, pause;
+                               # Ops > Control is the machine running the scheduler and UI, Ops > Fleet the EC2 instances launched for runs
 ./build/orca user add alice    # a login for the UI's actions; the password from stdin
 ./build/orca status taxi       # its state and latest runs, as its page shows them
 ./build/orca login https://orca.example.com   # from a laptop: a token for the deployed UI, kept mode 600

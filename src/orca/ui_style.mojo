@@ -50,6 +50,14 @@ pre code { background: none; border: 0; padding: 0; }
   font-size: 0.9375rem; border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .top nav a:hover { color: var(--text); }
 .top nav a[aria-current] { color: var(--text); font-weight: 600; border-bottom-color: var(--ember); }
+.menu { position: relative; display: flex; }
+.menu__sub { display: none; position: absolute; top: 100%; left: -0.75rem; min-width: 9rem;
+  flex-direction: column; padding: 0.35rem 0; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.menu:hover .menu__sub, .menu:focus-within .menu__sub { display: flex; }
+.top nav .menu__sub a { padding: 0.45rem 0.85rem; margin: 0; border: 0; white-space: nowrap; }
+.top nav .menu__sub a:hover { background: var(--surface-2); }
+.top nav a:focus-visible { outline: 2px solid var(--lake); outline-offset: 2px; border-radius: 2px; }
 .top__user { display: flex; align-items: center; gap: 0.5rem; margin-left: auto;
   color: var(--muted); font-size: 0.9375rem; }
 a.top__user { color: var(--lake); }
@@ -62,6 +70,13 @@ a.top__user { color: var(--lake); }
   .top__brand, .top__user { min-height: 3rem; }
   .top nav { order: 3; width: 100%; gap: 1rem; overflow-x: auto; }
   .top nav a { padding: 0.35rem 0 0.5rem; white-space: nowrap; }
+  /* The nav scrolls sideways here, which would clip a dropdown: show the
+     submenu inline, after "Ops". */
+  .menu { gap: 1rem; }
+  .menu__sub, .menu:hover .menu__sub, .menu:focus-within .menu__sub { display: flex; position: static;
+    flex-direction: row; gap: 1rem; padding: 0; min-width: 0; border: 0; box-shadow: none; background: none; }
+  .top nav .menu__sub a { padding: 0.35rem 0 0.5rem; }
+  .top nav .menu__sub a:hover { background: none; }
 }
 
 main { max-width: 72rem; margin: 0 auto; padding: 1.75rem 1.25rem 3rem; }

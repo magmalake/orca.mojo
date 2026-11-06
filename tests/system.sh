@@ -2,7 +2,7 @@
 # The control instance's own health (orca.system): the scheduler rolls the
 # lines of the control sampler's file into a row a minute in Postgres (a pass
 # again adds nothing, old rows go) and appends them to a file per day under
-# ORCA_LOGS/control; /system, /api/system, /metrics and the warning on / are
+# ORCA_LOGS/control; /ops/control, /api/system, /metrics and the warning on / are
 # drawn from those rows alone (the test deletes both files before fetching).
 # Needs ORCA_DATABASE_URL (pixi run test-system starts a throwaway server),
 # curl, jq and python3.
@@ -125,8 +125,12 @@ curl -fsS "$base/api/system?range=14d" | jq -e '.charts | .hours == 336 and .buc
 [ "$(curl -fsS -o /dev/null -w '%{content_type}' "$base/api/system")" = "application/json" ] || fail "/api/system's content type"
 echo "ok   /api/system"
 
-page=$(html /system)
-echo "$page" | grep -qF '<a href="/system" aria-current="page">System</a>' || fail "System isn't in the nav, current"
+page=$(html /ops/control)
+echo "$page" | grep -qF '<a href="/ops/control" aria-current="page">Control</a>' || fail "Control isn't in the Ops menu, current"
+echo "$page" | grep -q 'The one machine running the scheduler, this UI, Postgres and control-placed runs' || fail "the Control intro"
+echo "$page" | grep -qF '<a href="/ops/fleet">Fleet</a>' || fail "the intro doesn't link Fleet"
+echo "$page" | grep -qF '<a href="/watchdog">Watchdog</a>' || fail "Control doesn't link /watchdog"
+echo "$page" | grep -qF '<h1>System</h1>' && fail "the page is still called System"
 echo "$page" | grep -qF '<span class="stat__k">CPU</span><span class="stat__v">30%</span>' || fail "the CPU card"
 echo "$page" | grep -qF '<span class="stat__v">50%</span><span class="stat__s">2.0 GB of 4.0 GB' || fail "the memory card: $(echo "$page" | grep -o 'stat__k">Memory.\{0,150\}')"
 echo "$page" | grep -qF '<span class="stat__v">40%</span><span class="stat__s">8.0 GB of 20 GB, under /var/lib/orca/stage' || fail "the disk card"
@@ -136,11 +140,11 @@ echo "$page" | grep -qF '&lt;b&gt;app&lt;/b&gt;' || fail "the escaped container 
 for c in CPU Memory Disk Network 'Container memory'; do
     echo "$page" | grep -qF "aria-label=\"$c\"" || fail "no $c chart"
 done
-echo "$page" | grep -qF '<strong>24h</strong> <a href="/system?range=7d">7d</a> <a href="/system?range=14d">14d</a>' || fail "the range choice"
-html '/system?range=14d' | grep -qF '<strong>14d</strong>' || fail "the 14d range"
-html '/system?range=bogus' | grep -qF '<strong>24h</strong>' || fail "an unknown range is 24h"
+echo "$page" | grep -qF '<strong>24h</strong> <a href="/ops/control?range=7d">7d</a> <a href="/ops/control?range=14d">14d</a>' || fail "the range choice"
+html '/ops/control?range=14d' | grep -qF '<strong>14d</strong>' || fail "the 14d range"
+html '/ops/control?range=bogus' | grep -qF '<strong>24h</strong>' || fail "an unknown range is 24h"
 echo "$page" | grep -q 'class="alert"' && fail "an alert for a healthy machine"
-echo "ok   /system"
+echo "ok   /ops/control"
 
 metrics=$(curl -fsS "$base/metrics")
 [ "$(curl -fsS -o /dev/null -w '%{content_type}' "$base/metrics")" = "text/plain; version=0.0.4; charset=utf-8" ] || fail "/metrics' content type"
@@ -181,10 +185,10 @@ tick
 page=$(html /)
 echo "$page" | grep -qF '<div class="alert" role="alert"><div>The control instance&#39;s disk is 95% full (19 GB of 20 GB)' \
     || fail "no disk warning on / for a disk 95% full: $(echo "$page" | grep -o 'class="alert".\{0,200\}')"
-echo "$page" | grep -qF '<a href="/system">System health</a>' || fail "the warning doesn't link to /system"
+echo "$page" | grep -qF '<a href="/ops/control">Control health</a>' || fail "the warning doesn't link to /ops/control"
 echo "$page" | grep -qi 'memory is' && fail "a memory warning at 50%"
 curl -fsS -H 'Accept: application/json' "$base/" | jq -e '.warnings | length == 1' > /dev/null || fail "/'s JSON warnings for a full disk"
-html /system | grep -qF 'class="alert"' || fail "no warning on /system"
+html /ops/control | grep -qF 'class="alert"' || fail "no warning on /ops/control"
 curl -fsS "$base/metrics" | grep -qE '^orca_control_disk_percent (8[0-9]|9[0-9])\.' || fail "/metrics' disk gauge after the full disk: $(curl -fsS "$base/metrics" | grep disk_percent)"
 lines 12 93 95
 tick
@@ -200,10 +204,10 @@ q "UPDATE orca.system_minutes SET disk_max = 99, last_t = now() - interval '20 m
 html / | grep -q 'class="alert"' && fail "a warning from a stale sample"
 curl -fsS "$base/metrics" | grep -q '^orca_control_' && fail "control gauges from a stale sample"
 curl -fsS "$base/metrics" | grep -q '^orca_runs{status="running"} 0$' || fail "the run counts go with it"
-html /system | grep -qF 'minutes old: the sampler or the scheduler has stopped' || fail "/system doesn't say its samples are old"
+html /ops/control | grep -qF 'minutes old: the sampler or the scheduler has stopped' || fail "/ops/control doesn't say its samples are old"
 # And none at all: the page says how to start one.
 q "TRUNCATE orca.system_minutes, orca.system_containers" > /dev/null
-html /system | grep -qF 'has not been sampled yet' || fail "/system without samples"
+html /ops/control | grep -qF 'has not been sampled yet' || fail "/ops/control without samples"
 curl -fsS "$base/api/system" | jq -e '.now == null and .warnings == []' > /dev/null || fail "/api/system without samples"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/metrics")" = 200 ] || fail "/metrics without samples"
 echo "ok   stale and missing samples"
