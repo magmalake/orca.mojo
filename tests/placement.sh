@@ -81,6 +81,10 @@ export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test OR
 export ORCA_STALE_SECONDS=4 ORCA_START_SECONDS=60 ORCA_EC2_POOL_SECONDS=0
 export ORCA_LOGS=$PWD/build/placement-logs ORCA_LOG_STAGE=$PWD/build/placement-stage
 export ORCA_CLUSTER_LOG_SECONDS=1 ORCA_FLEET_SECONDS=0
+# The memory-pressure hold below seeds a 95 % /system minute, which would
+# also trip the watchdog's control rule (orca.watchdog) and pause every
+# pipeline before placement could hold the run: this test is placement's.
+export ORCA_WATCHDOG_SECONDS=0
 # The scheduler's clock stays where the pipelines were registered, so none
 # of their schedules fires.
 export ORCA_NOW=2024-01-15T00:00Z
