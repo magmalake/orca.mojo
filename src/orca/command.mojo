@@ -59,6 +59,8 @@ from orca.scheduler import Scheduler, parse_worker_procs
 from orca.secrets import secret_problem
 from orca.sensors import rebuild, rebuilds
 from orca.state import State
+from orca.watchdog import snooze as snooze_rule
+from orca.auth import audit
 from orca.tokens import revoke_user_tokens, user_tokens
 from orca.ui import DEFAULT_ADDR, serve_ui
 
@@ -82,6 +84,8 @@ comptime USAGE = """usage:
   orca rerun <run> <step>           (a new run, from that step on)
   orca pause|unpause <pipeline>     (the scheduler starts none of its runs)
   orca status [<pipeline>] [--json]
+  orca watchdog status [--json]     (rules, values, limits, active trips)
+  orca watchdog snooze <rule> <duration>   (2h, 30m, 1d; off ends it)
   orca tick
   orca scheduler
   orca ui
@@ -99,7 +103,7 @@ comptime USAGE = """usage:
   orca login [<url>] [--user NAME] [--days N] [--label L]
   orca logout [<url>]
   orca --remote <url> backfill|start|cancel|pause|unpause|resume|rerun|
-                      rebuild|status|lineage ...
+                      rebuild|status|lineage|watchdog ...
                 (to a deployed orca ui, as the user orca login logged in;
                 or ORCA_REMOTE=<url>)"""
 
@@ -156,8 +160,28 @@ def _command(args: List[String], target: String) raises -> Int:
     var cmd = args[1]
     # Commands that print what a page of the UI shows, or do what its
     # buttons do, over the database here as `--remote` does over HTTPS.
+    if cmd == "watchdog" and len(args) == 5 and args[2] == "snooze":
+        # Audited as the local user, since there is no session or token.
+        var db = State(url)
+        db.migrate()
+        var secs = snooze_rule(db, args[3], args[4], "cli")
+        var who = getenv("USER", "local")
+        audit(
+            db,
+            who,
+            String("/watchdog/", args[3], "/snooze"),
+            0,
+            String("duration=", args[4]),
+            "local",
+        )
+        if secs:
+            print("snoozed", args[3], "for", args[4])
+        else:
+            print("unsnoozed", args[3])
+        return 0
     if (
-        cmd == "status"
+        cmd == "watchdog"
+        or cmd == "status"
         or cmd == "start"
         or cmd == "resume"
         or cmd == "rerun"

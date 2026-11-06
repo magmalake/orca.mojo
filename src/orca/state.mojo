@@ -437,6 +437,27 @@ def _migrations() -> List[List[String]]:
             mem int8 NOT NULL,
             PRIMARY KEY (minute, name))""",
         ],
+        # The watchdog (orca.watchdog): each rule's last reading and the
+        # snooze it may have, and the trips: when a rule paused which
+        # pipelines, and the numbers it paused them for.
+        [
+            """CREATE TABLE orca.watchdog_rules (
+            rule text PRIMARY KEY,
+            value float8,
+            threshold float8,
+            detail text,
+            checked timestamptz,
+            snoozed_until timestamptz,
+            snoozed_by text)""",
+            """CREATE TABLE orca.watchdog_trips (
+            id bigserial PRIMARY KEY,
+            rule text NOT NULL,
+            at timestamptz NOT NULL DEFAULT now(),
+            value float8 NOT NULL,
+            threshold float8 NOT NULL,
+            detail text NOT NULL,
+            pipelines text NOT NULL)""",
+        ],
     ]
 
 
