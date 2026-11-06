@@ -307,6 +307,13 @@ svg.fl { display: block; width: 100%; min-width: 34rem; height: auto; font-famil
 .fl__line { fill: none; stroke-width: 1.75; stroke-linejoin: round; }
 .fl__line.fl--0 { stroke: var(--lake); } .fl__line.fl--1 { stroke: var(--ember); }
 .fl__line.fl--faint { stroke: var(--faint); stroke-dasharray: 4 3; }
+.fl__line.fl--2 { stroke: #7a5af8; } .fl__line.fl--live { stroke: var(--live); }
+.fl__line.fl--bad { stroke: var(--bad); }
+/* A warning on the home and system pages (orca.system). */
+.alert { margin: 0 0 1.25rem; padding: 0.6rem 0.9rem; border-radius: var(--radius); font-size: 0.9rem;
+  color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); }
+.alert a { color: inherit; font-weight: 600; }
 .fl__area { stroke: none; opacity: 0.22; }
 .fl__keys { margin: 0; padding: 0.4rem 1.1rem 0.8rem; font-size: 0.8125rem; color: var(--muted); }
 .fl__key { display: inline-block; width: 0.9em; height: 0.55em; margin-right: 0.3em; border-radius: 2px;

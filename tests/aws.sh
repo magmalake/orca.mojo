@@ -38,6 +38,12 @@ echo "$got" | grep -q "DbPassword=[0-9a-f]\{36\} BudgetEmail=ops@example.com Con
 grep -q "PublicBucket" ../up.out || fail "up didn't print the outputs"
 if grep -q "DbPassword" ../up.out; then fail "up printed the password"; fi
 cmp -s build/orca-aws/orca.yaml "$root/deploy/aws/orca.yaml" || fail "the template written isn't deploy/aws/orca.yaml"
+# The control instance's sampler reads the cgroup files and Docker's configs
+# (read-only), not the Docker socket, and its day files expire in 14 days.
+grep -qF -- '-v /sys/fs/cgroup:/host/cgroup:ro' build/orca-aws/orca.yaml || fail "the sampler doesn't mount the cgroup files read-only"
+grep -qF -- '--cgroup /host/cgroup --names /host/containers' build/orca-aws/orca.yaml || fail "the sampler isn't told where they are"
+grep -q 'docker.sock' build/orca-aws/orca.yaml && fail "a container gets the Docker socket"
+grep -qF 'Prefix: logs/control/, ExpirationInDays: 14' build/orca-aws/orca.yaml || fail "the control samples don't expire in 14 days"
 # An update keeps the password: no new one.
 "$orca" aws up > /dev/null 2>&1 || fail "up again"
 if calls | grep -q DbPassword; then fail "an update made a new password"; fi

@@ -774,9 +774,11 @@ def _chart(
     hours: Int,
     stacked: Bool = False,
     bars: Bool = False,
+    fixed_top: Float64 = 0.0,
 ) -> String:
     """A card holding a chart of `series` over the hours: bars side by side
-    (or stacked), or lines, with the series' names as a key under it."""
+    (or stacked), or lines, with the series' names as a key under it. The
+    scale's top is the highest value, rounded up, or `fixed_top`."""
     var n = max(len(labels), 1)
     var top = 0.0
     for i in range(len(labels)):
@@ -788,7 +790,7 @@ def _chart(
                 else:
                     top = max(top, s.values[i])
         top = max(top, stack)
-    top = _nice(top)
+    top = fixed_top if fixed_top > 0 else _nice(top)
     var slot = Float64(_W - _LEFT - 6) / Float64(n)
     var base = _H
     var out = String(

@@ -2,12 +2,16 @@
 read from the machine the test runs on, Linux or macOS."""
 
 from std.ffi import c_int, external_call
+from std.os import getenv, makedirs
 from std.testing import TestSuite, assert_equal, assert_true
 
 from json import loads
 
 from orca.sample import (
     Sampler,
+    container_ids,
+    container_mem,
+    container_name,
     cpu_share,
     default_dirs,
     fixed1,
@@ -119,6 +123,42 @@ def test_a_line_of_this_machine() raises:
     )
     assert_true(Int(v.at("/net/in").int_value()) >= 0, line)
     assert_true(line.byte_length() < 600, line)
+
+
+def test_container_mem() raises:
+    # docker stats: usage less the page cache that can be dropped.
+    assert_equal(
+        container_mem("1000000\n", "anon 1\ninactive_file 400000\nfile 9\n"),
+        600000,
+    )
+    assert_equal(container_mem("1000000\n", ""), 1000000)
+    assert_equal(container_mem("5\n", "inactive_file 50\n"), 0)
+    assert_equal(container_mem("", ""), -1)
+
+
+def test_container_name() raises:
+    assert_equal(
+        container_name('{"ID": "x", "Name": "/postgres", "Z": 1}'), "postgres"
+    )
+    assert_equal(container_name("not json"), "")
+    assert_equal(container_name("{}"), "")
+
+
+def test_container_ids() raises:
+    var root = String(
+        getenv("TMPDIR", "/tmp"),
+        "/orca-cg-",
+        Int(external_call["getpid", c_int]()),
+    )
+    var id = String(
+        "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0a1b2"
+    )
+    makedirs(String(root, "/system.slice/docker-", id, ".scope"), exist_ok=True)
+    makedirs(String(root, "/system.slice/sshd.service"), exist_ok=True)
+    makedirs(String(root, "/docker/", id[byte=:63], "x"), exist_ok=True)
+    var got = container_ids(root)
+    assert_equal(len(got), 2)
+    assert_equal(got[0][0], id)
 
 
 def main() raises:

@@ -110,9 +110,10 @@ from orca.day import Day
 from orca.key import parse_keys
 from orca.ec2 import Ec2Runner, Ec2Spec
 from orca.fleet import ingest
+from orca.system import Archive, keep as keep_system, trim as trim_system
 from orca.kube import KubeRunner, RunSpec, cpu_millis
 from orca.live import dead_sql, live_runs, live_sql, stale_limit, start_grace
-from orca.logs import is_remote, publish, run_dir, stage_of
+from orca.logs import is_remote, publish, read_location, run_dir, stage_of
 from orca.month import Month
 from orca.name import Name, parse_names, sort_texts
 from orca.proc import Capture, absolute, binary_seconds, capture, reap, spawn
@@ -832,6 +833,8 @@ struct Scheduler(Movable):
     files (`ORCA_FLEET_SECONDS`, 30; 0 turns it off)."""
     var _fleet_next: Int
     """When the next pass starts, on the monotonic clock."""
+    var _archive: Archive
+    """The control instance's day files between passes (`orca.system`)."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -873,6 +876,7 @@ struct Scheduler(Movable):
         self._expiring = List[String]()
         self.fleet_seconds = Float64(getenv("ORCA_FLEET_SECONDS", "30"))
         self._fleet_next = 0
+        self._archive = Archive()
 
     def register(
         mut self,
@@ -1499,6 +1503,17 @@ struct Scheduler(Movable):
             return
         self._fleet_next = t + Int(self.fleet_seconds * 1e9)
         _ = ingest(self.db)
+        var control = getenv("ORCA_CONTROL_SAMPLES")
+        if control:
+            # The same file the fleet read, for the system page's history.
+            var text = String()
+            try:
+                text = String(from_utf8_lossy=Span(read_location(control)))
+            except:
+                pass  # not written yet
+            if text:
+                _ = keep_system(self.db, text, self._archive)
+            trim_system(self.db)
 
     def _expire(mut self) raises:
         """Every `expire_seconds`, expires each dataset orca commits to by
