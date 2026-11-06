@@ -2,7 +2,6 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 - **Fills: a pipeline fills its whole range by itself, within limits**
   (#155, `orca.fill`, migration 30). In `orca.toml` (no register flags):
   `fills = "all"` (the default `"since_registration"` is what orca did
@@ -35,9 +34,8 @@
   - `examples/daily.mojo` takes `ORCA_DAILY_SLEEP`. `tests/fill.sh`
     (`pixi run test-fill`) covers it all on the local runner and against
     the stand-in EC2.
-=======
+
 ## 0.9.0 - 2026-11-06
->>>>>>> origin/main
 
 - **`orca.toml`: one checked-in file for how each pipeline runs** (#145,
   `orca.config`, `orca.toml`, migration 29). `[defaults]` and
