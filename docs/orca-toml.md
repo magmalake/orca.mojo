@@ -26,6 +26,8 @@ fill_window = "22..6"        # UTC hours fill runs start in
 [pipelines.mojo_repos]
 placement = "control"
 secrets = { GITHUB_TOKEN = "orca/github-token" }
+cpus = "1..2"                # a request: started once 1 CPU and
+memory_gb = "0.5..2"         # 0.5 GB fit on the host, given up to 2 and 2
 
 [stack]
 hostname = "orca.mlake.dev"
@@ -53,6 +55,8 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 | `workers` | integer `N` (at least 1), or string `"MIN..MAX"` | the code's `workers`, else 2; 0 for a pipeline without tasks | `--workers` | With `MIN..MAX`, the run scales between the two. |
 | `worker_procs` | integer from 1 to 256, or `"auto"` | 1 | `--worker-procs` | `auto` means one dista process per vCPU. |
 | `max_runs` | integer from 1 to 10000 | the code's `Pipeline[..., max_runs=]`, else 1 | `--max-runs` (new) | Overrides the code's value. |
+| `cpus` | integer `N` from 1 to 1024, or string `"MIN..MAX"` | none: no request | `--cpus` | Whole CPUs the run asks for. See [Requests and grants](#requests-and-grants). |
+| `memory_gb` | number `N` (decimals allowed), or string `"MIN..MAX"`, over 0 and up to 65536 | none: no request | `--memory-gb` | GB of memory the run asks for. |
 | `secrets` | table of `NAME = "orca/<id>"` | none | `--secret NAME=ID` | Secrets Manager IDs only, never values. A `--secret` flag replaces the whole set. |
 | `env` | table of `NAME = "value"` (numbers and booleans become text) | none | none (it replaces `ORCA_RUN_ENV` for pipeline settings) | See [env](#env-orca_run_env-and-the-warm-pool) below. |
 | `fills` | string: `"all"` or `"since_registration"` | `since_registration` | none | `all`: the scheduler fills the pipeline's whole range by itself. See [Fills](#fills). |
@@ -69,17 +73,18 @@ the file's only: no flag sets them.
 - Unknown keys, such as `workrs`.
 - A value of the wrong type.
 - A `workers` range like `4..2`.
+- A `cpus` or `memory_gb` range like `"4..2"`, `cpus = 0`, `cpus = 1.5` or `memory_gb = 0`.
 - A secret ID outside `orca/`.
 - A `fill_window` like `"6..6"` or `"1..30"`, a negative `fill_budget_per_day`, or `fill_max_runs = 0`.
 - `fills = "all"` for a keyed pipeline, a sensor, or one with no first partition. `orca register` refuses it with the file and line, because it has to see the pipeline first; see [Fills](#fills).
 - An `env` name that isn't a valid variable name.
 - An `env` name that looks like a secret (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*DATABASE_URL*`). Put those in `secrets` instead.
-- An `env` variable that orca sets itself: `ORCA_DATABASE_URL`, `ORCA_IMAGE`, `ORCA_SECRETS`, `ORCA_WORKERS`, `DISTA_ROLE`, `DISTA_HEAD`, `DISTA_ADVERTISE`.
+- An `env` variable that orca sets itself: `ORCA_DATABASE_URL`, `ORCA_IMAGE`, `ORCA_SECRETS`, `ORCA_WORKERS`, `DISTA_ROLE`, `DISTA_HEAD`, `DISTA_ADVERTISE`, `ORCA_GRANT_CPUS`, `ORCA_GRANT_MEMORY_MB`.
 
 Each refusal names the file and line, and nothing is registered:
 
 ```text
-orca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, fills, fill_order, fill_max_runs, fill_budget_per_day, fill_window, secrets and env)
+orca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, cpus, memory_gb, fills, fill_order, fill_max_runs, fill_budget_per_day, fill_window, secrets and env)
 orca.toml:3: [pipelines.toy] workers: not a count or a range MIN..MAX: 4..2
 ```
 
@@ -156,6 +161,68 @@ A project's image sets `ORCA_CONFIG`, `ORCA_PIPELINES_DIR`, `ORCA_COMMIT` and `O
 - **`ORCA_RUN_ENV` keeps working as a fallback for the whole stack.** The scheduler's variables named in it are copied to every run, as before. If a pipeline's `env` sets one of those names, the pipeline's value wins and the scheduler's isn't copied.
 - **On EC2 the env is part of the warm pool's key** (#134). An instance from the pool is only handed to a run of the same pipeline started with the same env. Changing a value and registering again launches new instances, and the old ones shut down after `ORCA_EC2_POOL_SECONDS`. The env is also kept in the run's spec (`orca.runs.spec`), so workers started later in a live run get the env its start had.
 - **Settings for the whole stack stay in `/etc/orca.env`**: the database URL, warehouse, logs, runner, `ORCA_VCPU_BUDGET` and so on. Pipeline settings, such as `DISTA_WORKER_SLOTS` for one pipeline, belong in orca.toml.
+
+## Requests and grants
+
+`cpus` and `memory_gb` are a pipeline's **request**: the least it needs to
+start and the most it can use, `"MIN..MAX"` (a single number is both). Its
+runs are then sized to their share of the machine (#171, `src/orca/resources.mojo`):
+
+```toml
+[pipelines.gharchive]
+cpus = "1..16"
+memory_gb = "2..24"
+env = { DISTA_WORKER_SLOTS = "auto", GHARCHIVE_PARALLEL = "auto" }
+```
+
+- **Admission.** On the local runner (`ORCA_RUNNER=local`, as on the
+  Hetzner server) and for control-placed runs, the scheduler starts a run
+  only if its minimum fits what this host can grant less what the runs
+  going there were granted. What it can grant is the host's CPUs and memory
+  (the cgroup's limits if set, else `/proc/meminfo` and its cores; `sysctl`
+  on macOS; `ORCA_HOST_CPUS` and `ORCA_HOST_MEMORY_MB` override them) less
+  a reserve for the scheduler, Postgres and the UI: `ORCA_RESERVE_CPUS`
+  (1) and `ORCA_RESERVE_MEMORY_MB` (1536). A run that doesn't fit stays
+  queued, and its page, its pipeline's page (**Waiting**) and their JSON
+  (`held`, `waiting`) say why: `waiting: needs 2 GB, 1.3 GB free of grants`,
+  or `waiting: needs 30 GB, more than the 6.5 GB this host grants at most`.
+  `max_runs` and `fill_max_runs` still cap the runs on top.
+- **Grants.** A run that starts gets up to its maximum of what's left, in
+  `ORCA_GRANT_CPUS` and `ORCA_GRANT_MEMORY_MB`. The grant is fixed for that
+  start: nothing shrinks or is killed mid-run, and a retry is granted
+  again. It's recorded on the run (`orca.runs.grant_cpus`,
+  `grant_memory_mb`, with the request it had: migration 36) and shown on
+  its page beside the peak it used. The first of two runs that start at
+  once takes up to its maximum, the second what's left.
+- **Remote workers** (`orca worker`) admit the runs they take the same way,
+  against their own host, with the same variables; a worker's reserve
+  defaults to 0 CPUs and 512 MB. A run that doesn't fit is left queued for
+  another worker, held saying which one had no room.
+- **No request, no change.** A pipeline without `cpus` or `memory_gb` is
+  started as before: no check, no grant. Its runs aren't counted against
+  the others' either, so on a shared host give every pipeline a request,
+  or keep the reserve large enough for the ones without.
+- **Not on EC2 or Kubernetes**, whose runs get machines of their own: the
+  request is kept but not used there yet.
+- **The control placement's memory cap** (`ORCA_CONTROL_MEMORY_MB`, 1024)
+  still kills a control-placed run over it, whatever its grant: set it at
+  least as high as the largest `memory_gb` maximum you place there.
+
+### "auto" from the grant
+
+An `env` value `"auto"` is passed to the run as it is, for the pipeline to
+size itself from its grant: `orca.auto_count("GHARCHIVE_PARALLEL", 16,
+memory_mb_each=1500)` reads a number as given, 16 when unset, and for
+`auto` the granted CPUs, at most the granted memory over 1500 MB (the
+pipeline keeps its per-unit estimate in its own code); without a grant,
+the host's cores.
+
+`DISTA_WORKER_SLOTS`, which dista reads as a number, is the exception: for
+`"auto"` orca gives the run the granted CPUs over its local dista workers
+(`ORCA_WORKERS`), at least 1, or `0` (dista's one per core) when the run
+has no CPU grant, as on EC2 and Kubernetes. Sizing slots by memory too, from
+each task's estimate, is dista's to do from `ORCA_GRANT_*`
+(magmalake/dista.mojo#123).
 
 ## Secrets without Secrets Manager
 
@@ -299,7 +366,7 @@ The pipeline page has a **Fill** line: partitions done of the range's total, fil
  "cost_is_estimate": true, "idle": null}
 ```
 
-`orca config show` lists the `fill*` keys, with their defaults, for a pipeline that fills.
+`orca config show` lists the `fill*` keys, with their defaults, for a pipeline that fills, and `cpus` and `memory_gb` for one with a request.
 
 ### Keyed pipelines and sensors don't fill
 

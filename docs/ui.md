@@ -48,7 +48,13 @@ The header is four cards, side by side on a wide screen:
 - **Resources**: what its last 20 measured runs used, the median (p50)
   and the most of each run's peak memory, CPU time and peak cores: what
   to ask for in a request (#171). It's `usage` in the page's JSON. See
-  [What a run uses](#what-a-run-uses).
+  [What a run uses](#what-a-run-uses). A pipeline with a request
+  (`cpus`, `memory_gb` in [orca.toml](orca-toml.md#requests-and-grants))
+  has it here too, as **Requested**, and `request` in the JSON.
+
+While its oldest queued run waits for room on its host, the Progress card
+says why under **Waiting** (`waiting: needs 2 GB, 1.3 GB free of grants`),
+and the JSON has it as `waiting` (null otherwise).
 
 Each fact's name has a "?" that explains it, with a link to the docs.
 Steps shows a Graph and a Table tab (`?steps=graph|table`). Hovering any
@@ -68,7 +74,7 @@ name with a "?" that explains it:
 | Status | `#status` | duration, created, started, ended, tries, why it waits, is held or failed; Resume, Rerun from and Cancel |
 | Partitions & trigger | `#trigger` | its partitions, and what started it: the rebuild, or the snapshots a sensor saw |
 | Code | `#code` | the pipeline, its steps and dista tasks on one line, each a name linked to its line (hover for the source), the commit and image, the driver log, and the code hash |
-| Resources | `#resources` | the run's own Peak memory and CPU used (see [What a run uses](#what-a-run-uses)), and on Kubernetes what its pods asked for |
+| Resources | `#resources` | what it requested and was granted, the run's own Peak memory and CPU used (see [What a run uses](#what-a-run-uses)), and on Kubernetes what its pods asked for |
 | Settings | `#settings` | where it was placed and ran (a [remote worker](workers.md) by name), max runs, the EC2 settings, its environment, and its secrets by name only |
 
 **Steps** (`#steps`) is one card with three tabs, remembered in the
@@ -130,6 +136,15 @@ step's latest attempt's; an attempt's page has its own. Runs tables have
 a Peak column. In the JSON, a run, each step and each attempt have
 `usage`, with `null` for what wasn't measured. `orca status <pipeline>`
 prints each run's, and `<binary> status <run>` each step's.
+
+A run of a pipeline with a request also has **Requested** (what its
+latest start asked for) and **Granted** (what it was given of its host, in
+`ORCA_GRANT_CPUS` and `ORCA_GRANT_MEMORY_MB`), beside its peak: a peak
+well under the grant means the request can come down, one at the grant
+that it may need more. The run's JSON has `request` (`cpus`, `memory_gb`)
+and `grant` (`cpus`, `memory_mb`), both null for a pipeline without one.
+A queued run held for room shows why under **Held**, and `held` in the
+JSON.
 
 Not measured: runs on EC2 or Kubernetes (their machines' samples are under
 Machines), runs no scheduler or worker started (`<binary> run`), and on

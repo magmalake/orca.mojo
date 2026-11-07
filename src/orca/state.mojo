@@ -567,6 +567,17 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.attempts ADD COLUMN cpu_seconds double precision",
             "ALTER TABLE orca.attempts ADD COLUMN peak_cpus double precision",
         ],
+        # Requests and grants (orca.resources): the CPUs and memory a
+        # pipeline asks for, `N` or `MIN..MAX` (null for none), and on each
+        # run the request its latest start had and what it was granted.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN cpus text",
+            "ALTER TABLE orca.pipelines ADD COLUMN memory_gb text",
+            "ALTER TABLE orca.runs ADD COLUMN request_cpus text",
+            "ALTER TABLE orca.runs ADD COLUMN request_memory_gb text",
+            "ALTER TABLE orca.runs ADD COLUMN grant_cpus int",
+            "ALTER TABLE orca.runs ADD COLUMN grant_memory_mb bigint",
+        ],
     ]
 
 
