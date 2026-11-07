@@ -7,7 +7,8 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | Path | |
 |---|---|
 | `/` | pipelines, with their schedules, next runs and last runs |
-| `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`orca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing |
+| `/pipelines/<name>` | `?tab=overview` (default), `runs` or `operate`, each its own page; a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`orca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing; `?steps=graph` or `table`: the Steps tab shown without scripts |
+| `/pipelines/<name>/progress` | the page's Progress card (runs going, fill, next run), as an HTML fragment the page refreshes every 5 s |
 | `/api/pipelines/<name>` | the same as JSON, whatever is asked for |
 | `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=`) and as the Start runs form's date picker |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
@@ -1368,7 +1369,7 @@ def _json_runs(mut out: String, runs: List[RunRow]):
 
 comptime _POLL = """
 const ago = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-const full = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium", timeZoneName: "short" });
+const full = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "long" });
 function relative(t) {
   const s = (t - Date.now()) / 1000, a = Math.abs(s);
   if (a < 45) return ago.format(Math.round(s), "second");
@@ -1445,6 +1446,125 @@ the page alone when nothing changed or text in it is selected, and keeps
 open `<details>` and scrolled boxes as they were. Each
 `<time class="rel">` reads as how long ago it was, in the viewer's locale,
 with the full local time in its tooltip; without scripts it stays UTC."""
+
+
+comptime _PEEK = """
+(() => {
+  const GH = /^https:[/][/]github[.]com[/]([^/]+)[/]([^/]+)[/]blob[/]([0-9a-f]{7,40})[/]([^#?]+)#L([0-9]+)$/;
+  const MAX = 24;
+  const files = new Map();
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const lead = (l) => l.length - l.trimStart().length;
+  const Q3 = '"'.repeat(3);
+  let box = null, cur = null, showT = 0, hideT = 0;
+  const load = (url) => {
+    if (!files.has(url)) files.set(url, fetch(url).then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); }));
+    return files.get(url);
+  };
+  // From the def (and its decorators) through its docstring and body, up
+  // to MAX lines; it ends at the next line no deeper than the def's.
+  function snippet(src, at) {
+    const lines = src.split(String.fromCharCode(10));
+    let from = at - 1;
+    while (from > 0 && lines[from - 1].trimStart().startsWith("@")) from--;
+    const indent = lead(lines[at - 1] || "");
+    const out = [];
+    let doc = false, i = from;
+    for (; i < lines.length && out.length < MAX; i++) {
+      const l = lines[i];
+      if (doc) { out.push([i + 1, l]); if (l.includes(Q3)) doc = false; continue; }
+      if (i > at - 1 && l.trim() && lead(l) <= indent && !")]}".includes(l.trimStart()[0])) {
+        if (!l.trimStart().startsWith(Q3)) break;
+        doc = l.split(Q3).length < 3;
+      }
+      out.push([i + 1, l]);
+    }
+    while (out.length && !out[out.length - 1][1].trim()) out.pop();
+    return { out, more: i < lines.length && out.length >= MAX };
+  }
+  function place(a) {
+    const r = a.getBoundingClientRect(), h = box.offsetHeight, w = box.offsetWidth;
+    const below = r.bottom + 6 + h <= innerHeight || r.top < h + 6;
+    box.style.top = (scrollY + (below ? r.bottom + 6 : r.top - h - 6)) + "px";
+    box.style.left = (scrollX + Math.max(8, Math.min(r.left, innerWidth - w - 8))) + "px";
+  }
+  async function show(a) {
+    const m = GH.exec(a.href);
+    if (!m) return;
+    cur = a;
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "peek";
+      box.id = "peek";
+      box.setAttribute("role", "tooltip");
+      box.addEventListener("mouseenter", () => clearTimeout(hideT));
+      box.addEventListener("mouseleave", () => hide(150));
+      document.body.append(box);
+    }
+    const [, owner, repo, sha, path, line] = m;
+    const at = Number(line);
+    box.innerHTML = '<div class="peek__head">' + esc(path + ":" + at) + ' <span>at ' + esc(sha.slice(0, 7)) + "</span></div>" + '<p class="peek__msg">Loading…</p>';
+    box.hidden = false;
+    a.setAttribute("aria-describedby", "peek");
+    place(a);
+    let body;
+    try {
+      const src = await load("https://raw.githubusercontent.com/" + owner + "/" + repo + "/" + sha + "/" + path);
+      const s = snippet(src, at);
+      body = "<pre>" + s.out.map(([n, l]) => '<span class="peek__line' + (n === at ? " peek__line--at" : "") + '"><span class="peek__ln">' + n + "</span>" + esc(l) + "</span>").join("") + (s.more ? '<span class="peek__line"><span class="peek__ln"></span>…</span>' : "") + "</pre>";
+    } catch (e) {
+      body = '<p class="peek__msg">Can&#39;t load the source here (a private repository, or offline). The link opens it.</p>';
+    }
+    if (cur !== a) return;
+    box.lastElementChild.outerHTML = body;
+    place(a);
+  }
+  function hide(after) {
+    clearTimeout(showT);
+    clearTimeout(hideT);
+    hideT = setTimeout(() => {
+      if (box) box.hidden = true;
+      if (cur) cur.removeAttribute("aria-describedby");
+      cur = null;
+    }, after);
+  }
+  const link = (t) => { const a = t.closest && t.closest("a.src"); return a && GH.test(a.href) ? a : null; };
+  document.addEventListener("mouseover", (e) => {
+    const a = link(e.target);
+    if (!a) return;
+    if (a.title) { a.dataset.title = a.title; a.removeAttribute("title"); }
+    clearTimeout(hideT);
+    if (a === cur) return;
+    clearTimeout(showT);
+    showT = setTimeout(() => show(a), 250);
+  });
+  document.addEventListener("mouseout", (e) => {
+    const a = link(e.target);
+    if (a && !a.contains(e.relatedTarget) && !(box && box.contains(e.relatedTarget))) hide(200);
+  });
+  document.addEventListener("focusin", (e) => {
+    const a = link(e.target);
+    if (a) { clearTimeout(hideT); show(a); }
+    const h = e.target.closest && e.target.closest(".help");
+    if (h) h.classList.remove("help--shut");
+  });
+  document.addEventListener("focusout", (e) => { if (link(e.target)) hide(0); });
+  document.addEventListener("mouseover", (e) => {
+    const h = e.target.closest && e.target.closest(".help");
+    if (h && !h.contains(e.relatedTarget)) h.classList.remove("help--shut");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (cur) hide(0);
+    for (const h of document.querySelectorAll(".help:hover, .help:focus-within")) h.classList.add("help--shut");
+  });
+})();
+"""
+"""Code on hover: a link to a line on GitHub (`a.src`) shows, after a
+moment or on keyboard focus, that function's source, from its def through
+its docstring, fetched from raw.githubusercontent.com once per file; the
+link itself is unchanged, so without scripts (or for a private repository)
+it still opens the file. Escape closes it and any help shown."""
 
 
 comptime _USER_SLOT = "<!--orca-user-->"
@@ -1545,7 +1665,13 @@ def _page(title: String, active: StaticString, body: Html) -> String:
     _extra_links(h)
     h.raw("</nav>", _USER_SLOT, "</header><main>")
     h.raw(body.out)
-    h.raw("</main><script>", _POLL, "</script></body></html>")
+    h.raw(
+        "</main><script>",
+        _POLL,
+        "</script><script>",
+        _PEEK,
+        "</script></body></html>",
+    )
     return h^.finish()
 
 
@@ -2979,7 +3105,6 @@ def _fill_of(mut db: State, name: String) raises -> Optional[FillStatus]:
 def _fill_html(mut h: Html, s: FillStatus):
     """The pipeline page's fill line: done of total, what's going, the
     rate and ETA, today's spend against the budget, and why it's idle."""
-    h.raw("</dd><dt>Fill</dt><dd>")
     var pct = (s.done * 100 // s.total) if s.total > 0 else 100
     h.text(s.done, " / ", s.total, " done (", pct, "%)")
     if s.running > 0:
@@ -3013,6 +3138,495 @@ def _fill_html(mut h: Html, s: FillStatus):
         h.raw("</span>")
 
 
+comptime _FILLS_DOCS = (
+    "https://github.com/magmalake/orca.mojo/blob/main/docs/orca-toml.md#fills"
+)
+"""Fills are documented in orca.toml's reference, not on the docs page."""
+
+
+def _help(
+    mut h: Html,
+    id: StaticString,
+    key: StaticString,
+    text: StaticString,
+    docs: StaticString = "",
+):
+    """A "?" after a fact's name that shows `text`, then a link to the docs
+    (`docs`: a section of the docs page, or a URL) if there is one. CSS
+    shows it on hover and keyboard focus, so it needs no script; to a
+    screen reader the text is the button's description. `id` is unique in
+    the page."""
+    h.raw(
+        '<span class="help"><button type="button" class="help__btn"',
+        ' aria-label="About ',
+        key,
+        '" aria-describedby="help-',
+        id,
+        '">?</button><span class="help__tip" role="tooltip" id="help-',
+        id,
+        '">',
+        text,
+    )
+    if docs:
+        var href = String(docs) if docs.startswith("http") else String(
+            getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"),
+            "#",
+            docs,
+        )
+        h.raw(
+            ' <a href="',
+            escape(href),
+            '" target="_blank" rel="noopener">Docs ↗</a>',
+        )
+    h.raw("</span></span>")
+
+
+def _fact(
+    mut h: Html,
+    key: StaticString,
+    id: StaticString,
+    help: StaticString,
+    docs: StaticString = "",
+):
+    """A fact's `<dt>`, its name with its help, then its `<dd>` opened."""
+    h.raw("<dt>", key)
+    _help(h, id, key, help, docs)
+    h.raw("</dt><dd>")
+
+
+def _progress_html(
+    mut h: Html, p: PipelineRow, fill: Optional[FillStatus], fires: List[Fire]
+):
+    """The Progress card's facts: the runs going, the fill, a failing
+    sensor, the next fire. Its own fragment too, which the page refreshes
+    (`/pipelines/<name>/progress`)."""
+    h.raw('<dl class="facts">')
+    _fact(
+        h,
+        "Runs at once",
+        "runs",
+        (
+            "Runs of this pipeline going now, out of the most the scheduler"
+            " starts at once (max_runs); the others wait in the queue. Fill"
+            " runs come on top, up to fill_max_runs."
+        ),
+        "scheduler",
+    )
+    h.text(p.running, " running of ", p.max_runs, ", ", p.queued, " queued")
+    h.raw("</dd>")
+    if fill:
+        _fact(
+            h,
+            "Fill",
+            "fill",
+            (
+                'With fills = "all" in orca.toml the scheduler works through'
+                " the whole range by itself, one partition per fill run,"
+                " within a daily budget and a window. This is how far it got,"
+                " how fast, and what it spent today."
+            ),
+            _FILLS_DOCS,
+        )
+        _fill_html(h, fill.value())
+        h.raw("</dd>")
+    if p.sense_error:
+        _fact(
+            h,
+            "Sensing",
+            "sensing",
+            (
+                "The pipeline's sensor watches its input tables for new"
+                " snapshots. It has been failing with this error since the"
+                " time shown."
+            ),
+            "sensors",
+        )
+        h.raw('<span class="error">Failing since ')
+        h.text(p.sense_error_at, ": ", p.sense_error)
+        h.raw("</span></dd>")
+    if len(fires) > 0:
+        _fact(
+            h,
+            "Next run",
+            "next",
+            (
+                "When the schedule fires next, in UTC, and the partition that"
+                " run fills. Next runs, further down, lists the next five."
+            ),
+            "partitions",
+        )
+        h.raw("<code>")
+        h.text(fires[0].at)
+        h.raw("</code>")
+        h.text(", fills ", fires[0].partition)
+        h.raw("</dd>")
+    if p.kind == "daily" or p.kind == "monthly":
+        _fact(
+            h,
+            "Coverage",
+            "coverage",
+            (
+                "Which days or months a run has done, failed or not reached"
+                " yet, as a calendar on the Operate tab."
+            ),
+            "partitions",
+        )
+        h.raw('<a href="?tab=operate#coverage">The calendar</a></dd>')
+    h.raw("</dl>")
+
+
+def pipeline_progress(mut db: State, name: String) raises -> Page:
+    """The Progress card of a pipeline's page, as a fragment."""
+    var ps = _pipelines(db, name)
+    if len(ps) == 0:
+        return not_found(String("no pipeline ", name))
+    var fires = List[Fire]()
+    try:
+        fires = _fires(ps[0], now(), 1)
+    except:
+        pass
+    var h = Html()
+    _progress_html(h, ps[0], _fill_of(db, name), fires)
+    return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
+
+
+def _config_html(mut h: Html, p: PipelineRow):
+    """The Config card's facts: how the pipeline is set up."""
+    h.raw('<dl class="facts">')
+    _fact(
+        h,
+        "Partitions",
+        "partitions",
+        (
+            "How the work is split: each run does some partitions (months,"
+            " days, hours or named keys), from the first one on. Backfills"
+            " and the coverage calendar count in partitions."
+        ),
+        "partitions",
+    )
+    h.text(p.kind, " from ", p.start if p.start else String("the start"))
+    h.raw("</dd>")
+    _fact(
+        h,
+        "Schedule",
+        "schedule",
+        (
+            "The cron line the scheduler fires on, in its time zone, and the"
+            " partition each fire runs. None means runs start only from a"
+            " sensor, a backfill or a person."
+        ),
+        "scheduler",
+    )
+    if p.cron:
+        h.raw("<code>")
+        h.text(p.cron)
+        h.raw("</code> ")
+        h.text(p.tz, ", fills the ", p.fills, " partition")
+    else:
+        h.raw('<span class="muted">none</span>')
+    h.raw("</dd>")
+    _fact(
+        h,
+        "Run retries",
+        "retries",
+        (
+            "How many more times the scheduler starts a run that failed"
+            " before leaving it failed for a person. A step's own retries,"
+            " inside a run, come first."
+        ),
+        "failures",
+    )
+    h.text(p.run_retries)
+    h.raw("</dd>")
+    _fact(
+        h,
+        "Placement",
+        "placement",
+        (
+            "Where its runs go: control is the scheduler's own host, ec2 an"
+            " instance launched for the run, worker:&lt;pool&gt; a remote orca"
+            " worker of that pool, and default the scheduler's runner"
+            " (ORCA_RUNNER)."
+        ),
+        "runners",
+    )
+    if p.placement == "control":
+        h.text("control")
+        h.raw(' <span class="muted">(on the scheduler\'s host)</span>')
+    elif p.placement.startswith("worker:"):
+        h.text(p.placement)
+        h.raw(' <span class="muted">(its runs wait for a worker of pool ')
+        h.text(p.placement.removeprefix("worker:"))
+        h.raw(', <a href="/ops/workers">Workers</a>)</span>')
+    elif p.placement:
+        h.text(p.placement)
+    else:
+        h.raw('<span class="muted">default (the scheduler\'s runner)</span>')
+    h.raw("</dd>")
+    _fact(
+        h,
+        "Binary",
+        "binary",
+        (
+            "The program each run starts: the pipeline's Mojo code built into"
+            " one executable, as orca register recorded it."
+        ),
+        "build",
+    )
+    # A long path breaks after a slash, not inside a name.
+    h.raw("<code>")
+    var parts = p.binary.split("/")
+    for i in range(len(parts)):
+        if i:
+            h.raw("/<wbr>")
+        h.text(parts[i])
+    h.raw("</code></dd></dl>")
+
+
+def _code_named(mut h: Html, name: String, at: CodeRef):
+    """A link to a function's code labelled with its name; where it is
+    (`file.mojo:26`) is in its title, and in the source shown on hover."""
+    h.code_named(at.url, name, at.at, at.commit)
+
+
+def _code_card(
+    mut h: Html, p: PipelineRow, steps: List[StepDef], links: CodeLinks
+):
+    """The Code card: the pipeline's declaration, its steps' and its dista
+    tasks' functions, each a name linked to its line, then the code's
+    hash."""
+    var any_step = False
+    for s in steps:
+        if links.step(s.name):
+            any_step = True
+    if not links.pipeline and not any_step and len(links.tasks) == 0:
+        h.raw(
+            '<p class="muted">No links to the code: the registered binary',
+            " has no source, or <code>orca locate</code> didn't map it.</p>",
+        )
+    else:
+        h.raw('<dl class="facts">')
+        if links.pipeline:
+            _fact(
+                h,
+                "Pipeline",
+                "code-pipeline",
+                "Where the pipeline is declared: its Pipeline[...] line.",
+                "pipelines",
+            )
+            _code_named(h, p.name, links.pipeline)
+            h.raw("</dd>")
+        if any_step:
+            _fact(
+                h,
+                "Steps",
+                "code-steps",
+                (
+                    "Each step's function, in the order the steps run. The"
+                    " Steps table below has what each reads and writes."
+                ),
+                "steps",
+            )
+            var first = True
+            for s in steps:
+                var at = links.step(s.name)
+                if not at:
+                    continue
+                h.raw("" if first else " · ")
+                first = False
+                _code_named(h, s.name, at)
+            h.raw("</dd>")
+        if len(links.tasks) > 0:
+            _fact(
+                h,
+                "Tasks",
+                "code-tasks",
+                "The dista tasks its steps fan out to, each a function.",
+                "dista",
+            )
+            for i in range(len(links.tasks)):
+                h.raw(" · " if i else "")
+                _code_named(h, links.tasks[i][0], links.tasks[i][1])
+            h.raw("</dd>")
+        h.raw("</dl>")
+    h.raw('<p class="hash">Code hash <code>')
+    h.text(p.registry_hash)
+    h.raw("</code>")
+    _help(
+        h,
+        "code-hash",
+        "Code hash",
+        (
+            "A hash of what the binary says about itself: its steps,"
+            " partitions and schedule. It changes when they do, not on every"
+            " build."
+        ),
+        "versions",
+    )
+    h.raw("</p>")
+
+
+def _steps_html(
+    mut h: Html,
+    name: String,
+    steps: List[StepDef],
+    links: CodeLinks,
+    view: String,
+):
+    """The Steps card: Graph and Table tabs, links that work without
+    scripts (`?steps=`); with them, the choice is kept in `localStorage`.
+    Without one, a pipeline of one step shows its table and others their
+    graph."""
+    var graph = view == "graph" or (view != "table" and len(steps) > 1)
+    var base = String("/pipelines/", url_encode(name))
+    h.raw(
+        '<section class="card steps" id="steps"><div class="steps__head">',
+        "<h2>Steps",
+        _docs("steps"),
+        '</h2><div class="vtabs"><div role="tablist"',
+        ' aria-label="How to show the steps">',
+    )
+    for v in [("graph", "Graph"), ("table", "Table")]:
+        var on = (v[0] == "graph") == graph
+        h.raw('<a role="tab" class="vtabs__tab" data-view="', v[0], '" href="')
+        h.text(base, "?steps=", v[0], "#steps")
+        h.raw(
+            '" aria-selected="',
+            "true" if on else "false",
+            '" aria-controls="steps-',
+            v[0],
+            '">',
+            v[1],
+            "</a>",
+        )
+    var dag = List[DagStep]()
+    for d in steps:
+        dag.append(DagStep(d.name, d.kind, d.after, "", links.step(d.name).url))
+    h.raw(
+        '</div></div></div><div id="steps-graph" role="tabpanel"',
+        ' class="scroll steps__graph"',
+        "" if graph else " hidden",
+        ">",
+        dag_svg(dag),
+        '</div><div id="steps-table" role="tabpanel" class="scroll"',
+        " hidden" if graph else "",
+        "><table><thead><tr><th>Step</th><th>Kind</th>",
+        "<th>After</th><th>Reads</th><th>Writes</th></tr></thead><tbody>",
+    )
+    for s in steps:
+        h.raw("<tr>")
+        _step_cell(h, s.name, links)
+        h.cell(s.kind)
+        h.cell(s.after)
+        h.raw("<td>")
+        _dataset_links(h, s.reads)
+        h.raw("</td><td>")
+        _dataset_links(h, s.writes)
+        h.raw("</td></tr>")
+    h.raw("</tbody></table></div></section><script>", _STEPS_JS, "</script>")
+
+
+comptime _STEPS_JS = """
+(() => {
+  const sec = document.getElementById("steps");
+  if (!sec) return;
+  const get = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  const put = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+  const show = (v, save) => {
+    if (v !== "graph" && v !== "table") return;
+    for (const a of sec.querySelectorAll("[data-view]")) {
+      a.setAttribute("aria-selected", String(a.dataset.view === v));
+      document.getElementById("steps-" + a.dataset.view).hidden = a.dataset.view !== v;
+    }
+    if (save) put("orca.steps.view", v);
+  };
+  sec.querySelector("[role=tablist]").addEventListener("click", (e) => {
+    const a = e.target.closest("a[data-view]");
+    if (!a) return;
+    e.preventDefault();
+    show(a.dataset.view, true);
+  });
+  if (!new URLSearchParams(location.search).has("steps")) show(get("orca.steps.view"), false);
+})();
+"""
+"""The Steps tabs: switch without loading the page, and remember the
+choice for every pipeline's page; a `?steps=` link still says which."""
+
+
+def _tabs_html(mut h: Html, base: String, tab: String):
+    """The pipeline page's tabs, each a link to its own page."""
+    h.raw('<nav class="ptabs" aria-label="Pipeline sections">')
+    for t in [
+        ("overview", "Overview"),
+        ("runs", "Runs"),
+        ("operate", "Operate"),
+    ]:
+        h.raw('<a class="ptabs__tab" href="')
+        h.text(base if t[0] == "overview" else String(base, "?tab=", t[0]))
+        h.raw('"', ' aria-current="page"' if t[0] == tab else "", ">")
+        h.raw(t[1], "</a>")
+    h.raw("</nav>")
+
+
+comptime _TAB_JS = """
+(() => {
+  // An old link to a section that moved to Operate (#coverage, #start,
+  // #stop) lands there.
+  const moved = ["#coverage", "#start", "#stop"];
+  if (moved.includes(location.hash) && !document.querySelector(location.hash)) {
+    const q = new URLSearchParams(location.search);
+    q.set("tab", "operate");
+    location.replace(location.pathname + "?" + q + location.hash);
+  }
+})();
+"""
+"""Sends a link to a section of another tab to that tab."""
+
+
+def _cards_html(
+    mut h: Html,
+    p: PipelineRow,
+    tab: String,
+    fill: Optional[FillStatus],
+    fires: List[Fire],
+    steps: List[StepDef],
+    links: CodeLinks,
+):
+    """The pipeline page's cards: what's going on (refreshed while the page
+    is open), and on the Overview tab how it's set up and its code."""
+    var base = String("/pipelines/", url_encode(p.name))
+    h.raw(
+        '<div class="pcards',
+        "" if tab == "overview" else " pcards--one",
+        '"><section class="card card--facts" id="progress">',
+        '<h2>Progress</h2><div data-poll="',
+    )
+    h.text(base, "/progress")
+    h.raw('" data-poll-every="5">')
+    _progress_html(h, p, fill, fires)
+    h.raw("</div></section>")
+    if tab != "overview":
+        h.raw("</div>")
+        return
+    h.raw('<section class="card card--facts" id="config"><h2>Config</h2>')
+    _config_html(h, p)
+    h.raw('</section><section class="card card--facts" id="code"><h2>Code')
+    _help(
+        h,
+        "code",
+        "Code",
+        (
+            "The functions this pipeline is made of, at the commit it's"
+            " registered with. Hover a name to see its source; click it to"
+            " open the file on its host."
+        ),
+        "versions",
+    )
+    h.raw("</h2>")
+    _code_card(h, p, steps, links)
+    h.raw("</section></div>")
+
+
 def pipeline(
     mut db: State,
     name: String,
@@ -3021,11 +3635,22 @@ def pipeline(
     preview: Bool = False,
     cal: String = "",
     allow_append: Bool = False,
+    steps_view: String = "",
+    tab_in: String = "",
 ) raises -> Page:
-    """A pipeline's page; with `preview` and `keys_in`, what its Start runs
-    form would queue over them (`?preview=1&partitions=...&rerun=1`, and
+    """A pipeline's page, one of its tabs (`?tab=`): `overview`, `runs` or
+    `operate`. With `preview` and `keys_in`, what its Start runs form would
+    queue over them (`?preview=1&partitions=...&rerun=1`, and
     `&allow_append=1` for a rerun that appends again); `cal` is the month
-    (or year) its coverage calendar shows."""
+    (or year) its coverage calendar shows; both are on Operate, which they
+    open when no tab is asked for. `steps_view` (`?steps=`) is `graph` or
+    `table`, the view of its steps shown without scripts. The JSON is the
+    same on every tab."""
+    var tab = tab_in if (tab_in == "runs" or tab_in == "operate") else String(
+        "overview"
+    )
+    if not tab_in and (preview or cal or keys_in):
+        tab = "operate"
     var ps = _pipelines(db, name)
     if len(ps) == 0:
         return not_found(String("no pipeline ", name))
@@ -3134,148 +3759,105 @@ def pipeline(
         h.raw(" ")
         h.status("paused")
     _pause_button(h, p.name, p.paused)
-    h.raw('</h1><dl class="facts"><dt>Partitions</dt><dd>')
-    h.text(p.kind, " from ", p.start if p.start else String("the start"))
-    h.raw("</dd><dt>Schedule</dt><dd>")
-    if p.cron:
-        h.raw("<code>")
-        h.text(p.cron)
-        h.raw("</code> ")
-        h.text(p.tz, ", fills the ", p.fills, " partition")
-    else:
-        h.raw('<span class="muted">none</span>')
-    h.raw("</dd><dt>Runs at once</dt><dd>")
-    h.text(p.running, " running of ", p.max_runs, ", ", p.queued, " queued")
-    if fill:
-        _fill_html(h, fill.value())
-    h.raw("</dd><dt>Run retries</dt><dd>")
-    h.text(p.run_retries)
-    h.raw("</dd><dt>Placement</dt><dd>")
-    if p.placement == "control":
-        h.text("control")
-        h.raw(' <span class="muted">(on the scheduler\'s host)</span>')
-    elif p.placement.startswith("worker:"):
-        h.text(p.placement)
-        h.raw(' <span class="muted">(its runs wait for a worker of pool ')
-        h.text(p.placement.removeprefix("worker:"))
-        h.raw(', <a href="/ops/workers">Workers</a>)</span>')
-    elif p.placement:
-        h.text(p.placement)
-    else:
-        h.raw('<span class="muted">default (the scheduler\'s runner)</span>')
-    if p.sense_error:
-        h.raw('</dd><dt>Sensing</dt><dd class="error">Failing since ')
-        h.text(p.sense_error_at, ": ", p.sense_error)
-    h.raw("</dd><dt>Binary</dt><dd><code>")
-    h.text(p.binary)
-    h.raw("</code></dd><dt>Code</dt><dd><code>")
-    h.text(p.registry_hash)
-    h.raw("</code></dd>")
+    h.raw("</h1>")
     var latest = _versions(db, pipeline=name)
     var links = _code_links(
         db,
         name,
         latest[0].copy() if len(latest) > 0 else Optional[VersionRow](None),
     )
-    _code_html(h, name, links)
-    h.raw("</dl>")
-    var dag = List[DagStep]()
-    for d in steps:
-        dag.append(DagStep(d.name, d.kind, d.after, "", links.step(d.name).url))
-    h.raw(
-        '<div class="scroll">',
-        dag_svg(dag),
-        "</div><h2>Steps",
-        _docs("steps"),
-        "</h2>",
-    )
-    h.raw(
-        '<div class="scroll"><table><thead><tr><th>Step</th><th>Kind</th>',
-        "<th>After</th><th>Reads</th><th>Writes</th></tr></thead><tbody>",
-    )
-    for s in steps:
-        h.raw("<tr>")
-        _step_cell(h, s.name, links)
-        h.cell(s.kind)
-        h.cell(s.after)
-        h.raw("<td>")
-        _dataset_links(h, s.reads)
-        h.raw("</td><td>")
-        _dataset_links(h, s.writes)
-        h.raw("</td></tr>")
-    h.raw("</tbody></table></div>")
-    if keys:
-        _keys_html(h, p.name, keys.value())
-    if len(unrun) > 0:
-        h.raw(
-            "<h2>Snapshots not run",
-            _docs("sensors"),
-            '</h2><p class="muted">Seen by its sensor, but holding keys that',
-            " aren't its partitions. A backfill runs what they should have.",
-            '</p><div class="scroll"><table><thead><tr><th>Snapshot</th>',
-            "<th>Seen</th><th>Why</th></tr></thead><tbody>",
-        )
-        for u in unrun:
-            h.raw("<tr><td>")
-            h.link(_snapshot_href(u[0]), String(u[0]))
-            h.raw("</td>")
-            h.cell(u[1])
-            h.cell(u[2])
-            h.raw("</tr>")
-        h.raw("</tbody></table></div>")
-    if p.kind == "daily" or p.kind == "monthly":
-        _coverage_html(h, db, p, cal)
-    if p.binary:
-        var regs = registered(db, name)
-        _start_html(
-            h,
-            p,
-            keys_in,
-            rerun,
-            start,
-            regs[0].keys_per_run if len(regs) > 0 else 1,
-        )
-    _control_html(h, p)
-    if len(fires) > 0:
-        h.raw(
-            "<h2>Next runs",
-            _docs("partitions"),
-            '</h2><div class="scroll"><table><thead><tr>',
-            "<th>UTC</th><th>Wall clock</th><th>Fills</th></tr></thead><tbody>",
-        )
-        for f in fires:
-            h.raw("<tr>")
-            h.mono(f.at)
-            h.mono(f.local)
-            h.mono(f.partition)
-            h.raw("</tr>")
-        h.raw("</tbody></table></div>")
-    if len(versions) > 0:
-        h.raw(
-            "<h2>Versions",
-            _docs("build"),
-            '</h2><div class="scroll"><table><thead><tr>',
-            "<th>Commit</th><th>Image</th><th>Code</th><th>First seen</th>",
-            '<th>Last seen</th><th class="num">Runs</th></tr></thead><tbody>',
-        )
-        for v in versions:
-            h.raw("<tr><td>")
-            _source_html(h, v)
-            h.raw("</td>")
-            h.mono(v.image)
-            h.raw("<td><code>")
-            h.text(v.registry_hash)
-            h.raw("</code></td>")
-            h.mono(v.first_seen)
-            h.mono(v.last_seen)
-            h.num(v.runs)
-            h.raw("</tr>")
-        h.raw("</tbody></table></div>")
-    h.raw("<h2>Runs</h2>")
-    _runs_table(h, runs, False)
-    h.raw('<p class="more"><a href="/runs?pipeline=')
-    h.text(url_encode(p.name))
-    h.raw('">All its runs</a></p>')
+    var base = String("/pipelines/", url_encode(p.name))
+    _tabs_html(h, base, tab)
+    _cards_html(h, p, tab, fill, fires, steps, links)
+    if tab == "overview":
+        _steps_html(h, p.name, steps, links, steps_view)
+        if keys:
+            _keys_html(h, p.name, keys.value())
+        if len(unrun) > 0:
+            h.raw(
+                "<h2>Snapshots not run",
+                _docs("sensors"),
+                (
+                    '</h2><p class="muted">Seen by its sensor, but holding keys'
+                    " that"
+                ),
+                (
+                    " aren't its partitions. A backfill runs what they should"
+                    " have."
+                ),
+                '</p><div class="scroll"><table><thead><tr><th>Snapshot</th>',
+                "<th>Seen</th><th>Why</th></tr></thead><tbody>",
+            )
+            for u in unrun:
+                h.raw("<tr><td>")
+                h.link(_snapshot_href(u[0]), String(u[0]))
+                h.raw("</td>")
+                h.cell(u[1])
+                h.cell(u[2])
+                h.raw("</tr>")
+            h.raw("</tbody></table></div>")
+        if len(fires) > 0:
+            h.raw(
+                "<h2>Next runs",
+                _docs("partitions"),
+                '</h2><div class="scroll"><table><thead><tr>',
+                (
+                    "<th>UTC</th><th>Wall"
+                    " clock</th><th>Fills</th></tr></thead><tbody>"
+                ),
+            )
+            for f in fires:
+                h.raw("<tr>")
+                h.mono(f.at)
+                h.mono(f.local)
+                h.mono(f.partition)
+                h.raw("</tr>")
+            h.raw("</tbody></table></div>")
+    elif tab == "operate":
+        if p.kind == "daily" or p.kind == "monthly":
+            _coverage_html(h, db, p, cal)
+        if p.binary:
+            var regs = registered(db, name)
+            _start_html(
+                h,
+                p,
+                keys_in,
+                rerun,
+                start,
+                regs[0].keys_per_run if len(regs) > 0 else 1,
+            )
+        _control_html(h, p)
+    else:
+        h.raw("<h2>Runs</h2>")
+        _runs_table(h, runs, False)
+        h.raw('<p class="more"><a href="/runs?pipeline=')
+        h.text(url_encode(p.name))
+        h.raw('">All its runs</a></p>')
+        if len(versions) > 0:
+            h.raw(
+                "<h2>Versions",
+                _docs("build"),
+                '</h2><div class="scroll"><table><thead><tr>',
+                "<th>Commit</th><th>Image</th><th>Code</th><th>First seen</th>",
+                (
+                    "<th>Last seen</th><th"
+                    ' class="num">Runs</th></tr></thead><tbody>'
+                ),
+            )
+            for v in versions:
+                h.raw("<tr><td>")
+                _source_html(h, v)
+                h.raw("</td>")
+                h.mono(v.image)
+                h.raw("<td><code>")
+                h.text(v.registry_hash)
+                h.raw("</code></td>")
+                h.mono(v.first_seen)
+                h.mono(v.last_seen)
+                h.num(v.runs)
+                h.raw("</tr>")
+            h.raw("</tbody></table></div>")
+    h.raw("<script>", _TAB_JS, "</script>")
     return Page(200, j^, _page(p.name, "/", h))
 
 
@@ -5380,6 +5962,8 @@ def _act(
     if len(parts) == 4 and parts[1] == "pipelines":
         var name = url_decode(parts[2])
         var back = String("/pipelines/", url_encode(name))
+        # Where a refused start or cancel goes back to: its form's tab.
+        var operate = String(back, "?tab=operate")
         var keys = _form(body, "partitions")
         if (parts[3] == "runs" or parts[3] == "backfill") and String(
             keys.strip()
@@ -5391,7 +5975,7 @@ def _act(
         if parts[3] == "runs":
             var o = start_run(db, name, keys)
             var to = String("/runs/", o.run)
-            return _acted(o, back, String('{"run": ', o.run, "}"), to)
+            return _acted(o, operate, String('{"run": ', o.run, "}"), to)
         if parts[3] == "backfill":
             var rerun = _form(body, "rerun") == "1"
             var o = backfill_runs(
@@ -5407,7 +5991,7 @@ def _act(
             j.write("}")
             return _acted(
                 o,
-                back,
+                operate,
                 j^,
                 to,
                 String(back, "/backfill"),
@@ -5421,7 +6005,9 @@ def _act(
         if parts[3] == "cancel":
             var o = cancel_runs(db, name, keys if keys.strip() else "@all")
             var to = String("/runs?pipeline=", url_encode(name))
-            return _acted(o, back, String('{"cancelled": ', o.queued, "}"), to)
+            return _acted(
+                o, operate, String('{"cancelled": ', o.queued, "}"), to
+            )
         if parts[3] == "pause" or parts[3] == "unpause":
             var paused = parts[3] == "pause"
             var o = pause_pipeline(db, name, paused)
@@ -6274,7 +6860,11 @@ struct Ui(Copyable, Handler):
                     _query(url, "preview") == "1",
                     _query(url, "cal"),
                     _query(url, "allow_append") == "1",
+                    _query(url, "steps"),
+                    _query(url, "tab"),
                 )
+            if len(parts) == 2 and parts[1] == "progress" and name:
+                return pipeline_progress(db, name)
             if len(parts) == 2 and parts[1] == "calendar" and name:
                 return calendar_page(db, name, _query(url, "month"))
             if len(parts) == 3 and parts[1] == "keys" and name:

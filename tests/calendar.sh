@@ -103,14 +103,14 @@ echo "ok   calendar: a monthly year's states"
 
 # The page: the text field stays the form; the picker is hidden until
 # scripts show it; coverage is plain HTML.
-page=$(get /pipelines/daily)
+page=$(get '/pipelines/daily?tab=operate')
 echo "$page" | grep -qF '<input name="partitions" required' || fail "no text field"
 echo "$page" | grep -qF '<div class="cal" hidden data-calendar="/pipelines/daily/calendar"></div>' || fail "no hidden picker"
 echo "$page" | grep -qF '<li class="cal__day cal--done" data-key="2024-03-02" title="2024-03-02: done">' || fail "coverage lacks 2024-03-02 done"
 echo "$page" | grep -qF 'cal--failed" data-key="2024-03-06"' || fail "coverage lacks 2024-03-06 failed"
 echo "$page" | grep -qF 'href="/pipelines/daily?cal=2024-02#coverage"' || fail "coverage lacks its previous-month link"
 get '/pipelines/daily?cal=2024-02' | grep -qF 'data-key="2024-02-29"' || fail "coverage of February"
-get '/pipelines/toy' | grep -qF 'data-key="2024-02" title="2024-02: failed"' || fail "monthly coverage"
+get '/pipelines/toy?tab=operate' | grep -qF 'data-key="2024-02" title="2024-02: failed"' || fail "monthly coverage"
 get '/pipelines/daily?cal=bad' | grep -qF 'class="refused"' || fail "coverage of a bad month"
 echo "ok   calendar: text field fallback and coverage"
 

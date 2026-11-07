@@ -139,10 +139,23 @@ struct Html(Movable, Writable):
         """A link to source code on its host, set apart from links inside
         orca: an icon, `label` (where, as `file.mojo:26`) in monospace, and
         ↗; it opens in a new tab, and its title names the commit."""
+        self._src(String(href), String(label), String(commit), String())
+
+    def code_named(
+        mut self,
+        href: StringSlice,
+        name: StringSlice,
+        at: StringSlice,
+        commit: StringSlice,
+    ):
+        """`code`'s link labelled with the function's `name`; where it is
+        (`at`, as `file.mojo:26`) goes in the title, after the commit."""
+        self._src(String(href), String(name), String(commit), String(at))
+
+    def _src(mut self, href: String, label: String, commit: String, at: String):
         var short = String(commit[byte = : min(7, commit.byte_length())])
         var host = (
-            String(" on GitHub") if "://github.com/"
-            in String(href) else String()
+            String(" on GitHub") if "://github.com/" in href else String()
         )
         self.out.write(
             '<a class="src" href="',
@@ -152,6 +165,8 @@ struct Html(Movable, Writable):
         )
         if short:
             self.out.write(" at ", escape(short))
+        if at:
+            self.out.write(": ", escape(at))
         self.out.write(
             '">',
             _CODE_ICON,

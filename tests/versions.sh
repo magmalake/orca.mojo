@@ -109,7 +109,7 @@ json "/runs/$r1" | jq -e '.version.locations["toy::measure"] | startswith("examp
 # with the image the pipeline has), then c1.
 got=$(json /pipelines/toy | jq -c '[.versions[] | [.commit[0:1], .image, .runs]]')
 [ "$got" = '[["","",1],["2","orca:c1",1],["1","orca:c1",1]]' ] || fail "the pipeline's versions: $got"
-html /pipelines/toy | grep -q "<h2>Versions" || fail "the pipeline page's versions"
+html '/pipelines/toy?tab=runs' | grep -q "<h2>Versions" || fail "the pipeline page's versions"
 
 # A dataset's page links the steps that write and read it to their lines:
 # the writer at the commit of the run that committed the snapshot (c1), the
@@ -127,6 +127,12 @@ done
 q "INSERT INTO orca.commits (attempt, table_name, snapshot_id, dataset) SELECT a.id, 'a', 7, 'lake.a' FROM orca.attempts a JOIN orca.steps s ON s.id = a.step JOIN orca.runs r ON r.id = s.run WHERE r.pipeline = 'first'" > /dev/null
 ./build/orca register ./build/ds-first-c2 >> "$log" 2>&1 || fail "register first c2"
 fline=$(grep -n '^def step(' tests/datasets/first.mojo | cut -d: -f1)
+# The pipeline page's Code card: each function by its name, where it is in
+# the title, at the commit registered now (c2).
+page=$(html /pipelines/first)
+echo "$page" | grep -qF "<a class=\"src\" href=\"$repo/blob/$c2/tests/datasets/first.mojo#L$fline\" target=\"_blank\" rel=\"noopener\" title=\"View source on GitHub at 2b2b2b2: tests/datasets/first.mojo:$fline\">$icon" \
+    || fail "the Code card doesn't link the step's line"
+echo "$page" | grep -qF '<span class="src__at">step</span>' || fail "the Code card's link isn't the step's name"
 page=$(html /datasets/lake.a)
 echo "$page" | grep -qF "<dt>Written by</dt><dd><a href=\"/pipelines/first\">first</a> <span class=\"steps-of\">step step $(code_link "$repo/blob/$c1/tests/datasets/first.mojo#L$fline" $c1)" \
     || fail "the dataset's page doesn't link its writer's code at the run's commit: $(echo "$page" | grep -o '<dt>Written by.*</dl>')"
