@@ -1,0 +1,504 @@
+"""What the UI's words mean, in one place: the help on every table's column
+headers, and on the values that come from a fixed set (statuses, step
+kinds, triggers, placements, where a setting came from), so the same word
+has the same explanation on every page.
+
+```
+header_help("Attempts")           # the "?" of a column named Attempts
+header_help("From", "config")     # a column whose meaning depends on its table
+value_help("status", "deferred")  # what a status chip says on hover
+```
+
+The UI (`orca.ui`) adds a header's help to every `<th>` it finds one for
+(a `data-help` attribute names a table-specific one), and `Html.status` and
+`Html.term` put a value's on its chip or word. Texts are HTML, written
+here as `if` chains (`_header`, `_context_header`, `_value`, `_key`), so
+they may hold entities; none holds data from a request or a double quote,
+as a value's goes in an attribute. An empty text means no help.
+"""
+
+
+def _header(label: String) -> StaticString:
+    """Each column header's help, by its label."""
+    if label == "10 min":
+        return "The host's CPU over its last ten minutes."
+    if label == "Action":
+        return "What was done: the path of the action posted."
+    if label == "After":
+        return (
+            "The steps this one waits for: it starts once they have succeeded."
+        )
+    if label == "At":
+        return "When it happened, in UTC."
+    if label == "Attempts":
+        return (
+            "How many times the step ran in this run: more than 1 means an "
+            "attempt failed and it was retried."
+        )
+    if label == "Busiest core":
+        return "The busiest single core's use at its highest."
+    if label == "By":
+        return "The user who did it, as they logged in."
+    if label == "By run":
+        return "The run that committed its latest snapshot."
+    if label == "Checks":
+        return "What the rule checks, each threshold with the last value seen."
+    if label == "Commit":
+        return "The git commit the binary was built from."
+    if label == "Committed":
+        return "When the attempt that wrote it finished."
+    if label == "Container":
+        return "A Docker container on the control host."
+    if label == "Code":
+        return (
+            "The code hash: what the binary says about itself (its steps, "
+            "partitions and schedule). It changes when they do, not on "
+            "every build."
+        )
+    if label == "CPU":
+        return (
+            "CPU used: for a step, its latest attempt's user and system "
+            "seconds; for a machine, its busiest moment as a share of all "
+            "cores."
+        )
+    if label == "CPUs":
+        return "The worker's cores, from its last heartbeat."
+    if label == "Created":
+        return "When it was made: a run when it was queued."
+    if label == "Dataset":
+        return "A table in the warehouse that pipelines read or write."
+    if label == "Disk":
+        return "The fullest disk the run writes to, at its fullest."
+    if label == "Disk io":
+        return "Disk reads and writes, at their highest rate."
+    if label == "Ended":
+        return "When it finished, whatever the outcome."
+    if label == "Error":
+        return "Why it failed, as the step or orca said."
+    if label == "Expires":
+        return "When the token stops working."
+    if label == "Fills":
+        return "The partition that run fills."
+    if label == "First seen":
+        return "When a run first ran this version."
+    if label == "From":
+        return "Where it came from."
+    if label == "Host":
+        return "The instance: its role (head or worker) and its id."
+    if label == "Image":
+        return "The container image the code ran in, if any."
+    if label == "Instance":
+        return (
+            "Where the samples were taken: local (the scheduler's machine), "
+            "control, an EC2 head or worker, or a pod."
+        )
+    if label == "Key":
+        return (
+            "The setting's name, as orca.toml and orca register's flags "
+            "call it."
+        )
+    if label == "Kind":
+        return (
+            "How the step runs: mapped, once per partition, or gather, once "
+            "over all of them. Hover a kind for more."
+        )
+    if label == "Label":
+        return "The name the token was given when it was made."
+    if label == "Last run":
+        return "Its latest run, and how it went."
+    if label == "Last seen":
+        return "The last time it was seen."
+    if label == "Latest":
+        return "Its newest snapshot that an orca run committed."
+    if label == "Launched":
+        return "When EC2 started the instance."
+    if label == "Level":
+        return (
+            "How far downstream of the dataset: level 1 reads it, level 2 "
+            "reads what level 1 writes, and so on. A level starts once the "
+            "one before is done."
+        )
+    if label == "Log":
+        return "Its output: an attempt's, an instance's or the run's process's."
+    if label == "Memory":
+        return "Memory used at its highest, of the machine's total."
+    if label == "Memory now":
+        return "The container's memory now, as docker stats counts it."
+    if label == "Message":
+        return "What the alert said."
+    if label == "Net in / out MB/s":
+        return "The host's network traffic in and out, in MB a second."
+    if label == "Network":
+        return "Network traffic in and out, at its highest rate."
+    if label == "Next run":
+        return "When the schedule fires next, in UTC."
+    if label == "Partition":
+        return (
+            "The partition this row is for; empty for a gather step, which "
+            "runs once over all of them."
+        )
+    if label == "Partitions":
+        return (
+            "The partitions it covers: months, days, hours or named keys. "
+            "Each step runs once per partition."
+        )
+    if label == "Peak":
+        return (
+            "The most memory the step's latest attempt held at once; its "
+            "page has each attempt's."
+        )
+    if label == "Peak in range":
+        return "The most memory the container held over the range shown."
+    if label == "Pipeline":
+        return (
+            "A pipeline: a binary of steps, registered with orca, that runs "
+            "on its schedule or when asked."
+        )
+    if label == "Pipelines":
+        return "The pipelines the rebuild runs, and their runs."
+    if label == "Pool":
+        return (
+            "The worker pool: a pipeline placed worker:&lt;pool&gt; runs on "
+            "that pool's workers."
+        )
+    if label == "Priority":
+        return "The alert's priority on the phone: high, default or low."
+    if label == "Queued":
+        return "Runs waiting to start."
+    if label == "Read":
+        return (
+            "The snapshots the step read when it wrote this one. Click one "
+            "for its own lineage."
+        )
+    if label == "Read by":
+        return "The pipelines, and their steps, that read it."
+    if label == "Read or wrote":
+        return (
+            "read: the step read this snapshot. wrote: it committed it, a "
+            "new snapshot of the table."
+        )
+    if label == "Reads":
+        return "The datasets the step reads."
+    if label == "Rebuild":
+        return (
+            "A rebuild: the pipelines downstream of a dataset run again "
+            "over some partitions, level by level."
+        )
+    if label == "Role":
+        return (
+            "head: the run's driver and dista head. worker: a dista worker "
+            "its tasks fan out to."
+        )
+    if label == "Rule":
+        return "A watchdog rule, and what it pauses when it trips."
+    if label == "Run":
+        return (
+            "A run: one start of a pipeline over some partitions, with its "
+            "steps and their attempts. Click for its page."
+        )
+    if label == "Running":
+        return "Runs going now."
+    if label == "Runs":
+        return "How many runs used it."
+    if label == "Samples":
+        return "How many samples the sampler took."
+    if label == "Schedule":
+        return "When it runs: a cron expression, or none for runs on demand."
+    if label == "Seen":
+        return "When its sensor saw the snapshot."
+    if label == "Snapshot":
+        return (
+            "A snapshot of a table: the table as one commit left it. Click "
+            "for its lineage."
+        )
+    if label == "Snapshots":
+        return "How many snapshots orca runs have committed to it."
+    if label == "Snooze":
+        return "Silence the rule for a while: its trips don't pause."
+    if label == "Start":
+        return (
+            "Which start of the run's process it served: 1, or more after a "
+            "retry or a resume."
+        )
+    if label == "Started":
+        return "When it started; empty while it waits."
+    if label == "State":
+        return "Where it stands now."
+    if label == "Status":
+        return "Where it stands. Hover a status for what it means."
+    if label == "Steal":
+        return "CPU time the hypervisor gave to other machines."
+    if label == "Step":
+        return (
+            "A step of the pipeline: a function that runs once per "
+            "partition (mapped) or once over all of them (gather)."
+        )
+    if label == "Subject":
+        return "What the alert is about: a run, a pipeline, a worker or a host."
+    if label == "Table":
+        return "The table's name in the warehouse."
+    if label == "Token":
+        return (
+            "A worker token: how a remote worker signs in, and which pool's "
+            "runs it may claim."
+        )
+    if label == "Took":
+        return "How long the run took, from its start to its end, or so far."
+    if label == "Trigger":
+        return "What started the run. Hover a trigger for what it means."
+    if label == "Tries":
+        return (
+            "Times the run's process was started: 1 is normal; more means "
+            "retries, a lost instance or a resume."
+        )
+    if label == "Type":
+        return "The EC2 instance type."
+    if label == "Uptime":
+        return "How long the instance has been up."
+    if label == "UTC":
+        return "When the schedule fires, in UTC."
+    if label == "Value":
+        return "The value it is registered with."
+    if label == "Wall clock":
+        return "The same moment in the pipeline's time zone."
+    if label == "Warnings":
+        return (
+            "Stretches with memory or a disk over 90%, or CPU steal over "
+            "20%: what slows or fails most runs."
+        )
+    if label == "When":
+        return "When it happened."
+    if label == "Why":
+        return "Why it happened, as orca recorded it."
+    if label == "Worker":
+        return "The worker using the token: its host name."
+    if label == "Writes":
+        return "The datasets the step commits to."
+    if label == "Written by":
+        return "The pipeline, and its step, that wrote it."
+    return ""
+
+
+def _context_header(key: String) -> StaticString:
+    """Headers whose meaning depends on their table: `<table>:<label>`, the
+    table named by the header's `data-help`."""
+    if key == "config:From":
+        return (
+            "Where the value came from: the code's default, orca.toml (and "
+            "which table), a flag of orca register, or the scheduler's "
+            "environment. A link opens the line that sets it."
+        )
+    if key == "audit:From":
+        return "ui: this site. cli: the orca command, with a token."
+    if key == "alerts:Kind":
+        return (
+            "What raised the alert: a watchdog trip, a failed run, a "
+            "stalled fill, a disk, a quiet worker."
+        )
+    if key == "alerts:Status":
+        return "sent, pending (it will be tried again) or resolved."
+    if key == "instances:Why":
+        return (
+            "Why the instance ended: drained when idle, pooled for the next "
+            "run, or lost."
+        )
+    if key == "sensed:Why":
+        return (
+            "Why the snapshot's keys weren't run: they aren't this "
+            "pipeline's partitions."
+        )
+    if key == "config:Key":
+        return (
+            "The setting's name, as orca.toml and orca register's flags "
+            "call it. Hover the name for what it sets."
+        )
+    return ""
+
+
+def _value(key: String) -> StaticString:
+    """Each value's help, by `<kind>:<value>`."""
+    if key == "status:queued":
+        return "Waiting to start: its turn, or room for its placement."
+    if key == "status:running":
+        return "Going now."
+    if key == "status:deferred":
+        return "A step asked to run again later; the run waits until then."
+    if key == "status:succeeded":
+        return "Done, every step succeeded."
+    if key == "status:failed":
+        return (
+            "Something failed after its last retry. Resume runs what hadn't "
+            "succeeded."
+        )
+    if key == "status:cancelled":
+        return "Stopped on request, before its next attempt."
+    if key == "status:skipped":
+        return "Not run: a step it waits for didn't succeed."
+    if key == "status:pending":
+        return "Not started yet in this run."
+    if key == "status:paused":
+        return "The scheduler starts none of its runs until resumed."
+    if key == "status:done":
+        return "A run has done this partition."
+    if key == "status:not done":
+        return "No run has done this key yet."
+    if key == "status:open":
+        return "Not reached yet."
+    if key == "status:live":
+        return "A run of it is going now."
+    if key == "status:stalled":
+        return "Its process stopped sending heartbeats."
+    if key == "kind:mapped":
+        return "Runs once per partition, each on its own."
+    if key == "kind:gather":
+        return "Runs once, over what every partition of the step before made."
+    if key == "trigger:schedule":
+        return "Its schedule fired."
+    if key == "trigger:sensor":
+        return "Its sensor saw a new snapshot of a table it reads."
+    if key == "trigger:backfill":
+        return "orca backfill, or the Start runs form, asked for it."
+    if key == "trigger:manual":
+        return "A binary's run command started it, outside the scheduler."
+    if key == "trigger:ui":
+        return "Started from this site's Start runs."
+    if key == "trigger:rerun":
+        return "A rerun of an ended run, from a step on."
+    if key == "trigger:rebuild":
+        return "A rebuild of everything downstream of a dataset."
+    if key == "trigger:fill":
+        return "The fill: the scheduler working through the range by itself."
+    if key == "placement:default":
+        return (
+            "On the scheduler's runner (ORCA_RUNNER: local, kubernetes or ec2)."
+        )
+    if key == "placement:local":
+        return "Beside the scheduler, on its machine."
+    if key == "placement:control":
+        return (
+            "On the control host, beside Postgres and the scheduler, within "
+            "its limits."
+        )
+    if key == "placement:ec2":
+        return "On EC2 instances of its own, a head and workers."
+    if key == "placement:kubernetes":
+        return "In pods on the Kubernetes cluster."
+    if key == "placement:worker":
+        return "On a remote worker of that pool, which claims the run."
+    if key == "from:code default":
+        return "Nothing set it: the pipeline's code, or orca, has this default."
+    if key == "from:orca.toml":
+        return "Set in orca.toml, in the table shown."
+    if key == "from:flag":
+        return "Set by a flag of orca register, over orca.toml."
+    if key == "from:environment":
+        return "Taken from the scheduler's environment when the run starts."
+    if key == "touch:read":
+        return "The step read this snapshot."
+    if key == "touch:wrote":
+        return "The step committed this snapshot."
+    if key == "fills:all":
+        return (
+            "The scheduler fills the whole range by itself, a run per "
+            "partition, within its budget and window."
+        )
+    if key == "fills:since_registration":
+        return (
+            "A schedule fills from registration on; earlier partitions need "
+            "a backfill."
+        )
+    if key == "fill_order:oldest":
+        return "Fill runs go from the oldest partition forward."
+    if key == "fill_order:newest":
+        return "Fill runs go from the newest partition back."
+    if key == "spot:true":
+        return (
+            "Its EC2 instances are Spot: cheaper, and AWS can take them back."
+        )
+    if key == "spot:false":
+        return "On-demand EC2 instances."
+    if key == "role:head":
+        return "The run's driver and dista head."
+    if key == "role:worker":
+        return "A dista worker the run's tasks fan out to."
+    return ""
+
+
+def _key(key: String) -> StaticString:
+    """Each setting's help, by its key (`secrets.X` and `env.X` by their
+    table)."""
+    if key == "placement":
+        return (
+            "Where its runs start: default (the scheduler's runner), "
+            "control, ec2, or worker:&lt;pool&gt;."
+        )
+    if key == "head_type":
+        return "The EC2 instance type of a run's dista head."
+    if key == "worker_type":
+        return "The EC2 instance type of each dista worker."
+    if key == "workers":
+        return (
+            "How many dista workers a run asks for, or min..max to scale "
+            "between."
+        )
+    if key == "worker_procs":
+        return (
+            "Dista worker processes on each worker instance; auto for one "
+            "per core."
+        )
+    if key == "max_runs":
+        return "The most runs of the pipeline the scheduler starts at once."
+    if key == "fills":
+        return (
+            "all: the scheduler fills the whole range by itself. "
+            "since_registration: from registration on."
+        )
+    if key == "fill_order":
+        return "Which end of the range the fill starts from."
+    if key == "fill_max_runs":
+        return "Fill runs at once, on top of max_runs."
+    if key == "fill_budget_per_day":
+        return "The most the fill may spend a day, in dollars."
+    if key == "fill_window":
+        return "The hours of the day, UTC, in which fill runs start."
+    if key == "image":
+        return "The container image its runs use."
+    if key == "spot":
+        return "Whether its EC2 instances are Spot."
+    if key == "secrets":
+        return (
+            "A secret put in its runs' environment, by its id in the secret "
+            "store; its value is never shown."
+        )
+    if key == "env":
+        return "A variable set in its runs' environment."
+    return ""
+
+
+def key_help(key: StringSlice) -> StaticString:
+    """The help of a setting `key` of orca.toml (`env.NAME` is `env`'s)."""
+    var k = String(key)
+    var dot = k.find(".")
+    if dot > 0:
+        var head = String(k[byte=:dot])
+        k = head^
+    return _key(k)
+
+
+def header_help(label: StringSlice, table: StringSlice = "") -> StaticString:
+    """The help of a column named `label`, in `table` if it has its own."""
+    if table:
+        var t = _context_header(String(table, ":", label))
+        if t:
+            return t
+    return _header(String(label))
+
+
+def value_help(kind: StringSlice, value: StringSlice) -> StaticString:
+    """The help of `value` of `kind` (`status`, `kind`, `trigger`,
+    `placement`, `from`, `touch`, `role`, `fills`, `fill_order`, `spot`):
+    a placement `worker:<pool>` is `worker`'s."""
+    var v = String(value)
+    if kind == "placement" and v.startswith("worker:"):
+        v = "worker"
+    return _value(String(kind, ":", v))

@@ -234,7 +234,15 @@ ui=
 echo "$page" | grep -q '<h2 id="config">Configuration</h2>' || fail "no Configuration on the pipeline page"
 echo "$page" | grep -q "Registered from <code>orca.toml</code> @ <code>$(echo "$commit" | cut -c1-12)</code>" || fail "the page's registered-from"
 echo "$page" | grep -q '<code>--max-runs 3</code>' || fail "the page doesn't show the override"
-echo "$page" | grep -q '<td><code>head_type</code></td><td><code>t4g.medium</code></td><td>orca.toml \[defaults\]</td>' || fail "the page's head_type row"
+echo "$page" | grep -q '<td><code>head_type</code><span class="help">.*</span></span></td><td><code>t4g.medium</code></td><td><span class="term" data-tip="[^"]*" tabindex="0">orca.toml</span> \[defaults\]</td>' || fail "the page's head_type row"
+# Each key has its help, a value from a fixed set its meaning, and the
+# registration keeps each file value's line and the file's path in its
+# checkout, for a link to the line.
+echo "$page" | grep -q '<td><code>placement</code><span class="help">' || fail "placement has no help"
+echo "$page" | grep -q '<th data-help="config">From<span class="help">' || fail "the From column has no help"
+echo "$page" | grep -q '<td><code><span class="term" data-tip="On the scheduler' || fail "the placement value has no meaning"
+[ "$(q "SELECT (config->'sources'->'head_type'->>'line') || ' ' || (config->>'repo_path') FROM orca.pipelines WHERE name = 'toy'")" = "2 orca.toml" ] \
+    || fail "the registration's line and path: $(q "SELECT config FROM orca.pipelines WHERE name = 'toy'")"
 [ "$(echo "$api" | jq -r '.config.overrides.max_runs + " " + .config.commit')" = "3 $commit" ] || fail "the page's JSON config: $(echo "$api" | jq .config)"
 echo "$runpage" | grep -q 'href="/pipelines/toy#config"' || fail "the run's settings don't link the registration"
 "$orca" register "$root/build/toy" >> "$log" 2>&1 || fail "register the toy back"

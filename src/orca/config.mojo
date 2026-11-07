@@ -68,7 +68,9 @@ from orca.json import quote
 from orca.proc import absolute, capture
 from orca.resources import canonical_cpus, canonical_memory_gb
 from orca.secrets import parse_secrets, secret_problem
+from orca.source import is_hex, web_url
 from orca.state import State
+from orca.terms import key_help
 from orca.toml import (
     BOOLEAN,
     FLOAT,
@@ -291,14 +293,25 @@ def env_name_problem(name: String) -> String:
     return ""
 
 
-@fieldwise_init
 struct Setting(Copyable, Movable):
     """A value and where it came from: `CODE_DEFAULT`, `FROM_FILE`,
-    `FROM_FLAG` or `FROM_ENV`, with a detail such as `[defaults]`."""
+    `FROM_FLAG` or `FROM_ENV`, with a detail such as `[defaults]`, and for
+    the file's, the line it's on."""
 
     var value: String
     var source: String
     var detail: String
+    var line: Int
+    """The file's line that sets it, from 1; 0 if not from the file, or
+    registered before orca kept it."""
+
+    def __init__(
+        out self, value: String, source: String, detail: String, line: Int = 0
+    ):
+        self.value = value
+        self.source = source
+        self.detail = detail
+        self.line = line
 
 
 def is_scalar_key(key: String) -> Bool:
@@ -326,6 +339,9 @@ struct ProjectConfig(Movable):
     var source: String
     """Where the commit is from (`ORCA_SOURCE`), for a file read outside a git
     checkout, as in the image; empty otherwise."""
+    var repo_path: String
+    """Its path in its checkout (`git ls-files --full-name`), for a link to
+    its lines at the commit; empty outside a checkout."""
     var doc: TomlDoc
 
     def __init__(out self):
@@ -335,6 +351,7 @@ struct ProjectConfig(Movable):
         self.commit = String()
         self.dirty = False
         self.source = String()
+        self.repo_path = String()
         self.doc = TomlDoc()
 
     def __init__(
@@ -347,6 +364,7 @@ struct ProjectConfig(Movable):
         """`text`, the file `path` holds, checked: every key is one this
         orca knows, every value of its type."""
         self.path = path
+        self.repo_path = String()
         self.hash = sha256_hex(text)
         self.commit = commit
         self.dirty = dirty
@@ -370,6 +388,7 @@ struct ProjectConfig(Movable):
         var dir = String(full[byte=:slash]) if slash > 0 else String("/")
         var commit = String()
         var dirty = False
+        var repo_path = String()
         # sh keeps git's "fatal: not a git repository" off stderr.
         var base = String("git -C '", dir, "' ")
         try:
@@ -392,6 +411,21 @@ struct ProjectConfig(Movable):
                     10,
                 )
                 dirty = st[0] != 0 or String(st[1].strip()) != ""
+                var at = capture(
+                    [
+                        "sh",
+                        "-c",
+                        String(
+                            base,
+                            "ls-files --full-name -- '",
+                            String(full[byte = slash + 1 :]),
+                            "' 2> /dev/null",
+                        ),
+                    ],
+                    10,
+                )
+                if at[0] == 0:
+                    repo_path = String(at[1].strip())
         except:
             pass
         var source = String()
@@ -401,6 +435,7 @@ struct ProjectConfig(Movable):
             source = getenv("ORCA_SOURCE")
         var cfg = ProjectConfig(text, path, commit, dirty)
         cfg.source = source
+        cfg.repo_path = repo_path
         return cfg^
 
     @staticmethod
@@ -705,6 +740,8 @@ struct Resolved(Movable):
             )
             if file.source:
                 out.write(', "source": ', quote(file.source))
+            if file.repo_path:
+                out.write(', "repo_path": ', quote(file.repo_path))
             out.write(', "overrides": {')
             for i in range(len(self.overrides)):
                 out.write(
@@ -719,14 +756,17 @@ struct Resolved(Movable):
 
 
 def _source_json(key: String, s: Setting) -> String:
-    return String(
+    var out = String(
         quote(key),
         ': {"source": ',
         quote(s.source),
         ', "detail": ',
         quote(s.detail),
-        "}",
     )
+    if s.line > 0:
+        out.write(', "line": ', s.line)
+    out.write("}")
+    return out^
 
 
 def env_json(env: List[Tuple[String, String]]) -> String:
@@ -774,11 +814,18 @@ def resolve(
                         _canonical_toml(String(key), v.value()),
                         FROM_FILE,
                         labels[t],
+                        v.value().line,
                     )
-            for kv in file._map(tables[t], "secrets"):
-                _set(r.secrets, kv[0], Setting(kv[1], FROM_FILE, labels[t]))
-            for kv in file._map(tables[t], "env"):
-                _set(r.env, kv[0], Setting(kv[1], FROM_FILE, labels[t]))
+            for m in ["secrets", "env"]:
+                for kv in file._map(tables[t], m):
+                    var p = tables[t].copy()
+                    p.append(String(m))
+                    p.append(kv[0])
+                    var st = Setting(kv[1], FROM_FILE, labels[t], file._line(p))
+                    if m == "secrets":
+                        _set(r.secrets, kv[0], st^)
+                    else:
+                        _set(r.env, kv[0], st^)
     for e in flags.values.items():
         if r.in_file:
             r.overrides.append((e.key, e.value))
@@ -818,6 +865,8 @@ struct Shown(Movable):
     var commit: String
     var dirty: Bool
     var source: String
+    var repo_path: String
+    """The file's path in its checkout, for links to its lines."""
     var overrides: List[Tuple[String, String]]
     var rows: List[_Row]
 
@@ -828,6 +877,7 @@ struct Shown(Movable):
         self.commit = String()
         self.dirty = False
         self.source = String()
+        self.repo_path = String()
         self.overrides = List[Tuple[String, String]]()
         self.rows = List[_Row]()
 
@@ -927,10 +977,20 @@ struct Shown(Movable):
         return out^
 
 
-def config_html(mut h: Html, s: Shown):
+comptime _VALUE_TERMS = ["placement", "fills", "fill_order", "spot"]
+"""The keys whose values are one of a fixed set (`orca.terms`)."""
+
+
+def config_html(
+    mut h: Html, s: Shown, repo: String = "", code_line: String = ""
+):
     """The pipeline page's Configuration (`id="config"`): what `orca config
     show` prints, where it was registered from, and the flags that
-    overrode the file."""
+    overrode the file. Each key has its help, each value from a fixed set
+    its meaning on hover, and From links to where the value is set where
+    that's known: an orca.toml line at the registration's commit in `repo`
+    (a repository's web address), or for a default from the pipeline's
+    code, `code_line`, its declaration."""
     h.raw('<h2 id="config">Configuration</h2><p class="muted">')
     if s.file:
         h.raw("Registered from <code>")
@@ -967,19 +1027,50 @@ def config_html(mut h: Html, s: Shown):
             )
             h.raw("</code>")
         h.raw("</p>")
+    # The file at its commit, where a line of it can be linked.
+    var file_url = String()
+    var web = web_url(s.source) if s.source else repo
+    if web and s.repo_path and s.commit and is_hex(s.commit) and not s.dirty:
+        if not s.repo_path.startswith("/") and ".." not in s.repo_path:
+            file_url = String(web, "/blob/", s.commit, "/", s.repo_path)
     h.raw(
-        '<div class="scroll"><table><thead><tr><th>Key</th><th>Value</th>',
-        "<th>From</th></tr></thead><tbody>",
+        '<div class="scroll"><table><thead><tr><th data-help="config">Key</th>',
+        '<th>Value</th><th data-help="config">From</th></tr></thead><tbody>',
     )
-    for r in s.rows:
+    for i in range(len(s.rows)):
+        ref r = s.rows[i]
         h.raw("<tr><td><code>")
         h.text(r.key)
-        h.raw("</code></td><td><code>")
-        h.text(r.setting.value)
+        h.raw("</code>")
+        var help = key_help(r.key)
+        if help:
+            h.help(String("key-", i), r.key, help)
+        h.raw("</td><td><code>")
+        var termed = False
+        for k in materialize[_VALUE_TERMS]():
+            termed = termed or r.key == k
+        if termed:
+            h.term(r.key, r.setting.value)
+        else:
+            h.text(r.setting.value)
         h.raw("</code></td><td>")
-        h.text(r.setting.source)
+        h.term("from", r.setting.source)
         if r.setting.detail:
             h.text(" ", r.setting.detail)
+        if r.setting.source == FROM_FILE and file_url and r.setting.line > 0:
+            h.raw(" ")
+            h.code(
+                String(file_url, "#L", r.setting.line),
+                String(s.repo_path, ":", r.setting.line),
+                s.commit,
+            )
+        elif (
+            r.setting.source == CODE_DEFAULT
+            and code_line
+            and (r.setting.detail.startswith("the pipeline's"))
+        ):
+            h.raw(" ")
+            h.code(code_line, "the Pipeline[...] line", "")
         h.raw("</td></tr>")
     h.raw("</tbody></table></div>")
 
@@ -1016,6 +1107,17 @@ def _source(
     return (String(FROM_FLAG), String(""))
 
 
+def _line_of(sources: Optional[Value], key: String) raises -> Int:
+    """The file's line the registration says `key` is set on, or 0."""
+    if sources:
+        var s = sources.value().get(key)
+        if s:
+            var l = s.value().get("line")
+            if l:
+                return Int(l.value().int_value())
+    return 0
+
+
 def _run_env_names() -> List[String]:
     var out = List[String]()
     for n in getenv("ORCA_RUN_ENV").split(","):
@@ -1045,6 +1147,9 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
                 var so = c.get("source")
                 if so and so.value().is_string():
                     s.source = so.value().string_value()
+                var rp = c.get("repo_path")
+                if rp and rp.value().is_string():
+                    s.repo_path = rp.value().string_value()
                 for kv in c["overrides"].object_items():
                     s.overrides.append((String(kv[0]), kv[1].string_value()))
             var src = c.get("sources")
@@ -1149,6 +1254,9 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
                     mine = True
             if not mine and getenv(n):
                 s.add(String("env.", n), getenv(n), FROM_ENV, "ORCA_RUN_ENV")
+        for ref row in s.rows:
+            if row.setting.source == FROM_FILE:
+                row.setting.line = _line_of(sources, row.key)
         out.append(s^)
     return out^
 

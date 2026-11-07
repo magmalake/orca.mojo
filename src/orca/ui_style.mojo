@@ -192,6 +192,35 @@ h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
 .card--facts a.src { font-size: 0.8125rem; }
 .card > p.card__none { padding: 0.8rem 1.1rem; margin: 0; font-size: 0.875rem; color: var(--muted); }
 
+/* The run page's cards: a line under the heading saying what the card
+   is, a plain warning when its numbers aren't the run's alone, and the
+   run's actions at the foot of its Status card. */
+.card > p.card__sub { padding: 0.55rem 1.1rem; font-size: 0.8125rem; color: var(--muted);
+  border-bottom: 1px solid var(--border); }
+.card > p.card__warn { padding: 0.55rem 1.1rem; font-size: 0.8125rem; color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent); border-bottom: 1px solid var(--border); }
+.card > .actions { margin: 0; padding: 0.7rem 1.1rem 0.9rem; border-top: 1px solid var(--border); }
+.card > .mx__legend { padding: 0.55rem 1.1rem 0; border-bottom: 0; }
+.card > .scroll > .mx { padding: 0 1.1rem; }
+.facts code.env { font-size: 0.8125rem; }
+/* A long link to code in a card wraps rather than widening a phone's page. */
+.card--facts dd a.src { white-space: normal; overflow-wrap: anywhere; }
+.steps__graph > .tl { margin: 0.25rem 0; }
+
+/* The lineage diagram's legend. */
+.card > .graph__legend { padding: 0.55rem 1.1rem; font-size: 0.8125rem; }
+.graph__key { display: inline-block; width: 1.4em; height: 0.85em; margin: 0 0.35em 0 0.8em;
+  vertical-align: -0.1em; border: 1.5px solid var(--border-strong); border-radius: 3px;
+  background: var(--surface); }
+.graph__key:first-child { margin-left: 0; }
+.graph__key--start { border: 2.5px solid var(--ember); }
+.graph__key--source { border-style: dashed; }
+.graph__key--other { border-style: dotted; opacity: 0.7; }
+.graph__node--other rect { stroke-dasharray: 2 3; }
+.graph__node--other text { opacity: 0.75; }
+.graph__arrow { margin-left: 0.8em; color: var(--faint); }
+.card > .scroll > .graph { margin: 0.75rem auto; }
+
 /* The Steps card: its heading with Graph and Table tabs. */
 .steps__head { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center;
   justify-content: space-between; padding: 0.5rem 1.1rem; border-bottom: 1px solid var(--border);
@@ -216,6 +245,21 @@ a.vtabs__tab { display: inline-block; text-decoration: none; }
 .help:hover .help__tip, .help:focus-within .help__tip { display: block; }
 .help.help--shut .help__tip { display: none; }
 
+/* In a table, which scrolls sideways, a "?"'s help escapes the box: fixed,
+   placed under its button by the page script (`_TIPS`). */
+.scroll .help__tip { position: fixed; top: auto; left: auto; }
+.scroll .help__tip::before { display: none; }
+th .help { margin-left: 0.25rem; vertical-align: 0; }
+
+/* A value from a fixed set (a status, a step's kind, a trigger, a
+   placement): what it means on hover, keyboard focus or a tap, in one
+   floating box the page script places (`_TIPS`). */
+.term { text-decoration: underline dotted var(--muted); text-underline-offset: 0.2em; }
+[data-tip] { cursor: help; }
+[data-tip]:focus-visible { outline: 2px solid var(--lake); outline-offset: 1px; }
+.help__tip.tip { position: fixed; display: none; top: 0; left: 0; }
+.help__tip.tip::before { display: none; }
+
 /* A function's source, shown on hovering a link to it. */
 .peek { position: absolute; z-index: 30; width: min(42rem, calc(100vw - 1rem));
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
@@ -230,6 +274,13 @@ a.vtabs__tab { display: inline-block; text-decoration: none; }
 .peek__ln { display: inline-block; width: 3.4em; padding-right: 0.9em; text-align: right;
   color: var(--faint); user-select: none; }
 .peek__msg { margin: 0; padding: 0.6rem 0.75rem; color: var(--muted); font-size: 0.8125rem; }
+/* Its colours (orca.highlight), from the theme's tokens. */
+.hl--kw { color: var(--ember); }
+.hl--fn { color: var(--live); font-weight: 600; }
+.hl--str { color: var(--ok); }
+.hl--com { color: var(--faint); font-style: italic; }
+.hl--num, .hl--const { color: var(--lake); }
+.hl--dec { color: var(--warn); }
 
 /* Forms: filters, actions, and logging in. */
 .filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: end; margin-bottom: 1rem; }
@@ -315,7 +366,7 @@ a.src:hover .src__out { color: inherit; }
 .dag__box--cancelled rect { stroke-dasharray: 4 3; }
 
 /* The flow of datasets through pipelines. */
-.graph { display: block; margin: 0.5rem 0; font-family: var(--mono); }
+.graph { display: block; margin: 0.5rem auto; font-family: var(--mono); max-width: 100%; height: auto; }
 .graph rect { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1.5; }
 .graph a:hover rect { stroke: var(--lake); }
 .graph__edge { fill: none; stroke: var(--faint); stroke-width: 1.5; }

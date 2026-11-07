@@ -13,8 +13,9 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=`) and as the Start runs form's date picker |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
 | `/runs` | runs, newest first, `?n=` (50, at most 500) to a page; `?pipeline=`, `?status=`, `?trigger=`; `?before=<id>`: older than that run |
-| `/runs/<id>` | a run's DAG, steps and partitions, attempts, errors, reads and commits |
+| `/runs/<id>` | a run's cards (Status, Partitions & trigger, Code, Resources, Settings), its steps (`?steps=table` (default), `timeline` or `graph`: the Steps tab shown without scripts), its machines, and the snapshots each step read and wrote |
 | `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error |
+| `/code` | `?u=` a link to a file at a commit on GitHub: its lines and each coloured as HTML (`orca.highlight`), as JSON, for the code shown on hover; the UI fetches the file, so a browser needn't reach GitHub |
 | `/runs/<id>/timeline.json` | the run's Dista timeline, which its page draws (`orca.ui_viz`) and Perfetto opens |
 | `/api/gantt` | the pipelines in dataset order with their runs over `?window=1h`, `6h`, `24h` (default) or `7d`, and the runs each started: the home page's Timeline tab (`orca.ui_viz`) |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
@@ -27,7 +28,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`orca.watchdog`); also the red banner on `/`, `/ops/fleet` and `/ops/control` |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), what a rebuild of it runs, and its snapshots; `?preview=1&partitions=`: a rebuild's runs by level, queueing nothing |
-| `/datasets/<name>/snapshots/<id>` | a snapshot's lineage, back and forward (`orca.lineage`) |
+| `/datasets/<name>/snapshots/<id>` | a snapshot's lineage (`orca.lineage`): its diagram, Upstream (`back` in the JSON: the snapshot, if a run wrote it, and the snapshots it was written from, with the run and step that wrote each and what that step read) and Downstream (`forward`: the snapshots written from it) |
 | `/rebuilds/<id>` | a rebuild's pipelines by level, with their runs (`orca.sensors`) |
 
 And the actions, each a `POST` of a form (see `orca.actions`):
@@ -85,6 +86,7 @@ from std.os import getenv
 
 from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
+from objectstore.http import Header, HttpClient
 from postgres import Params, Row
 
 from json import loads
@@ -124,7 +126,10 @@ from orca.chart import DayRuns, runs_chart
 from orca.civil import Civil, now
 from orca.logs import location_exists, read_location, run_dir
 from orca.cron import CronExpr
+from orca.control import CONTROL
 from orca.dag import DagStep, aggregate, dag_svg
+from orca.highlight import highlight
+from orca.terms import header_help, key_help, value_help
 from orca.graph import Edge, Node, graph_svg
 from orca.system import (
     alert_html,
@@ -167,6 +172,7 @@ from orca.metrics import (
     InstanceMetrics,
     StepSpan,
     metrics_html,
+    metrics_svg,
     peaks_json,
     read_metrics,
 )
@@ -1168,15 +1174,92 @@ def _step_spans(mut db: State, run: Int) raises -> List[StepSpan]:
     return out^
 
 
+comptime _MACHINES_HELP = (
+    "Samples of the whole machine, every few seconds while the run ran"
+    " (ORCA_SAMPLE_SECONDS, 5 by default): its CPU, memory, fullest disk,"
+    " disk io and network, by a sampler the runner starts beside the run's"
+    " process. They count everything on that machine, not just this run."
+    " What the run's own processes used is in Resources, above. The steps"
+    " lane lines a busy stretch up with the step it came from. A run on a"
+    " remote worker has none: the worker measures only its processes."
+)
+
+
+def _machines_of(
+    mut db: State, r: RunRow, names: List[String]
+) raises -> String:
+    """What the Machines card is, for the runner that recorded its samples
+    (each file's name): a heading's subtitle, and on the scheduler's own
+    machine, how many other runs it shared it with."""
+    var local = False
+    var control = False
+    var ec2 = False
+    for n in names:
+        if n == "local" or n == CONTROL:
+            local = True
+            control = control or n == CONTROL
+        elif n.startswith("head-") or n.startswith("worker-"):
+            ec2 = True
+    if local:
+        var host = String(
+            "the control host, which also runs Postgres, the scheduler and the UI" if control else "the scheduler's machine (the local runner)"
+        )
+        # Runs on the same machine at the same time: the scheduler's own
+        # (local and control-placed) that overlapped this one.
+        var n = Int(
+            db.conn.query(
+                (
+                    "SELECT count(*) AS n FROM orca.runs o JOIN orca.runs r ON"
+                    " r.id = $1 WHERE o.id <> r.id AND o.started IS NOT NULL"
+                    " AND r.started IS NOT NULL AND o.started < coalesce("
+                    "r.ended, now()) AND coalesce(o.ended, now()) > r.started"
+                    " AND coalesce(o.placement, '') IN ('local', 'control')"
+                ),
+                Params().int64(Int64(r.id)),
+            )
+            .row(0)
+            .int64("n")
+        )
+        var out = String(
+            "The whole machine, while this run ran: ",
+            host,
+            ". Not this run's own use; that is in Resources.",
+        )
+        if n > 0:
+            out.write(
+                '</p><p class="card__warn">A shared machine: ',
+                n,
+                " other run" if n == 1 else " other runs",
+                " ran on it at the same time, so these numbers are theirs",
+                " too.",
+            )
+        return out^
+    if ec2:
+        return String(
+            "This run's EC2 instances, its head and workers, each a whole"
+            " machine of its own while the run ran. What its processes used"
+            " is in Resources."
+        )
+    return String(
+        "This run's Kubernetes pods. CPU, memory and disk io are the whole"
+        " node's, which other pods share; network is the pod's own."
+    )
+
+
 def _machines_html(
     mut h: Html, mut db: State, r: RunRow, metrics: List[InstanceMetrics]
 ) raises:
-    """The run's machines (`orca.metrics`): nothing for a run without
-    samples."""
+    """The Machines card (`orca.metrics`), saying what its numbers are:
+    nothing for a run without samples."""
     if len(metrics) == 0:
         return
-    h.raw("<h2>Machines", _docs("metrics"), "</h2>")
+    var names = List[String]()
+    for m in metrics:
+        names.append(m.name)
+    _card(h, "machines", "Machines", _MACHINES_HELP, "metrics", facts=False)
+    h.raw('<p class="card__sub">', _machines_of(db, r, names), "</p>")
     metrics_html(h, metrics, _step_spans(db, r.id), _live(r.status))
+    h.raw("</section>")
 
 
 def _instances_html(mut h: Html, run: Int, xs: List[InstanceRow]):
@@ -1201,7 +1284,18 @@ def _instances_html(mut h: Html, run: Int, xs: List[InstanceRow]):
             changes[b - 1] = changes[b]
             changes[b] = t
             b -= 1
-    h.raw("<h2>Instances", _docs("scheduler"), "</h2>")
+    _card(
+        h,
+        "instances",
+        "Instances",
+        (
+            "The EC2 instances started for this run: each one's role, type,"
+            " when it was asked for, launched and ended, and why; the chart"
+            " is how many workers were up over time."
+        ),
+        "scheduler",
+        facts=False,
+    )
     if len(changes) > 0:
         h.raw('<div class="scroll">', workers_svg(changes, total), "</div>")
     h.raw(
@@ -1211,7 +1305,9 @@ def _instances_html(mut h: Html, run: Int, xs: List[InstanceRow]):
     )
     for i in xs:
         h.raw("<tr>")
-        h.cell(i.role)
+        h.raw("<td>")
+        h.term("role", i.role)
+        h.raw("</td>")
         h.raw("<td><code>")
         h.text(i.id)
         h.raw("</code></td>")
@@ -1232,7 +1328,7 @@ def _instances_html(mut h: Html, run: Int, xs: List[InstanceRow]):
         h.raw("<td>")
         h.link(String("/runs/", run, "/cluster/", _cluster_log(i)), "log")
         h.raw("</td></tr>")
-    h.raw("</tbody></table></div>")
+    h.raw("</tbody></table></div></section>")
 
 
 def _step_defs(mut db: State, name: String) raises -> List[StepDef]:
@@ -1540,6 +1636,7 @@ for (const el of document.querySelectorAll("[data-poll]")) {
       if (pos[i]) { x.scrollLeft = pos[i][0]; x.scrollTop = pos[i][1]; }
     });
     times(el);
+    el.dispatchEvent(new Event("orca:swap", { bubbles: true }));
   };
   const tick = async () => {
     timer = 0;
@@ -1564,9 +1661,102 @@ two seconds (`data-poll-every` seconds) by what its path returns, until that ans
 polling"), which a fragment does once what it shows has ended. It waits while the tab is hidden and
 asks at once when it's shown again, backs off when a request fails, leaves
 the page alone when nothing changed or text in it is selected, and keeps
-open `<details>` and scrolled boxes as they were. Each
+open `<details>` and scrolled boxes as they were, and tells the page
+(an `orca:swap` event, so `_TABS` shows the tab chosen again). Each
 `<time class="rel">` reads as how long ago it was, in the viewer's locale,
 with the full local time in its tooltip; without scripts it stays UTC."""
+
+
+comptime _TABS = """
+(() => {
+  const get = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  const put = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+  const chosen = {};
+  const show = (sec, v, save) => {
+    const tabs = [...sec.querySelectorAll("[role=tab][data-view]")];
+    if (!tabs.some((a) => a.dataset.view === v)) return;
+    for (const a of tabs) {
+      a.setAttribute("aria-selected", String(a.dataset.view === v));
+      const panel = document.getElementById(a.getAttribute("aria-controls"));
+      if (panel) panel.hidden = a.dataset.view !== v;
+    }
+    if (save) { chosen[sec.dataset.tabs] = v; put(sec.dataset.tabs, v); }
+  };
+  const init = (root) => {
+    for (const sec of root.querySelectorAll("[data-tabs]")) {
+      const asked = new URLSearchParams(location.search).get(sec.dataset.tabsParam);
+      show(sec, chosen[sec.dataset.tabs] || asked || get(sec.dataset.tabs), false);
+    }
+  };
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest && e.target.closest("[data-tabs] [role=tab][data-view]");
+    if (!a) return;
+    e.preventDefault();
+    show(a.closest("[data-tabs]"), a.dataset.view, true);
+  });
+  document.addEventListener("orca:swap", (e) => init(e.target));
+  init(document);
+})();
+"""
+"""Tabs that switch without loading the page (`data-tabs`, the key their
+choice is kept under in `localStorage`, so it's remembered per viewer for
+every page that has them): each `role=tab` link with a `data-view` shows
+the panel it `aria-controls`. A link's `?<data-tabs-param>=` still says
+which tab to show, and without scripts the links load it."""
+
+
+comptime _TIPS = """
+(() => {
+  let tip = null, on = null;
+  const show = (el) => {
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.className = "help__tip tip";
+      tip.id = "tip";
+      tip.setAttribute("role", "tooltip");
+      document.body.append(tip);
+    }
+    on = el;
+    tip.textContent = el.dataset.tip;
+    tip.style.display = "block";
+    el.setAttribute("aria-describedby", "tip");
+    const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    const below = r.bottom + 6 + h <= innerHeight || r.top < h + 6;
+    tip.style.top = (below ? r.bottom + 6 : r.top - h - 6) + "px";
+    tip.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + "px";
+  };
+  const hide = () => {
+    if (tip) tip.style.display = "none";
+    if (on) on.removeAttribute("aria-describedby");
+    on = null;
+  };
+  const of = (t) => t && t.closest && t.closest("[data-tip]");
+  document.addEventListener("mouseover", (e) => { const el = of(e.target); if (el && el !== on) show(el); });
+  document.addEventListener("mouseout", (e) => { const el = of(e.target); if (el && !el.contains(e.relatedTarget)) hide(); });
+  document.addEventListener("focusin", (e) => { const el = of(e.target); if (el) show(el); });
+  document.addEventListener("focusout", (e) => { if (of(e.target)) hide(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
+  addEventListener("scroll", hide, true);
+  // A "?" in a table, which scrolls sideways: its help is fixed (CSS), so
+  // not cut off by the table's box, and placed here under its button.
+  const place = (h) => {
+    const t = h.querySelector(".help__tip"), b = h.querySelector(".help__btn");
+    if (!t || !b) return;
+    const r = b.getBoundingClientRect(), w = t.offsetWidth, ht = t.offsetHeight;
+    const below = r.bottom + 6 + ht <= innerHeight || r.top < ht + 6;
+    t.style.top = (below ? r.bottom + 6 : r.top - ht - 6) + "px";
+    t.style.left = Math.max(8, Math.min(r.left - 10, innerWidth - w - 8)) + "px";
+  };
+  const help = (e) => { const h = e.target.closest && e.target.closest(".scroll .help"); if (h) requestAnimationFrame(() => place(h)); };
+  document.addEventListener("mouseover", help);
+  document.addEventListener("focusin", help);
+})();
+"""
+"""What a value from a fixed set means (`data-tip`, `orca.terms`): one
+floating box, shown under the value on hover, keyboard focus (each such
+value is a tab stop) or a tap, above it where there's no room, and
+hidden on scroll or Escape; to a screen reader, the value's description.
+And a table header's or cell's "?", whose help is placed under it."""
 
 
 comptime _PEEK = """
@@ -1578,14 +1768,14 @@ comptime _PEEK = """
   const lead = (l) => l.length - l.trimStart().length;
   const Q3 = '"'.repeat(3);
   let box = null, cur = null, showT = 0, hideT = 0;
+  // The file, coloured by orca (/code): its lines and their HTML.
   const load = (url) => {
-    if (!files.has(url)) files.set(url, fetch(url).then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); }));
+    if (!files.has(url)) files.set(url, fetch("/code?u=" + encodeURIComponent(url)).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }));
     return files.get(url);
   };
   // From the def (and its decorators) through its docstring and body, up
   // to MAX lines; it ends at the next line no deeper than the def's.
-  function snippet(src, at) {
-    const lines = src.split(String.fromCharCode(10));
+  function snippet(lines, at) {
     let from = at - 1;
     while (from > 0 && lines[from - 1].trimStart().startsWith("@")) from--;
     const indent = lead(lines[at - 1] || "");
@@ -1630,9 +1820,9 @@ comptime _PEEK = """
     place(a);
     let body;
     try {
-      const src = await load("https://raw.githubusercontent.com/" + owner + "/" + repo + "/" + sha + "/" + path);
-      const s = snippet(src, at);
-      body = "<pre>" + s.out.map(([n, l]) => '<span class="peek__line' + (n === at ? " peek__line--at" : "") + '"><span class="peek__ln">' + n + "</span>" + esc(l) + "</span>").join("") + (s.more ? '<span class="peek__line"><span class="peek__ln"></span>…</span>' : "") + "</pre>";
+      const src = await load("https://github.com/" + owner + "/" + repo + "/blob/" + sha + "/" + path);
+      const s = snippet(src.lines, at);
+      body = "<pre>" + s.out.map(([n, l]) => '<span class="peek__line' + (n === at ? " peek__line--at" : "") + '"><span class="peek__ln">' + n + "</span>" + (src.html[n - 1] ?? esc(l)) + "</span>").join("") + (s.more ? '<span class="peek__line"><span class="peek__ln"></span>…</span>' : "") + "</pre>";
     } catch (e) {
       body = '<p class="peek__msg">Can&#39;t load the source here (a private repository, or offline). The link opens it.</p>';
     }
@@ -1683,9 +1873,118 @@ comptime _PEEK = """
 """
 """Code on hover: a link to a line on GitHub (`a.src`) shows, after a
 moment or on keyboard focus, that function's source, from its def through
-its docstring, fetched from raw.githubusercontent.com once per file; the
+its docstring, coloured, from `/code` (which fetches the file from
+raw.githubusercontent.com and colours it, `orca.highlight`) once per file; the
 link itself is unchanged, so without scripts (or for a private repository)
 it still opens the file. Escape closes it and any help shown."""
+
+
+comptime _CODE_MAX = 1 << 20
+"""The largest file `/code` colours: 1 MiB."""
+
+
+def _code_part(s: StringSlice, path: Bool) -> Bool:
+    """Whether `s` is a safe owner, repository or (with `path`) file path
+    in a GitHub URL: letters, digits, `.`, `_`, `-` (and `/` in a path),
+    with no `..` segment."""
+    if not s or s.startswith(".") or "/." in s or "./" in s:
+        return False
+    for b in s.as_bytes():
+        var ok = (
+            (b >= UInt8(ord("a")) and b <= UInt8(ord("z")))
+            or (b >= UInt8(ord("A")) and b <= UInt8(ord("Z")))
+            or (b >= UInt8(ord("0")) and b <= UInt8(ord("9")))
+            or b == UInt8(ord("."))
+            or b == UInt8(ord("_"))
+            or b == UInt8(ord("-"))
+            or (path and b == UInt8(ord("/")))
+        )
+        if not ok:
+            return False
+    return True
+
+
+def raw_code_url(href: String) -> String:
+    """`https://raw.githubusercontent.com/<o>/<r>/<sha>/<path>` for a link
+    to a file at a commit on GitHub (`https://github.com/<o>/<r>/blob/
+    <sha>/<path>`, as the UI's code links are, without `#L`), or "" for
+    anything else, so `/code` fetches nothing but such files."""
+    comptime head = "https://github.com/"
+    if not href.startswith(head):
+        return ""
+    var rest = String(href[byte = head.byte_length() :])
+    var parts = List[String]()
+    for p in rest.split("/", 4):
+        parts.append(String(p))
+    if len(parts) != 5 or parts[2] != "blob":
+        return ""
+    var sha = parts[3]
+    if sha.byte_length() < 7 or sha.byte_length() > 40 or not is_hex(sha):
+        return ""
+    if not (
+        _code_part(parts[0], False)
+        and _code_part(parts[1], False)
+        and _code_part(parts[4], True)
+    ):
+        return ""
+    return String(
+        "https://raw.githubusercontent.com/",
+        parts[0],
+        "/",
+        parts[1],
+        "/",
+        sha,
+        "/",
+        parts[4],
+    )
+
+
+def code_page(href: String) -> Page:
+    """`/code?u=<a GitHub link to a file at a commit>`: the file's lines and
+    each coloured as HTML (`orca.highlight`), as JSON, for the code shown on
+    hover. 400 for any other URL, 502 when GitHub doesn't give it (a
+    private repository), 413 past `_CODE_MAX`."""
+    var raw = raw_code_url(href)
+    if not raw:
+        return Page(
+            400,
+            String('{"error": "not a GitHub file at a commit"}'),
+            String('{"error": "not a GitHub file at a commit"}'),
+            "application/json",
+        )
+    var body: List[UInt8]
+    try:
+        var http = HttpClient()
+        http.follow_redirects = False
+        http.verify_tls = True
+        http.timeout_ms = 5000
+        var resp = http.request(
+            "GET",
+            raw,
+            [Header("User-Agent", "orca-ui")],
+            List[UInt8]().copy(),
+        )
+        if resp.status != 200:
+            raise Error("HTTP ", resp.status)
+        body = resp.body.copy()
+    except:
+        var e = String('{"error": "GitHub didn\'t give the file"}')
+        return Page(502, e.copy(), e^, "application/json")
+    if len(body) > _CODE_MAX:
+        var e = String('{"error": "the file is too large"}')
+        return Page(413, e.copy(), e^, "application/json")
+    var text = String(from_utf8_lossy=Span(body))
+    var out = String('{"lines": [')
+    var first = True
+    for line in text.split("\n"):
+        out.write("" if first else ", ", quote(String(line)))
+        first = False
+    out.write('], "html": [')
+    var lines = highlight(text)
+    for i in range(len(lines)):
+        out.write(", " if i else "", quote(lines[i]))
+    out.write("]}")
+    return Page(200, out.copy(), out^, "application/json")
 
 
 comptime _USER_SLOT = "<!--orca-user-->"
@@ -1829,6 +2128,10 @@ def _page(title: String, active: StaticString, body: Html) -> String:
     h.raw(
         "</main><script>",
         _POLL,
+        "</script><script>",
+        _TABS,
+        "</script><script>",
+        _TIPS,
         "</script><script>",
         _PEEK,
         "</script></body></html>",
@@ -1984,7 +2287,9 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
         _when_cell(h, r.created)
         h.num(_took(r.seconds))
         _partitions_cell(h, r.partitions)
-        h.cell(r.trigger)
+        h.raw("<td>")
+        h.term("trigger", r.trigger)
+        h.raw("</td>")
         h.raw("<td>")
         h.status(r.status)
         if r.waiting_until:
@@ -3330,39 +3635,82 @@ comptime _FILLS_DOCS = (
 
 def _help(
     mut h: Html,
-    id: StaticString,
-    key: StaticString,
+    id: String,
+    key: String,
     text: StaticString,
     docs: StaticString = "",
 ):
-    """A "?" after a fact's name that shows `text`, then a link to the docs
-    (`docs`: a section of the docs page, or a URL) if there is one. CSS
-    shows it on hover and keyboard focus, so it needs no script; to a
-    screen reader the text is the button's description. `id` is unique in
-    the page."""
-    h.raw(
-        '<span class="help"><button type="button" class="help__btn"',
-        ' aria-label="About ',
-        key,
-        '" aria-describedby="help-',
-        id,
-        '">?</button><span class="help__tip" role="tooltip" id="help-',
-        id,
-        '">',
-        text,
-    )
-    if docs:
-        var href = String(docs) if docs.startswith("http") else String(
-            getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"),
-            "#",
-            docs,
-        )
-        h.raw(
-            ' <a href="',
-            escape(href),
-            '" target="_blank" rel="noopener">Docs ↗</a>',
-        )
-    h.raw("</span></span>")
+    """A "?" after a fact's name (`Html.help`)."""
+    h.help(id, key, text, docs)
+
+
+def _strip_tags(s: StringSlice) -> String:
+    """`s`'s text: its tags dropped, and a sort arrow (▲ ▼)."""
+    var out = String()
+    var inside = False
+    for cp in s.codepoint_slices():
+        if cp == "<":
+            inside = True
+        elif cp == ">":
+            inside = False
+        elif not inside:
+            out.write(cp)
+    return String(out.replace("▲", "").replace("▼", "").strip())
+
+
+def with_header_help(html: String, prefix: String) -> String:
+    """`html` with a "?" in every table header `orca.terms` has help for,
+    by its text (and the table its `data-help` names), as `_help` writes
+    one; ids `help-<prefix>-<n>`. One pass over the page, so every table,
+    whoever wrote it, gets them."""
+    var out = String()
+    var at = 0
+    var n = 0
+    while True:
+        var open = html.find("<th", at)
+        if open < 0:
+            break
+        var gt = html.find(">", open)
+        var close = html.find("</th>", open)
+        if gt < 0 or close < 0 or gt > close:
+            break
+        # Only <th> and <th ...>, not <thead>.
+        var next = String(html[byte = open + 3 : open + 4])
+        if next != ">" and next != " ":
+            out.write(html[byte = at : open + 3])
+            at = open + 3
+            continue
+        var tag = String(html[byte=open:gt])
+        var inner = String(html[byte = gt + 1 : close])
+        var table = String()
+        var dh = tag.find('data-help="')
+        if dh >= 0:
+            var q = tag.find('"', dh + 11)
+            table = String(tag[byte = dh + 11 : q])
+        var label = _strip_tags(inner)
+        var text = header_help(label, table)
+        out.write(html[byte=at:close])
+        if text and 'class="help"' not in inner:
+            var h = Html()
+            _help(h, String(prefix, "-", n), label, text)
+            out.write(h^.finish())
+            n += 1
+        at = close
+    out.write(html[byte=at:])
+    return out^
+
+
+def _dt(
+    mut h: Html,
+    key: StaticString,
+    id: StaticString,
+    help: StaticString,
+    docs: StaticString = "",
+):
+    """A fact's `<dt>`: its name with its help."""
+    h.raw("<dt>", key)
+    _help(h, id, key, help, docs)
+    h.raw("</dt>")
 
 
 def _fact(
@@ -3373,9 +3721,8 @@ def _fact(
     docs: StaticString = "",
 ):
     """A fact's `<dt>`, its name with its help, then its `<dd>` opened."""
-    h.raw("<dt>", key)
-    _help(h, id, key, help, docs)
-    h.raw("</dt><dd>")
+    _dt(h, key, id, help, docs)
+    h.raw("<dd>")
 
 
 comptime _PEAK_HELP = (
@@ -3625,15 +3972,15 @@ def _config_html(mut h: Html, p: PipelineRow):
         "runners",
     )
     if p.placement == "control":
-        h.text("control")
+        h.term("placement", "control")
         h.raw(' <span class="muted">(on the scheduler\'s host)</span>')
     elif p.placement.startswith("worker:"):
-        h.text(p.placement)
+        h.term("placement", p.placement)
         h.raw(' <span class="muted">(its runs wait for a worker of pool ')
         h.text(p.placement.removeprefix("worker:"))
         h.raw(', <a href="/ops/workers">Workers</a>)</span>')
     elif p.placement:
-        h.text(p.placement)
+        h.term("placement", p.placement)
     else:
         h.raw('<span class="muted">default (the scheduler\'s runner)</span>')
     h.raw("</dd>")
@@ -3754,8 +4101,8 @@ def _steps_html(
     var graph = view == "graph" or (view != "table" and len(steps) > 1)
     var base = String("/pipelines/", url_encode(name))
     h.raw(
-        '<section class="card steps" id="steps"><div class="steps__head">',
-        "<h2>Steps",
+        '<section class="card steps" id="steps" data-tabs="orca.steps.view"',
+        ' data-tabs-param="steps"><div class="steps__head"><h2>Steps',
         _docs("steps"),
         '</h2><div class="vtabs"><div role="tablist"',
         ' aria-label="How to show the steps">',
@@ -3790,41 +4137,16 @@ def _steps_html(
     for s in steps:
         h.raw("<tr>")
         _step_cell(h, s.name, links)
-        h.cell(s.kind)
+        h.raw("<td>")
+        h.term("kind", s.kind)
+        h.raw("</td>")
         h.cell(s.after)
         h.raw("<td>")
         _dataset_links(h, s.reads)
         h.raw("</td><td>")
         _dataset_links(h, s.writes)
         h.raw("</td></tr>")
-    h.raw("</tbody></table></div></section><script>", _STEPS_JS, "</script>")
-
-
-comptime _STEPS_JS = """
-(() => {
-  const sec = document.getElementById("steps");
-  if (!sec) return;
-  const get = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
-  const put = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
-  const show = (v, save) => {
-    if (v !== "graph" && v !== "table") return;
-    for (const a of sec.querySelectorAll("[data-view]")) {
-      a.setAttribute("aria-selected", String(a.dataset.view === v));
-      document.getElementById("steps-" + a.dataset.view).hidden = a.dataset.view !== v;
-    }
-    if (save) put("orca.steps.view", v);
-  };
-  sec.querySelector("[role=tablist]").addEventListener("click", (e) => {
-    const a = e.target.closest("a[data-view]");
-    if (!a) return;
-    e.preventDefault();
-    show(a.dataset.view, true);
-  });
-  if (!new URLSearchParams(location.search).has("steps")) show(get("orca.steps.view"), false);
-})();
-"""
-"""The Steps tabs: switch without loading the page, and remember the
-choice for every pipeline's page; a `?steps=` link still says which."""
+    h.raw("</tbody></table></div></section>")
 
 
 def _tabs_html(mut h: Html, base: String, tab: String):
@@ -4249,7 +4571,10 @@ def pipeline(
                 h.raw("</tr>")
             h.raw("</tbody></table></div>")
         if len(configs) > 0:
-            config_html(h, configs[0])
+            var repo = String()
+            if len(latest) > 0:
+                repo = web_url(latest[0].source)
+            config_html(h, configs[0], repo, links.pipeline.url)
     elif tab == "operate":
         if p.kind == "daily" or p.kind == "monthly":
             _coverage_html(h, db, p, cal)
@@ -4526,7 +4851,9 @@ def runs(
     return Page(200, j^, _page("Runs", "/runs", h))
 
 
-def run(mut db: State, id: Int) raises -> Page:
+def run(mut db: State, id: Int, view: String = "") raises -> Page:
+    """A run's page; `view` (`?steps=`) is the Steps tab shown without
+    scripts."""
     var found = _runs_one(db, id)
     if not found:
         return not_found(String("no run ", id))
@@ -4701,9 +5028,8 @@ def run(mut db: State, id: Int) raises -> Page:
         h.raw('/live" data-poll-every="5">')
     else:
         h.raw("<div>")
-    _run_state(h, db, r)
+    _run_state(h, db, r, view)
     h.raw("</div>")
-    _run_settings(h, db, r)
     if timeline:
         # Drawn in the browser, from timeline.json once it's in view.
         timeline_section(h, r.id)
@@ -4718,8 +5044,18 @@ def run(mut db: State, id: Int) raises -> Page:
         Params().int64(Int64(id)),
     )
     if len(acts) > 0:
+        _card(
+            h,
+            "audit",
+            "Actions",
+            (
+                "Who did what to this run, from the UI or the orca command,"
+                " as the user they logged in as."
+            ),
+            facts=False,
+        )
         h.raw(
-            '<h2>Actions</h2><div class="scroll"><table><thead><tr>',
+            '<div class="scroll"><table><thead><tr>',
             "<th>At</th><th>By</th><th>Action</th><th>From</th></tr>",
             "</thead><tbody>",
         )
@@ -4730,20 +5066,33 @@ def run(mut db: State, id: Int) raises -> Page:
             h.cell(a.text("action"))
             h.cell(a.text("source"))
             h.raw("</tr>")
-        h.raw("</tbody></table></div>")
+        h.raw("</tbody></table></div></section>")
     if len(touches) > 0:
+        _card(
+            h,
+            "tables",
+            "Snapshots",
+            (
+                "The table snapshots each step read, and the ones it wrote"
+                " (committed). A dataset's snapshot links to its lineage:"
+                " upstream, what it was written from, and downstream, what"
+                " was written from it."
+            ),
+            "tables",
+            facts=False,
+        )
         h.raw(
-            "<h2>Tables",
-            _docs("tables"),
-            '</h2><div class="scroll"><table><thead><tr>',
-            "<th>Step</th><th>Partition</th><th></th><th>Table</th>",
-            "<th>Snapshot</th></tr></thead><tbody>",
+            '<div class="scroll"><table><thead><tr>',
+            "<th>Step</th><th>Partition</th><th>Read or wrote</th>",
+            "<th>Table</th><th>Snapshot</th></tr></thead><tbody>",
         )
         for t in touches:
             h.raw("<tr>")
             h.cell(t.step)
             h.cell(t.partition)
-            h.cell(t.kind)
+            h.raw("<td>")
+            h.term("touch", "wrote" if t.kind == "commit" else t.kind)
+            h.raw("</td>")
             h.raw("<td>")
             if t.dataset:
                 h.link(String("/datasets/", url_encode(t.dataset)), t.dataset)
@@ -4765,7 +5114,7 @@ def run(mut db: State, id: Int) raises -> Page:
             else:
                 h.text(t.snapshot)
             h.raw("</td></tr>")
-        h.raw("</tbody></table></div>")
+        h.raw("</tbody></table></div></section>")
     return Page(200, j^, _page(String("Run ", r.id), "/runs", h))
 
 
@@ -4815,48 +5164,60 @@ def _run_actions(mut h: Html, r: RunRow, steps: List[StepDef]):
     h.raw("</div>")
 
 
-def _run_facts(mut h: Html, mut db: State, r: RunRow) raises:
-    """The facts about a run (`dl`): when, where, which code, and how it is."""
-    var id = r.id
-    var current = (
-        db.conn.query(
-            "SELECT registry_hash FROM orca.pipelines WHERE name = $1",
-            Params().text(r.pipeline),
-        )
-        .row(0)
-        .text("registry_hash")
+def _card(
+    mut h: Html,
+    id: StaticString,
+    title: StaticString,
+    help: StaticString,
+    docs: StaticString = "",
+    facts: Bool = True,
+):
+    """A run page's card opened: its anchor `id`, then its heading with a
+    "?" (`help`, its id `card-<id>`), closed. The caller ends the
+    `<section>`."""
+    h.raw(
+        '<section class="card',
+        " card--facts" if facts else "",
+        '" id="',
+        id,
+        '"><h2>',
+        title,
     )
-    var row = db.conn.query(
+    _help(h, String("card-", id), title, help, docs)
+    h.raw("</h2>")
+
+
+comptime _CANCEL_HELP = (
+    "Cancel was asked for: the run stops before its next attempt, and what"
+    " is running finishes."
+)
+
+
+def _status_card(mut h: Html, r: RunRow, defs: List[StepDef]):
+    """The Status card: how long it took and when, its tries, why it waits,
+    is held or failed, and what can be done to it."""
+    _card(
+        h,
+        "status",
+        "Status",
         (
-            "SELECT registry_hash, coalesce(rebuild, 0) AS rebuild,"
-            " coalesce(version, 0) AS version,"
-            " coalesce(cpu_millis, 0) AS cpu, coalesce(extract(epoch FROM"
-            " coalesce(ended, now()) - started)::bigint, 0) AS secs FROM"
-            " orca.runs WHERE id = $1"
+            "Where the run is: queued, running, then succeeded, failed or"
+            " cancelled. Refreshed every 5 s while it goes on."
         ),
-        Params().int64(Int64(id)),
-    ).row(0)
-    var hash = row.text("registry_hash")
-    var rebuild = Int(row.int64("rebuild"))
-    var version = Optional[VersionRow](None)
-    if row.int64("version"):
-        var vs = _versions(db, id=Int(row.int64("version")))
-        if len(vs) > 0:
-            version = vs[0].copy()
-    var cpu = Int(row.int64("cpu"))
-    var secs = Int(row.int64("secs"))
-    var sensed = List[SnapshotRef]()
-    for x in db.conn.query(
-        (
-            "SELECT dataset, snapshot_id FROM orca.sensed WHERE run = $1"
-            " ORDER BY dataset, snapshot_id"
-        ),
-        Params().int64(Int64(id)),
-    ):
-        sensed.append(SnapshotRef(x.text("dataset"), x.int64("snapshot_id")))
+        "runs",
+    )
     h.raw('<dl class="facts">')
     if r.seconds >= 0:
-        h.raw('<dt>Duration</dt><dd title="')
+        _dt(
+            h,
+            "Duration",
+            "run-duration",
+            (
+                "How long the run took, from its start to its end, or to now"
+                " while it goes on. Hover for the times."
+            ),
+        )
+        h.raw('<dd title="')
         h.text(
             "started ", r.started, "; ended " if r.ended else "; still going"
         )
@@ -4864,10 +5225,147 @@ def _run_facts(mut h: Html, mut db: State, r: RunRow) raises:
         h.raw('">')
         h.text(_took_long(r.seconds))
         h.raw("</dd>")
-    h.raw("<dt>Partitions</dt><dd>")
+    _fact(
+        h,
+        "Created",
+        "run-created",
+        (
+            "When the run was queued: by the schedule, a sensor, a backfill,"
+            " a fill or a person."
+        ),
+    )
+    h.text(r.created)
+    h.raw("</dd>")
+    _fact(
+        h,
+        "Started",
+        "run-started",
+        (
+            "When its process started, once its turn in the queue came and"
+            " its placement had room. Empty while it waits."
+        ),
+    )
+    h.text(r.started)
+    h.raw("</dd>")
+    _fact(
+        h,
+        "Ended",
+        "run-ended",
+        "When it finished, whatever the outcome. Empty while it goes on.",
+    )
+    h.text(r.ended)
+    h.raw("</dd>")
+    _fact(h, "Tries", "run-tries", _TRIES)
+    h.text(r.starts)
+    h.raw("</dd>")
+    if r.waiting_until:
+        _fact(
+            h,
+            "Waiting",
+            "run-waiting",
+            (
+                "A step asked to run again later, so the run waits until"
+                " then and goes on by itself."
+            ),
+        )
+        h.text("until ", r.waiting_until, ", when a step asked to run again")
+        h.raw("</dd>")
+    if r.held and r.status == "queued":
+        _dt(
+            h,
+            "Held",
+            "run-held",
+            (
+                "Why it is queued and not started: its placement is full or"
+                " the host is short of memory or disk. It starts once that"
+                " clears."
+            ),
+            "placement",
+        )
+        h.raw('<dd class="error">')
+        h.text(r.held.removeprefix("held: "))
+        h.raw("</dd>")
+    if r.error:
+        _fact(
+            h,
+            "Error",
+            "run-error",
+            (
+                "Why the run failed, as its process or orca said. The"
+                " failed step's attempt, under Steps, has its log."
+            ),
+        )
+        h.text(r.error)
+        h.raw("</dd>")
+    if r.stalled:
+        _fact(
+            h,
+            "Process",
+            "run-process",
+            (
+                "Its process stopped sending heartbeats: it died, or its"
+                " machine went away. Resume starts what hadn't succeeded."
+            ),
+            "scheduler",
+        )
+        h.raw("stalled: its heartbeat stopped, so it can be resumed</dd>")
+    elif r.cancel_requested and _live(r.status):
+        _fact(h, "Cancel", "run-cancel", _CANCEL_HELP)
+        h.raw("asked for; the run stops before its next attempt</dd>")
+    h.raw("</dl>")
+    _run_actions(h, r, defs)
+    h.raw("</section>")
+
+
+def _trigger_card(mut h: Html, mut db: State, r: RunRow) raises:
+    """The Partitions & trigger card: what the run does and what started
+    it, with the rebuild or the snapshots a sensor saw."""
+    var row = db.conn.query(
+        "SELECT coalesce(rebuild, 0) AS rebuild FROM orca.runs WHERE id = $1",
+        Params().int64(Int64(r.id)),
+    ).row(0)
+    var rebuild = Int(row.int64("rebuild"))
+    var sensed = List[SnapshotRef]()
+    for x in db.conn.query(
+        (
+            "SELECT dataset, snapshot_id FROM orca.sensed WHERE run = $1"
+            " ORDER BY dataset, snapshot_id"
+        ),
+        Params().int64(Int64(r.id)),
+    ):
+        sensed.append(SnapshotRef(x.text("dataset"), x.int64("snapshot_id")))
+    _card(
+        h,
+        "trigger",
+        "Partitions &amp; trigger",
+        "What this run does, and what made it start.",
+        "partitions",
+    )
+    h.raw('<dl class="facts">')
+    _fact(
+        h,
+        "Partitions",
+        "run-partitions",
+        (
+            "The partitions this run does (months, days, hours or named"
+            " keys): each step runs once per partition."
+        ),
+        "partitions",
+    )
     h.text(r.partitions)
-    h.raw("</dd><dt>Trigger</dt><dd>")
-    h.text(r.trigger)
+    h.raw("</dd>")
+    _fact(
+        h,
+        "Trigger",
+        "run-trigger",
+        (
+            "What started it: the schedule, a sensor (with the snapshots it"
+            " saw), a rebuild, a backfill, a fill, or manual (a person, or a"
+            " binary's run command)."
+        ),
+        "sensors",
+    )
+    h.term("trigger", r.trigger)
     if rebuild:
         h.raw(" ")
         h.link(String("/rebuilds/", rebuild), String("rebuild ", rebuild))
@@ -4877,33 +5375,175 @@ def _run_facts(mut h: Html, mut db: State, r: RunRow) raises:
             if i:
                 h.raw(", ")
             h.link(_snapshot_href(sensed[i]), String(sensed[i]))
-    h.raw("</dd><dt>Created</dt><dd>")
-    h.text(r.created)
-    h.raw("</dd><dt>Started</dt><dd>")
-    h.text(r.started)
-    h.raw("</dd><dt>Ended</dt><dd>")
-    h.text(r.ended)
-    if r.waiting_until:
-        h.raw("</dd><dt>Waiting</dt><dd>until ")
-        h.text(r.waiting_until)
-        h.raw(", when a step asked to run again")
-    if r.held and r.status == "queued":
-        h.raw('</dd><dt>Held</dt><dd class="error">')
-        h.text(r.held.removeprefix("held: "))
-    if r.placement:
-        h.raw("</dd><dt>Placed</dt><dd>")
-        if r.placement == "control":
-            h.raw("on the control host")
-        else:
-            h.text(r.placement)
-        var on = ran_on(db, r.id)
-        if on:
-            h.raw("</dd><dt>Ran on</dt><dd>")
-            h.text(on)
-    h.raw('</dd><dt><abbr title="', _TRIES, '">Tries</abbr></dt><dd>')
-    h.text(r.starts)
+    h.raw("</dd></dl></section>")
+
+
+def _run_code_card(mut h: Html, mut db: State, r: RunRow) raises:
+    """The Code card: the pipeline, its steps and tasks on one line, each
+    a name linked to its line; the commit and image; the driver log; then
+    the code hash."""
+    var current = (
+        db.conn.query(
+            "SELECT registry_hash FROM orca.pipelines WHERE name = $1",
+            Params().text(r.pipeline),
+        )
+        .row(0)
+        .text("registry_hash")
+    )
+    var hash = (
+        db.conn.query(
+            "SELECT registry_hash FROM orca.runs WHERE id = $1",
+            Params().int64(Int64(r.id)),
+        )
+        .row(0)
+        .text("registry_hash")
+    )
+    var version = _run_version(db, r.id)
+    var links = _code_links(db, r.pipeline, version)
+    _card(
+        h,
+        "code",
+        "Code",
+        (
+            "The code this run ran, at the commit its binary was built from."
+            " Hover a name to see its source; click it to open the file on"
+            " its host."
+        ),
+        "versions",
+    )
+    h.raw('<dl class="facts">')
+    var defs = _step_defs(db, r.pipeline)
+    var any = len(links.tasks) > 0
+    if links.pipeline:
+        any = True
+    for s in defs:
+        if links.step(s.name):
+            any = True
+    if any:
+        _fact(
+            h,
+            "Functions",
+            "run-code",
+            (
+                "The pipeline, its steps in the order they run, and the dista"
+                " tasks they fan out to, each linked to its line at the"
+                " commit this run ran."
+            ),
+            "steps",
+        )
+        var first = True
+        if links.pipeline:
+            _code_named(h, r.pipeline, links.pipeline)
+            first = False
+        for s in defs:
+            var at = links.step(s.name)
+            if not at:
+                continue
+            h.raw("" if first else " · ")
+            first = False
+            _code_named(h, s.name, at)
+        for t in links.tasks:
+            h.raw("" if first else " · ")
+            first = False
+            _code_named(h, t[0], t[1])
+        h.raw("</dd>")
+    if version:
+        _fact(
+            h,
+            "Source",
+            "run-source",
+            (
+                "The commit its binary was built from (-D ORCA_COMMIT), in"
+                " which repository, and the image it ran in, if any."
+            ),
+            "versions",
+        )
+        _source_html(h, version.value())
+        if version.value().image:
+            h.raw(' <span class="muted">in image</span> <code>')
+            h.text(version.value().image)
+            h.raw("</code>")
+        h.raw("</dd>")
+    var dir = run_dir(r.pipeline, r.id)
+    if dir and location_exists(String(dir, "/driver.log")):
+        _fact(
+            h,
+            "Driver log",
+            "run-driver",
+            (
+                "What the run's process printed: orca's lines and its steps'"
+                " output, as the scheduler kept it. Each attempt under Steps"
+                " has its own log too."
+            ),
+        )
+        h.link(String("/runs/", r.id, "/driver.log"), "driver.log")
+        h.raw("</dd>")
+    h.raw("</dl>")
+    if not any and not version:
+        h.raw(
+            '<p class="card__none">No links to the code: the binary records',
+            " no source, or <code>orca locate</code> didn't map it.</p>",
+        )
+    h.raw('<p class="hash">Code hash <code>')
+    h.text(hash)
+    h.raw("</code>")
+    _help(
+        h,
+        "run-hash",
+        "Code hash",
+        (
+            "A hash of what the binary says about itself: its steps,"
+            " partitions and schedule. It changes when they do, not on every"
+            " build."
+        ),
+        "versions",
+    )
+    if hash != current:
+        h.raw(' <span class="muted">(the pipeline has newer code)</span>')
+    h.raw("</p></section>")
+
+
+def _resources_card(mut h: Html, mut db: State, r: RunRow) raises:
+    """The Resources card: what the run's own processes used, and on
+    Kubernetes what its pods asked for."""
+    var row = db.conn.query(
+        (
+            "SELECT coalesce(cpu_millis, 0) AS cpu, coalesce(extract(epoch"
+            " FROM coalesce(ended, now()) - started)::bigint, 0) AS secs FROM"
+            " orca.runs WHERE id = $1"
+        ),
+        Params().int64(Int64(r.id)),
+    ).row(0)
+    var cpu = Int(row.int64("cpu"))
+    var secs = Int(row.int64("secs"))
+    _card(
+        h,
+        "resources",
+        "Resources",
+        (
+            "What this run's own processes used: its process and the ones it"
+            " started, dista's local workers too, measured by the scheduler"
+            " or worker that started it. Not the rest of the machine: the"
+            " machine's numbers, where they are recorded, are in their own"
+            " card further down. With a request, what it asked for and was"
+            " granted too."
+        ),
+        "runners",
+    )
+    h.raw('<dl class="facts">')
+    _grant_facts(h, r.resources)
+    _usage_facts(h, r.usage, _live(r.status))
     if cpu:
-        h.raw("</dd><dt>CPU</dt><dd>")
+        _fact(
+            h,
+            "Pods asked",
+            "run-pods",
+            (
+                "On Kubernetes, the CPU its pods asked for, times how long it"
+                " ran: what the cluster set aside for it, not what it used."
+            ),
+            "runners",
+        )
         h.text(
             cpu // 1000,
             ".",
@@ -4914,73 +5554,22 @@ def _run_facts(mut h: Html, mut db: State, r: RunRow) raises:
             cpu * secs // 1000,
             " vCPU-seconds",
         )
-    h.raw("</dd>")
-    _grant_facts(h, r.resources)
-    _usage_facts(h, r.usage, _live(r.status))
-    h.raw("<dt>Code</dt><dd><code>")
-    h.text(hash)
-    h.raw("</code>")
-    if hash != current:
-        h.raw(' <span class="muted">(the pipeline has newer code)</span>')
-    h.raw("</dd>")
-    if version:
-        h.raw("<dt>Source</dt><dd>")
-        _source_html(h, version.value())
-        if version.value().image:
-            h.raw(' <span class="muted">in image</span> <code>')
-            h.text(version.value().image)
-            h.raw("</code>")
         h.raw("</dd>")
-        _code_html(h, r.pipeline, _code_links(db, r.pipeline, version))
-    var dir = run_dir(r.pipeline, r.id)
-    if dir and location_exists(String(dir, "/driver.log")):
-        h.raw("<dt>Driver</dt><dd>")
-        h.link(String("/runs/", r.id, "/driver.log"), "driver.log")
-        h.raw("</dd>")
-    var timeline = _timeline_path(db, r)
-    if timeline:
-        h.raw("<dt>Timeline</dt><dd>")
-        h.link(String("/runs/", r.id, "/timeline.json"), "timeline.json")
-        # Perfetto fetches it itself, so only from a UI it can reach.
-        var base = String(getenv("ORCA_UI_URL").rstrip("/"))
-        if base:
-            h.raw(' <span class="muted">·</span> ')
-            h.link_out(
-                String(
-                    "https://ui.perfetto.dev/#!/?url=",
-                    url_encode(String(base, "/runs/", r.id, "/timeline.json")),
-                ),
-                "open in Perfetto",
-            )
-            h.raw("</dd>")
-        else:
-            h.raw(
-                ' <span class="muted">(Dista tasks; open it in',
-                ' <a href="https://ui.perfetto.dev" target="_blank"',
-                ' rel="noopener">Perfetto</a>)</span></dd>',
-            )
-    if r.error:
-        h.raw("<dt>Error</dt><dd>")
-        h.text(r.error)
-        h.raw("</dd>")
-    if r.stalled:
-        h.raw(
-            "<dt>Process</dt><dd>stalled: its heartbeat stopped, so it can",
-            " be resumed</dd>",
-        )
-    elif r.cancel_requested and _live(r.status):
-        h.raw(
-            "<dt>Cancel</dt><dd>asked for; the run stops before its next",
-            " attempt</dd>",
-        )
-    h.raw("</dl>")
+    h.raw("</dl></section>")
 
 
-def _run_state(mut h: Html, mut db: State, r: RunRow) raises:
-    """What changes while a run goes on: its facts, the steps, the machines
+def _run_state(mut h: Html, mut db: State, r: RunRow, view: String = "") raises:
+    """What changes while a run goes on: its cards, the steps, the machines
     and who waits for what. The page and `/runs/<id>/live` both draw it."""
-    _run_facts(h, db, r)
-    _run_live(h, db, r, _steps(db, r.id))
+    var defs = _step_defs(db, r.pipeline)
+    h.raw('<div class="pcards">')
+    _status_card(h, r, defs)
+    _trigger_card(h, db, r)
+    _run_code_card(h, db, r)
+    _resources_card(h, db, r)
+    _run_settings(h, db, r)
+    h.raw("</div>")
+    _run_live(h, db, r, _steps(db, r.id), view)
     _machines_html(h, db, r, read_metrics(r.pipeline, r.id))
     if _live(r.status):
         var waiting = db.conn.query(
@@ -5019,10 +5608,39 @@ def run_live(mut db: State, id: Int) raises -> Page:
     )
 
 
+def _setting_help(key: String) -> StaticString:
+    """The "?" text of one of a run's settings."""
+    if key == "Max runs":
+        return (
+            "The most runs of this pipeline the scheduler starts at once"
+            " (max_runs); the others wait in the queue."
+        )
+    if key == "Placement":
+        return (
+            "Where its runs start (placement): default (the scheduler's"
+            " runner), control, ec2, or a remote worker's pool."
+        )
+    if key == "Head type":
+        return "The EC2 instance type of the run's dista head."
+    if key == "Worker type":
+        return "The EC2 instance type of each of its dista workers."
+    if key == "Workers":
+        return "How many dista workers the run asks for."
+    if key == "Min workers":
+        return "The fewest workers it starts with; more join as they boot."
+    if key == "Spot":
+        return (
+            "Whether its EC2 instances are Spot: cheaper, and AWS can take"
+            " them back."
+        )
+    return "Dista worker processes on each worker instance."
+
+
 def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
-    """What the run was set up with: its environment as it was after
-    orca.toml and the flags (what its start recorded, else what the pipeline
-    is registered with), and the limits and machines. Secrets by name only."""
+    """The Settings card: where the run ran, and what it was set up with:
+    its environment as it was after orca.toml and the flags (what its start
+    recorded, else what the pipeline is registered with), and the limits
+    and machines. Secrets by name only."""
     var rows = db.conn.query(
         (
             "SELECT coalesce(r.spec->'env', p.env, '{}'::jsonb)::text AS env,"
@@ -5044,25 +5662,57 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
     if len(rows) == 0:
         return
     var s = rows.row(0)
-    h.raw("<h2>Settings</h2>")
-    h.raw('<p class="muted">')
+    _card(
+        h,
+        "settings",
+        "Settings",
+        (
+            "What the run was set up with, orca.toml and the flags applied:"
+            " as its start recorded them, or else as the pipeline is"
+            " registered. The pipeline's Config card says where each value"
+            " came from."
+        ),
+        "placement",
+    )
+    h.raw('<p class="card__sub">')
     if s.text("recorded") == "true" or s.text("recorded") == "t":
-        h.raw("As this run was started")
+        h.raw("As this run was started.")
     else:
-        h.raw("As the pipeline is registered")
-    h.raw(
-        " (orca.toml and flags applied). Secrets are shown by name; their",
-        ' values never are. <a href="/pipelines/',
-    )
+        h.raw("As the pipeline is registered.")
+    h.raw(' <a href="/pipelines/')
     h.text(url_encode(r.pipeline))
-    h.raw(
-        "#config\">The pipeline's registration</a> says where each value",
-        " came from.</p>",
-    )
+    h.raw('#config">Where each value came from</a></p>')
     h.raw('<dl class="facts">')
+    if r.placement:
+        _fact(
+            h,
+            "Placed",
+            "run-placed",
+            (
+                "Where it ran: local (beside the scheduler, on its machine),"
+                " control (on the control host, within its limits), ec2"
+                " (instances of its own), or a remote worker's pool."
+            ),
+            "placement",
+        )
+        h.term("placement", r.placement)
+        if r.placement == "control":
+            h.raw(' <span class="muted">(on the control host)</span>')
+        h.raw("</dd>")
+        var on = ran_on(db, r.id)
+        if on:
+            _fact(
+                h,
+                "Ran on",
+                "run-ran-on",
+                "The remote worker that claimed and ran it, and its token.",
+                "placement",
+            )
+            h.text(on)
+            h.raw("</dd>")
     var pairs = [
         ("Max runs", s.text("max_runs")),
-        ("Placement", s.text("placement")),
+        ("Placement", s.text("placement") if not r.placement else String()),
         ("Head type", s.text("head")),
         ("Worker type", s.text("worker")),
         ("Workers", s.text("workers")),
@@ -5074,10 +5724,15 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
         if p[1]:
             h.raw("<dt>")
             h.text(p[0])
+            _help(
+                h,
+                String("run-set-", String(p[0]).lower().replace(" ", "-")),
+                p[0],
+                _setting_help(p[0]),
+            )
             h.raw("</dt><dd>")
             h.text(p[1])
             h.raw("</dd>")
-    h.raw("</dl>")
     var env = db.conn.query(
         (
             "SELECT e.key AS name, e.value AS value FROM jsonb_each_text("
@@ -5094,24 +5749,38 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
         Params().text(s.text("secrets")),
     )
     if len(env) > 0:
-        h.raw(
-            '<h3>Environment</h3><div class="scroll"><table><thead><tr>',
-            "<th>Name</th><th>Value</th></tr></thead><tbody>",
+        _fact(
+            h,
+            "Environment",
+            "run-env",
+            (
+                "The variables orca.toml's env and the flags set in the run's"
+                " environment."
+            ),
         )
-        for e in env:
-            h.raw("<tr><td><code>")
-            h.text(e.text("name"))
-            h.raw("</code></td><td><code>")
-            h.text(e.text("value"))
-            h.raw("</code></td></tr>")
-        h.raw("</tbody></table></div>")
+        for i in range(len(env)):
+            h.raw("<br>" if i else "", '<code class="env">')
+            h.text(env.row(i).text("name"))
+            h.raw('</code>=<code class="env">')
+            h.text(env.row(i).text("value"))
+            h.raw("</code>")
+        h.raw("</dd>")
     if len(names) > 0:
-        h.raw("<h3>Secrets</h3><p>")
+        _fact(
+            h,
+            "Secrets",
+            "run-secrets",
+            (
+                "The secrets put in its environment, by name. Their values"
+                " are never shown, here or in its logs."
+            ),
+        )
         for i in range(len(names)):
             h.raw(", " if i else "", "<code>")
             h.text(names.row(i).text("name"))
             h.raw("</code>")
-        h.raw("</p>")
+        h.raw("</dd>")
+    h.raw("</dl></section>")
 
 
 def _live(status: String) -> Bool:
@@ -5120,13 +5789,21 @@ def _live(status: String) -> Bool:
 
 
 def _run_live(
-    mut h: Html, mut db: State, r: RunRow, steps: List[StepRow]
+    mut h: Html,
+    mut db: State,
+    r: RunRow,
+    steps: List[StepRow],
+    view: String = "",
 ) raises:
-    """What changes while a run goes on: what can be done to it, its DAG in
-    its steps' colours, its status, and its steps."""
+    """The Steps card: its tabs (`?steps=table|timeline|graph`, the table
+    without one; with scripts the choice is kept in `localStorage`), the
+    table of steps by partition, their attempts on the clock, and the DAG
+    in their colours."""
     var defs = _step_defs(db, r.pipeline)
-    _run_actions(h, r, defs)
     var links = _code_links(db, r.pipeline, _run_version(db, r.id))
+    var shown = String("table")
+    if view == "timeline" or view == "graph":
+        shown = view
     var dag = List[DagStep]()
     for d in defs:
         var st = List[String]()
@@ -5142,10 +5819,44 @@ def _run_live(
                 links.step(d.name).url,
             )
         )
-    h.raw('<div class="scroll">', dag_svg(dag), "</div><h2>Steps ")
+    h.raw(
+        '<section class="card steps" id="steps" data-tabs="orca.run.steps"',
+        ' data-tabs-param="steps"><div class="steps__head"><h2>Steps',
+    )
+    _help(
+        h,
+        "card-steps",
+        "Steps",
+        (
+            "Each step of each partition. Table: its status, attempts, times,"
+            " what its latest attempt used, and its log. Timeline: the"
+            " attempts on the clock, a row per step. Graph: the steps in the"
+            " order they run, in this run's colours."
+        ),
+        "steps",
+    )
     h.status(r.status)
     h.raw(
-        '</h2><div class="scroll"><table><thead><tr><th>Step</th>',
+        '</h2><div class="vtabs"><div role="tablist"',
+        ' aria-label="How to show the steps">',
+    )
+    for v in [("table", "Table"), ("timeline", "Timeline"), ("graph", "Graph")]:
+        h.raw('<a role="tab" class="vtabs__tab" data-view="', v[0], '" href="')
+        h.text("/runs/", r.id, "?steps=", v[0], "#steps")
+        h.raw(
+            '" aria-selected="',
+            "true" if shown == v[0] else "false",
+            '" aria-controls="steps-',
+            v[0],
+            '">',
+            v[1],
+            "</a>",
+        )
+    h.raw(
+        '</div></div></div><div id="steps-table" role="tabpanel"',
+        ' class="scroll"',
+        "" if shown == "table" else " hidden",
+        "><table><thead><tr><th>Step</th>",
         '<th>Partition</th><th>Status</th><th class="num">Attempts</th>',
         "<th>Started</th><th>Ended</th>",
         '<th class="num"><abbr title="',
@@ -5182,7 +5893,32 @@ def _run_live(
         h.raw('</td><td class="error">')
         h.text(s.error)
         h.raw("</td></tr>")
-    h.raw("</tbody></table></div>")
+    h.raw(
+        '</tbody></table></div><div id="steps-timeline" role="tabpanel"',
+        ' class="scroll steps__graph"',
+        "" if shown == "timeline" else " hidden",
+        ">",
+    )
+    var spans = _step_spans(db, r.id)
+    if len(spans) > 0:
+        h.raw(
+            metrics_svg(
+                List[InstanceMetrics](),
+                spans,
+                _live(r.status),
+                "The run's attempts over time",
+            )
+        )
+    else:
+        h.raw('<p class="muted">No attempt has started yet.</p>')
+    h.raw(
+        '</div><div id="steps-graph" role="tabpanel" class="scroll',
+        ' steps__graph"',
+        "" if shown == "graph" else " hidden",
+        ">",
+        dag_svg(dag),
+        "</div></section>",
+    )
 
 
 comptime _STEP_PEAK = (
@@ -6223,8 +6959,8 @@ def _json_made(mut out: String, ms: List[Made]):
 def _made_table(mut h: Html, ms: List[Made]):
     h.raw(
         '<div class="scroll"><table><thead><tr><th>Snapshot</th>',
-        "<th>Made by</th><th>Run</th><th>Step</th><th>Partition</th>",
-        "<th>Code</th><th>Committed</th><th>From</th></tr></thead><tbody>",
+        "<th>Written by</th><th>Run</th><th>Step</th><th>Partition</th>",
+        "<th>Code</th><th>Committed</th><th>Read</th></tr></thead><tbody>",
     )
     for m in ms:
         h.raw("<tr><td>")
@@ -6267,21 +7003,34 @@ def _lineage_graph(start: SnapshotRef, b: List[Made], f: List[Made]) -> String:
         all.append(m.copy())
     for m in f:
         all.append(m.copy())
-    # Sources first (inputs nobody here made), then the made, back to front.
-    for m in all:
-        for i in m.inputs:
+    # Inputs nobody here made first, then the made, back to front. An input
+    # upstream that no orca run made is a source (the back walk would have
+    # it otherwise); one only a downstream step read is another input of
+    # that step, whose own lineage isn't drawn.
+    for k in range(len(all)):
+        var inputs = all[k].inputs.copy()
+        for i in inputs:
             var made = False
             for o in all:
                 made = made or o.at == i
             if not made and _index_of(refs, i) < 0:
+                var source = k < len(b)
                 refs.append(i.copy())
                 nodes.append(
                     Node(
                         i.dataset,
-                        String(i.snapshot, " · source"),
+                        "source" if source else "also read",
                         "snapshot",
                         _snapshot_href(i),
-                        "start" if i == start else "source",
+                        "start" if i
+                        == start else ("source" if source else "other"),
+                        String(
+                            i,
+                            ": a source, written by no orca run" if source else (
+                                ": also read by a step downstream; open it"
+                                " for its own lineage"
+                            ),
+                        ),
                     )
                 )
     if _index_of(refs, start) < 0:
@@ -6293,26 +7042,33 @@ def _lineage_graph(start: SnapshotRef, b: List[Made], f: List[Made]) -> String:
             nodes.append(
                 Node(
                     start.dataset,
-                    String(start.snapshot, " · source"),
+                    "source",
                     "snapshot",
                     _snapshot_href(start),
                     "start",
+                    String(start, ": a source, written by no orca run"),
                 )
             )
     for m in all:
         if _index_of(refs, m.at) >= 0:
             continue
         refs.append(m.at.copy())
-        var sub = String(m.at.snapshot, " · ", m.pipeline)
+        var sub = String(m.pipeline)
         if m.partition:
             sub.write(" ", m.partition)
+        var title = String(
+            m.at, ": written by ", m.pipeline, " run ", m.run, ", step ", m.step
+        )
+        if m.partition:
+            title.write(" ", m.partition)
         nodes.append(
             Node(
                 m.at.dataset,
-                sub^,
+                sub,
                 "snapshot",
                 _snapshot_href(m.at),
                 "start" if m.at == start else "",
+                title,
             )
         )
     for m in all:
@@ -6326,6 +7082,27 @@ def _lineage_graph(start: SnapshotRef, b: List[Made], f: List[Made]) -> String:
                 if not dup:
                     edges.append(Edge(src, dst))
     return graph_svg(nodes, edges, String("The lineage of ", start))
+
+
+comptime _LINEAGE_HELP = (
+    "Each box is a snapshot of a dataset, an arrow a step that read the"
+    " snapshot it starts at and wrote the one it points to, so data flows"
+    " down: what this snapshot was written from is above it, what was"
+    " written from it below, up to 20 steps away. A box's"
+    " second line is the pipeline and partition that wrote it; hover for"
+    " the run and step, click to open that snapshot's lineage."
+)
+comptime _UPSTREAM_HELP = (
+    "This snapshot, if an orca run wrote it, and every snapshot it was"
+    " written from, directly or not: for each, the run and step that wrote"
+    " it and the snapshots that step read. A source, written by something"
+    " other than orca, is only in the Read column. back in the JSON."
+)
+comptime _DOWNSTREAM_HELP = (
+    "Every snapshot a step wrote after reading this one, then what steps"
+    " wrote after reading those, and so on: what a change to it reaches."
+    " forward in the JSON."
+)
 
 
 def snapshot_page(mut db: State, name: String, id: Int64) raises -> Page:
@@ -6356,18 +7133,34 @@ def snapshot_page(mut db: State, name: String, id: Int64) raises -> Page:
     h.raw("</p><h1>")
     h.text(name, " @ ", id)
     h.raw("</h1>")
-    h.raw('<div class="scroll">', _lineage_graph(start, b, f), "</div>")
-    h.raw("<h2>Made from</h2>")
+    _card(h, "lineage", "Lineage", _LINEAGE_HELP, "datasets", facts=False)
+    h.raw(
+        '<p class="muted graph__legend"><span class="graph__key',
+        ' graph__key--start"></span>this snapshot <span class="graph__key">',
+        '</span>written by an orca run <span class="graph__key',
+        ' graph__key--source"></span>a source, written by something else',
+        ' <span class="graph__key graph__key--other"></span>another input of',
+        ' a step downstream <span class="graph__arrow">↓</span> read, to',
+        " write</p>",
+        '<div class="scroll">',
+        _lineage_graph(start, b, f),
+        "</div></section>",
+    )
+    h.raw('<h2 id="upstream">Upstream')
+    _help(h, "upstream", "Upstream", _UPSTREAM_HELP, "datasets")
+    h.raw("</h2>")
     if len(b) == 0:
         h.raw(
-            '<p class="empty">No orca run made this snapshot: it is a'
+            '<p class="empty">No orca run wrote this snapshot: it is a'
             " source.</p>"
         )
     else:
         _made_table(h, b)
-    h.raw("<h2>Made from it</h2>")
+    h.raw('<h2 id="downstream">Downstream')
+    _help(h, "downstream", "Downstream", _DOWNSTREAM_HELP, "datasets")
+    h.raw("</h2>")
     if len(f) == 0:
-        h.raw('<p class="empty">Nothing orca made has read it yet.</p>')
+        h.raw('<p class="empty">No orca run has read it yet.</p>')
     else:
         _made_table(h, f)
     return Page(200, j^, _page(String(name, " @ ", id), "/datasets", h))
@@ -6663,6 +7456,11 @@ def _reason(status: Int) -> String:
 def _respond(page: Page, json: Bool) -> Response:
     var raw = page.content_type != ""
     var body = page.json if json and not raw else page.html
+    if not (json and not raw) and (
+        not raw or page.content_type.startswith("text/html")
+    ):
+        # A fragment's ids apart from its page's.
+        body = with_header_help(body, String("thf") if raw else String("th"))
     var status = (
         200 if page.location and json and page.status == 303 else (page.status)
     )
@@ -7213,6 +8011,8 @@ struct Ui(Copyable, Handler):
                 before=_int(_query(url, "before")),
                 n=_int(_query(url, "n")),
             )
+        if path == "/code":
+            return code_page(_query(url, "u"))
         if path.startswith("/runs/"):
             var parts = path[byte=6:].split("/")
             var id: Int
@@ -7221,7 +8021,7 @@ struct Ui(Copyable, Handler):
             except:
                 return not_found(String("no run ", parts[0]))
             if len(parts) == 1:
-                return run(db, id)
+                return run(db, id, _query(url, "steps"))
             if len(parts) == 2 and parts[1] == "live":
                 return run_live(db, id)
             if len(parts) == 2 and parts[1] == "steps":

@@ -541,10 +541,14 @@ def _strip_label(mut out: String, y: Int, text: String):
 
 
 def metrics_svg(
-    instances: List[InstanceMetrics], steps: List[StepSpan], live: Bool
+    instances: List[InstanceMetrics],
+    steps: List[StepSpan],
+    live: Bool,
+    label: String = "The run's machines over time",
 ) -> String:
     """The steps lane, then three strips per instance, on one time axis,
-    with the warnings as bands."""
+    with the warnings as bands; without instances, the steps lane alone.
+    `label` names it for screen readers."""
     var t = axis_of(instances, steps)
     var ax = _Axis(t[0], t[1])
     var names = List[String]()
@@ -564,7 +568,9 @@ def metrics_svg(
         width,
         '" height="',
         height,
-        '" role="img" aria-label="The run\'s machines over time">',
+        '" role="img" aria-label="',
+        escape(label),
+        '">',
     )
     # The axis, its ticks through every row.
     var bottom = height - _AXIS
