@@ -45,12 +45,13 @@ from std.sys import stderr
 from json import Value, loads
 from objectstore.http import Header, HttpClient, Response
 
+from orca.civil import now, parse_time
 from orca.html import url_encode
 from orca.json import quote
 from orca.lineage import SnapshotRef
 from orca.scheduler import file_names
 from orca.state import State
-from orca.ui import act, read_page
+from orca.ui import _took, act, read_page
 from orca.watchdog import status_lines
 
 
@@ -599,6 +600,19 @@ def _int_of(v: Value, key: String) raises -> Int:
     return Int(v[key].int_value())
 
 
+def _run_took(r: Value) raises -> String:
+    """How long a run ran (`3m 21s`), up to now while it runs; `-` before it
+    started."""
+    var started = r["started"]
+    if not started.is_string() or not started.string_value():
+        return "-"
+    var ended = r["ended"]
+    var end = now()
+    if ended.is_string() and ended.string_value():
+        end = parse_time(ended.string_value())
+    return _took(Int(end - parse_time(started.string_value())))
+
+
 def _text(v: Value, key: String) raises -> String:
     """A field of `v` as text: a string as it is, null as `-`."""
     var x = v[key]
@@ -679,7 +693,7 @@ def print_status(json: String, one: Bool) raises:
             " ",
             r["partitions"].string_value(),
             " ",
-            _text(r, "created"),
+            _run_took(r),
         )
         if (
             r["cancel_requested"].bool_value()
