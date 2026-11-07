@@ -29,7 +29,7 @@ revoked token stays listed, as revoked, and is answered 401.
 |---|---|
 | `/api/worker/claim` | the worker's own heartbeat (`name`, `image`, `cpus`, `memory_mb`, `running`), and with `slots` > 0 the oldest queued run of its pool it may take: its spec, or `null` |
 | `/api/worker/release` | a run it was given and won't start (`run`, `start`, `why`): queued again, held saying why |
-| `/api/worker/exited` | a run's process ended (`run`, `start`, `code`, `last`): a run it never claimed fails with why |
+| `/api/worker/exited` | a run's process ended (`run`, `start`, `code`, `last`): a run it never claimed fails with why; with `pid`, `max_rss` and `marks`, the process's samples, its attempts' peak memory and CPU are recorded (`orca.usage`) |
 | `/api/worker/store/<call>` | a `RunStore` call of a run this worker claimed, made on `orca.state.PgStore` |
 
 A claim takes, under its pipeline's lock, a queued run whose pipeline isn't
@@ -71,6 +71,7 @@ from orca.tokens import (
     new_token,
     token_hash,
 )
+from orca.usage import marks_of, record as record_usage
 
 comptime WORKER_OWNER = "worker"
 """A run's owner once a worker claimed it, until its process does."""
@@ -523,7 +524,8 @@ def release(mut db: State, w: WorkerAuth, v: Value) raises -> String:
 
 def exited(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     """`/api/worker/exited`: fails a run whose process ended before it
-    claimed it, as the scheduler's reap does for a local run."""
+    claimed it, as the scheduler's reap does for a local run, and records
+    what the process's attempts used from the worker's samples."""
     var run = _num(v, "run")
     var why = String(
         "its process on ",
@@ -548,7 +550,20 @@ def exited(mut db: State, w: WorkerAuth, v: Value) raises -> String:
         .text(why)
         .text(WORKER_OWNER),
     )
-    return String('{"failed": ', "true" if n == 1 else "false", "}")
+    var used = 0
+    if String("marks") in v and String("pid") in v:
+        used = record_usage(
+            db,
+            Int(run),
+            Int(_num(v, "pid")),
+            marks_of(v["marks"]),
+            Int(_num(v, "max_rss")) if String("max_rss") in v else -1,
+            worker=w.id,
+            start=Int(_num(v, "start")),
+        )
+    return String(
+        '{"failed": ', "true" if n == 1 else "false", ', "usage": ', used, "}"
+    )
 
 
 # ── store calls ──────────────────────────────────────────────────────────────

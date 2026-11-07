@@ -233,6 +233,33 @@ def parse_pid_stat(text: String) -> Tuple[Int, Int]:
 
 
 @fieldwise_init
+struct PidUsage(ImplicitlyCopyable, Movable):
+    """What /proc/<pid>/stat says one process uses."""
+
+    var parent: Int
+    """-1 if the line was malformed."""
+    var rss_pages: Int
+    var cpu_ticks: Int
+    """utime + stime + cutime + cstime: its own CPU and that of the
+    children it waited for, in clock ticks."""
+
+
+def parse_pid_usage(text: String) -> PidUsage:
+    """/proc/<pid>/stat's parent, resident pages and CPU ticks."""
+    var close = text.rfind(")")
+    if close < 0:
+        return PidUsage(-1, 0, 0)
+    var f = text[byte = close + 1 :].split()
+    if len(f) < 22:
+        return PidUsage(-1, 0, 0)
+    return PidUsage(
+        _int(f[1]),
+        _int(f[21]),
+        _int(f[11]) + _int(f[12]) + _int(f[13]) + _int(f[14]),
+    )
+
+
+@fieldwise_init
 struct CpuShare(Copyable, Movable):
     """Percentages of all cores' time between two readings."""
 
@@ -958,6 +985,68 @@ def tree_rss(root: Int, argv0: String = "") -> Int:
             if counted:
                 total += e.value
         return total
+
+
+def tree_usage(roots: List[Int]) -> Dict[Int, Tuple[Int, Float64]]:
+    """Each root's process tree's resident bytes and CPU seconds (its own
+    and its descendants', with what they waited for: so a child's time
+    stays counted once it ends), from one pass over /proc; the scheduler
+    and `orca worker` sample their runs with it each tick (orca.usage).
+    Empty on macOS, which has no /proc: there the runs' usage is what
+    `wait4` says at their end."""
+    var out = Dict[Int, Tuple[Int, Float64]]()
+    comptime if CompilationTarget.is_linux():
+        if len(roots) == 0:
+            return out^
+        var page = Int(external_call["getpagesize", c_int]())
+        # _SC_CLK_TCK is 2 on Linux.
+        var hz = Int(external_call["sysconf", Int](c_int(2)))
+        if hz <= 0:
+            hz = 100
+        var procs = Dict[Int, PidUsage]()
+        var pids: List[String]
+        try:
+            pids = listdir("/proc")
+        except:
+            return out^
+        for name in pids:
+            var pid: Int
+            try:
+                pid = Int(name)
+            except:
+                continue
+            var u = parse_pid_usage(_read(String("/proc/", pid, "/stat")))
+            if u.parent >= 0:
+                procs[pid] = u
+        var root_of = Dict[Int, Int]()
+        for r in roots:
+            root_of[r] = r
+            out[r] = (0, 0.0)
+        var rss = Dict[Int, Int]()
+        var ticks = Dict[Int, Int]()
+        for e in procs.items():
+            # Up the parents to a root, or to init: the ones walked are
+            # under the same one.
+            var walked = List[Int]()
+            var p = e.key
+            var found = -1
+            while p > 1 and len(walked) < 64:
+                if p in root_of:
+                    found = root_of.get(p, -1)
+                    break
+                walked.append(p)
+                p = procs.get(p, PidUsage(0, 0, 0)).parent
+            for w in walked:
+                root_of[w] = found
+            if found >= 0:
+                rss[found] = rss.get(found, 0) + e.value.rss_pages * page
+                ticks[found] = ticks.get(found, 0) + e.value.cpu_ticks
+        for r in roots:
+            if r in procs:
+                out[r] = (rss.get(r, 0), Float64(ticks.get(r, 0)) / Float64(hz))
+            else:
+                _ = out.pop(r, (0, 0.0))
+    return out^
 
 
 def default_dirs() -> List[String]:

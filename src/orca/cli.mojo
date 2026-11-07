@@ -86,6 +86,7 @@ from orca.store import (
     RunStore,
     process_owner,
 )
+from orca.usage import usage_text
 from orca.warehouse import Sensed, current_snapshot
 
 comptime USAGE = """usage:
@@ -573,6 +574,8 @@ def _print_steps[
         line.write(" ", s.status)
         if s.attempts > 1:
             line.write(" after ", s.attempts, " attempts")
+        if s.usage.known():
+            line.write(" (", usage_text(s.usage), ")")
         if s.error:
             line.write(": ", s.error)
         if show_logs and s.log:

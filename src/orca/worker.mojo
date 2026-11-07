@@ -19,7 +19,10 @@ data and logs go where the worker's own `ORCA_WAREHOUSE` and `ORCA_LOGS`
 say, as any run's do. When the process ends, its output is appended to
 the run's `driver.log` by `<binary> keep-log`, which also fails the
 attempts a crash left running; a process that ended before claiming its
-run has the run failed, saying why (`/api/worker/exited`).
+run has the run failed, saying why (`/api/worker/exited`). Each poll the
+worker samples its runs' process trees, as the scheduler samples a local
+run's, and sends the samples with `/api/worker/exited`, so their attempts
+get their peak memory and CPU (`orca.usage`).
 
 **No database.** The worker refuses to start with `ORCA_DATABASE_URL` set:
 nothing on a worker holds database credentials. Its token is
@@ -49,9 +52,10 @@ from json import Value
 from orca.control import fetch_secret
 from orca.http_store import Body, StateApi
 from orca.logs import run_dir
-from orca.proc import reap, spawn
-from orca.sample import _hostname, _sysctl_u64, parse_meminfo
+from orca.proc import Reaped, reap, spawn
+from orca.sample import _hostname, _sysctl_u64, parse_meminfo, tree_usage
 from orca.store import FINAL
+from orca.usage import Meter, marks_json
 from orca.workers import (
     WorkerRun,
     pool_problem,
@@ -117,6 +121,9 @@ struct Worker(Movable):
     """The runs' processes, by pid."""
     var keeping: Dict[Int, String]
     """`keep-log`s going, by pid, with the stage they're keeping."""
+    var meters: Dict[Int, Meter]
+    """The runs' processes' samples, by pid, sent when each ends
+    (`orca.usage`)."""
 
     def __init__(
         out self,
@@ -139,6 +146,7 @@ struct Worker(Movable):
         self.dir = dir
         self.running = Dict[Int, _Running]()
         self.keeping = Dict[Int, String]()
+        self.meters = Dict[Int, Meter]()
 
     def _running_ids(self) -> String:
         var ids = String()
@@ -196,6 +204,7 @@ struct Worker(Movable):
         if spec.allow_new_code:
             argv.append("--allow-new-code")
         var pid = spawn(argv, stage, env=env, group=True)
+        self.meters[pid] = Meter()
         print(
             "started",
             spec.pipeline,
@@ -209,7 +218,20 @@ struct Worker(Movable):
         )
         self.running[pid] = _Running(spec.copy(), stage, env^)
 
-    def _ended(mut self, pid: Int, code: Int) raises:
+    def _sample(mut self):
+        """Samples each run's process tree (none on macOS)."""
+        var pids = List[Int]()
+        for e in self.meters.items():
+            pids.append(e.key)
+        for e in tree_usage(pids).items():
+            try:
+                self.meters[e.key].sample(e.value[0], e.value[1])
+            except:
+                pass
+
+    def _ended(mut self, done: Reaped) raises:
+        var pid = done.pid
+        var code = done.code
         if pid in self.keeping:
             var stage = self.keeping.pop(pid)
             if code != 0:
@@ -224,6 +246,8 @@ struct Worker(Movable):
             return
         var r = self.running.pop(pid)
         print("run", r.spec.run, "pid", pid, "exited", code, flush=True)
+        var m = self.meters.pop(pid, Meter())
+        m.end(done.max_rss, done.cpu_seconds)
         try:
             _ = self._post(
                 "/api/worker/exited",
@@ -231,7 +255,10 @@ struct Worker(Movable):
                 .int("run", Int64(r.spec.run))
                 .int("start", Int64(r.spec.start))
                 .int("code", Int64(code))
-                .text("last", _last_line(r.stage)),
+                .text("last", _last_line(r.stage))
+                .int("pid", Int64(pid))
+                .int("max_rss", Int64(m.max_rss))
+                .raw("marks", marks_json(m.aged())),
             )
         except e:
             print("orca worker: can't report run", r.spec.run, "ending:", e)
@@ -279,9 +306,10 @@ struct Worker(Movable):
         while True:
             for done in reap():
                 try:
-                    self._ended(done[0], done[1])
+                    self._ended(done)
                 except e:
                     print("orca worker:", e)
+            self._sample()
             var slots = self.max_runs - len(self.running)
             var got: Value
             try:

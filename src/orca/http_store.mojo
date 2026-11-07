@@ -52,6 +52,7 @@ from orca.store import (
     SUCCEEDED,
     Store,
     TableSnapshot,
+    Usage,
 )
 
 comptime STORE_PATH = "/api/worker/store/"
@@ -199,6 +200,9 @@ def steps_json(steps: List[StepInfo]) -> String:
             .int("attempts", Int64(s.attempts))
             .text("error", s.error)
             .text("log", s.log)
+            .int("peak_rss_bytes", Int64(s.usage.peak_rss_bytes))
+            .float("cpu_seconds", s.usage.cpu_seconds)
+            .float("peak_cpus", s.usage.peak_cpus)
             .finish()
         )
     out.write("]")
@@ -216,9 +220,26 @@ def steps_of(v: Value) raises -> List[StepInfo]:
                 Int(_int(s, "attempts")),
                 _text(s, "error"),
                 _text(s, "log"),
+                _usage_of(s),
             )
         )
     return out^
+
+
+def _float_or(v: Value, key: String, default: Float64) raises -> Float64:
+    if key not in v:
+        return default
+    var x = v[key]
+    return Float64(x.int_value()) if x.is_int() else x.float_value()
+
+
+def _usage_of(v: Value) raises -> Usage:
+    """A step's usage; -1 for each field missing (a UI older than this)."""
+    return Usage(
+        Int(_float_or(v, "peak_rss_bytes", -1)),
+        _float_or(v, "cpu_seconds", -1),
+        _float_or(v, "peak_cpus", -1),
+    )
 
 
 def prior_json(res: RunResult) -> String:

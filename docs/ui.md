@@ -36,7 +36,7 @@ Three tabs, each its own page, so links and the back button work:
 The name, Pause and the Progress card are on every tab. Links to
 `#coverage`, `#start` or `#stop` open Operate.
 
-The header is three cards, side by side on a wide screen:
+The header is four cards, side by side on a wide screen:
 
 - **Progress**: runs going, the [fill](orca-toml.md#fills) (done of total,
   rate, ETA, today's spend against its budget, why it's idle), a failing
@@ -45,6 +45,10 @@ The header is three cards, side by side on a wide screen:
   [placement](placement.md), binary.
 - **Code**: the pipeline, its steps and dista tasks, each linked to its
   line on GitHub, and the code hash.
+- **Resources**: what its last 20 measured runs used, the median (p50)
+  and the most of each run's peak memory, CPU time and peak cores: what
+  to ask for in a request (#171). It's `usage` in the page's JSON. See
+  [What a run uses](#what-a-run-uses).
 
 Each fact's name has a "?" that explains it, with a link to the docs.
 Steps shows a Graph and a Table tab (`?steps=graph|table`). Hovering any
@@ -59,6 +63,32 @@ links the pipeline's previous and next run (the left and right arrow keys
 follow them). Settings shows the environment the run had, max runs,
 placement and worker settings, with secrets by name only. A run on a
 [remote worker](workers.md) says which worker ran it.
+
+### What a run uses
+
+The scheduler measures the runs it starts here (local and control-placed),
+and `orca worker` the runs it starts: each tick (every second; a worker's
+every poll) it reads the run's process tree in `/proc` (the run's process
+and what it started, dista's local workers too), and when the process
+ends `wait4` gives the largest single process and the CPU time of those
+that ended between samples. Each attempt of that process gets its share,
+by time: its **peak memory** (the most the tree held at once), its **CPU
+used** (user and system seconds), and its **peak cores** (the most cores
+kept busy over one sample's interval). They are `peak_rss_bytes`,
+`cpu_seconds` and `peak_cpus` on `orca.attempts`.
+
+The run's page has the run's Peak memory (its attempts' largest) and CPU
+used (their sum, with the most cores at once), and the Steps table each
+step's latest attempt's; an attempt's page has its own. Runs tables have
+a Peak column. In the JSON, a run, each step and each attempt have
+`usage`, with `null` for what wasn't measured. `orca status <pipeline>`
+prints each run's, and `<binary> status <run>` each step's.
+
+Not measured: runs on EC2 or Kubernetes (their machines' samples are under
+Machines), runs no scheduler or worker started (`<binary> run`), and on
+macOS, which has no `/proc`, the peak cores, and an attempt that shares
+its process with others (a retry, a second step): there only a process
+of one attempt gets `wait4`'s numbers.
 
 A run with dista tasks has a **Timeline**: a track per process (driver or
 head, then each worker), a lane per slot, spans coloured by function, input

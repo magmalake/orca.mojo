@@ -29,7 +29,14 @@ from orca.http_store import (
     steps_json,
     steps_of,
 )
-from orca.store import RunInfo, RunResult, StepInfo, StepRun, SUCCEEDED
+from orca.store import (
+    RunInfo,
+    RunResult,
+    StepInfo,
+    StepRun,
+    SUCCEEDED,
+    Usage,
+)
 from orca.workers import (
     WorkerRun,
     version_refusal,
@@ -89,8 +96,16 @@ def test_run_info() raises:
 
 def test_steps() raises:
     var steps: List[StepInfo] = [
-        StepInfo("load", "2024-01", "succeeded", 1, "", "/logs/a"),
-        StepInfo("sum", "", "failed", 3, "boom: é", ""),
+        StepInfo(
+            "load",
+            "2024-01",
+            "succeeded",
+            1,
+            "",
+            "/logs/a",
+            Usage(209715200, 6.25, 2.5),
+        ),
+        StepInfo("sum", "", "failed", 3, "boom: é", "", Usage.unknown()),
     ]
     var got = steps_of(loads(steps_json(steps)))
     assert_equal(len(got), 2)
@@ -99,6 +114,11 @@ def test_steps() raises:
     assert_equal(got[1].partition, "")
     assert_equal(got[1].attempts, 3)
     assert_equal(got[1].error, "boom: é")
+    assert_equal(got[0].usage.peak_rss_bytes, 209715200)
+    assert_equal(got[0].usage.cpu_seconds, 6.25)
+    assert_equal(got[0].usage.peak_cpus, 2.5)
+    assert_false(got[1].usage.known())
+    assert_equal(got[1].usage.peak_cpus, -1.0)
     assert_equal(len(steps_of(loads(steps_json(List[StepInfo]())))), 0)
 
 
