@@ -242,7 +242,18 @@ grep -q 'status--succeeded">succeeded</span></h2>' "$log.frag" || fail "the frag
 fan=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
 html "/runs/$fan" | grep -q "/runs/$fan/timeline.json" || fail "the run doesn't link its timeline"
 curl -fsS "$base/runs/$fan/timeline.json" | grep -q '"ph":"X"' || fail "the timeline isn't a Chrome trace"
-html "/runs/$fan" | grep -q '<svg class="tl"' || fail "the run page doesn't draw its timeline"
+# Its page draws it in the browser (orca.ui_viz): a section that fetches
+# timeline.json once it's in view, so the page holds none of the trace.
+page=$(html "/runs/$fan")
+echo "$page" | grep -qF "<section class=\"card tlv\" id=\"timeline\" data-src=\"/runs/$fan/timeline.json\">" \
+    || fail "the run page has no timeline viewer"
+echo "$page" | grep -qF '>Reset zoom</button>' || fail "the viewer has no Reset zoom"
+echo "$page" | grep -qF 'Open in Perfetto ↗</a>' || fail "the viewer doesn't link Perfetto"
+echo "$page" | grep -q 'new IntersectionObserver' || fail "the viewer doesn't wait to be in view"
+echo "$page" | grep -qF 'fetch(box.dataset.src)' || fail "the viewer doesn't fetch its data-src"
+echo "$page" | grep -q '"ph":' && fail "the run page holds the trace itself"
+html "/runs/$ok_run" | grep -q 'class="card tlv"' && fail "a run without tasks has a timeline viewer"
+curl -fsS "$base/static/orca.css" | grep -qF '.tlv__canvas' || fail "the stylesheet has no viewer rules"
 curl -fsS -D - -o /dev/null "$base/runs/$fan/timeline.json" | grep -qi '^access-control-allow-origin: https://ui.perfetto.dev' \
     || fail "Perfetto can't fetch the timeline"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$ok_run/timeline.json")
@@ -350,6 +361,77 @@ html /pipelines/toy | grep -qF 'action="/pipelines/toy/unpause"><button type="su
 q "UPDATE orca.pipelines SET paused = false WHERE name = 'toy'" > /dev/null
 q "DELETE FROM orca.runs WHERE id = $qd" > /dev/null
 echo "ok   /runs: dropdown filters, pages and tries"
+
+# The home page's Timeline tab (orca.ui_viz): List stays the default and
+# works without scripts; /api/gantt has the pipelines in dataset order
+# (gantt_raw writes raw.a, which fake_sensor reads to write lake.ab, which
+# gantt_report reads), their runs in the window, the edges between them,
+# and the run gantt_raw's commit started in fake_sensor.
+page=$(html /)
+echo "$page" | grep -qF '<button type="button" role="tab" class="vtabs__tab" data-view="list" aria-selected="true" aria-controls="pipelines-list">List</button>' \
+    || fail "the home page has no List tab, selected"
+echo "$page" | grep -qF 'data-view="timeline" aria-selected="false" aria-controls="pipelines-gantt">Timeline</button>' \
+    || fail "the home page has no Timeline tab"
+echo "$page" | grep -qF '<div class="vtabs" hidden>' || fail "the tabs show without scripts"
+echo "$page" | grep -qF '<div id="pipelines-list" role="tabpanel"><section class="card"><div class="scroll"><table>' \
+    || fail "the list isn't the tabs' first panel"
+echo "$page" | grep -qF 'id="pipelines-gantt" role="tabpanel" data-src="/api/gantt" hidden>' \
+    || fail "the timeline panel isn't hidden until asked for"
+echo "$page" | grep -qF 'localStorage.setItem' || fail "the tab isn't remembered"
+fake() { # name, reads, writes: a pipeline's binary that only describes it
+    cat > "build/$1" << FAKE
+#!/bin/sh
+case "\$1" in
+describe) echo '{"pipeline": "$1", "registry_hash": "0x$1", "partitions": {"kind": "monthly", "start": null}, "schedule": null, "max_runs": 1, "run_retries": 0, "steps": [{"name": "s", "kind": "mapped", "after": null, "function": "s", "input": "orca.month.Month", "output": "Int", "reads": $2, "writes": $3}], "tasks": [], "source": {"repo": "", "commit": "", "dirty": false}}' ;;
+*) exit 0 ;;
+esac
+FAKE
+    chmod +x "build/$1"
+}
+fake gantt_report '["lake.ab"]' '[]'
+fake gantt_raw '[]' '["raw.a"]'
+export FAKE_SENSE="$PWD/build/ui-sense.txt"
+printf 'raw.a -1 other -\nraw.b -1 other -\n' > "$FAKE_SENSE"
+for b in ./build/gantt_report ./tests/fake_sensor ./build/gantt_raw; do
+    ./build/orca register "$b" >> "$log" 2>&1 || fail "register $b"
+done
+# gantt_raw's run commits raw.a@7, which starts fake_sensor's run (as the
+# scheduler records it in orca.sensed); gantt_report has a fill running.
+mk() { # pipeline, status, trigger, minutes ago started, ended (or null)
+    q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, created, started, ended)
+       SELECT '$1', registry_hash, '2024-01', '$3', '$2', now() - interval '$4 minutes',
+       now() - interval '$4 minutes', $5 FROM orca.pipelines WHERE name = '$1' RETURNING id" | head -1
+}
+up=$(mk gantt_raw succeeded schedule 120 "now() - interval '110 minutes'")
+down=$(mk fake_sensor succeeded sensor 105 "now() - interval '100 minutes'")
+filling=$(mk gantt_report running fill 30 null)
+old=$(mk gantt_raw succeeded schedule 3000 "now() - interval '2990 minutes'")
+st=$(q "INSERT INTO orca.steps (run, step, partition, ord, status) VALUES ($up, 's', '2024-01', 0, 'succeeded') RETURNING id" | head -1)
+at=$(q "INSERT INTO orca.attempts (step, attempt, status, host, registry_hash) VALUES ($st, 1, 'succeeded', 'h', '0xgantt_raw') RETURNING id" | head -1)
+q "INSERT INTO orca.commits (attempt, table_name, snapshot_id, dataset) VALUES ($at, 'raw/a', 7, 'raw.a')" > /dev/null
+q "INSERT INTO orca.sensed (pipeline, dataset, snapshot_id, run) VALUES ('fake_sensor', 'raw.a', 7, $down)" > /dev/null
+g=$(json '/api/gantt?window=24h')
+echo "$g" | jq -e '[.rows[].pipeline | select(startswith("gantt_") or . == "fake_sensor")] == ["gantt_raw", "fake_sensor", "gantt_report"]' > /dev/null \
+    || fail "/api/gantt's rows aren't in dataset order: $(echo "$g" | jq -c '[.rows[] | [.pipeline, .depth]]')"
+echo "$g" | jq -e '.window == "24h" and .seconds == 86400 and .now > 0 and .truncated == false
+    and ([.rows[] | select(.pipeline == "fake_sensor")][0] | .depth == 1 and .how == "sensor" and .reads == ["raw.a", "raw.b"] and .writes == ["lake.ab"])
+    and ([.rows[] | select(.pipeline == "gantt_report")][0].depth == 2)' > /dev/null \
+    || fail "/api/gantt's rows: $(echo "$g" | jq -c '.rows')"
+echo "$g" | jq -e '[.edges[] | select(.from == "gantt_raw" or .to == "gantt_report") | [.from, .to, .dataset]]
+    == [["gantt_raw", "fake_sensor", "raw.a"], ["fake_sensor", "gantt_report", "lake.ab"]]' > /dev/null \
+    || fail "/api/gantt's edges: $(echo "$g" | jq -c '.edges')"
+echo "$g" | jq -e --argjson up "$up" --argjson down "$down" --argjson f "$filling" '
+    ([.runs[] | select(.pipeline | startswith("gantt_") or . == "fake_sensor") | .id] | sort) == ([$up, $down, $f] | sort)
+    and ([.runs[] | select(.id == $f)][0] | .end == null and .trigger == "fill" and .status == "running")
+    and ([.runs[] | select(.id == $up)][0] | .end > .start)
+    and .triggers == [{"from": $up, "to": $down, "dataset": "raw.a", "snapshot": 7}]' > /dev/null \
+    || fail "/api/gantt's runs and triggers: $(echo "$g" | jq -c '{runs: [.runs[] | [.id, .pipeline, .status]], triggers}')"
+[ "$(json '/api/gantt?window=7d' | jq --argjson old "$old" '[.runs[] | select(.id == $old)] | length')" -eq 1 ] \
+    || fail "the 7 d window hasn't the run of two days ago"
+[ "$(json '/api/gantt?window=1h' | jq -r '[.window, (.triggers | length)] | join(" ")')" = "1h 0" ] \
+    || fail "the 1 h window"
+[ "$(json '/api/gantt?window=x' | jq -r .window)" = 24h ] || fail "an unknown window isn't 24h"
+echo "ok   the home page's timeline: tabs, rows in dataset order, runs and what started them"
 
 kill "$pid"
 echo "ok   ui"
