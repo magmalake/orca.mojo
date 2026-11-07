@@ -111,6 +111,8 @@ r pause toy || fail "pause: $(out)"
 r status toy || fail "status toy: $(out)"
 [ "$(./build/orca status toy)" = "$(out)" ] || fail "status differs: $(out)"
 out | grep -q '^toy  paused  running 0  queued 4' || fail "status toy said: $(out)"
+# A run's line ends with how long it ran; a queued one hasn't started.
+out | grep -Eq '^  [0-9]+ queued backfill [^ ]+ -$' || fail "a queued run's duration: $(out)"
 [ "$(./build/orca --remote "$base" status toy --json | jq -r .pipeline.paused)" = true ] || fail "status --json"
 r unpause toy || fail "unpause: $(out)"
 [ "$(out)" = "unpaused toy" ] || fail "unpause said: $(out)"
