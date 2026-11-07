@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **The UI draws a run's timeline and the pipelines over time.** A run with
+  Dista tasks has a Timeline section that fetches `timeline.json` once it
+  scrolls into view and draws it on a canvas: a track per process (driver
+  or head, then each worker), a lane per slot, spans coloured by function,
+  input waits as thin bars, a time axis, a tooltip with the span's process,
+  slot, duration and arguments, wheel or drag to zoom and Reset zoom. Spans
+  under a pixel are drawn one pixel per lane, so a trace of ~300,000 spans
+  draws in a fraction of a second. Perfetto and the raw file stay linked,
+  and the page no longer parses the trace on the server. The home page has
+  List and Timeline tabs (remembered; the list is the default and needs no
+  JavaScript): a row per pipeline in dataset order, indented by depth, with
+  what it reads and what starts it, runs over 1 h, 6 h, 24 h or 7 d coloured
+  by status, fill runs thinner, a now line, connectors from a run to the
+  sensor or keyed runs its commits started (`orca.sensed` joined to
+  `orca.commits`), and dataset edges at the left. The data is
+  `GET /api/gantt?window=24h`. New module `orca.ui_viz`; `tests/ui.sh`.
+
 - **`orca register` with no paths registers the whole `orca.toml`.** Each
   `[pipelines.<name>]` is registered from `<dir>/<name>`, `<dir>` being
   `ORCA_PIPELINES_DIR`, else `pipelines/` next to the file; a table with no
