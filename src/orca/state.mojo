@@ -499,6 +499,15 @@ def _migrations() -> List[List[String]]:
                 " 'fill'"
             ),
         ],
+        # A watchdog trip can be acknowledged ("Keep paused"): its pipelines
+        # stay paused, and the banner stops showing it.
+        [
+            (
+                "ALTER TABLE orca.watchdog_trips ADD COLUMN acknowledged_at"
+                " timestamptz"
+            ),
+            "ALTER TABLE orca.watchdog_trips ADD COLUMN acknowledged_by text",
+        ],
     ]
 
 

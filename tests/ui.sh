@@ -141,8 +141,29 @@ page=$(html "/runs/$bad_run")
 echo "$page" | grep -q 'dag__box dag__box--failed"><title>measure' || fail "measure isn't failed in the DAG"
 echo "$page" | grep -q 'dag__box dag__box--skipped"><title>total' || fail "total isn't skipped in the DAG"
 echo "$page" | grep -q 'data-poll="' && fail "an ended run's page still polls"
-code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$bad_run/steps")
+code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$bad_run/live")
 [ "$code" = 286 ] || fail "an ended run's fragment answered $code, not 286"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/999999/live")
+[ "$code" = 404 ] || fail "an unknown run's fragment answered $code, not 404"
+
+# A run's settings: the pipeline's registered environment, or what the run's
+# start recorded; secrets by name only.
+q "UPDATE orca.pipelines SET env = '{\"REG_FLAG\": \"reg-on\"}', max_runs = 3,
+    secrets = '{\"DB_PASSWORD\": \"arn:sm:reg-secret-id\"}' WHERE name = 'toy'" > /dev/null
+q "UPDATE orca.runs SET spec = '{\"env\": {\"SPEC_FLAG\": \"spec-on\"},
+    \"secrets\": {\"API_TOKEN\": \"arn:sm:spec-secret-id\"}, \"workers\": 2}' WHERE id = $bad_run" > /dev/null
+page=$(html "/runs/$ok_run")
+echo "$page" | grep -q '<h2>Settings</h2>' || fail "no settings on the run page"
+echo "$page" | grep -q 'REG_FLAG</code></td><td><code>reg-on' || fail "the registered environment isn't shown"
+echo "$page" | grep -q '<code>DB_PASSWORD</code>' || fail "the secret's name isn't shown"
+echo "$page" | grep -q 'reg-secret-id' && fail "a secret's value is on the page"
+page=$(html "/runs/$bad_run")
+echo "$page" | grep -q 'SPEC_FLAG</code></td><td><code>spec-on' || fail "the run's recorded environment isn't shown"
+echo "$page" | grep -q 'REG_FLAG' && fail "the registered environment shows over the run's own"
+echo "$page" | grep -q '<code>API_TOKEN</code>' || fail "the recorded secret's name isn't shown"
+echo "$page" | grep -q 'spec-secret-id' && fail "a recorded secret's value is on the page"
+q "UPDATE orca.runs SET spec = NULL WHERE id = $bad_run" > /dev/null
+q "UPDATE orca.pipelines SET env = NULL, max_runs = NULL, secrets = NULL WHERE name = 'toy'" > /dev/null
 
 # Machine metrics: none recorded, the page is as it was; then a worker's
 # (tests/fixtures/metrics-worker.jsonl: memory over 90% for 30 s, steal
@@ -171,7 +192,7 @@ json "/runs/$ok_run" | jq -e '.instances[1] | .role == "worker" and .peaks.sampl
     || fail "the worker's peaks: $(json "/runs/$ok_run" | jq -c '.instances[1].peaks')"
 json "/runs/$ok_run" | jq -e '.instances[0].peaks | .samples == 2 and .mem_total > 0' > /dev/null \
     || fail "this machine's peaks: $(json "/runs/$ok_run" | jq -c '.instances[0].peaks')"
-[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$ok_run/metrics")" = 286 ] \
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$ok_run/live")" = 286 ] \
     || fail "an ended run's metrics fragment didn't answer 286"
 echo "ok   a run's machines: charts, peaks and warnings, and none without samples"
 
@@ -184,14 +205,21 @@ until [ "$(q "SELECT count(*) FROM orca.runs WHERE status = 'running'")" -eq 1 ]
     i=$((i + 1)); [ "$i" -lt 100 ] || fail "the slow run didn't start"; sleep 0.05
 done
 live=$(q "SELECT id FROM orca.runs WHERE status = 'running'")
-html "/runs/$live" | grep -q "data-poll=\"/runs/$live/steps\"" || fail "a running run's page doesn't poll"
-code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/steps")
+html "/runs/$live" | grep -q "data-poll=\"/runs/$live/live\" data-poll-every=\"5\"" || fail "a running run's page doesn't poll"
+code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/live")
 [ "$code" = 200 ] || fail "a running run's fragment answered $code"
+[ "$(html "/runs/$live" | grep -c 'data-poll="')" -eq 1 ] || fail "a running run's page has more than one poller"
+html "/runs/$live" | grep -q '<dt>Duration</dt><dd title="started .*; still going">[0-9]* s</dd>' || fail "a running run has no elapsed duration"
+html "/runs/$ok_run" | grep -q '<dt>Duration</dt><dd title="started [^"]*; ended [^"]*">[0-9 a-z]*</dd>' || fail "a finished run has no total duration"
+html "/runs/$live" | grep -q "rel=\"prev\" href=\"/runs/$((live - 1))\"" || fail "no link to the previous run"
+html "/runs/$live" | grep -q 'rel="next" href=' && fail "the newest run links a next one"
+html "/runs/$ok_run" | grep -q 'rel="prev" href=' && fail "the first run links a previous one"
+html "/runs/$ok_run" | grep -q "rel=\"next\" href=\"/runs/$((ok_run + 1))\"" || fail "no link to the next run"
+html "/runs/$live" | grep -q '<h2>Settings</h2>' || fail "a running run's page has no settings"
 # Its machines too: the fragment draws samples as they come.
-html "/runs/$live" | grep -q "data-poll=\"/runs/$live/metrics\"" || fail "a running run's machines don't poll"
 mkdir -p "$ORCA_LOGS/toy/$live/metrics"
 ./build/orca sample --out "$ORCA_LOGS/toy/$live/metrics/local.jsonl" --count 1 --seconds 0.1 || fail "the live sampler"
-code=$(curl -s -o "$log.mx" -w '%{http_code}' "$base/runs/$live/metrics")
+code=$(curl -s -o "$log.mx" -w '%{http_code}' "$base/runs/$live/live")
 [ "$code" = 200 ] || fail "a running run's metrics fragment answered $code"
 grep -q 'class="mx__now"' "$log.mx" || fail "the live fragment doesn't chart the samples"
 i=0
@@ -203,7 +231,7 @@ html "/runs/$live/attempts/$a" | grep -q "data-poll=\"/runs/$live/attempts/$a/lo
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/attempts/$a/log")
 [ "$code" = 200 ] || fail "a running attempt's log answered $code"
 wait "$toy" || fail "the slow run failed"
-code=$(curl -s -o "$log.frag" -w '%{http_code}' "$base/runs/$live/steps")
+code=$(curl -s -o "$log.frag" -w '%{http_code}' "$base/runs/$live/live")
 [ "$code" = 286 ] || fail "the ended run's fragment answered $code"
 grep -q 'status--succeeded">succeeded</span></h2>' "$log.frag" || fail "the fragment doesn't show the run succeeded"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/attempts/$a/log")" = 286 ] \
