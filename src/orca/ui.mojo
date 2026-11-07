@@ -1239,7 +1239,9 @@ def _instances_html(mut h: Html, run: Int, xs: List[InstanceRow]):
     )
     for i in xs:
         h.raw("<tr>")
-        h.cell(i.role)
+        h.raw("<td>")
+        h.term("role", i.role)
+        h.raw("</td>")
         h.raw("<td><code>")
         h.text(i.id)
         h.raw("</code></td>")
@@ -2146,7 +2148,9 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
         _when_cell(h, r.created)
         h.num(_took(r.seconds))
         _partitions_cell(h, r.partitions)
-        h.cell(r.trigger)
+        h.raw("<td>")
+        h.term("trigger", r.trigger)
+        h.raw("</td>")
         h.raw("<td>")
         h.status(r.status)
         if r.waiting_until:
@@ -3497,34 +3501,8 @@ def _help(
     text: StaticString,
     docs: StaticString = "",
 ):
-    """A "?" after a fact's name that shows `text`, then a link to the docs
-    (`docs`: a section of the docs page, or a URL) if there is one. CSS
-    shows it on hover and keyboard focus, so it needs no script; to a
-    screen reader the text is the button's description. `id` is unique in
-    the page."""
-    h.raw(
-        '<span class="help"><button type="button" class="help__btn"',
-        ' aria-label="About ',
-        key,
-        '" aria-describedby="help-',
-        id,
-        '">?</button><span class="help__tip" role="tooltip" id="help-',
-        id,
-        '">',
-        text,
-    )
-    if docs:
-        var href = String(docs) if docs.startswith("http") else String(
-            getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"),
-            "#",
-            docs,
-        )
-        h.raw(
-            ' <a href="',
-            escape(href),
-            '" target="_blank" rel="noopener">Docs ↗</a>',
-        )
-    h.raw("</span></span>")
+    """A "?" after a fact's name (`Html.help`)."""
+    h.help(id, key, text, docs)
 
 
 def _strip_tags(s: StringSlice) -> String:
@@ -3799,15 +3777,15 @@ def _config_html(mut h: Html, p: PipelineRow):
         "runners",
     )
     if p.placement == "control":
-        h.text("control")
+        h.term("placement", "control")
         h.raw(' <span class="muted">(on the scheduler\'s host)</span>')
     elif p.placement.startswith("worker:"):
-        h.text(p.placement)
+        h.term("placement", p.placement)
         h.raw(' <span class="muted">(its runs wait for a worker of pool ')
         h.text(p.placement.removeprefix("worker:"))
         h.raw(', <a href="/ops/workers">Workers</a>)</span>')
     elif p.placement:
-        h.text(p.placement)
+        h.term("placement", p.placement)
     else:
         h.raw('<span class="muted">default (the scheduler\'s runner)</span>')
     h.raw("</dd>")
@@ -3964,7 +3942,9 @@ def _steps_html(
     for s in steps:
         h.raw("<tr>")
         _step_cell(h, s.name, links)
-        h.cell(s.kind)
+        h.raw("<td>")
+        h.term("kind", s.kind)
+        h.raw("</td>")
         h.cell(s.after)
         h.raw("<td>")
         _dataset_links(h, s.reads)
@@ -4381,7 +4361,10 @@ def pipeline(
                 h.raw("</tr>")
             h.raw("</tbody></table></div>")
         if len(configs) > 0:
-            config_html(h, configs[0])
+            var repo = String()
+            if len(latest) > 0:
+                repo = web_url(latest[0].source)
+            config_html(h, configs[0], repo, links.pipeline.url)
     elif tab == "operate":
         if p.kind == "daily" or p.kind == "monthly":
             _coverage_html(h, db, p, cal)
@@ -4897,7 +4880,9 @@ def run(mut db: State, id: Int, view: String = "") raises -> Page:
             h.raw("<tr>")
             h.cell(t.step)
             h.cell(t.partition)
-            h.cell("wrote" if t.kind == "commit" else t.kind)
+            h.raw("<td>")
+            h.term("touch", "wrote" if t.kind == "commit" else t.kind)
+            h.raw("</td>")
             h.raw("<td>")
             if t.dataset:
                 h.link(String("/datasets/", url_encode(t.dataset)), t.dataset)
@@ -5170,7 +5155,7 @@ def _trigger_card(mut h: Html, mut db: State, r: RunRow) raises:
         ),
         "sensors",
     )
-    h.text(r.trigger)
+    h.term("trigger", r.trigger)
     if rebuild:
         h.raw(" ")
         h.link(String("/rebuilds/", rebuild), String("rebuild ", rebuild))
@@ -5498,10 +5483,9 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
             ),
             "placement",
         )
+        h.term("placement", r.placement)
         if r.placement == "control":
-            h.raw("on the control host")
-        else:
-            h.text(r.placement)
+            h.raw(' <span class="muted">(on the control host)</span>')
         h.raw("</dd>")
         var on = ran_on(db, r.id)
         if on:

@@ -13,6 +13,8 @@ page is tables of records, and writing it in Mojo keeps each value's type
 until the moment it's escaped.
 """
 
+from std.os import getenv
+
 from orca.terms import value_help
 
 
@@ -219,6 +221,42 @@ struct Html(Movable, Writable):
             e,
             "</span>",
         )
+
+    def help(
+        mut self,
+        id: String,
+        key: String,
+        text: StaticString,
+        docs: StaticString = "",
+    ):
+        """A "?" after a fact's or a column's name that shows `text`, then a
+        link to the docs (`docs`: a section of the docs page, or a URL) if
+        there is one. CSS shows it on hover and keyboard focus, so it needs
+        no script; to a screen reader the text is the button's description.
+        `id` is unique in the page."""
+        self.raw(
+            '<span class="help"><button type="button" class="help__btn"',
+            ' aria-label="About ',
+            key,
+            '" aria-describedby="help-',
+            id,
+            '">?</button><span class="help__tip" role="tooltip" id="help-',
+            id,
+            '">',
+            text,
+        )
+        if docs:
+            var href = String(docs) if docs.startswith("http") else String(
+                getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"),
+                "#",
+                docs,
+            )
+            self.raw(
+                ' <a href="',
+                escape(href),
+                '" target="_blank" rel="noopener">Docs ↗</a>',
+            )
+        self.raw("</span></span>")
 
     def term(mut self, kind: StringSlice, value: StringSlice):
         """`value`, one of a fixed set (`kind` in `orca.terms`): dotted
