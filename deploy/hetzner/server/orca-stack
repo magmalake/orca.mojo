@@ -133,9 +133,11 @@ ORCA_UI_SECURE_COOKIES=1
 ORCA_UI_TRUST_PROXY=1
 EOS
     } > "$CONF/orca.env"
-    # An app reads the lake, not orca's database: no password.
+    # An app reads the lake, not orca's database: no password. It gets the
+    # UI's PostHog key as POSTHOG_KEY (the census console's analytics).
     {
         grep -E '^(AWS_REGION|AWS_ENDPOINT_URL_S3|ORCA_WAREHOUSE|ORCA_PUBLIC_WAREHOUSE)=' "$CONF/settings.env" || true
+        sed -n 's/^ORCA_POSTHOG_KEY=/POSTHOG_KEY=/p' "$CONF/settings.env" | tail -n 1
         cat "$CONF/s3.env"
     } > "$CONF/app.env"
 }

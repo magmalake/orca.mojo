@@ -73,6 +73,16 @@
 - **Ops sections can be linked to.** Each section on Ops › Control and Fleet
   has an id and its heading links to it, so `/ops/control#cpu` opens at the
   CPU chart.
+- **PostHog analytics in the UI, when asked for.** With `ORCA_POSTHOG_KEY`
+  set to a PostHog project key (`phc_...`), every page's head has the same
+  snippet as the magmalake.org website: `array.js` and events through `/ph`
+  on the UI's own origin (a first-party proxy, such as the `mojourney-ph`
+  Worker in magmalake/magmalake.org for orca.mojourney.dev), memory-only
+  persistence (no cookies, no `localStorage`), and `site: "orca"` on every
+  event. Unset or not a `phc_` key, nothing is added. `deploy/hetzner`
+  takes `POSTHOG_KEY` in `hetzner.env` and writes it as `ORCA_POSTHOG_KEY`;
+  `orca-stack` passes it to the apps as `POSTHOG_KEY` (the census console's
+  analytics). `docs/hetzner.md` has the setup.
 
 ## 0.12.0 - 2026-11-07
 

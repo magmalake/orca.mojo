@@ -73,6 +73,34 @@ echo "$nav" | grep -qF '<div class="menu"><a href="/ops" aria-haspopup="true">Op
     || fail "the Ops menu isn't in the nav"
 echo "$nav" | grep -qE '<a href="/(system|fleet)"' && fail "the old System or Fleet nav item is still there"
 curl -fsS "$base/static/orca.css" | grep -qF '.menu:focus-within .menu__sub' || fail "the Ops menu doesn't open on keyboard focus"
+# PostHog: no snippet without ORCA_POSTHOG_KEY; with a phc_ key, every page's
+# head has it, with the key and site "orca"; a key that isn't one adds nothing.
+echo "$nav" | grep -q 'ph/static/array.js' && fail "the PostHog snippet is there without ORCA_POSTHOG_KEY"
+for key in phc_TestKey_123 'phc_x");alert(1);//' not_a_key; do
+    php=$((port + 1))
+    ORCA_POSTHOG_KEY=$key ORCA_UI_ADDR="127.0.0.1:$php" ./build/orca ui >> "$log" 2>&1 &
+    phpid=$!
+    i=0
+    until curl -fs "http://127.0.0.1:$php/" > /dev/null 2>&1; do
+        i=$((i + 1)); [ "$i" -lt 100 ] || { kill "$phpid"; fail "orca ui with ORCA_POSTHOG_KEY didn't start"; }; sleep 0.1
+    done
+    for path in / /runs "/runs/$ok_run" /login; do
+        page=$(curl -sS "http://127.0.0.1:$php$path")
+        head=${page%%</head>*}
+        if [ "$key" = phc_TestKey_123 ]; then
+            echo "$head" | grep -qF '<script defer src="/ph/static/array.js"></script>' \
+                && echo "$head" | grep -qF 'posthog.init("phc_TestKey_123",{api_host:location.origin+'"'/ph'"',' \
+                && echo "$head" | grep -qF "persistence:'memory'" \
+                && echo "$head" | grep -qF "posthog.register({site:'orca'})" \
+                || { kill "$phpid"; fail "$path's head hasn't the PostHog snippet"; }
+        else
+            echo "$page" | grep -q 'posthog' && { kill "$phpid"; fail "ORCA_POSTHOG_KEY=$key added a snippet to $path"; }
+        fi
+    done
+    kill "$phpid"
+    wait "$phpid" 2> /dev/null || true
+done
+echo "ok   PostHog only with a phc_ ORCA_POSTHOG_KEY"
 # Runs per day on the home page: 30 days, today's with both runs.
 json / | jq -e '(.runs_per_day | length) == 30 and .runs_per_day[-1].succeeded == 1 and .runs_per_day[-1].failed == 1' > /dev/null \
     || fail "runs per day: $(json / | jq -c '.runs_per_day[-1]')"

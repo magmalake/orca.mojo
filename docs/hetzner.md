@@ -237,6 +237,31 @@ alert is sent at most once every 30 minutes (`ORCA_NOTIFY_MIN_SECONDS`), and
 one that could not be sent (ntfy down) waits in Postgres and goes later. The
 nightly backup runs `orca notify --kind backup-failed` on failure.
 
+## Analytics (PostHog)
+
+The UI and the census console can load PostHog the way the magmalake.org
+website does: `array.js` and the events go through `/ph` on the page's own
+origin, memory-only persistence (no cookies, no `localStorage`, so no consent
+banner), and a `site` property on every event (`orca` or `mojourney`) so one
+PostHog project can hold both. Once:
+
+1. Deploy the `/ph` proxy, a Cloudflare Worker on the mojourney.dev zone's
+   `mojourney.dev/ph/*` and `orca.mojourney.dev/ph/*` routes. It lives in
+   magmalake/magmalake.org: `npx wrangler deploy -c worker/mojourney-ph/wrangler.jsonc`.
+   The tunnel serves everything else; nothing on the server serves `/ph`.
+2. Put the project key (`phc_...`, public, the website's `POSTHOG_KEY` in its
+   `src/data/site.ts`) in `hetzner.env` as `POSTHOG_KEY`. `up.sh` writes it
+   to `settings.env` as `ORCA_POSTHOG_KEY`, which the UI reads, and
+   `orca-stack apply` passes it to the apps as `POSTHOG_KEY`, which the
+   census console reads. Without `up.sh`, add
+   `ORCA_POSTHOG_KEY=phc_...` to `/etc/orca/settings.env` on the server and
+   `orca-stack apply`.
+3. Open https://orca.mojourney.dev and https://mojourney.dev: each page's
+   head has `/ph/static/array.js`, and PostHog's Activity shows `$pageview`
+   events with `site` set.
+
+Leave `POSTHOG_KEY` empty and nothing is added to either site's pages.
+
 ## Teardown
 
 ```sh
