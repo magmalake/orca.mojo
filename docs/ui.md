@@ -101,7 +101,9 @@ a snapshot, each arrow a step that read the snapshot it starts at and
 wrote the one it points to, so data flows left to right. The legend under
 the heading names the boxes: this snapshot (a thick border), one written
 by an orca run (its pipeline and partition on the second line; hover for
-the run and step), and a source (dashed), written by something else.
+the run and step), a source (dashed), written by something else, and
+another input (dotted) of a step downstream, whose own lineage its page
+has. A box nothing points to sits just left of what read it.
 Below it, **Upstream** is the snapshot and everything it was written
 from, with the run and step that wrote each and what that step read
 (`back` in the JSON), and **Downstream** is everything written from it

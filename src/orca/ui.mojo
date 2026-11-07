@@ -5058,7 +5058,7 @@ def _run_code_card(mut h: Html, mut db: State, r: RunRow) raises:
     if any:
         _fact(
             h,
-            "Code",
+            "Functions",
             "run-code",
             (
                 "The pipeline, its steps in the order they run, and the dista"
@@ -6636,22 +6636,34 @@ def _lineage_graph(start: SnapshotRef, b: List[Made], f: List[Made]) -> String:
         all.append(m.copy())
     for m in f:
         all.append(m.copy())
-    # Sources first (inputs nobody here made), then the made, back to front.
-    for m in all:
-        for i in m.inputs:
+    # Inputs nobody here made first, then the made, back to front. An input
+    # upstream that no orca run made is a source (the back walk would have
+    # it otherwise); one only a downstream step read is another input of
+    # that step, whose own lineage isn't drawn.
+    for k in range(len(all)):
+        var inputs = all[k].inputs.copy()
+        for i in inputs:
             var made = False
             for o in all:
                 made = made or o.at == i
             if not made and _index_of(refs, i) < 0:
+                var source = k < len(b)
                 refs.append(i.copy())
                 nodes.append(
                     Node(
                         i.dataset,
-                        "source",
+                        "source" if source else "also read",
                         "snapshot",
                         _snapshot_href(i),
-                        "start" if i == start else "source",
-                        String(i, ": a source, written by no orca run"),
+                        "start" if i
+                        == start else ("source" if source else "other"),
+                        String(
+                            i,
+                            ": a source, written by no orca run" if source else (
+                                ": also read by a step downstream; open it"
+                                " for its own lineage"
+                            ),
+                        ),
                     )
                 )
     if _index_of(refs, start) < 0:
@@ -6663,7 +6675,7 @@ def _lineage_graph(start: SnapshotRef, b: List[Made], f: List[Made]) -> String:
             nodes.append(
                 Node(
                     start.dataset,
-                    "this snapshot · source",
+                    "source",
                     "snapshot",
                     _snapshot_href(start),
                     "start",
@@ -6674,8 +6686,7 @@ def _lineage_graph(start: SnapshotRef, b: List[Made], f: List[Made]) -> String:
         if _index_of(refs, m.at) >= 0:
             continue
         refs.append(m.at.copy())
-        var sub = String("this snapshot · " if m.at == start else "")
-        sub.write(m.pipeline)
+        var sub = String(m.pipeline)
         if m.partition:
             sub.write(" ", m.partition)
         var title = String(
@@ -6761,7 +6772,9 @@ def snapshot_page(mut db: State, name: String, id: Int64) raises -> Page:
         ' graph__key--start"></span>this snapshot <span class="graph__key">',
         '</span>written by an orca run <span class="graph__key',
         ' graph__key--source"></span>a source, written by something else',
-        ' <span class="graph__arrow">→</span> read, to write</p>',
+        ' <span class="graph__key graph__key--other"></span>another input of',
+        ' a step downstream <span class="graph__arrow">→</span> read, to',
+        " write</p>",
         '<div class="scroll">',
         _lineage_graph(start, b, f),
         "</div></section>",

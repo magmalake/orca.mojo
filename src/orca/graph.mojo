@@ -2,7 +2,8 @@
 that feed each other, and a snapshot's lineage.
 
 Nodes are laid out left to right by their longest path from a node with no
-edge in, and top to bottom in the order given. Each node is a box with a
+edge in (such a node itself just left of the first node it points to), and
+top to bottom in the order given. Each node is a box with a
 label, a second line, a kind (`dataset`, `pipeline` or `snapshot`, which
 the stylesheet shapes) and optionally a link and a class, such as `start`
 for the snapshot a lineage page is about. Edges that would close a cycle
@@ -66,6 +67,19 @@ def _levels(n: Int, edges: List[Edge]) -> List[Int]:
                     moved = True
         if not moved:
             break
+    # A node nothing points to sits just left of the first node it points
+    # to, not at the far left: an input read late in a long chain is drawn
+    # beside what read it.
+    for i in range(n):
+        var into = False
+        var first = n
+        for e in edges:
+            if e.dst == i and e.src != i:
+                into = True
+            if e.src == i and e.dst != i:
+                first = min(first, level[e.dst])
+        if not into and first < n and first > 0:
+            level[i] = first - 1
     return level^
 
 

@@ -203,6 +203,8 @@ h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
 .card > .mx__legend { padding: 0.55rem 1.1rem 0; border-bottom: 0; }
 .card > .scroll > .mx { padding: 0 1.1rem; }
 .facts code.env { font-size: 0.8125rem; }
+/* A long link to code in a card wraps rather than widening a phone's page. */
+.card--facts dd a.src { white-space: normal; overflow-wrap: anywhere; }
 .steps__graph > .tl { margin: 0.25rem 0; }
 
 /* The lineage diagram's legend. */
@@ -213,6 +215,9 @@ h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
 .graph__key:first-child { margin-left: 0; }
 .graph__key--start { border: 2.5px solid var(--ember); }
 .graph__key--source { border-style: dashed; }
+.graph__key--other { border-style: dotted; opacity: 0.7; }
+.graph__node--other rect { stroke-dasharray: 2 3; }
+.graph__node--other text { opacity: 0.75; }
 .graph__arrow { margin-left: 0.8em; color: var(--faint); }
 .card > .scroll > .graph { margin: 0.5rem 1.1rem; }
 
