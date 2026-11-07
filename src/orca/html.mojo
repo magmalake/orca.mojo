@@ -18,7 +18,6 @@ from std.os import getenv
 from orca.terms import value_help
 
 
-
 def escape(s: StringSlice) -> String:
     """`s` with `&`, `<`, `>`, `"` and `'` as character references, safe in
     text and in a quoted attribute."""
@@ -212,10 +211,10 @@ struct Html(Movable, Writable):
         status is a hyphen in the class), with what it means on hover or
         keyboard focus (`orca.terms`)."""
         var e = escape(s)
-        self.out.write("<span ")
+        self.out.write("<span")
         self._tip(value_help("status", s))
         self.out.write(
-            'class="status status--',
+            ' class="status status--',
             e.replace(" ", "-"),
             '">',
             e,
@@ -266,15 +265,15 @@ struct Html(Movable, Writable):
         if not tip:
             self.out.write(escape(value))
             return
-        self.out.write('<span class="term" ')
+        self.out.write('<span class="term"')
         self._tip(tip)
         self.out.write(">", escape(value), "</span>")
 
     def _tip(mut self, tip: StaticString):
-        """`data-tip` (the stylesheet shows it) and a tab stop, if there's a
-        tip: the attributes before an element's class."""
+        """` data-tip` (the stylesheet shows it) and a tab stop, if there's
+        a tip: attributes, each after a space."""
         if tip:
-            self.out.write('data-tip="', tip, '" tabindex="0" ')
+            self.out.write(' data-tip="', tip, '" tabindex="0"')
 
     def finish(deinit self) -> String:
         """The page written."""

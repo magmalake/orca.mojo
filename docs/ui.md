@@ -143,6 +143,39 @@ waits as thin bars. Hover for a span's process, slot, duration and
 arguments; wheel or drag to zoom, Reset zoom to go back. Perfetto and the
 raw `timeline.json` stay linked.
 
+## Help on every page
+
+Each fact's name and each table's column header has a "?" that explains
+it, on hover, keyboard focus or a tap. A value from a fixed set (a status
+such as `deferred`, a step's kind `mapped`, a trigger, a placement, where
+a setting came from) is dotted underlined instead, and says what it means
+the same ways, so a table doesn't get a "?" in every cell. The texts are
+in one place, `src/orca/terms.mojo`: a header's by its label (or its
+table's, for a word that means different things, as From does in the
+Configuration and Actions tables), a value's by its kind and value, and a
+setting's by its key. The UI adds a header's "?" to every `<th>` it has a
+text for as it answers, so a new table gets them by using the same words.
+
+The Configuration table (a pipeline's Overview) has each key's "?", and
+its From column links to where the value is set, where orca knows it:
+
+| From | Links to |
+|---|---|
+| orca.toml | the line at the commit the file was registered from, on the host of the pipeline's source (`config.sources.<key>.line` and `config.repo_path`, recorded by `orca register` from a git checkout; not for a file with uncommitted changes, one registered before orca kept lines, or one outside a checkout) |
+| code default, from the pipeline (max_runs, workers) | the pipeline's `Pipeline[...]` line, from `orca locate` |
+| code default, orca's own (placement, instance types, worker_procs, fills) | nothing: it's orca's, not the pipeline's |
+| flag, environment | nothing: a flag of `orca register`, or the scheduler's environment, has no line |
+
+## Code on hover
+
+Hovering a link to a line on GitHub shows that function, coloured:
+keywords, names a `def` or `struct` defines, strings (triple-quoted too),
+comments, numbers and decorators, from the theme's colours. The UI fetches
+the file (`/code?u=`, only a GitHub file at a commit, at most 1 MiB) and
+colours it (`orca.highlight`, a small tokenizer, no library), so the
+browser needn't reach GitHub; a private repository's file it can't fetch
+says so, and the link still opens it.
+
 ## Ops
 
 "Ops" in the nav has three pages, each linking the others:

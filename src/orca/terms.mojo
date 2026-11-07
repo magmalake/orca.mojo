@@ -12,9 +12,11 @@ value_help("status", "deferred")  # what a status chip says on hover
 The UI (`orca.ui`) adds a header's help to every `<th>` it finds one for
 (a `data-help` attribute names a table-specific one), and `Html.status` and
 `Html.term` put a value's on its chip or word. Texts are HTML, written
-here, so they may hold markup; none holds data from a request. An empty
-text means no help.
+here as `if` chains (`_header`, `_context_header`, `_value`, `_key`), so
+they may hold entities; none holds data from a request or a double quote,
+as a value's goes in an attribute. An empty text means no help.
 """
+
 
 def _header(label: String) -> StaticString:
     """Each column header's help, by its label."""
@@ -24,8 +26,7 @@ def _header(label: String) -> StaticString:
         return "What was done: the path of the action posted."
     if label == "After":
         return (
-            "The steps this one waits for: it starts once they have "
-            "succeeded."
+            "The steps this one waits for: it starts once they have succeeded."
         )
     if label == "At":
         return "When it happened, in UTC."
@@ -118,10 +119,7 @@ def _header(label: String) -> StaticString:
             "one before is done."
         )
     if label == "Log":
-        return (
-            "Its output: an attempt's, an instance's or the run's "
-            "process's."
-        )
+        return "Its output: an attempt's, an instance's or the run's process's."
     if label == "Memory":
         return "Memory used at its highest, of the machine's total."
     if label == "Memory now":
@@ -236,10 +234,7 @@ def _header(label: String) -> StaticString:
             "partition (mapped) or once over all of them (gather)."
         )
     if label == "Subject":
-        return (
-            "What the alert is about: a run, a pipeline, a worker or a "
-            "host."
-        )
+        return "What the alert is about: a run, a pipeline, a worker or a host."
     if label == "Table":
         return "The table's name in the warehouse."
     if label == "Token":
@@ -284,7 +279,6 @@ def _header(label: String) -> StaticString:
     return ""
 
 
-
 def _context_header(key: String) -> StaticString:
     """Headers whose meaning depends on their table: `<table>:<label>`, the
     table named by the header's `data-help`."""
@@ -319,7 +313,6 @@ def _context_header(key: String) -> StaticString:
             "call it. Hover the name for what it sets."
         )
     return ""
-
 
 
 def _value(key: String) -> StaticString:
@@ -377,8 +370,7 @@ def _value(key: String) -> StaticString:
         return "The fill: the scheduler working through the range by itself."
     if key == "placement:default":
         return (
-            "On the scheduler's runner (ORCA_RUNNER: local, kubernetes or "
-            "ec2)."
+            "On the scheduler's runner (ORCA_RUNNER: local, kubernetes or ec2)."
         )
     if key == "placement:local":
         return "Beside the scheduler, on its machine."
@@ -394,10 +386,7 @@ def _value(key: String) -> StaticString:
     if key == "placement:worker":
         return "On a remote worker of that pool, which claims the run."
     if key == "from:code default":
-        return (
-            "Nothing set it: the pipeline's code, or orca, has this "
-            "default."
-        )
+        return "Nothing set it: the pipeline's code, or orca, has this default."
     if key == "from:orca.toml":
         return "Set in orca.toml, in the table shown."
     if key == "from:flag":
@@ -424,8 +413,7 @@ def _value(key: String) -> StaticString:
         return "Fill runs go from the newest partition back."
     if key == "spot:true":
         return (
-            "Its EC2 instances are Spot: cheaper, and AWS can take them "
-            "back."
+            "Its EC2 instances are Spot: cheaper, and AWS can take them back."
         )
     if key == "spot:false":
         return "On-demand EC2 instances."
@@ -434,7 +422,6 @@ def _value(key: String) -> StaticString:
     if key == "role:worker":
         return "A dista worker the run's tasks fan out to."
     return ""
-
 
 
 def _key(key: String) -> StaticString:
@@ -486,8 +473,6 @@ def _key(key: String) -> StaticString:
     if key == "env":
         return "A variable set in its runs' environment."
     return ""
-
-
 
 
 def key_help(key: StringSlice) -> StaticString:

@@ -26,7 +26,9 @@ def test_keywords_and_names() raises:
     )
     assert_equal(_kinds("struct Point(Copyable):"), "kw:struct fn:Point")
     assert_equal(_kinds("comptime N = 4"), "kw:comptime num:4")
-    assert_equal(_kinds("return self or None"), "kw:return const:self kw:or const:None")
+    assert_equal(
+        _kinds("return self or None"), "kw:return const:self kw:or const:None"
+    )
     # A keyword inside a word isn't one.
     assert_equal(_kinds("define = format"), "")
 
@@ -36,27 +38,40 @@ def test_strings() raises:
     assert_equal(_kinds("s = 'it\\'s'"), "str:'it\\'s'")
     assert_equal(_kinds('"open'), 'str:"open')
     var doc = String('"""One.\n\nTwo "quoted".\n"""\nvar x = 1')
-    assert_equal(
-        _kinds(doc), 'str:"""One.\n\nTwo "quoted".\n""" kw:var num:1'
-    )
+    assert_equal(_kinds(doc), 'str:"""One.\n\nTwo "quoted".\n""" kw:var num:1')
 
 
 def test_numbers_and_decorators() raises:
-    assert_equal(_kinds("1_000 0x1f 3.5e-2 x2"), "num:1_000 num:0x1f num:3.5e-2")
-    assert_equal(_kinds("@fieldwise_init\n@always_inline"), "dec:@fieldwise_init dec:@always_inline")
+    assert_equal(
+        _kinds("1_000 0x1f 3.5e-2 x2"), "num:1_000 num:0x1f num:3.5e-2"
+    )
+    assert_equal(
+        _kinds("@fieldwise_init\n@always_inline"),
+        "dec:@fieldwise_init dec:@always_inline",
+    )
     assert_equal(_kinds("a @ b"), "")
 
 
 def test_lines_are_whole() raises:
-    var lines = highlight('def f():\n    """Doc\n    <b>"""\n    return 1  # one')
+    var lines = highlight(
+        'def f():\n    """Doc\n    <b>"""\n    return 1  # one'
+    )
     assert_equal(len(lines), 4)
     assert_equal(
         lines[0],
-        '<span class="hl hl--kw">def</span> <span class="hl hl--fn">f</span>():',
+        (
+            '<span class="hl hl--kw">def</span> <span class="hl'
+            ' hl--fn">f</span>():'
+        ),
     )
     # A docstring over two lines is a span on each, closed on each.
-    assert_equal(lines[1], '    <span class="hl hl--str">&quot;&quot;&quot;Doc</span>')
-    assert_equal(lines[2], '<span class="hl hl--str">    &lt;b&gt;&quot;&quot;&quot;</span>')
+    assert_equal(
+        lines[1], '    <span class="hl hl--str">&quot;&quot;&quot;Doc</span>'
+    )
+    assert_equal(
+        lines[2],
+        '<span class="hl hl--str">    &lt;b&gt;&quot;&quot;&quot;</span>',
+    )
     assert_true(lines[3].endswith('<span class="hl hl--com"># one</span>'))
 
 

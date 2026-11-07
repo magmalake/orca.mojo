@@ -86,7 +86,13 @@ comptime _KEYWORDS: List[StaticString] = [
     "async",
     "await",
 ]
-comptime _CONSTANTS: List[StaticString] = ["True", "False", "None", "self", "Self"]
+comptime _CONSTANTS: List[StaticString] = [
+    "True",
+    "False",
+    "None",
+    "self",
+    "Self",
+]
 comptime _DEFINES: List[StaticString] = ["def", "fn", "struct", "trait"]
 
 
@@ -185,7 +191,10 @@ def tokens(src: StringSlice) -> List[Token]:
                 or (
                     (Int(s[i]) == ord("-") or Int(s[i]) == ord("+"))
                     and (Int(s[i - 1]) == ord("e") or Int(s[i - 1]) == ord("E"))
-                    and not (Int(s[start + 1]) == ord("x") or Int(s[start + 1]) == ord("X"))
+                    and not (
+                        Int(s[start + 1]) == ord("x")
+                        or Int(s[start + 1]) == ord("X")
+                    )
                 )
             ):
                 i += 1
@@ -231,7 +240,9 @@ def highlight(src: StringSlice) -> List[String]:
             if b > a:
                 var text = escape(StringSlice(unsafe_from_utf8=s[a:b]))
                 if t.kind:
-                    line.write('<span class="hl hl--', t.kind, '">', text, "</span>")
+                    line.write(
+                        '<span class="hl hl--', t.kind, '">', text, "</span>"
+                    )
                 else:
                     line.write(text)
             if b < t.end:

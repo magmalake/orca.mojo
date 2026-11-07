@@ -426,8 +426,31 @@ page=$(html "/runs?pipeline=toy&status=failed")
 echo "$page" | grep -qF "<th class=\"num\"><abbr title=\"Times the run's process was started: 1 is normal; more means retries, a lost instance or a resume.\"" \
     || fail "the Tries header"
 echo "$page" | grep -q '>Starts<' && fail "a runs table still says Starts"
+# Help on every table (orca.terms): a "?" on each header it knows, and on
+# a value from a fixed set (a status, a trigger, a step's kind) its meaning
+# on hover or focus, without a "?" in every cell.
+for p in /runs /pipelines/toy "/runs/$bad_run" "/pipelines/toy?tab=runs"; do
+    pg=$(html "$p")
+    [ "$(echo "$pg" | grep -o '<th[ >]' | wc -l)" -gt 0 ] || continue
+    echo "$pg" | grep -q '<th>Status<span class="help"><button type="button" class="help__btn" aria-label="About Status"' \
+        || echo "$pg" | grep -q '<th>Step<span class="help">' || fail "$p's headers have no help"
+    [ "$(echo "$pg" | grep -o ' id="help-[^"]*"' | sort | uniq -d | wc -l)" -eq 0 ] || fail "$p has two helps with one id"
+done
+echo "$page" | grep -qF '<span data-tip="Something failed after its last retry. Resume runs what hadn&#39;t succeeded." tabindex="0" class="status status--failed">failed</span>' \
+    || echo "$page" | grep -q '<span data-tip="Something failed after its last retry[^"]*" tabindex="0" class="status status--failed">failed</span>' \
+    || fail "a status has no meaning"
+echo "$page" | grep -q '<span class="term" data-tip="[^"]*" tabindex="0">manual</span>' || fail "a trigger has no meaning"
+html /pipelines/toy | grep -q '<td><span class="term" data-tip="Runs once per partition, each on its own." tabindex="0">mapped</span></td>' \
+    || fail "a step's kind has no meaning"
+curl -fsS "$base/static/orca.css" | grep -qF '.help__tip.tip' || fail "the stylesheet doesn't place a value's meaning"
+curl -fsS "$base/static/orca.css" | grep -qF '.hl--kw' || fail "the stylesheet doesn't colour code"
+# /code fetches only a GitHub file at a commit, for the code shown on hover.
+for u in https://evil.example/x "https://github.com/a/b/blob/main/x.mojo" "https://github.com/a/b/blob/abcdef1/../x" "https://github.com/a/b/tree/abcdef1/x"; do
+    [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/code?u=$(printf %s "$u" | jq -sRr @uri)")" = 400 ] || fail "/code took $u"
+done
+html / | grep -qF 'fetch("/code?u=" + encodeURIComponent(url))' || fail "the hover doesn't ask /code"
 echo "$page" | grep -qF '<td class="num">3</td>' || fail "a run started 3 times doesn't say 3"
-echo "$page" | grep -qF '<th>Created</th><th class="num">Took</th><th>Partitions</th>' \
+echo "$page" | grep -q '<th>Created<span class="help">[^h]*help__btn.*</span></span></th><th class="num">Took<span class="help">.*</th><th>Partitions<span class="help">' \
     || fail "Created and Took don't lead the runs table"
 echo "$page" | grep -qE '<td class="mono"><time class="rel" datetime="[0-9-]+T[0-9:]+Z">' \
     || fail "a run's created time isn't a <time> the script shows as relative"

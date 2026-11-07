@@ -245,23 +245,20 @@ a.vtabs__tab { display: inline-block; text-decoration: none; }
 .help:hover .help__tip, .help:focus-within .help__tip { display: block; }
 .help.help--shut .help__tip { display: none; }
 
-/* In a table, which scrolls sideways, a header's help escapes the box:
-   fixed where it would be, not cut off by the scroll. */
-.scroll .help__tip { position: fixed; top: auto; left: auto; margin: 0.4rem 0 0 -1.4rem; }
+/* In a table, which scrolls sideways, a "?"'s help escapes the box: fixed,
+   placed under its button by the page script (`_TIPS`). */
+.scroll .help__tip { position: fixed; top: auto; left: auto; }
 .scroll .help__tip::before { display: none; }
 th .help { margin-left: 0.25rem; vertical-align: 0; }
 
 /* A value from a fixed set (a status, a step's kind, a trigger, a
-   placement): what it means on hover, keyboard focus or a tap. */
-.term { text-decoration: underline dotted var(--faint); text-underline-offset: 0.2em; }
+   placement): what it means on hover, keyboard focus or a tap, in one
+   floating box the page script places (`_TIPS`). */
+.term { text-decoration: underline dotted var(--muted); text-underline-offset: 0.2em; }
 [data-tip] { cursor: help; }
 [data-tip]:focus-visible { outline: 2px solid var(--lake); outline-offset: 1px; }
-[data-tip]:hover::after, [data-tip]:focus::after { content: attr(data-tip); position: fixed;
-  display: block; z-index: 20; width: max-content; max-width: min(20rem, 80vw);
-  margin-top: 0.35rem; padding: 0.55rem 0.75rem; text-align: left; background: var(--surface);
-  color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
-  box-shadow: var(--shadow); font: 400 0.8125rem/1.45 var(--sans); letter-spacing: 0;
-  text-transform: none; white-space: normal; text-decoration: none; }
+.help__tip.tip { position: fixed; display: none; top: 0; left: 0; }
+.help__tip.tip::before { display: none; }
 
 /* A function's source, shown on hovering a link to it. */
 .peek { position: absolute; z-index: 30; width: min(42rem, calc(100vw - 1rem));

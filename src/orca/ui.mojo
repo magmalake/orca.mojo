@@ -1622,6 +1622,60 @@ the panel it `aria-controls`. A link's `?<data-tabs-param>=` still says
 which tab to show, and without scripts the links load it."""
 
 
+comptime _TIPS = """
+(() => {
+  let tip = null, on = null;
+  const show = (el) => {
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.className = "help__tip tip";
+      tip.id = "tip";
+      tip.setAttribute("role", "tooltip");
+      document.body.append(tip);
+    }
+    on = el;
+    tip.textContent = el.dataset.tip;
+    tip.style.display = "block";
+    el.setAttribute("aria-describedby", "tip");
+    const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    const below = r.bottom + 6 + h <= innerHeight || r.top < h + 6;
+    tip.style.top = (below ? r.bottom + 6 : r.top - h - 6) + "px";
+    tip.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + "px";
+  };
+  const hide = () => {
+    if (tip) tip.style.display = "none";
+    if (on) on.removeAttribute("aria-describedby");
+    on = null;
+  };
+  const of = (t) => t && t.closest && t.closest("[data-tip]");
+  document.addEventListener("mouseover", (e) => { const el = of(e.target); if (el && el !== on) show(el); });
+  document.addEventListener("mouseout", (e) => { const el = of(e.target); if (el && !el.contains(e.relatedTarget)) hide(); });
+  document.addEventListener("focusin", (e) => { const el = of(e.target); if (el) show(el); });
+  document.addEventListener("focusout", (e) => { if (of(e.target)) hide(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
+  addEventListener("scroll", hide, true);
+  // A "?" in a table, which scrolls sideways: its help is fixed (CSS), so
+  // not cut off by the table's box, and placed here under its button.
+  const place = (h) => {
+    const t = h.querySelector(".help__tip"), b = h.querySelector(".help__btn");
+    if (!t || !b) return;
+    const r = b.getBoundingClientRect(), w = t.offsetWidth, ht = t.offsetHeight;
+    const below = r.bottom + 6 + ht <= innerHeight || r.top < ht + 6;
+    t.style.top = (below ? r.bottom + 6 : r.top - ht - 6) + "px";
+    t.style.left = Math.max(8, Math.min(r.left - 10, innerWidth - w - 8)) + "px";
+  };
+  const help = (e) => { const h = e.target.closest && e.target.closest(".scroll .help"); if (h) requestAnimationFrame(() => place(h)); };
+  document.addEventListener("mouseover", help);
+  document.addEventListener("focusin", help);
+})();
+"""
+"""What a value from a fixed set means (`data-tip`, `orca.terms`): one
+floating box, shown under the value on hover, keyboard focus (each such
+value is a tab stop) or a tap, above it where there's no room, and
+hidden on scroll or Escape; to a screen reader, the value's description.
+And a table header's or cell's "?", whose help is placed under it."""
+
+
 comptime _PEEK = """
 (() => {
   const GH = /^https:[/][/]github[.]com[/]([^/]+)[/]([^/]+)[/]blob[/]([0-9a-f]{7,40})[/]([^#?]+)#L([0-9]+)$/;
@@ -1993,6 +2047,8 @@ def _page(title: String, active: StaticString, body: Html) -> String:
         _POLL,
         "</script><script>",
         _TABS,
+        "</script><script>",
+        _TIPS,
         "</script><script>",
         _PEEK,
         "</script></body></html>",
@@ -7246,9 +7302,7 @@ def _respond(page: Page, json: Bool) -> Response:
         not raw or page.content_type.startswith("text/html")
     ):
         # A fragment's ids apart from its page's.
-        body = with_header_help(
-            body, String("thf") if raw else String("th")
-        )
+        body = with_header_help(body, String("thf") if raw else String("th"))
     var status = (
         200 if page.location and json and page.status == 303 else (page.status)
     )

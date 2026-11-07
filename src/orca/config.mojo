@@ -1045,8 +1045,10 @@ def config_html(
                 String(s.repo_path, ":", r.setting.line),
                 s.commit,
             )
-        elif r.setting.source == CODE_DEFAULT and code_line and (
-            r.setting.detail.startswith("the pipeline's")
+        elif (
+            r.setting.source == CODE_DEFAULT
+            and code_line
+            and (r.setting.detail.startswith("the pipeline's"))
         ):
             h.raw(" ")
             h.code(code_line, "the Pipeline[...] line", "")
