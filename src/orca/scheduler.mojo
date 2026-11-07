@@ -127,6 +127,7 @@ from orca.control import (
     pool_of,
     pressure_reason,
     run_env,
+    secrets_env,
     slots_reason,
 )
 from orca.config import (
@@ -1085,6 +1086,9 @@ struct Scheduler(Movable):
     """What a control-placed run may use (`orca.control`)."""
     var _control: Dict[Int, _ControlProc]
     """A control-placed run's process to what its end needs."""
+    var _kept: Dict[Int, _ControlProc]
+    """A local run's process whose output, staged for its secrets, `keep-log`
+    appends to its `driver.log` once it ends."""
     var _keeping: Dict[Int, String]
     """A `keep-log` still going to the staging file it keeps, removed once
     it has ended."""
@@ -1138,6 +1142,7 @@ struct Scheduler(Movable):
         self._notify_next = 0
         self.limits = ControlLimits.from_env()
         self._control = Dict[Int, _ControlProc]()
+        self._kept = Dict[Int, _ControlProc]()
         self._keeping = Dict[Int, String]()
         self._meters = Dict[Int, Meter]()
 
@@ -1430,6 +1435,8 @@ struct Scheduler(Movable):
                     print("orca: can't record run", spawned[0], "usage:", e)
             if ctl:
                 self._keep_control_log(ctl.value())
+            if done.pid in self._kept:
+                self._keep_control_log(self._kept.pop(done.pid))
             var log = self._driver_logs.pop(done.pid, "")
             if log:
                 try:
@@ -1583,9 +1590,10 @@ struct Scheduler(Movable):
         print("run", spawned[0], "crashed,", n, "attempts failed:", why)
 
     def _keep_control_log(mut self, c: _ControlProc):
-        """Appends a control-placed run's output to its `driver.log`, masked
-        (`<binary> keep-log`, given the run's secrets as the run was); the
-        staging file is removed once that has ended."""
+        """Appends a control-placed run's output, or a local run's with
+        secrets, to its `driver.log`, masked (`<binary> keep-log`, given the
+        run's secrets as the run was); the staging file is removed once
+        that has ended."""
         if not c.location:
             return
         try:
@@ -2638,10 +2646,39 @@ struct Scheduler(Movable):
                         Params().int64(id).text(String("can't start: ", e)),
                     )
                 continue
+            # Its own variables, from orca.toml, and its secrets, read now
+            # and named in ORCA_SECRETS for masking; the rest it inherits.
+            var env = List[String]()
+            for kv in p.env:
+                env.append(String(kv[0], "=", kv[1]))
+            try:
+                var secrets = List[Tuple[String, String]]()
+                for s in p.secrets:
+                    secrets.append((s[0], fetch_secret(s[1])))
+                env.extend(secrets_env(secrets))
+            except e:
+                # Retried as a run whose process failed is.
+                print("orca: run", id, "of", p.name, "can't start:", e)
+                _ = self.db.conn.execute(
+                    (
+                        "UPDATE orca.runs SET status = 'failed', ended ="
+                        " now(), error = $2 WHERE id = $1 AND status ="
+                        " 'running' AND heartbeat IS NULL"
+                    ),
+                    Params().int64(id).text(String("can't start: ", e)),
+                )
+                continue
             var log = String()
+            var stage = String()
+            # A run with secrets prints what it likes: its output is
+            # staged outside ORCA_LOGS and appended to its driver.log,
+            # masked, by keep-log once it ends, as a control-placed run's.
+            var kept = len(p.secrets) > 0
             if self.logs:
                 log = String(run_dir(p.name, Int(id)), "/driver.log")
-                var stage = stage_of(log)
+                stage = control_stage(
+                    p.name, Int(id), starts[i]
+                ) if kept else stage_of(log)
                 makedirs(
                     String(stage[byte = : stage.rfind("/")]), exist_ok=True
                 )
@@ -2649,22 +2686,24 @@ struct Scheduler(Movable):
             if new_code[i]:
                 argv.append("--allow-new-code")
             if log:
-                # Each start's output after a line of its own, as on the
-                # other runners: a crash's dump is looked for after the last.
-                with open(stage_of(log), "a") as f:
-                    f.write("--- start ", starts[i], "\n")
-            # Its own variables, from orca.toml; the rest it inherits.
-            var env = List[String]()
-            for kv in p.env:
-                env.append(String(kv[0], "=", kv[1]))
-            var pid = spawn(argv, stage_of(log) if log else log, env=env)
+                if kept:
+                    # keep-log heads it with the start.
+                    with open(stage, "w") as f:
+                        f.write("")
+                else:
+                    # Each start's output after a line of its own, as on
+                    # the other runners: a crash's dump is looked for after
+                    # the last.
+                    with open(stage, "a") as f:
+                        f.write("--- start ", starts[i], "\n")
+            var pid = spawn(argv, stage, env=env)
             self._meters[pid] = Meter()
-            self._spawned[pid] = (
-                Int(id),
-                starts[i],
-                stage_of(log) if log else String(),
-            )
-            if is_remote(log):
+            self._spawned[pid] = (Int(id), starts[i], stage)
+            if log and kept:
+                self._kept[pid] = _ControlProc(
+                    Int(id), p.binary, stage, log, starts[i], env^, ""
+                )
+            elif is_remote(log):
                 self._driver_logs[pid] = log
             print("started", p.name, "run", id, "pid", pid)
             if log and sample_seconds() > 0:
