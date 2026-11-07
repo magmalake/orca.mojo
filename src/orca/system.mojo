@@ -807,7 +807,10 @@ def system_html(mut h: Html, now: Optional[Now], c: Charts, range: String):
     )
     h.raw("</div>")
     if len(n.containers) > 0:
-        h.raw('<section class="card"><h2>Containers</h2>')
+        h.raw(
+            '<section class="card" id="containers"><h2><a class="anchor"'
+            ' href="#containers">Containers</a></h2>'
+        )
         h.raw('<div class="scroll"><table><thead><tr><th>Container</th>')
         h.raw('<th class="num">Memory now</th>')
         h.raw('<th class="num">Peak in range</th></tr></thead><tbody>')
@@ -834,20 +837,29 @@ def system_html(mut h: Html, now: Optional[Now], c: Charts, range: String):
         c.bucket // 60,
         " minutes; a point with no samples is 0)</p>",
     )
-    h.raw('<section class="card"><h2>CPU</h2>')
+    h.raw(
+        '<section class="card" id="cpu"><h2><a class="anchor"'
+        ' href="#cpu">CPU</a></h2>'
+    )
     h.raw(
         '<p class="muted">Percent of all cores, user and system.</p>',
         _chart("CPU", "%", c.labels, c.cpu, c.hours, fixed_top=100.0),
         "</section>",
     )
-    h.raw('<section class="card"><h2>Memory</h2>')
+    h.raw(
+        '<section class="card" id="memory"><h2><a class="anchor"'
+        ' href="#memory">Memory</a></h2>'
+    )
     h.raw(
         '<p class="muted">Percent of memory in use (not counting the page',
         " cache).</p>",
         _chart("Memory", "%", c.labels, c.mem, c.hours, fixed_top=100.0),
         "</section>",
     )
-    h.raw('<section class="card"><h2>Disk</h2>')
+    h.raw(
+        '<section class="card" id="disk"><h2><a class="anchor"'
+        ' href="#disk">Disk</a></h2>'
+    )
     h.raw(
         '<p class="muted">Percent used of the file system under ',
         "<code>/var/lib/orca</code>, which holds Postgres' data and the",
@@ -855,14 +867,20 @@ def system_html(mut h: Html, now: Optional[Now], c: Charts, range: String):
         _chart("Disk", "%", c.labels, c.disk, c.hours, fixed_top=100.0),
         "</section>",
     )
-    h.raw('<section class="card"><h2>Network</h2>')
+    h.raw(
+        '<section class="card" id="network"><h2><a class="anchor"'
+        ' href="#network">Network</a></h2>'
+    )
     h.raw(
         '<p class="muted">Throughput over all interfaces but loopback.</p>',
         _chart("Network", "MB/s", c.labels, c.net, c.hours),
         "</section>",
     )
     if len(c.containers) > 0:
-        h.raw('<section class="card"><h2>Container memory</h2>')
+        h.raw(
+            '<section class="card" id="container-memory"><h2><a class="anchor"'
+            ' href="#container-memory">Container memory</a></h2>'
+        )
         h.raw(
             '<p class="muted">Each container&rsquo;s highest memory in the',
             " point, as <code>docker stats</code> counts it.</p>",
