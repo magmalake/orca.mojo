@@ -17,6 +17,11 @@
 #   instance over the same variable from ORCA_RUN_ENV, and is part of the
 #   warm pool's key: a run after a change of env launches a new instance, one
 #   with the same env takes the pooled one;
+# - `orca config check` checks a file with no database: its keys, that each
+#   instance type can be sized (a warning for one with no price), and with
+#   --secrets that each secret can be read, never printing a value;
+# - the pipeline page shows the registration and its overrides (and its
+#   JSON, `config`), and a run's settings link to it;
 # - `orca config export` writes back a file that registers to the same thing;
 # - `orca aws register` sends the file with its commit (tests/aws.sh has the
 #   stand-ins; here only that the flags read back).
@@ -37,9 +42,12 @@ orca=$root/build/orca
 log=$root/build/config.log
 : > "$log"
 fake=
+ui=
 stop() {
     [ -z "$fake" ] || kill "$fake" 2> /dev/null || true
+    [ -z "$ui" ] || kill "$ui" 2> /dev/null || true
     fake=
+    ui=
 }
 fail() {
     echo "FAIL: $*"
@@ -171,6 +179,26 @@ grep -q "bad.toml:2: \[pipelines.toy\] workers: not a count or a range MIN..MAX:
 [ "$(q "SELECT config->>'hash' FROM orca.pipelines WHERE name = 'toy'")" = "$before" ] || fail "the bad file changed the registration"
 echo "ok   a bad file is refused with its line"
 
+# orca config check: a file alone, with no database, for a project's CI.
+check() { env -u ORCA_DATABASE_URL "$orca" config check "$@"; }
+[ "$(check 2>&1)" = "orca.toml: ok, 1 pipeline" ] || fail "config check of orca.toml: $(check 2>&1)"
+printf '[pipelines.toy]\nworkrs = 4\n' > bad.toml
+if check bad.toml > bad.out 2>&1; then fail "config check passed a bad key"; fi
+grep -q "bad.toml:2: \[pipelines.toy\] has no key workrs" bad.out || fail "config check's message: $(cat bad.out)"
+printf '[defaults]\nhead_type = "m7g.large"\n[pipelines.toy]\nworker_type = "c7g.huge"\n' > bad.toml
+if check bad.toml > bad.out 2>&1; then fail "config check passed c7g.huge"; fi
+grep -q "bad.toml:4: \[pipelines.toy\] worker_type: the vCPUs of c7g.huge" bad.out || fail "the instance type's message: $(cat bad.out)"
+grep -q "warning: bad.toml:2: \[defaults\] head_type: m7g.large isn't in orca's price table" bad.out || fail "no price warning: $(cat bad.out)"
+printf '[pipelines.toy]\nsecrets = { A = "orca/github-token" }\n[pipelines.daily]\nsecrets = { B = "orca/missing" }\n' > sec.toml
+check sec.toml > sec.out 2>&1 || fail "config check without --secrets reads none: $(cat sec.out)"
+if ORCA_SECRET_FETCH=$root/tests/fake_secret.sh check sec.toml --secrets > sec.out 2>&1; then fail "a missing secret passed"; fi
+grep -q "sec.toml:4: \[pipelines.daily\] secrets: B: can't read secret orca/missing" sec.out || fail "the missing secret's message: $(cat sec.out)"
+grep -q "s3cr3t" sec.out && fail "config check printed a secret's value"
+printf '[pipelines.toy]\nsecrets = { A = "orca/github-token" }\n' > sec.toml
+[ "$(ORCA_SECRET_FETCH=$root/tests/fake_secret.sh check sec.toml --secrets 2>&1)" = "sec.toml: ok, 1 pipeline, 1 secret(s) readable" ] \
+    || fail "config check --secrets: $(ORCA_SECRET_FETCH=$root/tests/fake_secret.sh check sec.toml --secrets 2>&1)"
+echo "ok   config check checks a file, its instance types and secrets, with no database"
+
 # The env reaches the toy's runs on the local runner: 2024-02 fails as asked,
 # 2024-01 doesn't; daily's runs don't get it.
 export ORCA_LOGS=$root/build/config-logs
@@ -185,6 +213,32 @@ done
 [ "$(q "SELECT status FROM orca.runs WHERE pipeline = 'toy' AND partitions = '2024-02'")" = failed ] || fail "2024-02 didn't fail"
 [ "$(q "SELECT count(*) FROM orca.attempts WHERE error LIKE '%failing 2024-02 as asked%'")" -ge 1 ] || fail "2024-02 failed otherwise"
 echo "ok   a pipeline's env reaches its own runs on the local runner"
+
+# The pipeline page shows the registration as config show does, with the
+# flags over the file; the run page's settings link to it.
+"$orca" register --max-runs 3 "$root/build/toy" >> "$log" 2>&1 || fail "register --max-runs for the page"
+uport=$((19000 + $$ % 2000))
+ORCA_UI_ADDR="127.0.0.1:$uport" "$orca" ui >> "$log" 2>&1 &
+ui=$!
+i=0
+until curl -fs "http://127.0.0.1:$uport/" > /dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+done
+page=$(curl -fsS "http://127.0.0.1:$uport/pipelines/toy")
+api=$(curl -fsS "http://127.0.0.1:$uport/api/pipelines/toy")
+run=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
+runpage=$(curl -fsS "http://127.0.0.1:$uport/runs/$run")
+kill "$ui"
+wait "$ui" 2> /dev/null || true
+ui=
+echo "$page" | grep -q '<h2 id="config">Configuration</h2>' || fail "no Configuration on the pipeline page"
+echo "$page" | grep -q "Registered from <code>orca.toml</code> @ <code>$(echo "$commit" | cut -c1-12)</code>" || fail "the page's registered-from"
+echo "$page" | grep -q '<code>--max-runs 3</code>' || fail "the page doesn't show the override"
+echo "$page" | grep -q '<td><code>head_type</code></td><td><code>t4g.medium</code></td><td>orca.toml \[defaults\]</td>' || fail "the page's head_type row"
+[ "$(echo "$api" | jq -r '.config.overrides.max_runs + " " + .config.commit')" = "3 $commit" ] || fail "the page's JSON config: $(echo "$api" | jq .config)"
+echo "$runpage" | grep -q 'href="/pipelines/toy#config"' || fail "the run's settings don't link the registration"
+"$orca" register "$root/build/toy" >> "$log" 2>&1 || fail "register the toy back"
+echo "ok   the pipeline page shows its registration; a run's settings link to it"
 
 # config export: back to a file that registers the same.
 "$orca" config export --out exported.toml >> "$log" 2>&1 || fail "config export"

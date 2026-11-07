@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **orca.toml follow-ups: `orca config check`, the registration on the
+  pipeline page** (#181). `orca config check [<file>] [--secrets]` checks a
+  file for a project's CI with no database: what `orca register` refuses,
+  with its `file:line: [table] key: why`, plus that each `head_type` and
+  `worker_type` can be sized (a warning for one not in orca's price table,
+  which counts as $0 an hour), and with `--secrets` that each secret can be
+  read (`ORCA_SECRET_FETCH` or Secrets Manager; a value is never printed).
+  It exits 1 on a problem. The pipeline page has a Configuration section
+  (`#config`) with what `orca config show` prints: where it was registered
+  from, the flags over the file and each value's source; `/api/pipelines/<name>`
+  has it as `config`. A run's Settings link to it. `docs/orca-toml.md`,
+  `tests/config.sh`. Still to do: drift warnings, `[stack]` read by
+  `orca aws up`, and a register flag for per-pipeline env.
+
 - **Ops sections can be linked to.** Each section on Ops › Control and Fleet
   has an id and its heading links to it, so `/ops/control#cpu` opens at the
   CPU chart.

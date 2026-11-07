@@ -58,6 +58,28 @@ def test_the_example_reads() raises:
     assert_equal(f.commit, "abc123")
 
 
+def test_entries_say_where() raises:
+    # What `orca config check` checks, each with its file:line and table.
+    var f = ProjectConfig(EXAMPLE, "orca.toml")
+    var heads = f.entries("head_type")
+    assert_equal(len(heads), 1)
+    assert_equal(heads[0][0], "orca.toml:3: [defaults] head_type")
+    assert_equal(heads[0][1], "t4g.medium")
+    var workers = f.entries("worker_type")
+    assert_equal(len(workers), 1)
+    assert_equal(
+        workers[0][0], "orca.toml:7: [pipelines.gharchive] worker_type"
+    )
+    var secrets = f.entries("secrets")
+    assert_equal(len(secrets), 1)
+    assert_equal(
+        secrets[0][0],
+        "orca.toml:15: [pipelines.mojo_repos] secrets: GITHUB_TOKEN",
+    )
+    assert_equal(secrets[0][1], "orca/github-token")
+    assert_equal(len(f.entries("fills")), 0)
+
+
 def test_pipeline_beats_defaults() raises:
     var f = ProjectConfig(EXAMPLE, "orca.toml")
     var r = resolve("gharchive", RegisterFlags(), f)

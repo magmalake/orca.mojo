@@ -17,6 +17,12 @@ runs (#145), read by `orca register` and `orca aws register`.
 
     [stack]                      # for `orca aws up`; not read yet
 
+`orca config check [<file>] [--secrets]` checks a file without a database,
+for a project's CI: what registering checks, and that orca can size each
+instance type (a warning for one its price table hasn't); with `--secrets`,
+that each secret can be read (its value is never printed). The pipeline
+page's Configuration (`config_html`) is `orca config show`'s.
+
 What stays in the pipeline's code is what it does; this file says where and
 how much. A key in `[pipelines.<name>]` beats the same key in `[defaults]`
 (`env` and `secrets` are merged name by name), and a flag of `orca register`
@@ -55,6 +61,7 @@ from orca.fill import (
     parse_fill_window,
     parse_fills,
 )
+from orca.html import Html
 from orca.json import quote
 from orca.proc import absolute, capture
 from orca.secrets import parse_secrets, secret_problem
@@ -404,6 +411,63 @@ struct ProjectConfig(Movable):
         if s.detail != "[defaults]":
             p = ["pipelines", pipeline, key]
         return String(self.path, ":", self._line(p), ": ", s.detail)
+
+    def entries(self, key: String) -> List[Tuple[String, String]]:
+        """Each value of `key` in `[defaults]` and the `[pipelines.<name>]`
+        tables, with `file:line: [table] key` for a message; for `secrets`
+        or `env`, each of its names (`... secrets: NAME`)."""
+        var out = List[Tuple[String, String]]()
+        var tables = List[List[String]]()
+        var labels = List[String]()
+        if self.doc.has_table(["defaults"]):
+            tables.append(["defaults"])
+            labels.append("[defaults]")
+        for name in self.pipelines():
+            tables.append(["pipelines", name])
+            labels.append(String("[pipelines.", toml_key(name), "]"))
+        for t in range(len(tables)):
+            var p = tables[t].copy()
+            p.append(key)
+            var v = self.doc.get(p)
+            if not v:
+                continue
+            if is_map_key(key):
+                for name in self.doc.keys(p):
+                    var q = p.copy()
+                    q.append(name)
+                    var item = self.doc.get(q).value().copy()
+                    out.append(
+                        (
+                            String(
+                                self.path,
+                                ":",
+                                item.line,
+                                ": ",
+                                labels[t],
+                                " ",
+                                key,
+                                ": ",
+                                name,
+                            ),
+                            item.text,
+                        )
+                    )
+            else:
+                out.append(
+                    (
+                        String(
+                            self.path,
+                            ":",
+                            v.value().line,
+                            ": ",
+                            labels[t],
+                            " ",
+                            key,
+                        ),
+                        v.value().text,
+                    )
+                )
+        return out^
 
     def _fail(self, line: Int, table: String, msg: String) raises:
         raise Error(self.path, ":", line, ": ", table, " ", msg)
@@ -842,6 +906,63 @@ struct Shown(Movable):
                 out.write(" ", r.setting.detail)
             out.write("\n")
         return out^
+
+
+def config_html(mut h: Html, s: Shown):
+    """The pipeline page's Configuration (`id="config"`): what `orca config
+    show` prints, where it was registered from, and the flags that
+    overrode the file."""
+    h.raw('<h2 id="config">Configuration</h2><p class="muted">')
+    if s.file:
+        h.raw("Registered from <code>")
+        h.text(s.file)
+        h.raw("</code>")
+        if s.commit:
+            h.raw(" @ <code>")
+            h.text(s.commit[byte = : min(12, s.commit.byte_length())])
+            h.raw("</code>")
+            if s.dirty:
+                h.raw(" (with changes not committed)")
+            if s.source:
+                h.text(" of ", s.source)
+        h.raw(", sha256 <code>")
+        h.text(s.hash[byte = : min(12, s.hash.byte_length())])
+        h.raw("</code>.")
+    else:
+        h.raw(
+            "Not registered from orca.toml: from <code>orca register</code>'s",
+            " flags, each left out keeping what was registered.",
+        )
+    h.raw("</p>")
+    if len(s.overrides) > 0:
+        h.raw(
+            '<p class="warn">Registered with flags over the file, gone at',
+            " the next registration without them:",
+        )
+        for o in s.overrides:
+            h.raw(" <code>")
+            h.text(
+                flag_of(o[0]) if o[0] != "secrets" else String("--secret"),
+                " ",
+                o[1],
+            )
+            h.raw("</code>")
+        h.raw("</p>")
+    h.raw(
+        '<div class="scroll"><table><thead><tr><th>Key</th><th>Value</th>',
+        "<th>From</th></tr></thead><tbody>",
+    )
+    for r in s.rows:
+        h.raw("<tr><td><code>")
+        h.text(r.key)
+        h.raw("</code></td><td><code>")
+        h.text(r.setting.value)
+        h.raw("</code></td><td>")
+        h.text(r.setting.source)
+        if r.setting.detail:
+            h.text(" ", r.setting.detail)
+        h.raw("</td></tr>")
+    h.raw("</tbody></table></div>")
 
 
 comptime _SHOWN_SQL = (

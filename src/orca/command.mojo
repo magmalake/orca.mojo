@@ -77,6 +77,9 @@ from orca.config import (
     shown,
 )
 from orca.scheduler import Scheduler
+from orca.control import fetch_secret
+from orca.ec2 import vcpus
+from orca.fleet import hourly_price
 from orca.secrets import secret_problem
 from orca.sensors import rebuild, rebuilds
 from orca.state import State
@@ -130,6 +133,9 @@ comptime USAGE = """usage:
                 default, orca.toml, flag, environment)
   orca config export [--out <path>|-] [--force]
                 (an orca.toml from what's registered; default ./orca.toml)
+  orca config check [<orca.toml>] [--secrets]
+                (checks a file as register does, and its instance types,
+                with no database; --secrets reads each secret too)
   orca watchdog status [--json]     (rules, values, limits, active trips)
   orca watchdog snooze <rule> <duration>   (2h, 30m, 1d; off ends it)
   orca watchdog ack [--all|<trip id>]   (keep a trip's pipelines paused and
@@ -366,6 +372,9 @@ def _command(args: List[String], target: String) raises -> Int:
     if args[1] == "worker":
         # Talks only to the UI's API, with no database (orca.worker).
         return worker_command(args, target)
+    if args[1] == "config" and len(args) >= 3 and args[2] == "check":
+        # A file only, for a project's CI: no database.
+        return _config_check(args)
     var url = getenv("ORCA_DATABASE_URL")
     if not url:
         _usage("orca needs ORCA_DATABASE_URL")
@@ -851,6 +860,75 @@ def _register(url: String, args: List[String]) raises -> Int:
                 file=stderr,
             )
         print("registered", got)
+    return 0
+
+
+def _without_orca(e: String) -> String:
+    return String(e[byte=6:]) if e.startswith("orca: ") else e
+
+
+def _config_check(args: List[String]) raises -> Int:
+    """`orca config check [<file>] [--secrets]`: `file` (`$ORCA_CONFIG`,
+    else ./orca.toml) as registering checks it, and each instance type
+    sized; with `--secrets`, each secret read. 1 if anything is wrong."""
+    var path = String()
+    var read_secrets = False
+    for k in range(3, len(args)):
+        if args[k] == "--secrets":
+            read_secrets = True
+        elif not path and not args[k].startswith("--"):
+            path = args[k]
+        else:
+            _usage(String("unknown argument: ", args[k]))
+    if not path:
+        path = getenv("ORCA_CONFIG", "orca.toml")
+    var file: ProjectConfig
+    try:
+        file = ProjectConfig.load(path)
+    except e:
+        print(e, file=stderr)
+        return 1
+    var problems = 0
+    for key in ["head_type", "worker_type"]:
+        for e in file.entries(String(key)):
+            try:
+                _ = vcpus(e[1])
+            except err:
+                print(
+                    e[0], ": ", _without_orca(String(err)), sep="", file=stderr
+                )
+                problems += 1
+                continue
+            if hourly_price(e[1]) < 0:
+                print(
+                    "orca: warning: ",
+                    e[0],
+                    ": ",
+                    e[1],
+                    " isn't in orca's price table (orca.fleet), so Ops >",
+                    " Fleet and the watchdog's cost rule count it as $0 an",
+                    " hour",
+                    sep="",
+                    file=stderr,
+                )
+    var secrets = file.entries("secrets")
+    if read_secrets:
+        for e in secrets:
+            try:
+                _ = fetch_secret(e[1])
+            except err:
+                print(
+                    e[0], ": ", _without_orca(String(err)), sep="", file=stderr
+                )
+                problems += 1
+    if problems > 0:
+        print("orca:", path, "has", problems, "problem(s)", file=stderr)
+        return 1
+    var n = len(file.pipelines())
+    var line = String(path, ": ok, ", n, " pipeline", "" if n == 1 else "s")
+    if read_secrets:
+        line.write(", ", len(secrets), " secret(s) readable")
+    print(line)
     return 0
 
 
