@@ -6,6 +6,8 @@
 # (ORCA_FANOUT_SECRET): the run succeeds and its tasks saw the value, yet no
 # log under ORCA_LOGS (driver, attempts, head and workers) holds it, and
 # Postgres holds only its ID. A pipeline whose secret can't be read fails.
+# Then the same on the local runner: fanout's next run gets the value and no
+# log holds it, and the toy's fails with "can't start: can't read secret".
 #
 # Needs ORCA_DATABASE_URL (pixi run test-secrets starts a throwaway server),
 # python3 and curl.
@@ -103,5 +105,30 @@ toy=$(q "SELECT id FROM orca.runs WHERE pipeline = 'toy'")
 until_true "SELECT count(*) > 0 FROM orca.instances WHERE run = $toy AND ended IS NOT NULL" 120
 grep -rq "can't read secret orca/missing" "$dir" || fail "the toy's instance didn't say why"
 echo "ok   an instance that can't read its secret stops"
+stop
+
+# The local runner: the scheduler reads the secrets as it starts each run.
+unset ORCA_RUNNER ORCA_EC2_MODE ORCA_EC2_ENDPOINT
+./build/orca scheduler >> "$log" 2>&1 &
+sched=$!
+./build/orca backfill fanout 2024-03 >> "$log" 2>&1 || fail "backfill fanout locally"
+./build/orca backfill toy 2024-03 >> "$log" 2>&1 || fail "backfill the toy locally"
+local=$(q "SELECT id FROM orca.runs WHERE pipeline = 'fanout' AND id <> $run")
+until_true "SELECT status IN ('succeeded', 'failed') FROM orca.runs WHERE id = $local" 300
+[ "$(q "SELECT status FROM orca.runs WHERE id = $local")" = succeeded ] || fail "local run $local"
+# keep-log appends the driver's output to driver.log once it has ended.
+i=0
+until grep -q "secret \*\*\*$" "$ORCA_LOGS/fanout/$local/driver.log" 2> /dev/null; do
+    i=$((i + 1)); [ "$i" -lt 60 ] || fail "local run $local's driver.log"; sleep 0.5
+done
+grep -rq "secret \*\*\* of length ${#value}" "$ORCA_LOGS/fanout/$local" \
+    || fail "the local step's log didn't see the secret"
+if grep -rq "$value" "$ORCA_LOGS"; then
+    fail "the secret's value is in $(grep -rl "$value" "$ORCA_LOGS")"
+fi
+echo "ok   a local run's secret reached its step, and no log holds it"
+toy=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
+until_true "SELECT status = 'failed' AND error LIKE 'can''t start: can''t read secret orca/missing%' FROM orca.runs WHERE id = $toy" 60
+echo "ok   a local run whose secret can't be read fails"
 stop
 echo "ok   secrets"
