@@ -186,10 +186,10 @@ def slots_reason(running: Int, max_runs: Int) -> String:
 
 
 def control_stage(pipeline: String, run: Int, start: Int) -> String:
-    """Where a control-placed run's start writes its output before
-    `keep-log` appends it to the run's `driver.log`: under `ORCA_LOG_STAGE`
-    (else `$TMPDIR/orca-logs`), never in the logs themselves, since it isn't
-    masked yet."""
+    """Where a control-placed run's start, or a local run's with secrets,
+    writes its output before `keep-log` appends it to the run's
+    `driver.log`: under `ORCA_LOG_STAGE` (else `$TMPDIR/orca-logs`), never
+    in the logs themselves, since it isn't masked yet."""
     var root = getenv("ORCA_LOG_STAGE")
     if not root:
         root = String(getenv("TMPDIR", "/tmp").rstrip("/"), "/orca-logs")
@@ -210,6 +210,15 @@ def run_env(
     var out: List[String] = [String("ORCA_WORKERS=", limits.workers)]
     if image:
         out.append(String("ORCA_IMAGE=", image))
+    out.extend(secrets_env(secrets))
+    return out^
+
+
+def secrets_env(secrets: List[Tuple[String, String]]) -> List[String]:
+    """A run's secrets as environment entries, `secrets` being (NAME, value)
+    pairs: each `NAME=value`, then `ORCA_SECRETS` naming them, which
+    `orca.logs.mask` masks the values by. Nothing for no secrets."""
+    var out = List[String]()
     var names = String()
     for s in secrets:
         out.append(String(s[0], "=", s[1]))
