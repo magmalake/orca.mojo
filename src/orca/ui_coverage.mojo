@@ -1,0 +1,384 @@
+"""The Coverage card on a dated pipeline's Operate tab: its partitions'
+states (`orca.calendar`) as plain HTML, read-only.
+
+A daily pipeline's card has two tabs, **Month** (a month of days) and
+**Year** (twelve small months, each with how many of its days are done, and
+a strip of every month of its range linking to their years). Both are in
+the page; the links work without scripts (`?cov=month|year`, with `?cal=`
+the month or year), and with them the tabs switch in place and the choice
+is kept in `localStorage`, as the Steps tabs are. Year is the default. A
+monthly pipeline's card is its year of months, as before.
+
+One calendar is read for both tabs (`year_calendar`): the month is cut out
+of the year, so the card costs the same three queries as a month did.
+"""
+
+from orca.calendar import (
+    Calendar,
+    Year,
+    calendar,
+    month_of,
+    year_calendar,
+    year_of,
+)
+from orca.civil import Civil, now
+from orca.html import Html, url_encode
+from orca.month import days_in
+from orca.state import State
+
+
+def states() -> List[String]:
+    """The states, in the legend's order."""
+    return ["done", "failed", "live", "open", "outside"]
+
+
+def month_name(month: Int) -> String:
+    var names = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ]
+    return String(names[month - 1])
+
+
+def state_words(state: String) -> String:
+    if state == "live":
+        return "running or queued"
+    if state == "open":
+        return "not run"
+    if state == "outside":
+        return "outside the pipeline's range"
+    return state
+
+
+def _cal_title(c: Calendar) raises -> String:
+    if c.kind == "monthly":
+        return c.period
+    var y = c.period[byte=:4]
+    var m = Int(c.period[byte=5:7])
+    return String(month_name(m), " ", y)
+
+
+def _nav(
+    mut h: Html,
+    base: String,
+    prev: String,
+    next: String,
+    title: String,
+    unit: String,
+    view: String,
+):
+    """`‹ title ›`, the arrows linking `prev` and `next` (`?cal=`) when
+    there are; `view` is the tab the links open (empty for none)."""
+    h.raw('<div class="cal__head">')
+    if prev:
+        h.raw('<a rel="prev" href="')
+        h.text(base, "?cal=", prev)
+        if view:
+            h.raw("&amp;cov=", view)
+        h.raw('#coverage" aria-label="Previous ', unit, '">‹</a>')
+    else:
+        h.raw('<span aria-hidden="true">‹</span>')
+    h.raw('<strong aria-live="polite">')
+    h.text(title)
+    h.raw("</strong>")
+    if next:
+        h.raw('<a rel="next" href="')
+        h.text(base, "?cal=", next)
+        if view:
+            h.raw("&amp;cov=", view)
+        h.raw('#coverage" aria-label="Next ', unit, '">›</a>')
+    else:
+        h.raw('<span aria-hidden="true">›</span>')
+    h.raw("</div>")
+
+
+def _cell(mut h: Html, key: String, state: String, label: String):
+    h.raw('<li class="cal__day cal--', state, '" data-key="')
+    h.text(key)
+    h.raw('" title="')
+    h.text(key, ": ", state_words(state))
+    h.raw('">')
+    h.text(label)
+    h.raw('<span class="sr">')
+    h.text(", ", key, " ", state_words(state))
+    h.raw("</span></li>")
+
+
+def _legend(mut h: Html, counts: List[Int]):
+    h.raw('<p class="muted cal__legend">')
+    var names = states()
+    for i in range(len(names)):
+        h.raw("" if i == 0 else " · ")
+        h.raw('<span class="cal__key cal--', names[i], '"></span> ')
+        h.text(counts[i], " ", state_words(names[i]))
+    h.raw("</p>")
+
+
+def _month_html(mut h: Html, base: String, c: Calendar, view: String):
+    """A month of days (a year of months for a monthly pipeline), as the
+    card has always drawn it."""
+    var daily = c.kind == "daily"
+    h.raw('<div class="cal cal--static" role="group" aria-label="')
+    h.text("Days" if daily else "Months", " of ", c.pipeline)
+    h.raw('">')
+    try:
+        _nav(
+            h,
+            base,
+            c.prev,
+            c.next,
+            _cal_title(c),
+            "month" if daily else "year",
+            view,
+        )
+    except:
+        pass
+    h.raw('<ul class="cal__grid')
+    h.raw(" cal__grid--days" if daily else " cal__grid--months", '">')
+    if daily:
+        for w in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]:
+            h.raw('<li class="cal__dow" aria-hidden="true">', w, "</li>")
+        for _ in range(c.weekday):
+            h.raw('<li class="cal__pad" aria-hidden="true"></li>')
+    for i in range(len(c.cells)):
+        ref cell = c.cells[i]
+        _cell(
+            h,
+            cell.key,
+            cell.state,
+            String(i + 1) if daily else String(month_name(i + 1)[byte=:3]),
+        )
+    h.raw("</ul>")
+    var counts = List[Int]()
+    for s in states():
+        counts.append(c.count(s))
+    _legend(h, counts)
+    h.raw("</div>")
+
+
+def _summary(y: Year, month: Int) -> String:
+    """`28/31 done`, of the month's days in the range, and its failures."""
+    var outside = y.count("outside", month)
+    var total = days_in(y.year, month) - outside
+    if total == 0:
+        return "not in range"
+    var s = String(y.count("done", month), "/", total, " done")
+    var failed = y.count("failed", month)
+    if failed:
+        s.write(", ", failed, " failed")
+    return s^
+
+
+def _year_html(mut h: Html, base: String, y: Year):
+    """Twelve small months, the year's legend, and the range strip."""
+    _nav(
+        h,
+        base,
+        y.prev,
+        y.next,
+        String(y.year),
+        "year",
+        "year",
+    )
+    h.raw('<ol class="cov__months" aria-label="Months of ')
+    h.text(y.year)
+    h.raw('">')
+    for m in range(1, 13):
+        var key = String(y.cells[y.first(m)].key[byte=:7])
+        h.raw('<li class="cov__month"><a class="cov__name" href="')
+        h.text(base, "?cal=", key)
+        h.raw('&amp;cov=month#coverage">')
+        h.text(month_name(m))
+        h.raw('</a><span class="cov__sum">')
+        h.text(_summary(y, m))
+        h.raw(
+            '</span><ul class="cal__grid cal__grid--days cov__grid"',
+            ' role="group" aria-label="',
+        )
+        h.text("Days of ", month_name(m), " ", y.year)
+        h.raw('">')
+        for w in ["M", "T", "W", "T", "F", "S", "S"]:
+            h.raw('<li class="cal__dow" aria-hidden="true">', w, "</li>")
+        var pad = (Civil(y.year, m, 1, 0, 0, 0).weekday() + 6) % 7
+        for _ in range(pad):
+            h.raw('<li class="cal__pad" aria-hidden="true"></li>')
+        var lo = y.first(m)
+        for i in range(lo, lo + days_in(y.year, m)):
+            _cell(h, y.cells[i].key, y.cells[i].state, String())
+        h.raw("</ul></li>")
+    h.raw("</ol>")
+    var counts = List[Int]()
+    for s in states():
+        counts.append(y.count(s))
+    _legend(h, counts)
+    if len(y.strip) < 2:
+        return
+    h.raw(
+        '<div class="cov__range"><p class="muted cal__legend">Each month of',
+        " its range, by how many of its days are done:</p>",
+        '<ol class="cov__strip">',
+    )
+    for s in y.strip:
+        var pct = s.done * 100 // s.total if s.total else 0
+        var year = String(s.key[byte=:4])
+        var tone = "cov--all" if s.total and s.done == s.total else (
+            "cov--none" if s.done == 0 else String("cov--", pct // 25)
+        )
+        h.raw('<li><a class="cov__bar ', tone)
+        if year == String(y.year):
+            h.raw(" cov--here")
+        h.raw('" href="')
+        h.text(base, "?cal=", year)
+        h.raw('&amp;cov=year#coverage" title="')
+        h.text(s.key, ": ", s.done, "/", s.total, " done (", pct, "%)")
+        h.raw('"><span class="sr">')
+        h.text(s.key, ": ", pct, "% done")
+        h.raw("</span></a></li>")
+    var first = String(y.strip[0].key[byte=:4])
+    var last = String(y.strip[len(y.strip) - 1].key[byte=:4])
+    h.raw('</ol><p class="cov__ends muted"><span>')
+    h.text(first)
+    h.raw("</span><span>")
+    h.text(last)
+    h.raw("</span></p></div>")
+
+
+def coverage_html(
+    mut h: Html,
+    mut db: State,
+    name: String,
+    kind: String,
+    start: String,
+    cal: String,
+    view: String,
+) raises:
+    """The pipeline page's Coverage card; `cal` is the month or year to
+    show (`?cal=`, today's if empty) and `view` the tab (`?cov=`)."""
+    var base = String("/pipelines/", url_encode(name))
+    if kind != "daily":
+        h.raw(
+            '<section class="card cov" id="coverage"><div class="steps__head">',
+            '<h2>Coverage</h2></div><div class="cov__body">',
+        )
+        try:
+            var c = calendar(db, name, kind, start, cal)
+            _month_html(h, base, c, "")
+        except e:
+            h.raw('<p class="refused">')
+            h.text(String(e))
+            h.raw("</p>")
+        h.raw("</div></section>")
+        return
+    var year = view != "month"
+    h.raw(
+        '<section class="card cov" id="coverage"><div class="steps__head">',
+        '<h2>Coverage</h2><div class="vtabs"><div role="tablist"',
+        ' aria-label="How much to show">',
+    )
+    var ym: Tuple[Int, Int]
+    try:
+        ym = year_of(cal, Civil.of(now()))
+    except e:
+        h.raw('</div></div></div><div class="cov__body"><p class="refused">')
+        h.text(String(e))
+        h.raw("</p></div></section>")
+        return
+    var y = year_calendar(db, name, start, ym[0])
+    var c = month_of(y, ym[1])
+    for v in [("month", "Month"), ("year", "Year")]:
+        var on = (v[0] == "year") == year
+        h.raw('<a role="tab" class="vtabs__tab" data-view="', v[0], '" href="')
+        h.text(base, "?cal=", c.period if v[0] == "month" else String(y.year))
+        h.raw("&amp;cov=", v[0], '#coverage" aria-selected="')
+        h.raw("true" if on else "false", '" aria-controls="coverage-', v[0])
+        h.raw('">', v[1], "</a>")
+    h.raw(
+        '</div></div></div><div id="coverage-month" role="tabpanel"',
+        ' class="cov__body"',
+        " hidden" if year else "",
+        ">",
+    )
+    _month_html(h, base, c, "month")
+    h.raw(
+        '</div><div id="coverage-year" role="tabpanel" class="cov__body"',
+        "" if year else " hidden",
+        ">",
+    )
+    _year_html(h, base, y)
+    h.raw("</div></section><script>", _COVERAGE_JS, "</script>")
+
+
+comptime _COVERAGE_JS = """
+(() => {
+  const sec = document.getElementById("coverage");
+  if (!sec || !sec.querySelector("[role=tablist]")) return;
+  const get = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  const put = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+  const show = (v, save) => {
+    if (v !== "month" && v !== "year") return;
+    for (const a of sec.querySelectorAll("[data-view]")) {
+      a.setAttribute("aria-selected", String(a.dataset.view === v));
+      document.getElementById("coverage-" + a.dataset.view).hidden = a.dataset.view !== v;
+    }
+    if (save) put("orca.coverage.view", v);
+  };
+  sec.querySelector("[role=tablist]").addEventListener("click", (e) => {
+    const a = e.target.closest("a[data-view]");
+    if (!a) return;
+    e.preventDefault();
+    show(a.dataset.view, true);
+  });
+  const q = new URLSearchParams(location.search);
+  if (!q.has("cov")) show(get("orca.coverage.view"), false);
+})();
+"""
+"""The Coverage tabs: switch without loading the page, and remember the
+choice for every daily pipeline's page; a `?cov=` link still says which."""
+
+
+comptime COVERAGE_STYLE = """
+.cov__body { padding: 0.75rem 1.1rem 0.9rem; display: grid; gap: 0.6rem; }
+.cov__body[hidden] { display: none; }
+.cov__body > .cal { margin: 0; }
+.cov .cal__key { border: 1px solid var(--border-strong); }
+.cov__body > .cal__head { max-width: 22rem; }
+.cov__months { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem 1.1rem;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); }
+.cov__month { min-width: 0; display: grid; gap: 0.15rem; align-content: start; }
+.cov__name { font-size: 0.8125rem; font-weight: 600; color: var(--text); text-decoration: none; }
+.cov__name:hover { color: var(--lake); text-decoration: underline; }
+.cov__sum { font-size: 0.7rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cov__grid { gap: 2px; }
+.cov__grid .cal__dow { font-size: 0.6rem; line-height: 1.2; }
+.cov__grid .cal__day { min-height: 0; aspect-ratio: 1; border-radius: 2px; font-size: 0; }
+.cov__grid .cal__day::after { content: none; }
+.cov__grid .cal--open { border-color: var(--border-strong); }
+.cov__range { display: grid; gap: 0.25rem; }
+.cov__strip { list-style: none; margin: 0; padding: 0; display: flex; gap: 1px; }
+.cov__strip li { flex: 1 1 0; min-width: 0; }
+.cov__bar { display: block; height: 1.1rem; border-radius: 1px; background: var(--surface-2);
+  border: 1px solid var(--border); }
+.cov__bar:hover, .cov__bar:focus-visible { outline: 2px solid var(--lake); outline-offset: 0; }
+.cov--0 { background: color-mix(in srgb, var(--ok) 12%, var(--surface)); }
+.cov--1 { background: color-mix(in srgb, var(--ok) 30%, var(--surface)); }
+.cov--2 { background: color-mix(in srgb, var(--ok) 50%, var(--surface)); }
+.cov--3 { background: color-mix(in srgb, var(--ok) 70%, var(--surface)); }
+.cov--all { background: var(--ok); border-color: var(--ok); }
+.cov--here { border-color: var(--ember); border-bottom-width: 3px; }
+.cov__ends { display: flex; justify-content: space-between; margin: 0; font-size: 0.7rem; }
+@media (max-width: 640px) {
+  .cov__months { grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); gap: 0.75rem; }
+  .cov__body { padding: 0.6rem 0.75rem 0.75rem; }
+}
+"""
+"""The Coverage card's rules, served after `orca.ui_style.STYLE`."""

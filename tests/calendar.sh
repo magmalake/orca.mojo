@@ -108,11 +108,50 @@ echo "$page" | grep -qF '<input name="partitions" required' || fail "no text fie
 echo "$page" | grep -qF '<div class="cal" hidden data-calendar="/pipelines/daily/calendar"></div>' || fail "no hidden picker"
 echo "$page" | grep -qF '<li class="cal__day cal--done" data-key="2024-03-02" title="2024-03-02: done">' || fail "coverage lacks 2024-03-02 done"
 echo "$page" | grep -qF 'cal--failed" data-key="2024-03-06"' || fail "coverage lacks 2024-03-06 failed"
-echo "$page" | grep -qF 'href="/pipelines/daily?cal=2024-02#coverage"' || fail "coverage lacks its previous-month link"
+echo "$page" | grep -qF 'href="/pipelines/daily?cal=2024-02&amp;cov=month#coverage"' || fail "coverage lacks its previous-month link"
 get '/pipelines/daily?cal=2024-02' | grep -qF 'data-key="2024-02-29"' || fail "coverage of February"
 get '/pipelines/toy?tab=operate' | grep -qF 'data-key="2024-02" title="2024-02: failed"' || fail "monthly coverage"
 get '/pipelines/daily?cal=bad' | grep -qF 'class="refused"' || fail "coverage of a bad month"
 echo "ok   calendar: text field fallback and coverage"
+
+# Coverage's Month and Year tabs: a daily pipeline opens on Year, both are
+# in the page, and ?cov= picks one without scripts.
+echo "$page" | grep -qF 'data-view="year" href="/pipelines/daily?cal=2024&amp;cov=year#coverage" aria-selected="true"' \
+    || fail "Year isn't the default tab"
+echo "$page" | grep -qF 'data-view="month" href="/pipelines/daily?cal=2024-03&amp;cov=month#coverage" aria-selected="false"' \
+    || fail "no Month tab for this month"
+echo "$page" | grep -qF '<div id="coverage-month" role="tabpanel" class="cov__body" hidden>' || fail "the month isn't hidden"
+echo "$page" | grep -qF '<div id="coverage-year" role="tabpanel" class="cov__body">' || fail "the year is hidden"
+m=$(get '/pipelines/daily?cov=month')
+echo "$m" | grep -qF '<div id="coverage-month" role="tabpanel" class="cov__body">' || fail "?cov=month hides the month"
+echo "$m" | grep -qF '<div id="coverage-year" role="tabpanel" class="cov__body" hidden>' || fail "?cov=month shows the year"
+echo "$m" | grep -qF 'id="start"' || fail "?cov= doesn't open Operate"
+# The year: twelve months of cells, each with its share done (of its days
+# from the start to today) and its failures, its name linking its month.
+[ "$(echo "$page" | grep -o 'class="cov__month"' | wc -l | tr -d ' ')" = 12 ] || fail "not twelve months"
+echo "$page" | grep -qF 'href="/pipelines/daily?cal=2024-03&amp;cov=month#coverage">March</a><span class="cov__sum">3/20 done, 1 failed</span>' \
+    || fail "March's summary: $(echo "$page" | grep -o 'March</a><span class="cov__sum">[^<]*')"
+echo "$page" | grep -qF 'January</a><span class="cov__sum">0/31 done</span>' || fail "January's summary"
+echo "$page" | grep -qF 'April</a><span class="cov__sum">not in range</span>' || fail "April's summary"
+echo "$page" | grep -qF 'aria-label="Days of February 2024"' || fail "no February grid"
+echo "$page" | grep -qF '<li class="cal__day cal--failed" data-key="2024-03-06" title="2024-03-06: failed"><span class="sr">' \
+    || fail "the year's cells lack their tooltip"
+[ "$(echo "$page" | grep -o 'data-key="2024-' | wc -l | tr -d ' ')" = $((366 + 31)) ] || fail "not the year's days and the month's"
+echo "$page" | grep -qF '<span class="cal__key cal--done"></span> 3 done' || fail "the year's legend"
+# The strip: each month of the range, linking its year.
+echo "$page" | grep -qF '<a class="cov__bar cov--0 cov--here" href="/pipelines/daily?cal=2024&amp;cov=year#coverage" title="2024-03: 3/20 done (15%)">' \
+    || fail "the strip lacks March"
+[ "$(echo "$page" | grep -o 'class="cov__bar' | wc -l | tr -d ' ')" = 3 ] || fail "the strip isn't three months"
+# A year before the start: all outside, its next year linked, none before.
+y=$(get '/pipelines/daily?cal=2023&cov=year')
+echo "$y" | grep -qF 'href="/pipelines/daily?cal=2024&amp;cov=year#coverage" aria-label="Next year"' || fail "2023's next year"
+echo "$y" | grep -qF 'aria-label="Previous year"' && fail "a year before 2023"
+echo "$y" | grep -qF 'December</a><span class="cov__sum">not in range</span>' || fail "2023 isn't outside"
+echo "$y" | grep -qF 'data-view="month" href="/pipelines/daily?cal=2023-12&amp;cov=month' || fail "a past year's month isn't December"
+# A monthly pipeline keeps its year of months, with no tabs.
+t=$(get '/pipelines/toy?tab=operate')
+echo "$t" | grep -qF 'id="coverage"' && echo "$t" | grep -qF 'data-view="year"' && fail "a monthly pipeline has tabs"
+echo "ok   calendar: coverage's month and year"
 
 # A range as the picker writes it: the preview, then the backfill, queue
 # the days that aren't done or live, and no others.

@@ -56,6 +56,28 @@ While its oldest queued run waits for room on its host, the Progress card
 says why under **Waiting** (`waiting: needs 2 GB, 1.3 GB free of grants`),
 and the JSON has it as `waiting` (null otherwise).
 
+### Coverage
+
+Operate's **Coverage** card is a dated pipeline's partitions on a
+calendar, each coloured by its state: done, failed, running or queued, not
+run, or outside the pipeline's range (before its start, or after today).
+Hover a day for its date and state.
+
+A daily pipeline's card has two tabs, **Month** and **Year**, remembered
+in the browser like the Steps tabs; Year is the default. Year is twelve
+small months (Monday to Sunday, like Month), each named with how many of
+its days in the range are done (`28/31 done, 1 failed`) and linking to
+that month; `‹ 2026 ›` moves a year within the range. Under it, a strip
+has every month of the range (the last ten years at most), darker the
+more of its days are done, each linking to its year. The tabs and arrows
+are links (`?cal=2026` or `?cal=2026-03`, `&cov=year` or `month`), so all
+of it works without scripts. A monthly pipeline's card is a year of
+months, a keyed pipeline has none.
+
+The card reads one year for both tabs: which days are done (of the year
+and the strip's range together), the live runs, and each day's last run,
+three queries whatever the view.
+
 Each fact's name has a "?" that explains it, with a link to the docs.
 Steps shows a Graph and a Table tab (`?steps=graph|table`). Hovering any
 link to code on GitHub shows that function, up to 24 lines (not for a
