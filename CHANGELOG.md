@@ -25,6 +25,24 @@
   `orca.notify`, `orca.alerts`, `tests/notify.sh` (`pixi run -e default
   test-notify`) against `tests/fake_ntfy.py`.
 
+- **The default project image builds for Neoverse N1** (#178). `orca aws
+  push`'s image (`deploy/project.Dockerfile`) passes `--target-cpu
+  "$MOJO_TARGET_CPU"` (`ARG`, default `neoverse-n1`) in every `mojo build`:
+  binaries built on GitHub's arm64 runners (Neoverse N2, SVE2) died with
+  SIGILL (exit 132) on Hetzner CAX servers (N1), as mojo-census#35 found.
+  `docs/hetzner.md` tells projects with their own `Dockerfile.orca` to do
+  the same.
+
+- **`docs/hetzner.md` corrections from the first real setup** (#179).
+  Points at the census's `orca.toml` instead of quoting slot counts; image
+  tags are `<short-sha>`/`latest` and where to find the sha; `hcloud` with a
+  context and `hetzner.env` outside the repository (`HETZNER_ENV`); the
+  bucket in the server's location; GHCR's private route as the default;
+  Cloudflare's existing A records and DNS-only CNAMEs; the deploy sequence
+  with runs running (`orca-stack quiesce`, `deploy.sh`, `orca-stack
+  resume`). New `FIXED_COST` in `hetzner.env` becomes `ORCA_FIXED_COST` for
+  the Fleet page's Cost tile.
+
 - **The UI draws a run's timeline and the pipelines over time.** A run with
   Dista tasks has a Timeline section that fetches `timeline.json` once it
   scrolls into view and draws it on a canvas: a track per process (driver
