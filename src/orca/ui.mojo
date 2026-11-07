@@ -1495,6 +1495,42 @@ comptime _ICON = (
 from the census's amber bar chart."""
 
 
+def _posthog(mut h: Html):
+    """PostHog product analytics in the page head when `ORCA_POSTHOG_KEY` is
+    a project key (`phc_` and letters, digits, `_` or `-`), nothing otherwise.
+
+    The same snippet as the magmalake.org website: PostHog's `array.js` and
+    its API go through `/ph` on the UI's own origin, a first-party proxy
+    (the mojourney-ph Worker in magmalake/magmalake.org; the UI itself
+    doesn't serve it), so ad-blockers keep it. `persistence: 'memory'` sets
+    no cookie and writes no `localStorage`, so there is nothing to consent
+    to. `site: "orca"` tells its events apart in a shared PostHog project.
+    """
+    var key = getenv("ORCA_POSTHOG_KEY")
+    if not key.startswith("phc_"):
+        return
+    for byte in key.as_bytes():
+        var b = Int(byte)
+        if not (
+            (b >= ord("a") and b <= ord("z"))
+            or (b >= ord("A") and b <= ord("Z"))
+            or (b >= ord("0") and b <= ord("9"))
+            or b == ord("_")
+            or b == ord("-")
+        ):
+            return
+    h.raw(
+        '<script defer src="/ph/static/array.js"></script>',
+        '<script>window.addEventListener("DOMContentLoaded",function(){',
+        'if(window.posthog){posthog.init("',
+        key,
+        "\",{api_host:location.origin+'/ph',",
+        "ui_host:'https://us.posthog.com',defaults:'2025-05-24',",
+        "persistence:'memory',capture_exceptions:true});",
+        "posthog.register({site:'orca'});}});</script>",
+    )
+
+
 def _page(title: String, active: StaticString, body: Html) -> String:
     var h = Html()
     h.raw(
@@ -1505,7 +1541,11 @@ def _page(title: String, active: StaticString, body: Html) -> String:
     )
     h.text(title, " · orca")
     h.raw(
-        '</title><link rel="stylesheet" href="/static/orca.css"></head>',
+        '</title><link rel="stylesheet" href="/static/orca.css">',
+    )
+    _posthog(h)
+    h.raw(
+        "</head>",
         '<body class="',
         _AUTH_SLOT,
         '">',

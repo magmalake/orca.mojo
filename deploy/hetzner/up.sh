@@ -121,6 +121,7 @@ remote mountpoint -q /mnt/orca-data
         [ -z "${UI_URL:-}" ] || echo "ORCA_UI_URL=$UI_URL"
     fi
     [ -z "${FIXED_COST:-}" ] || echo "ORCA_FIXED_COST=$FIXED_COST"
+    [ -z "${POSTHOG_KEY:-}" ] || echo "ORCA_POSTHOG_KEY=$POSTHOG_KEY"
     if [ -n "${EXTRA_ENV_FILE:-}" ] && [ -r "$EXTRA_ENV_FILE" ]; then cat "$EXTRA_ENV_FILE"; fi
 } > "$tmp/settings.env"
 put 600 /etc/orca/settings.env "$tmp/settings.env"
