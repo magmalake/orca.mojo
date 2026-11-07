@@ -16,6 +16,12 @@
   `tests/config.sh`. Still to do: drift warnings, `[stack]` read by
   `orca aws up`, and a register flag for per-pipeline env.
 
+- **`deploy/hetzner/deploy.sh` pauses, waits and resumes by itself.** It
+  quiesces (pauses the pipelines that aren't paused, waits for running runs,
+  listing them each minute; `--timeout`), deploys, then unpauses what it
+  paused, logging each step. It refreshes the server's `orca-stack` first.
+  `--force` keeps the old behaviour.
+
 - **`orca status <pipeline>` shows how long each run ran** (`3m 21s`, up to now
   while it runs; `-` before it starts) instead of when it was created.
 
