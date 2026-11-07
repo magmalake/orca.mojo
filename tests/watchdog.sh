@@ -315,6 +315,35 @@ tick
 [ "$(only)" = "" ] || fail "a run busy 10 minutes ago paused: $(only)"
 echo "ok   stuck: a run with nothing moving pauses its pipeline; a busy host is progress"
 
+# Control (#180): memory over its 90 with disk under its 85 pauses everything;
+# status, /api/watchdog's JSON and the trip show both thresholds and that
+# memory is the one that tripped.
+reset
+q "DELETE FROM orca.system_minutes;
+   INSERT INTO orca.system_minutes (minute, n, last_t, cpu_sum, cpu_max, mem_sum, mem_max, mem_used, mem_total,
+     disk_max, disk_used, disk_total, disk_path, net_in_sum, net_out_sum)
+   VALUES (date_trunc('minute', now()), 1, now(), 10, 10, 98.3, 98.3, 983, 1000, 10.6, 106, 1000, '/', 0, 0)" > /dev/null
+tick
+[ "$(only)" = "fanout,toy" ] || fail "control paused: '$(only)'"
+[ "$(q "SELECT count(*) FROM orca.watchdog_trips WHERE rule = 'control' AND detail = 'control instance memory 98.3% (limit 90%)'
+        AND checks @> '[{\"name\": \"memory\", \"past\": true}, {\"name\": \"disk\", \"past\": false}]'")" -eq 1 ] \
+    || fail "the control trip: $(q "SELECT detail, checks FROM orca.watchdog_trips")"
+out=$(./build/orca watchdog status 2>&1) || fail "orca watchdog status: $out"
+echo "$out" | grep -q '^control   memory 98.30 % (trips over 90.00, past), disk 10.60 % (trips over 85.00)  TRIPPED on memory$' \
+    || fail "status doesn't show both control thresholds: $out"
+./build/orca watchdog status --json | jq -e '.rules[] | select(.rule == "control") | .tripped_on == ["memory"]
+    and (.checks | map(.name)) == ["memory", "disk"] and (.checks | map(.limit)) == [90, 85]' > /dev/null \
+    || fail "status --json: $(./build/orca watchdog status --json)"
+./build/orca watchdog status --json | jq -e '.trips[0].tripped_on == ["memory"]' > /dev/null || fail "the trip's tripped_on"
+# Memory back down while the pipelines stay paused: the reading is fine,
+# the trip still says memory.
+q "UPDATE orca.system_minutes SET mem_sum = 10.6, mem_max = 10.6" > /dev/null
+tick
+echo "$(./build/orca watchdog status)" | grep -q '^control   memory 10.60 % (trips over 90.00), disk 10.60 % (trips over 85.00)  TRIPPED on memory$' \
+    || fail "status after memory came down: $(./build/orca watchdog status)"
+q "DELETE FROM orca.system_minutes" > /dev/null
+echo "ok   control: memory over its limit pauses all; status shows memory and disk and which one tripped"
+
 # ORCA_RUNNER=local: no instances, a fixed price. The cost rule reads "fixed
 # price" and never trips, with the same seeded instances that tripped it above.
 reset
