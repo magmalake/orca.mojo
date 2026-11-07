@@ -109,7 +109,7 @@ json "/runs/$r1" | jq -e '.version.locations["toy::measure"] | startswith("examp
 # with the image the pipeline has), then c1.
 got=$(json /pipelines/toy | jq -c '[.versions[] | [.commit[0:1], .image, .runs]]')
 [ "$got" = '[["","",1],["2","orca:c1",1],["1","orca:c1",1]]' ] || fail "the pipeline's versions: $got"
-html /pipelines/toy | grep -q "<h2>Versions" || fail "the pipeline page's versions"
+html '/pipelines/toy?tab=runs' | grep -q "<h2>Versions" || fail "the pipeline page's versions"
 
 # A dataset's page links the steps that write and read it to their lines:
 # the writer at the commit of the run that committed the snapshot (c1), the

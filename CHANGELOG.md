@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **The pipeline page has three tabs**, each its own page (`?tab=`), so
+  links and the back button work without scripts: **Overview** (the
+  cards, Steps, keys, snapshots not run, Next runs), **Runs** (its runs
+  and Versions) and **Operate** (Coverage beside Start runs and Stop
+  runs, since the calendar is where days are picked). The name, Pause and
+  the live Progress card are on every tab. `?cal=` and `?preview=` open
+  Operate, a link to `#coverage`, `#start` or `#stop` is sent there, and
+  a refused start, backfill or cancel goes back to it.
+
 - **The pipeline page's header is three cards.** Progress (runs at once,
   the fill, a failing sensor, the next run, a link to the coverage),
   Config (partitions, schedule, run retries, placement, binary) and Code,

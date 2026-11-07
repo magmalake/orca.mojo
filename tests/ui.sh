@@ -155,6 +155,27 @@ html '/pipelines/toy?steps=table' | grep -qF '<div id="steps-graph" role="tabpan
     || fail "?steps=table still shows the graph"
 html /pipelines/toy/progress | grep -q '^<dl class="facts"><dt>Runs at once' || fail "the progress fragment"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/pipelines/nope/progress")" = 404 ] || fail "an unknown pipeline's progress"
+# Three tabs, each its own page with Progress on top: Overview (the
+# default and anything unknown), Runs and Operate, which ?cal= and
+# ?preview= open; the JSON is the same on each.
+tab_of() { html "$1" | grep -o 'class="ptabs__tab" href="[^"]*" aria-current="page">[A-Za-z]*' | sed 's/.*">//'; }
+for t in "/pipelines/toy Overview" "/pipelines/toy?tab=bogus Overview" "/pipelines/toy?tab=runs Runs" \
+    "/pipelines/toy?tab=operate Operate" "/pipelines/toy?cal=2024 Operate" "/pipelines/toy?preview=1&partitions=2024-01 Operate"; do
+    set -- $t
+    [ "$(tab_of "$1")" = "$2" ] || fail "$1 isn't on $2: $(tab_of "$1")"
+done
+echo "$page" | grep -qF '<nav class="ptabs" aria-label="Pipeline sections"><a class="ptabs__tab" href="/pipelines/toy" aria-current="page">Overview</a><a class="ptabs__tab" href="/pipelines/toy?tab=runs">Runs</a><a class="ptabs__tab" href="/pipelines/toy?tab=operate">Operate</a></nav>' \
+    || fail "the tabs"
+echo "$page" | grep -q 'id="start"\|<h2>Versions\|<h2>Runs</h2>\|id="coverage"' && fail "Overview has another tab's sections"
+page=$(html '/pipelines/toy?tab=runs')
+echo "$page" | grep -q '<h2>Runs</h2>' && echo "$page" | grep -q '<h2>Versions' || fail "the Runs tab"
+echo "$page" | grep -q 'id="config"\|id="steps"\|id="start"' && fail "the Runs tab has another tab's sections"
+page=$(html '/pipelines/toy?tab=operate')
+echo "$page" | grep -q 'id="coverage"' && echo "$page" | grep -q 'id="start"' && echo "$page" | grep -q '<h2>Stop runs' \
+    || fail "the Operate tab"
+echo "$page" | grep -q 'data-poll="/pipelines/toy/progress"' || fail "Operate has no live Progress"
+[ "$(json '/pipelines/toy?tab=runs' | jq -c '[.steps | length, (.runs | length)]')" = "$(json /pipelines/toy | jq -c '[.steps | length, (.runs | length)]')" ] \
+    || fail "the JSON differs by tab"
 ORCA_NOW=2024-01-15T00:00Z ./build/orca register ./build/daily >> "$log" 2>&1 || fail "register daily"
 [ "$(html /pipelines/daily | grep -o 'class="dag__box' | wc -l)" -eq 2 ] || fail "daily's DAG hasn't 2 boxes"
 [ "$(html /pipelines/daily | grep -o 'class="dag__edge' | wc -l)" -eq 1 ] || fail "daily's DAG hasn't 1 edge"

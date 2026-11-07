@@ -114,12 +114,13 @@ want="days 2024-01 0 $run,days 2024-02 0 $run,measure 2024-01 1 0,measure 2024-0
 [ "$(post "/runs/$run/rerun" step=nope)" = 409 ] || fail "a rerun from no step"
 
 # Start a run and backfill a range from the pipeline's page.
-curl -fsS "$base/pipelines/toy" | grep -q 'action="/pipelines/toy/runs"' || fail "no start form"
+curl -fsS "$base/pipelines/toy?tab=operate" | grep -q 'action="/pipelines/toy/runs"' || fail "no start form"
 [ "$(post /pipelines/toy/runs partitions=2024-03..2024-04)" = 303 ] || fail "start: $(cat "$log.body")"
 started=$(json '/runs?trigger=ui' | jq -r '.runs[0].id')
 [ "$(json "/runs/$started" | jq -r .run.partitions)" = 2024-03,2024-04 ] || fail "the started run's partitions"
 until_status "$started" succeeded
 [ "$(post /pipelines/toy/runs partitions=2023-13)" = 409 ] || fail "a bad partition was started"
+grep -qF '<a href="/pipelines/toy?tab=operate">Back</a>' "$log.body" || fail "a refused start doesn't go back to Operate"
 grep -q 'Not done' "$log.body" || fail "the refusal page"
 [ "$(post /pipelines/toy/backfill partitions=2024-05..2024-06)" = 303 ] || fail "backfill: $(cat "$log.body")"
 [ "$(json '/runs?trigger=backfill' | jq '.runs | length')" -eq 2 ] || fail "backfill didn't queue 2024-05 and 2024-06"
@@ -131,13 +132,13 @@ for r in $(json '/runs?trigger=backfill' | jq -r '.runs[].id'); do until_status 
 code=$(curl -s -o "$log.body" -w '%{http_code}' -H 'Accept: application/json' -H "Origin: $base" \
     -X POST --data-urlencode partitions=2024-05..2024-06 --data-urlencode rerun=1 "$base/pipelines/toy/backfill")
 [ "$code" = 200 ] && [ "$(jq .queued "$log.body")" -eq 2 ] || fail "backfilling with rerun=1 queued $(cat "$log.body")"
-curl -fsS "$base/pipelines/toy" | grep -q 'name="rerun"' || fail "no rerun checkbox on the backfill form"
+curl -fsS "$base/pipelines/toy?tab=operate" | grep -q 'name="rerun"' || fail "no rerun checkbox on the backfill form"
 for r in $(json '/runs?trigger=backfill' | jq -r '.runs[].id'); do until_status "$r" succeeded; done
 
 # The Start runs form: one range, the backfill first, and a preview (a GET)
 # that counts what each button would queue, with the same logic, queueing
 # nothing; and the same from the command line.
-page=$(curl -fsS "$base/pipelines/toy")
+page=$(curl -fsS "$base/pipelines/toy?tab=operate")
 echo "$page" | grep -qF '<button type="submit" class="primary">Backfill: one run per month</button>' \
     || fail "the backfill button"
 echo "$page" | grep -qF 'formaction="/pipelines/toy/runs">Start one run over the whole range</button>' \
@@ -178,7 +179,7 @@ psql "$ORCA_DATABASE_URL" -qc "INSERT INTO orca.pipelines (name, registry_hash, 
 [ "$(post /pipelines/names/runs partitions=carol)" = 409 ] || fail "a key the stand-in hasn't was started"
 grep -q 'a key of people.names' "$log.body" || fail "the keyed refusal: $(cat "$log.body")"
 # Keyed pipelines keep the text form: no calendar, no coverage.
-page=$(curl -fsS "$base/pipelines/names")
+page=$(curl -fsS "$base/pipelines/names?tab=operate")
 echo "$page" | grep -qF 'name="partitions"' || fail "the keyed pipeline has no text field"
 echo "$page" | grep -qF 'data-calendar=' && fail "a keyed pipeline has a calendar picker"
 echo "$page" | grep -qF 'id="coverage"' && fail "a keyed pipeline has coverage"
@@ -203,7 +204,7 @@ json '/pipelines/names?preview=1&partitions=alice,bob' | jq -e '.preview | .runs
 want="orca backfill names 'alice bob;x'"
 got=$(json "/pipelines/names?preview=1&partitions=alice%20bob%3Bx" | jq -r .preview.commands.backfill)
 [ "$got" = "$want" ] || fail "a keyed command isn't quoted: $got"
-curl -fsS "$base/pipelines/names" | grep -qF 'Include keys that already succeeded (rerun them)' || fail "the keyed rerun label"
+curl -fsS "$base/pipelines/names?tab=operate" | grep -qF 'Include keys that already succeeded (rerun them)' || fail "the keyed rerun label"
 
 # Cancel a queued run: it never starts.
 kill "$sched"; wait "$sched" 2> /dev/null || true; sched=

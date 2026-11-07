@@ -7,7 +7,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | Path | |
 |---|---|
 | `/` | pipelines, with their schedules, next runs and last runs |
-| `/pipelines/<name>` | a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`orca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing; `?steps=graph` or `table`: the Steps tab shown without scripts |
+| `/pipelines/<name>` | `?tab=overview` (default), `runs` or `operate`, each its own page; a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`orca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing; `?steps=graph` or `table`: the Steps tab shown without scripts |
 | `/pipelines/<name>/progress` | the page's Progress card (runs going, fill, next run), as an HTML fragment the page refreshes every 5 s |
 | `/api/pipelines/<name>` | the same as JSON, whatever is asked for |
 | `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=`) and as the Start runs form's date picker |
@@ -3267,11 +3267,11 @@ def _progress_html(
             "coverage",
             (
                 "Which days or months a run has done, failed or not reached"
-                " yet, as a calendar further down."
+                " yet, as a calendar on the Operate tab."
             ),
             "partitions",
         )
-        h.raw('<a href="#coverage">The calendar</a></dd>')
+        h.raw('<a href="?tab=operate#coverage">The calendar</a></dd>')
     h.raw("</dl>")
 
 
@@ -3553,6 +3553,80 @@ comptime _STEPS_JS = """
 choice for every pipeline's page; a `?steps=` link still says which."""
 
 
+def _tabs_html(mut h: Html, base: String, tab: String):
+    """The pipeline page's tabs, each a link to its own page."""
+    h.raw('<nav class="ptabs" aria-label="Pipeline sections">')
+    for t in [
+        ("overview", "Overview"),
+        ("runs", "Runs"),
+        ("operate", "Operate"),
+    ]:
+        h.raw('<a class="ptabs__tab" href="')
+        h.text(base if t[0] == "overview" else String(base, "?tab=", t[0]))
+        h.raw('"', ' aria-current="page"' if t[0] == tab else "", ">")
+        h.raw(t[1], "</a>")
+    h.raw("</nav>")
+
+
+comptime _TAB_JS = """
+(() => {
+  // An old link to a section that moved to Operate (#coverage, #start,
+  // #stop) lands there.
+  const moved = ["#coverage", "#start", "#stop"];
+  if (moved.includes(location.hash) && !document.querySelector(location.hash)) {
+    const q = new URLSearchParams(location.search);
+    q.set("tab", "operate");
+    location.replace(location.pathname + "?" + q + location.hash);
+  }
+})();
+"""
+"""Sends a link to a section of another tab to that tab."""
+
+
+def _cards_html(
+    mut h: Html,
+    p: PipelineRow,
+    tab: String,
+    fill: Optional[FillStatus],
+    fires: List[Fire],
+    steps: List[StepDef],
+    links: CodeLinks,
+):
+    """The pipeline page's cards: what's going on (refreshed while the page
+    is open), and on the Overview tab how it's set up and its code."""
+    var base = String("/pipelines/", url_encode(p.name))
+    h.raw(
+        '<div class="pcards',
+        "" if tab == "overview" else " pcards--one",
+        '"><section class="card card--facts" id="progress">',
+        '<h2>Progress</h2><div data-poll="',
+    )
+    h.text(base, "/progress")
+    h.raw('" data-poll-every="5">')
+    _progress_html(h, p, fill, fires)
+    h.raw("</div></section>")
+    if tab != "overview":
+        h.raw("</div>")
+        return
+    h.raw('<section class="card card--facts" id="config"><h2>Config</h2>')
+    _config_html(h, p)
+    h.raw('</section><section class="card card--facts" id="code"><h2>Code')
+    _help(
+        h,
+        "code",
+        "Code",
+        (
+            "The functions this pipeline is made of, at the commit it's"
+            " registered with. Hover a name to see its source; click it to"
+            " open the file on its host."
+        ),
+        "versions",
+    )
+    h.raw("</h2>")
+    _code_card(h, p, steps, links)
+    h.raw("</section></div>")
+
+
 def pipeline(
     mut db: State,
     name: String,
@@ -3562,12 +3636,21 @@ def pipeline(
     cal: String = "",
     allow_append: Bool = False,
     steps_view: String = "",
+    tab_in: String = "",
 ) raises -> Page:
-    """A pipeline's page; with `preview` and `keys_in`, what its Start runs
-    form would queue over them (`?preview=1&partitions=...&rerun=1`, and
+    """A pipeline's page, one of its tabs (`?tab=`): `overview`, `runs` or
+    `operate`. With `preview` and `keys_in`, what its Start runs form would
+    queue over them (`?preview=1&partitions=...&rerun=1`, and
     `&allow_append=1` for a rerun that appends again); `cal` is the month
-    (or year) its coverage calendar shows; `steps_view` (`?steps=`) is
-    `graph` or `table`, the view of its steps shown without scripts."""
+    (or year) its coverage calendar shows; both are on Operate, which they
+    open when no tab is asked for. `steps_view` (`?steps=`) is `graph` or
+    `table`, the view of its steps shown without scripts. The JSON is the
+    same on every tab."""
+    var tab = tab_in if (tab_in == "runs" or tab_in == "operate") else String(
+        "overview"
+    )
+    if not tab_in and (preview or cal or keys_in):
+        tab = "operate"
     var ps = _pipelines(db, name)
     if len(ps) == 0:
         return not_found(String("no pipeline ", name))
@@ -3683,109 +3766,98 @@ def pipeline(
         name,
         latest[0].copy() if len(latest) > 0 else Optional[VersionRow](None),
     )
-    # Three cards: what's going on (refreshed while the page is open), how
-    # it's set up, and its code.
     var base = String("/pipelines/", url_encode(p.name))
-    h.raw(
-        '<div class="pcards"><section class="card card--facts" id="progress">',
-        '<h2>Progress</h2><div data-poll="',
-    )
-    h.text(base, "/progress")
-    h.raw('" data-poll-every="5">')
-    _progress_html(h, p, fill, fires)
-    h.raw(
-        '</div></section><section class="card card--facts" id="config">',
-        "<h2>Config</h2>",
-    )
-    _config_html(h, p)
-    h.raw('</section><section class="card card--facts" id="code"><h2>Code')
-    _help(
-        h,
-        "code",
-        "Code",
-        (
-            "The functions this pipeline is made of, at the commit it's"
-            " registered with. Hover a name to see its source; click it to"
-            " open the file on its host."
-        ),
-        "versions",
-    )
-    h.raw("</h2>")
-    _code_card(h, p, steps, links)
-    h.raw("</section></div>")
-    _steps_html(h, p.name, steps, links, steps_view)
-    if keys:
-        _keys_html(h, p.name, keys.value())
-    if len(unrun) > 0:
-        h.raw(
-            "<h2>Snapshots not run",
-            _docs("sensors"),
-            '</h2><p class="muted">Seen by its sensor, but holding keys that',
-            " aren't its partitions. A backfill runs what they should have.",
-            '</p><div class="scroll"><table><thead><tr><th>Snapshot</th>',
-            "<th>Seen</th><th>Why</th></tr></thead><tbody>",
-        )
-        for u in unrun:
-            h.raw("<tr><td>")
-            h.link(_snapshot_href(u[0]), String(u[0]))
-            h.raw("</td>")
-            h.cell(u[1])
-            h.cell(u[2])
-            h.raw("</tr>")
-        h.raw("</tbody></table></div>")
-    if p.kind == "daily" or p.kind == "monthly":
-        _coverage_html(h, db, p, cal)
-    if p.binary:
-        var regs = registered(db, name)
-        _start_html(
-            h,
-            p,
-            keys_in,
-            rerun,
-            start,
-            regs[0].keys_per_run if len(regs) > 0 else 1,
-        )
-    _control_html(h, p)
-    if len(fires) > 0:
-        h.raw(
-            "<h2>Next runs",
-            _docs("partitions"),
-            '</h2><div class="scroll"><table><thead><tr>',
-            "<th>UTC</th><th>Wall clock</th><th>Fills</th></tr></thead><tbody>",
-        )
-        for f in fires:
-            h.raw("<tr>")
-            h.mono(f.at)
-            h.mono(f.local)
-            h.mono(f.partition)
-            h.raw("</tr>")
-        h.raw("</tbody></table></div>")
-    if len(versions) > 0:
-        h.raw(
-            "<h2>Versions",
-            _docs("build"),
-            '</h2><div class="scroll"><table><thead><tr>',
-            "<th>Commit</th><th>Image</th><th>Code</th><th>First seen</th>",
-            '<th>Last seen</th><th class="num">Runs</th></tr></thead><tbody>',
-        )
-        for v in versions:
-            h.raw("<tr><td>")
-            _source_html(h, v)
-            h.raw("</td>")
-            h.mono(v.image)
-            h.raw("<td><code>")
-            h.text(v.registry_hash)
-            h.raw("</code></td>")
-            h.mono(v.first_seen)
-            h.mono(v.last_seen)
-            h.num(v.runs)
-            h.raw("</tr>")
-        h.raw("</tbody></table></div>")
-    h.raw("<h2>Runs</h2>")
-    _runs_table(h, runs, False)
-    h.raw('<p class="more"><a href="/runs?pipeline=')
-    h.text(url_encode(p.name))
-    h.raw('">All its runs</a></p>')
+    _tabs_html(h, base, tab)
+    _cards_html(h, p, tab, fill, fires, steps, links)
+    if tab == "overview":
+        _steps_html(h, p.name, steps, links, steps_view)
+        if keys:
+            _keys_html(h, p.name, keys.value())
+        if len(unrun) > 0:
+            h.raw(
+                "<h2>Snapshots not run",
+                _docs("sensors"),
+                (
+                    '</h2><p class="muted">Seen by its sensor, but holding keys'
+                    " that"
+                ),
+                (
+                    " aren't its partitions. A backfill runs what they should"
+                    " have."
+                ),
+                '</p><div class="scroll"><table><thead><tr><th>Snapshot</th>',
+                "<th>Seen</th><th>Why</th></tr></thead><tbody>",
+            )
+            for u in unrun:
+                h.raw("<tr><td>")
+                h.link(_snapshot_href(u[0]), String(u[0]))
+                h.raw("</td>")
+                h.cell(u[1])
+                h.cell(u[2])
+                h.raw("</tr>")
+            h.raw("</tbody></table></div>")
+        if len(fires) > 0:
+            h.raw(
+                "<h2>Next runs",
+                _docs("partitions"),
+                '</h2><div class="scroll"><table><thead><tr>',
+                (
+                    "<th>UTC</th><th>Wall"
+                    " clock</th><th>Fills</th></tr></thead><tbody>"
+                ),
+            )
+            for f in fires:
+                h.raw("<tr>")
+                h.mono(f.at)
+                h.mono(f.local)
+                h.mono(f.partition)
+                h.raw("</tr>")
+            h.raw("</tbody></table></div>")
+    elif tab == "operate":
+        if p.kind == "daily" or p.kind == "monthly":
+            _coverage_html(h, db, p, cal)
+        if p.binary:
+            var regs = registered(db, name)
+            _start_html(
+                h,
+                p,
+                keys_in,
+                rerun,
+                start,
+                regs[0].keys_per_run if len(regs) > 0 else 1,
+            )
+        _control_html(h, p)
+    else:
+        h.raw("<h2>Runs</h2>")
+        _runs_table(h, runs, False)
+        h.raw('<p class="more"><a href="/runs?pipeline=')
+        h.text(url_encode(p.name))
+        h.raw('">All its runs</a></p>')
+        if len(versions) > 0:
+            h.raw(
+                "<h2>Versions",
+                _docs("build"),
+                '</h2><div class="scroll"><table><thead><tr>',
+                "<th>Commit</th><th>Image</th><th>Code</th><th>First seen</th>",
+                (
+                    "<th>Last seen</th><th"
+                    ' class="num">Runs</th></tr></thead><tbody>'
+                ),
+            )
+            for v in versions:
+                h.raw("<tr><td>")
+                _source_html(h, v)
+                h.raw("</td>")
+                h.mono(v.image)
+                h.raw("<td><code>")
+                h.text(v.registry_hash)
+                h.raw("</code></td>")
+                h.mono(v.first_seen)
+                h.mono(v.last_seen)
+                h.num(v.runs)
+                h.raw("</tr>")
+            h.raw("</tbody></table></div>")
+    h.raw("<script>", _TAB_JS, "</script>")
     return Page(200, j^, _page(p.name, "/", h))
 
 
@@ -5890,6 +5962,8 @@ def _act(
     if len(parts) == 4 and parts[1] == "pipelines":
         var name = url_decode(parts[2])
         var back = String("/pipelines/", url_encode(name))
+        # Where a refused start or cancel goes back to: its form's tab.
+        var operate = String(back, "?tab=operate")
         var keys = _form(body, "partitions")
         if (parts[3] == "runs" or parts[3] == "backfill") and String(
             keys.strip()
@@ -5901,7 +5975,7 @@ def _act(
         if parts[3] == "runs":
             var o = start_run(db, name, keys)
             var to = String("/runs/", o.run)
-            return _acted(o, back, String('{"run": ', o.run, "}"), to)
+            return _acted(o, operate, String('{"run": ', o.run, "}"), to)
         if parts[3] == "backfill":
             var rerun = _form(body, "rerun") == "1"
             var o = backfill_runs(
@@ -5917,7 +5991,7 @@ def _act(
             j.write("}")
             return _acted(
                 o,
-                back,
+                operate,
                 j^,
                 to,
                 String(back, "/backfill"),
@@ -5931,7 +6005,9 @@ def _act(
         if parts[3] == "cancel":
             var o = cancel_runs(db, name, keys if keys.strip() else "@all")
             var to = String("/runs?pipeline=", url_encode(name))
-            return _acted(o, back, String('{"cancelled": ', o.queued, "}"), to)
+            return _acted(
+                o, operate, String('{"cancelled": ', o.queued, "}"), to
+            )
         if parts[3] == "pause" or parts[3] == "unpause":
             var paused = parts[3] == "pause"
             var o = pause_pipeline(db, name, paused)
@@ -6785,6 +6861,7 @@ struct Ui(Copyable, Handler):
                     _query(url, "cal"),
                     _query(url, "allow_append") == "1",
                     _query(url, "steps"),
+                    _query(url, "tab"),
                 )
             if len(parts) == 2 and parts[1] == "progress" and name:
                 return pipeline_progress(db, name)
