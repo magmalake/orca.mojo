@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **The pipeline page's header is three cards.** Progress (runs at once,
+  the fill, a failing sensor, the next run, a link to the coverage),
+  Config (partitions, schedule, run retries, placement, binary) and Code,
+  side by side on a wide screen and stacked on a phone. Progress refreshes
+  itself every 5 s from the new `/pipelines/<name>/progress` fragment.
+  Each fact's name has a "?" that explains it, on hover or keyboard
+  focus, with a link to the docs. The Code card names the pipeline, its
+  steps and its dista tasks, each linked to its line (file and line in
+  the title), with the code hash in small print under them; the two Code
+  lines are gone.
+- **Hovering a link to code shows the code.** On every page, a link to a
+  line on GitHub shows that function, from its def through its docstring
+  (up to 24 lines), fetched from raw.githubusercontent.com once per file;
+  for a private repository it says it can't, and the link still opens it.
+- **Steps: Graph and Table tabs.** The graph is shown first for a pipeline
+  of more than one step, the table for one step; the choice is remembered
+  in the browser, and `?steps=graph|table` links work without scripts.
+- **Relative times and live pages work again in browsers.** The page
+  script built an `Intl.DateTimeFormat` with `dateStyle` and
+  `timeZoneName` together, which browsers refuse; the error stopped the
+  script, so times stayed UTC and `data-poll` parts never refreshed.
+
 - **Ops sections can be linked to.** Each section on Ops › Control and Fleet
   has an id and its heading links to it, so `/ops/control#cpu` opens at the
   CPU chart.

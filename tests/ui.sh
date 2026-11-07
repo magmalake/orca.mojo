@@ -134,6 +134,27 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$ok_run/attempts/$fail
 # The DAG: a box per step, an edge per after, coloured by the run.
 [ "$(html /pipelines/toy | grep -o 'class="dag__box' | wc -l)" -eq 3 ] || fail "toy's DAG hasn't 3 boxes"
 [ "$(html /pipelines/toy | grep -o 'class="dag__edge' | wc -l)" -eq 2 ] || fail "toy's DAG hasn't 2 edges"
+# The page's header: Progress (refreshed from its fragment), Config and
+# Code cards, each fact with its help; Steps with Graph and Table tabs,
+# the graph shown for more than one step, and ?steps= for the other.
+page=$(html /pipelines/toy)
+for id in progress config code; do
+    echo "$page" | grep -q "<section class=\"card card--facts\" id=\"$id\">" || fail "toy's page has no $id card"
+done
+echo "$page" | grep -qF '<div data-poll="/pipelines/toy/progress" data-poll-every="5"><dl class="facts"><dt>Runs at once' \
+    || fail "the Progress card isn't refreshed"
+for key in Partitions Schedule "Runs at once" "Run retries" Placement Binary; do
+    echo "$page" | grep -qF "<dt>$key<span class=\"help\"><button type=\"button\" class=\"help__btn\" aria-label=\"About $key\" aria-describedby=\"help-" \
+        || fail "$key has no help"
+done
+[ "$(echo "$page" | grep -o 'role="tooltip" id="help-' | wc -l)" -eq "$(echo "$page" | grep -o 'aria-describedby="help-' | wc -l)" ] \
+    || fail "a help button without its text"
+echo "$page" | grep -qF '<div id="steps-graph" role="tabpanel" class="scroll steps__graph">' || fail "toy's graph isn't shown first"
+echo "$page" | grep -qF '<div id="steps-table" role="tabpanel" class="scroll" hidden>' || fail "toy's table isn't the other tab"
+html '/pipelines/toy?steps=table' | grep -qF '<div id="steps-graph" role="tabpanel" class="scroll steps__graph" hidden>' \
+    || fail "?steps=table still shows the graph"
+html /pipelines/toy/progress | grep -q '^<dl class="facts"><dt>Runs at once' || fail "the progress fragment"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/pipelines/nope/progress")" = 404 ] || fail "an unknown pipeline's progress"
 ORCA_NOW=2024-01-15T00:00Z ./build/orca register ./build/daily >> "$log" 2>&1 || fail "register daily"
 [ "$(html /pipelines/daily | grep -o 'class="dag__box' | wc -l)" -eq 2 ] || fail "daily's DAG hasn't 2 boxes"
 [ "$(html /pipelines/daily | grep -o 'class="dag__edge' | wc -l)" -eq 1 ] || fail "daily's DAG hasn't 1 edge"
