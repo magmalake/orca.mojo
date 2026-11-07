@@ -76,7 +76,8 @@ pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   #
 ./build/orca watchdog status   # the watchdog pauses pipelines on a launch storm, runaway cost, idle workers,
                                # failures or stuck runs; orca watchdog snooze launches 2h silences a rule
 ./build/orca ui                # http://127.0.0.1:8270: pipelines, runs and datasets, also as JSON; start, resume, rerun, backfill, cancel, pause;
-                               # Ops > Control is the machine running the scheduler and UI, Ops > Fleet the EC2 instances launched for runs
+                               # Ops > Control is the machine running the scheduler and UI, Ops > Fleet the EC2 instances launched for runs,
+                               # Ops > Workers the remote workers
                                # Pipelines > Timeline: each pipeline's runs over 1 h to 7 d, in dataset order, with what started what;
                                # a run's page draws its Dista timeline (zoom, hover) without leaving for Perfetto
 ./build/orca user add alice    # a login for the UI's actions; the password from stdin
@@ -91,6 +92,10 @@ tests/kind.sh                  # that, on a kind cluster: each run on a dista cl
 pixi run test-ec2              # ORCA_RUNNER=ec2 against a stand-in EC2: a head and workers per run
 ./build/orca register --placement control ./build/toy   # a small pipeline's runs on the scheduler's own host, no instance (orca.control)
 pixi run test-placement        # that, within the control instance's limits, beside runs on the stand-in EC2
+./build/orca register --placement worker:bgent ./build/toy   # its runs on a remote worker of pool bgent (docs/workers.md)
+./build/orca worker-token create --pool bgent   # that pool's token; then on the worker, with no database:
+ORCA_WORKER_TOKEN=orca_... ./build/orca worker --pool bgent --remote https://orca.example.com
+pixi run -e data test-worker   # orca ui, the scheduler and a worker: claims, a killed worker's runs requeued, tokens, versions
 ./build/orca register ./build/toy   # with ./orca.toml if there is one: how each pipeline runs, checked in (below)
 ./build/orca config show toy   # its effective settings and where each came from (--json for scripts)
 ./build/orca config export     # an orca.toml from what's registered, to adopt one without retyping flags
@@ -154,6 +159,19 @@ don't fill. See [Fills](docs/orca-toml.md#fills).
 --remote <url> backfill|pause|unpause|cancel|resume`), which keep audit
 rows. Change a fill's limits in `orca.toml` and register again. On AWS,
 SSM `sudo docker exec scheduler orca ...` is for debugging only.
+
+## Remote workers
+
+A pipeline placed `worker:<pool>` runs on another machine, such as a coding
+machine with spare CPU: `orca worker --pool <pool> --remote <url>` polls
+`orca ui` for the pool's runs and runs them there, with its run's state
+calls going over HTTPS to the UI (`orca.http_store`), which writes them to
+Postgres. Nothing on the worker holds database credentials. Its token,
+from `orca worker-token create --pool <pool>`, is scoped to the pool and
+revocable. A worker that dies has its runs requeued once their heartbeats
+are stale, and a worker of another image than the pipeline's is given
+nothing. Ops > Workers lists the workers. See
+[docs/workers.md](docs/workers.md).
 
 ## Running it on one server
 

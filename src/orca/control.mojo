@@ -3,7 +3,9 @@ the control runner, which runs them on the scheduler's own host.
 
 A pipeline's placement is `default` (stored as null: the scheduler's runner,
 `ORCA_RUNNER`, as before), `ec2` (instances of their own, `orca.ec2`; on a
-scheduler whose runner isn't `ec2` such runs wait, saying why) or `control`:
+scheduler whose runner isn't `ec2` such runs wait, saying why),
+`worker:<pool>` (a remote worker of that pool starts them, `orca.workers`,
+never the scheduler) or `control`:
 the scheduler starts the run as a child process of its own, the pipeline's
 binary with `resume <run>` as the local runner does, which on AWS is in the
 scheduler's container on the control instance (the binary is the project's
@@ -56,11 +58,51 @@ comptime HOLD_PERCENT: Float64 = 85.0
 control-placed run starts."""
 
 
+comptime WORKER_PREFIX = "worker:"
+"""A placement on a pool of remote workers (`orca.workers`): this and the
+pool's name."""
+comptime MAX_POOL = 32
+
+
+def pool_problem(pool: String) -> String:
+    """Why `pool` can't name a pool of workers, or empty: 1 to 32 of
+    `a-z`, `0-9`, `-` and `_`."""
+    var b = pool.as_bytes()
+    if len(b) == 0 or len(b) > MAX_POOL:
+        return String("a pool's name is 1 to ", MAX_POOL, " characters")
+    for c in b:
+        if not (
+            (c >= UInt8(ord("a")) and c <= UInt8(ord("z")))
+            or (c >= UInt8(ord("0")) and c <= UInt8(ord("9")))
+            or c == UInt8(ord("-"))
+            or c == UInt8(ord("_"))
+        ):
+            return String(
+                "a pool's name is a-z, 0-9, - and _, not ", quote(pool)
+            )
+    return ""
+
+
+def pool_of(placement: String) -> String:
+    """The pool a `worker:<pool>` placement names, or empty for any other."""
+    if placement.startswith(WORKER_PREFIX):
+        return String(placement[byte = WORKER_PREFIX.byte_length() :])
+    return ""
+
+
 def parse_placement(v: String) raises -> String:
-    """`--placement`'s value: `control`, `ec2` or `default`."""
+    """`--placement`'s value: `control`, `ec2`, `worker:<pool>` or
+    `default`."""
     if v == "control" or v == "ec2" or v == "default":
         return v
-    raise Error("--placement is control, ec2 or default, not ", v)
+    if v.startswith(WORKER_PREFIX):
+        var why = pool_problem(pool_of(v))
+        if why:
+            raise Error("--placement worker:<pool>: ", why)
+        return v
+    raise Error(
+        "--placement is control, ec2, worker:<pool> or default, not ", v
+    )
 
 
 def _env_int(name: StaticString, default: Int, least: Int) raises -> Int:

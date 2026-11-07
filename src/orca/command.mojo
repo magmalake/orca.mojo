@@ -75,6 +75,13 @@ from orca.watchdog import acknowledge, snooze as snooze_rule
 from orca.auth import audit
 from orca.tokens import revoke_user_tokens, user_tokens
 from orca.ui import DEFAULT_ADDR, serve_ui
+from orca.worker import worker_command
+from orca.workers import (
+    create_worker_token,
+    revoke_worker_token,
+    worker_rows,
+    worker_token_days,
+)
 
 comptime USAGE = """usage:
   orca locate <pipeline binary> [...] [--root <dir>]
@@ -82,7 +89,8 @@ comptime USAGE = """usage:
                                     (orca aws for more)
   orca register [--image <image>] [--head-type T] [--worker-type T]
                 [--workers N|MIN..MAX] [--worker-procs N|auto] [--spot]
-                [--secret NAME=ID ...] [--placement control|ec2|default]
+                [--secret NAME=ID ...]
+                [--placement control|ec2|worker:<pool>|default]
                 [--max-runs N] [--config <orca.toml>|--no-config]
                 [<pipeline binary> ...]
                 (no binaries: every [pipelines.<name>] of the file, in
@@ -131,6 +139,13 @@ comptime USAGE = """usage:
   orca user list
   orca user tokens <name>           (its API tokens, from orca login)
   orca user revoke <name> <id>|@all
+  orca worker-token create --pool <pool> [--days N] [--label L]
+  orca worker-token list
+  orca worker-token revoke <id>
+  orca worker --pool <pool> [--remote <url>] [--token-file <path>]
+              [--max-runs N] [--poll-seconds S] [--dir <dir>]
+              [--image <image>] [--name <name>]
+                (runs pool's runs here, over the UI's API: orca.worker)
   orca login [<url>] [--user NAME] [--days N] [--label L]
   orca logout [<url>]
   orca --remote <url> backfill|start|cancel|pause|unpause|resume|rerun|
@@ -204,6 +219,9 @@ def _command(args: List[String], target: String) raises -> Int:
         return aws_command(args)
     if args[1] == "sample":
         return sample_main(args)
+    if args[1] == "worker":
+        # Talks only to the UI's API, with no database (orca.worker).
+        return worker_command(args, target)
     var url = getenv("ORCA_DATABASE_URL")
     if not url:
         _usage("orca needs ORCA_DATABASE_URL")
@@ -402,10 +420,88 @@ def _command(args: List[String], target: String) raises -> Int:
                 raise Error("orca: ", args[3], " has no token ", id)
             print("revoked", n, "tokens of" if n != 1 else "token of", args[3])
             return 0
+    if cmd == "worker-token" and len(args) >= 3:
+        return _worker_token(url, args)
     if cmd == "ui" and len(args) == 2:
         var db = State(url)
         db.migrate()
         serve_ui(url, getenv("ORCA_UI_ADDR", DEFAULT_ADDR))
+        return 0
+    _usage()
+    return 2
+
+
+def _worker_token(url: String, args: List[String]) raises -> Int:
+    """`orca worker-token create|list|revoke` (`orca.workers`)."""
+    var db = State(url)
+    db.migrate()
+    var who = getenv("USER", "local")
+    if args[2] == "create":
+        var pool = String()
+        var label = String()
+        var days = 0
+        var i = 3
+        while i + 1 < len(args):
+            if args[i] == "--pool":
+                pool = args[i + 1]
+            elif args[i] == "--label":
+                label = args[i + 1]
+            elif args[i] == "--days":
+                try:
+                    days = Int(args[i + 1])
+                except:
+                    _usage(String("not a count of days: ", args[i + 1]))
+            else:
+                _usage(String("unknown argument: ", args[i]))
+            i += 2
+        if i != len(args) or not pool:
+            _usage("worker-token create needs --pool <pool>")
+        var got = create_worker_token(
+            db, pool, label, worker_token_days(days), who
+        )
+        var shown_label = label.copy() if label else pool.copy()
+        audit(
+            db,
+            who,
+            "worker-token create",
+            0,
+            String("pool=", pool, " label=", shown_label),
+            "local",
+        )
+        # The token alone on stdout, for a script; the rest on stderr.
+        print(got.token)
+        print(
+            "a worker token for pool", pool, "until", got.expires, file=stderr
+        )
+        return 0
+    if args[2] == "list" and len(args) == 3:
+        var rows = worker_rows(db)
+        if len(rows) == 0:
+            print("no worker tokens")
+        for r in rows:
+            print(
+                r.id,
+                r.pool,
+                r.label,
+                r.state,
+                r.name if r.name else String("-"),
+                "seen",
+                r.last_seen if r.last_seen else String("never"),
+                "expires",
+                r.expires,
+            )
+        return 0
+    if args[2] == "revoke" and len(args) == 4:
+        var id: Int
+        try:
+            id = Int(args[3])
+        except:
+            _usage(String("not a worker token's id: ", args[3]))
+            return 2
+        if not revoke_worker_token(db, id):
+            raise Error("orca: no live worker token ", id)
+        audit(db, who, "worker-token revoke", 0, String("id=", id), "local")
+        print("revoked worker token", id)
         return 0
     _usage()
     return 2

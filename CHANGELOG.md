@@ -19,6 +19,29 @@
   `orca.commits`), and dataset edges at the left. The data is
   `GET /api/gantt?window=24h`. New module `orca.ui_viz`; `tests/ui.sh`.
 
+- **Remote workers over the API** (#173). `placement = "worker:<pool>"`
+  (orca.toml, `orca register --placement`) leaves a pipeline's runs to
+  `orca worker --pool <pool> --remote <url>`, which claims them from
+  `orca ui` (`POST /api/worker/claim`) and runs `<binary> resume <run>` on
+  its own machine. The run records itself over HTTPS: `HttpStore`
+  (`orca.http_store`, `ORCA_STATE_URL` and `ORCA_STATE_TOKEN`) is the
+  `RunStore` whose calls `orca ui` makes on `PgStore`
+  (`/api/worker/store/<call>`, `orca.workers`), so a worker holds no
+  database credentials and refuses to start with `ORCA_DATABASE_URL`.
+  The scheduler starts none of these runs; it keeps them queued, held
+  "waiting for a worker", and requeues due retries and dead runs, so a
+  killed worker's runs (their processes exit once the worker is gone) are
+  claimed again. Worker tokens (`orca worker-token create|list|revoke`,
+  `orca.workers` table, migration 32) are `orca login`'s kind of token,
+  scoped to one pool, revocable, and each claim is audited. A run needs its
+  pipeline's image to be the worker's (`ORCA_IMAGE`). Ops > Workers
+  (`/ops/workers`, `/api/workers`) lists them; a run's page says where it
+  ran. `orca.state.beat_run` is the heartbeat and watchdog both stores
+  share. `docs/workers.md`, `tests/worker.sh` (`pixi run -e data
+  test-worker`), `tests/test_worker.mojo`.
+
+## 0.11.0 - 2026-11-07
+
 - **A live run's page refreshes itself, and shows its settings.** While a
   run is queued or running, `/runs/<id>` replaces its facts, steps, machines
   and workers every 5 s from the fragment `/runs/<id>/live` (one poller

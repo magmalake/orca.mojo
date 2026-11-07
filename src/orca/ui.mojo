@@ -18,10 +18,11 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/api/gantt` | the pipelines in dataset order with their runs over `?window=1h`, `6h`, `24h` (default) or `7d`, and the runs each started: the home page's Timeline tab (`orca.ui_viz`) |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
 | `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
-| `/ops` | redirects to `/ops/control`; "Ops" in the nav has Control and Fleet under it |
+| `/ops` | redirects to `/ops/control`; "Ops" in the nav has Control, Fleet and Workers under it |
 | `/ops/control` | Control, the one machine running the scheduler, this UI, Postgres and control-placed runs: its own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`), and the watchdog's banner; `/api/system` is the same as JSON; `/system` redirects here (301) |
 | `/metrics` | Prometheus gauges: the control instance's CPU, memory, disk, network and containers' memory, runs running and queued, hosts, and errors in the last hour; open like the other pages (reads need no login) |
 | `/ops/fleet` | Fleet, the EC2 instances orca launches for runs, the machines it is paying for: hosts running and what they cost an hour, runs and errors per hour, a table of live hosts (`?sort=` a column, `&dir=desc`) and charts over `?range=24h` or `7d` (`orca.fleet`); `/ops/fleet/hosts` is the live part of it, and `/api/fleet` the same as JSON; `/fleet` and `/fleet/hosts` redirect here (301) |
+| `/ops/workers` | Workers, the machines running pipelines placed `worker:<pool>` (`orca.workers`): each worker token's pool, label, worker, image, last heartbeat, runs, CPUs and memory; `/api/workers` the same as JSON. A worker's own requests go to `/api/worker/...` with its token |
 | `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`orca.watchdog`); also the red banner on `/`, `/ops/fleet` and `/ops/control` |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), what a rebuild of it runs, and its snapshots; `?preview=1&partitions=`: a rebuild's runs by level, queueing nothing |
@@ -210,6 +211,13 @@ from orca.ui_viz import (
     gantt_panel,
     gantt_tabs,
     timeline_section,
+)
+from orca.workers import (
+    ran_on,
+    worker_api,
+    worker_rows,
+    workers_html,
+    workers_json,
 )
 
 comptime DEFAULT_ADDR = "127.0.0.1:8270"
@@ -1515,7 +1523,11 @@ def _page(title: String, active: StaticString, body: Html) -> String:
     if active.startswith("/ops/"):
         h.raw(' aria-current="page"')
     h.raw(' aria-haspopup="true">Ops</a><div class="menu__sub">')
-    for item in [("/ops/control", "Control"), ("/ops/fleet", "Fleet")]:
+    for item in [
+        ("/ops/control", "Control"),
+        ("/ops/fleet", "Fleet"),
+        ("/ops/workers", "Workers"),
+    ]:
         h.raw('<a href="', item[0], '"')
         if item[0] == active:
             h.raw(' aria-current="page"')
@@ -3128,6 +3140,11 @@ def pipeline(
     if p.placement == "control":
         h.text("control")
         h.raw(' <span class="muted">(on the scheduler\'s host)</span>')
+    elif p.placement.startswith("worker:"):
+        h.text(p.placement)
+        h.raw(' <span class="muted">(its runs wait for a worker of pool ')
+        h.text(p.placement.removeprefix("worker:"))
+        h.raw(', <a href="/ops/workers">Workers</a>)</span>')
     elif p.placement:
         h.text(p.placement)
     else:
@@ -3844,6 +3861,10 @@ def _run_facts(mut h: Html, mut db: State, r: RunRow) raises:
             h.raw("on the control host")
         else:
             h.text(r.placement)
+        var on = ran_on(db, r.id)
+        if on:
+            h.raw("</dd><dt>Ran on</dt><dd>")
+            h.text(on)
     h.raw('</dd><dt><abbr title="', _TRIES, '">Tries</abbr></dt><dd>')
     h.text(r.starts)
     if cpu:
@@ -5939,6 +5960,19 @@ struct Ui(Copyable, Handler):
             resp.headers.set("Content-Type", "text/css; charset=utf-8")
             return resp^
         var post = req.method == "POST"
+        if post and path.startswith("/api/worker/"):
+            # A remote worker (orca.workers): its token, its JSON, its calls.
+            var got = worker_api(
+                self.url,
+                path,
+                _bearer(req.headers.get("Authorization")),
+                String(from_utf8_lossy=Span(req.body)),
+            )
+            var status = got.status
+            var resp = _respond(Page(status, got.json.copy(), String()), True)
+            if status == 401:
+                resp.headers.set("WWW-Authenticate", 'Bearer realm="orca"')
+            return resp^
         if post and not _is_action(path):
             return _not_allowed()
         if not post and req.method != "GET" and req.method != "HEAD":
@@ -6160,6 +6194,13 @@ struct Ui(Copyable, Handler):
             )
         if path == "/api/fleet":
             return fleet_api(db, _query(url, "range"))
+        if path == "/ops/workers" or path == "/api/workers":
+            var rows = worker_rows(db)
+            var h = Html()
+            workers_html(h, rows)
+            return Page(
+                200, workers_json(rows), _page("Workers", "/ops/workers", h)
+            )
         if path == "/ops/control":
             return system_page(db, _query(url, "range"))
         if path == "/api/system":
