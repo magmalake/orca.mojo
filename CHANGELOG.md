@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-11-07
+
 - **A live run's page refreshes itself, and shows its settings.** While a
   run is queued or running, `/runs/<id>` replaces its facts, steps, machines
   and workers every 5 s from the fragment `/runs/<id>/live` (one poller
