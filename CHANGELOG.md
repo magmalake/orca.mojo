@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **`deploy/hetzner/deploy.sh` pauses, waits and resumes by itself.** It
+  quiesces (pauses the pipelines that aren't paused, waits for running runs,
+  listing them each minute; `--timeout`), deploys, then unpauses what it
+  paused, logging each step. It refreshes the server's `orca-stack` first.
+  `--force` keeps the old behaviour.
+
 - **Ops sections can be linked to.** Each section on Ops › Control and Fleet
   has an id and its heading links to it, so `/ops/control#cpu` opens at the
   CPU chart.

@@ -150,20 +150,21 @@ and control rules stay on.
 
 The tag is the project's image tag: see [Images](#images). This replaces
 `orca aws app` and `orca aws up` for code changes, and needs `hcloud` with a
-context like `up.sh`. Postgres is not restarted. It **refuses while runs are
-running** (restarting the scheduler kills them; `--force` does it anyway).
-The sequence that doesn't lose a run:
+context like `up.sh`. Postgres is not restarted. Restarting the scheduler kills
+running runs, so `deploy.sh` does the safe sequence itself, logging each step:
 
-```sh
-ssh root@<ip> orca-stack quiesce       # pause every pipeline, wait for the running runs to end (--timeout SECONDS, default 3600)
-./deploy.sh <tag>                      # nothing is running now
-ssh root@<ip> orca-stack resume        # unpause what quiesce paused
-```
+1. copies this checkout's `orca-stack` to the server;
+2. `orca-stack quiesce`: pauses every pipeline that isn't paused, then waits
+   for the running runs to end, listing them each minute (`--timeout
+   SECONDS`, default 3600);
+3. `orca-stack apply --tag <tag>`: pulls and restarts;
+4. `orca-stack resume`: unpauses the pipelines it paused, and only those
+   (not ones the watchdog or you paused).
 
-`quiesce` pauses only pipelines that weren't paused, and `resume` unpauses
-only those (not ones the watchdog or you paused); `orca-stack status` shows
-the running runs and what quiesce paused. On a timeout it stops and leaves
-the pipelines paused.
+On a timeout or a failed apply it stops with the pipelines still paused and
+says so; `ssh root@<ip> orca-stack resume` undoes the pause. `--force` skips
+the pause and the wait and kills the running runs. `orca-stack status` shows
+the running runs and what quiesce paused.
 
 ## Rescaling for an import
 
