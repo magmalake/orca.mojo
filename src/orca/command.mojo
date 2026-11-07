@@ -71,7 +71,7 @@ from orca.scheduler import Scheduler
 from orca.secrets import secret_problem
 from orca.sensors import rebuild, rebuilds
 from orca.state import State
-from orca.watchdog import snooze as snooze_rule
+from orca.watchdog import acknowledge, snooze as snooze_rule
 from orca.auth import audit
 from orca.tokens import revoke_user_tokens, user_tokens
 from orca.ui import DEFAULT_ADDR, serve_ui
@@ -123,6 +123,8 @@ comptime USAGE = """usage:
                 (an orca.toml from what's registered; default ./orca.toml)
   orca watchdog status [--json]     (rules, values, limits, active trips)
   orca watchdog snooze <rule> <duration>   (2h, 30m, 1d; off ends it)
+  orca watchdog ack [--all|<trip id>]   (keep a trip's pipelines paused and
+                                    clear its banner; status still lists it)
   orca tick
   orca scheduler
   orca ui
@@ -226,6 +228,27 @@ def _command(args: List[String], target: String) raises -> Int:
     var cmd = args[1]
     # Commands that print what a page of the UI shows, or do what its
     # buttons do, over the database here as `--remote` does over HTTPS.
+    if (
+        cmd == "watchdog"
+        and (len(args) == 3 or len(args) == 4)
+        and args[2] == "ack"
+    ):
+        var db = State(url)
+        db.migrate()
+        var which = String("all")
+        if len(args) == 4 and args[3] != "--all":
+            which = args[3]
+        var trip = 0
+        if which != "all":
+            try:
+                trip = Int(which)
+            except:
+                _usage("orca watchdog ack [--all|<trip id>]")
+        var who = getenv("USER", "local")
+        var n = acknowledge(db, trip, who)
+        audit(db, who, String("/watchdog/", which, "/ack"), 0, "", "local")
+        print("acknowledged", n, "trip" if n == 1 else "trips")
+        return 0
     if cmd == "watchdog" and len(args) == 5 and args[2] == "snooze":
         # Audited as the local user, since there is no session or token.
         var db = State(url)

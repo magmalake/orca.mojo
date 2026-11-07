@@ -167,6 +167,26 @@ echo "ok   snoozing is audited and stops the rule; unpausing clears the banner a
 until_true "SELECT count(*) = 2 FROM orca.pipelines WHERE paused" 60
 curl -fsS "$base/" | grep -q 'alert--trip' || fail "no banner after the snooze ended"
 echo "ok   a snooze that ends lets the rule trip again"
+
+# Keep paused: acknowledging a trip hides its banner and leaves the
+# pipelines paused; status still lists it, marked.
+trip=$(q "SELECT max(id) FROM orca.watchdog_trips")
+paused_before=$(q "SELECT count(*) FROM orca.pipelines WHERE paused")
+curl -s -o /dev/null -w '%{http_code}' -H "Origin: $base" -d '' "$base/watchdog/nope/ack" | grep -q 404 || fail "a bad trip id"
+curl -fsS -o /dev/null -H "Origin: $base" -d '' "$base/watchdog/all/ack" || fail "the UI's keep paused"
+curl -fsS "$base/" | grep -q 'alert--trip' && fail "the banner shows an acknowledged trip"
+[ "$(q "SELECT count(*) FROM orca.pipelines WHERE paused")" = "$paused_before" ] || fail "keep paused unpaused something"
+[ "$(q "SELECT acknowledged_by FROM orca.watchdog_trips WHERE id = $trip")" = ui ] || fail "the trip isn't acknowledged"
+./build/orca watchdog status | grep -q '^trip launches .*(acknowledged by ui)' || fail "status doesn't mark the acknowledged trip"
+./build/orca watchdog status --json | jq -e '.trips | map(select(.id == '"$trip"' and .acknowledged_by == "ui")) | length == 1' > /dev/null || fail "status --json"
+fake=$(q "INSERT INTO orca.watchdog_trips (rule, value, threshold, detail, pipelines) VALUES ('launches', 3, 2, 'again', 'toy') RETURNING id" | head -1)
+curl -fsS "$base/" | grep -q 'Keep paused' || fail "no Keep paused button on the banner"
+./build/orca watchdog ack nonsense > /dev/null 2>&1 && fail "ack of nonsense"
+./build/orca watchdog ack "$fake" >> "$log" 2>&1 || fail "orca watchdog ack"
+curl -fsS "$base/" | grep -q 'alert--trip' && fail "the banner shows a trip acknowledged by the command"
+[ "$(q "SELECT count(*) FROM orca.audit WHERE action = '/watchdog/$fake/ack' AND source = 'local'")" -eq 1 ] || fail "the ack isn't audited"
+[ "$(q "SELECT count(*) FROM orca.pipelines WHERE paused")" = "$paused_before" ] || fail "ack unpaused something"
+echo "ok   keep paused hides a trip's banner and leaves its pipelines paused"
 stop
 grep -q "can't check the watchdog" "$log" && fail "the watchdog raised"
 
