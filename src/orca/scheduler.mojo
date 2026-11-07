@@ -184,6 +184,15 @@ from orca.sensors import (
     parse_sense,
     split_keys,
 )
+from orca.resources import (
+    Grant,
+    Request,
+    Room,
+    admit,
+    host_room,
+    resolve_auto,
+    run_env as grant_env,
+)
 from orca.state import State
 from orca.watchdog import check as check_watchdog, config as watchdog_config
 from orca.tz import Zone
@@ -195,6 +204,10 @@ comptime _BUDGET_LOCK = 0x6F726362  # "orcb"
 comptime _CONTROL_LOCK = 0x6F726363  # "orcc"
 """Held while a control-placed start is weighed against
 `ORCA_CONTROL_MAX_RUNS`."""
+
+comptime _HOST_LOCK = 0x6F726364  # "orcd"
+"""Held while a start is weighed against what this host's running runs
+weren't granted (`orca.resources`)."""
 
 comptime _RETRIED = "trigger IN ('schedule', 'backfill', 'sensor', 'fill')"
 """The runs the scheduler retries."""
@@ -254,6 +267,14 @@ struct Registered(Copyable, Movable):
     to its runs alone, over those `ORCA_RUN_ENV` names."""
     var fill: Fill
     """How it fills its range by itself (`orca.fill`)."""
+    var cpus: String
+    """The CPUs it asks for, `N` or `MIN..MAX` (`orca.resources`); empty
+    for none."""
+    var memory_gb: String
+    """The memory it asks for, in GB; empty for none."""
+
+    def request(self) raises -> Request:
+        return Request.of(self.cpus, self.memory_gb)
 
 
 def _ec2_spec(p: Registered, run: Int, start: Int, new_code: Bool) -> Ec2Spec:
@@ -274,7 +295,7 @@ def _ec2_spec(p: Registered, run: Int, start: Int, new_code: Bool) -> Ec2Spec:
         p.secrets.copy(),
         p.worker_procs,
         p.registry_hash,
-        p.env.copy(),
+        resolve_auto(p.env),
     )
 
 
@@ -351,7 +372,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " '') AS fill_mode, coalesce(fill_order, '') AS fill_order,"
             " coalesce(fill_max_runs, 0) AS fill_max_runs,"
             " coalesce(fill_budget_per_day, -1) AS fill_budget,"
-            " coalesce(fill_window, '') AS fill_window FROM orca.pipelines"
+            " coalesce(fill_window, '') AS fill_window, coalesce(cpus, '') AS"
+            " cpus, coalesce(memory_gb, '') AS memory_gb FROM orca.pipelines"
             " WHERE binary_path IS NOT NULL AND ($1 = '' OR name = $1) ORDER BY"
             " name"
         ),
@@ -395,6 +417,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                     r.float64("fill_budget"),
                     r.text("fill_window"),
                 ),
+                r.text("cpus"),
+                r.text("memory_gb"),
             )
         )
     # A fixed count, or no tasks: no scaling.
@@ -1083,6 +1107,9 @@ struct Scheduler(Movable):
     clock; they are every `ORCA_NOTIFY_CHECK_SECONDS` (10)."""
     var limits: ControlLimits
     """What a control-placed run may use (`orca.control`)."""
+    var room: Room
+    """What this host can grant the runs of pipelines with a request
+    (`orca.resources`): its capacity less its reserve."""
     var _control: Dict[Int, _ControlProc]
     """A control-placed run's process to what its end needs."""
     var _keeping: Dict[Int, String]
@@ -1137,6 +1164,7 @@ struct Scheduler(Movable):
         self._watchdog_next = 0
         self._notify_next = 0
         self.limits = ControlLimits.from_env()
+        self.room = host_room()
         self._control = Dict[Int, _ControlProc]()
         self._keeping = Dict[Int, String]()
         self._meters = Dict[Int, Meter]()
@@ -1243,18 +1271,17 @@ struct Scheduler(Movable):
                 " binary_path, since, sensing_since, image, head_type,"
                 " worker_type, ec2_workers, spot, ec2_min_workers, secrets,"
                 " worker_procs, placement, max_runs, env, config, fills,"
-                " fill_order, fill_max_runs, fill_budget_per_day, fill_window)"
-                " SELECT"
-                " d->>'pipeline',"
-                " d->>'registry_hash', d, $2, $3, CASE WHEN $4 THEN now() END,"
-                " nullif($5, ''), nullif($6, ''), nullif($7, ''), nullif($8,"
-                " 0), $9, nullif($10, -1), nullif($11, '')::jsonb,"
-                " nullif($12, -1), nullif(nullif($13, ''), 'default'),"
-                " nullif($15, -1), nullif($16, '')::jsonb, $17::jsonb,"
-                " nullif($18, ''), nullif($19, ''), nullif($20, -1),"
-                " nullif($21, -1::float8), nullif($22, '')"
-                " FROM (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO"
-                " UPDATE SET registry_hash = EXCLUDED.registry_hash, describe ="
+                " fill_order, fill_max_runs, fill_budget_per_day, fill_window,"
+                " cpus, memory_gb) SELECT d->>'pipeline', d->>'registry_hash',"
+                " d, $2, $3, CASE WHEN $4 THEN now() END, nullif($5, ''),"
+                " nullif($6, ''), nullif($7, ''), nullif($8, 0), $9,"
+                " nullif($10, -1), nullif($11, '')::jsonb, nullif($12, -1),"
+                " nullif(nullif($13, ''), 'default'), nullif($15, -1),"
+                " nullif($16, '')::jsonb, $17::jsonb, nullif($18, ''),"
+                " nullif($19, ''), nullif($20, -1), nullif($21, -1::float8),"
+                " nullif($22, ''), nullif($23, ''), nullif($24, '') FROM"
+                " (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO UPDATE SET"
+                " registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
                 " = coalesce(orca.pipelines.since, EXCLUDED.since),"
                 " sensing_since = CASE WHEN $4 THEN"
@@ -1280,9 +1307,9 @@ struct Scheduler(Movable):
                 " EXCLUDED.env ELSE orca.pipelines.env END, config = CASE WHEN"
                 " $14 THEN EXCLUDED.config ELSE jsonb_build_object('sources',"
                 " coalesce(orca.pipelines.config->'sources', '{}'::jsonb) ||"
-                " coalesce(EXCLUDED.config->'sources', '{}'::jsonb)) END,"
-                " spot = CASE WHEN $6 <> '' OR $7 <> '' OR $8 > 0 OR $9 THEN $9"
-                " ELSE orca.pipelines.spot END, fills = CASE WHEN $14 THEN"
+                " coalesce(EXCLUDED.config->'sources', '{}'::jsonb)) END, spot"
+                " = CASE WHEN $6 <> '' OR $7 <> '' OR $8 > 0 OR $9 THEN $9 ELSE"
+                " orca.pipelines.spot END, fills = CASE WHEN $14 THEN"
                 " EXCLUDED.fills ELSE orca.pipelines.fills END, fill_order ="
                 " CASE WHEN $14 THEN EXCLUDED.fill_order ELSE"
                 " orca.pipelines.fill_order END, fill_max_runs = CASE WHEN $14"
@@ -1291,9 +1318,12 @@ struct Scheduler(Movable):
                 " EXCLUDED.fill_budget_per_day ELSE"
                 " orca.pipelines.fill_budget_per_day END, fill_window = CASE"
                 " WHEN $14 THEN EXCLUDED.fill_window ELSE"
-                " orca.pipelines.fill_window END, last_seen"
-                " = now() RETURNING name, registry_hash, coalesce(image, '')"
-                " AS image"
+                " orca.pipelines.fill_window END, cpus = CASE WHEN $14 OR $23"
+                " <> '' THEN EXCLUDED.cpus ELSE orca.pipelines.cpus END,"
+                " memory_gb = CASE WHEN $14 OR $24 <> '' THEN"
+                " EXCLUDED.memory_gb ELSE orca.pipelines.memory_gb END,"
+                " last_seen = now() RETURNING name, registry_hash,"
+                " coalesce(image, '') AS image"
             ),
             Params()
             .text(got[1])
@@ -1317,7 +1347,9 @@ struct Scheduler(Movable):
             .text(r.text("fill_order"))
             .int64(Int64(fill_max_runs))
             .float64(fill_budget)
-            .text(r.text("fill_window")),
+            .text(r.text("fill_window"))
+            .text(r.text("cpus"))
+            .text(r.text("memory_gb")),
         )
         var name = res.row(0).text("name")
         var version = self.db.version(
@@ -2458,6 +2490,40 @@ struct Scheduler(Movable):
                     free = 0
                 else:
                     free = min(free, self.limits.max_runs - used)
+        # A request (orca.resources): on this host, a start only if its
+        # minimum fits what the running runs weren't granted, each with its
+        # grant. A pipeline without one is started as ever.
+        var request = p.request()
+        var grants = List[Grant]()
+        var admitted = request.any() and (control or placed == "local")
+        if admitted and free > 0:
+            # Across pipelines: one start at a time weighs the grants.
+            _ = tx.execute(
+                "SELECT pg_advisory_xact_lock($1)",
+                Params().int64(_HOST_LOCK),
+            )
+            var g = tx.query(
+                String(
+                    "SELECT coalesce(sum(grant_cpus), 0) AS cpus,",
+                    " coalesce(sum(grant_memory_mb), 0) AS mb FROM orca.runs",
+                    " WHERE status = 'running' AND placement IN ('local',",
+                    " 'control') AND NOT ",
+                    self._dead("$1"),
+                ),
+                Params().float64(self.stale),
+            ).row(0)
+            var got = admit(
+                request,
+                self.room,
+                Int(g.int64("cpus")),
+                Int(g.int64("mb")),
+                free,
+            )
+            grants = got[0].copy()
+            if len(grants) < free:
+                # The ones that don't start say why; those that do, not.
+                hold = got[1]
+            free = len(grants)
         # Its queued runs say why they wait, or no longer do.
         _ = tx.execute(
             String(
@@ -2570,7 +2636,9 @@ struct Scheduler(Movable):
                     )
                     new_code.append(False)
                     print("fill", p.name, next[i], "run", ids[len(ids) - 1])
-            for id in ids:
+            for i in range(len(ids)):
+                var id = ids[i]
+                var grant = grants[i] if admitted else Grant.none()
                 starts.append(
                     Int(
                         tx.query(
@@ -2580,9 +2648,19 @@ struct Scheduler(Movable):
                                 " now(), ended = NULL, starts = starts + 1,"
                                 " retry_at = NULL, error = NULL, waiting_since"
                                 " = NULL, cpu_millis = $2, placement = $3, held"
-                                " = NULL WHERE id = $1 RETURNING starts"
+                                " = NULL, request_cpus = nullif($4, ''),"
+                                " request_memory_gb = nullif($5, ''),"
+                                " grant_cpus = nullif($6, 0), grant_memory_mb ="
+                                " nullif($7, 0) WHERE id = $1 RETURNING starts"
                             ),
-                            Params().int64(id).int64(Int64(need)).text(placed),
+                            Params()
+                            .int64(id)
+                            .int64(Int64(need))
+                            .text(placed)
+                            .text(p.cpus if admitted else String())
+                            .text(p.memory_gb if admitted else String())
+                            .int64(Int64(grant.cpus))
+                            .int64(Int64(grant.memory_mb)),
                         )
                         .row(0)
                         .int64("starts")
@@ -2591,8 +2669,20 @@ struct Scheduler(Movable):
         tx.commit()
         for i in range(len(ids)):
             var id = ids[i]
+            var grant = grants[i] if admitted else Grant.none()
+            if admitted:
+                print(
+                    "granted",
+                    p.name,
+                    "run",
+                    id,
+                    grant.cpus,
+                    "CPUs and",
+                    grant.memory_mb,
+                    "MB (0: not asked for)",
+                )
             if control:
-                self._start_control(p, Int(id), starts[i], new_code[i])
+                self._start_control(p, Int(id), starts[i], new_code[i], grant)
                 continue
             if self.runner:
                 try:
@@ -2605,7 +2695,7 @@ struct Scheduler(Movable):
                             p.binary,
                             p.workers,
                             new_code[i],
-                            p.env.copy(),
+                            resolve_auto(p.env),
                         )
                     )
                     print("started", p.name, "run", id, "on its cluster")
@@ -2653,10 +2743,9 @@ struct Scheduler(Movable):
                 # other runners: a crash's dump is looked for after the last.
                 with open(stage_of(log), "a") as f:
                     f.write("--- start ", starts[i], "\n")
-            # Its own variables, from orca.toml; the rest it inherits.
-            var env = List[String]()
-            for kv in p.env:
-                env.append(String(kv[0], "=", kv[1]))
+            # Its own variables, from orca.toml, and its grant; the rest it
+            # inherits.
+            var env = grant_env(p.env, grant)
             var pid = spawn(argv, stage_of(log) if log else log, env=env)
             self._meters[pid] = Meter()
             self._spawned[pid] = (
@@ -2734,7 +2823,12 @@ struct Scheduler(Movable):
             print("requeued", n, "runs of", p.name, "for pool", pool)
 
     def _start_control(
-        mut self, p: Registered, id: Int, start: Int, new_code: Bool
+        mut self,
+        p: Registered,
+        id: Int,
+        start: Int,
+        new_code: Bool,
+        grant: Grant = Grant.none(),
     ):
         """Starts start `start` of `p`'s run `id` on this host
         (`orca.control`): its binary's `resume`, in a process group of its
@@ -2748,10 +2842,9 @@ struct Scheduler(Movable):
             var secrets = List[Tuple[String, String]]()
             for s in p.secrets:
                 secrets.append((s[0], fetch_secret(s[1])))
-            var env = List[String]()
-            for kv in p.env:
-                env.append(String(kv[0], "=", kv[1]))
-            env.extend(run_env(self.limits, p.image, secrets))
+            var env = grant_env(
+                p.env, grant, run_env(self.limits, p.image, secrets)
+            )
             var location = String()
             var stage = String()
             if self.logs:

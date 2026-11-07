@@ -14,6 +14,7 @@ from std.testing import (
 from json import loads
 
 from orca.control import pool_of, pool_problem
+from orca.resources import Grant
 from orca.http_store import (
     Body,
     bytes_of_hex,
@@ -161,8 +162,11 @@ def test_worker_run() raises:
         "ghcr.io/x/orca:0.11.0",
         env^,
         secrets^,
+        Grant(3, 2048),
     )
     var got = worker_run_of(loads(worker_run_json(w)))
+    assert_equal(got.grant.cpus, 3)
+    assert_equal(got.grant.memory_mb, 2048)
     assert_equal(got.run, 12)
     assert_equal(got.start, 2)
     assert_equal(got.binary, "/app/bin/toy")

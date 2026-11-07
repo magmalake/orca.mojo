@@ -118,6 +118,14 @@ burst is slow instead of fatal; a server made before that can run
 `fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`
 and add `/swapfile none swap sw 0 0` to `/etc/fstab`.
 
+Instead of numbers that are wrong after a rescale, a pipeline can ask for a
+range with `cpus` and `memory_gb` and set `DISTA_WORKER_SLOTS = "auto"`: the
+scheduler then starts its run once the minimum fits beside the others' and
+grants it up to the maximum of what's left, so the next run after
+`rescale.sh up` is simply given more ([orca.toml](orca-toml.md#requests-and-grants)).
+A pipeline's own `"auto"`, like `GHARCHIVE_PARALLEL`, needs its code to read
+the grant (`orca.auto_count`).
+
 Register (the binaries are in the image; `up.sh` doesn't do this because
 what to register is the project's):
 

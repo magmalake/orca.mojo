@@ -61,6 +61,7 @@ from orca.http_store import (
 )
 from orca.json import quote
 from orca.live import dead_sql, stale_limit, start_grace
+from orca.resources import Grant, Room, admit
 from orca.scheduler import registered
 from orca.state import PgStore, State, beat_run
 from orca.store import FINAL, TableSnapshot
@@ -293,6 +294,10 @@ struct WorkerRun(Copyable, Movable):
     var secrets: List[Tuple[String, String]]
     """Its secrets: the variable and the ID the worker reads it by, with its
     own `ORCA_SECRET_FETCH`."""
+    var grant: Grant
+    """What this start was granted of the worker's host (`orca.resources`);
+    none for a pipeline without a request, or a worker that didn't say
+    what it can grant."""
 
 
 def _pairs_json(
@@ -328,6 +333,8 @@ def worker_run_json(w: WorkerRun) -> String:
         .text("image", w.image)
         .raw("env", _pairs_json(w.env, "name", "value"))
         .raw("secrets", _pairs_json(w.secrets, "name", "id"))
+        .int("grant_cpus", Int64(w.grant.cpus))
+        .int("grant_memory_mb", Int64(w.grant.memory_mb))
         .finish()
     )
 
@@ -344,6 +351,12 @@ def worker_run_of(v: Value) raises -> WorkerRun:
         v["image"].string_value(),
         _pairs_of(v["env"], "name", "value"),
         _pairs_of(v["secrets"], "name", "id"),
+        Grant(
+            Int(v["grant_cpus"].int_value()) if String("grant_cpus")
+            in v else 0,
+            Int(v["grant_memory_mb"].int_value()) if String("grant_memory_mb")
+            in v else 0,
+        ),
     )
 
 
@@ -393,6 +406,13 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
         return String('{"run": null}')
     var image = _str(v, "image")
     var name = _str(v, "name")
+    # What the worker's host can grant (orca.resources), from a worker that
+    # says; -1 from one that doesn't, whose runs aren't admitted.
+    var room_cpus = -1
+    var room_mb = -1
+    if String("room_cpus") in v and String("room_memory_mb") in v:
+        room_cpus = Int(v["room_cpus"].int_value())
+        room_mb = Int(v["room_memory_mb"].int_value())
     var stale = stale_limit()
     var dead = dead_sql("$2", start_grace(stale))
     var refused = String()
@@ -444,20 +464,59 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
         if live >= p.max_runs:
             tx.rollback()
             continue
+        var request = p.request()
+        var grant = Grant.none()
+        var admitted = request.any() and room_cpus >= 0
+        if admitted:
+            var g = tx.query(
+                String(
+                    "SELECT coalesce(sum(grant_cpus), 0) AS cpus,",
+                    " coalesce(sum(grant_memory_mb), 0) AS mb FROM orca.runs",
+                    " WHERE worker = $1 AND status = 'running' AND NOT ",
+                    dead,
+                ),
+                Params().int64(Int64(w.id)).float64(stale),
+            ).row(0)
+            var fit = admit(
+                request,
+                Room(room_cpus, room_mb, room_cpus, room_mb),
+                Int(g.int64("cpus")),
+                Int(g.int64("mb")),
+                1,
+                String("worker ", name) if name else w.user(),
+            )
+            if len(fit[0]) == 0:
+                tx.rollback()
+                refused = fit[1]
+                _ = db.conn.execute(
+                    (
+                        "UPDATE orca.runs SET held = $2 WHERE id = $1 AND"
+                        " status = 'queued'"
+                    ),
+                    Params().int64(id).text(fit[1]),
+                )
+                continue
+            grant = fit[0][0]
         var got = tx.query(
             (
                 "UPDATE orca.runs SET status = 'running', owner = $2, heartbeat"
                 " = NULL, started = now(), ended = NULL, starts = starts + 1,"
                 " retry_at = NULL, error = NULL, waiting_since = NULL,"
-                " cpu_millis = 0, placement = $3, held = NULL, worker = $4"
-                " WHERE id = $1 AND status = 'queued' RETURNING starts,"
-                " allow_new_code, partitions"
+                " cpu_millis = 0, placement = $3, held = NULL, worker = $4,"
+                " request_cpus = nullif($5, ''), request_memory_gb ="
+                " nullif($6, ''), grant_cpus = nullif($7, 0), grant_memory_mb"
+                " = nullif($8, 0) WHERE id = $1 AND status = 'queued'"
+                " RETURNING starts, allow_new_code, partitions"
             ),
             Params()
             .int64(id)
             .text(WORKER_OWNER)
             .text(w.placement())
-            .int64(Int64(w.id)),
+            .int64(Int64(w.id))
+            .text(p.cpus if admitted else String())
+            .text(p.memory_gb if admitted else String())
+            .int64(Int64(grant.cpus))
+            .int64(Int64(grant.memory_mb)),
         )
         if len(got) != 1:
             tx.rollback()
@@ -474,6 +533,7 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
             p.image,
             p.env.copy(),
             p.secrets.copy(),
+            grant,
         )
         _ = tx.execute(
             (
