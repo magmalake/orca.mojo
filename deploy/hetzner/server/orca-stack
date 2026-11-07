@@ -248,7 +248,12 @@ cmd_apply() {
     # The tunnel: Cloudflare's routes point at http://ui:8270 and
     # http://<app>:<port> on this network. Nothing listens on the host.
     if [ -s "$CONF/tunnel.env" ]; then
-        run_container cloudflared --network orca --env-file "$CONF/tunnel.env" "$cf" tunnel --no-autoupdate run
+        # HTTP/2 unless tunnel.env says otherwise: QUIC (UDP 7844) timed out on
+        # Hetzner ("timeout: no recent network activity").
+        proto="-e TUNNEL_TRANSPORT_PROTOCOL=http2"
+        ! grep -q '^TUNNEL_TRANSPORT_PROTOCOL=' "$CONF/tunnel.env" || proto=
+        # shellcheck disable=SC2086
+        run_container cloudflared --network orca --env-file "$CONF/tunnel.env" $proto "$cf" tunnel --no-autoupdate run
     else
         echo "orca-stack: no $CONF/tunnel.env, so no tunnel"
     fi

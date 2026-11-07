@@ -297,6 +297,9 @@ struct ProjectConfig(Movable):
     """The git commit of the checkout it's in, or empty."""
     var dirty: Bool
     """Whether it differs from that commit."""
+    var source: String
+    """Where the commit is from (`ORCA_SOURCE`), for a file read outside a git
+    checkout, as in the image; empty otherwise."""
     var doc: TomlDoc
 
     def __init__(out self):
@@ -305,6 +308,7 @@ struct ProjectConfig(Movable):
         self.hash = String()
         self.commit = String()
         self.dirty = False
+        self.source = String()
         self.doc = TomlDoc()
 
     def __init__(
@@ -320,6 +324,7 @@ struct ProjectConfig(Movable):
         self.hash = sha256_hex(text)
         self.commit = commit
         self.dirty = dirty
+        self.source = String()
         try:
             self.doc = parse_toml(text)
         except e:
@@ -339,26 +344,38 @@ struct ProjectConfig(Movable):
         var dir = String(full[byte=:slash]) if slash > 0 else String("/")
         var commit = String()
         var dirty = False
+        # sh keeps git's "fatal: not a git repository" off stderr.
+        var base = String("git -C '", dir, "' ")
         try:
-            var got = capture(["git", "-C", dir, "rev-parse", "HEAD"], 10)
+            var got = capture(
+                ["sh", "-c", String(base, "rev-parse HEAD 2> /dev/null")], 10
+            )
             if got[0] == 0:
                 commit = String(got[1].strip())
                 var st = capture(
                     [
-                        "git",
-                        "-C",
-                        dir,
-                        "status",
-                        "--porcelain",
-                        "--",
-                        String(full[byte = slash + 1 :]),
+                        "sh",
+                        "-c",
+                        String(
+                            base,
+                            "status --porcelain -- '",
+                            String(full[byte = slash + 1 :]),
+                            "' 2> /dev/null",
+                        ),
                     ],
                     10,
                 )
                 dirty = st[0] != 0 or String(st[1].strip()) != ""
         except:
             pass
-        return ProjectConfig(text, path, commit, dirty)
+        var source = String()
+        if not commit and getenv("ORCA_COMMIT"):
+            # Not in a checkout (the image): what the build recorded.
+            commit = getenv("ORCA_COMMIT")
+            source = getenv("ORCA_SOURCE")
+        var cfg = ProjectConfig(text, path, commit, dirty)
+        cfg.source = source
+        return cfg^
 
     @staticmethod
     def from_b64(
@@ -602,8 +619,10 @@ struct Resolved(Movable):
                 quote(file.commit),
                 ', "dirty": ',
                 "true" if file.dirty else "false",
-                ', "overrides": {',
             )
+            if file.source:
+                out.write(', "source": ', quote(file.source))
+            out.write(', "overrides": {')
             for i in range(len(self.overrides)):
                 out.write(
                     "" if i == 0 else ", ",
@@ -715,6 +734,7 @@ struct Shown(Movable):
     var hash: String
     var commit: String
     var dirty: Bool
+    var source: String
     var overrides: List[Tuple[String, String]]
     var rows: List[_Row]
 
@@ -724,6 +744,7 @@ struct Shown(Movable):
         self.hash = String()
         self.commit = String()
         self.dirty = False
+        self.source = String()
         self.overrides = List[Tuple[String, String]]()
         self.rows = List[_Row]()
 
@@ -784,6 +805,8 @@ struct Shown(Movable):
                 )
                 if self.dirty:
                     out.write(" (with changes not committed)")
+                if self.source:
+                    out.write(" of ", self.source)
             out.write(
                 ", sha256 ",
                 self.hash[byte = : min(12, self.hash.byte_length())],
@@ -878,6 +901,9 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
                 s.hash = c["hash"].string_value()
                 s.commit = c["commit"].string_value()
                 s.dirty = c["dirty"].bool_value()
+                var so = c.get("source")
+                if so and so.value().is_string():
+                    s.source = so.value().string_value()
                 for kv in c["overrides"].object_items():
                     s.overrides.append((String(kv[0]), kv[1].string_value()))
             var src = c.get("sources")

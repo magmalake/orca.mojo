@@ -266,5 +266,54 @@ r3=$(ec2_run 2024-05)
 [ "$(q "SELECT spec->'env'->>'CONFIG_ONLY' FROM orca.runs WHERE id = $r3")" = z ] || fail "the run's spec lacks the env"
 echo "ok   on ec2 the env is on the instance, over ORCA_RUN_ENV's, and in the pool's key"
 stop
+
+# No paths: every table of the file, from pipelines/ next to it or
+# ORCA_PIPELINES_DIR; outside a git checkout, ORCA_COMMIT and ORCA_SOURCE are
+# the commit, and git says nothing.
+np=$(mktemp -d)
+mkdir "$np/pipelines" "$np/elsewhere"
+cp "$root/build/toy" "$np/pipelines/toy"
+cp "$root/build/daily" "$np/pipelines/daily"
+cat > "$np/orca.toml" << 'EOF'
+[defaults]
+max_runs = 1
+
+[pipelines.toy]
+
+[pipelines.daily]
+EOF
+cd "$np"
+ORCA_COMMIT=0123456789abcdef0123456789abcdef01234567 ORCA_SOURCE=https://github.com/example/census \
+    "$orca" register --config orca.toml > reg.out 2> reg.err || fail "register with no paths: $(cat reg.err)"
+grep -q "registered toy" reg.out && grep -q "registered daily" reg.out || fail "no paths registered: $(cat reg.out)"
+! grep -q "fatal" reg.err || fail "git's stderr leaked: $(cat reg.err)"
+[ "$(q "SELECT (config->>'commit') || ' ' || (config->>'source') FROM orca.pipelines WHERE name = 'toy'")" = "0123456789abcdef0123456789abcdef01234567 https://github.com/example/census" ] \
+    || fail "ORCA_COMMIT and ORCA_SOURCE weren't recorded"
+# Without them, no commit, and still no noise.
+"$orca" register --config orca.toml > reg.out 2> reg.err || fail "register without ORCA_COMMIT"
+! grep -q "fatal" reg.err || fail "git's stderr leaked: $(cat reg.err)"
+[ "$(q "SELECT config->>'commit' FROM orca.pipelines WHERE name = 'toy'")" = "" ] || fail "a commit from nowhere"
+# ORCA_PIPELINES_DIR beats pipelines/ next to the file.
+mv pipelines elsewhere/p
+ORCA_PIPELINES_DIR=$np/elsewhere/p "$orca" register --config orca.toml > reg.out 2>&1 || fail "ORCA_PIPELINES_DIR: $(cat reg.out)"
+# Neither: refused, saying so.
+if "$orca" register --config orca.toml > reg.out 2>&1; then fail "registered with no pipelines directory"; fi
+grep -q "ORCA_PIPELINES_DIR" reg.out || fail "the refusal doesn't say how: $(cat reg.out)"
+# A missing binary: an error naming it, and nothing registered.
+mv elsewhere/p pipelines
+cat > bad.toml << 'EOF'
+[pipelines.toy]
+max_runs = 3
+
+[pipelines.ghost]
+EOF
+if "$orca" register --config bad.toml > reg.out 2>&1; then fail "registered with a binary missing"; fi
+grep -q "ghost" reg.out || fail "the error doesn't name ghost: $(cat reg.out)"
+[ "$(q "SELECT max_runs FROM orca.pipelines WHERE name = 'toy'")" = 1 ] || fail "something was registered"
+# Paths given explicitly still work.
+"$orca" register --config orca.toml pipelines/toy > reg.out 2>&1 || fail "explicit path: $(cat reg.out)"
+grep -q "registered toy" reg.out || fail "explicit path not registered"
+echo "ok   register with no paths registers the file's pipelines; the commit from ORCA_COMMIT outside git"
 cd "$root"
+rm -rf "$np"
 echo "ok   config"

@@ -122,6 +122,12 @@ Each value comes from the first of these that sets it, highest first:
 | neither | `./orca.toml`, if it exists |
 | `--no-config` | none |
 
+### Registering without paths
+
+`orca register` with no pipeline binaries registers every `[pipelines.<name>]` the file names, each as `<dir>/<name>`. `<dir>` is `ORCA_PIPELINES_DIR` if it is set, else the directory `pipelines/` next to the file if it exists; with neither, `orca register` refuses and says so. A table whose binary doesn't exist is an error naming it, and nothing is registered. Binaries given on the command line work as before (and a pipeline in the file that you leave out isn't touched).
+
+A project's image sets `ORCA_CONFIG`, `ORCA_PIPELINES_DIR`, `ORCA_COMMIT` and `ORCA_SOURCE`, so `orca register` alone registers the whole file.
+
 `orca aws register` takes the same `--config` and `--no-config`. It checks the file on your machine, then sends the file whole (base64) to the control instance's `orca register`, with its git commit. A bad file is refused before anything is sent.
 
 ### What a registration records
@@ -129,7 +135,7 @@ Each value comes from the first of these that sets it, highest first:
 `orca.pipelines.config` (migration 29) holds:
 - the file's name
 - its SHA-256
-- its git commit, and whether the file had uncommitted changes
+- its git commit, and whether the file had uncommitted changes; for a file outside a git checkout (an image), the commit in `ORCA_COMMIT`, with `ORCA_SOURCE` as the commit's source, when they are set
 - the flags that overrode it
 - the source of every value
 
