@@ -8,6 +8,9 @@
   paused, logging each step. It refreshes the server's `orca-stack` first.
   `--force` keeps the old behaviour.
 
+- **`orca status <pipeline>` shows how long each run ran** (`3m 21s`, up to now
+  while it runs; `-` before it starts) instead of when it was created.
+
 - **Ops sections can be linked to.** Each section on Ops › Control and Fleet
   has an id and its heading links to it, so `/ops/control#cpu` opens at the
   CPU chart.
