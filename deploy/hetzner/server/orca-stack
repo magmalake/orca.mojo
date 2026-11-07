@@ -278,13 +278,17 @@ cmd_quiesce() {
     for p in $(psql_q "SELECT name FROM orca.pipelines WHERE NOT paused ORDER BY name"); do
         docker exec scheduler orca pause "$p" > /dev/null
         echo "$p" >> "$STATE/paused-by-quiesce"
+        echo "orca-stack: paused $p"
     done
     sort -u "$STATE/paused-by-quiesce" > "$STATE/paused-by-quiesce.new"
     mv "$STATE/paused-by-quiesce.new" "$STATE/paused-by-quiesce"
     t=0
     while [ "$(running_runs)" -gt 0 ]; do
         [ "$t" -lt "$timeout" ] || die "$(running_runs) run(s) still running after ${timeout}s; the pipelines stay paused (orca-stack resume undoes it)"
-        [ $((t % 60)) -ne 0 ] || echo "orca-stack: waiting for $(running_runs) running run(s)"
+        if [ $((t % 60)) -eq 0 ]; then
+            echo "orca-stack: waiting for $(running_runs) running run(s):"
+            psql_q "SELECT '  run ' || id || ' ' || pipeline || ' ' || partitions || ', running ' || date_trunc('second', now() - started) FROM orca.runs WHERE status = 'running' ORDER BY id" 2> /dev/null || true
+        fi
         sleep 10
         t=$((t + 10))
     done
@@ -297,7 +301,15 @@ cmd_resume() {
         return 0
     }
     while read -r p; do
-        [ -z "$p" ] || docker exec scheduler orca unpause "$p" > /dev/null
+        [ -n "$p" ] || continue
+        # The scheduler may still be starting after an apply.
+        n=0
+        until docker exec scheduler orca unpause "$p" > /dev/null 2>&1; do
+            n=$((n + 1))
+            [ "$n" -lt 30 ] || die "couldn't unpause $p; still paused: $(tr '\n' ' ' < "$STATE/paused-by-quiesce")"
+            sleep 2
+        done
+        echo "orca-stack: unpaused $p"
     done < "$STATE/paused-by-quiesce"
     rm -f "$STATE/paused-by-quiesce"
     echo "orca-stack: unpaused"

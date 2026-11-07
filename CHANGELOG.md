@@ -16,6 +16,12 @@
   `/api/watchdog` adds `checks` and `tripped_on` to rules and trips
   (`value` and `threshold` stay). `tests/watchdog.sh` has a control trip.
 
+- **`deploy/hetzner/deploy.sh` pauses, waits and resumes by itself.** It
+  quiesces (pauses the pipelines that aren't paused, waits for running runs,
+  listing them each minute; `--timeout`), deploys, then unpauses what it
+  paused, logging each step. It refreshes the server's `orca-stack` first.
+  `--force` keeps the old behaviour.
+
 - **`orca status <pipeline>` shows how long each run ran** (`3m 21s`, up to now
   while it runs; `-` before it starts) instead of when it was created.
 
