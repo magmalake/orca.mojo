@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **A live run's page refreshes itself, and shows its settings.** While a
+  run is queued or running, `/runs/<id>` replaces its facts, steps, machines
+  and workers every 5 s from the fragment `/runs/<id>/live` (one poller
+  instead of two; `/steps` and `/metrics` still answer). The fragment answers
+  286 once the run has ended and the page stops asking; a finished run's page
+  doesn't poll at all, and without scripts the page is complete as loaded.
+  The poller (`data-poll`) now waits while the tab is hidden and asks at once
+  when it is shown, backs off when a request fails, and keeps selected text,
+  open `<details>` and scrolled boxes as they were. A new Settings section
+  shows the environment the run had (what its start recorded, else the
+  pipeline's registered one), max runs, placement and worker settings, with
+  secrets by name only. The facts start with the run's duration (elapsed
+  so far while it goes on, the total after; start and end in its tooltip),
+  and the crumb links the pipeline's previous and next run (`rel=prev/next`;
+  the left and right arrow keys follow them outside form fields).
+  `tests/ui.sh`.
+
 ## 0.10.0 - 2026-11-06
 
 - **One Hetzner server: scripts, runbook, and the local runner as a
