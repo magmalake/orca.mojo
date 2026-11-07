@@ -34,6 +34,8 @@ mounts:
 runcmd:
   - [mkdir, -p, /mnt/orca-data, /etc/orca/secrets, /var/lib/orca/stage, /var/lib/orca/backup]
   - [chmod, "700", /etc/orca]
+  # A 4 GB swapfile if there is none, so a burst of memory is slow, not fatal.
+  - [sh, -c, "[ -e /swapfile ] || swapon --show | grep -q . || { fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab; }"]
   - [systemctl, daemon-reload]
   - [systemctl, enable, --now, docker]
   - [sh, -c, "date -u +%FT%TZ > /var/lib/orca/booted"]

@@ -19,6 +19,17 @@
   the left and right arrow keys follow them outside form fields).
   `tests/ui.sh`.
 
+- **`orca register` with no paths registers the whole `orca.toml`.** Each
+  `[pipelines.<name>]` is registered from `<dir>/<name>`, `<dir>` being
+  `ORCA_PIPELINES_DIR`, else `pipelines/` next to the file; a table with no
+  binary is an error naming it and nothing is registered. A file outside a
+  git checkout (the image) records `ORCA_COMMIT` and `ORCA_SOURCE` instead of
+  a commit, and git's `fatal: not a git repository` no longer reaches stderr.
+  `cloud-init.yaml` creates a 4 GB swapfile if there is none.
+  `orca-stack` starts cloudflared on HTTP/2 unless `tunnel.env` sets
+  `TUNNEL_TRANSPORT_PROTOCOL`.
+  `docs/hetzner.md`: the census's `orca.toml` lives in mojo-census.
+
 ## 0.10.0 - 2026-11-06
 
 - **One Hetzner server: scripts, runbook, and the local runner as a

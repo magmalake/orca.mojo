@@ -37,7 +37,13 @@ Cloudflare ---- tunnel ------>| cloudflared -> ui:8270, console:8080            
    `TUNNEL_TOKEN=...`, mode 600. Add two public hostnames to the tunnel:
    `orca.mlake.dev` to service `http://ui:8270`, and `census.mlake.dev` to
    `http://console:8080`. (If those names are on the AWS stack, Cloudflare
-   replaces their DNS records with the tunnel's CNAME.)
+   replaces their DNS records with the tunnel's CNAME; if it can't create the
+   CNAME, delete the existing A records for the names first.) The CNAMEs must
+   be **Proxied** (orange cloud): DNS-only resolves to a private `fd10::`
+   address and the site is unreachable. The tunnel runs over HTTP/2
+   (`TUNNEL_TRANSPORT_PROTOCOL=http2`, set by `orca-stack` unless
+   `tunnel.env` sets it), because QUIC over UDP 7844 kept timing out on
+   Hetzner ("timeout: no recent network activity").
 4. **A GitHub token** for the census's `mojo_repos`, in a file (read-only
    access to public repositories is enough).
 5. **Your address** for the firewall: `curl -4 ifconfig.me`, plus `/32`.
@@ -82,45 +88,39 @@ pipeline's `secrets = { GITHUB_TOKEN = "orca/github-token" }` reads
 
 ## The census: `orca.toml`
 
-The census registers from this file (save it as `orca.toml` on the server;
-`mojo-census` is not changed by this). `fills = "all"` with `max_runs = 1` and
-`fill_max_runs = 1` is the setting until iceberg-mojo 0.11.1 is pinned
-everywhere (issue 164). `DISTA_WORKER_SLOTS` is how many dista workers run
-in one process on the server: 4 on the CAX21; during an import on the CAX41
-register it again with 14, and set it back to 4 after.
-
-```toml
-[defaults]
-max_runs = 1
-
-[pipelines.gharchive]
-fills = "all"
-fill_order = "oldest"
-fill_max_runs = 1
-env = { DISTA_WORKER_SLOTS = "4" }
-
-[pipelines.gharchive_index]
-env = { DISTA_WORKER_SLOTS = "4" }
-
-[pipelines.mojo_repos]
-secrets = { GITHUB_TOKEN = "orca/github-token" }
-
-[pipelines.mojo_history]
-env = { DISTA_WORKER_SLOTS = "4" }
-
-[pipelines.mojo_activity]
-env = { DISTA_WORKER_SLOTS = "4" }
-
-[pipelines.mojo_stats]
-```
+The census's `orca.toml` lives in the mojo-census repository, next to the
+code it configures, and the image has it (`ORCA_CONFIG=/opt/orca/orca.toml`,
+the pipelines at `ORCA_PIPELINES_DIR=/opt/orca/pipelines`, and the build's
+`ORCA_COMMIT` and `ORCA_SOURCE`, which `orca config show` reports as the
+file's commit). Read the file there; each setting has a comment. In short:
+`max_runs = 1` and `fill_max_runs = 1` with `fills = "all"` is the setting
+until iceberg-mojo 0.11.1 is pinned everywhere (issue 164), and
+`DISTA_WORKER_SLOTS` is how many dista workers run in one process on the
+server: 3 on the CAX21; during an import on the CAX41 register it again with
+14, and set it back to 3 after. gharchive's `GHARCHIVE_PARALLEL` (hours
+in flight at once) is 3 for the same reason: its default of 16 is sized for
+four AWS instances, each hour in flight takes about 1 GB (processes of 2 to
+4.4 GB), and 16 took the CAX21's memory to 99.6% and then OOM (the watchdog
+paused everything); raise both on a bigger server. `cloud-init.yaml` also
+creates a 4 GB `/swapfile` (in `/etc/fstab`) if the server has no swap, so a
+burst is slow instead of fatal; a server made before that can run
+`fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`
+and add `/swapfile none swap sw 0 0` to `/etc/fstab`.
 
 Register (the binaries are in the image; `up.sh` doesn't do this because
 what to register is the project's):
 
 ```sh
-ssh root@<ip> 'docker exec -i scheduler sh -c "cat > /tmp/orca.toml"' < orca.toml
-ssh root@<ip> 'docker exec scheduler sh -c "p=/opt/orca/pipelines; orca register --config /tmp/orca.toml \$p/gharchive \$p/gharchive_index \$p/mojo_repos \$p/mojo_history \$p/mojo_activity \$p/mojo_stats"'
+ssh root@<ip> docker exec scheduler orca register
 ```
+
+To change a setting: edit `orca.toml` in mojo-census, merge it, deploy the
+new image (`./deploy.sh <tag>`), and register again. (For a quick try,
+`docker exec` can still register another file with `--config` and explicit
+binaries; the next registration from the image takes it back.) This needs
+an orca with `orca register` reading the file's tables (after 0.10.0);
+before that, name the binaries:
+`docker exec scheduler sh -c 'cd /opt/orca/pipelines && orca register gharchive gharchive_index mojo_repos mojo_history mojo_activity mojo_stats mojo_versions'`.
 
 `orca config show` says what was registered. A pipeline with `placement`
 left out runs on the scheduler's runner, here the local one. The Fleet page
@@ -143,7 +143,7 @@ kills them): pause the pipelines in the UI and wait, or use `--force`.
 
 ```sh
 ./rescale.sh up                        # CAX21 -> CAX41, keeping the disk
-# register the census with DISTA_WORKER_SLOTS = "14" if you want the 16 vCPUs used
+# register the census with DISTA_WORKER_SLOTS = "14" and GHARCHIVE_PARALLEL = "14" if you want the 16 vCPUs used
 # ... the fill runs; watch the pipeline page's Fill line ...
 ./rescale.sh down                      # CAX41 -> CAX21
 ```
