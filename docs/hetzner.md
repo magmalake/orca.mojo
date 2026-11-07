@@ -17,8 +17,8 @@ laptop: hcloud + ssh + deploy/hetzner/*.sh
 firewall: tcp/22 from you     +-- docker network "orca" ---------------------------+
                               | postgres  (data on the Volume, /mnt/orca-data)     |
 Cloudflare ---- tunnel ------>| cloudflared -> ui:8270, console:8080               |
- orca.mlake.dev               | scheduler (local runner), ui, sampler, console     |
- census.mlake.dev             +----------------------------------------------------+
+ orca.mojourney.dev               | scheduler (local runner), ui, sampler, console     |
+ mojourney.dev             +----------------------------------------------------+
                                         |  S3 API (outbound)
                                         v
                               Hetzner Object Storage: warehouse/, logs/, backups/pg/
@@ -38,7 +38,7 @@ Cloudflare ---- tunnel ------>| cloudflared -> ui:8270, console:8080            
 3. **Cloudflare**: Zero Trust > Networks > Tunnels > create a tunnel
    ("Cloudflared"), and copy its token into a file as one line,
    `TUNNEL_TOKEN=...`, mode 600. Add two public hostnames to the tunnel:
-   `orca.mlake.dev` to service `http://ui:8270`, and `census.mlake.dev` to
+   `orca.mojourney.dev` to service `http://ui:8270`, and `mojourney.dev` to
    `http://console:8080`. (If those names are on the AWS stack, Cloudflare
    replaces their DNS records with the tunnel's CNAME; if it can't create the
    CNAME, delete the existing A (and AAAA) records for the names first: a
@@ -89,7 +89,7 @@ ssh root@<ip>                          # up.sh prints the address
 docker exec -it scheduler orca user add <you>      # reads a password
 ```
 
-and register the pipelines (below). Open `https://orca.mlake.dev`.
+and register the pipelines (below). Open `https://orca.mojourney.dev`.
 
 Secrets without Secrets Manager: `ORCA_SECRET_FETCH` is
 `sh /etc/orca/secret-fetch`, which prints `/etc/orca/secrets/<id>`, so the
@@ -150,20 +150,21 @@ and control rules stay on.
 
 The tag is the project's image tag: see [Images](#images). This replaces
 `orca aws app` and `orca aws up` for code changes, and needs `hcloud` with a
-context like `up.sh`. Postgres is not restarted. It **refuses while runs are
-running** (restarting the scheduler kills them; `--force` does it anyway).
-The sequence that doesn't lose a run:
+context like `up.sh`. Postgres is not restarted. Restarting the scheduler kills
+running runs, so `deploy.sh` does the safe sequence itself, logging each step:
 
-```sh
-ssh root@<ip> orca-stack quiesce       # pause every pipeline, wait for the running runs to end (--timeout SECONDS, default 3600)
-./deploy.sh <tag>                      # nothing is running now
-ssh root@<ip> orca-stack resume        # unpause what quiesce paused
-```
+1. copies this checkout's `orca-stack` to the server;
+2. `orca-stack quiesce`: pauses every pipeline that isn't paused, then waits
+   for the running runs to end, listing them each minute (`--timeout
+   SECONDS`, default 3600);
+3. `orca-stack apply --tag <tag>`: pulls and restarts;
+4. `orca-stack resume`: unpauses the pipelines it paused, and only those
+   (not ones the watchdog or you paused).
 
-`quiesce` pauses only pipelines that weren't paused, and `resume` unpauses
-only those (not ones the watchdog or you paused); `orca-stack status` shows
-the running runs and what quiesce paused. On a timeout it stops and leaves
-the pipelines paused.
+On a timeout or a failed apply it stops with the pipelines still paused and
+says so; `ssh root@<ip> orca-stack resume` undoes the pause. `--force` skips
+the pause and the wait and kills the running runs. `orca-stack status` shows
+the running runs and what quiesce paused.
 
 ## Rescaling for an import
 
@@ -226,7 +227,7 @@ disk over 85%, a lost worker, each with a link to the UI. Once:
    (read through `ORCA_SECRET_FETCH` like the other secrets, never logged).
    `NTFY_URL` is the server (default `https://ntfy.sh`; a self-hosted one
    works), `NTFY_TOKEN_FILE` an access token for a protected topic, and
-   `UI_URL` (`https://orca.mlake.dev`) is what the notifications link to
+   `UI_URL` (`https://orca.mojourney.dev`) is what the notifications link to
    (`ORCA_UI_URL`).
 3. `./up.sh`, then `ssh root@<ip> docker exec scheduler orca notify test`:
    the phone should show "orca: test alert".
