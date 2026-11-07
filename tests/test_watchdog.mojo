@@ -8,6 +8,8 @@ from orca.watchdog import (
     Counts,
     Lease,
     Quiet,
+    check_text,
+    checks_json,
     cost_rate,
     cost_spent,
     default_config,
@@ -17,7 +19,10 @@ from orca.watchdog import (
     eval_idle,
     eval_launches,
     eval_stuck,
+    limits,
+    parse_checks,
     parse_duration,
+    past_names,
 )
 
 
@@ -158,6 +163,60 @@ def test_control() raises:
     var none = eval_control(c, False, 0.0, 0.0, _all())
     assert_false(none.tripped)
     assert_true(none.value < 0)
+    assert_equal(len(none.checks), 2)
+    assert_true(none.checks[0].value < 0 and none.checks[1].value < 0)
+
+
+def test_control_checks_both_thresholds() raises:
+    # Memory past 90 while disk, nearer its 85 relatively, is fine: both
+    # thresholds are kept, and memory is the one past.
+    var c = default_config()
+    var r = eval_control(c, True, 98.3, 10.6, _all())
+    assert_equal(len(r.checks), 2)
+    assert_equal(r.checks[0].name, "memory")
+    assert_equal(Int(r.checks[0].limit), 90)
+    assert_true(r.checks[0].past)
+    assert_equal(r.checks[1].name, "disk")
+    assert_equal(Int(r.checks[1].limit), 85)
+    assert_false(r.checks[1].past)
+    var on = past_names(r.checks)
+    assert_equal(len(on), 1)
+    assert_equal(on[0], "memory")
+    assert_equal(
+        check_text(r.checks[0]), "memory 98.30 % (trips over 90.00, past)"
+    )
+    assert_equal(check_text(r.checks[1]), "disk 10.60 % (trips over 85.00)")
+    # What the tables keep reads back the same.
+    var back = parse_checks(checks_json(r.checks))
+    assert_equal(len(back), 2)
+    assert_equal(back[0].name, "memory")
+    assert_true(back[0].past and not back[1].past)
+    assert_equal(Int(back[1].limit), 85)
+    assert_equal(back[1].unit, " %")
+    assert_equal(back[1].op, "over")
+    assert_equal(len(parse_checks("")), 0)
+
+
+def test_checks_of_each_rule() raises:
+    var c = default_config()
+    var cost = eval_cost(c, List[Lease](), _all())
+    assert_equal(len(cost.checks), 2)
+    assert_equal(cost.checks[0].name, "rate for 15m")
+    assert_equal(Int(cost.checks[1].limit), 25)
+    var many: List[Counts] = [Counts("a", 21, 100), Counts("b", 6, 10)]
+    var f = eval_failing(c, many)
+    assert_true(f.checks[0].past)  # a: 21 failed
+    assert_true(f.checks[1].past)  # b: 60%
+    assert_equal(Int(f.checks[1].value), 60)
+    var few: List[Counts] = [Counts("a", 2, 3)]
+    var g = eval_failing(c, few)
+    assert_true(g.checks[1].value < 0)  # under failed_min: no share
+    var idle = eval_idle(c, 3, 4.0, _all())
+    assert_true(idle.checks[0].past and not idle.checks[1].past)
+    assert_false(idle.tripped)
+    assert_equal(idle.checks[1].op, "at least")
+    for rule in ["launches", "cost", "idle", "failing", "stuck", "control"]:
+        assert_true(len(limits(c, String(rule))) > 0)
 
 
 def test_durations() raises:

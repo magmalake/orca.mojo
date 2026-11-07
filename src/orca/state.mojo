@@ -550,6 +550,13 @@ def _migrations() -> List[List[String]]:
             last_error text,
             PRIMARY KEY (kind, subject))""",
         ],
+        # Every threshold a watchdog rule checks (orca.watchdog.limits), its
+        # value and whether it was past it, on the rule's last reading and
+        # on each trip: which of a rule's thresholds tripped it.
+        [
+            "ALTER TABLE orca.watchdog_rules ADD COLUMN checks jsonb",
+            "ALTER TABLE orca.watchdog_trips ADD COLUMN checks jsonb",
+        ],
     ]
 
 

@@ -130,7 +130,7 @@ comptime USAGE = """usage:
                 default, orca.toml, flag, environment)
   orca config export [--out <path>|-] [--force]
                 (an orca.toml from what's registered; default ./orca.toml)
-  orca watchdog status [--json]     (rules, values, limits, active trips)
+  orca watchdog status [--json]     (rules, each threshold and value, trips)
   orca watchdog snooze <rule> <duration>   (2h, 30m, 1d; off ends it)
   orca watchdog ack [--all|<trip id>]   (keep a trip's pipelines paused and
                                     clear its banner; status still lists it)

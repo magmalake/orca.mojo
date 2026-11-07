@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **The watchdog shows every threshold a rule checks, and which one
+  tripped** (#180). `control` printed one limit (85, disk's) while it
+  tripped on memory's 90. Each rule now keeps a check per threshold
+  (`orca.watchdog.limits`: `control` memory and disk, `cost` the sustained
+  rate and the day, `failing` the count and the share, `idle` the CPU and
+  the workers, `launches` and `stuck` one each) with its value, limit and
+  whether it is past it, on its reading and on each trip (a `checks` jsonb
+  column on `orca.watchdog_rules` and `orca.watchdog_trips`, migration 34).
+  `orca watchdog status` prints `control   memory 98.30 % (trips over
+  90.00, past), disk 10.60 % (trips over 85.00)  TRIPPED on memory`;
+  `/watchdog` has a Checks column and says what a trip tripped on;
+  `/api/watchdog` adds `checks` and `tripped_on` to rules and trips
+  (`value` and `threshold` stay). `tests/watchdog.sh` has a control trip.
+
 ## 0.12.0 - 2026-11-07
 
 - **Alerts to your phone through ntfy** (#184). With `ORCA_NOTIFY_URL` (a
