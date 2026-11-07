@@ -7,7 +7,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | Path | |
 |---|---|
 | `/` | pipelines, with their schedules, next runs and last runs |
-| `/pipelines/<name>` | `?tab=overview` (default), `runs` or `operate`, each its own page; a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`orca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing; `?steps=graph` or `table`: the Steps tab shown without scripts |
+| `/pipelines/<name>` | `?tab=overview` (default), `runs` or `operate`, each its own page; a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`orca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; its registration as `orca config show` prints it (`#config`, Overview); `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing; `?steps=graph` or `table`: the Steps tab shown without scripts |
 | `/pipelines/<name>/progress` | the page's Progress card (runs going, fill, next run), as an HTML fragment the page refreshes every 5 s |
 | `/api/pipelines/<name>` | the same as JSON, whatever is asked for |
 | `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=`) and as the Start runs form's date picker |
@@ -186,6 +186,7 @@ from orca.notify import (
     notify_json,
     recent as recent_alerts,
 )
+from orca.config import config_html, shown
 from orca.fill import FillStatus, eta_text, fill_status, money, status_json
 from orca.sensors import Link, Rebuild, downstream, plan_rebuild, rebuilds
 from orca.schedule import Schedule
@@ -3706,7 +3707,11 @@ def pipeline(
         if i:
             j.write(", ")
         _json_version(j, versions[i])
-    j.write('], "runs": ')
+    # What `orca config show <name>` prints (orca.config).
+    var configs = shown(db, name)
+    j.write('], "config": ')
+    j.write(configs[0].json() if len(configs) > 0 else String("null"))
+    j.write(', "runs": ')
     _json_runs(j, runs)
     var keys = Optional[KeyCounts](None)
     if p.kind == "keyed":
@@ -3813,6 +3818,8 @@ def pipeline(
                 h.mono(f.partition)
                 h.raw("</tr>")
             h.raw("</tbody></table></div>")
+        if len(configs) > 0:
+            config_html(h, configs[0])
     elif tab == "operate":
         if p.kind == "daily" or p.kind == "monthly":
             _coverage_html(h, db, p, cal)
@@ -4610,7 +4617,12 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
         h.raw("As the pipeline is registered")
     h.raw(
         " (orca.toml and flags applied). Secrets are shown by name; their",
-        " values never are.</p>",
+        ' values never are. <a href="/pipelines/',
+    )
+    h.text(url_encode(r.pipeline))
+    h.raw(
+        "#config\">The pipeline's registration</a> says where each value",
+        " came from.</p>",
     )
     h.raw('<dl class="facts">')
     var pairs = [

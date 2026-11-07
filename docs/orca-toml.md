@@ -202,6 +202,20 @@ Without a pipeline name it prints every registered pipeline. Values that come fr
 
 `source` is one of `code default`, `orca.toml`, `flag` or `environment`.
 
+The UI's pipeline page has the same under **Configuration** (`/pipelines/<name>#config`, and `config` in `/api/pipelines/<name>`): where it was registered from, the flags that overrode the file, and each value with its source. A run's **Settings** link to it. The values from the environment are the UI's environment, which on AWS is the scheduler's.
+
+## orca config check
+
+```text
+$ orca config check                    # ./orca.toml, or $ORCA_CONFIG
+orca.toml: ok, 3 pipelines
+$ orca config check ci/orca.toml --secrets
+ci/orca.toml:9: [pipelines.mojo_repos] secrets: GITHUB_TOKEN: can't read secret orca/github-token: exit 254
+orca: ci/orca.toml has 1 problem(s)
+```
+
+It checks a file for a project's CI and needs no database. It refuses what `orca register` would refuse, with the same `file:line: [table] key: why`. It also checks that orca can size each `head_type` and `worker_type` (the vCPUs `worker_procs = "auto"` and the fleet use; `ORCA_EC2_VCPUS` adds types), and warns about a type that isn't in orca's price table, which Ops > Fleet and the watchdog's cost rule count as $0 an hour. `--secrets` also reads each secret the way the scheduler does (`ORCA_SECRET_FETCH`, else Secrets Manager with the `AWS_*` credentials or the instance role) and never prints a value. It exits 1 if anything is wrong.
+
 ## orca config export
 
 ```text
@@ -303,6 +317,5 @@ Operations go through the UI or the remote CLI (`orca login` and `orca --remote`
 
 ## Not yet
 
-- The UI's pipeline page showing the registered configuration, with drift warnings.
-- `orca config check` for a project's CI.
+- Drift warnings on the pipeline page (registered from orca.toml @ X, which has since changed): the control instance has no checkout to compare with.
 - `[stack]` read by `orca aws up`.
