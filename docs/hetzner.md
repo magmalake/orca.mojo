@@ -96,11 +96,16 @@ file's commit). Read the file there; each setting has a comment. In short:
 `max_runs = 1` and `fill_max_runs = 1` with `fills = "all"` is the setting
 until iceberg-mojo 0.11.1 is pinned everywhere (issue 164), and
 `DISTA_WORKER_SLOTS` is how many dista workers run in one process on the
-server: 4 on the CAX21; during an import on the CAX41 register it again with
-14, and set it back to 4 after. gharchive's `GHARCHIVE_PARALLEL` (downloads
-at once) is 4 for the same reason: its default of 16 is sized for four AWS
-instances and took the CAX21's memory to 99.6% (the watchdog paused
-everything); use 16 with the 14 slots on the CAX41.
+server: 3 on the CAX21; during an import on the CAX41 register it again with
+14, and set it back to 3 after. gharchive's `GHARCHIVE_PARALLEL` (hours
+in flight at once) is 3 for the same reason: its default of 16 is sized for
+four AWS instances, each hour in flight takes about 1 GB (processes of 2 to
+4.4 GB), and 16 took the CAX21's memory to 99.6% and then OOM (the watchdog
+paused everything); raise both on a bigger server. `cloud-init.yaml` also
+creates a 4 GB `/swapfile` (in `/etc/fstab`) if the server has no swap, so a
+burst is slow instead of fatal; a server made before that can run
+`fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`
+and add `/swapfile none swap sw 0 0` to `/etc/fstab`.
 
 Register (the binaries are in the image; `up.sh` doesn't do this because
 what to register is the project's):
@@ -138,7 +143,7 @@ kills them): pause the pipelines in the UI and wait, or use `--force`.
 
 ```sh
 ./rescale.sh up                        # CAX21 -> CAX41, keeping the disk
-# register the census with DISTA_WORKER_SLOTS = "14" and GHARCHIVE_PARALLEL = "16" if you want the 16 vCPUs used
+# register the census with DISTA_WORKER_SLOTS = "14" and GHARCHIVE_PARALLEL = "14" if you want the 16 vCPUs used
 # ... the fill runs; watch the pipeline page's Fill line ...
 ./rescale.sh down                      # CAX41 -> CAX21
 ```
