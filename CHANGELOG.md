@@ -19,6 +19,19 @@
   the left and right arrow keys follow them outside form fields).
   `tests/ui.sh`.
 
+- **Watchdog: "Keep paused", the local runner's cost tile, orca's icon in
+  the header.** The trip banner has a Keep paused button, and
+  `orca watchdog ack [--all|<trip id>]` does the same: the trip is
+  acknowledged (migration 31, `acknowledged_at`/`acknowledged_by`, audited),
+  its pipelines stay paused, the banner stops showing it, and
+  `orca watchdog status` still lists it as acknowledged by the user. With
+  `ORCA_RUNNER=local` the Cost tile reads "Cost", the optional
+  `ORCA_FIXED_COST` (free text such as `€8.49/month`; "Fixed" if unset) and
+  "fixed price: the local runner launches no instances", with no
+  region; `/api/fleet` says `cost_is_estimate: false`. The header's logo is
+  the tab's icon (three connected nodes) in the theme's colours.
+  `tests/watchdog.sh`, `tests/fleet.sh`.
+
 - **`orca register` with no paths registers the whole `orca.toml`.** Each
   `[pipelines.<name>]` is registered from `<dir>/<name>`, `<dir>` being
   `ORCA_PIPELINES_DIR`, else `pipelines/` next to the file; a table with no

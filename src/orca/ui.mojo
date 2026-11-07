@@ -191,6 +191,7 @@ from orca.timeline import (
 from orca.state import State
 from orca.tz import Zone
 from orca.watchdog import (
+    acknowledge,
     active_trips,
     banner_html,
     config as watchdog_config,
@@ -1428,13 +1429,14 @@ comptime _USER_SLOT = "<!--orca-user-->"
 """Where `serve` puts who's logged in, or a link to log in."""
 
 comptime _MARK = (
-    '<svg class="top__mark" width="22" height="22" viewBox="0 0 24 24"'
-    ' fill="none" aria-hidden="true"><path d="M12 1.9 22 20.2H2L12 1.9Z"'
-    ' stroke="var(--lake)" stroke-width="1.6" stroke-linejoin="round"/>'
-    '<path d="M12 9.4 17.4 19H6.6L12 9.4Z" fill="var(--ember)"/></svg>'
+    '<svg class="top__mark" width="22" height="22" viewBox="0 0 16 16"'
+    ' aria-hidden="true"><rect width="16" height="16" rx="3"'
+    ' fill="var(--lake)"/><path d="M4.5 5L8 11.5M11.5 5L8 11.5"'
+    ' stroke="var(--bg)" stroke-width="1.3"/><circle cx="4.5" cy="4.5" r="2"'
+    ' fill="var(--bg)"/><circle cx="11.5" cy="4.5" r="2" fill="var(--bg)"/>'
+    '<circle cx="8" cy="11.5" r="2" fill="var(--bg)"/></svg>'
 )
-"""magmalake's mark, as mlake.dev draws it: a caldera seen from above, a
-cold rim and a molten core."""
+"""orca's icon, the tab's three connected nodes, in the theme's colours."""
 
 
 def _extra_links(mut h: Html):
@@ -5336,7 +5338,9 @@ def _acted(
     )
 
 
-def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
+def _act(
+    mut db: State, path: String, body: String, user: String
+) raises -> Optional[Page]:
     """Does the action `path` names, or None if it names none."""
     var parts = path.split("/")
     if len(parts) == 4 and parts[1] == "pipelines":
@@ -5393,6 +5397,20 @@ def _act(mut db: State, path: String, body: String) raises -> Optional[Page]:
                 String('{"paused": ', "true" if paused else "false", "}"),
                 back,
             )
+    if len(parts) == 4 and parts[1] == "watchdog" and parts[3] == "ack":
+        var which = 0
+        if String(parts[2]) != "all":
+            try:
+                which = Int(parts[2])
+            except:
+                return None
+        var n = acknowledge(db, which, user)
+        return _acted(
+            Outcome.done(0),
+            String("/watchdog"),
+            String('{"acknowledged": ', n, "}"),
+            String("/watchdog"),
+        )
     if len(parts) == 4 and parts[1] == "watchdog" and parts[3] == "snooze":
         var duration = _form(body, "duration")
         try:
@@ -5603,7 +5621,7 @@ def _is_action(path: String) -> Bool:
     if parts[1] == "datasets":
         return parts[3] == "rebuild"
     if parts[1] == "watchdog":
-        return parts[3] == "snooze"
+        return parts[3] == "snooze" or parts[3] == "ack"
     return parts[1] == "runs" and (
         parts[3] == "resume" or parts[3] == "rerun" or parts[3] == "cancel"
     )
@@ -6008,7 +6026,7 @@ struct Ui(Copyable, Handler):
                 )
             if required and not user:
                 return _login_needed(req, json)
-            var done = _act(db, path, body)
+            var done = _act(db, path, body, user)
             if not done:
                 return _respond(not_found(String("nothing at ", path)), json)
             var page = done.take()
@@ -6217,7 +6235,7 @@ def act(mut db: State, path: String, form: String) raises -> Optional[Page]:
     """The action `path` with the fields of `form`, as the UI's button does
     it, or None if `path` names none (`orca.remote`). Not audited: the
     command acts as whoever can reach the database."""
-    return _act(db, path, form)
+    return _act(db, path, form, "")
 
 
 def serve_ui(url: String, addr: String) raises:

@@ -206,17 +206,24 @@ html /ops/fleet | grep -qF '&lt;b&gt;x&lt;/b&gt;' || fail "the escaped instance 
 # it doesn't.
 html /ops/fleet | grep -q 'launches no instances' && fail "the local-runner notice on a scheduler with no runner set"
 lport=$((port + 1))
-ORCA_RUNNER=local ORCA_UI_ADDR="127.0.0.1:$lport" ./build/orca ui >> "$log" 2>&1 &
+ORCA_FIXED_COST="€8.49/month" ORCA_RUNNER=local ORCA_UI_ADDR="127.0.0.1:$lport" ./build/orca ui >> "$log" 2>&1 &
 lpid=$!
 i=0
 until curl -fs "http://127.0.0.1:$lport/" > /dev/null 2>&1; do
     i=$((i + 1)); [ "$i" -lt 100 ] || { kill "$lpid"; fail "the second orca ui didn't start"; }; sleep 0.1
 done
 lpage=$(curl -fsS "http://127.0.0.1:$lport/ops/fleet")
+lhome=$(curl -fsS "http://127.0.0.1:$lport/")
 kill "$lpid"
 wait "$lpid" 2> /dev/null || true
 echo "$lpage" | grep -q 'runner is <code>local</code>: it runs every run on its own machine and launches no instances' \
     || fail "no local-runner notice on /ops/fleet"
+for pg in "$lpage" "$lhome"; do
+    echo "$pg" | grep -q 'stat__k">Cost</span><span class="stat__v">€8.49/month</span><span class="stat__s">fixed price: the local runner launches no instances' \
+        || fail "the local runner's cost tile"
+    echo "$pg" | grep -q 'us-east-2\|Cost now\|on-demand' && fail "EC2 price text on the local runner's page"
+done
+html /ops/fleet | grep -q 'Cost now' || fail "the EC2 cost tile is gone on another runner"
 echo "ok   Ops > Fleet says the local runner launches no instances"
 kill "$pid"
 echo "ok   fleet"
