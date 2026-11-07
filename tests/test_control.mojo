@@ -48,7 +48,16 @@ def test_placements() raises:
     assert_equal(parse_placement("ec2"), "ec2")
     assert_equal(parse_placement("default"), "default")
     for bad in ["", "Control", "local", "kubernetes"]:
-        with assert_raises(contains="control, ec2 or default"):
+        with assert_raises(contains="control, ec2, worker:<pool> or default"):
+            _ = parse_placement(bad)
+    # A pool of remote workers (orca.workers).
+    assert_equal(parse_placement("worker:bgent"), "worker:bgent")
+    assert_equal(parse_placement("worker:a_b-9"), "worker:a_b-9")
+    var long = String("worker:")
+    for _ in range(33):
+        long.write("x")
+    for bad in ["worker:", "worker:Bgent", "worker:a b", long]:
+        with assert_raises(contains="a pool's name"):
             _ = parse_placement(bad)
 
 

@@ -67,9 +67,9 @@ echo "$nav" | grep -qF '<a href="https://census.example/?a=b" target="_blank" re
     || fail "ORCA_UI_LINKS' link isn't in the nav"
 echo "$nav" | grep -qF '>&lt;b&gt;x&lt;/b&gt;</a>' || fail "an ORCA_UI_LINKS label isn't escaped"
 echo "$nav" | grep -q 'javascript:' && fail "a javascript: link from ORCA_UI_LINKS is in the nav"
-# Ops: one top-level link with Control and Fleet under it, as plain links;
+# Ops: one top-level link with Control, Fleet and Workers under it, as plain links;
 # the old System and Fleet items are gone.
-echo "$nav" | grep -qF '<div class="menu"><a href="/ops" aria-haspopup="true">Ops</a><div class="menu__sub"><a href="/ops/control">Control</a><a href="/ops/fleet">Fleet</a></div></div>' \
+echo "$nav" | grep -qF '<div class="menu"><a href="/ops" aria-haspopup="true">Ops</a><div class="menu__sub"><a href="/ops/control">Control</a><a href="/ops/fleet">Fleet</a><a href="/ops/workers">Workers</a></div></div>' \
     || fail "the Ops menu isn't in the nav"
 echo "$nav" | grep -qE '<a href="/(system|fleet)"' && fail "the old System or Fleet nav item is still there"
 curl -fsS "$base/static/orca.css" | grep -qF '.menu:focus-within .menu__sub' || fail "the Ops menu doesn't open on keyboard focus"

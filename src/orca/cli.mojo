@@ -17,7 +17,10 @@ refused, as a malformed key is, with exit code 2.
 With `ORCA_DATABASE_URL` set, runs are recorded in Postgres and can be
 resumed, or, for `sqlite:<path>` (`sqlite:///abs/path` for an absolute
 one), in that SQLite file (`orca.sqlite_store`); without it, `run` records its run in memory (`MemoryStore`, run 0)
-on the same path, and `resume` and `status` aren't available. `run` records the pipeline the first time; once `orca register`
+on the same path, and `resume` and `status` aren't available. With
+`ORCA_STATE_URL` (and `ORCA_STATE_TOKEN`) instead, as `orca worker` starts
+a run, `resume`, `status <run>` and `keep-log` record over `orca ui`'s API
+(`orca.http_store`), and `run` is refused. `run` records the pipeline the first time; once `orca register`
 has given it a binary, `run` leaves the registration as it is, since what
 the scheduler queues and counts as done is that code's. A binary whose code
 isn't the registered one's is refused (exit code 2) unless `run` is given
@@ -55,6 +58,7 @@ from std.sys import argv, exit
 from dista.client import Observer
 
 from orca.heartbeat import heartbeat_interval
+from orca.http_store import HttpStore
 from orca.logs import (
     location_exists,
     publish,
@@ -144,6 +148,10 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         # For the runners: this machine's metrics beside a run (orca.sample).
         return sample_main(args)
     var url = getenv("ORCA_DATABASE_URL")
+    # A worker's run records itself over orca ui's API (orca.http_store).
+    var state_url = getenv("ORCA_STATE_URL")
+    if url and state_url:
+        _usage("set ORCA_DATABASE_URL or ORCA_STATE_URL, not both")
     # A schedule is checked on every command, so a binary whose cron
     # expression or zone is bad can't be registered or run.
     comptime if P.scheduled():
@@ -167,9 +175,12 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         # the crash's first frames (orca.crash) while the run is running.
         var why = crash_summary(String(from_utf8_lossy=Span(data)))
         var run = getenv("ORCA_RUN")
-        if why and run and url:
+        if why and run and (url or state_url):
             try:
-                if sqlite_path(url):
+                if state_url:
+                    var api = HttpStore(state_url, getenv("ORCA_STATE_TOKEN"))
+                    _crashed(api, Int(run), why)
+                elif sqlite_path(url):
                     var file = SqliteStore(sqlite_path(url))
                     _crashed(file, Int(run), why)
                 else:
@@ -254,6 +265,11 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         except e:
             _usage(String(e))
             return 2
+        if state_url:
+            _usage(
+                "run needs ORCA_DATABASE_URL: a worker's run (ORCA_STATE_URL)"
+                " only resumes the run it was given"
+            )
         var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
         if not url:
             var mem = MemoryStore()
@@ -264,8 +280,8 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         var store = PgStore(url)
         return _run[P](rt, store, keys, new_code)
     if cmd == "resume":
-        if not url:
-            _usage("resume needs ORCA_DATABASE_URL")
+        if not url and not state_url:
+            _usage("resume needs ORCA_DATABASE_URL (or ORCA_STATE_URL)")
         var run = -1
         var allow_new_code = False
         for i in range(2, len(args)):
@@ -281,12 +297,18 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         if run < 0:
             _usage("resume needs a run")
         var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
+        if state_url:
+            var api = HttpStore(state_url, getenv("ORCA_STATE_TOKEN"))
+            return _resume[P](rt, api, run, allow_new_code)
         if sqlite_path(url):
             var file = SqliteStore(sqlite_path(url))
             return _resume[P](rt, file, run, allow_new_code)
         var store = PgStore(url)
         return _resume[P](rt, store, run, allow_new_code)
     if cmd == "status":
+        if state_url:
+            var api = HttpStore(state_url, getenv("ORCA_STATE_TOKEN"))
+            return _status(api, args)
         if not url:
             _usage("status needs ORCA_DATABASE_URL")
         if sqlite_path(url):

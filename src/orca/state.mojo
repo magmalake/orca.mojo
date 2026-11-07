@@ -508,6 +508,27 @@ def _migrations() -> List[List[String]]:
             ),
             "ALTER TABLE orca.watchdog_trips ADD COLUMN acknowledged_by text",
         ],
+        # Remote workers (orca.workers): a row per worker token, scoped to
+        # a pool, with what its worker last said of itself, and on each run
+        # the worker its latest start was claimed by.
+        [
+            """CREATE TABLE orca.workers (
+            id bigserial PRIMARY KEY,
+            token_hash text NOT NULL UNIQUE,
+            pool text NOT NULL,
+            label text NOT NULL,
+            created timestamptz NOT NULL DEFAULT now(),
+            created_by text NOT NULL,
+            expires timestamptz NOT NULL,
+            revoked timestamptz,
+            name text,
+            image text,
+            last_seen timestamptz,
+            cpus int,
+            memory_mb bigint,
+            running text)""",
+            "ALTER TABLE orca.runs ADD COLUMN worker bigint",
+        ],
     ]
 
 
@@ -984,6 +1005,24 @@ def _stop(
     return why^
 
 
+def beat_run(
+    mut conn: Connection, run: Int, owner: String, timeouts: String
+) raises -> String:
+    """One beat of `run`'s heartbeat as `owner`, and the watchdog's look at
+    it (`orca.heartbeat`): why the run's process must stop now, a cancel
+    whose time has come or an attempt past its step's timeout, which is
+    then recorded, or empty. `PgBeat`'s, and `orca ui`'s for a worker's run
+    (`orca.workers`), whose process then stops itself."""
+    _ = conn.execute(
+        (
+            "UPDATE orca.runs SET heartbeat = now() WHERE id = $1 AND"
+            " owner = $2 AND status = 'running'"
+        ),
+        Params().int64(Int64(run)).text(owner),
+    )
+    return _stop(conn, run, owner, timeouts)
+
+
 struct PgBeat(Beater):
     """Refreshes a run's heartbeat in Postgres, on a connection of its own."""
 
@@ -1006,16 +1045,9 @@ struct PgBeat(Beater):
     def beat(mut self) raises:
         if not self._conn:
             self._conn = Connection(self.url)
-        _ = self._conn.value().execute(
-            (
-                "UPDATE orca.runs SET heartbeat = now() WHERE id = $1 AND"
-                " owner = $2 AND status = 'running'"
-            ),
-            Params().int64(Int64(self.run)).text(self.owner),
+        var why = beat_run(
+            self._conn.value(), self.run, self.owner, self.timeouts
         )
-        # The watchdog (orca.heartbeat): a cancel whose time has come, or
-        # an attempt past its step's timeout, stops the process.
-        var why = _stop(self._conn.value(), self.run, self.owner, self.timeouts)
         if why:
             print("run", self.run, why, flush=True)
             external_call["_exit", NoneType](Int32(1))
@@ -1128,6 +1160,45 @@ struct PgStore(Movable, RunStore):
         self.run = run
         self.owner = owner
         self.registry_hash = registry_hash
+
+    def attempt_id(self) -> Int64:
+        """The `attempts` row of the attempt last started: what a worker's
+        run is told, to name it in its later calls (`orca.workers`)."""
+        return self._attempt_id
+
+    def at_attempt(mut self, id: Int64):
+        """Points `record` and `set_log` at the `attempts` row `id`."""
+        self._attempt_id = id
+
+    def start_attempt_once(
+        mut self,
+        step: String,
+        partition: String,
+        ord: Int,
+        input: Span[UInt8, _],
+    ) raises -> Int:
+        """`start_attempt` without its retries, its errors as they are
+        (`FINAL` for a lost or cancelled run): for `orca ui`, whose worker
+        retries the call itself (`orca.http_store`)."""
+        return self._start_attempt(step, partition, ord, input)
+
+    def finish_attempt_once(
+        mut self,
+        step: String,
+        partition: String,
+        attempt: Int,
+        status: String,
+        output: Span[UInt8, _],
+        error: String,
+    ) raises:
+        """`finish_attempt` without its retries, as `start_attempt_once`."""
+        self._finish_attempt(step, partition, attempt, status, output, error)
+
+    def skip_once(
+        mut self, step: String, partition: String, ord: Int, reason: String
+    ) raises:
+        """`skip` without its retries, as `start_attempt_once`."""
+        self._skip(step, partition, ord, reason)
 
     def start_heartbeat(
         mut self, interval: Float64, timeouts: String = ""
