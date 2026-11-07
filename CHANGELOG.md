@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.13.0 - 2026-11-07
+
 - **orca.toml follow-ups: `orca config check`, the registration on the
   pipeline page** (#181). `orca config check [<file>] [--secrets]` checks a
   file for a project's CI with no database: what `orca register` refuses,
