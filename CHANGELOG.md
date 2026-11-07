@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-11-07
+
 - **Alerts to your phone through ntfy** (#184). With `ORCA_NOTIFY_URL` (a
   topic URL; the topic itself can come from a secret,
   `ORCA_NOTIFY_SECRET`, read with `ORCA_SECRET_FETCH` and never logged;
