@@ -41,6 +41,8 @@ need NAME LOCATION BUCKET S3_ENDPOINT S3_REGION ADMIN_IP
 need_file SSH_PUBLIC_KEY_FILE S3_CREDENTIALS_FILE TUNNEL_TOKEN_FILE
 [ -z "${GITHUB_TOKEN_FILE:-}" ] || need_file GITHUB_TOKEN_FILE
 [ -z "${EXTRA_ENV_FILE:-}" ] || need_file EXTRA_ENV_FILE
+[ -z "${NTFY_TOPIC_FILE:-}" ] || need_file NTFY_TOPIC_FILE
+[ -z "${NTFY_TOKEN_FILE:-}" ] || need_file NTFY_TOKEN_FILE
 [ -z "${GHCR_USER:-}" ] || need_file GHCR_TOKEN_FILE
 need_tool hcloud ssh jq
 
@@ -111,6 +113,13 @@ remote mountpoint -q /mnt/orca-data
     echo "ORCA_PUBLIC_WAREHOUSE=s3://$BUCKET/warehouse"
     echo "ORCA_LOGS=s3://$BUCKET/logs"
     echo "ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE"
+    # Alerts (ntfy): the topic and token are secret files, only their ids are here.
+    if [ -n "${NTFY_TOPIC_FILE:-}" ]; then
+        echo "ORCA_NOTIFY_SECRET=orca/ntfy-topic"
+        [ -z "${NTFY_URL:-}" ] || echo "ORCA_NOTIFY_URL=$NTFY_URL"
+        [ -z "${NTFY_TOKEN_FILE:-}" ] || echo "ORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token"
+        [ -z "${UI_URL:-}" ] || echo "ORCA_UI_URL=$UI_URL"
+    fi
     [ -z "${FIXED_COST:-}" ] || echo "ORCA_FIXED_COST=$FIXED_COST"
     if [ -n "${EXTRA_ENV_FILE:-}" ] && [ -r "$EXTRA_ENV_FILE" ]; then cat "$EXTRA_ENV_FILE"; fi
 } > "$tmp/settings.env"
@@ -119,6 +128,12 @@ put 600 /etc/orca/s3.env "$S3_CREDENTIALS_FILE"
 put 600 /etc/orca/tunnel.env "$TUNNEL_TOKEN_FILE"
 if [ -n "${GITHUB_TOKEN_FILE:-}" ]; then
     put 600 /etc/orca/secrets/orca/github-token "$GITHUB_TOKEN_FILE"
+fi
+if [ -n "${NTFY_TOPIC_FILE:-}" ]; then
+    put 600 /etc/orca/secrets/orca/ntfy-topic "$NTFY_TOPIC_FILE"
+fi
+if [ -n "${NTFY_TOKEN_FILE:-}" ]; then
+    put 600 /etc/orca/secrets/orca/ntfy-token "$NTFY_TOKEN_FILE"
 fi
 if [ -n "${GHCR_USER:-}" ]; then
     put 600 /etc/orca/ghcr-token "$GHCR_TOKEN_FILE"

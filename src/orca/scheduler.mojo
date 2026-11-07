@@ -137,6 +137,14 @@ from orca.config import (
     resolve,
 )
 from orca.crash import crash_summary, crashed_by_signal
+from orca.alerts import (
+    disk as alert_disk,
+    failed_runs,
+    fill as alert_fill,
+    lost_workers,
+    watchdog_recovered,
+)
+from orca.notify import configured as notify_configured, flush as flush_notify
 from orca.fill import (
     Fill,
     FillPipeline,
@@ -1066,6 +1074,9 @@ struct Scheduler(Movable):
     (`ORCA_WATCHDOG_SECONDS`, 60; 0 turns it off): `orca.watchdog`."""
     var _watchdog_next: Int
     """When the next check starts, on the monotonic clock."""
+    var _notify_next: Int
+    """When the alerts' checks (`orca.alerts`) run next, on the monotonic
+    clock; they are every `ORCA_NOTIFY_CHECK_SECONDS` (10)."""
     var limits: ControlLimits
     """What a control-placed run may use (`orca.control`)."""
     var _control: Dict[Int, _ControlProc]
@@ -1117,6 +1128,7 @@ struct Scheduler(Movable):
         self._archive = Archive()
         self.watchdog_seconds = Float64(getenv("ORCA_WATCHDOG_SECONDS", "60"))
         self._watchdog_next = 0
+        self._notify_next = 0
         self.limits = ControlLimits.from_env()
         self._control = Dict[Int, _ControlProc]()
         self._keeping = Dict[Int, String]()
@@ -1445,6 +1457,10 @@ struct Scheduler(Movable):
             self._watchdog()
         except e:
             print("orca: can't check the watchdog's rules:", e)
+        try:
+            self._notify(now)
+        except e:
+            print("orca: can't raise alerts:", e)
         advance_rebuilds(self.db)
         try:
             self._expire()
@@ -1464,6 +1480,11 @@ struct Scheduler(Movable):
                     error = String(e)
                 self._sensed(p, error)
             self._schedule_retries(p, now)
+            if notify_configured():
+                try:
+                    _ = failed_runs(self.db, p.name, p.run_retries, _RETRIED)
+                except e:
+                    print("orca: can't alert on", p.name, "failures:", e)
             self._start(p, now)
             # After its other runs, so a fill never takes their place.
             if p.fill.all:
@@ -1928,6 +1949,45 @@ struct Scheduler(Movable):
             return
         self._watchdog_next = t + Int(self.watchdog_seconds * 1e9)
         _ = check_watchdog(self.db, watchdog_config())
+
+    def _notify(mut self, now: Int64) raises:
+        """Alerts to a person (`orca.notify`): sends what is pending and
+        due, and every `ORCA_NOTIFY_CHECK_SECONDS` (10) checks what the
+        alerts of `orca.alerts` are about that the scheduler's other steps
+        don't decide: a watchdog trip that ended, the control host's disk,
+        workers that went quiet, and fills that stalled. A failure to send
+        is logged and tried again later, never raised."""
+        if not notify_configured():
+            return
+        _ = flush_notify(self.db)
+        var t = Int(perf_counter_ns())
+        if t < self._notify_next:
+            return
+        var every = Float64(getenv("ORCA_NOTIFY_CHECK_SECONDS", "10"))
+        self._notify_next = t + Int(every * 1e9)
+        watchdog_recovered(self.db)
+        alert_disk(self.db)
+        _ = lost_workers(self.db)
+        var hour = Int((now % 86400) // 3600)
+        for p in registered(self.db):
+            if not p.fill.all:
+                continue
+            var tx = self.db.conn.begin()
+            var status = fill_status(
+                tx,
+                fill_pipeline(
+                    p,
+                    placed_of(p),
+                    Int(self.ec2.value().pool_seconds) if self.ec2 else 0,
+                ),
+                now,
+                p.run_retries,
+            )
+            tx.commit()
+            alert_fill(
+                self.db, p.name, status, p.paused, p.fill.in_window(hour)
+            )
+        _ = flush_notify(self.db)
 
     def _expire(mut self) raises:
         """Every `expire_seconds`, expires each dataset orca commits to by

@@ -10,6 +10,7 @@
 #   quiesce [--timeout SECONDS]                pause every pipeline, wait for runs to end
 #   resume                                     unpause what quiesce paused
 #   backup                                     pg_dump to s3://BUCKET/backups/pg/<time>.dump
+#                                              (a failure is pushed: orca notify --kind backup-failed)
 #   list-backups
 #   restore [--force] <key|latest>             pg_restore into the (empty) database
 #
@@ -302,7 +303,7 @@ cmd_resume() {
     echo "orca-stack: unpaused"
 }
 
-cmd_backup() {
+cmd_backup_now() {
     bucket=$(conf_get BUCKET)
     keep=$(conf_get BACKUP_KEEP)
     keep=${keep:-14}
@@ -319,6 +320,22 @@ cmd_backup() {
         [ -z "$old" ] || s3 s3 rm "s3://$bucket/backups/pg/$old" > /dev/null
     done
     echo "orca-stack: backed up to backups/pg/$name"
+}
+
+# A failed backup is a push to the phone (orca notify, if alerts are set up):
+# the backup runs as a process of its own, whose output is kept for the message.
+cmd_backup() {
+    out=$(mktemp)
+    rc=0
+    sh "$0" backup-now > "$out" 2>&1 || rc=$?
+    cat "$out"
+    if [ "$rc" -ne 0 ]; then
+        why=$(tail -n 3 "$out" | tr '\n' ' ' | cut -c1-300)
+        docker exec scheduler orca notify --kind backup-failed --subject nightly --priority high \
+            --tags rotating_light --title "orca: nightly backup failed" "$why" > /dev/null 2>&1 || true
+    fi
+    rm -f "$out"
+    return "$rc"
 }
 
 cmd_list_backups() {
@@ -363,6 +380,7 @@ case "$sub" in
     quiesce) cmd_quiesce "$@" ;;
     resume) cmd_resume ;;
     backup) cmd_backup ;;
+    backup-now) cmd_backup_now ;;
     list-backups) cmd_list_backups ;;
     restore) cmd_restore "$@" ;;
     *) die "usage: orca-stack configure|app|apply|status|quiesce|resume|backup|list-backups|restore" ;;

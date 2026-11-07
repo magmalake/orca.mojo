@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **Alerts to your phone through ntfy** (#184). With `ORCA_NOTIFY_URL` (a
+  topic URL; the topic itself can come from a secret,
+  `ORCA_NOTIFY_SECRET`, read with `ORCA_SECRET_FETCH` and never logged;
+  `ORCA_NOTIFY_TOKEN` / `_TOKEN_SECRET` for a protected topic) the scheduler
+  POSTs, with ntfy's `Title`, `Priority`, `Tags` and `Click` headers, a
+  watchdog trip (high; low when acknowledged or unpaused), a run that
+  failed after its last retry, a fill with no fill run finished in
+  `ORCA_NOTIFY_FILL_STALL_HOURS` (2), the control disk over
+  `ORCA_NOTIFY_DISK_PERCENT` (85), and a worker quiet for
+  `ORCA_NOTIFY_WORKER_SECONDS` (300) while it held runs. The same alert is
+  sent at most once per `ORCA_NOTIFY_MIN_SECONDS` (1800), kept in the new
+  `orca.notifications` table (migration 33) so a restart doesn't resend; a
+  send that fails (a 5 s timeout, `ORCA_NOTIFY_TIMEOUT_MS`) is logged
+  without the URL and retried on a later tick with a doubling wait, and
+  never blocks or fails the tick. `orca notify test` sends a test message;
+  `orca notify --kind K [--subject S] ... "message"` is the same for
+  scripts (the Hetzner `orca-stack backup` calls it on failure). Ops >
+  Control and `/api/system` (`notify`) say whether alerts are on and list
+  the last ones. `deploy/hetzner` takes `NTFY_TOPIC_FILE`, `NTFY_TOKEN_FILE`,
+  `NTFY_URL` and `UI_URL`; `docs/hetzner.md` has the phone setup.
+  `orca.notify`, `orca.alerts`, `tests/notify.sh` (`pixi run -e default
+  test-notify`) against `tests/fake_ntfy.py`.
+
 - **The default project image builds for Neoverse N1** (#178). `orca aws
   push`'s image (`deploy/project.Dockerfile`) passes `--target-cpu
   "$MOJO_TARGET_CPU"` (`ARG`, default `neoverse-n1`) in every `mojo build`:

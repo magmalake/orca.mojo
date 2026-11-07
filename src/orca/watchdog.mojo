@@ -38,6 +38,7 @@ from orca.auth import audit
 from orca.fleet import hourly_price
 from orca.html import Html, url_encode
 from orca.json import quote
+from orca.notify import alert, ui_link
 from orca.pause import set_paused
 from orca.state import State
 from orca.system import system_now
@@ -678,6 +679,30 @@ def trip(mut db: State, r: Reading) raises -> List[String]:
             "- paused",
             joined,
         )
+        try:
+            _ = alert(
+                db,
+                "watchdog",
+                r.rule,
+                "high",
+                "rotating_light,warning",
+                String("orca watchdog: ", r.rule, " tripped"),
+                String(
+                    "Rule ",
+                    r.rule,
+                    ": ",
+                    _fx(r.value),
+                    " against a limit of ",
+                    _fx(r.threshold),
+                    ". ",
+                    r.detail,
+                    "\nPaused: ",
+                    joined.replace(",", ", "),
+                ),
+                ui_link("/ops/control"),
+            )
+        except e:
+            print("orca: notify: can't record the watchdog alert:", e)
     return paused^
 
 
