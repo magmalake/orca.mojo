@@ -48,7 +48,13 @@ The header is four cards, side by side on a wide screen:
 - **Resources**: what its last 20 measured runs used, the median (p50)
   and the most of each run's peak memory, CPU time and peak cores: what
   to ask for in a request (#171). It's `usage` in the page's JSON. See
-  [What a run uses](#what-a-run-uses).
+  [What a run uses](#what-a-run-uses). A pipeline with a request
+  (`cpus`, `memory_gb` in [orca.toml](orca-toml.md#requests-and-grants))
+  has it here too, as **Requested**, and `request` in the JSON.
+
+While its oldest queued run waits for room on its host, the Progress card
+says why under **Waiting** (`waiting: needs 2 GB, 1.3 GB free of grants`),
+and the JSON has it as `waiting` (null otherwise).
 
 Each fact's name has a "?" that explains it, with a link to the docs.
 Steps shows a Graph and a Table tab (`?steps=graph|table`). Hovering any
@@ -83,6 +89,15 @@ step's latest attempt's; an attempt's page has its own. Runs tables have
 a Peak column. In the JSON, a run, each step and each attempt have
 `usage`, with `null` for what wasn't measured. `orca status <pipeline>`
 prints each run's, and `<binary> status <run>` each step's.
+
+A run of a pipeline with a request also has **Requested** (what its
+latest start asked for) and **Granted** (what it was given of its host, in
+`ORCA_GRANT_CPUS` and `ORCA_GRANT_MEMORY_MB`), beside its peak: a peak
+well under the grant means the request can come down, one at the grant
+that it may need more. The run's JSON has `request` (`cpus`, `memory_gb`)
+and `grant` (`cpus`, `memory_mb`), both null for a pipeline without one.
+A queued run held for room shows why under **Held**, and `held` in the
+JSON.
 
 Not measured: runs on EC2 or Kubernetes (their machines' samples are under
 Machines), runs no scheduler or worker started (`<binary> run`), and on

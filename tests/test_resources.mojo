@@ -1,0 +1,197 @@
+"""Requests, admission and grants (orca.resources): the parsing, what fits,
+the grants and the reason a run waits, and `auto`."""
+
+from std.os import setenv, unsetenv
+from std.testing import (
+    TestSuite,
+    assert_equal,
+    assert_false,
+    assert_raises,
+    assert_true,
+)
+
+from orca.resources import (
+    Grant,
+    Request,
+    Room,
+    admit,
+    auto_count,
+    canonical_cpus,
+    canonical_memory_gb,
+    gb_text,
+    host_capacity,
+    host_room,
+    parse_cpus,
+    parse_memory_gb,
+    resolve_auto,
+    run_env,
+)
+
+
+def test_parse_cpus() raises:
+    assert_equal(parse_cpus("4")[0], 4)
+    assert_equal(parse_cpus("4")[1], 4)
+    assert_equal(parse_cpus("1..16")[0], 1)
+    assert_equal(parse_cpus("1..16")[1], 16)
+    assert_equal(canonical_cpus("2..2"), "2")
+    assert_equal(canonical_cpus("1..16"), "1..16")
+    for bad in ["0", "0..4", "4..2", "1..2000", "x", "1.5", "", "..4"]:
+        with assert_raises(contains="CPUs"):
+            _ = parse_cpus(bad)
+
+
+def test_parse_memory_gb() raises:
+    assert_equal(parse_memory_gb("2..24")[0], 2048)
+    assert_equal(parse_memory_gb("2..24")[1], 24 * 1024)
+    assert_equal(parse_memory_gb("0.5")[0], 512)
+    assert_equal(parse_memory_gb("0.5")[1], 512)
+    assert_equal(canonical_memory_gb("2..24"), "2..24")
+    assert_equal(canonical_memory_gb("2.0..24"), "2..24")
+    assert_equal(canonical_memory_gb("1.5..1.5"), "1.5")
+    assert_equal(canonical_memory_gb("8"), "8")
+    for bad in ["0", "-1", "24..2", "0..2", "x", "1..70000", ""]:
+        with assert_raises(contains="GB"):
+            _ = parse_memory_gb(bad)
+
+
+def test_gb_text() raises:
+    assert_equal(gb_text(2048), "2")
+    assert_equal(gb_text(1331), "1.3")
+    assert_equal(gb_text(0), "0")
+    assert_equal(gb_text(-5), "0")
+
+
+def test_request_of() raises:
+    var none = Request.of("", "")
+    assert_false(none.any())
+    var r = Request.of("1..16", "2..24")
+    assert_true(r.any())
+    assert_equal(r.cpus_min, 1)
+    assert_equal(r.memory_max_mb, 24 * 1024)
+    assert_true(Request.of("", "1").any())
+
+
+def test_admit_grants_up_to_the_maximum_then_what_is_left() raises:
+    var room = Room(8, 8192, 9, 9728)
+    var got = admit(Request.of("1..6", "2..5"), room, 0, 0, 3)
+    assert_equal(len(got[0]), 2)
+    assert_equal(got[0][0].cpus, 6)
+    assert_equal(got[0][0].memory_mb, 5120)
+    # The second gets what the first left: 2 CPUs, 3 GB.
+    assert_equal(got[0][1].cpus, 2)
+    assert_equal(got[0][1].memory_mb, 3072)
+    # The third's 2 GB and 1 CPU don't fit in the nothing left.
+    assert_equal(
+        got[1],
+        (
+            "waiting: needs 2 GB, 0 GB free of grants; needs 1 CPU, 0 free of"
+            " grants"
+        ),
+    )
+
+
+def test_admit_counts_the_running_runs_grants() raises:
+    var room = Room(4, 6144, 5, 7680)
+    var got = admit(Request.of("", "2..4"), room, 0, 4813, 1)
+    assert_equal(len(got[0]), 0)
+    assert_equal(got[1], "waiting: needs 2 GB, 1.3 GB free of grants")
+    got = admit(Request.of("2", ""), room, 3, 0, 2)
+    assert_equal(len(got[0]), 0)
+    assert_equal(got[1], "waiting: needs 2 CPUs, 1 free of grants")
+    got = admit(Request.of("2", "3"), room, 3, 4096, 1)
+    assert_equal(
+        got[1],
+        (
+            "waiting: needs 3 GB, 2 GB free of grants; needs 2 CPUs, 1 free of"
+            " grants"
+        ),
+    )
+    # A grant of only the resource asked for.
+    got = admit(Request.of("2", ""), room, 0, 0, 1)
+    assert_equal(got[0][0].cpus, 2)
+    assert_equal(got[0][0].memory_mb, 0)
+    assert_equal(got[1], "")
+
+
+def test_admit_more_than_the_host() raises:
+    var room = Room(3, 6656, 4, 8192)
+    var got = admit(Request.of("", "30"), room, 0, 0, 1)
+    assert_equal(
+        got[1],
+        "waiting: needs 30 GB, more than the 6.5 GB this host grants at most",
+    )
+    got = admit(Request.of("1", ""), room, 3, 0, 1, "worker bgent-1")
+    assert_equal(
+        got[1], "waiting: needs 1 CPU, 0 free of grants on worker bgent-1"
+    )
+
+
+def test_run_env() raises:
+    var env: List[Tuple[String, String]] = [
+        ("DISTA_WORKER_SLOTS", "auto"),
+        ("GHARCHIVE_PARALLEL", "auto"),
+        ("X", "1"),
+    ]
+    var got = run_env(env, Grant(8, 4096), ["ORCA_WORKERS=2"])
+    assert_equal(len(got), 6)
+    assert_equal(got[0], "DISTA_WORKER_SLOTS=4")
+    assert_equal(got[1], "GHARCHIVE_PARALLEL=auto")
+    assert_equal(got[2], "X=1")
+    assert_equal(got[3], "ORCA_GRANT_CPUS=8")
+    assert_equal(got[4], "ORCA_GRANT_MEMORY_MB=4096")
+    assert_equal(got[5], "ORCA_WORKERS=2")
+    got = run_env(env, Grant(1, 0), ["ORCA_WORKERS=4"])
+    assert_equal(got[0], "DISTA_WORKER_SLOTS=1")
+    assert_equal(len(got), 5)
+    got = run_env(env, Grant.none())
+    assert_equal(got[0], "DISTA_WORKER_SLOTS=0")
+    assert_equal(len(got), 3)
+    var plain = resolve_auto(env)
+    assert_equal(plain[0][1], "0")
+    assert_equal(plain[1][1], "auto")
+
+
+def test_auto_count() raises:
+    _ = unsetenv("ORCA_TEST_PARALLEL")
+    assert_equal(auto_count("ORCA_TEST_PARALLEL", 16), 16)
+    _ = setenv("ORCA_TEST_PARALLEL", "3")
+    assert_equal(auto_count("ORCA_TEST_PARALLEL", 16), 3)
+    _ = setenv("ORCA_TEST_PARALLEL", "auto")
+    _ = setenv("ORCA_GRANT_CPUS", "6")
+    _ = setenv("ORCA_GRANT_MEMORY_MB", "4000")
+    assert_equal(auto_count("ORCA_TEST_PARALLEL", 16), 6)
+    assert_equal(auto_count("ORCA_TEST_PARALLEL", 16, memory_mb_each=1500), 2)
+    assert_equal(auto_count("ORCA_TEST_PARALLEL", 16, memory_mb_each=9000), 1)
+    _ = setenv("ORCA_TEST_PARALLEL", "many")
+    with assert_raises(contains="a number or auto"):
+        _ = auto_count("ORCA_TEST_PARALLEL", 16)
+    _ = unsetenv("ORCA_TEST_PARALLEL")
+    _ = unsetenv("ORCA_GRANT_CPUS")
+    _ = unsetenv("ORCA_GRANT_MEMORY_MB")
+
+
+def test_host() raises:
+    var cap = host_capacity()
+    assert_true(cap[0] >= 1)
+    assert_true(cap[1] > 0)
+    _ = setenv("ORCA_HOST_CPUS", "4")
+    _ = setenv("ORCA_HOST_MEMORY_MB", "8192")
+    var room = host_room()
+    assert_equal(room.cpus, 3)
+    assert_equal(room.memory_mb, 8192 - 1536)
+    room = host_room(worker=True)
+    assert_equal(room.cpus, 4)
+    assert_equal(room.memory_mb, 8192 - 512)
+    _ = setenv("ORCA_RESERVE_MEMORY_MB", "10000")
+    assert_equal(host_room().memory_mb, 0)
+    _ = setenv("ORCA_RESERVE_CPUS", "two")
+    with assert_raises(contains="ORCA_RESERVE_CPUS"):
+        _ = host_room()
+    _ = unsetenv("ORCA_RESERVE_CPUS")
+    _ = unsetenv("ORCA_RESERVE_MEMORY_MB")
+    _ = unsetenv("ORCA_HOST_CPUS")
+    _ = unsetenv("ORCA_HOST_MEMORY_MB")
+
+
+def main() raises:
+    TestSuite.discover_tests[__functions_in_module()]().run()

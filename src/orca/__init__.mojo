@@ -44,6 +44,7 @@ from orca.pipeline import (
     RunResult,
     StepRun,
 )
+from orca.resources import Grant, auto_count
 from orca.schedule import (
     Cron,
     Current,

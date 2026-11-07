@@ -91,6 +91,8 @@ comptime _REGISTER_VALUED = [
     "--secret",
     "--placement",
     "--max-runs",
+    "--cpus",
+    "--memory-gb",
 ]
 
 
