@@ -167,6 +167,69 @@ h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
 
+/* The pipeline page's cards: Progress, Config and Code side by side where
+   there's room, one above the other where there isn't. */
+.pcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 1rem;
+  align-items: start; margin: 1rem 0 1.25rem; }
+.pcards > .card { margin: 0; }
+.pcards--one { grid-template-columns: 1fr; }
+
+/* The pipeline page's tabs: Overview, Runs and Operate, each its own page. */
+.ptabs { display: flex; gap: 1.5rem; margin: 0 0 1rem; border-bottom: 1px solid var(--border);
+  overflow-x: auto; }
+.ptabs__tab { padding: 0.4rem 0.1rem 0.55rem; margin-bottom: -1px; color: var(--muted);
+  text-decoration: none; border-bottom: 2px solid transparent; white-space: nowrap; }
+.ptabs__tab:hover { color: var(--text); }
+.ptabs__tab[aria-current] { color: var(--text); font-weight: 600; border-bottom-color: var(--ember); }
+.ptabs__tab:focus-visible { outline: 2px solid var(--lake); outline-offset: 2px; border-radius: 2px; }
+.card--facts { overflow: visible; }
+.card--facts > h2 { border-radius: var(--radius) var(--radius) 0 0; }
+.card > .facts, .card > div > .facts { padding: 0.8rem 1.1rem; margin: 0; gap: 0.45rem 1.1rem;
+  font-size: 0.875rem; }
+.card > p.hash { font-size: 0.75rem; color: var(--faint); border-top: 1px solid var(--border);
+  padding: 0.5rem 1.1rem; }
+.card > p.hash code { font-size: 0.95em; color: var(--muted); }
+.card--facts a.src { font-size: 0.8125rem; }
+
+/* The Steps card: its heading with Graph and Table tabs. */
+.steps__head { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center;
+  justify-content: space-between; padding: 0.5rem 1.1rem; border-bottom: 1px solid var(--border);
+  background: var(--surface-2); }
+.steps__head h2 { font-size: 0.9375rem; margin: 0; }
+.steps__graph { padding: 0.5rem 1.1rem; }
+.steps__head .vtabs { margin: 0; }
+a.vtabs__tab { display: inline-block; text-decoration: none; }
+
+/* A "?" after a fact's name: its help on hover or keyboard focus. */
+.help { position: relative; display: inline-block; margin-left: 0.35rem; vertical-align: 0.08em; }
+.help__btn { display: inline-grid; place-items: center; width: 1rem; height: 1rem; padding: 0;
+  border-radius: 50%; font: 600 0.625rem/1 var(--sans); color: var(--faint);
+  background: transparent; border: 1px solid var(--border-strong); cursor: help; }
+.help__btn:hover, .help:focus-within .help__btn { color: var(--lake); border-color: var(--lake); }
+.help__tip { display: none; position: absolute; z-index: 20; top: calc(100% + 0.4rem); left: -0.6rem;
+  width: max-content; max-width: min(20rem, 80vw); padding: 0.55rem 0.75rem; text-align: left;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow); font: 400 0.8125rem/1.45 var(--sans);
+  letter-spacing: 0; text-transform: none; white-space: normal; }
+.help__tip::before { content: ""; position: absolute; left: 0; right: 0; top: -0.5rem; height: 0.5rem; }
+.help:hover .help__tip, .help:focus-within .help__tip { display: block; }
+.help.help--shut .help__tip { display: none; }
+
+/* A function's source, shown on hovering a link to it. */
+.peek { position: absolute; z-index: 30; width: min(42rem, calc(100vw - 1rem));
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow); overflow: hidden; }
+.peek__head { padding: 0.35rem 0.75rem; font: 0.75rem var(--mono); color: var(--muted);
+  background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.peek__head span { color: var(--faint); }
+.peek pre { margin: 0; padding: 0.4rem 0; max-height: 24rem; overflow: auto; white-space: pre;
+  font-size: 0.75rem; line-height: 1.5; }
+.peek__line { display: block; padding-right: 0.75rem; }
+.peek__line--at { background: color-mix(in srgb, var(--lake) 12%, transparent); }
+.peek__ln { display: inline-block; width: 3.4em; padding-right: 0.9em; text-align: right;
+  color: var(--faint); user-select: none; }
+.peek__msg { margin: 0; padding: 0.6rem 0.75rem; color: var(--muted); font-size: 0.8125rem; }
+
 /* Forms: filters, actions, and logging in. */
 .filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: end; margin-bottom: 1rem; }
 .filters label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }

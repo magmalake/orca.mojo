@@ -16,6 +16,51 @@
   `tests/config.sh`. Still to do: drift warnings, `[stack]` read by
   `orca aws up`, and a register flag for per-pipeline env.
 
+- **The watchdog shows every threshold a rule checks, and which one
+  tripped** (#180). `control` printed one limit (85, disk's) while it
+  tripped on memory's 90. Each rule now keeps a check per threshold
+  (`orca.watchdog.limits`: `control` memory and disk, `cost` the sustained
+  rate and the day, `failing` the count and the share, `idle` the CPU and
+  the workers, `launches` and `stuck` one each) with its value, limit and
+  whether it is past it, on its reading and on each trip (a `checks` jsonb
+  column on `orca.watchdog_rules` and `orca.watchdog_trips`, migration 34).
+  `orca watchdog status` prints `control   memory 98.30 % (trips over
+  90.00, past), disk 10.60 % (trips over 85.00)  TRIPPED on memory`;
+  `/watchdog` has a Checks column and says what a trip tripped on;
+  `/api/watchdog` adds `checks` and `tripped_on` to rules and trips
+  (`value` and `threshold` stay). `tests/watchdog.sh` has a control trip.
+
+- **The pipeline page has three tabs**, each its own page (`?tab=`), so
+  links and the back button work without scripts: **Overview** (the
+  cards, Steps, keys, snapshots not run, Next runs), **Runs** (its runs
+  and Versions) and **Operate** (Coverage beside Start runs and Stop
+  runs, since the calendar is where days are picked). The name, Pause and
+  the live Progress card are on every tab. `?cal=` and `?preview=` open
+  Operate, a link to `#coverage`, `#start` or `#stop` is sent there, and
+  a refused start, backfill or cancel goes back to it.
+
+- **The pipeline page's header is three cards.** Progress (runs at once,
+  the fill, a failing sensor, the next run, a link to the coverage),
+  Config (partitions, schedule, run retries, placement, binary) and Code,
+  side by side on a wide screen and stacked on a phone. Progress refreshes
+  itself every 5 s from the new `/pipelines/<name>/progress` fragment.
+  Each fact's name has a "?" that explains it, on hover or keyboard
+  focus, with a link to the docs. The Code card names the pipeline, its
+  steps and its dista tasks, each linked to its line (file and line in
+  the title), with the code hash in small print under them; the two Code
+  lines are gone.
+- **Hovering a link to code shows the code.** On every page, a link to a
+  line on GitHub shows that function, from its def through its docstring
+  (up to 24 lines), fetched from raw.githubusercontent.com once per file;
+  for a private repository it says it can't, and the link still opens it.
+- **Steps: Graph and Table tabs.** The graph is shown first for a pipeline
+  of more than one step, the table for one step; the choice is remembered
+  in the browser, and `?steps=graph|table` links work without scripts.
+- **Relative times and live pages work again in browsers.** The page
+  script built an `Intl.DateTimeFormat` with `dateStyle` and
+  `timeZoneName` together, which browsers refuse; the error stopped the
+  script, so times stayed UTC and `data-poll` parts never refreshed.
+
 - **`deploy/hetzner/deploy.sh` pauses, waits and resumes by itself.** It
   quiesces (pauses the pipelines that aren't paused, waits for running runs,
   listing them each minute; `--timeout`), deploys, then unpauses what it

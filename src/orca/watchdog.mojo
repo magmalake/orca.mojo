@@ -25,6 +25,13 @@ its limit when a pipeline is unpaused trips again on the next pass, so
 snooze it (`orca watchdog snooze <rule> 2h`, or on `/watchdog`) first;
 that is stored in `orca.watchdog_rules` and audited.
 
+A rule checks one threshold or more (`limits`: `control` checks memory
+and disk, `cost` the sustained rate and the day, `failing` the count and
+the share, `idle` the CPU and the number of workers). Each reading keeps
+every check's value and limit and whether it is past it, and so does each
+trip, so `orca watchdog status`, `/watchdog` and `/api/watchdog` show
+every threshold and which one tripped.
+
 Evaluation is pure (`eval_*`, over plain rows) apart from the gathering
 (`gather_*`).
 """
@@ -169,6 +176,152 @@ def config() raises -> Config:
 
 
 @fieldwise_init
+struct Check(Copyable, Movable):
+    """One threshold a rule checks, and what it saw against it."""
+
+    var name: String
+    var value: Float64
+    """-1 when there is nothing to judge."""
+    var limit: Float64
+    var unit: String
+    var op: String
+    """How the value trips it: `over`, `under` or `at least` the limit."""
+    var past: Bool
+    """The value is past the limit (the rule trips when all of its
+    conditions are; for `idle` both checks must be past)."""
+
+
+def limits(c: Config, rule: String) -> List[Check]:
+    """The thresholds `rule` checks, with no values yet."""
+    var out = List[Check]()
+    if rule == "launches":
+        out.append(
+            Check(
+                "launched", -1.0, Float64(c.launches), " in 1h", "over", False
+            )
+        )
+    elif rule == "cost":
+        out.append(
+            Check(
+                String("rate for ", c.cost_minutes, "m"),
+                -1.0,
+                c.cost_hour,
+                " $/h",
+                "over",
+                False,
+            )
+        )
+        out.append(Check("day", -1.0, c.cost_day, " $/24h", "over", False))
+    elif rule == "idle":
+        out.append(
+            Check(
+                String("cpu for ", c.idle_minutes, "m"),
+                -1.0,
+                c.idle_cpu,
+                " %",
+                "under",
+                False,
+            )
+        )
+        out.append(
+            Check(
+                "workers",
+                -1.0,
+                Float64(c.idle_workers),
+                "",
+                "at least",
+                False,
+            )
+        )
+    elif rule == "failing":
+        out.append(
+            Check("failed", -1.0, Float64(c.failed), " in 1h", "over", False)
+        )
+        out.append(
+            Check(
+                "failed share",
+                -1.0,
+                c.failed_percent,
+                String(" % of ", c.failed_min, "+"),
+                "over",
+                False,
+            )
+        )
+    elif rule == "stuck":
+        out.append(
+            Check(
+                "quiet",
+                -1.0,
+                Float64(c.stuck_minutes),
+                " min",
+                "at least",
+                False,
+            )
+        )
+    elif rule == "control":
+        out.append(Check("memory", -1.0, c.memory, " %", "over", False))
+        out.append(Check("disk", -1.0, c.disk, " %", "over", False))
+    return out^
+
+
+def _see(mut checks: List[Check], i: Int, value: Float64, past: Bool):
+    checks[i].value = value
+    checks[i].past = past
+
+
+def checks_json(checks: List[Check]) -> String:
+    var out = String("[")
+    for i in range(len(checks)):
+        ref k = checks[i]
+        out.write(
+            ", " if i else "",
+            '{"name": ',
+            quote(k.name),
+            ', "value": ',
+            _fx(k.value, 2) if k.value >= 0 else String("null"),
+            ', "limit": ',
+            _fx(k.limit, 2),
+            ', "unit": ',
+            quote(k.unit),
+            ', "op": ',
+            quote(k.op),
+            ', "past": ',
+            "true" if k.past else "false",
+            "}",
+        )
+    out.write("]")
+    return out^
+
+
+def parse_checks(text: String) raises -> List[Check]:
+    """`checks_json`'s text back (empty: none)."""
+    var out = List[Check]()
+    if not text:
+        return out^
+    var v = loads(text)
+    for k in v.array_items():
+        out.append(
+            Check(
+                k["name"].string_value(),
+                k["value"].float_value() if not k["value"].is_null() else -1.0,
+                k["limit"].float_value(),
+                k["unit"].string_value(),
+                k["op"].string_value(),
+                k["past"].bool_value(),
+            )
+        )
+    return out^
+
+
+def past_names(checks: List[Check]) -> List[String]:
+    var out = List[String]()
+    for k in checks:
+        if k.past:
+            out.append(k.name)
+    return out^
+
+
+@fieldwise_init
 struct Reading(Copyable, Movable):
     """What a rule saw: its current value against its threshold, and if
     that is a trip, why and which pipelines."""
@@ -177,9 +330,12 @@ struct Reading(Copyable, Movable):
     var value: Float64
     """-1 when there is nothing to judge (no samples)."""
     var threshold: Float64
+    """The limit of the check nearest it (`value` is that check's)."""
     var tripped: Bool
     var detail: String
     var pipelines: List[String]
+    var checks: List[Check]
+    """Every threshold the rule checks (`limits`), with its value."""
 
 
 def _fx(x: Float64, digits: Int = 1) -> String:
@@ -196,16 +352,22 @@ def _fx(x: Float64, digits: Int = 1) -> String:
     return s^
 
 
-def _ok(rule: String, value: Float64, threshold: Float64) -> Reading:
-    return Reading(rule, value, threshold, False, String(), List[String]())
+def _ok(
+    rule: String, value: Float64, threshold: Float64, var checks: List[Check]
+) -> Reading:
+    return Reading(
+        rule, value, threshold, False, String(), List[String](), checks^
+    )
 
 
 def eval_launches(
     c: Config, launched: Int, everything: List[String]
 ) -> Reading:
     """`launched` instances in the last hour against the limit."""
+    var k = limits(c, "launches")
+    _see(k, 0, Float64(launched), launched > c.launches)
     if launched <= c.launches:
-        return _ok("launches", Float64(launched), Float64(c.launches))
+        return _ok("launches", Float64(launched), Float64(c.launches), k^)
     return Reading(
         "launches",
         Float64(launched),
@@ -218,6 +380,7 @@ def eval_launches(
             ")",
         ),
         everything.copy(),
+        k^,
     )
 
 
@@ -262,9 +425,16 @@ def eval_cost(
     """The rate now (the reading's value), the lowest it was at each minute
     of the sustain period, and the last 24 hours' spend. On the local
     runner (`fixed_price`) there is nothing to price: no reading, no trip."""
+    var k = limits(c, "cost")
     if c.fixed_price:
         return Reading(
-            "cost", -1.0, c.cost_hour, False, "fixed price", List[String]()
+            "cost",
+            -1.0,
+            c.cost_hour,
+            False,
+            "fixed price",
+            List[String](),
+            k^,
         )
     var now_rate = cost_rate(leases, 0.0, c.control_price)
     var lowest = now_rate
@@ -273,6 +443,8 @@ def eval_cost(
             lowest, cost_rate(leases, Float64(m * 60), c.control_price)
         )
     var day = cost_spent(leases, 86400.0, c.control_price)
+    _see(k, 0, lowest, lowest > c.cost_hour)
+    _see(k, 1, day, day > c.cost_day)
     var detail = String()
     if lowest > c.cost_hour:
         detail = String(
@@ -294,9 +466,9 @@ def eval_cost(
             ")",
         )
     if not detail:
-        return _ok("cost", now_rate, c.cost_hour)
+        return _ok("cost", now_rate, c.cost_hour, k^)
     return Reading(
-        "cost", now_rate, c.cost_hour, True, detail, everything.copy()
+        "cost", now_rate, c.cost_hour, True, detail, everything.copy(), k^
     )
 
 
@@ -305,8 +477,11 @@ def eval_idle(
 ) -> Reading:
     """`workers` up for the whole window, averaging `cpu` percent over it
     (-1: no samples)."""
+    var k = limits(c, "idle")
+    _see(k, 0, cpu, cpu >= 0 and cpu < c.idle_cpu)
+    _see(k, 1, Float64(workers), workers >= c.idle_workers)
     if workers < c.idle_workers or cpu < 0 or cpu >= c.idle_cpu:
-        return _ok("idle", cpu, c.idle_cpu)
+        return _ok("idle", cpu, c.idle_cpu, k^)
     return Reading(
         "idle",
         cpu,
@@ -323,6 +498,7 @@ def eval_idle(
             "%)",
         ),
         pipelines.copy(),
+        k^,
     )
 
 
@@ -337,16 +513,25 @@ struct Counts(Copyable, Movable):
 
 def eval_failing(c: Config, counts: List[Counts]) -> Reading:
     """Pipelines over either failure limit; the value is the most failed
-    attempts any had."""
+    attempts any had; the share check's, the highest share of a pipeline
+    with at least `failed_min` attempts ended."""
     var worst = 0
+    var share = -1.0
     var detail = String()
     var out = List[String]()
+    var checks = limits(c, "failing")
     for k in counts:
         worst = max(worst, k.failed)
         var many = k.failed > c.failed
         var half = k.total >= c.failed_min and Float64(
             k.failed
         ) * 100.0 > c.failed_percent * Float64(k.total)
+        if k.total >= c.failed_min and k.total > 0:
+            share = max(share, Float64(k.failed) * 100.0 / Float64(k.total))
+        if many:
+            checks[0].past = True
+        if half:
+            checks[1].past = True
         if many or half:
             out.append(k.pipeline)
             detail.write(
@@ -358,10 +543,18 @@ def eval_failing(c: Config, counts: List[Counts]) -> Reading:
                 k.total,
                 " attempts failed in the last hour",
             )
+    checks[0].value = Float64(worst)
+    checks[1].value = share
     if len(out) == 0:
-        return _ok("failing", Float64(worst), Float64(c.failed))
+        return _ok("failing", Float64(worst), Float64(c.failed), checks^)
     return Reading(
-        "failing", Float64(worst), Float64(c.failed), True, detail, out^
+        "failing",
+        Float64(worst),
+        Float64(c.failed),
+        True,
+        detail,
+        out^,
+        checks^,
     )
 
 
@@ -396,23 +589,31 @@ def eval_stuck(c: Config, runs: List[Quiet]) -> Reading:
                 _fx(r.minutes, 0),
                 " minutes",
             )
+    var k = limits(c, "stuck")
+    _see(k, 0, worst, worst >= Float64(c.stuck_minutes))
     if len(out) == 0:
-        return _ok("stuck", worst, Float64(c.stuck_minutes))
-    return Reading("stuck", worst, Float64(c.stuck_minutes), True, detail, out^)
+        return _ok("stuck", worst, Float64(c.stuck_minutes), k^)
+    return Reading(
+        "stuck", worst, Float64(c.stuck_minutes), True, detail, out^, k^
+    )
 
 
 def eval_control(
     c: Config, have: Bool, mem: Float64, disk: Float64, everything: List[String]
 ) -> Reading:
     """The newest minute's memory and fullest disk (`have` false: no fresh
-    samples). The value is whichever is nearer its limit, in percent."""
+    samples). The value is whichever is nearer its limit, in percent; the
+    checks have both."""
+    var k = limits(c, "control")
     if not have:
-        return _ok("control", -1.0, c.memory)
+        return _ok("control", -1.0, c.memory, k^)
+    _see(k, 0, mem, mem > c.memory)
+    _see(k, 1, disk, disk > c.disk)
     var by_disk = disk / c.disk > mem / c.memory
     var value = disk if by_disk else mem
     var limit = c.disk if by_disk else c.memory
     if mem <= c.memory and disk <= c.disk:
-        return _ok("control", value, limit)
+        return _ok("control", value, limit, k^)
     var detail = String()
     if mem > c.memory:
         detail = String(
@@ -431,7 +632,7 @@ def eval_control(
             _fx(c.disk, 0),
             "%)",
         )
-    return Reading("control", value, limit, True, detail, everything.copy())
+    return Reading("control", value, limit, True, detail, everything.copy(), k^)
 
 
 # ---------------------------------------------------------------------------
@@ -616,16 +817,18 @@ def _record(mut db: State, r: Reading) raises:
     _ = db.conn.execute(
         (
             "INSERT INTO orca.watchdog_rules (rule, value, threshold, detail,"
-            " checked) VALUES ($1, $2, $3, $4, now()) ON CONFLICT (rule) DO"
-            " UPDATE SET value = EXCLUDED.value, threshold ="
-            " EXCLUDED.threshold, detail = EXCLUDED.detail, checked ="
-            " EXCLUDED.checked"
+            " checked, checks) VALUES ($1, $2, $3, $4, now(),"
+            " $5::text::jsonb) ON CONFLICT (rule) DO UPDATE SET value ="
+            " EXCLUDED.value, threshold = EXCLUDED.threshold, detail ="
+            " EXCLUDED.detail, checked = EXCLUDED.checked, checks ="
+            " EXCLUDED.checks"
         ),
         Params()
         .text(r.rule)
         .float64(r.value)
         .float64(r.threshold)
-        .text(r.detail),
+        .text(r.detail)
+        .text(checks_json(r.checks)),
     )
 
 
@@ -662,14 +865,16 @@ def trip(mut db: State, r: Reading) raises -> List[String]:
         _ = db.conn.execute(
             (
                 "INSERT INTO orca.watchdog_trips (rule, value, threshold,"
-                " detail, pipelines) VALUES ($1, $2, $3, $4, $5)"
+                " detail, pipelines, checks) VALUES ($1, $2, $3, $4, $5,"
+                " $6::text::jsonb)"
             ),
             Params()
             .text(r.rule)
             .float64(r.value)
             .float64(r.threshold)
             .text(r.detail)
-            .text(joined),
+            .text(joined)
+            .text(checks_json(r.checks)),
         )
         print(
             "orca: watchdog rule",
@@ -806,6 +1011,9 @@ struct Trip(Copyable, Movable):
     var id: Int
     var acked_by: String
     """Who kept it paused (acknowledged it), or empty."""
+    var checks: List[Check]
+    """The checks as the trip saw them (empty for a trip from before they
+    were kept)."""
 
 
 def active_trips(mut db: State) raises -> List[Trip]:
@@ -845,6 +1053,7 @@ def _trips(mut db: State, acknowledged: Bool) raises -> List[Trip]:
             " t.at)::float8 AS ago, to_char(t.at AT TIME ZONE 'UTC',"
             " 'YYYY-MM-DD HH24:MI:SS') || ' UTC' AS at, t.value, t.threshold,"
             " t.detail, t.id, coalesce(t.acknowledged_by, '') AS acked,"
+            " coalesce(t.checks::text, '') AS checks,"
             " t.acknowledged_at IS NOT NULL AS is_acked, (SELECT"
             " string_agg(p.name, ',' ORDER BY p.name) FROM orca.pipelines p"
             " WHERE p.paused AND p.name = ANY(string_to_array(t.pipelines,"
@@ -869,6 +1078,7 @@ def _trips(mut db: State, acknowledged: Bool) raises -> List[Trip]:
                 ps^,
                 Int(r.int64("id")),
                 r.text("acked"),
+                parse_checks(r.text("checks")),
             )
         )
     return out^
@@ -886,6 +1096,11 @@ struct RuleRow(Copyable, Movable):
     var tripped: Bool
     var note: String
     """Why the rule has no reading ("fixed price"), or empty."""
+    var checks: List[Check]
+    """Each threshold with its last value (-1 before the first check)."""
+    var tripped_on: List[String]
+    """The checks its unacknowledged trips tripped on (what `tripped`
+    shows)."""
 
 
 def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
@@ -895,9 +1110,17 @@ def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
     var out = List[RuleRow]()
     for name in rule_names():
         var tripped = False
+        var on = List[String]()
         for t in trips:
             if t.rule == name:
                 tripped = True
+                for n in past_names(t.checks):
+                    var seen = False
+                    for o in on:
+                        if o == n:
+                            seen = True
+                    if not seen:
+                        on.append(n)
         var note = String()
         if name == "cost" and c.fixed_price:
             note = "fixed price"
@@ -906,8 +1129,9 @@ def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
                 "SELECT value, threshold, checked IS NOT NULL AS seen,"
                 " coalesce(to_char(snoozed_until AT TIME ZONE 'UTC',"
                 " 'YYYY-MM-DD HH24:MI:SS') || ' UTC', '') AS until,"
-                " snoozed_until > now() AS live, coalesce(snoozed_by, '') AS by"
-                " FROM orca.watchdog_rules WHERE rule = $1"
+                " snoozed_until > now() AS live, coalesce(snoozed_by, '') AS"
+                " by, coalesce(checks::text, '') AS checks FROM"
+                " orca.watchdog_rules WHERE rule = $1"
             ),
             Params().text(name),
         )
@@ -922,11 +1146,16 @@ def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
                     String(),
                     tripped,
                     note,
+                    limits(c, name),
+                    on^,
                 )
             )
             continue
         var r = rows.row(0)
         var live = (not r.is_null("live")) and r.bool("live")
+        var checks = parse_checks(r.text("checks"))
+        if len(checks) == 0:
+            checks = limits(c, name)
         out.append(
             RuleRow(
                 name,
@@ -937,6 +1166,8 @@ def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
                 r.text("by") if live else String(),
                 tripped,
                 note,
+                checks^,
+                on^,
             )
         )
     return out^
@@ -1020,6 +1251,36 @@ def banner_html(mut h: Html, trips: List[Trip]):
     )
 
 
+def _names_json(names: List[String]) -> String:
+    var out = String("[")
+    for i in range(len(names)):
+        out.write(", " if i else "", quote(names[i]))
+    out.write("]")
+    return out^
+
+
+def check_text(k: Check, digits: Int = 2) -> String:
+    """`memory 10.60 % (trips over 90.00)`, and `, past` when it is."""
+    return String(
+        k.name,
+        " ",
+        _fx(k.value, digits) if k.value >= 0 else String("-"),
+        k.unit,
+        " (trips ",
+        k.op,
+        " ",
+        _fx(k.limit, digits),
+        ", past)" if k.past else ")",
+    )
+
+
+def _joined(names: List[String]) -> String:
+    var text = String()
+    for n in names:
+        text.write(", " if text else "", n)
+    return text^
+
+
 def trips_json(trips: List[Trip]) -> String:
     var out = String("[")
     for i in range(len(trips)):
@@ -1042,6 +1303,10 @@ def trips_json(trips: List[Trip]) -> String:
             t.id,
             ', "acknowledged_by": ',
             quote(t.acked_by) if t.acked_by else String("null"),
+            ', "checks": ',
+            checks_json(t.checks),
+            ', "tripped_on": ',
+            _names_json(past_names(t.checks)),
             ', "pipelines": [',
         )
         for k in range(len(t.pipelines)):
@@ -1067,6 +1332,10 @@ def rules_json(rows: List[RuleRow]) -> String:
             quote(r.note) if r.note else String("null"),
             ', "tripped": ',
             "true" if r.tripped else "false",
+            ', "tripped_on": ',
+            _names_json(r.tripped_on),
+            ', "checks": ',
+            checks_json(r.checks),
             ', "snoozed_until": ',
             quote(r.snoozed_until) if r.snoozed_until else String("null"),
             "}",
@@ -1094,22 +1363,26 @@ def watchdog_html(mut h: Html, rows: List[RuleRow], trips: List[Trip]):
         " never resumes them. Checked by the scheduler every",
         " <code>ORCA_WATCHDOG_SECONDS</code>.</p>",
         '<section class="card"><div class="scroll"><table><thead><tr>',
-        "<th>Rule</th><th>Now</th><th>Limit</th><th>State</th><th>Snooze</th>",
+        "<th>Rule</th><th>Checks</th><th>State</th><th>Snooze</th>",
         "</tr></thead><tbody>",
     )
     for r in rows:
         h.raw("<tr><td><code>")
         h.text(r.rule)
-        h.raw('</code></td><td class="num">')
-        if r.value >= 0:
-            h.text(_fx(r.value, 1), unit_of(r.rule))
-        else:
-            h.raw("-")
-        h.raw('</td><td class="num">')
-        h.text(_fx(r.threshold, 1), unit_of(r.rule))
+        h.raw("</code></td><td>")
+        for i in range(len(r.checks)):
+            ref k = r.checks[i]
+            h.raw("<br>" if i else "")
+            if k.past:
+                h.raw('<span class="error">')
+            h.text(check_text(k, 1))
+            if k.past:
+                h.raw("</span>")
         h.raw("</td><td>")
         if r.tripped:
             h.raw('<span class="error">tripped</span>')
+            if len(r.tripped_on) > 0:
+                h.text(" on ", _joined(r.tripped_on))
         elif r.note:
             h.text(r.note)
         elif r.snoozed_until:
@@ -1185,17 +1458,29 @@ def status_lines(json: String) raises -> List[String]:
         var line = String(r["rule"].string_value())
         while line.byte_length() < 10:
             line.write(" ")
-        var val = r["value"]
-        line.write(
-            "now ",
-            _num_text(val),
-            unit_of(r["rule"].string_value()),
-            "  limit ",
-            _num_text(r["threshold"]),
-            "  ",
-        )
+        var checks = List[String]()
+        if "checks" in r:
+            for k in parse_checks(r["checks"].raw_json()):
+                checks.append(check_text(k))
+        if len(checks) > 0:
+            line.write(_joined(checks), "  ")
+        else:  # an older server
+            line.write(
+                "now ",
+                _num_text(r["value"]),
+                unit_of(r["rule"].string_value()),
+                "  limit ",
+                _num_text(r["threshold"]),
+                "  ",
+            )
         if r["tripped"].bool_value():
             line.write("TRIPPED")
+            if "tripped_on" in r:
+                var on = List[String]()
+                for n in r["tripped_on"].array_items():
+                    on.append(n.string_value())
+                if len(on) > 0:
+                    line.write(" on ", _joined(on))
         elif not r["note"].is_null():
             line.write(r["note"].string_value())
         elif not r["snoozed_until"].is_null():

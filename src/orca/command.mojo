@@ -136,7 +136,7 @@ comptime USAGE = """usage:
   orca config check [<orca.toml>] [--secrets]
                 (checks a file as register does, and its instance types,
                 with no database; --secrets reads each secret too)
-  orca watchdog status [--json]     (rules, values, limits, active trips)
+  orca watchdog status [--json]     (rules, each threshold and value, trips)
   orca watchdog snooze <rule> <duration>   (2h, 30m, 1d; off ends it)
   orca watchdog ack [--all|<trip id>]   (keep a trip's pipelines paused and
                                     clear its banner; status still lists it)
