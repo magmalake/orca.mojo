@@ -529,6 +529,27 @@ def _migrations() -> List[List[String]]:
             running text)""",
             "ALTER TABLE orca.runs ADD COLUMN worker bigint",
         ],
+        # Alerts to a person (orca.notify): a row per kind and subject, so a
+        # restart doesn't send an alert again, and one that couldn't be sent
+        # waits there for its retry.
+        [
+            """CREATE TABLE orca.notifications (
+            kind text NOT NULL,
+            subject text NOT NULL,
+            state text NOT NULL,
+            pending boolean NOT NULL DEFAULT false,
+            title text NOT NULL,
+            body text NOT NULL,
+            priority text NOT NULL,
+            tags text NOT NULL,
+            click text NOT NULL,
+            attempts int NOT NULL DEFAULT 0,
+            next_try timestamptz NOT NULL DEFAULT now(),
+            last_sent timestamptz,
+            sent_at timestamptz,
+            last_error text,
+            PRIMARY KEY (kind, subject))""",
+        ],
     ]
 
 

@@ -184,6 +184,32 @@ everything. On an existing database, `ssh root@<ip> orca-stack restore --force
 is in the bucket and needs no restore; only orca's own state (runs, pipelines,
 users) is in the dump. Test a restore before you need one.
 
+## Alerts on your phone (ntfy)
+
+The UI is where problems show, so orca can also push the important ones to
+your phone through [ntfy](https://ntfy.sh): a watchdog trip, a run that
+failed after its last retry, a fill that stalled, a failed nightly backup, the
+disk over 85%, a lost worker, each with a link to the UI. Once:
+
+1. Install the ntfy app (iOS, Android) and subscribe to a topic with a long
+   random name, e.g. the output of `openssl rand -hex 16`. Anyone who knows
+   the topic can read what is sent to it, so treat the name as a secret.
+2. Put the topic in a file on the laptop (mode 600), and its path in
+   `hetzner.env` as `NTFY_TOPIC_FILE`; `up.sh` writes it to
+   `/etc/orca/secrets/orca/ntfy-topic` and sets `ORCA_NOTIFY_SECRET=orca/ntfy-topic`
+   (read through `ORCA_SECRET_FETCH` like the other secrets, never logged).
+   `NTFY_URL` is the server (default `https://ntfy.sh`; a self-hosted one
+   works), `NTFY_TOKEN_FILE` an access token for a protected topic, and
+   `UI_URL` (`https://orca.mlake.dev`) is what the notifications link to
+   (`ORCA_UI_URL`).
+3. `./up.sh`, then `ssh root@<ip> docker exec scheduler orca notify test`:
+   the phone should show "orca: test alert".
+
+Ops > Control lists whether alerts are on and the last ones sent. The same
+alert is sent at most once every 30 minutes (`ORCA_NOTIFY_MIN_SECONDS`), and
+one that could not be sent (ntfy down) waits in Postgres and goes later. The
+nightly backup runs `orca notify --kind backup-failed` on failure.
+
 ## Teardown
 
 ```sh

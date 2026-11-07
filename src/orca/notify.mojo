@@ -1,0 +1,541 @@
+"""Alerts to a person: a push to the owner's phone through ntfy (#184).
+
+A problem is otherwise only visible in the UI. These are raised where
+they're decided (the watchdog's trip, a run failing after its last retry, a
+fill that stopped moving, the control host's disk, a worker that went quiet,
+and `orca notify` from a shell script such as the nightly backup) and sent
+as one HTTP POST of plain text to an ntfy topic URL, with the headers ntfy
+reads:
+
+    Title, Priority (high | default | low), Tags, Click (the UI's link)
+
+**Settings.** None of these is logged, and none is ever in a message.
+
+| Variable | Meaning |
+|---|---|
+| `ORCA_NOTIFY_URL` | a topic URL (`https://ntfy.sh/<long-random-topic>`), or just a server (`https://ntfy.example.com`) when the topic comes from the secret. Unset, and no `ORCA_NOTIFY_SECRET`: no alerts. |
+| `ORCA_NOTIFY_SECRET` | the id of a secret, read with `ORCA_SECRET_FETCH` (`orca.control.fetch_secret`), holding the topic: a name (appended to `ORCA_NOTIFY_URL`, else `https://ntfy.sh`), or a whole URL. The topic is a secret in practice (anyone who knows it can read it). |
+| `ORCA_NOTIFY_TOKEN`, `ORCA_NOTIFY_TOKEN_SECRET` | an ntfy access token for a protected topic, plain or as a secret's id. |
+| `ORCA_NOTIFY_MIN_SECONDS` | 1800: the same alert (kind and subject) is sent at most once per period. |
+| `ORCA_NOTIFY_TIMEOUT_MS` | 5000: how long a send may take. |
+| `ORCA_NOTIFY_FILL_STALL_HOURS` | 2: see `orca.scheduler`. |
+| `ORCA_NOTIFY_DISK_PERCENT` | 85: the control host's fullest disk. |
+| `ORCA_NOTIFY_WORKER_SECONDS` | 300: a worker holding runs, quiet for this long. |
+| `ORCA_UI_URL` | where `Click` goes (`<ORCA_UI_URL>/runs/<id>`, `/ops/control`). |
+
+**Dedup and retries are in Postgres** (`orca.notifications`, a row per kind
+and subject), so a restart doesn't send again. `alert` records the alert as
+firing and tries to send it; one that failed stays pending and `flush`, which
+the scheduler calls on every tick, tries it again after a wait that doubles
+(30 seconds, up to 15 minutes). A send is one POST with a bounded timeout and
+no retry of its own, and a failure is logged without the URL, so a down ntfy
+costs the scheduler at most one timeout a tick, and never an exception.
+`resolve` sends a low-priority 'resolved' once, for an alert that was sent.
+"""
+
+from std.os import getenv
+
+from objectstore.http import Header, HttpClient
+from postgres import Params
+
+from orca.control import fetch_secret
+from orca.html import Html
+from orca.json import quote
+from orca.state import State
+
+comptime DEFAULT_MIN_SECONDS = 1800
+comptime DEFAULT_SERVER = "https://ntfy.sh"
+comptime _FLUSH_BATCH = 5
+
+
+def _number(name: String, default: Int) -> Int:
+    var v = getenv(name)
+    if not v:
+        return default
+    try:
+        return Int(Float64(v))
+    except:
+        return default
+
+
+def min_seconds() -> Int:
+    """`ORCA_NOTIFY_MIN_SECONDS`: how long the same alert is held back."""
+    return _number("ORCA_NOTIFY_MIN_SECONDS", DEFAULT_MIN_SECONDS)
+
+
+def configured() -> Bool:
+    """Whether alerts are on: the URL or the secret naming the topic is set.
+    Reads only the environment (the secret is read when sending)."""
+    return getenv("ORCA_NOTIFY_URL").byte_length() > 0 or (
+        getenv("ORCA_NOTIFY_SECRET").byte_length() > 0
+    )
+
+
+def ui_link(path: String) -> String:
+    """`path` on the UI at `ORCA_UI_URL`, or empty when that isn't set."""
+    var base = String(getenv("ORCA_UI_URL").rstrip("/"))
+    if not base:
+        return String()
+    return String(base, path)
+
+
+@fieldwise_init
+struct Target(Movable):
+    """Where to send, and the token to send with. Never printed."""
+
+    var url: String
+    var token: String
+
+
+def target() raises -> Target:
+    """The topic URL and token from the settings, reading the secrets. The
+    errors say which setting, never a value."""
+    var base = String(getenv("ORCA_NOTIFY_URL").strip())
+    var url = base
+    var secret = getenv("ORCA_NOTIFY_SECRET")
+    if secret:
+        var topic = String()
+        try:
+            topic = String(fetch_secret(secret).strip())
+        except:
+            raise Error("can't read the secret ORCA_NOTIFY_SECRET names")
+        if not topic:
+            raise Error("the secret ORCA_NOTIFY_SECRET names is empty")
+        if "://" in topic:
+            url = topic
+        else:
+            url = String(
+                (base if base else String(DEFAULT_SERVER)).rstrip("/"),
+                "/",
+                topic,
+            )
+    if not url:
+        raise Error("no ORCA_NOTIFY_URL or ORCA_NOTIFY_SECRET")
+    if not (url.startswith("https://") or url.startswith("http://")):
+        raise Error("the notify URL isn't http or https")
+    var token = String(getenv("ORCA_NOTIFY_TOKEN").strip())
+    var token_secret = getenv("ORCA_NOTIFY_TOKEN_SECRET")
+    if not token and token_secret:
+        try:
+            token = String(fetch_secret(token_secret).strip())
+        except:
+            raise Error("can't read the secret ORCA_NOTIFY_TOKEN_SECRET names")
+    return Target(url^, token^)
+
+
+def _header_text(s: String, limit: Int) -> String:
+    """`s` for a header: one line of ASCII (ntfy's headers are), cut."""
+    var out = String()
+    var n = 0
+    for b in s.as_bytes():
+        if n >= limit:
+            break
+        var c = Int(b)
+        out.write("?" if c >= 0x7F else (" " if c < 0x20 else chr(c)))
+        n += 1
+    return out^
+
+
+def post(
+    t: Target,
+    title: String,
+    body: String,
+    priority: String,
+    tags: String,
+    click: String,
+) raises:
+    """One POST to ntfy. Raises a message that holds neither the URL nor the
+    token: `HTTP <status>` for a refusal, else that it couldn't connect."""
+    var h: List[Header] = [
+        Header("Content-Type", "text/plain; charset=utf-8"),
+        Header("User-Agent", "orca-notify"),
+        Header("Title", _header_text(title, 200)),
+        Header(
+            "Priority", _header_text(priority if priority else "default", 20)
+        ),
+    ]
+    if tags:
+        h.append(Header("Tags", _header_text(tags, 100)))
+    if click:
+        h.append(Header("Click", _header_text(click, 500)))
+    if t.token:
+        h.append(Header("Authorization", String("Bearer ", t.token)))
+    var http = HttpClient()
+    http.follow_redirects = False
+    http.verify_tls = True
+    http.timeout_ms = _number("ORCA_NOTIFY_TIMEOUT_MS", 5000)
+    var status = 0
+    try:
+        status = http.request("POST", t.url, h, body.as_bytes()).status
+    except:
+        raise Error("can't reach the ntfy server")
+    if status < 200 or status >= 300:
+        raise Error("HTTP ", status)
+
+
+def send_now(
+    title: String,
+    body: String,
+    priority: String = "default",
+    tags: String = "",
+    click: String = "",
+) raises:
+    """Sends at once, without Postgres: `orca notify test`, and the fallback
+    of `orca notify` when the database isn't there."""
+    post(target(), title, body, priority, tags, click)
+
+
+# ---------------------------------------------------------------------------
+# Dedup and retries (Postgres)
+# ---------------------------------------------------------------------------
+
+
+def alert(
+    mut db: State,
+    kind: String,
+    subject: String,
+    priority: String,
+    tags: String,
+    title: String,
+    body: String,
+    click: String = "",
+) raises -> Bool:
+    """Records the alert `kind` about `subject` as firing and sends it, unless
+    the same one was sent in the last `min_seconds()` (or is pending). Returns
+    whether it will be sent (now, or by a later `flush`). Never raises for a
+    send that fails; Postgres errors do."""
+    if not configured():
+        return False
+    var rows = db.conn.query(
+        (
+            "SELECT state, pending, (last_sent IS NOT NULL AND last_sent >"
+            " now() - make_interval(secs => $3)) AS recent FROM"
+            " orca.notifications WHERE kind = $1 AND subject = $2"
+        ),
+        Params().text(kind).text(subject).float64(Float64(min_seconds())),
+    )
+    if len(rows) == 1:
+        var r = rows.row(0)
+        if r.text("state") == "firing" and r.bool("pending"):
+            # Not delivered yet: the newest words, on the same schedule.
+            _ = db.conn.execute(
+                (
+                    "UPDATE orca.notifications SET title = $3, body = $4,"
+                    " priority = $5, tags = $6, click = $7 WHERE kind = $1"
+                    " AND subject = $2"
+                ),
+                Params()
+                .text(kind)
+                .text(subject)
+                .text(title)
+                .text(body)
+                .text(priority)
+                .text(tags)
+                .text(click),
+            )
+            return True
+        if r.bool("recent"):
+            return False
+    _ = db.conn.execute(
+        (
+            "INSERT INTO orca.notifications (kind, subject, state, pending,"
+            " title, body, priority, tags, click, attempts, next_try) VALUES"
+            " ($1, $2, 'firing', true, $3, $4, $5, $6, $7, 0, now()) ON"
+            " CONFLICT (kind, subject) DO UPDATE SET state = 'firing',"
+            " pending = true, title = EXCLUDED.title, body = EXCLUDED.body,"
+            " priority = EXCLUDED.priority, tags = EXCLUDED.tags, click ="
+            " EXCLUDED.click, attempts = 0, next_try = now()"
+        ),
+        Params()
+        .text(kind)
+        .text(subject)
+        .text(title)
+        .text(body)
+        .text(priority)
+        .text(tags)
+        .text(click),
+    )
+    _ = flush(db)
+    return True
+
+
+def is_firing(mut db: State, kind: String, subject: String) raises -> Bool:
+    """Whether an alert of this kind and subject was raised and not yet
+    resolved."""
+    return (
+        len(
+            db.conn.query(
+                (
+                    "SELECT 1 FROM orca.notifications WHERE kind = $1 AND"
+                    " subject = $2 AND state = 'firing'"
+                ),
+                Params().text(kind).text(subject),
+            )
+        )
+        > 0
+    )
+
+
+def firing_subjects(mut db: State, kind: String) raises -> List[String]:
+    """The subjects of `kind` raised and not yet resolved."""
+    var out = List[String]()
+    for r in db.conn.query(
+        (
+            "SELECT subject FROM orca.notifications WHERE kind = $1 AND state"
+            " = 'firing' ORDER BY subject"
+        ),
+        Params().text(kind),
+    ):
+        out.append(r.text("subject"))
+    return out^
+
+
+def resolve(
+    mut db: State,
+    kind: String,
+    subject: String,
+    title: String,
+    body: String,
+    click: String = "",
+) raises:
+    """Ends a firing alert: a low-priority 'resolved' is sent once, if the
+    alert itself was ever sent. Nothing for an alert that isn't firing."""
+    if not configured():
+        return
+    var rows = db.conn.query(
+        (
+            "UPDATE orca.notifications SET state = 'resolved', pending ="
+            " (last_sent IS NOT NULL), title = $3, body = $4, priority ="
+            " 'low', tags = 'white_check_mark', click = $5, attempts = 0,"
+            " next_try = now() WHERE kind = $1 AND subject = $2 AND state ="
+            " 'firing' RETURNING pending"
+        ),
+        Params().text(kind).text(subject).text(title).text(body).text(click),
+    )
+    if len(rows) == 1 and rows.row(0).bool("pending"):
+        _ = flush(db)
+
+
+def flush(mut db: State) raises -> Int:
+    """Sends the alerts that are pending and due (a few a call), and returns
+    how many were sent. A send that fails is logged and tried again later; it
+    never raises. Postgres errors do."""
+    var due = db.conn.query(
+        (
+            "UPDATE orca.notifications n SET next_try = now() + interval '60"
+            " seconds' WHERE (kind, subject) IN (SELECT kind, subject FROM"
+            " orca.notifications WHERE pending AND next_try <= now() ORDER BY"
+            " next_try LIMIT 5 FOR UPDATE SKIP LOCKED) RETURNING kind, subject,"
+            " title, body, priority, tags, click, attempts"
+        ),
+        Params(),
+    )
+    if len(due) == 0:
+        return 0
+    var sent = 0
+    var t = Optional[Target](None)
+    var why = String()
+    try:
+        t = target()
+    except e:
+        why = String(e)
+    for i in range(len(due)):
+        var r = due.row(i)
+        var kind = r.text("kind")
+        var subject = r.text("subject")
+        var failure = why
+        if t:
+            try:
+                post(
+                    t.value(),
+                    r.text("title"),
+                    r.text("body"),
+                    r.text("priority"),
+                    r.text("tags"),
+                    r.text("click"),
+                )
+                failure = String()
+            except e:
+                failure = String(e)
+        if not failure:
+            _ = db.conn.execute(
+                (
+                    "UPDATE orca.notifications SET pending = false, attempts ="
+                    " 0, last_error = NULL, sent_at = now(), last_sent = CASE"
+                    " WHEN state = 'firing' THEN now() ELSE last_sent END"
+                    " WHERE kind = $1 AND subject = $2"
+                ),
+                Params().text(kind).text(subject),
+            )
+            sent += 1
+            continue
+        var attempts = Int(r.int64("attempts")) + 1
+        var wait = min(30 * (1 << min(attempts - 1, 10)), 900)
+        _ = db.conn.execute(
+            (
+                "UPDATE orca.notifications SET attempts = $3, last_error = $4,"
+                " next_try = now() + make_interval(secs => $5) WHERE kind = $1"
+                " AND subject = $2"
+            ),
+            Params()
+            .text(kind)
+            .text(subject)
+            .int64(Int64(attempts))
+            .text(failure)
+            .float64(Float64(wait)),
+        )
+        print(
+            "orca: notify:",
+            kind,
+            "alert not sent (",
+            failure,
+            "); trying again in",
+            wait,
+            "s",
+        )
+    _ = db.conn.execute(
+        (
+            "DELETE FROM orca.notifications WHERE NOT pending AND coalesce("
+            "sent_at, last_sent) < now() - interval '30 days'"
+        ),
+        Params(),
+    )
+    return sent
+
+
+# ---------------------------------------------------------------------------
+# The UI
+# ---------------------------------------------------------------------------
+
+
+@fieldwise_init
+struct Sent(Copyable, Movable):
+    var kind: String
+    var subject: String
+    var state: String
+    var title: String
+    var priority: String
+    var when: String
+    var ago: Int
+    var pending: Bool
+    var error: String
+
+
+def recent(mut db: State, limit: Int = 8) raises -> List[Sent]:
+    """The alerts last sent or waiting to be, newest first."""
+    comptime ts = '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\''
+    var out = List[Sent]()
+    for r in db.conn.query(
+        String(
+            "SELECT kind, subject, state, title, priority, pending,",
+            " coalesce(last_error, '') AS error, coalesce(to_char(sent_at AT",
+            " TIME ZONE 'UTC', ",
+            ts,
+            "), '') AS sent, coalesce(extract(epoch FROM now() -",
+            " sent_at)::bigint, -1) AS ago FROM orca.notifications WHERE",
+            " sent_at IS NOT NULL OR pending ORDER BY coalesce(sent_at,",
+            " next_try) DESC LIMIT $1",
+        ),
+        Params().int64(Int64(limit)),
+    ):
+        out.append(
+            Sent(
+                r.text("kind"),
+                r.text("subject"),
+                r.text("state"),
+                r.text("title"),
+                r.text("priority"),
+                r.text("sent"),
+                Int(r.int64("ago")),
+                r.bool("pending"),
+                r.text("error"),
+            )
+        )
+    return out^
+
+
+def notify_json(on: Bool, sent: List[Sent]) -> String:
+    """Whether alerts are configured and the last few; never the URL."""
+    var out = String('{"configured": ', "true" if on else "false")
+    out.write(', "min_seconds": ', min_seconds(), ', "recent": [')
+    for i in range(len(sent)):
+        ref s = sent[i]
+        out.write(
+            ", " if i else "",
+            '{"kind": ',
+            quote(s.kind),
+            ', "subject": ',
+            quote(s.subject),
+            ', "state": ',
+            quote(s.state),
+            ', "title": ',
+            quote(s.title),
+            ', "priority": ',
+            quote(s.priority),
+            ', "sent": ',
+            quote(s.when),
+            ', "pending": ',
+            "true" if s.pending else "false",
+            ', "error": ',
+            quote(s.error),
+            "}",
+        )
+    out.write("]}")
+    return out^
+
+
+def _ago(seconds: Int) -> String:
+    if seconds < 0:
+        return String()
+    if seconds < 90:
+        return String(seconds, " s ago")
+    if seconds < 5400:
+        return String(seconds // 60, " min ago")
+    if seconds < 172800:
+        return String(seconds // 3600, " h ago")
+    return String(seconds // 86400, " days ago")
+
+
+def notify_html(mut h: Html, on: Bool, sent: List[Sent]):
+    """Ops > Control's alerts: whether they're configured, and the last few.
+    The topic is a secret, so only whether it is set is shown."""
+    h.raw("<h2>Alerts</h2>")
+    if not on:
+        h.raw(
+            '<p class="muted">Not configured: set <code>ORCA_NOTIFY_URL</code>',
+            " (an ntfy topic URL) to get a push when the watchdog trips, a",
+            " run fails, a fill stalls, the disk fills or a worker is lost;",
+            " <code>orca notify test</code> sends a test message.</p>",
+        )
+        return
+    h.raw("<p>Alerts go to an ntfy topic (not shown: anyone who knows it can")
+    h.raw(
+        " read it); the same alert is sent at most once every ",
+        min_seconds() // 60,
+        " minutes. <code>orca notify test</code> sends a test message.</p>",
+    )
+    if len(sent) == 0:
+        h.raw('<p class="muted">None sent yet.</p>')
+        return
+    h.raw(
+        "<table><thead><tr><th>When</th><th>Kind</th><th>Subject</th>",
+        "<th>Priority</th><th>Message</th><th>Status</th></tr></thead><tbody>",
+    )
+    for s in sent:
+        h.raw('<tr><td title="')
+        h.text(s.when)
+        h.raw('">')
+        h.text(_ago(s.ago) if s.ago >= 0 else String("waiting"))
+        h.raw("</td>")
+        h.cell(s.kind)
+        h.cell(s.subject)
+        h.cell(s.priority)
+        h.cell(s.title)
+        if s.pending:
+            h.raw('<td class="bad">not sent: ')
+            h.text(s.error if s.error else String("waiting"))
+            h.raw("</td>")
+        else:
+            h.cell(String("resolved") if s.state == "resolved" else "sent")
+        h.raw("</tr>")
+    h.raw("</tbody></table>")

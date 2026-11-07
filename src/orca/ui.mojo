@@ -178,6 +178,12 @@ from orca.scheduler import (
     preview_backfill,
     registered,
 )
+from orca.notify import (
+    configured as notify_configured,
+    notify_html,
+    notify_json,
+    recent as recent_alerts,
+)
 from orca.fill import FillStatus, eta_text, fill_status, money, status_json
 from orca.sensors import Link, Rebuild, downstream, plan_rebuild, rebuilds
 from orca.schedule import Schedule
@@ -1982,9 +1988,17 @@ def system_page(mut db: State, range: String) raises -> Page:
     )
     banner_html(h, active_trips(db))
     system_html(h, now, charts, span)
-    return Page(
-        200, system_json(now, charts), _page("Control", "/ops/control", h)
+    var sent = recent_alerts(db)
+    notify_html(h, notify_configured(), sent)
+    var json = system_json(now, charts)
+    var close = json.rfind("}")
+    var with_alerts = String(
+        json[byte=:close],
+        ', "notify": ',
+        notify_json(notify_configured(), sent),
+        "}",
     )
+    return Page(200, with_alerts, _page("Control", "/ops/control", h))
 
 
 def metrics_page(mut db: State) raises -> Page:

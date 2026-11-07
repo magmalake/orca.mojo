@@ -40,6 +40,8 @@ from std.os.path import exists
 from std.sys import argv, exit, stderr
 from std.time import sleep
 
+from postgres import Params
+
 from orca.actions import cancel_runs, pause_pipeline
 from orca.auth import add_user, remove_user, users
 from orca.aws import aws_command
@@ -48,6 +50,13 @@ from orca.civil import now
 from orca.expiry import expirable, expire_argv, maintain_binary
 from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.locate import locate
+from orca.notify import (
+    alert,
+    configured as notify_configured,
+    flush as flush_notify,
+    resolve as resolve_alert,
+    send_now,
+)
 from orca.proc import absolute, binary_seconds, capture
 from orca.remote import (
     Api,
@@ -125,6 +134,13 @@ comptime USAGE = """usage:
   orca watchdog snooze <rule> <duration>   (2h, 30m, 1d; off ends it)
   orca watchdog ack [--all|<trip id>]   (keep a trip's pipelines paused and
                                     clear its banner; status still lists it)
+  orca notify test                  (sends a test message to ORCA_NOTIFY_URL,
+                                    orca.notify)
+  orca notify --kind K [--subject S] [--title T] [--priority high|default|
+              low] [--tags a,b] [--click URL] [--resolved] [message ...]
+                                    (an alert from a script, held back like
+                                    the scheduler's: once per kind and subject
+                                    in ORCA_NOTIFY_MIN_SECONDS)
   orca tick
   orca scheduler
   orca ui
@@ -203,6 +219,132 @@ def _locate(args: List[String]) raises -> Int:
     return 0
 
 
+def _notify(args: List[String]) raises -> Int:
+    """`orca notify`: a message to the person ORCA_NOTIFY_URL reaches
+    (`orca.notify`). `test` sends one at once. Otherwise it's an alert of a
+    kind and subject: recorded in Postgres, so it isn't sent twice in
+    `ORCA_NOTIFY_MIN_SECONDS` and is tried again by the scheduler if ntfy is
+    down; or sent at once when there is no database."""
+    if not notify_configured():
+        print(
+            (
+                "orca: alerts are off: set ORCA_NOTIFY_URL (and the topic's"
+                " secret with ORCA_NOTIFY_SECRET)"
+            ),
+            file=stderr,
+        )
+        return 1
+    if len(args) == 3 and args[2] == "test":
+        try:
+            send_now(
+                "orca: test alert",
+                "If you can read this, orca's alerts reach you.",
+                "default",
+                "white_check_mark",
+            )
+        except e:
+            print("orca: the test alert wasn't sent:", e, file=stderr)
+            return 1
+        print("sent")
+        return 0
+    var kind = String()
+    var subject = String("default")
+    var title = String()
+    var priority = String("default")
+    var tags = String()
+    var click = String()
+    var resolved = False
+    var words = List[String]()
+    var i = 2
+    while i < len(args):
+        var a = args[i]
+        if a == "--resolved":
+            resolved = True
+            i += 1
+        elif (
+            a == "--kind"
+            or a == "--subject"
+            or a == "--title"
+            or a == "--priority"
+            or a == "--tags"
+            or a == "--click"
+        ) and i + 1 < len(args):
+            var v = args[i + 1]
+            if a == "--kind":
+                kind = v
+            elif a == "--subject":
+                subject = v
+            elif a == "--title":
+                title = v
+            elif a == "--priority":
+                priority = v
+            elif a == "--tags":
+                tags = v
+            else:
+                click = v
+            i += 2
+        else:
+            words.append(a)
+            i += 1
+    if not kind:
+        _usage("orca notify needs test, or --kind")
+    if priority not in ["high", "default", "low", "urgent", "min"]:
+        _usage("orca notify --priority is high, default or low")
+    var body = String()
+    for k in range(len(words)):
+        body.write(" " if k else "", words[k])
+    if not title:
+        title = String("orca: ", kind)
+    var url = getenv("ORCA_DATABASE_URL")
+    if url:
+        try:
+            var db = State(url)
+            db.migrate()
+            if resolved:
+                resolve_alert(db, kind, subject, title, body, click)
+                _ = flush_notify(db)
+                print("resolved")
+                return 0
+            var queued = alert(
+                db, kind, subject, priority, tags, title, body, click
+            )
+            if not queued:
+                print("held back: the same alert was sent lately")
+                return 0
+            var waiting = db.conn.query(
+                (
+                    "SELECT 1 FROM orca.notifications WHERE kind = $1 AND"
+                    " subject = $2 AND pending"
+                ),
+                Params().text(kind).text(subject),
+            )
+            if len(waiting) > 0:
+                print(
+                    (
+                        "not sent yet: ntfy didn't answer; the scheduler tries"
+                        " again"
+                    ),
+                    file=stderr,
+                )
+                return 1
+            print("sent")
+            return 0
+        except e:
+            print(
+                "orca: no database for the alert's record (",
+                e,
+                ")",
+                file=stderr,
+            )
+    try:
+        send_now(title, body, priority, tags, click)
+    except e:
+        print("orca: the alert wasn't sent:", e, file=stderr)
+        return 1
+    print("sent")
+    return 0
+
+
 def _command(args: List[String], target: String) raises -> Int:
     if args[1] == "login":
         return login_command(args, target)
@@ -219,6 +361,8 @@ def _command(args: List[String], target: String) raises -> Int:
         return aws_command(args)
     if args[1] == "sample":
         return sample_main(args)
+    if args[1] == "notify":
+        return _notify(args)
     if args[1] == "worker":
         # Talks only to the UI's API, with no database (orca.worker).
         return worker_command(args, target)

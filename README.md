@@ -75,6 +75,7 @@ pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   #
 ./build/orca pause taxi        # the scheduler starts none of its runs until orca unpause taxi
 ./build/orca watchdog status   # the watchdog pauses pipelines on a launch storm, runaway cost, idle workers,
                                # failures or stuck runs; orca watchdog snooze launches 2h silences a rule
+./build/orca notify test        # a push to your phone through ntfy (ORCA_NOTIFY_URL): watchdog trips, failed runs, stalled fills, disk, lost workers
 ./build/orca ui                # http://127.0.0.1:8270: pipelines, runs and datasets, also as JSON; start, resume, rerun, backfill, cancel, pause;
                                # Ops > Control is the machine running the scheduler and UI, Ops > Fleet the EC2 instances launched for runs,
                                # Ops > Workers the remote workers
@@ -170,6 +171,26 @@ revocable. A worker that dies has its runs requeued once their heartbeats
 are stale, and a worker of another image than the pipeline's is given
 nothing. Ops > Workers lists the workers. See
 [docs/workers.md](docs/workers.md).
+
+## Alerts
+
+Problems otherwise show only in the UI. With `ORCA_NOTIFY_URL` set to an
+[ntfy](https://ntfy.sh) topic URL (`https://ntfy.sh/<long-random-topic>`, or
+your own server), orca pushes them to the phone app: a watchdog trip (high
+priority; low when it is acknowledged or unpaused), a run that failed after
+its last retry, a fill with no finished run in `ORCA_NOTIFY_FILL_STALL_HOURS`
+(2), the control host's disk over `ORCA_NOTIFY_DISK_PERCENT` (85), a worker
+quiet for 5 minutes while it held runs, and, from a script,
+`orca notify --kind backup-failed ... "message"`. Each carries ntfy's
+`Title`, `Priority`, `Tags` and `Click` (a link into `ORCA_UI_URL`). The topic
+is a secret in practice: keep it in a file read through `ORCA_SECRET_FETCH`
+(`ORCA_NOTIFY_SECRET=orca/ntfy-topic`; `ORCA_NOTIFY_TOKEN_SECRET` for a
+protected topic) and it is never logged. The same alert (kind and subject) is
+sent at most once per `ORCA_NOTIFY_MIN_SECONDS` (1800), remembered in
+Postgres (`orca.notifications`) across restarts; a send that fails is logged
+and retried with a wait that doubles, and never blocks the scheduler.
+`orca notify test` checks the setup; Ops > Control shows what was sent. See
+`orca.notify` and `orca.alerts`.
 
 ## Running it on one server
 
