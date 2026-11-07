@@ -47,7 +47,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 
 | Key | Type | Default when absent | Replaces the flag | Notes |
 |---|---|---|---|---|
-| `placement` | string: `"control"`, `"ec2"` or `"default"` | `default`, the scheduler's runner (`ORCA_RUNNER`) | `--placement` | `control` runs on the scheduler's host (`orca.control`). |
+| `placement` | string: `"control"`, `"ec2"`, `"worker:<pool>"` or `"default"` | `default`, the scheduler's runner (`ORCA_RUNNER`) | `--placement` | `control` runs on the scheduler's host (`orca.control`). `worker:<pool>` runs on a remote worker of that pool (`orca worker`), never the scheduler: [workers.md](workers.md). |
 | `head_type` | string, an instance type | `ORCA_EC2_HEAD_TYPE`, else `c7g.large` | `--head-type` | Only used on EC2. |
 | `worker_type` | string, an instance type | `ORCA_EC2_WORKER_TYPE`, else `c7g.xlarge` | `--worker-type` | Only used on EC2. |
 | `workers` | integer `N` (at least 1), or string `"MIN..MAX"` | the code's `workers`, else 2; 0 for a pipeline without tasks | `--workers` | With `MIN..MAX`, the run scales between the two. |
@@ -149,6 +149,7 @@ A project's image sets `ORCA_CONFIG`, `ORCA_PIPELINES_DIR`, `ORCA_COMMIT` and `O
   |---|---|
   | local | the run's process environment |
   | control | the run's process environment |
+  | worker:&lt;pool&gt; | the run's process environment, on the worker |
   | Kubernetes | each pod's `env` |
   | EC2 | exported in each instance's script, and passed to its containers |
 

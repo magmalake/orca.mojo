@@ -131,7 +131,10 @@ def test_values_are_checked() raises:
     _refused('[pipelines.a]\nworker_procs = "some"\n', "1 to 256 or auto")
     _refused('[pipelines.a]\nmax_runs = "2"\n', "is a count")
     _refused("[pipelines.a]\nmax_runs = 0\n", "from 1")
-    _refused('[pipelines.a]\nplacement = "moon"\n', "control, ec2 or default")
+    _refused(
+        '[pipelines.a]\nplacement = "moon"\n',
+        "control, ec2, worker:<pool> or default",
+    )
     _refused('[pipelines.a]\nhead_type = "big"\n', "not an instance type")
     _refused("[pipelines.a]\nhead_type = 3\n", "is a string")
     _refused('[pipelines.a]\nsecrets = "x"\n', "is a table")
