@@ -98,12 +98,14 @@ their lineage.
 
 `/datasets/<name>/snapshots/<id>` draws the snapshot's lineage: each box
 a snapshot, each arrow a step that read the snapshot it starts at and
-wrote the one it points to, so data flows left to right. The legend under
+wrote the one it points to, so data flows down. The legend under
 the heading names the boxes: this snapshot (a thick border), one written
 by an orca run (its pipeline and partition on the second line; hover for
 the run and step), a source (dashed), written by something else, and
 another input (dotted) of a step downstream, whose own lineage its page
-has. A box nothing points to sits just left of what read it.
+has. A box nothing points to sits just above what read it. The diagram, like
+`/datasets`' graph of pipelines and datasets, is drawn top to bottom, at
+most two boxes to a row, so it fits a phone and grows downward.
 Below it, **Upstream** is the snapshot and everything it was written
 from, with the run and step that wrote each and what that step read
 (`back` in the JSON), and **Downstream** is everything written from it

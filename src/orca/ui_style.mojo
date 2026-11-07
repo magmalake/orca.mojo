@@ -219,7 +219,7 @@ h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
 .graph__node--other rect { stroke-dasharray: 2 3; }
 .graph__node--other text { opacity: 0.75; }
 .graph__arrow { margin-left: 0.8em; color: var(--faint); }
-.card > .scroll > .graph { margin: 0.5rem 1.1rem; }
+.card > .scroll > .graph { margin: 0.75rem auto; }
 
 /* The Steps card: its heading with Graph and Table tabs. */
 .steps__head { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center;
@@ -351,7 +351,7 @@ a.src:hover .src__out { color: inherit; }
 .dag__box--cancelled rect { stroke-dasharray: 4 3; }
 
 /* The flow of datasets through pipelines. */
-.graph { display: block; margin: 0.5rem 0; font-family: var(--mono); }
+.graph { display: block; margin: 0.5rem auto; font-family: var(--mono); max-width: 100%; height: auto; }
 .graph rect { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1.5; }
 .graph a:hover rect { stroke: var(--lake); }
 .graph__edge { fill: none; stroke: var(--faint); stroke-width: 1.5; }
