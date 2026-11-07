@@ -19,7 +19,6 @@ comptime _GAP_Y = 18
 comptime _PAD = 12
 
 
-@fieldwise_init
 struct Node(Copyable, Movable):
     var label: String
     var sub: String
@@ -28,6 +27,24 @@ struct Node(Copyable, Movable):
     """Empty for no link."""
     var cls: String
     """An extra class, or empty."""
+    var title: String
+    """Its tooltip; empty for the label and the second line."""
+
+    def __init__(
+        out self,
+        label: String,
+        sub: String,
+        kind: String,
+        href: String,
+        cls: String,
+        title: String = "",
+    ):
+        self.label = label
+        self.sub = sub
+        self.kind = kind
+        self.href = href
+        self.cls = cls
+        self.title = title
 
 
 @fieldwise_init
@@ -130,9 +147,7 @@ def graph_svg(nodes: List[Node], edges: List[Edge], label: String) -> String:
             '<g class="',
             cls,
             '"><title>',
-            escape(d.label),
-            " ",
-            escape(d.sub),
+            escape(d.title) if d.title else escape(String(d.label, " ", d.sub)),
             '</title><rect x="',
             x,
             '" y="',

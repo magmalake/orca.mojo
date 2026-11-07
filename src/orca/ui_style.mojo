@@ -192,6 +192,30 @@ h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
 .card--facts a.src { font-size: 0.8125rem; }
 .card > p.card__none { padding: 0.8rem 1.1rem; margin: 0; font-size: 0.875rem; color: var(--muted); }
 
+/* The run page's cards: a line under the heading saying what the card
+   is, a plain warning when its numbers aren't the run's alone, and the
+   run's actions at the foot of its Status card. */
+.card > p.card__sub { padding: 0.55rem 1.1rem; font-size: 0.8125rem; color: var(--muted);
+  border-bottom: 1px solid var(--border); }
+.card > p.card__warn { padding: 0.55rem 1.1rem; font-size: 0.8125rem; color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent); border-bottom: 1px solid var(--border); }
+.card > .actions { margin: 0; padding: 0.7rem 1.1rem 0.9rem; border-top: 1px solid var(--border); }
+.card > .mx__legend { padding: 0.55rem 1.1rem 0; border-bottom: 0; }
+.card > .scroll > .mx { padding: 0 1.1rem; }
+.facts code.env { font-size: 0.8125rem; }
+.steps__graph > .tl { margin: 0.25rem 0; }
+
+/* The lineage diagram's legend. */
+.card > .graph__legend { padding: 0.55rem 1.1rem; font-size: 0.8125rem; }
+.graph__key { display: inline-block; width: 1.4em; height: 0.85em; margin: 0 0.35em 0 0.8em;
+  vertical-align: -0.1em; border: 1.5px solid var(--border-strong); border-radius: 3px;
+  background: var(--surface); }
+.graph__key:first-child { margin-left: 0; }
+.graph__key--start { border: 2.5px solid var(--ember); }
+.graph__key--source { border-style: dashed; }
+.graph__arrow { margin-left: 0.8em; color: var(--faint); }
+.card > .scroll > .graph { margin: 0.5rem 1.1rem; }
+
 /* The Steps card: its heading with Graph and Table tabs. */
 .steps__head { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center;
   justify-content: space-between; padding: 0.5rem 1.1rem; border-bottom: 1px solid var(--border);

@@ -58,11 +58,54 @@ private repository).
 ## A run's page
 
 `/runs/<id>` refreshes itself while the run is queued or running, and
-stops once it has ended. It starts with the run's duration, and the crumb
-links the pipeline's previous and next run (the left and right arrow keys
-follow them). Settings shows the environment the run had, max runs,
-placement and worker settings, with secrets by name only. A run on a
-[remote worker](workers.md) says which worker ran it.
+stops once it has ended. The crumb links the pipeline's previous and next
+run (the left and right arrow keys follow them). The header is five
+cards, side by side on a wide screen and stacked on a phone, each fact's
+name with a "?" that explains it:
+
+| Card | Anchor | What it has |
+|---|---|---|
+| Status | `#status` | duration, created, started, ended, tries, why it waits, is held or failed; Resume, Rerun from and Cancel |
+| Partitions & trigger | `#trigger` | its partitions, and what started it: the rebuild, or the snapshots a sensor saw |
+| Code | `#code` | the pipeline, its steps and dista tasks on one line, each a name linked to its line (hover for the source), the commit and image, the driver log, and the code hash |
+| Resources | `#resources` | the run's own Peak memory and CPU used (see [What a run uses](#what-a-run-uses)), and on Kubernetes what its pods asked for |
+| Settings | `#settings` | where it was placed and ran (a [remote worker](workers.md) by name), max runs, the EC2 settings, its environment, and its secrets by name only |
+
+**Steps** (`#steps`) is one card with three tabs, remembered in the
+browser: **Table** (the default: each step and partition, status,
+attempts, times, peak memory and CPU, log, error), **Timeline** (the
+attempts on the clock, a row per step) and **Graph** (the DAG in the
+run's colours). `?steps=table|timeline|graph` links work without scripts.
+
+**Machines** (`#machines`) is the machines' samples, when the runner
+recorded them, and its subtitle says whose:
+
+| Runner | Machines shows |
+|---|---|
+| local | `local`: the whole machine the scheduler runs on. Other runs, the scheduler and anything else on it count too; when other local or control-placed runs overlapped this one, the card says how many shared it |
+| control placement | `control`: the whole control host, with Postgres, the scheduler and the UI on it; shared the same way |
+| EC2 | `head-<id>` and `worker-<id>`: each of the run's own instances, a whole machine |
+| Kubernetes | each pod's samples: CPU, memory and disk io are the node's, which other pods share; network is the pod's own |
+| remote worker | nothing: a worker measures only the run's processes, which are in Resources |
+
+So Machines is never the run's own use; Resources is. Below it come
+Instances (`#instances`, EC2), the Dista timeline (`#timeline`), Actions
+(`#audit`, who did what from the UI or `orca`) and **Snapshots**
+(`#tables`): the table snapshots each step read and wrote, linked to
+their lineage.
+
+## A snapshot's lineage
+
+`/datasets/<name>/snapshots/<id>` draws the snapshot's lineage: each box
+a snapshot, each arrow a step that read the snapshot it starts at and
+wrote the one it points to, so data flows left to right. The legend under
+the heading names the boxes: this snapshot (a thick border), one written
+by an orca run (its pipeline and partition on the second line; hover for
+the run and step), and a source (dashed), written by something else.
+Below it, **Upstream** is the snapshot and everything it was written
+from, with the run and step that wrote each and what that step read
+(`back` in the JSON), and **Downstream** is everything written from it
+(`forward`), up to 20 steps away either way.
 
 ### What a run uses
 
