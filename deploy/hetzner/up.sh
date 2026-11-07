@@ -111,6 +111,7 @@ remote mountpoint -q /mnt/orca-data
     echo "ORCA_PUBLIC_WAREHOUSE=s3://$BUCKET/warehouse"
     echo "ORCA_LOGS=s3://$BUCKET/logs"
     echo "ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE"
+    [ -z "${FIXED_COST:-}" ] || echo "ORCA_FIXED_COST=$FIXED_COST"
     if [ -n "${EXTRA_ENV_FILE:-}" ] && [ -r "$EXTRA_ENV_FILE" ]; then cat "$EXTRA_ENV_FILE"; fi
 } > "$tmp/settings.env"
 put 600 /etc/orca/settings.env "$tmp/settings.env"

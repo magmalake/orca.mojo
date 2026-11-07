@@ -29,7 +29,10 @@ Cloudflare ---- tunnel ------>| cloudflared -> ui:8270, console:8080            
 1. **Hetzner Cloud**: a project, and an API token with read & write
    (Security > API tokens). On the laptop: `hcloud context create orca` and
    paste the token (it stays in hcloud's config, not in this repo).
-2. **Object Storage** (same console, same location as the server): a bucket,
+2. **Object Storage** (same console): a bucket, in the **same location as
+   the server** (`LOCATION` in `hetzner.env`). A bucket in another location
+   works (it was tried with the bucket in nbg1 and the server in fsn1), but
+   every byte of the warehouse and the logs then crosses locations. And
    and S3 credentials (access key and secret). Put them in a file of two
    lines, `AWS_ACCESS_KEY_ID=...` and `AWS_SECRET_ACCESS_KEY=...`, mode 600.
 3. **Cloudflare**: Zero Trust > Networks > Tunnels > create a tunnel
@@ -38,16 +41,24 @@ Cloudflare ---- tunnel ------>| cloudflared -> ui:8270, console:8080            
    `orca.mlake.dev` to service `http://ui:8270`, and `census.mlake.dev` to
    `http://console:8080`. (If those names are on the AWS stack, Cloudflare
    replaces their DNS records with the tunnel's CNAME; if it can't create the
-   CNAME, delete the existing A records for the names first.) The CNAMEs must
-   be **Proxied** (orange cloud): DNS-only resolves to a private `fd10::`
-   address and the site is unreachable. The tunnel runs over HTTP/2
+   CNAME, delete the existing A (and AAAA) records for the names first: a
+   name that already has an A record cannot also get the tunnel's CNAME, and
+   Cloudflare says so only when you save the hostname.) The CNAMEs must
+   be **Proxied** (orange cloud): a DNS-only CNAME resolves to a private
+   `fd10::` address and the site is unreachable. The tunnel runs over HTTP/2
    (`TUNNEL_TRANSPORT_PROTOCOL=http2`, set by `orca-stack` unless
    `tunnel.env` sets it), because QUIC over UDP 7844 kept timing out on
    Hetzner ("timeout: no recent network activity").
 4. **A GitHub token** for the census's `mojo_repos`, in a file (read-only
    access to public repositories is enough).
 5. **Your address** for the firewall: `curl -4 ifconfig.me`, plus `/32`.
-6. **Tools** on the laptop: `hcloud`, `ssh`, `jq`, POSIX `sh`.
+6. **Tools** on the machine you deploy from: `hcloud` **with a context**
+   (`hcloud context create orca`, step 1; `up.sh` and `deploy.sh` both call
+   it), `ssh`, `jq`, POSIX `sh`. Keep `hetzner.env` outside the repository,
+   where no commit can pick it up, and point the scripts at it:
+   `mkdir -p ~/.config/orca-hetzner && cp deploy/hetzner/hetzner.env.example ~/.config/orca-hetzner/hetzner.env`
+   and `export HETZNER_ENV=~/.config/orca-hetzner/hetzner.env` (or put the
+   export in your shell's profile).
 7. **Images**: the scheduler's image is the project's (for the census,
    the one `orca aws push` builds from its `Dockerfile.orca`), at
    `ghcr.io/magmalake/orca:<tag>`; see [Images](#images).
@@ -92,16 +103,16 @@ The census's `orca.toml` lives in the mojo-census repository, next to the
 code it configures, and the image has it (`ORCA_CONFIG=/opt/orca/orca.toml`,
 the pipelines at `ORCA_PIPELINES_DIR=/opt/orca/pipelines`, and the build's
 `ORCA_COMMIT` and `ORCA_SOURCE`, which `orca config show` reports as the
-file's commit). Read the file there; each setting has a comment. In short:
-`max_runs = 1` and `fill_max_runs = 1` with `fills = "all"` is the setting
-until iceberg-mojo 0.11.1 is pinned everywhere (issue 164), and
+file's commit). Read the file there, not here: each setting has a comment,
+and the numbers move as the census does, so this page quotes none.
 `DISTA_WORKER_SLOTS` is how many dista workers run in one process on the
-server: 3 on the CAX21; during an import on the CAX41 register it again with
-14, and set it back to 3 after. gharchive's `GHARCHIVE_PARALLEL` (hours
-in flight at once) is 3 for the same reason: its default of 16 is sized for
-four AWS instances, each hour in flight takes about 1 GB (processes of 2 to
-4.4 GB), and 16 took the CAX21's memory to 99.6% and then OOM (the watchdog
-paused everything); raise both on a bigger server. `cloud-init.yaml` also
+server, and gharchive's `GHARCHIVE_PARALLEL` is how many hours are in flight
+at once. Their defaults are sized for four AWS instances; each hour in
+flight takes about 1 GB (processes of 2 to 4.4 GB), and 3 and 3 on the
+CAX21 swapped hard, so the census's `orca.toml` sets both lower for it
+(mojo-census#37). Raise both on a bigger server (during an import on the
+CAX41, register again with more, and set them back after); too many took
+the CAX21's memory to 99.6% and then OOM (the watchdog paused everything). `cloud-init.yaml` also
 creates a 4 GB `/swapfile` (in `/etc/fstab`) if the server has no swap, so a
 burst is slow instead of fatal; a server made before that can run
 `fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`
@@ -124,20 +135,35 @@ before that, name the binaries:
 
 `orca config show` says what was registered. A pipeline with `placement`
 left out runs on the scheduler's runner, here the local one. The Fleet page
-(Ops > Fleet) says the runner launches no instances, and the watchdog's cost
+(Ops > Fleet) says the runner launches no instances, its Cost tile shows
+`ORCA_FIXED_COST` (`FIXED_COST` in `hetzner.env`, free text such as
+`€8.49/month`; "Fixed" if unset), and the watchdog's cost
 rule reads "fixed price" and never trips; its launch, idle, failing, stuck
 and control rules stay on.
 
 ## Deploying code
 
 ```sh
-./deploy.sh 0.10.1                     # pulls ghcr.io/magmalake/orca:0.10.1, restarts scheduler, ui, sampler, apps, tunnel
-./deploy.sh 0.10.1 console=0.10.0      # one app on another tag
+./deploy.sh a1b2c3d                    # pulls ghcr.io/magmalake/orca:a1b2c3d, restarts scheduler, ui, sampler, apps, tunnel
+./deploy.sh a1b2c3d console=latest     # one app on another tag
 ```
 
-This replaces `orca aws app` and `orca aws up` for code changes. Postgres is
-not restarted. It refuses while runs are running (restarting the scheduler
-kills them): pause the pipelines in the UI and wait, or use `--force`.
+The tag is the project's image tag: see [Images](#images). This replaces
+`orca aws app` and `orca aws up` for code changes, and needs `hcloud` with a
+context like `up.sh`. Postgres is not restarted. It **refuses while runs are
+running** (restarting the scheduler kills them; `--force` does it anyway).
+The sequence that doesn't lose a run:
+
+```sh
+ssh root@<ip> orca-stack quiesce       # pause every pipeline, wait for the running runs to end (--timeout SECONDS, default 3600)
+./deploy.sh <tag>                      # nothing is running now
+ssh root@<ip> orca-stack resume        # unpause what quiesce paused
+```
+
+`quiesce` pauses only pipelines that weren't paused, and `resume` unpauses
+only those (not ones the watchdog or you paused); `orca-stack status` shows
+the running runs and what quiesce paused. On a timeout it stops and leaves
+the pipelines paused.
 
 ## Rescaling for an import
 
@@ -200,7 +226,14 @@ The scripts pull `ghcr.io/magmalake/orca:<tag>` (`ORCA_IMAGE` in
 `hetzner.env`). The orca repository's CI doesn't push images anywhere (ECR
 is only pushed by `orca aws push`, from a project's own build), so there is
 nothing to add behind a CI build here. A project publishes to GHCR from its
-own CI:
+own CI, tagged `<short-sha>` of the commit and `latest`; there are no orca
+version tags (`ORCA_TAG=0.10.0` does not exist). To find a sha, read main's
+image job in the project's Actions: its log ends with
+`<short-sha>: digest: sha256:...` for the push. `ORCA_TAG` in `hetzner.env`
+is the tag the first `up.sh` starts (`latest` will do; `deploy.sh <short-sha>`
+moves it afterwards).
+
+For example:
 
 ```yaml
 permissions: { contents: read, packages: write }
@@ -212,10 +245,26 @@ steps:
 
 The workflow's `GITHUB_TOKEN` can push to a package only if the package lets
 the repository write to it (the package's settings > Manage Actions access).
-The server needs ARM images (`linux/arm64`). A new GHCR package is private:
-either make it public, or give the server a token that can read packages
-(`GHCR_USER` and `GHCR_TOKEN_FILE` in `hetzner.env`). ECR stays as it is for
+The server needs ARM images (`linux/arm64`). A new GHCR package is private,
+and an organization may forbid public packages, so the private route is the
+default: set `GHCR_USER` and `GHCR_TOKEN_FILE` in `hetzner.env` (a token with
+`read:packages`, in a file of its own). Making the package public is the
+alternative only where the organization allows it. ECR stays as it is for
 AWS.
+
+**Build for the server's CPU.** The server is Neoverse N1 (Ampere Altra);
+GitHub's arm64 runners are Neoverse N2, with SVE2. `mojo build` targets the
+CPU it runs on, so a binary built on a runner dies on the server with
+SIGILL (exit 132). The image `orca aws push` builds from
+[`deploy/project.Dockerfile`](../deploy/project.Dockerfile) passes
+`--target-cpu "$MOJO_TARGET_CPU"` (default `neoverse-n1`; N1 code runs on
+N2, V1, V2 and Graviton). A project with its own `Dockerfile.orca` must do
+the same in every `mojo build` of it:
+
+```dockerfile
+ARG MOJO_TARGET_CPU=neoverse-n1
+RUN pixi run sh -c 'for f in bin/*.mojo; do mojo build --target-cpu "$MOJO_TARGET_CPU" "$f" -o "/out/bin/$(basename "$f" .mojo)" || exit 1; done'
+```
 
 ## S3-compatible storage
 
