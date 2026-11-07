@@ -191,6 +191,7 @@ from orca.notify import (
 from orca.config import config_html, shown
 from orca.fill import FillStatus, eta_text, fill_status, money, status_json
 from orca.sensors import Link, Rebuild, downstream, plan_rebuild, rebuilds
+from orca.resources import Grant, gb_text
 from orca.sample import fixed1
 from orca.schedule import Schedule
 from orca.source import commit_url, is_hex, web_url
@@ -281,6 +282,44 @@ struct PipelineRow(Copyable, Movable):
     var placement: String
     """`orca register --placement`: `control`, `ec2`, or empty for the
     scheduler's runner."""
+    var cpus: String
+    """The CPUs it asks for (`orca.resources`), or empty."""
+    var memory_gb: String
+    """The memory it asks for, in GB, or empty."""
+    var waiting: String
+    """Why its oldest queued run that waits for room on its host waits
+    (`orca.resources`), or empty."""
+
+
+@fieldwise_init
+struct RunResources(Copyable, Movable):
+    """What a run's latest start asked for and was granted
+    (`orca.resources`); empty and 0 for none."""
+
+    var cpus: String
+    var memory_gb: String
+    var grant: Grant
+
+    def any(self) -> Bool:
+        return self.cpus != "" or self.memory_gb != ""
+
+    def json(self) -> String:
+        """`"request": {...}|null, "grant": {...}|null` for a run's JSON."""
+        if not self.any():
+            return String('"request": null, "grant": null')
+        return String(
+            '"request": {"cpus": ',
+            quote(self.cpus) if self.cpus else String("null"),
+            ', "memory_gb": ',
+            quote(self.memory_gb) if self.memory_gb else String("null"),
+            '}, "grant": {"cpus": ',
+            String(self.grant.cpus) if self.grant.cpus else String("null"),
+            ', "memory_mb": ',
+            String(self.grant.memory_mb) if self.grant.memory_mb else String(
+                "null"
+            ),
+            "}",
+        )
 
 
 @fieldwise_init
@@ -311,6 +350,8 @@ struct RunRow(Copyable, Movable):
     var usage: Usage
     """What its attempts used (`orca.usage`): the largest peak, the CPU
     seconds summed and the most cores."""
+    var resources: RunResources
+    """What its latest start asked for and was granted (`orca.resources`)."""
 
 
 @fieldwise_init
@@ -462,7 +503,11 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
                 " coalesce(l.id, 0)::text AS last_run, coalesce(l.status, '')"
                 " AS last_status, coalesce(l.partitions, '') AS"
                 " last_partitions, p.paused, coalesce(p.sense_error, '') AS"
-                " sense_error, coalesce(p.placement, '') AS placement, "
+                " sense_error, coalesce(p.placement, '') AS placement,"
+                " coalesce(p.cpus, '') AS cpus, coalesce(p.memory_gb, '') AS"
+                " memory_gb, coalesce((SELECT r.held FROM orca.runs r WHERE"
+                " r.pipeline = p.name AND r.status = 'queued' AND r.held LIKE"
+                " 'waiting: needs %' ORDER BY r.id LIMIT 1), '') AS waiting, "
             ),
             _ts("p.sense_error_at"),
             (
@@ -499,6 +544,9 @@ def _pipelines(mut db: State, name: String = "") raises -> List[PipelineRow]:
             r.text("sense_error"),
             r.text("sense_error_at"),
             r.text("placement"),
+            r.text("cpus"),
+            r.text("memory_gb"),
+            r.text("waiting"),
         )
         try:
             var f = _fires(p, t, 1)
@@ -533,6 +581,22 @@ comptime _USAGE_COLUMNS = (
     " coalesce(u.peak, -1) AS peak, coalesce(u.cpu, -1) AS cpu,"
     " coalesce(u.cpus, -1) AS cpus"
 )
+
+comptime _GRANT_COLUMNS = (
+    " coalesce(request_cpus, '') AS request_cpus, coalesce(request_memory_gb,"
+    " '') AS request_memory_gb, coalesce(grant_cpus, 0)::bigint AS"
+    " grant_cpus, coalesce(grant_memory_mb, 0)::bigint AS grant_memory_mb,"
+)
+"""SQL for a run's request and grant (`orca.resources`)."""
+
+
+def _resources_of(r: Row) raises -> RunResources:
+    """The `_GRANT_COLUMNS`' request and grant."""
+    return RunResources(
+        r.text("request_cpus"),
+        r.text("request_memory_gb"),
+        Grant(Int(r.int64("grant_cpus")), Int(r.int64("grant_memory_mb"))),
+    )
 
 
 def _usage_of(r: Row) raises -> Usage:
@@ -635,6 +699,7 @@ def _runs(
             _SECONDS,
             " AS seconds, coalesce(placement, '') AS placement,",
             " coalesce(held, '') AS held,",
+            _GRANT_COLUMNS,
             _USAGE_COLUMNS,
             " FROM orca.runs",
             _RUN_USAGE,
@@ -670,6 +735,7 @@ def _runs(
                 r.text("placement"),
                 r.text("held"),
                 _usage_of(r),
+                _resources_of(r),
             )
         )
     return out^
@@ -1406,6 +1472,21 @@ def _json_pipeline(mut out: String, p: PipelineRow):
         "true" if p.paused else "false",
         ', "placement": ',
         quote(p.placement if p.placement else String("default")),
+        ', "request": ',
+    )
+    if p.cpus or p.memory_gb:
+        out.write(
+            '{"cpus": ',
+            quote(p.cpus) if p.cpus else String("null"),
+            ', "memory_gb": ',
+            quote(p.memory_gb) if p.memory_gb else String("null"),
+            "}",
+        )
+    else:
+        out.write("null")
+    out.write(
+        ', "waiting": ',
+        quote(p.waiting) if p.waiting else String("null"),
         ', "last_run": ',
     )
     if p.last_run:
@@ -1479,6 +1560,8 @@ def _json_run(mut out: String, r: RunRow):
         quote(r.held) if r.held and r.status == "queued" else String("null"),
         ', "usage": ',
         usage_json(r.usage),
+        ", ",
+        r.resources.json(),
         "}",
     )
 
@@ -3452,6 +3535,47 @@ comptime _CPU_HELP = (
 )
 
 
+comptime _GRANT_HELP = (
+    "What its pipeline asks for (cpus and memory_gb in orca.toml), and what"
+    " its latest start was given of its host's CPUs and memory, fixed for"
+    " that start, in ORCA_GRANT_CPUS and ORCA_GRANT_MEMORY_MB. Compare it"
+    " with the peak below."
+)
+
+
+def _request_text(cpus: String, memory_gb: String) -> String:
+    """`1..16 CPUs, 2..24 GB`."""
+    var text = String()
+    if cpus:
+        text.write(cpus, " CPU" if cpus == "1" else " CPUs")
+    if memory_gb:
+        if text:
+            text.write(", ")
+        text.write(memory_gb, " GB")
+    return text^
+
+
+def _grant_facts(mut h: Html, r: RunResources):
+    """A run's Requested and Granted facts (`orca.resources`), when its
+    pipeline asked for any."""
+    if not r.any():
+        return
+    _fact(h, "Requested", "request", _GRANT_HELP, "runners")
+    h.text(_request_text(r.cpus, r.memory_gb))
+    h.raw("</dd>")
+    _fact(h, "Granted", "grant", _GRANT_HELP, "runners")
+    var g = String()
+    if r.grant.cpus > 0:
+        g.write(r.grant.cpus, " CPU" if r.grant.cpus == 1 else " CPUs")
+    if r.grant.memory_mb > 0:
+        g.write(", " if g else "", gb_text(r.grant.memory_mb), " GB")
+    if g:
+        h.text(g)
+    else:
+        h.raw('<span class="muted">not yet: it hasn\'t started</span>')
+    h.raw("</dd>")
+
+
 def _usage_facts(mut h: Html, u: Usage, live: Bool):
     """A run's or an attempt's Peak memory and CPU used facts (`orca.usage`)."""
     var none = String(
@@ -3493,6 +3617,21 @@ def _progress_html(
     )
     h.text(p.running, " running of ", p.max_runs, ", ", p.queued, " queued")
     h.raw("</dd>")
+    if p.waiting:
+        _fact(
+            h,
+            "Waiting",
+            "waiting",
+            (
+                "Its next run waits for room on its host: what it asks for at"
+                " least (cpus, memory_gb in orca.toml) is more than the"
+                " running runs weren't granted, less the host's reserve."
+            ),
+            "runners",
+        )
+        h.raw('<span class="warn">')
+        h.text(p.waiting.removeprefix("waiting: "))
+        h.raw("</span></dd>")
     if fill:
         _fact(
             h,
@@ -3893,6 +4032,21 @@ def _cards_html(
     )
     h.raw("</h2>")
     _usage_card(h, usage)
+    if p.cpus or p.memory_gb:
+        h.raw('<dl class="facts">')
+        _fact(
+            h,
+            "Requested",
+            "usage-request",
+            (
+                "What it asks for (cpus and memory_gb in orca.toml): its runs"
+                " start once the least of it fits on their host, each granted"
+                " up to the most. Set it from the peaks above."
+            ),
+            "runners",
+        )
+        h.text(_request_text(p.cpus, p.memory_gb))
+        h.raw("</dd></dl>")
     h.raw("</section></div>")
 
 
@@ -5161,11 +5315,13 @@ def _resources_card(mut h: Html, mut db: State, r: RunRow) raises:
             " started, dista's local workers too, measured by the scheduler"
             " or worker that started it. Not the rest of the machine: the"
             " machine's numbers, where they are recorded, are in their own"
-            " card further down."
+            " card further down. With a request, what it asked for and was"
+            " granted too."
         ),
         "runners",
     )
     h.raw('<dl class="facts">')
+    _grant_facts(h, r.resources)
     _usage_facts(h, r.usage, _live(r.status))
     if cpu:
         _fact(
@@ -5929,6 +6085,7 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
             _SECONDS,
             " AS seconds, coalesce(placement, '') AS placement,",
             " coalesce(held, '') AS held,",
+            _GRANT_COLUMNS,
             _USAGE_COLUMNS,
             " FROM orca.runs",
             _RUN_USAGE,
@@ -5957,6 +6114,7 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
         r.text("placement"),
         r.text("held"),
         _usage_of(r),
+        _resources_of(r),
     )
 
 

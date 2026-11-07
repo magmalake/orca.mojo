@@ -84,6 +84,18 @@ logs go straight from the worker to `ORCA_WAREHOUSE` and `ORCA_LOGS`, as
 any run's do. When the process ends, `<binary> keep-log` appends its output,
 masked, to the run's `driver.log`.
 
+A pipeline with a request (`cpus`, `memory_gb`: [orca.toml](orca-toml.md#requests-and-grants))
+is admitted against the worker's own host, as the scheduler admits a local
+run: each claim says what the worker can grant (its CPUs and memory, the
+cgroup's limits if set, less `ORCA_RESERVE_CPUS`, 0, and
+`ORCA_RESERVE_MEMORY_MB`, 512, of the worker's environment), and the UI
+gives it a run only if the run's minimum fits less what the worker's
+running runs were granted. The run gets its grant in `ORCA_GRANT_CPUS` and
+`ORCA_GRANT_MEMORY_MB`, recorded on the run. One that doesn't fit stays
+queued, held saying which worker had no room, for another worker of the
+pool. A worker from before requests says nothing of its room, and its runs
+are started as before.
+
 ## A worker on another machine
 
 The simplest worker is the server's own image in Docker, at the same tag,

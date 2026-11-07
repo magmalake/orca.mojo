@@ -10,6 +10,8 @@ runs (#145), read by `orca register` and `orca aws register`.
     workers = "0..4"             # or a count, 4
     worker_procs = 1             # or "auto", one per vCPU
     max_runs = 2                 # over the code's Pipeline max_runs
+    cpus = "1..16"               # a request: MIN..MAX (orca.resources)
+    memory_gb = "2..24"
     env = { DISTA_WORKER_SLOTS = "4", GHARCHIVE_PARALLEL = "16" }
     secrets = { GITHUB_TOKEN = "orca/github-token" }   # Secrets Manager IDs
     fills = "all"                # fill the range by itself (orca.fill)
@@ -64,6 +66,7 @@ from orca.fill import (
 from orca.html import Html
 from orca.json import quote
 from orca.proc import absolute, capture
+from orca.resources import canonical_cpus, canonical_memory_gb
 from orca.secrets import parse_secrets, secret_problem
 from orca.state import State
 from orca.toml import (
@@ -91,6 +94,8 @@ comptime SCALAR_KEYS = [
     "workers",
     "worker_procs",
     "max_runs",
+    "cpus",
+    "memory_gb",
     "fills",
     "fill_order",
     "fill_max_runs",
@@ -110,6 +115,8 @@ comptime _RESERVED_ENV = [
     "DISTA_ROLE",
     "DISTA_HEAD",
     "DISTA_ADVERTISE",
+    "ORCA_GRANT_CPUS",
+    "ORCA_GRANT_MEMORY_MB",
 ]
 """Variables orca gives a run itself, which `env` can't set."""
 
@@ -195,6 +202,10 @@ def _canonical(key: String, text: String) raises -> String:
         return String("auto") if n == 0 else String(n)
     if key == "max_runs":
         return String(parse_max_runs(text))
+    if key == "cpus":
+        return canonical_cpus(text)
+    if key == "memory_gb":
+        return canonical_memory_gb(text)
     if key == "fills":
         return parse_fills(text)
     if key == "fill_order":
@@ -216,6 +227,14 @@ def canonical_flag(key: String, text: String) raises -> String:
 
 def _canonical_toml(key: String, v: TomlValue) raises -> String:
     """`key`'s value in the file, checked: the types each takes."""
+    if key == "cpus":
+        if v.kind != INTEGER and v.kind != STRING:
+            raise Error('is a count or a string "MIN..MAX", not ', v.kind)
+        return _canonical(key, v.text)
+    if key == "memory_gb":
+        if v.kind != INTEGER and v.kind != FLOAT and v.kind != STRING:
+            raise Error('is GB, a number or a string "MIN..MAX", not ', v.kind)
+        return _canonical(key, v.text)
     if key == "fill_max_runs":
         if v.kind != INTEGER:
             raise Error("is a count, not ", v.kind)
@@ -975,7 +994,8 @@ comptime _SHOWN_SQL = (
     " coalesce(spot, false) AS spot, coalesce(fills, '') AS fills,"
     " coalesce(fill_order, '') AS fill_order, coalesce(fill_max_runs, 0) AS"
     " fill_max_runs, coalesce(fill_budget_per_day, -1) AS fill_budget,"
-    " coalesce(fill_window, '') AS fill_window FROM orca.pipelines WHERE"
+    " coalesce(fill_window, '') AS fill_window, coalesce(cpus, '') AS cpus,"
+    " coalesce(memory_gb, '') AS memory_gb FROM orca.pipelines WHERE"
     " binary_path IS"
     " NOT NULL AND ($1 = '' OR name = $1) ORDER BY name"
 )
@@ -1103,6 +1123,11 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
         else:
             var w = _source(sources, "max_runs")
             s.add("max_runs", String(r.int64("max_runs")), w[0], w[1])
+        # A request (orca.resources), only when it has one.
+        for key in ["cpus", "memory_gb"]:
+            if r.text(key):
+                var w = _source(sources, key)
+                s.add(key, r.text(key), w[0], w[1])
         _show_fills(s, r, sources)
         if r.text("image"):
             s.add("image", r.text("image"), FROM_FLAG, "--image")
@@ -1237,6 +1262,9 @@ def export_toml(mut db: State) raises -> String:
                 out.write("worker_procs = ", n, "\n")
         if not r.is_null("max_runs"):
             out.write("max_runs = ", r.int64("max_runs"), "\n")
+        for key in ["cpus", "memory_gb"]:
+            if r.text(key):
+                out.write(key, " = ", toml_string(r.text(key)), "\n")
         if r.text("fills"):
             out.write("fills = ", toml_string(r.text("fills")), "\n")
         if r.text("fill_order"):

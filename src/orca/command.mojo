@@ -103,7 +103,8 @@ comptime USAGE = """usage:
                 [--workers N|MIN..MAX] [--worker-procs N|auto] [--spot]
                 [--secret NAME=ID ...]
                 [--placement control|ec2|worker:<pool>|default]
-                [--max-runs N] [--config <orca.toml>|--no-config]
+                [--max-runs N] [--cpus N|MIN..MAX] [--memory-gb N|MIN..MAX]
+                [--config <orca.toml>|--no-config]
                 [<pipeline binary> ...]
                 (no binaries: every [pipelines.<name>] of the file, in
                 ORCA_PIPELINES_DIR or pipelines/ next to it; how its runs run comes from orca.toml, ./orca.toml or
@@ -717,6 +718,8 @@ comptime _FLAG_KEYS = [
     ("--worker-procs", "worker_procs"),
     ("--placement", "placement"),
     ("--max-runs", "max_runs"),
+    ("--cpus", "cpus"),
+    ("--memory-gb", "memory_gb"),
 ]
 """`orca register`'s flags for orca.toml's keys (`orca.config`)."""
 
@@ -796,6 +799,8 @@ def _register(url: String, args: List[String]) raises -> Int:
             except e:
                 if key == "workers":
                     _usage(String("not a count or a range MIN..MAX: ", v))
+                if key == "cpus" or key == "memory_gb":
+                    _usage(String(a, " ", e))
                 _usage(String(e))
         elif a == "--image":
             flags.image = v

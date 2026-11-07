@@ -53,6 +53,7 @@ from orca.control import fetch_secret
 from orca.http_store import Body, StateApi
 from orca.logs import run_dir
 from orca.proc import Reaped, reap, spawn
+from orca.resources import host_room, run_env as grant_env
 from orca.sample import _hostname, _sysctl_u64, parse_meminfo, tree_usage
 from orca.store import FINAL
 from orca.usage import Meter, marks_json
@@ -82,7 +83,7 @@ def _memory_mb() -> Int:
         try:
             with open("/proc/meminfo", "r") as f:
                 var m = parse_meminfo(f.read())
-                return m.get("MemTotal", 0) // 1024
+                return m.get("MemTotal", 0) // (1024 * 1024)
         except:
             return 0
     else:
@@ -172,9 +173,8 @@ struct Worker(Movable):
                 .text("why", why),
             )
             return
-        var env = List[String]()
-        for kv in spec.env:
-            env.append(String(kv[0], "=", kv[1]))
+        # Its own variables and its grant of this host (orca.resources).
+        var env = grant_env(spec.env, spec.grant)
         var names = String()
         for s in spec.secrets:
             env.append(String(s[0], "=", fetch_secret(s[1])))
@@ -302,6 +302,16 @@ struct Worker(Movable):
         )
         var cpus = num_logical_cores()
         var mem = _memory_mb()
+        # What this host can grant the runs it takes (orca.resources).
+        var room = host_room(worker=True)
+        print(
+            "orca worker: grants up to",
+            room.cpus,
+            "CPUs and",
+            room.memory_mb,
+            "MB (ORCA_RESERVE_CPUS, ORCA_RESERVE_MEMORY_MB)",
+            flush=True,
+        )
         var said = String()
         while True:
             for done in reap():
@@ -320,7 +330,9 @@ struct Worker(Movable):
                     .int("slots", Int64(slots))
                     .text("running", self._running_ids())
                     .int("cpus", Int64(cpus))
-                    .int("memory_mb", Int64(mem)),
+                    .int("memory_mb", Int64(mem))
+                    .int("room_cpus", Int64(room.cpus))
+                    .int("room_memory_mb", Int64(room.memory_mb)),
                 )
             except e:
                 var msg = String(e)
