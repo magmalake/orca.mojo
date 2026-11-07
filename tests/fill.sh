@@ -158,7 +158,8 @@ idle_has daily complete
 [ "$(q "SELECT count(*) FROM orca.runs WHERE trigger = 'fill' AND status <> 'succeeded'")" -eq 0 ] \
     || fail "a fill run didn't succeed"
 zero "$(fill daily rate_per_hour)" && fail "no rate"
-curl -fsS "$base/pipelines/daily" | grep -q "<dt>Fill</dt><dd>8 / 8 done (100%)" || fail "the page's fill line"
+curl -fsS "$base/pipelines/daily" | grep -q 'aria-label="About Fill".*</dt><dd>8 / 8 done (100%)' || fail "the page's fill line"
+curl -fsS "$base/pipelines/daily/progress" | grep -q '</dt><dd>8 / 8 done (100%)' || fail "the progress fragment's fill line"
 echo "ok   fills newest first, 2 at once beside max_runs, after a backfill, beside a fire, never a done day"
 
 # --- The window ---

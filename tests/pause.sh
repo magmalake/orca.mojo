@@ -90,7 +90,7 @@ post() {
 [ "$(json /pipelines/toy | jq .pipeline.paused)" = true ] || fail "the page's JSON isn't paused"
 curl -fsS "$base/pipelines/toy" | grep -q 'action="/pipelines/toy/unpause"' || fail "no unpause form"
 curl -fsS "$base/" | grep -q 'status--paused' || fail "the list doesn't say paused"
-curl -fsS "$base/pipelines/toy" | grep -q 'action="/pipelines/toy/cancel"' || fail "no cancel form"
+curl -fsS "$base/pipelines/toy?tab=operate" | grep -q 'action="/pipelines/toy/cancel"' || fail "no cancel form"
 [ "$(post /pipelines/toy/pause)" = 409 ] || fail "the UI paused a paused pipeline"
 
 # Cancel by keys: just those runs. Then @all: the queued and the retrying.
