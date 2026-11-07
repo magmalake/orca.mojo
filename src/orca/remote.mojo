@@ -52,6 +52,7 @@ from orca.lineage import SnapshotRef
 from orca.scheduler import file_names
 from orca.state import State
 from orca.ui import _took, act, read_page
+from orca.usage import usage_of, usage_text
 from orca.watchdog import status_lines
 
 
@@ -700,6 +701,10 @@ def print_status(json: String, one: Bool) raises:
             and r["status"].string_value() == "running"
         ):
             line.write(" (cancelling)")
+        if String("usage") in r:
+            var used = usage_text(usage_of(r["usage"]))
+            if used:
+                line.write(" ", used)
         var err = r["error"]
         if err.is_string() and err.string_value():
             line.write(" error: ", err.string_value())

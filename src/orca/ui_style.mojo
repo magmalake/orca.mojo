@@ -167,8 +167,8 @@ h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
 
-/* The pipeline page's cards: Progress, Config and Code side by side where
-   there's room, one above the other where there isn't. */
+/* The pipeline page's cards: Progress, Config, Code and Resources side by
+   side where there's room, one above the other where there isn't. */
 .pcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 1rem;
   align-items: start; margin: 1rem 0 1.25rem; }
 .pcards > .card { margin: 0; }
@@ -190,6 +190,7 @@ h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
   padding: 0.5rem 1.1rem; }
 .card > p.hash code { font-size: 0.95em; color: var(--muted); }
 .card--facts a.src { font-size: 0.8125rem; }
+.card > p.card__none { padding: 0.8rem 1.1rem; margin: 0; font-size: 0.875rem; color: var(--muted); }
 
 /* The Steps card: its heading with Graph and Table tabs. */
 .steps__head { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center;

@@ -104,7 +104,10 @@ process is reaped if `ORCA_LOGS` is in object storage, or kept from the
 driver pod's log on Kubernetes (`orca.kube`). Beside a local run's process
 the scheduler starts `<binary> sample` (`orca.sample`), which writes the
 machine's metrics to `.../<run>/metrics/local.jsonl` until the process ends;
-`ORCA_SAMPLE_SECONDS=0` turns it off, on every runner.
+`ORCA_SAMPLE_SECONDS=0` turns it off, on every runner. Apart from that, each
+tick reads each local and control-placed run's process tree in /proc, and
+once the process is reaped its attempts get their peak memory and CPU
+(`orca.usage`).
 """
 
 from std.ffi import c_int, external_call
@@ -171,7 +174,7 @@ from orca.logs import is_remote, publish, read_location, run_dir, stage_of
 from orca.month import Month
 from orca.name import Name, parse_names, sort_texts
 from orca.proc import Capture, absolute, binary_seconds, capture, reap, spawn
-from orca.sample import metrics_location, sample_seconds, tree_rss
+from orca.sample import metrics_location, sample_seconds, tree_rss, tree_usage
 from orca.schedule import Schedule
 from orca.secrets import parse_secrets, secrets_json
 from orca.sensors import (
@@ -184,6 +187,7 @@ from orca.sensors import (
 from orca.state import State
 from orca.watchdog import check as check_watchdog, config as watchdog_config
 from orca.tz import Zone
+from orca.usage import Meter, record as record_usage
 
 comptime _BUDGET_LOCK = 0x6F726362  # "orcb"
 """Held while a start is weighed against `ORCA_VCPU_BUDGET`."""
@@ -1084,6 +1088,9 @@ struct Scheduler(Movable):
     var _keeping: Dict[Int, String]
     """A `keep-log` still going to the staging file it keeps, removed once
     it has ended."""
+    var _meters: Dict[Int, Meter]
+    """A local or control-placed run's process to its samples, recorded on
+    its attempts when it's reaped (`orca.usage`)."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -1132,6 +1139,7 @@ struct Scheduler(Movable):
         self.limits = ControlLimits.from_env()
         self._control = Dict[Int, _ControlProc]()
         self._keeping = Dict[Int, String]()
+        self._meters = Dict[Int, Meter]()
 
     def register(
         mut self,
@@ -1383,42 +1391,52 @@ struct Scheduler(Movable):
         for done in reap():
             var asked = String()
             for e in self._asked.items():
-                if e.value.pid == done[0]:
+                if e.value.pid == done.pid:
                     asked = e.key
             if asked:
                 var c = self._asked.pop(asked)
-                c.code = done[1]
+                c.code = done.code
                 self._asked[asked] = c^
                 continue
-            if done[0] in self._keeping:
-                var stage = self._keeping.pop(done[0])
-                if done[1] != 0:
-                    print("orca: keep-log exited", done[1], "keeping", stage)
+            if done.pid in self._keeping:
+                var stage = self._keeping.pop(done.pid)
+                if done.code != 0:
+                    print("orca: keep-log exited", done.code, "keeping", stage)
                 try:
                     remove(stage)
                 except:
                     pass
                 continue
-            print("reaped pid", done[0], "exit", done[1])
-            var spawned = self._spawned.pop(done[0], (-1, 0, String()))
+            print("reaped pid", done.pid, "exit", done.code)
+            var spawned = self._spawned.pop(done.pid, (-1, 0, String()))
             var over = String()
             var ctl = Optional[_ControlProc](None)
-            if done[0] in self._control:
-                ctl = self._control.pop(done[0])
+            if done.pid in self._control:
+                ctl = self._control.pop(done.pid)
                 over = ctl.value().over
             if spawned[0] >= 0:
                 try:
-                    self._exited(spawned, done[0], done[1], over)
+                    self._exited(spawned, done.pid, done.code, over)
                 except e:
                     print("orca: can't record run", spawned[0], "exiting:", e)
+            if done.pid in self._meters:
+                var m = self._meters.pop(done.pid)
+                m.end(done.max_rss, done.cpu_seconds)
+                try:
+                    _ = record_usage(
+                        self.db, spawned[0], done.pid, m.aged(), m.max_rss
+                    )
+                except e:
+                    print("orca: can't record run", spawned[0], "usage:", e)
             if ctl:
                 self._keep_control_log(ctl.value())
-            var log = self._driver_logs.pop(done[0], "")
+            var log = self._driver_logs.pop(done.pid, "")
             if log:
                 try:
                     publish(log)
                 except e:
                     print("orca: can't keep the driver log at", log, ":", e)
+        var readings = self._sample()
         if self.runner:
             try:
                 var n = self.runner.value().sweep(self.db)
@@ -1446,7 +1464,7 @@ struct Scheduler(Movable):
             except e:
                 print("orca: can't scale run workers:", e)
         try:
-            self._check_control_memory()
+            self._check_control_memory(readings)
         except e:
             print("orca: can't check control-placed runs' memory:", e)
         try:
@@ -1579,10 +1597,28 @@ struct Scheduler(Movable):
         except e:
             print("orca: can't keep run", c.run, "driver log:", e)
 
-    def _check_control_memory(mut self) raises:
+    def _sample(mut self) -> Dict[Int, Tuple[Int, Float64]]:
+        """Samples each local and control-placed run's process tree, in one
+        pass over /proc (`orca.usage`); the readings, by pid, are empty on
+        macOS."""
+        var pids = List[Int]()
+        for e in self._meters.items():
+            pids.append(e.key)
+        var readings = tree_usage(pids)
+        for e in readings.items():
+            try:
+                self._meters[e.key].sample(e.value[0], e.value[1])
+            except:
+                pass
+        return readings^
+
+    def _check_control_memory(
+        mut self, readings: Dict[Int, Tuple[Int, Float64]]
+    ) raises:
         """Kills each control-placed run's processes once they hold more
         than `ORCA_CONTROL_MEMORY_MB` resident; the reap fails its attempts
-        saying so."""
+        saying so. The tick's `readings` say what they hold, or on macOS
+        `tree_rss`."""
         if len(self._control) == 0:
             return
         var cap = self.limits.memory_mb * 1024 * 1024
@@ -1591,7 +1627,7 @@ struct Scheduler(Movable):
             if not e.value.over:
                 pids.append(e.key)
         for pid in pids:
-            var rss = tree_rss(pid)
+            var rss = readings[pid][0] if pid in readings else tree_rss(pid)
             if rss <= cap:
                 continue
             var c = self._control.pop(pid)
@@ -2622,6 +2658,7 @@ struct Scheduler(Movable):
             for kv in p.env:
                 env.append(String(kv[0], "=", kv[1]))
             var pid = spawn(argv, stage_of(log) if log else log, env=env)
+            self._meters[pid] = Meter()
             self._spawned[pid] = (
                 Int(id),
                 starts[i],
@@ -2752,6 +2789,7 @@ struct Scheduler(Movable):
                 print("orca: can't record run", id, "failing:", e2)
             return
         self._spawned[pid] = (id, start, c.stage)
+        self._meters[pid] = Meter()
         var sampled = c.location != ""
         self._control[pid] = c^
         print("started", p.name, "run", id, "pid", pid, "on the control host")

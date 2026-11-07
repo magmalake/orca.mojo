@@ -85,7 +85,7 @@ from std.os import getenv
 
 from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
-from postgres import Params
+from postgres import Params, Row
 
 from json import loads
 
@@ -189,6 +189,7 @@ from orca.notify import (
 from orca.config import config_html, shown
 from orca.fill import FillStatus, eta_text, fill_status, money, status_json
 from orca.sensors import Link, Rebuild, downstream, plan_rebuild, rebuilds
+from orca.sample import fixed1
 from orca.schedule import Schedule
 from orca.source import commit_url, is_hex, web_url
 from orca.locate import function_key
@@ -199,7 +200,9 @@ from orca.timeline import (
     workers_svg,
 )
 from orca.state import State
+from orca.store import Usage
 from orca.tz import Zone
+from orca.usage import bytes_text, cpu_text, usage_json, usage_text
 from orca.watchdog import (
     acknowledge,
     active_trips,
@@ -303,6 +306,9 @@ struct RunRow(Copyable, Movable):
     `kubernetes` or `local`; empty before its first."""
     var held: String
     """Why the scheduler keeps it queued (`orca.control`), or empty."""
+    var usage: Usage
+    """What its attempts used (`orca.usage`): the largest peak, the CPU
+    seconds summed and the most cores."""
 
 
 @fieldwise_init
@@ -372,6 +378,8 @@ struct StepRow(Copyable, Movable):
     """The latest attempt's ID, 0 before the first."""
     var from_run: Int
     """The run a rerun copied this step from, or 0."""
+    var usage: Usage
+    """What the latest attempt used."""
 
 
 @fieldwise_init
@@ -511,6 +519,25 @@ def _waiting(t: Int64) -> String:
     return _epoch(t) if t > 0 else String()
 
 
+comptime _RUN_USAGE = (
+    " LEFT JOIN LATERAL (SELECT max(a.peak_rss_bytes) AS peak,"
+    " sum(a.cpu_seconds) AS cpu, max(a.peak_cpus) AS cpus FROM orca.attempts"
+    " a JOIN orca.steps s ON s.id = a.step WHERE s.run = orca.runs.id) u ON"
+    " true"
+)
+"""SQL joining a run (`orca.runs`) to what its attempts used, as `u`."""
+
+comptime _USAGE_COLUMNS = (
+    " coalesce(u.peak, -1) AS peak, coalesce(u.cpu, -1) AS cpu,"
+    " coalesce(u.cpus, -1) AS cpus"
+)
+
+
+def _usage_of(r: Row) raises -> Usage:
+    """The `peak`, `cpu` and `cpus` columns' usage."""
+    return Usage(Int(r.int64("peak")), r.float64("cpu"), r.float64("cpus"))
+
+
 comptime _SECONDS = (
     "coalesce(extract(epoch FROM coalesce(ended, now()) - started)::bigint, -1)"
 )
@@ -605,8 +632,11 @@ def _runs(
             " AS waiting, ",
             _SECONDS,
             " AS seconds, coalesce(placement, '') AS placement,",
-            " coalesce(held, '') AS held FROM orca.runs WHERE ($1 = '' OR",
-            " pipeline = $1) AND",
+            " coalesce(held, '') AS held,",
+            _USAGE_COLUMNS,
+            " FROM orca.runs",
+            _RUN_USAGE,
+            " WHERE ($1 = '' OR pipeline = $1) AND",
             " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) AND",
             " ($5 = 0 OR id < $5) ORDER BY orca.runs.id DESC LIMIT $4",
         ),
@@ -637,6 +667,7 @@ def _runs(
                 Int(r.int64("seconds")),
                 r.text("placement"),
                 r.text("held"),
+                _usage_of(r),
             )
         )
     return out^
@@ -1186,9 +1217,12 @@ def _steps(mut db: State, run: Int) raises -> List[StepRow]:
             " AS ended, coalesce((SELECT a.id FROM orca.attempts a WHERE",
             " a.step = s.id ORDER BY a.attempt DESC LIMIT 1), 0)::text AS",
             " attempt_id, coalesce((SELECT c.run FROM orca.steps c WHERE c.id",
-            " = s.copied_from), 0)::text AS from_run FROM orca.steps s WHERE",
-            " s.run = $1 ORDER BY s.ord,",
-            " s.id",
+            " = s.copied_from), 0)::text AS from_run, coalesce(u.peak, -1) AS",
+            " peak, coalesce(u.cpu, -1) AS cpu, coalesce(u.cpus, -1) AS cpus",
+            " FROM orca.steps s LEFT JOIN LATERAL (SELECT a.peak_rss_bytes AS",
+            " peak, a.cpu_seconds AS cpu, a.peak_cpus AS cpus FROM",
+            " orca.attempts a WHERE a.step = s.id ORDER BY a.attempt DESC",
+            " LIMIT 1) u ON true WHERE s.run = $1 ORDER BY s.ord, s.id",
         ),
         Params().int64(Int64(run)),
     )
@@ -1206,6 +1240,7 @@ def _steps(mut db: State, run: Int) raises -> List[StepRow]:
                 r.text("ended"),
                 _int(r.text("attempt_id")),
                 _int(r.text("from_run")),
+                _usage_of(r),
             )
         )
     return out^
@@ -1352,6 +1387,8 @@ def _json_run(mut out: String, r: RunRow):
         quote(r.placement) if r.placement else String("null"),
         ', "held": ',
         quote(r.held) if r.held and r.status == "queued" else String("null"),
+        ', "usage": ',
+        usage_json(r.usage),
         "}",
     )
 
@@ -1847,7 +1884,11 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
         _TRIES,
         '" aria-label="Tries: ',
         _TRIES,
-        '">Tries</abbr></th></tr></thead><tbody>',
+        '">Tries</abbr></th><th class="num"><abbr title="',
+        _PEAK,
+        '" aria-label="Peak memory: ',
+        _PEAK,
+        '">Peak</abbr></th></tr></thead><tbody>',
     )
     for r in runs:
         h.raw("<tr><td>")
@@ -1874,8 +1915,27 @@ def _runs_table(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
             h.num(r.starts)
         else:
             h.raw('<td class="num"></td>')
+        _usage_cell(h, r.usage)
         h.raw("</tr>")
     h.raw("</tbody></table></div>")
+
+
+comptime _PEAK = (
+    "The most memory the run's processes held at once, and in its title"
+    " the CPU they used; empty where it wasn't measured."
+)
+
+
+def _usage_cell(mut h: Html, u: Usage):
+    """A `<td>` of a peak in memory, with the CPU in its title."""
+    if u.peak_rss_bytes < 0:
+        h.raw('<td class="num"></td>')
+        return
+    h.raw('<td class="num" title="')
+    h.text(usage_text(u))
+    h.raw('">')
+    h.text(bytes_text(u.peak_rss_bytes))
+    h.raw("</td>")
 
 
 # ── the pages ────────────────────────────────────────────────────────────────
@@ -3235,6 +3295,40 @@ def _fact(
     h.raw("</dt><dd>")
 
 
+comptime _PEAK_HELP = (
+    "The most memory its processes held at once: the run's process and"
+    " what it started (dista's local workers too), sampled every second by"
+    " the scheduler or worker that started it, and at the end the largest"
+    " single process. Not measured on EC2 or Kubernetes."
+)
+comptime _CPU_HELP = (
+    "The CPU time its processes used, user and system, and the most cores"
+    " they kept busy over one sample's second. macOS gives only the time, and"
+    " only for a process that made one attempt."
+)
+
+
+def _usage_facts(mut h: Html, u: Usage, live: Bool):
+    """A run's or an attempt's Peak memory and CPU used facts (`orca.usage`)."""
+    var none = String(
+        "recorded when its process ends" if live else "not measured"
+    )
+    _fact(h, "Peak memory", "peak", _PEAK_HELP, "runners")
+    if u.peak_rss_bytes >= 0:
+        h.text(bytes_text(u.peak_rss_bytes))
+    else:
+        h.raw('<span class="muted">', none, "</span>")
+    h.raw("</dd>")
+    _fact(h, "CPU used", "cpu-used", _CPU_HELP, "runners")
+    if u.cpu_seconds >= 0:
+        h.text(cpu_text(u.cpu_seconds))
+        if u.peak_cpus >= 0:
+            h.text(", up to ", fixed1(u.peak_cpus), " cores at once")
+    else:
+        h.raw('<span class="muted">', none, "</span>")
+    h.raw("</dd>")
+
+
 def _progress_html(
     mut h: Html, p: PipelineRow, fill: Optional[FillStatus], fires: List[Fire]
 ):
@@ -3632,9 +3726,11 @@ def _cards_html(
     fires: List[Fire],
     steps: List[StepDef],
     links: CodeLinks,
+    usage: UsageSummary,
 ):
     """The pipeline page's cards: what's going on (refreshed while the page
-    is open), and on the Overview tab how it's set up and its code."""
+    is open), and on the Overview tab how it's set up, its code and what
+    its runs used."""
     var base = String("/pipelines/", url_encode(p.name))
     h.raw(
         '<div class="pcards',
@@ -3665,7 +3761,145 @@ def _cards_html(
     )
     h.raw("</h2>")
     _code_card(h, p, steps, links)
+    h.raw('</section><section class="card card--facts" id="resources">')
+    h.raw("<h2>Resources")
+    _help(
+        h,
+        "resources",
+        "Resources",
+        (
+            "What its latest runs used, as the median (p50) and the most of"
+            " them: what a run of it needs. A run's peak is its attempts'"
+            " largest, its CPU their sum."
+        ),
+        "runners",
+    )
+    h.raw("</h2>")
+    _usage_card(h, usage)
     h.raw("</section></div>")
+
+
+comptime USAGE_RUNS = 20
+"""How many of a pipeline's latest measured runs its Resources card
+summarizes."""
+
+
+@fieldwise_init
+struct UsageSummary(Copyable, Movable):
+    """What a pipeline's latest measured runs used: the median and the most
+    of each run's peak memory, CPU seconds and peak cores; -1 for none."""
+
+    var runs: Int
+    var peak_p50: Float64
+    var peak_max: Float64
+    var cpu_p50: Float64
+    var cpu_max: Float64
+    var cpus_p50: Float64
+    var cpus_max: Float64
+
+    def json(self) -> String:
+        """`{"runs": n, "peak_rss_bytes": {"p50": .., "max": ..}, ...}`."""
+        var out = String('{"runs": ', self.runs)
+        var parts = [
+            ("peak_rss_bytes", self.peak_p50, self.peak_max),
+            ("cpu_seconds", self.cpu_p50, self.cpu_max),
+            ("peak_cpus", self.cpus_p50, self.cpus_max),
+        ]
+        for p in parts:
+            out.write(', "', p[0], '": {"p50": ')
+            out.write(_json_num(p[1]), ', "max": ', _json_num(p[2]), "}")
+        out.write("}")
+        return out^
+
+
+def _json_num(x: Float64) -> String:
+    """`x` to the thousandth as JSON, or null if it's negative."""
+    if x < 0:
+        return "null"
+    return String(Float64(Int(x * 1000.0 + 0.5)) / 1000.0)
+
+
+def _usage_summary(mut db: State, name: String) raises -> UsageSummary:
+    """The pipeline's latest `USAGE_RUNS` runs that recorded what they used,
+    summarized."""
+    var r = db.conn.query(
+        (
+            "SELECT count(*) AS n, coalesce(percentile_cont(0.5) WITHIN GROUP"
+            " (ORDER BY peak), -1) AS peak_p50, coalesce(max(peak), -1)::float8"
+            " AS peak_max, coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY"
+            " cpu), -1) AS cpu_p50, coalesce(max(cpu), -1) AS cpu_max,"
+            " coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY cpus), -1)"
+            " AS cpus_p50, coalesce(max(cpus), -1) AS cpus_max FROM (SELECT"
+            " max(a.peak_rss_bytes) AS peak, sum(a.cpu_seconds) AS cpu,"
+            " max(a.peak_cpus) AS cpus FROM orca.runs r JOIN orca.steps s ON"
+            " s.run = r.id JOIN orca.attempts a ON a.step = s.id WHERE"
+            " r.pipeline = $1 GROUP BY r.id HAVING max(a.peak_rss_bytes) IS"
+            " NOT NULL OR sum(a.cpu_seconds) IS NOT NULL ORDER BY r.id DESC"
+            " LIMIT $2) x"
+        ),
+        Params().text(name).int64(Int64(USAGE_RUNS)),
+    ).row(0)
+    return UsageSummary(
+        Int(r.int64("n")),
+        r.float64("peak_p50"),
+        r.float64("peak_max"),
+        r.float64("cpu_p50"),
+        r.float64("cpu_max"),
+        r.float64("cpus_p50"),
+        r.float64("cpus_max"),
+    )
+
+
+def _usage_card(mut h: Html, u: UsageSummary):
+    """The Resources card's facts."""
+    if u.runs == 0:
+        h.raw(
+            '<p class="card__none">None of its runs has been measured'
+            " yet: the scheduler measures the runs it starts here (local and"
+            " control-placed), a worker the ones it runs; runs on EC2 and"
+            " Kubernetes aren't.</p>"
+        )
+        return
+    h.raw('<dl class="facts">')
+    _fact(
+        h,
+        "Measured",
+        "usage-runs",
+        (
+            "How many of its latest runs these are: the last 20 that"
+            " recorded what they used."
+        ),
+    )
+    h.text("its last ", u.runs, " run" if u.runs == 1 else " runs")
+    h.raw("</dd>")
+    _fact(h, "Peak memory", "usage-peak", _PEAK_HELP, "runners")
+    if u.peak_max >= 0:
+        h.text("p50 ", bytes_text(Int(u.peak_p50)))
+        h.text(" · max ", bytes_text(Int(u.peak_max)))
+    else:
+        h.raw('<span class="muted">not measured</span>')
+    h.raw("</dd>")
+    _fact(h, "CPU used", "usage-cpu", _CPU_HELP, "runners")
+    if u.cpu_max >= 0:
+        h.text("p50 ", cpu_text(u.cpu_p50), " · max ", cpu_text(u.cpu_max))
+    else:
+        h.raw('<span class="muted">not measured</span>')
+    h.raw("</dd>")
+    _fact(
+        h,
+        "Peak cores",
+        "usage-cores",
+        (
+            "The most cores a run's processes kept busy over one sample's"
+            " second: the CPUs to ask for. Not measured on macOS."
+        ),
+        "runners",
+    )
+    if u.cpus_max >= 0:
+        h.text("p50 ", fixed1(u.cpus_p50), " · max ", fixed1(u.cpus_max))
+    else:
+        h.raw('<span class="muted">not measured</span>')
+    h.raw("</dd></dl>")
 
 
 def pipeline(
@@ -3707,6 +3941,7 @@ def pipeline(
         pass
     var runs = _runs(db, pipeline=name, limit=20)
     var fill = _fill_of(db, name)
+    var usage = _usage_summary(db, name)
 
     var j = String('{"pipeline": ')
     _json_pipeline(j, p)
@@ -3753,6 +3988,7 @@ def pipeline(
     j.write(configs[0].json() if len(configs) > 0 else String("null"))
     j.write(', "runs": ')
     _json_runs(j, runs)
+    j.write(', "usage": ', usage.json())
     var keys = Optional[KeyCounts](None)
     if p.kind == "keyed":
         keys = _key_counts(db, name)
@@ -3813,7 +4049,7 @@ def pipeline(
     )
     var base = String("/pipelines/", url_encode(p.name))
     _tabs_html(h, base, tab)
-    _cards_html(h, p, tab, fill, fires, steps, links)
+    _cards_html(h, p, tab, fill, fires, steps, links, usage)
     if tab == "overview":
         _steps_html(h, p.name, steps, links, steps_view)
         if keys:
@@ -4234,6 +4470,8 @@ def run(mut db: State, id: Int) raises -> Page:
             s.attempt_id,
             ', "from_run": ',
             s.from_run,
+            ', "usage": ',
+            usage_json(s.usage),
             "}",
         )
     j.write('], "tables": [')
@@ -4522,7 +4760,9 @@ def _run_facts(mut h: Html, mut db: State, r: RunRow) raises:
             cpu * secs // 1000,
             " vCPU-seconds",
         )
-    h.raw("</dd><dt>Code</dt><dd><code>")
+    h.raw("</dd>")
+    _usage_facts(h, r.usage, _live(r.status))
+    h.raw("<dt>Code</dt><dd><code>")
     h.text(hash)
     h.raw("</code>")
     if hash != current:
@@ -4752,8 +4992,13 @@ def _run_live(
     h.raw(
         '</h2><div class="scroll"><table><thead><tr><th>Step</th>',
         '<th>Partition</th><th>Status</th><th class="num">Attempts</th>',
-        "<th>Started</th><th>Ended</th><th>Log</th><th>Error</th></tr>",
-        "</thead><tbody>",
+        "<th>Started</th><th>Ended</th>",
+        '<th class="num"><abbr title="',
+        _STEP_PEAK,
+        '" aria-label="Peak memory: ',
+        _STEP_PEAK,
+        '">Peak</abbr></th><th class="num">CPU</th>',
+        "<th>Log</th><th>Error</th></tr></thead><tbody>",
     )
     for s in steps:
         h.raw("<tr>")
@@ -4765,6 +5010,11 @@ def _run_live(
         h.num(s.attempts)
         h.mono(s.started)
         h.mono(s.ended)
+        _usage_cell(h, s.usage)
+        if s.usage.cpu_seconds >= 0:
+            h.num(cpu_text(s.usage.cpu_seconds))
+        else:
+            h.raw('<td class="num"></td>')
         h.raw("<td>")
         if s.attempt_id:
             h.link(
@@ -4778,6 +5028,12 @@ def _run_live(
         h.text(s.error)
         h.raw("</td></tr>")
     h.raw("</tbody></table></div>")
+
+
+comptime _STEP_PEAK = (
+    "The most memory the step's latest attempt held at once; its page has"
+    " each attempt's."
+)
 
 
 def run_steps(mut db: State, id: Int) raises -> Page:
@@ -4924,6 +5180,7 @@ struct AttemptRow(Copyable, Movable):
     var ended: String
     var error: String
     var log: String
+    var usage: Usage
 
 
 def _attempts(
@@ -4937,7 +5194,9 @@ def _attempts(
             " AS started, ",
             _ts("a.ended"),
             " AS ended, coalesce(a.error, '') AS error, coalesce(a.log, '')",
-            " AS log FROM orca.attempts a JOIN orca.steps s ON s.id = a.step",
+            " AS log, coalesce(a.peak_rss_bytes, -1) AS peak,",
+            " coalesce(a.cpu_seconds, -1) AS cpu, coalesce(a.peak_cpus, -1)",
+            " AS cpus FROM orca.attempts a JOIN orca.steps s ON s.id = a.step",
             " JOIN orca.runs r ON r.id = s.run WHERE s.run = $1 AND ",
             cond,
             " ORDER BY a.attempt",
@@ -4960,6 +5219,7 @@ def _attempts(
                 r.text("ended"),
                 r.text("error"),
                 r.text("log"),
+                _usage_of(r),
             )
         )
     return out^
@@ -5015,6 +5275,8 @@ def attempt(mut db: State, run: Int, id: Int) raises -> Page:
         quote(a.error),
         ', "log": ',
         quote(a.log),
+        ', "usage": ',
+        usage_json(a.usage),
         '}, "text": ',
         quote(log[0]),
         ', "truncated": ',
@@ -5065,7 +5327,9 @@ def attempt(mut db: State, run: Int, id: Int) raises -> Page:
     h.text(a.started)
     h.raw("</dd><dt>Ended</dt><dd>")
     h.text(a.ended)
-    h.raw("</dd><dt>Log file</dt><dd><code>")
+    h.raw("</dd>")
+    _usage_facts(h, a.usage, _live(a.status))
+    h.raw("<dt>Log file</dt><dd><code>")
     h.text(a.log)
     h.raw("</code></dd>")
     var cache = Dict[String, CodeLinks]()
@@ -5088,6 +5352,10 @@ def attempt(mut db: State, run: Int, id: Int) raises -> Page:
                 )
             h.raw(" ")
             h.status(s.status)
+            if s.usage.peak_rss_bytes >= 0:
+                h.raw(' <span class="muted">')
+                h.text(bytes_text(s.usage.peak_rss_bytes))
+                h.raw("</span>")
         h.raw("</dd>")
     h.raw("</dl><h2>Log</h2>")
     if _live(a.status):
@@ -5134,7 +5402,11 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
             " AS waiting, ",
             _SECONDS,
             " AS seconds, coalesce(placement, '') AS placement,",
-            " coalesce(held, '') AS held FROM orca.runs WHERE id = $1",
+            " coalesce(held, '') AS held,",
+            _USAGE_COLUMNS,
+            " FROM orca.runs",
+            _RUN_USAGE,
+            " WHERE id = $1",
         ),
         Params().int64(Int64(id)),
     )
@@ -5158,6 +5430,7 @@ def _runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
         Int(r.int64("seconds")),
         r.text("placement"),
         r.text("held"),
+        _usage_of(r),
     )
 
 

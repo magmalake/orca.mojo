@@ -168,6 +168,10 @@ that can't be made within half the stale limit refuses the commit.
   its run lost at its next call, and a commit is fenced.
 - **A process that never claimed its run** (a missing binary, a `resume`
   that refused) has the run failed, saying why (`/api/worker/exited`).
+- **What a run uses.** The worker samples each run's process tree every
+  poll, as the scheduler does a local run's, and sends the samples with
+  `/api/worker/exited`; the UI records each attempt's peak memory and CPU
+  from them ([the UI](ui.md#what-a-run-uses)).
 - **Versions.** A run needs its pipeline's image (`orca register
   --image`; `orca config show <pipeline>` prints it) to be the worker's
   (`--image`, `ORCA_IMAGE`), both empty included, so there's no silent
