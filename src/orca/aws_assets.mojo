@@ -672,7 +672,15 @@ comptime PROJECT_DOCKERFILE: StaticString = """# The image `orca aws push` build
 # frame's function, file and line (orca.crash). The line tables, compressed,
 # make a binary about half as big again (mojo-census's gharchive: 4.2 MB,
 # 6.5 MB with them, 25 MB uncompressed) and leave its speed as it was.
+#
+# The binaries are built for MOJO_TARGET_CPU, not for the CPU of the machine
+# building them (`mojo build` defaults to that). GitHub's arm64 runners are
+# Neoverse N2, which has SVE2; Hetzner's CAX servers are Neoverse N1, which
+# has not, so a binary built there dies on the server with SIGILL (exit
+# 132). N1 code runs on N2, V1, V2 and Graviton. Build for something else
+# with --build-arg MOJO_TARGET_CPU=<cpu>; this is for linux/arm64 images.
 FROM ghcr.io/prefix-dev/pixi:0.78.0 AS build
+ARG MOJO_TARGET_CPU=neoverse-n1
 ARG ORCA_SOURCE=""
 ARG ORCA_COMMIT=""
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \\
@@ -685,12 +693,12 @@ RUN mkdir -p /out/bin /out/pipelines \\
     && pixi run sh -c 'inc=""; [ -d src ] && inc="-I src"; \\
         [ -f bin/scheduler.mojo ] || { echo "orca aws push: no bin/scheduler.mojo calling orca.command"; exit 1; }; \\
         for f in bin/*.mojo; do n=$(basename "$f" .mojo); [ "$n" = scheduler ] && n=orca; \\
-            mojo build -g1 $inc "$f" -o "/out/bin/$n" || exit 1; done; \\
+            mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc "$f" -o "/out/bin/$n" || exit 1; done; \\
         if [ ! -f bin/orca_maintain.mojo ] && grep -rqs "orca.tables" pipelines src; then \\
             printf "from orca.maintain import maintain_main\\n\\n\\ndef main() raises:\\n    maintain_main()\\n" > /tmp/orca_maintain.mojo; \\
-            mojo build -g1 $inc /tmp/orca_maintain.mojo -o /out/bin/orca_maintain || exit 1; fi; \\
+            mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc /tmp/orca_maintain.mojo -o /out/bin/orca_maintain || exit 1; fi; \\
         for p in pipelines/*.mojo; do [ -f "$p" ] || continue; n=$(basename "$p" .mojo); \\
-            mojo build -g1 $inc -D ORCA_SOURCE='"${ORCA_SOURCE}"' -D ORCA_COMMIT='"${ORCA_COMMIT}"' \\
+            mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc -D ORCA_SOURCE='"${ORCA_SOURCE}"' -D ORCA_COMMIT='"${ORCA_COMMIT}"' \\
                 "$p" -o "/out/pipelines/$n" || exit 1; done; \\
         if ls /out/pipelines/* > /dev/null 2>&1; then /out/bin/orca locate /out/pipelines/* --root .; fi'
 # The line tables compressed, which llvm-symbolizer reads as they are.
