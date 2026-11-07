@@ -48,7 +48,7 @@ from orca.civil import now
 from orca.expiry import expirable, expire_argv, maintain_binary
 from orca.lineage import Made, SnapshotRef, back, forward, latest
 from orca.locate import locate
-from orca.proc import binary_seconds, capture
+from orca.proc import absolute, binary_seconds, capture
 from orca.remote import (
     Api,
     api_command,
@@ -84,7 +84,9 @@ comptime USAGE = """usage:
                 [--workers N|MIN..MAX] [--worker-procs N|auto] [--spot]
                 [--secret NAME=ID ...] [--placement control|ec2|default]
                 [--max-runs N] [--config <orca.toml>|--no-config]
-                (how its runs run comes from orca.toml, ./orca.toml or
+                [<pipeline binary> ...]
+                (no binaries: every [pipelines.<name>] of the file, in
+                ORCA_PIPELINES_DIR or pipelines/ next to it; how its runs run comes from orca.toml, ./orca.toml or
                 ORCA_CONFIG unless --config names another, flags over it;
                 orca config show)
                 (--worker-procs: dista worker processes per EC2 worker
@@ -447,6 +449,46 @@ comptime _FLAG_KEYS = [
 """`orca register`'s flags for orca.toml's keys (`orca.config`)."""
 
 
+def _config_binaries(file: ProjectConfig) raises -> List[String]:
+    """The binary of each `[pipelines.<name>]` in `file`, in the directory
+    ORCA_PIPELINES_DIR, else `pipelines/` next to the file. Raises, before
+    anything is registered, if there is no such directory or a binary is
+    missing."""
+    var names = file.pipelines()
+    if len(names) == 0:
+        raise Error("orca: ", file.path, " names no [pipelines.<name>]")
+    var dir = getenv("ORCA_PIPELINES_DIR")
+    if not dir:
+        var full = absolute(file.path)
+        var slash = full.rfind("/")
+        var beside = String(full[byte=:slash]) if slash > 0 else String("/")
+        dir = String(beside, "/pipelines")
+        if not exists(dir):
+            raise Error(
+                "orca: no pipeline binaries: set ORCA_PIPELINES_DIR, put them",
+                " in ",
+                dir,
+                ", or name them: orca register <binary>...",
+            )
+    var out = List[String]()
+    var missing = String()
+    for n in names:
+        var p = String(dir, "/", n)
+        if not exists(p):
+            missing.write(" " if missing else "", n)
+        out.append(p)
+    if missing:
+        raise Error(
+            "orca: ",
+            file.path,
+            " names pipelines with no binary in ",
+            dir,
+            ":",
+            missing,
+        )
+    return out^
+
+
 def _register(url: String, args: List[String]) raises -> Int:
     """`orca register`: each binary's pipeline, with how its runs run from
     the project's orca.toml and the flags (`orca.config`)."""
@@ -503,8 +545,7 @@ def _register(url: String, args: List[String]) raises -> Int:
         else:
             _usage(String("unknown option: ", a))
         i += 2
-    if i >= len(args):
-        _usage("register needs a pipeline binary")
+    var explicit_paths = i < len(args)
     var file: ProjectConfig
     if b64:
         file = ProjectConfig.from_b64(b64, name, commit, dirty)
@@ -525,9 +566,16 @@ def _register(url: String, args: List[String]) raises -> Int:
             "(sha256 " + String(file.hash[byte=:12]) + ")",
             file=stderr,
         )
-    var s = Scheduler(url)
+    var paths = List[String]()
     for k in range(i, len(args)):
-        var got = s.register(args[k], now(), flags, file)
+        paths.append(args[k])
+    if not explicit_paths:
+        if not file.is_file():
+            _usage("register needs a pipeline binary, or an orca.toml")
+        paths = _config_binaries(file)
+    var s = Scheduler(url)
+    for k in range(len(paths)):
+        var got = s.register(paths[k], now(), flags, file)
         if file.is_file() and not file.has(got):
             print(
                 String(

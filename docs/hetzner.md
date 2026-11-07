@@ -82,45 +82,31 @@ pipeline's `secrets = { GITHUB_TOKEN = "orca/github-token" }` reads
 
 ## The census: `orca.toml`
 
-The census registers from this file (save it as `orca.toml` on the server;
-`mojo-census` is not changed by this). `fills = "all"` with `max_runs = 1` and
-`fill_max_runs = 1` is the setting until iceberg-mojo 0.11.1 is pinned
-everywhere (issue 164). `DISTA_WORKER_SLOTS` is how many dista workers run
-in one process on the server: 4 on the CAX21; during an import on the CAX41
-register it again with 14, and set it back to 4 after.
-
-```toml
-[defaults]
-max_runs = 1
-
-[pipelines.gharchive]
-fills = "all"
-fill_order = "oldest"
-fill_max_runs = 1
-env = { DISTA_WORKER_SLOTS = "4" }
-
-[pipelines.gharchive_index]
-env = { DISTA_WORKER_SLOTS = "4" }
-
-[pipelines.mojo_repos]
-secrets = { GITHUB_TOKEN = "orca/github-token" }
-
-[pipelines.mojo_history]
-env = { DISTA_WORKER_SLOTS = "4" }
-
-[pipelines.mojo_activity]
-env = { DISTA_WORKER_SLOTS = "4" }
-
-[pipelines.mojo_stats]
-```
+The census's `orca.toml` lives in the mojo-census repository, next to the
+code it configures, and the image has it (`ORCA_CONFIG=/opt/orca/orca.toml`,
+the pipelines at `ORCA_PIPELINES_DIR=/opt/orca/pipelines`, and the build's
+`ORCA_COMMIT` and `ORCA_SOURCE`, which `orca config show` reports as the
+file's commit). Read the file there; each setting has a comment. In short:
+`max_runs = 1` and `fill_max_runs = 1` with `fills = "all"` is the setting
+until iceberg-mojo 0.11.1 is pinned everywhere (issue 164), and
+`DISTA_WORKER_SLOTS` is how many dista workers run in one process on the
+server: 4 on the CAX21; during an import on the CAX41 register it again with
+14, and set it back to 4 after.
 
 Register (the binaries are in the image; `up.sh` doesn't do this because
 what to register is the project's):
 
 ```sh
-ssh root@<ip> 'docker exec -i scheduler sh -c "cat > /tmp/orca.toml"' < orca.toml
-ssh root@<ip> 'docker exec scheduler sh -c "p=/opt/orca/pipelines; orca register --config /tmp/orca.toml \$p/gharchive \$p/gharchive_index \$p/mojo_repos \$p/mojo_history \$p/mojo_activity \$p/mojo_stats"'
+ssh root@<ip> docker exec scheduler orca register
 ```
+
+To change a setting: edit `orca.toml` in mojo-census, merge it, deploy the
+new image (`./deploy.sh <tag>`), and register again. (For a quick try,
+`docker exec` can still register another file with `--config` and explicit
+binaries; the next registration from the image takes it back.) This needs
+an orca with `orca register` reading the file's tables (after 0.10.0);
+before that, name the binaries:
+`docker exec scheduler sh -c 'cd /opt/orca/pipelines && orca register gharchive gharchive_index mojo_repos mojo_history mojo_activity mojo_stats mojo_versions'`.
 
 `orca config show` says what was registered. A pipeline with `placement`
 left out runs on the scheduler's runner, here the local one. The Fleet page
