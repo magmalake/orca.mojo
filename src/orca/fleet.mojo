@@ -23,7 +23,9 @@ control`, orca.control) are running, which its row lists; without
 
 Prices are a small table of us-east-2 on-demand rates for the types orca
 runs on: an estimate (Spot hosts cost less, and a stopped-and-started clock
-isn't modelled).
+isn't modelled). With `ORCA_RUNNER=local` no instance is launched, so the
+cost tile says "fixed price" instead and shows `ORCA_FIXED_COST` (free text,
+such as `€8.49/month`; "Fixed" when unset), with no region.
 """
 
 from std.os import getenv
@@ -1019,14 +1021,25 @@ def summary_html(mut h: Html, s: Summary, compact: Bool):
         h.text(_type_text(s.types))
     h.raw("</span></a>")
     # Cost.
-    h.raw(
-        '<a class="stat" href="/ops/fleet#hosts"><span class="stat__k">Cost now'
-    )
-    h.raw('</span><span class="stat__v">~$', _fixed(s.cost, 2), "/h</span>")
-    h.raw('<span class="stat__s">estimate, on-demand us-east-2')
-    if s.unpriced > 0:
-        h.raw("; ", s.unpriced, " unpriced")
-    h.raw("</span></a>")
+    if getenv("ORCA_RUNNER") == "local":
+        # The local runner launches no instances: the server's price is fixed.
+        h.raw(
+            '<a class="stat" href="/ops/fleet#hosts"><span class="stat__k">Cost'
+        )
+        h.raw('</span><span class="stat__v">')
+        h.text(getenv("ORCA_FIXED_COST", "Fixed"))
+        h.raw('</span><span class="stat__s">fixed price: the local runner')
+        h.raw(" launches no instances</span></a>")
+    else:
+        h.raw(
+            '<a class="stat" href="/ops/fleet#hosts"><span'
+            ' class="stat__k">Cost now'
+        )
+        h.raw('</span><span class="stat__v">~$', _fixed(s.cost, 2), "/h</span>")
+        h.raw('<span class="stat__s">estimate, on-demand us-east-2')
+        if s.unpriced > 0:
+            h.raw("; ", s.unpriced, " unpriced")
+        h.raw("</span></a>")
     # Runs.
     h.raw('<a class="stat" href="/runs?status=running">')
     h.raw('<span class="stat__k">Runs now</span><span class="stat__v">')
@@ -1300,7 +1313,9 @@ def summary_json(s: Summary) -> String:
     out.write(
         '], "cost_per_hour": ',
         _f(s.cost, 4),
-        ', "cost_is_estimate": true, "unpriced_hosts": ',
+        ', "cost_is_estimate": ',
+        "false" if getenv("ORCA_RUNNER") == "local" else "true",
+        ', "unpriced_hosts": ',
         s.unpriced,
         ', "runs_running": ',
         s.running,

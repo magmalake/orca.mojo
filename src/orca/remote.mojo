@@ -866,6 +866,16 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
         )
         print(cmd + "d", rest[0])
         return 0
+    if cmd == "watchdog" and len(rest) >= 1 and rest[0] == "ack":
+        var which = (
+            String("all") if len(rest) == 1 or rest[1] == "--all" else rest[1]
+        )
+        _ = api.post(
+            String("/watchdog/", _seg(which), "/ack"),
+            List[Tuple[String, String]](),
+        )
+        print("acknowledged", "all trips" if which == "all" else which)
+        return 0
     if cmd == "watchdog" and len(rest) == 3 and rest[0] == "snooze":
         _ = api.post(
             String("/watchdog/", _seg(rest[1]), "/snooze"),

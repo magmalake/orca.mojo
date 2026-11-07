@@ -778,24 +778,58 @@ struct Trip(Copyable, Movable):
     var detail: String
     var pipelines: List[String]
     """The pipelines it paused that are still paused."""
+    var id: Int
+    var acked_by: String
+    """Who kept it paused (acknowledged it), or empty."""
 
 
 def active_trips(mut db: State) raises -> List[Trip]:
-    """The trips with a pipeline still paused, newest first."""
+    """The trips with a pipeline still paused that nobody has acknowledged,
+    newest first: what the banner shows."""
+    return _trips(db, False)
+
+
+def listed_trips(mut db: State) raises -> List[Trip]:
+    """Like `active_trips`, with the acknowledged ones: what status lists."""
+    return _trips(db, True)
+
+
+def acknowledge(mut db: State, trip: Int, by: String) raises -> Int:
+    """Keeps the pipelines of the unacknowledged trips (all of them if `trip`
+    is 0) paused, and stops the banner showing them. Returns how many."""
+    var n = 0
+    for t in active_trips(db):
+        if trip != 0 and t.id != trip:
+            continue
+        _ = db.conn.execute(
+            (
+                "UPDATE orca.watchdog_trips SET acknowledged_at = now(),"
+                " acknowledged_by = $2 WHERE id = $1"
+            ),
+            Params().int64(Int64(t.id)).text(by if by else String("ui")),
+        )
+        n += 1
+    return n
+
+
+def _trips(mut db: State, acknowledged: Bool) raises -> List[Trip]:
     var out = List[Trip]()
     for r in db.conn.query(
         (
             "SELECT * FROM (SELECT t.rule, extract(epoch FROM now() -"
             " t.at)::float8 AS ago, to_char(t.at AT TIME ZONE 'UTC',"
             " 'YYYY-MM-DD HH24:MI:SS') || ' UTC' AS at, t.value, t.threshold,"
-            " t.detail, t.id, (SELECT string_agg(p.name, ',' ORDER BY p.name)"
-            " FROM orca.pipelines p WHERE p.paused AND p.name = ANY"
-            "(string_to_array(t.pipelines, ','))) AS paused FROM"
-            " orca.watchdog_trips t) x WHERE paused IS NOT NULL ORDER BY id"
-            " DESC"
+            " t.detail, t.id, coalesce(t.acknowledged_by, '') AS acked,"
+            " t.acknowledged_at IS NOT NULL AS is_acked, (SELECT"
+            " string_agg(p.name, ',' ORDER BY p.name) FROM orca.pipelines p"
+            " WHERE p.paused AND p.name = ANY(string_to_array(t.pipelines,"
+            " ','))) AS paused FROM orca.watchdog_trips t) x WHERE paused IS"
+            " NOT NULL ORDER BY id DESC"
         ),
         Params(),
     ):
+        if r.bool("is_acked") and not acknowledged:
+            continue
         var ps = List[String]()
         for p in r.text("paused").split(","):
             ps.append(String(p))
@@ -808,6 +842,8 @@ def active_trips(mut db: State) raises -> List[Trip]:
                 r.float64("threshold"),
                 r.text("detail"),
                 ps^,
+                Int(r.int64("id")),
+                r.text("acked"),
             )
         )
     return out^
@@ -952,8 +988,10 @@ def banner_html(mut h: Html, trips: List[Trip]):
         h.link(_rule_link(t), "See why")
         h.raw("</div>")
     h.raw(
-        '<div>Unpause a pipeline to clear its trip; <a href="/watchdog">'
-        "Watchdog</a> snoozes a rule.</div></div>"
+        '<div>Unpause a pipeline to clear its trip, or <form method="post"'
+        ' action="/watchdog/all/ack" class="inline"><button type="submit">'
+        "Keep paused</button></form> to leave them paused and hide this; <a"
+        ' href="/watchdog">Watchdog</a> snoozes a rule.</div></div>'
     )
 
 
@@ -975,6 +1013,10 @@ def trips_json(trips: List[Trip]) -> String:
             _fx(t.threshold, 2),
             ', "detail": ',
             quote(t.detail),
+            ', "id": ',
+            t.id,
+            ', "acknowledged_by": ',
+            quote(t.acked_by) if t.acked_by else String("null"),
             ', "pipelines": [',
         )
         for k in range(len(t.pipelines)):
@@ -1013,7 +1055,7 @@ def watchdog_json(mut db: State, c: Config) raises -> String:
         '{"rules": ',
         rules_json(rule_rows(db, c)),
         ', "trips": ',
-        trips_json(active_trips(db)),
+        trips_json(listed_trips(db)),
         "}",
     )
 
@@ -1148,6 +1190,10 @@ def status_lines(json: String) raises -> List[String]:
         )
         for p in t["pipelines"].array_items():
             line.write(" ", p.string_value())
+        if not t["acknowledged_by"].is_null():
+            line.write(
+                " (acknowledged by ", t["acknowledged_by"].string_value(), ")"
+            )
         out.append(line^)
     return out^
 

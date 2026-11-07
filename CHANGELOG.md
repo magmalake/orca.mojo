@@ -19,6 +19,36 @@
   `orca.commits`), and dataset edges at the left. The data is
   `GET /api/gantt?window=24h`. New module `orca.ui_viz`; `tests/ui.sh`.
 
+- **A live run's page refreshes itself, and shows its settings.** While a
+  run is queued or running, `/runs/<id>` replaces its facts, steps, machines
+  and workers every 5 s from the fragment `/runs/<id>/live` (one poller
+  instead of two; `/steps` and `/metrics` still answer). The fragment answers
+  286 once the run has ended and the page stops asking; a finished run's page
+  doesn't poll at all, and without scripts the page is complete as loaded.
+  The poller (`data-poll`) now waits while the tab is hidden and asks at once
+  when it is shown, backs off when a request fails, and keeps selected text,
+  open `<details>` and scrolled boxes as they were. A new Settings section
+  shows the environment the run had (what its start recorded, else the
+  pipeline's registered one), max runs, placement and worker settings, with
+  secrets by name only. The facts start with the run's duration (elapsed
+  so far while it goes on, the total after; start and end in its tooltip),
+  and the crumb links the pipeline's previous and next run (`rel=prev/next`;
+  the left and right arrow keys follow them outside form fields).
+  `tests/ui.sh`.
+
+- **Watchdog: "Keep paused", the local runner's cost tile, orca's icon in
+  the header.** The trip banner has a Keep paused button, and
+  `orca watchdog ack [--all|<trip id>]` does the same: the trip is
+  acknowledged (migration 31, `acknowledged_at`/`acknowledged_by`, audited),
+  its pipelines stay paused, the banner stops showing it, and
+  `orca watchdog status` still lists it as acknowledged by the user. With
+  `ORCA_RUNNER=local` the Cost tile reads "Cost", the optional
+  `ORCA_FIXED_COST` (free text such as `€8.49/month`; "Fixed" if unset) and
+  "fixed price: the local runner launches no instances", with no
+  region; `/api/fleet` says `cost_is_estimate: false`. The header's logo is
+  the tab's icon (three connected nodes) in the theme's colours.
+  `tests/watchdog.sh`, `tests/fleet.sh`.
+
 - **`orca register` with no paths registers the whole `orca.toml`.** Each
   `[pipelines.<name>]` is registered from `<dir>/<name>`, `<dir>` being
   `ORCA_PIPELINES_DIR`, else `pipelines/` next to the file; a table with no
