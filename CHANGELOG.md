@@ -22,6 +22,12 @@
   holding 200 MiB beside a child holding 100, each burning a core, on the
   local runner, the control host and a worker).
 
+- **`orca register` with no arguments works.** It printed the usage instead
+  of registering every `[pipelines.<name>]` of the file, as the docs say (and
+  `deploy/hetzner` runs it so): only a call with a flag or a path got through.
+  `tests/config.sh` now registers bare, from `./orca.toml` and from
+  `ORCA_CONFIG`.
+
 ## 0.13.0 - 2026-11-07
 
 - **orca.toml follow-ups: `orca config check`, the registration on the
