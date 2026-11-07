@@ -347,6 +347,12 @@ grep -q "registered toy" reg.out && grep -q "registered daily" reg.out || fail "
 "$orca" register --config orca.toml > reg.out 2> reg.err || fail "register without ORCA_COMMIT"
 ! grep -q "fatal" reg.err || fail "git's stderr leaked: $(cat reg.err)"
 [ "$(q "SELECT config->>'commit' FROM orca.pipelines WHERE name = 'toy'")" = "" ] || fail "a commit from nowhere"
+# Bare, as on the server (docker exec scheduler orca register): the file
+# from ORCA_CONFIG, else ./orca.toml.
+"$orca" register > reg.out 2> reg.err || fail "bare register: $(cat reg.out reg.err)"
+grep -q "registered toy" reg.out && grep -q "registered daily" reg.out || fail "bare register: $(cat reg.out)"
+(cd / && ORCA_CONFIG=$np/orca.toml "$orca" register > "$np/reg.out" 2>&1) || fail "bare register, ORCA_CONFIG: $(cat reg.out)"
+grep -q "registered toy" reg.out || fail "bare register, ORCA_CONFIG: $(cat reg.out)"
 # ORCA_PIPELINES_DIR beats pipelines/ next to the file.
 mv pipelines elsewhere/p
 ORCA_PIPELINES_DIR=$np/elsewhere/p "$orca" register --config orca.toml > reg.out 2>&1 || fail "ORCA_PIPELINES_DIR: $(cat reg.out)"
