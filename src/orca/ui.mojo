@@ -14,7 +14,8 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/runs` | runs, newest first, `?n=` (50, at most 500) to a page; `?pipeline=`, `?status=`, `?trigger=`; `?before=<id>`: older than that run |
 | `/runs/<id>` | a run's DAG, steps and partitions, attempts, errors, reads and commits |
 | `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error |
-| `/runs/<id>/timeline.json` | the run's Dista timeline, for Perfetto |
+| `/runs/<id>/timeline.json` | the run's Dista timeline, which its page draws (`orca.ui_viz`) and Perfetto opens |
+| `/api/gantt` | the pipelines in dataset order with their runs over `?window=1h`, `6h`, `24h` (default) or `7d`, and the runs each started: the home page's Timeline tab (`orca.ui_viz`) |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
 | `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
 | `/ops` | redirects to `/ops/control`; "Ops" in the nav has Control, Fleet and Workers under it |
@@ -204,6 +205,13 @@ from orca.watchdog import (
     watchdog_json,
 )
 from orca.ui_style import STYLE
+from orca.ui_viz import (
+    VIZ_STYLE,
+    gantt_json,
+    gantt_panel,
+    gantt_tabs,
+    timeline_section,
+)
 from orca.workers import (
     ran_on,
     worker_api,
@@ -1802,6 +1810,8 @@ def home(mut db: State) raises -> Page:
             " &lt;binary&gt;</code> adds one.</p>",
         )
     else:
+        # List and Timeline tabs over the table (orca.ui_viz).
+        gantt_tabs(h)
         h.raw(
             '<section class="card"><div class="scroll"><table><thead><tr>',
             "<th>Pipeline</th><th>Partitions</th><th>Schedule</th>",
@@ -1851,6 +1861,7 @@ def home(mut db: State) raises -> Page:
                 h.raw("</span>")
             h.raw("</td></tr>")
         h.raw("</tbody></table></div></section>")
+        gantt_panel(h)
     h.raw(
         '<section class="card"><h2>Runs per day</h2>',
         '<p class="muted">The last 30 days, by the day each run started',
@@ -3659,20 +3670,8 @@ def run(mut db: State, id: Int) raises -> Page:
     h.raw("</div>")
     _run_settings(h, db, r)
     if timeline:
-        try:
-            var t = read_timeline(
-                String(from_utf8_lossy=Span(read_location(timeline)))
-            )
-            h.raw("<h2>Timeline", _docs("dista"), "</h2>")
-            if t.left_out:
-                h.raw('<p class="muted">The first ')
-                h.text(MAX_BARS, " tasks; ", t.left_out, " more are in")
-                h.raw(" timeline.json.</p>")
-            h.raw('<div class="scroll">', timeline_svg(t), "</div>")
-        except e:
-            h.raw('<p class="muted">The timeline can\'t be drawn: ')
-            h.text(e)
-            h.raw("</p>")
+        # Drawn in the browser, from timeline.json once it's in view.
+        timeline_section(h, r.id)
     # Who did what to it from the UI (orca.auth).
     var acts = db.conn.query(
         (
@@ -5954,7 +5953,9 @@ struct Ui(Copyable, Handler):
         )
         if path == "/static/orca.css":
             var resp = Response(
-                status=200, reason="OK", body=List[UInt8](STYLE.as_bytes())
+                status=200,
+                reason="OK",
+                body=List[UInt8](String(STYLE, VIZ_STYLE).as_bytes()),
             )
             resp.headers.set("Content-Type", "text/css; charset=utf-8")
             return resp^
@@ -6215,6 +6216,9 @@ struct Ui(Copyable, Handler):
                 watchdog_json(db, watchdog_config()),
                 _page("Watchdog", "", h),
             )
+        if path == "/api/gantt":
+            var j = gantt_json(db, _query(url, "window"))
+            return Page(200, j.copy(), j^, "application/json")
         if path == "/api/watchdog":
             var j = watchdog_json(db, watchdog_config())
             return Page(200, j.copy(), j^, "application/json")
