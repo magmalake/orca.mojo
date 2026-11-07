@@ -15,6 +15,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/runs` | runs, newest first, `?n=` (50, at most 500) to a page; `?pipeline=`, `?status=`, `?trigger=`; `?before=<id>`: older than that run |
 | `/runs/<id>` | a run's cards (Status, Partitions & trigger, Code, Resources, Settings), its steps (`?steps=table` (default), `timeline` or `graph`: the Steps tab shown without scripts), its machines, and the snapshots each step read and wrote |
 | `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error |
+| `/code` | `?u=` a link to a file at a commit on GitHub: its lines and each coloured as HTML (`orca.highlight`), as JSON, for the code shown on hover; the UI fetches the file, so a browser needn't reach GitHub |
 | `/runs/<id>/timeline.json` | the run's Dista timeline, which its page draws (`orca.ui_viz`) and Perfetto opens |
 | `/api/gantt` | the pipelines in dataset order with their runs over `?window=1h`, `6h`, `24h` (default) or `7d`, and the runs each started: the home page's Timeline tab (`orca.ui_viz`) |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
@@ -85,6 +86,7 @@ from std.os import getenv
 
 from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
+from objectstore.http import Header, HttpClient
 from postgres import Params, Row
 
 from json import loads
@@ -126,6 +128,8 @@ from orca.logs import location_exists, read_location, run_dir
 from orca.cron import CronExpr
 from orca.control import CONTROL
 from orca.dag import DagStep, aggregate, dag_svg
+from orca.highlight import highlight
+from orca.terms import header_help, key_help, value_help
 from orca.graph import Edge, Node, graph_svg
 from orca.system import (
     alert_html,
@@ -1625,14 +1629,14 @@ comptime _PEEK = """
   const lead = (l) => l.length - l.trimStart().length;
   const Q3 = '"'.repeat(3);
   let box = null, cur = null, showT = 0, hideT = 0;
+  // The file, coloured by orca (/code): its lines and their HTML.
   const load = (url) => {
-    if (!files.has(url)) files.set(url, fetch(url).then((r) => { if (!r.ok) throw new Error(r.status); return r.text(); }));
+    if (!files.has(url)) files.set(url, fetch("/code?u=" + encodeURIComponent(url)).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }));
     return files.get(url);
   };
   // From the def (and its decorators) through its docstring and body, up
   // to MAX lines; it ends at the next line no deeper than the def's.
-  function snippet(src, at) {
-    const lines = src.split(String.fromCharCode(10));
+  function snippet(lines, at) {
     let from = at - 1;
     while (from > 0 && lines[from - 1].trimStart().startsWith("@")) from--;
     const indent = lead(lines[at - 1] || "");
@@ -1677,9 +1681,9 @@ comptime _PEEK = """
     place(a);
     let body;
     try {
-      const src = await load("https://raw.githubusercontent.com/" + owner + "/" + repo + "/" + sha + "/" + path);
-      const s = snippet(src, at);
-      body = "<pre>" + s.out.map(([n, l]) => '<span class="peek__line' + (n === at ? " peek__line--at" : "") + '"><span class="peek__ln">' + n + "</span>" + esc(l) + "</span>").join("") + (s.more ? '<span class="peek__line"><span class="peek__ln"></span>…</span>' : "") + "</pre>";
+      const src = await load("https://github.com/" + owner + "/" + repo + "/blob/" + sha + "/" + path);
+      const s = snippet(src.lines, at);
+      body = "<pre>" + s.out.map(([n, l]) => '<span class="peek__line' + (n === at ? " peek__line--at" : "") + '"><span class="peek__ln">' + n + "</span>" + (src.html[n - 1] ?? esc(l)) + "</span>").join("") + (s.more ? '<span class="peek__line"><span class="peek__ln"></span>…</span>' : "") + "</pre>";
     } catch (e) {
       body = '<p class="peek__msg">Can&#39;t load the source here (a private repository, or offline). The link opens it.</p>';
     }
@@ -1730,9 +1734,118 @@ comptime _PEEK = """
 """
 """Code on hover: a link to a line on GitHub (`a.src`) shows, after a
 moment or on keyboard focus, that function's source, from its def through
-its docstring, fetched from raw.githubusercontent.com once per file; the
+its docstring, coloured, from `/code` (which fetches the file from
+raw.githubusercontent.com and colours it, `orca.highlight`) once per file; the
 link itself is unchanged, so without scripts (or for a private repository)
 it still opens the file. Escape closes it and any help shown."""
+
+
+comptime _CODE_MAX = 1 << 20
+"""The largest file `/code` colours: 1 MiB."""
+
+
+def _code_part(s: StringSlice, path: Bool) -> Bool:
+    """Whether `s` is a safe owner, repository or (with `path`) file path
+    in a GitHub URL: letters, digits, `.`, `_`, `-` (and `/` in a path),
+    with no `..` segment."""
+    if not s or s.startswith(".") or "/." in s or "./" in s:
+        return False
+    for b in s.as_bytes():
+        var ok = (
+            (b >= UInt8(ord("a")) and b <= UInt8(ord("z")))
+            or (b >= UInt8(ord("A")) and b <= UInt8(ord("Z")))
+            or (b >= UInt8(ord("0")) and b <= UInt8(ord("9")))
+            or b == UInt8(ord("."))
+            or b == UInt8(ord("_"))
+            or b == UInt8(ord("-"))
+            or (path and b == UInt8(ord("/")))
+        )
+        if not ok:
+            return False
+    return True
+
+
+def raw_code_url(href: String) -> String:
+    """`https://raw.githubusercontent.com/<o>/<r>/<sha>/<path>` for a link
+    to a file at a commit on GitHub (`https://github.com/<o>/<r>/blob/
+    <sha>/<path>`, as the UI's code links are, without `#L`), or "" for
+    anything else, so `/code` fetches nothing but such files."""
+    comptime head = "https://github.com/"
+    if not href.startswith(head):
+        return ""
+    var rest = String(href[byte = head.byte_length() :])
+    var parts = List[String]()
+    for p in rest.split("/", 4):
+        parts.append(String(p))
+    if len(parts) != 5 or parts[2] != "blob":
+        return ""
+    var sha = parts[3]
+    if sha.byte_length() < 7 or sha.byte_length() > 40 or not is_hex(sha):
+        return ""
+    if not (
+        _code_part(parts[0], False)
+        and _code_part(parts[1], False)
+        and _code_part(parts[4], True)
+    ):
+        return ""
+    return String(
+        "https://raw.githubusercontent.com/",
+        parts[0],
+        "/",
+        parts[1],
+        "/",
+        sha,
+        "/",
+        parts[4],
+    )
+
+
+def code_page(href: String) -> Page:
+    """`/code?u=<a GitHub link to a file at a commit>`: the file's lines and
+    each coloured as HTML (`orca.highlight`), as JSON, for the code shown on
+    hover. 400 for any other URL, 502 when GitHub doesn't give it (a
+    private repository), 413 past `_CODE_MAX`."""
+    var raw = raw_code_url(href)
+    if not raw:
+        return Page(
+            400,
+            String('{"error": "not a GitHub file at a commit"}'),
+            String('{"error": "not a GitHub file at a commit"}'),
+            "application/json",
+        )
+    var body: List[UInt8]
+    try:
+        var http = HttpClient()
+        http.follow_redirects = False
+        http.verify_tls = True
+        http.timeout_ms = 5000
+        var resp = http.request(
+            "GET",
+            raw,
+            [Header("User-Agent", "orca-ui")],
+            List[UInt8]().copy(),
+        )
+        if resp.status != 200:
+            raise Error("HTTP ", resp.status)
+        body = resp.body.copy()
+    except:
+        var e = String('{"error": "GitHub didn\'t give the file"}')
+        return Page(502, e.copy(), e^, "application/json")
+    if len(body) > _CODE_MAX:
+        var e = String('{"error": "the file is too large"}')
+        return Page(413, e.copy(), e^, "application/json")
+    var text = String(from_utf8_lossy=Span(body))
+    var out = String('{"lines": [')
+    var first = True
+    for line in text.split("\n"):
+        out.write("" if first else ", ", quote(String(line)))
+        first = False
+    out.write('], "html": [')
+    var lines = highlight(text)
+    for i in range(len(lines)):
+        out.write(", " if i else "", quote(lines[i]))
+    out.write("]}")
+    return Page(200, out.copy(), out^, "application/json")
 
 
 comptime _USER_SLOT = "<!--orca-user-->"
@@ -3412,6 +3525,62 @@ def _help(
             '" target="_blank" rel="noopener">Docs ↗</a>',
         )
     h.raw("</span></span>")
+
+
+def _strip_tags(s: StringSlice) -> String:
+    """`s`'s text: its tags dropped, and a sort arrow (▲ ▼)."""
+    var out = String()
+    var inside = False
+    for cp in s.codepoint_slices():
+        if cp == "<":
+            inside = True
+        elif cp == ">":
+            inside = False
+        elif not inside:
+            out.write(cp)
+    return String(out.replace("▲", "").replace("▼", "").strip())
+
+
+def with_header_help(html: String, prefix: String) -> String:
+    """`html` with a "?" in every table header `orca.terms` has help for,
+    by its text (and the table its `data-help` names), as `_help` writes
+    one; ids `help-<prefix>-<n>`. One pass over the page, so every table,
+    whoever wrote it, gets them."""
+    var out = String()
+    var at = 0
+    var n = 0
+    while True:
+        var open = html.find("<th", at)
+        if open < 0:
+            break
+        var gt = html.find(">", open)
+        var close = html.find("</th>", open)
+        if gt < 0 or close < 0 or gt > close:
+            break
+        # Only <th> and <th ...>, not <thead>.
+        var next = String(html[byte = open + 3 : open + 4])
+        if next != ">" and next != " ":
+            out.write(html[byte = at : open + 3])
+            at = open + 3
+            continue
+        var tag = String(html[byte=open:gt])
+        var inner = String(html[byte = gt + 1 : close])
+        var table = String()
+        var dh = tag.find('data-help="')
+        if dh >= 0:
+            var q = tag.find('"', dh + 11)
+            table = String(tag[byte = dh + 11 : q])
+        var label = _strip_tags(inner)
+        var text = header_help(label, table)
+        out.write(html[byte=at:close])
+        if text and 'class="help"' not in inner:
+            var h = Html()
+            _help(h, String(prefix, "-", n), label, text)
+            out.write(h^.finish())
+            n += 1
+        at = close
+    out.write(html[byte=at:])
+    return out^
 
 
 def _dt(
@@ -7089,6 +7258,13 @@ def _reason(status: Int) -> String:
 def _respond(page: Page, json: Bool) -> Response:
     var raw = page.content_type != ""
     var body = page.json if json and not raw else page.html
+    if not (json and not raw) and (
+        not raw or page.content_type.startswith("text/html")
+    ):
+        # A fragment's ids apart from its page's.
+        body = with_header_help(
+            body, String("thf") if raw else String("th")
+        )
     var status = (
         200 if page.location and json and page.status == 303 else (page.status)
     )
@@ -7639,6 +7815,8 @@ struct Ui(Copyable, Handler):
                 before=_int(_query(url, "before")),
                 n=_int(_query(url, "n")),
             )
+        if path == "/code":
+            return code_page(_query(url, "u"))
         if path.startswith("/runs/"):
             var parts = path[byte=6:].split("/")
             var id: Int

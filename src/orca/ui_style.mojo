@@ -259,6 +259,13 @@ a.vtabs__tab { display: inline-block; text-decoration: none; }
 .peek__ln { display: inline-block; width: 3.4em; padding-right: 0.9em; text-align: right;
   color: var(--faint); user-select: none; }
 .peek__msg { margin: 0; padding: 0.6rem 0.75rem; color: var(--muted); font-size: 0.8125rem; }
+/* Its colours (orca.highlight), from the theme's tokens. */
+.hl--kw { color: var(--ember); }
+.hl--fn { color: var(--live); font-weight: 600; }
+.hl--str { color: var(--ok); }
+.hl--com { color: var(--faint); font-style: italic; }
+.hl--num, .hl--const { color: var(--lake); }
+.hl--dec { color: var(--warn); }
 
 /* Forms: filters, actions, and logging in. */
 .filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: end; margin-bottom: 1rem; }
