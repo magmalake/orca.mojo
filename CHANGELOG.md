@@ -8,6 +8,8 @@
   binary is an error naming it and nothing is registered. A file outside a
   git checkout (the image) records `ORCA_COMMIT` and `ORCA_SOURCE` instead of
   a commit, and git's `fatal: not a git repository` no longer reaches stderr.
+  `orca-stack` starts cloudflared on HTTP/2 unless `tunnel.env` sets
+  `TUNNEL_TRANSPORT_PROTOCOL`.
   `docs/hetzner.md`: the census's `orca.toml` lives in mojo-census.
 
 ## 0.10.0 - 2026-11-06

@@ -37,7 +37,13 @@ Cloudflare ---- tunnel ------>| cloudflared -> ui:8270, console:8080            
    `TUNNEL_TOKEN=...`, mode 600. Add two public hostnames to the tunnel:
    `orca.mlake.dev` to service `http://ui:8270`, and `census.mlake.dev` to
    `http://console:8080`. (If those names are on the AWS stack, Cloudflare
-   replaces their DNS records with the tunnel's CNAME.)
+   replaces their DNS records with the tunnel's CNAME; if it can't create the
+   CNAME, delete the existing A records for the names first.) The CNAMEs must
+   be **Proxied** (orange cloud): DNS-only resolves to a private `fd10::`
+   address and the site is unreachable. The tunnel runs over HTTP/2
+   (`TUNNEL_TRANSPORT_PROTOCOL=http2`, set by `orca-stack` unless
+   `tunnel.env` sets it), because QUIC over UDP 7844 kept timing out on
+   Hetzner ("timeout: no recent network activity").
 4. **A GitHub token** for the census's `mojo_repos`, in a file (read-only
    access to public repositories is enough).
 5. **Your address** for the firewall: `curl -4 ifconfig.me`, plus `/32`.
@@ -91,7 +97,10 @@ file's commit). Read the file there; each setting has a comment. In short:
 until iceberg-mojo 0.11.1 is pinned everywhere (issue 164), and
 `DISTA_WORKER_SLOTS` is how many dista workers run in one process on the
 server: 4 on the CAX21; during an import on the CAX41 register it again with
-14, and set it back to 4 after.
+14, and set it back to 4 after. gharchive's `GHARCHIVE_PARALLEL` (downloads
+at once) is 4 for the same reason: its default of 16 is sized for four AWS
+instances and took the CAX21's memory to 99.6% (the watchdog paused
+everything); use 16 with the 14 slots on the CAX41.
 
 Register (the binaries are in the image; `up.sh` doesn't do this because
 what to register is the project's):
@@ -129,7 +138,7 @@ kills them): pause the pipelines in the UI and wait, or use `--force`.
 
 ```sh
 ./rescale.sh up                        # CAX21 -> CAX41, keeping the disk
-# register the census with DISTA_WORKER_SLOTS = "14" if you want the 16 vCPUs used
+# register the census with DISTA_WORKER_SLOTS = "14" and GHARCHIVE_PARALLEL = "16" if you want the 16 vCPUs used
 # ... the fill runs; watch the pipeline page's Fill line ...
 ./rescale.sh down                      # CAX41 -> CAX21
 ```
