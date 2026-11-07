@@ -80,7 +80,7 @@ until curl -fs "http://127.0.0.1:$port/" > /dev/null 2>&1; do
 done
 curl -fsS -H 'Accept: application/json' "http://127.0.0.1:$port/runs/$old" | jq -e '.run.error | startswith("not started: its code is 0xold")' > /dev/null \
     || fail "the run's JSON has no error"
-curl -fsS "http://127.0.0.1:$port/runs/$old" | grep -q "<dt>Error</dt><dd>not started: its code is 0xold" \
+curl -fsS "http://127.0.0.1:$port/runs/$old" | grep -q "<dt>Error<span class=\"help\">.*</dt><dd>not started: its code is 0xold" \
     || fail "the run's page has no error"
 kill "$pid"
 wait "$pid" 2> /dev/null || true

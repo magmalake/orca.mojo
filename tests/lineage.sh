@@ -132,6 +132,19 @@ curl -fsS "$base/datasets/lake.report/snapshots/$R" | grep -q "href=\"/datasets/
     || fail "the lineage page doesn't link the raw snapshot"
 run=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'report'")
 curl -fsS "$base/runs/$run" | grep -q "href=\"/datasets/lake.clean/snapshots/$C\"" || fail "the run doesn't link what it read"
+page=$(curl -fsS "$base/runs/$run")
+echo "$page" | grep -qF '<section class="card" id="tables"><h2>Snapshots<span class="help">' || fail "the run's Snapshots card"
+echo "$page" | grep -q 'tabindex="0">read</span></td>' && echo "$page" | grep -q 'tabindex="0">wrote</span></td>' || fail "the run's snapshots don't say read and wrote"
+# The snapshot page: the diagram with its legend and help, Upstream and
+# Downstream (back and forward in the JSON), each with its help.
+page=$(curl -fsS "$base/datasets/lake.report/snapshots/$R")
+echo "$page" | grep -qF '<section class="card" id="lineage"><h2>Lineage<span class="help">' || fail "the lineage diagram's help"
+echo "$page" | grep -qF '<p class="muted graph__legend">' || fail "the lineage diagram's legend"
+for h in Upstream Downstream; do
+    echo "$page" | grep -qF "<h2 id=\"$(echo $h | tr A-Z a-z)\">$h<span class=\"help\">" || fail "no $h with its help"
+done
+echo "$page" | grep -q 'Made from' && fail "the snapshot page still says Made from"
+echo "$page" | grep -qF '<th>Written by<span class="help">' && echo "$page" | grep -qF '<th>Read<span class="help">' || fail "the lineage tables' columns"
 [ "$(json "/runs/$run" | jq -r '[.tables[] | .dataset] | sort | join(",")')" = "lake.clean,lake.report" ] \
     || fail "the run's tables' datasets"
 [ "$(json /pipelines/clean | jq -c '.steps[0] | [.reads, .writes]')" = '[["lake.raw"],["lake.clean"]]' ] \

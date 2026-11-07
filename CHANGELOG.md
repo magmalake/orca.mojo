@@ -15,6 +15,57 @@
   Monthly pipelines keep their year of months. `orca.ui_coverage`,
   `docs/ui.md#coverage`, `tests/calendar.sh`.
 
+- **Help on every table, and on the values in it.** Every table's column
+  headers have a "?" (Steps, Next runs, Runs, Versions, Machines, Fleet,
+  Workers, the watchdog's, alerts' and the rest), added as each page is
+  answered from one dictionary, `orca.terms`. Values from a fixed set
+  (statuses, step kinds, triggers, placements, read and wrote, a
+  setting's source) are dotted underlined and say what they mean on
+  hover, keyboard focus or a tap, from the same dictionary, without a "?"
+  in every cell. A "?" in a table that scrolls sideways is no longer cut
+  off by it.
+
+- **The Configuration table explains itself and links its sources.** Each
+  key has a "?", a placement or fills value its meaning, and From links to
+  the orca.toml line at the registered commit (`orca register` now keeps
+  each file value's line and the file's path in its checkout) or, for a
+  default from the pipeline's code, to its `Pipeline[...]` line. A flag,
+  the environment and orca's own defaults have no line to link.
+
+- **Code on hover is coloured.** `/code?u=` fetches a GitHub file at a
+  commit for the UI and colours it with `orca.highlight`, a small Mojo
+  tokenizer (keywords, defined names, strings, comments, numbers,
+  decorators), in the theme's colours.
+
+- **A run's page is cards, like a pipeline's.** The list of facts at the
+  top is now Status (with Resume, Rerun and Cancel), Partitions &
+  trigger, Code (the pipeline, steps and tasks on one line, source on
+  hover, the code hash in small print), Resources (the run's own peak
+  memory and CPU) and Settings, each fact with a "?" that explains it.
+  Steps is one card with Table, Timeline and Graph tabs (the table
+  first, the choice remembered in the browser, `?steps=` without
+  scripts), so they aren't drawn twice. Machines says what its numbers
+  are: the whole machine for the local runner and control placement,
+  saying so plainly when other runs shared it, the run's own instances on
+  EC2, the node on Kubernetes. Each section has an anchor (`#status`,
+  `#steps`, `#machines`, `#tables`, ...); the JSON is unchanged.
+
+- **Lineage reads Upstream and Downstream.** A snapshot's page calls
+  "Made from" and "Made from it" Upstream and Downstream, its tables'
+  columns Written by and Read, and the run page's Snapshots card says
+  read and wrote, as the dataset page's Written by and Read by do. The
+  diagram has a legend and a "?" that says how to read it, and a box's
+  second line is the pipeline and partition that wrote it, the snapshot,
+  run and step on hover, instead of a cut-off id.
+
+- **Graphs are drawn top to bottom.** `/datasets`' graph of pipelines and
+  datasets was 5,000 px wide; it and a snapshot's lineage are now laid out
+  downward, a row per level, at most two boxes to a row (about 400 px, a
+  phone's width), arrows pointing down. A cycle (a pipeline reading what
+  it writes) no longer pushes a box to the far end: its edge goes back up
+  round the side, and an edge that skips a level goes round the boxes
+  rather than through them.
+
 - **Runs sized to their share of the machine** (part of #171). A pipeline
   can ask for `cpus = "1..16"` and `memory_gb = "2..24"` in orca.toml
   (`[defaults]` or its own table; a single number is both ends) or with
