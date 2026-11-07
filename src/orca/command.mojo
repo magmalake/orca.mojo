@@ -432,7 +432,7 @@ def _command(args: List[String], target: String) raises -> Int:
     ):
         var api = Api(url)
         return api_command(api, args)
-    if cmd == "register" and len(args) >= 3:
+    if cmd == "register":
         return _register(url, args)
     if cmd == "config" and len(args) >= 3:
         return _config(url, args)
