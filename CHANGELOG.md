@@ -21,6 +21,7 @@
   `orca.usage`, `docs/ui.md#what-a-run-uses`, `tests/usage.sh` (a step
   holding 200 MiB beside a child holding 100, each burning a core, on the
   local runner, the control host and a worker).
+
 - **`orca register` with no arguments works.** It printed the usage instead
   of registering every `[pipelines.<name>]` of the file, as the docs say (and
   `deploy/hetzner` runs it so): only a call with a flag or a path got through.
