@@ -47,7 +47,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 
 | Key | Type | Default when absent | Replaces the flag | Notes |
 |---|---|---|---|---|
-| `placement` | string: `"control"`, `"ec2"`, `"worker:<pool>"` or `"default"` | `default`, the scheduler's runner (`ORCA_RUNNER`) | `--placement` | `control` runs on the scheduler's host (`orca.control`). `worker:<pool>` runs on a remote worker of that pool (`orca worker`), never the scheduler: [workers.md](workers.md). |
+| `placement` | string: `"control"`, `"ec2"`, `"worker:<pool>"` or `"default"` | `default`, the scheduler's runner (`ORCA_RUNNER`) | `--placement` | `control` runs on the scheduler's host (`orca.control`). `worker:<pool>` runs on a remote worker of that pool (`orca worker`), never the scheduler: [workers.md](workers.md). All four: [placement.md](placement.md). |
 | `head_type` | string, an instance type | `ORCA_EC2_HEAD_TYPE`, else `c7g.large` | `--head-type` | Only used on EC2. |
 | `worker_type` | string, an instance type | `ORCA_EC2_WORKER_TYPE`, else `c7g.xlarge` | `--worker-type` | Only used on EC2. |
 | `workers` | integer `N` (at least 1), or string `"MIN..MAX"` | the code's `workers`, else 2; 0 for a pipeline without tasks | `--workers` | With `MIN..MAX`, the run scales between the two. |
@@ -268,7 +268,7 @@ The pipeline page and `/api/pipelines/<name>` say which of these stopped it, in 
 | Idle because | |
 |---|---|
 | `complete` | Every partition of the range is done, or the last ones are running. |
-| `paused` | `orca pause`, the UI's Pause button, or the watchdog (#153) tripping: it pauses the pipeline, and a fill stops like everything else. The reason names the watchdog's rule when the watchdog paused it. |
+| `paused` | `orca pause`, the UI's Pause button, or the [watchdog](watchdog.md) tripping: it pauses the pipeline, and a fill stops like everything else. The reason names the watchdog's rule when the watchdog paused it. |
 | `outside its window` | The UTC hour is outside `fill_window`. A fill run that has started goes on past the window's end. |
 | `no budget` | The runs cost money (EC2 or Kubernetes) and `fill_budget_per_day` isn't set. |
 | `price unknown` | Neither orca.fleet's price table nor a Kubernetes cluster can price the run. The [cost estimate](#the-cost-estimate) fails closed. |

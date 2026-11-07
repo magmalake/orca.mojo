@@ -43,10 +43,28 @@ mojo build bin/scheduler.mojo -o build/orca
 ./build/orca locate build/daily --root . && ./build/orca register ./build/daily
 ```
 
+## Docs
+
+| Page | What it covers |
+|---|---|
+| [docs/orca-toml.md](docs/orca-toml.md) | `orca.toml`: every key, precedence, `orca config show` and `export`, and [fills](docs/orca-toml.md#fills) |
+| [docs/placement.md](docs/placement.md) | where a pipeline's runs run: `default`, `ec2`, `control` and `worker:<pool>`, and the control host's limits |
+| [docs/workers.md](docs/workers.md) | remote workers: `orca worker`, worker tokens, a worker on another machine, the run's state over the API |
+| [docs/watchdog.md](docs/watchdog.md) | the watchdog's rules and thresholds, what a trip pauses, `orca watchdog status`, `ack` and `snooze` |
+| [docs/alerts.md](docs/alerts.md) | alerts to your phone through ntfy: what is sent, `ORCA_NOTIFY_*`, `orca notify` |
+| [docs/ui.md](docs/ui.md) | the UI's newer parts: the pipeline page's tabs and cards, a run's timeline, Ops › Control, Fleet and Workers |
+| [docs/hetzner.md](docs/hetzner.md) | the runbook for one Hetzner server: setup, deploying, rescaling, backups, alerts |
+| [docs/replace-control.md](docs/replace-control.md) | the runbook for replacing the AWS control instance |
+| [docs/future-directions.md](docs/future-directions.md) | where orca's seams are, and which are worth cutting |
+
+The site's [orca docs](https://mlake.dev/s/orca/docs) cover writing a
+pipeline, the command line, the scheduler and the UI's pages.
 [VISION.md](VISION.md) says what orca is for and how it gets there;
 [DESIGN.md](DESIGN.md) is the plan for building it; [K8S.md](K8S.md) is how
 it will run on Kubernetes and AWS; [docs/future-directions.md](docs/future-directions.md)
 is where its seams are and which are worth cutting.
+
+## Commands at a glance
 
 ```
 pixi run -e default test       # unit, CLI, compile-fail, state, kill, tasks, logs (plain `pixi run test` is ambiguous)
@@ -74,15 +92,16 @@ pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   #
 ./build/orca cancel taxi @all  # cancel its queued, running and retrying runs (or KEYS)
 ./build/orca pause taxi        # the scheduler starts none of its runs until orca unpause taxi
 ./build/orca watchdog status   # the watchdog pauses pipelines on a launch storm, runaway cost, idle workers,
-                               # failures or stuck runs; orca watchdog snooze launches 2h silences a rule
-./build/orca notify test        # a push to your phone through ntfy (ORCA_NOTIFY_URL): watchdog trips, failed runs, stalled fills, disk, lost workers
+                               # failures, stuck runs or a full control host (docs/watchdog.md);
+                               # orca watchdog snooze launches 2h silences a rule, orca watchdog ack keeps a trip's pipelines paused
+./build/orca notify test        # a push to your phone through ntfy (ORCA_NOTIFY_URL): watchdog trips, failed runs, stalled fills, disk, lost workers (docs/alerts.md)
 ./build/orca ui                # http://127.0.0.1:8270: pipelines, runs and datasets, also as JSON; start, resume, rerun, backfill, cancel, pause;
                                # Ops > Control is the machine running the scheduler and UI, Ops > Fleet the EC2 instances launched for runs,
                                # Ops > Workers the remote workers
                                # Pipelines > Timeline: each pipeline's runs over 1 h to 7 d, in dataset order, with what started what;
                                # a run's page draws its Dista timeline (zoom, hover) without leaving for Perfetto
 ./build/orca user add alice    # a login for the UI's actions; the password from stdin
-./build/orca status taxi       # its state and latest runs, as its page shows them
+./build/orca status taxi       # its state and latest runs, with how long each ran, as its page shows them
 ./build/orca login https://orca.example.com   # from a laptop: a token for the deployed UI, kept mode 600
 ./build/orca --remote orca.example.com backfill taxi 2024-03   # then backfill, pause, cancel, resume, rerun, status there
 ./build/orca lineage lake.report   # what a dataset's latest snapshot was made from, and what was made from it
@@ -91,7 +110,7 @@ pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   #
 docker build -f deploy/Dockerfile -t orca:dev . && kubectl apply -f deploy/k8s/   # on Kubernetes
 tests/kind.sh                  # that, on a kind cluster: each run on a dista cluster of its own
 pixi run test-ec2              # ORCA_RUNNER=ec2 against a stand-in EC2: a head and workers per run
-./build/orca register --placement control ./build/toy   # a small pipeline's runs on the scheduler's own host, no instance (orca.control)
+./build/orca register --placement control ./build/toy   # a small pipeline's runs on the scheduler's own host, no instance (docs/placement.md)
 pixi run test-placement        # that, within the control instance's limits, beside runs on the stand-in EC2
 ./build/orca register --placement worker:bgent ./build/toy   # its runs on a remote worker of pool bgent (docs/workers.md)
 ./build/orca worker-token create --pool bgent   # that pool's token; then on the worker, with no database:
@@ -177,22 +196,23 @@ nothing. Ops > Workers lists the workers. See
 ## Alerts
 
 Problems otherwise show only in the UI. With `ORCA_NOTIFY_URL` set to an
-[ntfy](https://ntfy.sh) topic URL (`https://ntfy.sh/<long-random-topic>`, or
-your own server), orca pushes them to the phone app: a watchdog trip (high
-priority; low when it is acknowledged or unpaused), a run that failed after
-its last retry, a fill with no finished run in `ORCA_NOTIFY_FILL_STALL_HOURS`
-(2), the control host's disk over `ORCA_NOTIFY_DISK_PERCENT` (85), a worker
-quiet for 5 minutes while it held runs, and, from a script,
-`orca notify --kind backup-failed ... "message"`. Each carries ntfy's
-`Title`, `Priority`, `Tags` and `Click` (a link into `ORCA_UI_URL`). The topic
-is a secret in practice: keep it in a file read through `ORCA_SECRET_FETCH`
-(`ORCA_NOTIFY_SECRET=orca/ntfy-topic`; `ORCA_NOTIFY_TOKEN_SECRET` for a
-protected topic) and it is never logged. The same alert (kind and subject) is
-sent at most once per `ORCA_NOTIFY_MIN_SECONDS` (1800), remembered in
-Postgres (`orca.notifications`) across restarts; a send that fails is logged
-and retried with a wait that doubles, and never blocks the scheduler.
-`orca notify test` checks the setup; Ops > Control shows what was sent. See
-`orca.notify` and `orca.alerts`.
+[ntfy](https://ntfy.sh) topic URL, the scheduler pushes them to the phone
+app: a watchdog trip, a run that failed after its last retry, a stalled
+fill, the control host's disk over 85%, a lost worker, and, from a script,
+`orca notify --kind backup-failed ... "message"`. The same alert is sent at
+most once per 30 minutes, and a failed send is retried later without
+blocking the scheduler. `orca notify test` checks the setup; Ops > Control
+shows what was sent. Every setting: [docs/alerts.md](docs/alerts.md).
+
+## The watchdog
+
+Every minute the scheduler checks launches, estimated cost, idle workers,
+failing attempts, stuck runs and the control host's memory and disk. A rule
+past a threshold pauses its pipelines and shows a banner; it never resumes
+anything. Unpause the pipelines to clear the trip, `orca watchdog ack` to
+keep them paused, or `orca watchdog snooze <rule> 2h` while you fix the
+cause. On the `local` runner the cost rule reads "fixed price". Each rule's
+thresholds and variables: [docs/watchdog.md](docs/watchdog.md).
 
 ## Running it on one server
 

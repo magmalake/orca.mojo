@@ -84,6 +84,57 @@ logs go straight from the worker to `ORCA_WAREHOUSE` and `ORCA_LOGS`, as
 any run's do. When the process ends, `<binary> keep-log` appends its output,
 masked, to the run's `driver.log`.
 
+## A worker on another machine
+
+The simplest worker is the server's own image in Docker, at the same tag,
+so the pipeline binaries are at the paths they were registered with
+(`/opt/orca/pipelines/<name>` in a project image).
+
+On the server, once, a token for the pool:
+
+```sh
+orca worker-token create --pool bgent --label bgent
+```
+
+On the worker, `worker.env` (mode 600) holds the token, the bucket and
+where secrets come from:
+
+```sh
+ORCA_WORKER_TOKEN=orca_...
+ORCA_WAREHOUSE=s3://<bucket>/warehouse
+ORCA_LOGS=s3://<bucket>/logs
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=<location>
+AWS_ENDPOINT_URL_S3=https://<location>.your-objectstorage.com   # S3-compatible storage only
+ORCA_SECRET_FETCH=sh /etc/orca/secret-fetch
+```
+
+Then:
+
+```sh
+docker run -d --name orca-worker --restart always --env-file worker.env \
+    -v "$PWD/secrets:/etc/orca/secrets:ro" -v "$PWD/secret-fetch:/etc/orca/secret-fetch:ro" \
+    ghcr.io/<owner>/<image>:<tag> worker --pool bgent --remote https://orca.example.com
+```
+
+- `secret-fetch` can be a copy of the server's
+  ([`deploy/hetzner/server/secret-fetch`](../deploy/hetzner/server/secret-fetch)):
+  it prints `/etc/orca/secrets/<id>`, so a pipeline's
+  `GITHUB_TOKEN = "orca/github-token"` reads `secrets/orca/github-token`.
+- Pass `--image` (or `ORCA_IMAGE`) only if the pipelines were registered
+  with `--image`, and then the same value: [Versions](#failures).
+- The worker needs only outbound HTTPS, to the UI and to the bucket.
+- `docker logs orca-worker` shows each run it starts and how it exited;
+  Ops > Workers shows its heartbeat.
+
+**Deploying.** The worker runs the code of its own image, so keep it on
+the server's tag: deploy the server first (`deploy.sh <tag>`), then
+restart the worker on the same tag (`docker rm -f orca-worker`, then the
+`docker run` above with the new tag). In between, a worker on the old tag
+runs the old code, unless the pipelines are registered with `--image`: then
+it is given nothing until it matches.
+
 ## The run's state over HTTPS
 
 A pipeline binary with `ORCA_STATE_URL` records its run through
@@ -117,9 +168,10 @@ that can't be made within half the stale limit refuses the commit.
   its run lost at its next call, and a commit is fenced.
 - **A process that never claimed its run** (a missing binary, a `resume`
   that refused) has the run failed, saying why (`/api/worker/exited`).
-- **Versions.** A run needs its pipeline's image (`--image`, `image` in
-  orca.toml) to be the worker's (`--image`, `ORCA_IMAGE`), both empty
-  included, so there's no silent drift. A worker of another image isn't
+- **Versions.** A run needs its pipeline's image (`orca register
+  --image`; `orca config show <pipeline>` prints it) to be the worker's
+  (`--image`, `ORCA_IMAGE`), both empty included, so there's no silent
+  drift. A worker of another image isn't
   given the run, and the run stays queued, held saying why. The worker
   checks the spec again and puts back a run that isn't for it
   (`/api/worker/release`). Pin the same tag in `deploy.sh` and the worker's
