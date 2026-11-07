@@ -43,6 +43,7 @@ from orca.store import (
     StepInfo,
     StepRun,
     TableSnapshot,
+    Usage,
     process_owner,
 )
 
@@ -557,6 +558,15 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.watchdog_rules ADD COLUMN checks jsonb",
             "ALTER TABLE orca.watchdog_trips ADD COLUMN checks jsonb",
         ],
+        # What each attempt's processes used (orca.usage): the peak resident
+        # bytes of its process tree, its CPU seconds and the most cores it
+        # kept busy; null where it isn't known (EC2, Kubernetes, macOS's
+        # peak cores).
+        [
+            "ALTER TABLE orca.attempts ADD COLUMN peak_rss_bytes bigint",
+            "ALTER TABLE orca.attempts ADD COLUMN cpu_seconds double precision",
+            "ALTER TABLE orca.attempts ADD COLUMN peak_cpus double precision",
+        ],
     ]
 
 
@@ -893,10 +903,13 @@ struct State(Movable):
             (
                 "SELECT s.step, s.partition, s.status, coalesce(s.error, '') AS"
                 " error, (SELECT count(*) FROM orca.attempts a WHERE a.step ="
-                " s.id) AS attempts, coalesce((SELECT a.log FROM orca.attempts"
-                " a WHERE a.step = s.id ORDER BY a.attempt DESC LIMIT 1), '')"
-                " AS log FROM orca.steps s WHERE s.run = $1 ORDER BY s.ord,"
-                " s.id"
+                " s.id) AS attempts, coalesce(l.log, '') AS log,"
+                " coalesce(l.peak_rss_bytes, -1) AS peak,"
+                " coalesce(l.cpu_seconds, -1) AS cpu, coalesce(l.peak_cpus,"
+                " -1) AS cpus FROM orca.steps s LEFT JOIN LATERAL (SELECT"
+                " a.log, a.peak_rss_bytes, a.cpu_seconds, a.peak_cpus FROM"
+                " orca.attempts a WHERE a.step = s.id ORDER BY a.attempt DESC"
+                " LIMIT 1) l ON true WHERE s.run = $1 ORDER BY s.ord, s.id"
             ),
             Params().int64(Int64(run)),
         )
@@ -909,6 +922,11 @@ struct State(Movable):
                     Int(r.int64("attempts")),
                     r.text("error"),
                     r.text("log"),
+                    Usage(
+                        Int(r.int64("peak")),
+                        r.float64("cpu"),
+                        r.float64("cpus"),
+                    ),
                 )
             )
         return out^

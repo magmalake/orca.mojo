@@ -51,6 +51,7 @@ from orca.store import (
     StepInfo,
     StepRun,
     TableSnapshot,
+    Usage,
 )
 
 comptime _NOW = "((julianday('now') - 2440587.5) * 86400.0)"
@@ -155,6 +156,14 @@ def _migrations() -> List[List[String]]:
         [
             "ALTER TABLE runs ADD COLUMN retry_at INTEGER",
             "ALTER TABLE runs ADD COLUMN deferrals INTEGER NOT NULL DEFAULT 0",
+        ],
+        # What each attempt's processes used, as Postgres's migration 35
+        # keeps it (orca.usage); a run in a file has no scheduler or worker
+        # to measure it, so they stay null unless copied in.
+        [
+            "ALTER TABLE attempts ADD COLUMN peak_rss_bytes INTEGER",
+            "ALTER TABLE attempts ADD COLUMN cpu_seconds REAL",
+            "ALTER TABLE attempts ADD COLUMN peak_cpus REAL",
         ],
     ]
 
@@ -631,9 +640,11 @@ struct SqliteStore(Movable, RunStore):
         var st = self._stmt(
             "SELECT s.step, s.partition, s.status, coalesce(s.error, ''),"
             " (SELECT count(*) FROM attempts a WHERE a.step = s.id),"
-            " coalesce((SELECT a.log FROM attempts a WHERE a.step = s.id"
-            " ORDER BY a.attempt DESC LIMIT 1), '') FROM steps s WHERE s.run"
-            " = ?1 ORDER BY s.ord, s.id"
+            " coalesce(l.log, ''), coalesce(l.peak_rss_bytes, -1),"
+            " coalesce(l.cpu_seconds, -1.0), coalesce(l.peak_cpus, -1.0)"
+            " FROM steps s LEFT JOIN attempts l ON l.id = (SELECT a.id FROM"
+            " attempts a WHERE a.step = s.id ORDER BY a.attempt DESC LIMIT 1)"
+            " WHERE s.run = ?1 ORDER BY s.ord, s.id"
         )
         st.bind_int(1, run)
         while True:
@@ -649,6 +660,7 @@ struct SqliteStore(Movable, RunStore):
                     row.int_val(4),
                     row.text_val(3),
                     row.text_val(5),
+                    Usage(row.int_val(6), row.float_val(7), row.float_val(8)),
                 )
             )
         return out^

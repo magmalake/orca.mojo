@@ -199,6 +199,26 @@ struct RunInfo(Copyable, Movable):
 
 
 @fieldwise_init
+struct Usage(ImplicitlyCopyable, Movable):
+    """What an attempt's processes used (`orca.usage`): the peak resident
+    bytes of its process tree, its CPU seconds, and the most cores it kept
+    busy over a sample's interval. Each is -1 where it isn't known: a run
+    on EC2 or Kubernetes, one no scheduler or worker started, or on macOS
+    the peak cores, which only samples give."""
+
+    var peak_rss_bytes: Int
+    var cpu_seconds: Float64
+    var peak_cpus: Float64
+
+    @staticmethod
+    def unknown() -> Usage:
+        return Usage(-1, -1.0, -1.0)
+
+    def known(self) -> Bool:
+        return self.peak_rss_bytes >= 0 or self.cpu_seconds >= 0
+
+
+@fieldwise_init
 struct StepInfo(Copyable, Movable):
     var step: String
     var partition: String
@@ -207,6 +227,8 @@ struct StepInfo(Copyable, Movable):
     var error: String
     var log: String
     """The latest attempt's log file, or empty."""
+    var usage: Usage
+    """What the latest attempt used, as far as it's known."""
 
 
 def process_owner() -> String:
@@ -753,7 +775,15 @@ struct MemoryStore(Movable, RunStore):
                         last = a.attempt
                         log = a.log
             out.append(
-                StepInfo(s.step, s.partition, s.status, attempts, s.error, log)
+                StepInfo(
+                    s.step,
+                    s.partition,
+                    s.status,
+                    attempts,
+                    s.error,
+                    log,
+                    Usage.unknown(),
+                )
             )
         return out^
 

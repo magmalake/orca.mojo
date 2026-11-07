@@ -1,7 +1,8 @@
 """Starting processes: what the scheduler needs to run pipeline binaries.
 
 `spawn` forks and executes a binary without waiting for it, its output
-appended to a log file if one is given; `reap` collects the ones that ended.
+appended to a log file if one is given; `reap` collects the ones that
+ended, with what `wait4` says they used (`orca.usage`).
 `capture` runs a command to the end, killing it past a timeout, and returns
 what it printed; `Capture` is the same started without waiting, for the
 scheduler to check on from tick to tick. Everything a child needs is
@@ -113,19 +114,64 @@ def spawn(
     return Int(pid)
 
 
-def reap() -> List[Tuple[Int, Int]]:
-    """The children that ended, as (pid, exit code), without waiting; a
-    child killed by a signal has code 128 + the signal."""
-    var out = List[Tuple[Int, Int]]()
+@fieldwise_init
+struct Reaped(ImplicitlyCopyable, Movable):
+    """A child that ended, as `reap` collects it."""
+
+    var pid: Int
+    var code: Int
+    """Its exit code; 128 + the signal if a signal killed it."""
+    var max_rss: Int
+    """`wait4`'s `ru_maxrss` in bytes: the largest resident set of it or of
+    a descendant it waited for, one process's, not their sum."""
+    var cpu_seconds: Float64
+    """Its user and system CPU seconds, with its waited-for descendants'."""
+
+
+def reap() -> List[Reaped]:
+    """The children that ended, without waiting, with what `wait4` says
+    they used."""
+    var out = List[Reaped]()
     var status = stack_allocation[1, c_int]()
+    # struct rusage: two timevals (16 bytes each on 64-bit Linux and
+    # macOS), then longs, ru_maxrss first; 144 bytes in all.
+    var ru = List[UInt8](length=256, fill=0)
     while True:
         status[] = 0
         # WNOHANG is 1 on macOS and Linux.
-        var pid = external_call["waitpid", c_int](c_int(-1), status, c_int(1))
+        var pid = external_call["wait4", c_int](
+            c_int(-1), status, c_int(1), ru.unsafe_ptr()
+        )
         if pid <= 0:
             break
-        out.append((Int(pid), _code(Int(status[]))))
+        out.append(
+            Reaped(
+                Int(pid),
+                _code(Int(status[])),
+                _max_rss(_u64(ru, 32)),
+                Float64(_u64(ru, 0))
+                + Float64(_u64(ru, 8) & 0xFFFFFFFF) / 1e6
+                + Float64(_u64(ru, 16))
+                + Float64(_u64(ru, 24) & 0xFFFFFFFF) / 1e6,
+            )
+        )
     return out^
+
+
+def _u64(b: List[UInt8], at: Int) -> Int:
+    """The little-endian 64-bit value at `at`."""
+    var v = 0
+    for k in range(8):
+        v |= Int(b[at + k]) << (8 * k)
+    return v
+
+
+def _max_rss(v: Int) -> Int:
+    """`ru_maxrss` in bytes: Linux counts it in KiB, macOS in bytes."""
+    comptime if CompilationTarget.is_linux():
+        return v * 1024
+    else:
+        return v
 
 
 def binary_seconds() -> Float64:
