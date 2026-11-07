@@ -6720,8 +6720,8 @@ def _lineage_graph(start: SnapshotRef, b: List[Made], f: List[Made]) -> String:
 comptime _LINEAGE_HELP = (
     "Each box is a snapshot of a dataset, an arrow a step that read the"
     " snapshot it starts at and wrote the one it points to, so data flows"
-    " left to right: what this snapshot was written from is to its left,"
-    " what was written from it to its right, up to 20 steps away. A box's"
+    " down: what this snapshot was written from is above it, what was"
+    " written from it below, up to 20 steps away. A box's"
     " second line is the pipeline and partition that wrote it; hover for"
     " the run and step, click to open that snapshot's lineage."
 )
@@ -6773,7 +6773,7 @@ def snapshot_page(mut db: State, name: String, id: Int64) raises -> Page:
         '</span>written by an orca run <span class="graph__key',
         ' graph__key--source"></span>a source, written by something else',
         ' <span class="graph__key graph__key--other"></span>another input of',
-        ' a step downstream <span class="graph__arrow">→</span> read, to',
+        ' a step downstream <span class="graph__arrow">↓</span> read, to',
         " write</p>",
         '<div class="scroll">',
         _lineage_graph(start, b, f),

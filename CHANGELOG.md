@@ -23,6 +23,14 @@
   second line is the pipeline and partition that wrote it, the snapshot,
   run and step on hover, instead of a cut-off id.
 
+- **Graphs are drawn top to bottom.** `/datasets`' graph of pipelines and
+  datasets was 5,000 px wide; it and a snapshot's lineage are now laid out
+  downward, a row per level, at most two boxes to a row (about 400 px, a
+  phone's width), arrows pointing down. A cycle (a pipeline reading what
+  it writes) no longer pushes a box to the far end: its edge goes back up
+  round the side, and an edge that skips a level goes round the boxes
+  rather than through them.
+
 - **Each run's peak memory and CPU** (#200). The scheduler samples each
   local and control-placed run's process tree every tick (one pass over
   `/proc` for all of them: resident bytes, and utime + stime with what the
