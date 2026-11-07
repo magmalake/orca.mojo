@@ -16,6 +16,10 @@
   `/api/watchdog` adds `checks` and `tripped_on` to rules and trips
   (`value` and `threshold` stay). `tests/watchdog.sh` has a control trip.
 
+- **Ops sections can be linked to.** Each section on Ops › Control and Fleet
+  has an id and its heading links to it, so `/ops/control#cpu` opens at the
+  CPU chart.
+
 ## 0.12.0 - 2026-11-07
 
 - **Alerts to your phone through ntfy** (#184). With `ORCA_NOTIFY_URL` (a

@@ -1219,7 +1219,10 @@ def hosts_fragment(
     """What the page refreshes: the summary cards and the hosts table."""
     var h = Html()
     summary_html(h, fleet_summary(db), False)
-    h.raw('<section class="card" id="hosts"><h2>Hosts</h2>')
+    h.raw(
+        '<section class="card" id="hosts"><h2><a class="anchor"'
+        ' href="#hosts">Hosts</a></h2>'
+    )
     var hosts = fleet_hosts(db)
     sort_hosts(hosts, sort, desc)
     hosts_html(h, hosts, sort, desc, range)
@@ -1236,7 +1239,10 @@ def charts_html(mut h: Html, c: Charts, range: String):
         else:
             h.raw('<a href="/ops/fleet?range=', r, '">', r, "</a> ")
     h.raw("(UTC, by the hour)</p>")
-    h.raw('<section class="card" id="hours"><h2>Hosts over time</h2>')
+    h.raw(
+        '<section class="card" id="hours"><h2><a class="anchor"'
+        ' href="#hours">Hosts over time</a></h2>'
+    )
     h.raw(
         '<p class="muted">Hosts that ran during each hour, by role.</p>',
         _chart(
@@ -1250,7 +1256,10 @@ def charts_html(mut h: Html, c: Charts, range: String):
         ),
         "</section>",
     )
-    h.raw('<section class="card" id="runs"><h2>Runs per hour</h2>')
+    h.raw(
+        '<section class="card" id="runs"><h2><a class="anchor"'
+        ' href="#runs">Runs per hour</a></h2>'
+    )
     h.raw(
         '<p class="muted">Runs started and runs that ended each hour; failures',
         " (failed runs, and every failed step attempt, even one a retry",
@@ -1258,7 +1267,10 @@ def charts_html(mut h: Html, c: Charts, range: String):
         _chart("Runs per hour", "", c.labels, c.runs, c.hours, bars=True),
         "</section>",
     )
-    h.raw('<section class="card"><h2>Fleet CPU</h2>')
+    h.raw(
+        '<section class="card" id="fleet-cpu"><h2><a class="anchor"'
+        ' href="#fleet-cpu">Fleet CPU</a></h2>'
+    )
     h.raw(
         (
             '<p class="muted">The vCPUs of all sampled hosts: busy, and'
@@ -1267,7 +1279,10 @@ def charts_html(mut h: Html, c: Charts, range: String):
         _chart("Fleet CPU", "vCPUs", c.labels, c.cpu, c.hours),
         "</section>",
     )
-    h.raw('<section class="card"><h2>Fleet network</h2>')
+    h.raw(
+        '<section class="card" id="fleet-network"><h2><a class="anchor"'
+        ' href="#fleet-network">Fleet network</a></h2>'
+    )
     h.raw(
         '<p class="muted">Throughput summed over all sampled hosts.</p>',
         _chart("Fleet network", "MB/s", c.labels, c.net, c.hours),

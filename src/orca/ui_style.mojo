@@ -95,6 +95,9 @@ h2 { font-size: 1.1rem; letter-spacing: -0.01em; margin: 2rem 0 0.7rem; }
   box-shadow: var(--shadow); margin: 1.25rem 0; overflow: hidden; }
 .card > h2 { font-size: 0.9375rem; margin: 0; padding: 0.75rem 1.1rem;
   border-bottom: 1px solid var(--border); background: var(--surface-2); }
+/* A heading that links to its own section, so a page can be linked to it. */
+.card > h2 > a.anchor { color: inherit; text-decoration: none; }
+.card > h2 > a.anchor:hover::after { content: " #"; color: var(--muted); }
 .card > p { margin: 0; padding: 0.8rem 1.1rem; }
 .card > .muted { font-size: 0.875rem; border-bottom: 1px solid var(--border); }
 .card > .scroll { padding: 0; }
