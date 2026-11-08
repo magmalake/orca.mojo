@@ -95,6 +95,8 @@ def test_range() raises:
 def test_prices() raises:
     assert_equal(run_hourly("control", "x9g.huge", "", 4), 0.0)
     assert_equal(run_hourly("local", "", "", 4), 0.0)
+    # A worker pool's machines run anyway.
+    assert_equal(run_hourly("worker:gharchive", "x9g.huge", "", 4), 0.0)
     assert_true(run_hourly("kubernetes", "", "", 0) < 0)
     # A head and its most workers.
     var p = run_hourly("ec2", "t4g.medium", "c7g.xlarge", 4)

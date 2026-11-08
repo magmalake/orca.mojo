@@ -13,7 +13,11 @@ that pool (`orca worker`, `orca.worker`), never by the scheduler, which
 keeps them queued, `held` "waiting for a worker of pool <pool>", requeues
 one whose heartbeat went stale (a worker that died, or a laptop that went
 to sleep) as it would start any dead run again, and fails one that has no
-retries left. Fills are not run on workers yet.
+retries left. A run whose worker is gone (not seen for half the stale
+limit, or seen since without it) is queued again whatever its trigger. A
+pipeline with `fills = "all"` has its fill runs queued the same way, held
+for a worker, at most `fill_max_runs` of them queued or running across the
+pool (`orca.fill`).
 
 **Tokens.** A worker token is an API token (`orca.tokens`: `orca_` and 64
 hex digits, kept only as its SHA-256), in `orca.workers` rather than
@@ -29,7 +33,9 @@ heartbeat and its claims; `/api/worker/release`, a run it won't start;
 `store_call`, a `RunStore` call of a run it claimed.
 
 A claim takes, under its pipeline's lock, a queued run whose pipeline isn't
-paused and has fewer than `max_runs` live runs, and starts it as the
+paused and has fewer than `max_runs` live runs (a fill run: fewer than
+`fill_max_runs` running fill runs, inside its `fill_window`, with fills on),
+its other runs before its fill runs, and starts it as the
 scheduler starts a run: `running`, owner `worker`, no heartbeat yet (the
 run's process claims it, within the start grace), one more start. Each
 claim is a row of `orca.audit` (user `worker:<label>`, source `worker`).
@@ -55,6 +61,7 @@ from orca.http_store import (
     run_info_json,
     steps_json,
 )
+from orca.civil import now
 from orca.json import quote
 from orca.live import dead_sql, stale_limit, start_grace
 from orca.resources import Grant, Room, admit
@@ -416,19 +423,25 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     var refused = String()
     var candidates = db.conn.query(
         (
-            "SELECT r.id, r.pipeline FROM orca.runs r JOIN orca.pipelines p ON"
+            "SELECT r.id, r.pipeline, r.trigger FROM orca.runs r JOIN"
+            " orca.pipelines p ON"
             " p.name = r.pipeline WHERE r.status = 'queued' AND p.placement ="
-            " $1 AND NOT p.paused AND p.binary_path IS NOT NULL AND r.trigger"
-            " <> 'fill' ORDER BY r.id LIMIT 50"
+            " $1 AND NOT p.paused AND p.binary_path IS NOT NULL AND"
+            " (r.trigger <> 'fill' OR p.fills = 'all') ORDER BY r.trigger ="
+            " 'fill', r.id LIMIT 50"
         ),
         Params().text(w.placement()),
     )
+    var hour = Int((now() % 86400) // 3600)
     for c in candidates:
         var id = c.int64("id")
         var ps = registered(db, c.text("pipeline"))
         if len(ps) == 0:
             continue
         ref p = ps[0]
+        var fill = c.text("trigger") == "fill"
+        if fill and not p.fill.in_window(hour):
+            continue  # it waits for its fill_window, as a local one does
         var why = version_refusal(p.image, image)
         if why:
             refused = why
@@ -447,19 +460,26 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
             "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
             Params().text(p.name),
         )
+        # Its fill runs and its others are capped apart, as on the local
+        # runner: `fill_max_runs` (the scheduler queues no more than that,
+        # and this holds it if it was lowered since), `max_runs`.
+        var which = String(" AND trigger = 'fill'") if fill else String(
+            " AND trigger <> 'fill'"
+        )
         var live = Int(
             tx.query(
                 String(
                     "SELECT count(*) AS n FROM orca.runs WHERE pipeline = $1",
                     " AND status = 'running' AND NOT ",
                     dead,
+                    which,
                 ),
                 Params().text(p.name).float64(stale),
             )
             .row(0)
             .int64("n")
         )
-        if live >= p.max_runs:
+        if live >= (p.fill.max_runs if fill else p.max_runs):
             tx.rollback()
             continue
         var request = p.request()

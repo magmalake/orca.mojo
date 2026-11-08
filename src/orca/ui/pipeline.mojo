@@ -230,6 +230,8 @@ def _fill_html(mut h: Html, s: FillStatus):
     h.text(s.done, " / ", s.total, " done (", pct, "%)")
     if s.running > 0:
         h.text(", ", s.running, " fill runs going")
+    if s.queued > 0:
+        h.text(", ", s.queued, " fill runs queued")
     if s.live > 0:
         h.text(", ", s.live, " in live runs")
     if s.retrying > 0:
