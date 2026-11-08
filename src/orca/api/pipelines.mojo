@@ -2,7 +2,12 @@
 counts and Start runs' preview.
 """
 
-from orca.api.runs import json_runs, json_runs_page, json_version
+from orca.api.runs import (
+    json_runs,
+    json_runs_page,
+    json_version,
+    runs_filters_json,
+)
 from orca.calendar import calendar, calendar_json
 from orca.fill import status_json
 from orca.follow import follow_json
@@ -254,6 +259,8 @@ def pipeline_json(v: PipelineView, ask: PipelineAsk) -> String:
     json_runs(j, v.runs.rows)
     j.write(', "runs_page": {')
     json_runs_page(j, v.runs)
+    j.write(", ")
+    runs_filters_json(j, v.runs)
     j.write('}, "usage": ', v.usage.json())
     if v.keys:
         j.write(', "keys": ')

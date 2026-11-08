@@ -349,12 +349,12 @@ up claims, heartbeats and store calls (docs/workers.md).
 |---|---|
 | `/` | Pipelines: each with its schedule, next fire, last run and its status, and runs live now against `max_runs`. |
 | `/pipelines/<name>` | The DAG, partitions and schedule, the next fires, the latest runs, and the forms to start a run, backfill a range, cancel its runs and pause it. |
-| `/runs` | Runs across pipelines, newest first, filterable by pipeline, status and trigger. |
+| `/runs` | Runs across pipelines, newest first, filterable by pipeline, statuses, trigger, when created, partition and run, with the runs ticked (or all that match) cancelled, retried or backfilled again in one go. |
 | `/runs/<id>` | The run: each step and partition with status, timing and attempts, the error of a failed one, its reads and commits, the DAG in this run's colours, and resume, rerun from a step and cancel. |
 | `/runs/<id>/attempts/<attempt>` | An attempt's log (its last MiB), followed while it's running, with its error at the top when it failed, and the step's other attempts. |
 | `/runs/<id>/timeline.json` | The run's Dista timeline, for Perfetto. |
 
-The actions are `POST`s of forms: `/pipelines/<name>/runs`, `/pipelines/<name>/backfill` and `/pipelines/<name>/cancel` (`partitions`), `/pipelines/<name>/pause` and `/unpause`, and `/runs/<id>/resume` (`allow_new_code`), `/runs/<id>/rerun` (`step`) and `/runs/<id>/cancel`. `tests/actions.sh` is the gate, and `tests/pause.sh` for cancelling in bulk and pausing.
+The actions are `POST`s of forms: `/pipelines/<name>/runs`, `/pipelines/<name>/backfill` and `/pipelines/<name>/cancel` (`partitions`), `/pipelines/<name>/pause` and `/unpause`, and `/runs/<id>/resume` (`allow_new_code`), `/runs/<id>/rerun` (`step`) and `/runs/<id>/cancel`, and `/runs/bulk` (`do`, `pick` or `all` and `expect`) for the runs picked from a list. `tests/actions.sh` is the gate, and `tests/pause.sh` for cancelling in bulk and pausing.
 
 ### PRs
 

@@ -111,6 +111,29 @@ echo "$page" | grep -qF 'action="/pipelines/toy/pause"><button type="submit" cla
 [ "$(post "/runs/$run/cancel" '' -b "$jar")" = 303 ] || fail "cancel with a session"
 [ "$(q "SELECT count(*) FROM orca.audit WHERE run = $run")" -eq 2 ] || fail "the cancel's audit"
 
+# Bulk actions from a runs list: logged out, the list's boxes and buttons
+# are hidden behind a link to log in, and a POST is refused; logged in, each
+# run acted on is audited as its own action's, beside the bulk one.
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
+   SELECT 'toy', registry_hash, '2024-0' || i, 'manual', 'queued' FROM orca.runs, generate_series(5, 7) i
+   WHERE id = $run" > /dev/null
+b1=$(q "SELECT max(id) - 2 FROM orca.runs"); b2=$((b1 + 1)); b3=$((b1 + 2))
+page=$(curl -fs "$base/runs?status=queued")
+echo "$page" | grep -qF '<form id="bulk-runs" class="bulk act__need"' || fail "no bulk form for act__need to hide"
+echo "$page" | grep -qF '<td class="pick act__need"><input type="checkbox" name="pick" form="bulk-runs"'     || fail "the boxes aren't hidden logged out"
+echo "$page" | grep -qF '<p class="act__login bulk__login"><a href="/login?next=%2Fruns%3Fstatus%3Dqueued">Log in</a>'     || fail "no Log in for the bulk actions"
+[ "$(post /runs/bulk "do=cancel&pick=$b1&pick=$b2" -H 'Accept: application/json')" = 401 ] || fail "a bulk cancel without a session"
+[ "$(post /runs/bulk "do=cancel&all=1&expect=3&status=queued" -H 'Accept: application/json')" = 401 ]     || fail "a bulk cancel of all without a session"
+[ "$(q "SELECT count(*) FROM orca.runs WHERE id >= $b1 AND status = 'queued'")" -eq 3 ] || fail "a refused bulk cancel changed runs"
+code=$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -H 'Origin: http://evil.example' -d "do=cancel&pick=$b1" "$base/runs/bulk")
+[ "$code" = 403 ] || fail "a bulk cancel from another site answered $code"
+[ "$(post /runs/bulk "do=cancel&view=list&status=queued&pick=$b1&pick=$b2&pick=$run" -b "$jar")" = 303 ] || fail "a bulk cancel with a session"
+[ "$(q "SELECT string_agg(status, ',' ORDER BY id) FROM orca.runs WHERE id >= $b1")" = cancelled,cancelled,queued ]     || fail "the bulk cancel: $(q "SELECT id, status FROM orca.runs WHERE id >= $b1")"
+[ "$(q "SELECT string_agg(action || ' ' || coalesce(run::text, '-') || ' ' || detail, '|' ORDER BY id)
+        FROM orca.audit WHERE username = 'alice' AND (action LIKE '/runs/%' AND (run >= $b1 OR run IS NULL))")" \
+    = "/runs/$b1/cancel $b1 bulk|/runs/$b2/cancel $b2 bulk|/runs/bulk - do=cancel&view=list&status=queued&pick=$b1&pick=$b2&pick=$run" ] \
+    || fail "the bulk cancel's audit: $(q "SELECT action, run, detail FROM orca.audit WHERE username = 'alice'")"
+
 # Ending sessions.
 [ "$(post /login 'name=alice&password=correct+horse+battery' -c "$jar")" = 303 ] || fail "log in again"
 [ "$(post /logout '' -b "$jar" -c "$jar")" = 303 ] || fail "log out"

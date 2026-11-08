@@ -57,4 +57,10 @@ grep -q 'month_trips 2024-02\] 29 days' "$ORCA_LOGS/fanout/$run/month_trips/2024
 ./build/toy status --before "$run" > "$log" 2>&1 || fail "status --before"
 grep -q "^$run " "$log" && fail "status --before lists that run"
 [ "$(head -1 "$log" | cut -d' ' -f1)" -lt "$run" ] || fail "status --before doesn't start under that run"
+# `--status`: only runs with one of those statuses, with or without --before.
+./build/toy status --status succeeded > "$log" 2>&1 || fail "status --status"
+[ -s "$log" ] || fail "status --status succeeded lists nothing"
+awk '$3 != "succeeded" { exit 1 }' "$log" || fail "status --status lists another status: $(cat "$log")"
+./build/toy status --status nope,cancelled --before "$run" > "$log" 2>&1 || fail "status --status --before"
+[ ! -s "$log" ] || fail "status --status nope,cancelled lists runs: $(cat "$log")"
 echo "ok   logs"

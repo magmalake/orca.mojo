@@ -40,6 +40,7 @@ from orca.store import (
     RunInfo,
     RunResult,
     RunStore,
+    status_list,
     StepInfo,
     StepRun,
     TableSnapshot,
@@ -582,6 +583,10 @@ def _migrations() -> List[List[String]]:
         # newest first by id under a cursor: one range of this index, and
         # their count an index-only scan.
         ["CREATE INDEX runs_pipeline_id ON orca.runs (pipeline, id DESC)"],
+        # A runs list filtered by when its runs were created (`?from=`,
+        # `?to=`, `?since=`): one range of this index, for its page and its
+        # counts, where without it each is a scan of every run.
+        ["CREATE INDEX runs_created ON orca.runs (created)"],
     ]
 
 
@@ -887,19 +892,24 @@ struct State(Movable):
         )
 
     def runs(
-        mut self, limit: Int = 20, before: Int = 0
+        mut self, limit: Int = 20, before: Int = 0, status: String = ""
     ) raises -> List[RunInfo]:
         """The latest runs, newest first; those under `before` if it isn't
-        0."""
+        0, and with `status` (one or several, comma-separated) one of
+        those."""
         var out = List[RunInfo]()
         var rows = self.conn.query(
             (
                 "SELECT id, pipeline, registry_hash, partitions, status,"
                 " coalesce(owner, '') AS owner, coalesce(error, '') AS error"
-                " FROM orca.runs WHERE $2 = 0 OR id < $2 ORDER BY id DESC"
+                " FROM orca.runs WHERE ($2 = 0 OR id < $2) AND ($3 = '' OR"
+                " status = ANY(string_to_array($3, ','))) ORDER BY id DESC"
                 " LIMIT $1"
             ),
-            Params().int64(Int64(limit)).int64(Int64(before)),
+            Params()
+            .int64(Int64(limit))
+            .int64(Int64(before))
+            .text(String(",").join(status_list(status))),
         )
         for r in rows:
             out.append(
@@ -1215,8 +1225,10 @@ struct PgStore(Movable, RunStore):
     def run_info(mut self, run: Int) raises -> RunInfo:
         return self.db.run_info(run)
 
-    def runs(mut self, limit: Int, before: Int = 0) raises -> List[RunInfo]:
-        return self.db.runs(limit, before)
+    def runs(
+        mut self, limit: Int, before: Int = 0, status: String = ""
+    ) raises -> List[RunInfo]:
+        return self.db.runs(limit, before, status)
 
     def steps(mut self, run: Int) raises -> List[StepInfo]:
         return self.db.steps(run)
