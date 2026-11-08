@@ -12,7 +12,7 @@
   `memory.pressure` with a memory limit (a container run with `--memory`),
   else the host's `/proc/pressure/memory`, or `ORCA_MEMORY_PRESSURE_FILE`;
   without PSI (macOS, `psi=0`) nothing changes and the log says so once.
-  `orca.pressure`, `orca.admission`; migration 39. docs/orca-toml.md,
+  `orca.pressure`, `orca.admission`; migration 40. docs/orca-toml.md,
   "Memory pressure"; `tests/pressure.sh`.
 - **The pressure, shown.** Ops › Control has a Memory pressure card
   (`memory_pressure` in `/api/system`), `/api/workers`

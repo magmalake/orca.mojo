@@ -480,6 +480,7 @@ def _command(args: List[String], target: String) raises -> Int:
     if cmd == "scheduler" and len(args) == 2:
         var s = Scheduler(url)
         s.say_pressure()
+        s.contain()
         while True:
             # A tick that fails (the database is down) is tried again; the
             # state it would have changed is all in Postgres.
@@ -489,6 +490,7 @@ def _command(args: List[String], target: String) raises -> Int:
                 print("orca: tick failed:", e)
                 try:
                     s = Scheduler(url)
+                    s.contain()
                 except:
                     pass
             sleep(1.0)

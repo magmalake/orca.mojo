@@ -34,7 +34,7 @@ UI, so the scheduler bounds it:
 | Variable | Default | |
 |---|---|---|
 | `ORCA_CONTROL_MAX_RUNS` | 2 | control-placed runs at once, of all pipelines |
-| `ORCA_CONTROL_MEMORY_MB` | 1024 | a run whose processes' resident memory goes over is killed, its attempts failed saying why |
+| `ORCA_CONTROL_MEMORY_MB` | 1024 | a run whose processes' resident memory goes over is killed, its attempts failed saying why; where runs get cgroups (`orca.cgroup`), it's the most a run's limit (`memory.high`) can be, and the cgroup does the killing |
 | `ORCA_CONTROL_NICE` | 10 | the `nice` its processes run at, so the host's own processes win |
 | `ORCA_CONTROL_WORKERS` | 1 | local dista workers a run forks |
 

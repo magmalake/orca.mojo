@@ -22,7 +22,10 @@ attempts a crash left running; a process that ended before claiming its
 run has the run failed, saying why (`/api/worker/exited`). Each poll the
 worker samples its runs' process trees, as the scheduler samples a local
 run's, and sends the samples with `/api/worker/exited`, so their attempts
-get their peak memory and CPU (`orca.usage`).
+get their peak memory and CPU (`orca.usage`). Where the worker can make
+cgroups (`orca.cgroup`), each run gets one at its grant, and an
+out-of-memory kill is reported with `/api/worker/exited`, which fails the
+attempts saying so and raises what the pipeline asks for.
 
 **No database.** The worker refuses to start with `ORCA_DATABASE_URL` set:
 nothing on a worker holds database credentials. Its token is
@@ -50,6 +53,8 @@ from std.time import perf_counter_ns, sleep
 from json import Value
 
 from orca.admission import Report
+from orca.cgroup import Cgroups, Contained, MemoryKnobs, put as put_cgroup
+from orca.cgroup import start_limit_mb
 from orca.control import fetch_secret
 from orca.http_store import Body, StateApi
 from orca.logs import run_dir
@@ -138,6 +143,15 @@ struct Worker(Movable):
     """Where this host's memory pressure is read from (`orca.pressure`)."""
     var admission: Admission
     """Whether this worker claims runs for its host's memory pressure."""
+    var cgroups: Cgroups
+    """Where the runs' cgroups go (`orca.cgroup`), or why they don't."""
+    var contained: Dict[Int, Contained]
+    """The runs' processes' cgroups, by pid."""
+    var unswept: List[String]
+    """Cgroups to remove once empty."""
+    var room_mb: Int
+    """The memory this host can grant, the limit of a run without a
+    grant."""
 
     def __init__(
         out self,
@@ -163,6 +177,10 @@ struct Worker(Movable):
         self.meters = Dict[Int, Meter]()
         self.psi = find_source()
         self.admission = Admission.from_env()
+        self.cgroups = Cgroups.off("off: not serving")
+        self.contained = Dict[Int, Contained]()
+        self.unswept = List[String]()
+        self.room_mb = 0
 
     def _running_ids(self) -> String:
         var ids = String()
@@ -218,7 +236,37 @@ struct Worker(Movable):
         var argv: List[String] = [spec.binary, "resume", String(spec.run)]
         if spec.allow_new_code:
             argv.append("--allow-new-code")
-        var pid = spawn(argv, stage, env=env, group=True)
+        var cg = Contained(
+            spec.run,
+            spec.start,
+            spec.pipeline,
+            "",
+            0,
+            0,
+            0,
+            spec.grant.memory_mb,
+        )
+        if self.cgroups.on():
+            var default = self.cgroups.knobs.default_mb
+            cg.limit_mb = start_limit_mb(
+                spec.grant.memory_mb,
+                0,
+                default if default > 0 else self.room_mb,
+                0,
+                0,
+            )
+            if cg.limit_mb > 0:
+                try:
+                    var made = self.cgroups.make(
+                        spec.run, spec.start, cg.limit_mb
+                    )
+                    cg.path = made[0]
+                    cg.kill_mb = made[1]
+                except e:
+                    print("orca worker: run", spec.run, "without a cgroup:", e)
+        var pid = spawn(argv, stage, env=env, group=True, cgroup=cg.path)
+        if cg.path:
+            self.contained[pid] = cg^
         self.meters[pid] = Meter()
         print(
             "started",
@@ -263,18 +311,31 @@ struct Worker(Movable):
         print("run", r.spec.run, "pid", pid, "exited", code, flush=True)
         var m = self.meters.pop(pid, Meter())
         m.end(done.max_rss, done.cpu_seconds)
+        var body = (
+            Body()
+            .int("run", Int64(r.spec.run))
+            .int("start", Int64(r.spec.start))
+            .int("code", Int64(code))
+            .text("last", _last_line(r.stage))
+            .int("pid", Int64(pid))
+            .int("max_rss", Int64(m.max_rss))
+            .raw("marks", marks_json(m.aged()))
+        )
+        if pid in self.contained:
+            var cg = self.contained.pop(pid)
+            var oom = code != 0 and Cgroups.oom_kills(cg.path) > 0
+            if oom:
+                print(
+                    "run", r.spec.run, "pid", pid, "out of memory", flush=True
+                )
+            body = body^.int("memory_limit_mb", Int64(cg.limit_mb)).int(
+                "memory_max_mb", Int64(cg.kill_mb)
+            ).int("oom", Int64(1 if oom else 0))
+            _ = put_cgroup(String(cg.path, "/cgroup.kill"), "1")
+            if not Cgroups.remove(cg.path):
+                self.unswept.append(cg.path)
         try:
-            _ = self._post(
-                "/api/worker/exited",
-                Body()
-                .int("run", Int64(r.spec.run))
-                .int("start", Int64(r.spec.start))
-                .int("code", Int64(code))
-                .text("last", _last_line(r.stage))
-                .int("pid", Int64(pid))
-                .int("max_rss", Int64(m.max_rss))
-                .raw("marks", marks_json(m.aged())),
-            )
+            _ = self._post("/api/worker/exited", body^)
         except e:
             print("orca worker: can't report run", r.spec.run, "ending:", e)
         var location = run_dir(r.spec.pipeline, r.spec.run)
@@ -342,6 +403,10 @@ struct Worker(Movable):
                 String(pct_text(self.admission.limit), "%"),
                 flush=True,
             )
+        self.room_mb = room.memory_mb
+        self.cgroups = Cgroups.setup(MemoryKnobs.from_env())
+        print("orca worker: run cgroups", self.cgroups.why, flush=True)
+        self.unswept = self.cgroups.stale()
         var said = String()
         while True:
             for done in reap():
@@ -349,6 +414,12 @@ struct Worker(Movable):
                     self._ended(done)
                 except e:
                     print("orca worker:", e)
+            if len(self.unswept) > 0:
+                var left = List[String]()
+                for path in self.unswept:
+                    if not Cgroups.remove(path):
+                        left.append(path)
+                self.unswept = left^
             self._sample()
             var slots = self.max_runs - len(self.running)
             # Memory pressure (orca.pressure): no claim while this host is

@@ -303,6 +303,20 @@ A queued run held for room or by memory pressure shows why under
 for its memory pressure, the home page and Runs say so at the top (and
 their JSON has `memory_pressure`).
 
+Where the scheduler (or worker) gives runs a cgroup of their own
+([docs/hetzner.md](hetzner.md#a-cgroup-per-run), `orca.cgroup`), the run's
+page also has **Memory limit**: its latest start's `memory.high` (its grant,
+request maximum or `ORCA_RUN_MEMORY_MB`) and the `memory.max` past which the
+kernel kills it. The Steps table's Peak cell reads `312 MB / 1 GB`: the
+latest attempt's peak against the limit it ran under (its grant in the
+title), and an attempt's page has its own limit and grant. An attempt the
+kernel killed for its memory fails `out of memory at <limit>: ...`, saying
+what the retry asks for: 1.5 times as much, up to the request's maximum,
+which the pipeline's later runs ask for too. In the JSON, a run has
+`memory_limit` (`limit_mb`, `max_mb`, `current_bytes` while it runs), and each
+step and attempt `memory_limit_mb` and `grant_memory_mb`; null without a
+cgroup.
+
 Not measured: runs on EC2 or Kubernetes (their machines' samples are under
 Machines), runs no scheduler or worker started (`<binary> run`), and on
 macOS, which has no `/proc`, the peak cores, and an attempt that shares
@@ -377,14 +391,14 @@ each bar and box keeps its title.
 
 | Page | What it shows |
 |---|---|
-| Ops › Control (`/ops/control`, `/api/system`) | the one machine running the scheduler, the UI, Postgres and local and control-placed runs: CPU, memory, disk, network and each container's memory over `?range=24h`, `7d` or `14d`; its **Memory pressure** (PSI `some` and `full` avg10, avg60 and avg300, the file read, and whether new runs wait for it: [orca.toml](orca-toml.md#memory-pressure)), `memory_pressure` in the JSON, null without a reading in the last minute; whether [alerts](alerts.md) are on and the last ones; the [watchdog](watchdog.md)'s banner |
+| Ops › Control (`/ops/control`, `/api/system`) | the one machine running the scheduler, the UI, Postgres and local and control-placed runs: CPU, memory, disk, network and each container's memory over `?range=24h`, `7d` or `14d`; its **Memory pressure** (PSI `some` and `full` avg10, avg60 and avg300, the file read, and whether new runs wait for it: [orca.toml](orca-toml.md#memory-pressure)), `memory_pressure` in the JSON, null without a reading in the last minute; whether [alerts](alerts.md) are on and the last ones; the [watchdog](watchdog.md)'s banner; the local and control-placed runs going, each with its cgroup's memory against its limit, its kill line and its grant (`runs` in the JSON) |
 | Ops › Pools (`/ops/pools`, `/api/pools`) | every machine runs are placed on, a row each, by pool: the EC2 instances orca launches, a Kubernetes run's pods, the machines running [`orca worker`](workers.md). See [Pools](#pools) |
 | Ops › Watchdog (`/watchdog`, `/api/watchdog`) | the rules that pause pipelines, and their trips. See [the watchdog page](#the-watchdog-page) |
 
 Each section's heading links to it, so a link can open at one chart:
 
 - Control: `#cpu`, `#memory`, `#disk`, `#network`, `#containers`,
-  `#container-memory`
+  `#runs`, `#container-memory`
 - Pools: `#machines`, and with EC2 in view `#hours`, `#runs`, `#fleet-cpu`,
   `#fleet-network`
 

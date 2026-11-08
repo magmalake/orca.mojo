@@ -112,7 +112,10 @@ machine's metrics to `.../<run>/metrics/local.jsonl` until the process ends;
 `ORCA_SAMPLE_SECONDS=0` turns it off, on every runner. Apart from that, each
 tick reads each local and control-placed run's process tree in /proc, and
 once the process is reaped its attempts get their peak memory and CPU
-(`orca.usage`).
+(`orca.usage`). `orca scheduler` gives each local and control-placed run a
+cgroup of its own where it can (`orca.cgroup`): a memory limit at its
+grant, an out-of-memory kill that fails its attempts saying so, and a retry
+that asks for more.
 """
 
 from std.ffi import c_int, external_call
@@ -124,6 +127,18 @@ from postgres import Params, Transaction
 
 from orca.expiry import expirable, expire_argv, maintain_binary
 from orca.civil import Civil
+from orca.cgroup import (
+    Cgroups,
+    Contained,
+    MemoryKnobs,
+    at_limit,
+    ceiling_mb,
+    oom_text,
+    put as put_cgroup,
+    raised_mb,
+    raised_request,
+    start_limit_mb,
+)
 from orca.control import (
     CONTROL,
     ControlLimits,
@@ -293,6 +308,9 @@ struct Registered(Copyable, Movable):
     for none."""
     var memory_gb: String
     """The memory it asks for, in GB; empty for none."""
+    var memory_raised_mb: Int
+    """What an out-of-memory kill raised its memory to (`orca.cgroup`),
+    which its runs ask for at least; 0 for none."""
 
     def request(self) raises -> Request:
         return Request.of(self.cpus, self.memory_gb)
@@ -394,7 +412,9 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " coalesce(fill_max_runs, 0) AS fill_max_runs,"
             " coalesce(fill_budget_per_day, -1) AS fill_budget,"
             " coalesce(fill_window, '') AS fill_window, coalesce(cpus, '') AS"
-            " cpus, coalesce(memory_gb, '') AS memory_gb FROM orca.pipelines"
+            " cpus, coalesce(memory_gb, '') AS memory_gb,"
+            " coalesce(memory_raised_mb, 0) AS memory_raised_mb FROM"
+            " orca.pipelines"
             " WHERE binary_path IS NOT NULL AND ($1 = '' OR name = $1) ORDER BY"
             " name"
         ),
@@ -440,6 +460,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 ),
                 r.text("cpus"),
                 r.text("memory_gb"),
+                Int(r.int64("memory_raised_mb")),
             )
         )
     # A fixed count, or no tasks: no scaling.
@@ -1153,6 +1174,18 @@ struct Scheduler(Movable):
     clock."""
     var _pressure_unread: Bool
     """The file was found but last couldn't be read (said once)."""
+    var cgroups: Cgroups
+    """Where its runs' cgroups go (`orca.cgroup`); off until `contain`."""
+    var _contained: Dict[Int, Contained]
+    """A local or control-placed run's process to its cgroup."""
+    var _unswept: List[String]
+    """Runs' cgroups to remove once their processes have left them."""
+    var _stalled: Dict[Int, Bool]
+    """Contained runs' processes killed for a stale heartbeat while held at
+    their memory limit: out of memory, as a kill at memory.max is."""
+    var _cgroups_next: Int
+    """When the runs' cgroups' memory is next recorded, on the monotonic
+    clock."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -1208,6 +1241,11 @@ struct Scheduler(Movable):
         self.admission = Admission.from_env()
         self._pressure_kept = 0
         self._pressure_unread = False
+        self.cgroups = Cgroups.off("off: not the scheduler's loop")
+        self._contained = Dict[Int, Contained]()
+        self._unswept = List[String]()
+        self._stalled = Dict[Int, Bool]()
+        self._cgroups_next = 0
 
     def say_pressure(self):
         """Says once, for `orca scheduler`, where this host's memory
@@ -1231,6 +1269,180 @@ struct Scheduler(Movable):
                 "- no new runs start here while some avg10 is over",
                 String(pct_text(self.admission.limit), "%"),
             )
+
+    def contain(mut self) raises:
+        """Turns on a cgroup per run (`orca.cgroup`) where this host lets
+        orca make them, saying once which, and picks up the empty cgroups
+        an earlier scheduler left. `orca scheduler` does this; `orca tick`
+        and the other commands don't, as they don't reap what they
+        start."""
+        self.cgroups = Cgroups.setup(MemoryKnobs.from_env())
+        print("orca: run cgroups", self.cgroups.why)
+        if not self.cgroups.on():
+            print(
+                "orca: runs are contained as before: first to go if memory",
+                "runs out, and control-placed runs killed over",
+                "ORCA_CONTROL_MEMORY_MB",
+            )
+        self._unswept = self.cgroups.stale()
+        self._sweep_cgroups()
+
+    def _sweep_cgroups(mut self):
+        """Removes the runs' cgroups their processes have left."""
+        var left = List[String]()
+        for path in self._unswept:
+            if not Cgroups.remove(path):
+                left.append(path)
+        self._unswept = left^
+
+    def _contain(
+        mut self,
+        p: Registered,
+        run: Int,
+        start: Int,
+        grant: Grant,
+        control: Bool,
+    ) -> Contained:
+        """Makes a start's cgroup at its limit (`orca.cgroup`) and records
+        the limit on the run; with cgroups off, or if it can't, one with no
+        path, and the run starts as before."""
+        var c = Contained(run, start, p.name, "", 0, 0, 0, grant.memory_mb)
+        if not self.cgroups.on():
+            return c^
+        try:
+            var req = p.request()
+            var cap = self.limits.memory_mb if control else 0
+            var default = self.cgroups.knobs.default_mb
+            if default <= 0:
+                default = cap if control else self.room.memory_mb
+            c.limit_mb = start_limit_mb(
+                grant.memory_mb,
+                req.memory_max_mb,
+                default,
+                p.memory_raised_mb,
+                cap,
+            )
+            c.ceiling_mb = ceiling_mb(
+                req.memory_max_mb, self.room.memory_mb, cap
+            )
+            if c.limit_mb <= 0:
+                return c^
+            var made = self.cgroups.make(run, start, c.limit_mb)
+            c.path = made[0]
+            c.kill_mb = made[1]
+            _ = self.db.conn.execute(
+                (
+                    "UPDATE orca.runs SET memory_limit_mb = $3, memory_max_mb"
+                    " = $4, memory_bytes = NULL WHERE id = $1 AND starts = $2"
+                ),
+                Params()
+                .int64(Int64(run))
+                .int64(Int64(start))
+                .int64(Int64(c.limit_mb))
+                .int64(Int64(c.kill_mb)),
+            )
+        except e:
+            print("orca: run", run, "starts without a cgroup:", e)
+            if c.path and not Cgroups.remove(c.path):
+                self._unswept.append(c.path)
+            c.path = ""
+        return c^
+
+    def _uncontain(mut self, pid: Int, code: Int, mut over: String):
+        """At the reap of `pid`: if the kernel killed its run's processes
+        for their memory, `over` says so, and its pipeline asks for more
+        from now on; its attempts get its limit; the cgroup is emptied of
+        what's left of the run, and removed."""
+        if pid not in self._contained:
+            return
+        var c: Contained
+        try:
+            c = self._contained.pop(pid)
+        except:
+            return
+        var stalled = self._stalled.pop(pid, False)
+        if (
+            code != 0
+            and not over
+            and (stalled or Cgroups.oom_kills(c.path) > 0)
+        ):
+            var next = raised_mb(
+                c.limit_mb, self.cgroups.knobs.growth_pct, c.ceiling_mb
+            )
+            over = oom_text(
+                c.limit_mb,
+                c.kill_mb,
+                next,
+                stalled and Cgroups.oom_kills(c.path) == 0,
+            )
+            print("run", c.run, "pid", pid, over)
+            try:
+                _ = self.db.conn.execute(
+                    (
+                        "UPDATE orca.pipelines SET memory_raised_mb ="
+                        " greatest(coalesce(memory_raised_mb, 0), $2) WHERE"
+                        " name = $1"
+                    ),
+                    Params().text(c.pipeline).int64(Int64(next)),
+                )
+            except e:
+                print("orca: can't raise", c.pipeline, "memory:", e)
+        try:
+            _ = self.db.conn.execute(
+                (
+                    "UPDATE orca.attempts a SET memory_limit_mb = $3,"
+                    " grant_memory_mb = nullif($4, 0) FROM orca.steps st WHERE"
+                    " st.id = a.step AND st.run = $1 AND a.host LIKE '%:' ||"
+                    " $2 AND a.memory_limit_mb IS NULL"
+                ),
+                Params()
+                .int64(Int64(c.run))
+                .text(String(pid))
+                .int64(Int64(c.limit_mb))
+                .int64(Int64(c.grant_mb)),
+            )
+            _ = self.db.conn.execute(
+                (
+                    "UPDATE orca.runs SET memory_bytes = NULL WHERE id = $1"
+                    " AND starts = $2"
+                ),
+                Params().int64(Int64(c.run)).int64(Int64(c.start)),
+            )
+        except e:
+            print("orca: can't record run", c.run, "memory limit:", e)
+        # The run is over: what it left running goes with it.
+        _ = put_cgroup(String(c.path, "/cgroup.kill"), "1")
+        if not Cgroups.remove(c.path):
+            self._unswept.append(c.path)
+
+    def _record_cgroups(mut self):
+        """Every 5 s, each contained run's memory now, for Ops > Control;
+        and the cgroups of ended runs removed once empty."""
+        if len(self._unswept) > 0:
+            self._sweep_cgroups()
+        if len(self._contained) == 0:
+            return
+        var t = Int(perf_counter_ns())
+        if t < self._cgroups_next:
+            return
+        self._cgroups_next = t + 5_000_000_000
+        for e in self._contained.items():
+            var b = Cgroups.current(e.value.path)
+            if b < 0:
+                continue
+            try:
+                _ = self.db.conn.execute(
+                    (
+                        "UPDATE orca.runs SET memory_bytes = $3 WHERE id = $1"
+                        " AND starts = $2"
+                    ),
+                    Params()
+                    .int64(Int64(e.value.run))
+                    .int64(Int64(e.value.start))
+                    .int64(Int64(b)),
+                )
+            except:
+                pass
 
     def register(
         mut self,
@@ -1385,6 +1597,11 @@ struct Scheduler(Movable):
                 " <> '' THEN EXCLUDED.cpus ELSE orca.pipelines.cpus END,"
                 " memory_gb = CASE WHEN $14 OR $24 <> '' THEN"
                 " EXCLUDED.memory_gb ELSE orca.pipelines.memory_gb END,"
+                # A new request forgets what out-of-memory kills raised.
+                " memory_raised_mb = CASE WHEN (CASE WHEN $14 OR $24 <> ''"
+                " THEN EXCLUDED.memory_gb ELSE orca.pipelines.memory_gb END)"
+                " IS DISTINCT FROM orca.pipelines.memory_gb THEN NULL ELSE"
+                " orca.pipelines.memory_raised_mb END,"
                 " last_seen = now() RETURNING name, registry_hash,"
                 " coalesce(image, '') AS image"
             ),
@@ -1509,6 +1726,7 @@ struct Scheduler(Movable):
             if done.pid in self._control:
                 ctl = self._control.pop(done.pid)
                 over = ctl.value().over
+            self._uncontain(done.pid, done.code, over)
             if spawned[0] >= 0:
                 try:
                     self._exited(spawned, done.pid, done.code, over)
@@ -1538,6 +1756,7 @@ struct Scheduler(Movable):
             self._pressure()
         except e:
             print("orca: can't keep the memory pressure:", e)
+        self._record_cgroups()
         if self.runner:
             try:
                 var n = self.runner.value().sweep(self.db)
@@ -1762,7 +1981,8 @@ struct Scheduler(Movable):
         var cap = self.limits.memory_mb * 1024 * 1024
         var pids = List[Int]()
         for e in self._control.items():
-            if not e.value.over:
+            # A run in a cgroup has its limit there (orca.cgroup).
+            if not e.value.over and e.key not in self._contained:
                 pids.append(e.key)
         for pid in pids:
             var rss = readings[pid][0] if pid in readings else tree_rss(pid)
@@ -2518,6 +2738,15 @@ struct Scheduler(Movable):
                     if e.value[0] == id:
                         pid = e.key
                 if pid > 0:
+                    if pid in self._contained:
+                        # Throttled at its limit (memory.high) rather than
+                        # wedged: out of memory.
+                        try:
+                            ref c = self._contained[pid]
+                            if at_limit(Cgroups.current(c.path), c.limit_mb):
+                                self._stalled[pid] = True
+                        except:
+                            pass
                     if pid in self._control:
                         # Its own process group: its forked workers too.
                         _ = external_call["kill", c_int](c_int(-pid), c_int(9))
@@ -2610,6 +2839,13 @@ struct Scheduler(Movable):
         # minimum fits what the running runs weren't granted, each with its
         # grant. A pipeline without one is started as ever.
         var request = p.request()
+        if request.memory_min_mb > 0:
+            # At least what an out-of-memory kill raised it to.
+            request.memory_min_mb = raised_request(
+                request.memory_min_mb,
+                request.memory_max_mb,
+                p.memory_raised_mb,
+            )
         var grants = List[Grant]()
         var admitted = request.any() and (control or placed == "local")
         if admitted and free > 0:
@@ -2772,7 +3008,9 @@ struct Scheduler(Movable):
                                 " = NULL, request_cpus = nullif($4, ''),"
                                 " request_memory_gb = nullif($5, ''),"
                                 " grant_cpus = nullif($6, 0), grant_memory_mb ="
-                                " nullif($7, 0) WHERE id = $1 RETURNING starts"
+                                " nullif($7, 0), memory_limit_mb = NULL,"
+                                " memory_max_mb = NULL, memory_bytes = NULL"
+                                " WHERE id = $1 RETURNING starts"
                             ),
                             Params()
                             .int64(id)
@@ -2898,7 +3136,10 @@ struct Scheduler(Movable):
                     # the last.
                     with open(stage, "a") as f:
                         f.write("--- start ", starts[i], "\n")
-            var pid = spawn(argv, stage, env=env)
+            var cg = self._contain(p, Int(id), starts[i], grant, False)
+            var pid = spawn(argv, stage, env=env, cgroup=cg.path)
+            if cg.path:
+                self._contained[pid] = cg^
             self._meters[pid] = Meter()
             self._spawned[pid] = (Int(id), starts[i], stage)
             if log and kept:
@@ -2990,6 +3231,7 @@ struct Scheduler(Movable):
         run whose process failed is."""
         var c: _ControlProc
         var pid: Int
+        var cg = self._contain(p, id, start, grant, True)
         try:
             var secrets = List[Tuple[String, String]]()
             for s in p.secrets:
@@ -3017,10 +3259,13 @@ struct Scheduler(Movable):
                 nice=self.limits.nice,
                 group=True,
                 first_to_go=True,
+                cgroup=cg.path,
             )
             c = _ControlProc(id, p.binary, stage, location, start, env^, "")
         except e:
             print("orca: run", id, "of", p.name, "can't start:", e)
+            if cg.path and not Cgroups.remove(cg.path):
+                self._unswept.append(cg.path)
             try:
                 _ = self.db.conn.execute(
                     (
@@ -3035,6 +3280,8 @@ struct Scheduler(Movable):
             return
         self._spawned[pid] = (id, start, c.stage)
         self._meters[pid] = Meter()
+        if cg.path:
+            self._contained[pid] = cg^
         var sampled = c.location != ""
         self._control[pid] = c^
         print("started", p.name, "run", id, "pid", pid, "on the control host")

@@ -6,9 +6,10 @@ ended, with what `wait4` says they used (`orca.usage`).
 `capture` runs a command to the end, killing it past a timeout, and returns
 what it printed; `Capture` is the same started without waiting, for the
 scheduler to check on from tick to tick. Everything a child needs is
-prepared before `fork`, so the child calls only `setpgid`, `fopen`, `dup2`,
-`setenv`, `setpriority`, `fwrite` (Linux), `execv` (or `execvp`)
-and `_exit`.
+prepared before `fork`, so the child calls only `write` (into a run's
+cgroup, on a descriptor the parent opened), `setpgid`, `fopen`, `dup2`,
+`setenv`, `setpriority`, `fwrite` (Linux), `execv` (or `execvp`) and
+`_exit`.
 """
 
 from std.ffi import c_int, external_call
@@ -33,6 +34,7 @@ def spawn(
     nice: Int = 0,
     group: Bool = False,
     first_to_go: Bool = False,
+    cgroup: String = "",
 ) raises -> Int:
     """Starts `argv[0]` (a path) with arguments `argv`, and returns its pid.
     Its stdout and stderr are appended to `log`, if given, else shared with
@@ -40,7 +42,11 @@ def spawn(
     so they're on no command line; `nice` lowers its CPU priority; `group`
     makes it lead a process group of its own, which `kill(-pid)` ends whole;
     `first_to_go`, on Linux, makes it (and what it forks) the first the
-    kernel kills when memory runs out (`oom_score_adj` 1000)."""
+    kernel kills when memory runs out (`oom_score_adj` 1000). `cgroup`, a
+    cgroup v2 directory (`orca.cgroup`), is where it goes before it execs:
+    the parent opens its `cgroup.procs` (close-on-exec) and the child
+    writes `0` to it, its first act and an async-signal-safe one, so all
+    it runs and starts is in the cgroup."""
     if len(argv) == 0:
         raise Error("spawn: no program")
     var args = List[List[UInt8]]()
@@ -64,10 +70,26 @@ def spawn(
     var oom_path = _cstr("/proc/self/oom_score_adj")
     var oom_value = _cstr("1000")
     var oom_mode = _cstr("w")
+    var procs = Int(0)
+    var procs_fd = c_int(-1)
+    var zero = _cstr("0")
+    if cgroup:
+        var path = _cstr(String(cgroup, "/cgroup.procs"))
+        # "e": O_CLOEXEC, so the run doesn't inherit it.
+        var we = _cstr("we")
+        procs = external_call["fopen", Int](path.unsafe_ptr(), we.unsafe_ptr())
+        if procs == 0:
+            raise Error("spawn: can't open ", cgroup, "/cgroup.procs")
+        procs_fd = external_call["fileno", c_int](procs)
     var pid = external_call["fork", c_int]()
     if pid < 0:
+        if procs != 0:
+            _ = external_call["fclose", c_int](procs)
         raise Error("spawn: fork failed")
     if pid == 0:
+        if procs_fd >= 0:
+            # 0 is the writer: this process, into the run's cgroup.
+            _ = external_call["write", Int](procs_fd, zero.unsafe_ptr(), Int(1))
         if group:
             _ = external_call["setpgid", c_int](c_int(0), c_int(0))
         if log:
@@ -104,6 +126,9 @@ def spawn(
             args[0].unsafe_ptr(), ptrs.unsafe_ptr()
         )
         external_call["_exit", NoneType](c_int(127))
+    if procs != 0:
+        _ = external_call["fclose", c_int](procs)
+    _ = zero^
     _ = args^
     _ = ptrs^
     _ = names^

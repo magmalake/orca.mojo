@@ -222,6 +222,64 @@ small type, which is what allows coming back down; the data is on the Volume
 anyway. `rescale.sh down` waits for the fill to be over or paused: to stop
 earlier, cancel the runs in the UI.
 
+## A cgroup per run
+
+Every run on the server shares one machine. Where orca can make cgroups, each
+run gets one with a memory limit (`memory.high`) at its grant, and the kernel
+kills only that run's processes if they go 25% past it
+(`ORCA_RUN_MEMORY_MARGIN`); the attempt fails `out of memory at <limit>`, and
+the retry and the pipeline's later runs ask for 1.5 times as much
+(`ORCA_RUN_MEMORY_GROWTH`), up to `memory_gb`'s maximum. Without it, a run
+that runs away can push the machine into the kernel's OOM killer, which picks
+the run's processes first (`oom_score_adj`) but may take others too.
+
+The scheduler runs in a container, whose `/sys/fs/cgroup` docker mounts
+read-only. To turn it on:
+
+```sh
+ssh root@<ip> orca-stack configure CGROUPS=1
+ssh root@<ip> orca-stack apply           # restarts the scheduler; pause first, or --force
+ssh root@<ip> docker logs scheduler 2>&1 | grep 'run cgroups'
+# orca: run cgroups on: runs' cgroups go in /sys/fs/cgroup
+```
+
+What `CGROUPS=1` changes in the scheduler's `docker run` (nothing else's):
+
+- `--cgroupns=private`: the container sees its own cgroup as
+  `/sys/fs/cgroup` (docker's default on cgroup v2, said explicitly).
+- `--cap-add SYS_ADMIN --security-opt apparmor=unconfined` and an entrypoint
+  of `mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set
+  -sys_admin --inh-caps -sys_admin orca scheduler`: the remount needs the
+  capability and AppArmor's leave, and the capability is dropped from the
+  bounding set before orca starts, so neither orca nor any run it starts has
+  it. (`--privileged` would work too, and gives far more.)
+
+orca then moves itself into `/sys/fs/cgroup/orca` (a cgroup that gives its
+children controllers can hold no processes), turns on the memory controller
+for the container's cgroup's children, and makes `orca-run-<run>-<start>-<pid>`
+beside it for each run. The container's own limits and the host's other
+cgroups are out of its reach: under a private namespace with `nsdelegate`, the
+container's root cgroup's `memory.max` isn't writable from inside, and nothing
+above it is visible. `docker exec scheduler ...` (orca-stack's quiesce,
+`orca pause`) still works: runc puts it in `orca`.
+
+**Safe to turn on, but not on by default.** For the machine, it only adds a
+boundary; the capability is gone before orca runs, so the one thing given up
+for good is docker's AppArmor profile on the scheduler's container. What
+changes is what runs may use: a run is throttled past its grant and killed 25%
+above it, where today it may take what's free. Before turning it on, check on
+each pipeline's page (Resources: the max of its peaks, #203) that its peak
+fits under `memory_gb`'s maximum, and raise the maximum where it doesn't; a
+pipeline without a request is limited only to what the host can grant (its
+memory less `ORCA_RESERVE_MEMORY_MB`). Off again: `orca-stack configure
+CGROUPS=0` and `apply`.
+
+Where orca can't make cgroups (this option off, macOS, cgroup v1), the
+scheduler says why once (`orca: run cgroups off: ...`) and runs as before:
+`first_to_go`, and control-placed runs killed over `ORCA_CONTROL_MEMORY_MB`.
+`ORCA_CGROUPS=0` in `settings.env` turns it off from orca's side. Ops >
+Control lists each run going with its memory against its limit.
+
 ## Backups and restore
 
 The server runs `orca-stack backup` every night at 02:30 UTC
