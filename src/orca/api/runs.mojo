@@ -157,6 +157,8 @@ def json_run(mut out: String, r: RunRow):
         usage_json(r.usage),
         ", ",
         r.resources.json(),
+        ", ",
+        r.resources.limit_json(),
         "}",
     )
 
@@ -263,6 +265,10 @@ def run_json(v: RunView) -> String:
             s.from_run,
             ', "usage": ',
             usage_json(s.usage),
+            ', "memory_limit_mb": ',
+            String(s.limit_mb) if s.limit_mb > 0 else String("null"),
+            ', "grant_memory_mb": ',
+            String(s.grant_mb) if s.grant_mb > 0 else String("null"),
             "}",
         )
     j.write('], "tables": [')

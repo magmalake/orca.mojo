@@ -34,6 +34,7 @@ from orca.system import (
     system_json,
     system_now,
 )
+from orca.ui.contained import host_runs, host_runs_html, host_runs_json
 from orca.ui.layout import page_html
 from orca.watchdog import (
     active_trips,
@@ -157,6 +158,7 @@ def _system_live(mut h: Html, mut db: State, span: String) raises:
     health over `span`, and the alerts sent."""
     banner_html(h, active_trips(db))
     system_html(h, system_now(db), system_charts(db, range_hours(span)), span)
+    host_runs_html(h, host_runs(db))
     notify_html(h, notify_configured(), recent_alerts(db))
 
 
@@ -182,6 +184,8 @@ def system_page(mut db: State, range: String) raises -> Page:
     h.raw('" data-poll-every="', _CONTROL_EVERY, '">')
     banner_html(h, active_trips(db))
     system_html(h, now, charts, span)
+    var runs = host_runs(db)
+    host_runs_html(h, runs)
     var sent = recent_alerts(db)
     notify_html(h, notify_configured(), sent)
     h.raw("</div>")
@@ -191,6 +195,8 @@ def system_page(mut db: State, range: String) raises -> Page:
         json[byte=:close],
         ', "notify": ',
         notify_json(notify_configured(), sent),
+        ', "runs": ',
+        host_runs_json(runs),
         "}",
     )
     return Page(200, with_alerts, page_html("Control", "/ops/control", h))

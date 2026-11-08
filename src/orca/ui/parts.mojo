@@ -246,15 +246,33 @@ comptime _PEAK = (
 )
 
 
-def usage_cell(mut h: Html, u: Usage):
-    """A `<td>` of a peak in memory, with the CPU in its title."""
-    if u.peak_rss_bytes < 0:
+def mb_text(mb: Int) -> String:
+    """`512 MB`, `1.5 GB`."""
+    return String(gb_text(mb), " GB") if mb >= 1024 else String(mb, " MB")
+
+
+def usage_cell(mut h: Html, u: Usage, limit_mb: Int = 0, grant_mb: Int = 0):
+    """A `<td>` of a peak in memory, with the CPU in its title, and after
+    it the attempt's memory limit (`orca.cgroup`) when it had one."""
+    if u.peak_rss_bytes < 0 and limit_mb <= 0:
         h.raw('<td class="num"></td>')
         return
+    var title = usage_text(u) if u.peak_rss_bytes >= 0 else String()
+    if limit_mb > 0:
+        title.write(
+            "; " if title else "", "memory limit ", mb_text(limit_mb)
+        )
+        if grant_mb > 0:
+            title.write(", granted ", mb_text(grant_mb))
     h.raw('<td class="num" title="')
-    h.text(usage_text(u))
+    h.text(title)
     h.raw('">')
-    h.text(bytes_text(u.peak_rss_bytes))
+    if u.peak_rss_bytes >= 0:
+        h.text(bytes_text(u.peak_rss_bytes))
+    if limit_mb > 0:
+        h.raw('<span class="muted"> / ')
+        h.text(mb_text(limit_mb))
+        h.raw("</span>")
     h.raw("</td>")
 
 
@@ -293,10 +311,34 @@ def request_text(cpus: String, memory_gb: String) -> String:
     return text^
 
 
+comptime LIMIT_HELP = (
+    "Its latest start's cgroup (orca.cgroup): past the limit (memory.high,"
+    " its grant, request or ORCA_RUN_MEMORY_MB) the kernel slows its"
+    " processes and reclaims their memory; past the kill line (memory.max,"
+    " ORCA_RUN_MEMORY_MARGIN above) it kills them, and the retry asks for"
+    " more. None where orca can't make cgroups."
+)
+
+
+def limit_facts(mut h: Html, limit_mb: Int, max_mb: Int, grant_mb: Int = 0):
+    """A Memory limit fact (`orca.cgroup`), when there was one."""
+    if limit_mb <= 0:
+        return
+    fact_item(h, "Memory limit", "memory-limit", LIMIT_HELP, "runners")
+    h.text(mb_text(limit_mb))
+    if max_mb > 0:
+        h.text(", killed past ", mb_text(max_mb))
+    if grant_mb > 0:
+        h.text(" (granted ", mb_text(grant_mb), ")")
+    h.raw("</dd>")
+
+
 def grant_facts(mut h: Html, r: RunResources):
     """A run's Requested and Granted facts (`orca.resources`), when its
-    pipeline asked for any."""
+    pipeline asked for any, and its memory limit (`orca.cgroup`) when it
+    had one."""
     if not r.any():
+        limit_facts(h, r.limit_mb, r.max_mb)
         return
     fact_item(h, "Requested", "request", _GRANT_HELP, "runners")
     h.text(request_text(r.cpus, r.memory_gb))
@@ -312,6 +354,7 @@ def grant_facts(mut h: Html, r: RunResources):
     else:
         h.raw('<span class="muted">not yet: it hasn\'t started</span>')
     h.raw("</dd>")
+    limit_facts(h, r.limit_mb, r.max_mb)
 
 
 def usage_facts(mut h: Html, u: Usage, live: Bool):

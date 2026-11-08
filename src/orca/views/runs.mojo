@@ -36,9 +36,32 @@ struct RunResources(Copyable, Movable):
     var cpus: String
     var memory_gb: String
     var grant: Grant
+    var limit_mb: Int
+    """Its latest start's cgroup limit, `memory.high` (`orca.cgroup`); 0
+    for none."""
+    var max_mb: Int
+    """Its `memory.max`, past which the kernel kills its processes."""
+    var memory_bytes: Int
+    """Its cgroup's memory a few seconds ago while it runs; -1 else."""
 
     def any(self) -> Bool:
         return self.cpus != "" or self.memory_gb != ""
+
+    def limit_json(self) -> String:
+        """`"memory_limit": {...}|null` for a run's JSON."""
+        if self.limit_mb <= 0:
+            return String('"memory_limit": null')
+        return String(
+            '"memory_limit": {"limit_mb": ',
+            self.limit_mb,
+            ', "max_mb": ',
+            self.max_mb,
+            ', "current_bytes": ',
+            String(self.memory_bytes) if self.memory_bytes >= 0 else String(
+                "null"
+            ),
+            "}",
+        )
 
     def json(self) -> String:
         """`"request": {...}|null, "grant": {...}|null` for a run's JSON."""
@@ -144,6 +167,10 @@ struct StepRow(Copyable, Movable):
     """The run a rerun copied this step from, or 0."""
     var usage: Usage
     """What the latest attempt used."""
+    var limit_mb: Int
+    """The latest attempt's memory limit (`orca.cgroup`); 0 for none."""
+    var grant_mb: Int
+    """Its start's memory grant (`orca.resources`); 0 for none."""
 
 
 @fieldwise_init
@@ -196,6 +223,10 @@ comptime _GRANT_COLUMNS = (
     " coalesce(request_cpus, '') AS request_cpus, coalesce(request_memory_gb,"
     " '') AS request_memory_gb, coalesce(grant_cpus, 0)::bigint AS"
     " grant_cpus, coalesce(grant_memory_mb, 0)::bigint AS grant_memory_mb,"
+    " coalesce(memory_limit_mb, 0)::bigint AS memory_limit_mb,"
+    " coalesce(memory_max_mb, 0)::bigint AS memory_max_mb, CASE WHEN status"
+    " = 'running' THEN coalesce(memory_bytes, -1) ELSE -1 END::bigint AS"
+    " memory_bytes,"
 )
 """SQL for a run's request and grant (`orca.resources`)."""
 
@@ -206,6 +237,9 @@ def _resources_of(r: Row) raises -> RunResources:
         r.text("request_cpus"),
         r.text("request_memory_gb"),
         Grant(Int(r.int64("grant_cpus")), Int(r.int64("grant_memory_mb"))),
+        Int(r.int64("memory_limit_mb")),
+        Int(r.int64("memory_max_mb")),
+        Int(r.int64("memory_bytes")),
     )
 
 
@@ -437,10 +471,13 @@ def step_rows(mut db: State, run: Int) raises -> List[StepRow]:
             " a.step = s.id ORDER BY a.attempt DESC LIMIT 1), 0)::text AS",
             " attempt_id, coalesce((SELECT c.run FROM orca.steps c WHERE c.id",
             " = s.copied_from), 0)::text AS from_run, coalesce(u.peak, -1) AS",
-            " peak, coalesce(u.cpu, -1) AS cpu, coalesce(u.cpus, -1) AS cpus",
-            " FROM orca.steps s LEFT JOIN LATERAL (SELECT a.peak_rss_bytes AS",
-            " peak, a.cpu_seconds AS cpu, a.peak_cpus AS cpus FROM",
-            " orca.attempts a WHERE a.step = s.id ORDER BY a.attempt DESC",
+            " peak, coalesce(u.cpu, -1) AS cpu, coalesce(u.cpus, -1) AS cpus,",
+            " coalesce(u.limit_mb, 0) AS limit_mb, coalesce(u.grant_mb, 0) AS",
+            " grant_mb FROM orca.steps s LEFT JOIN LATERAL (SELECT",
+            " a.peak_rss_bytes AS peak, a.cpu_seconds AS cpu, a.peak_cpus AS",
+            " cpus, a.memory_limit_mb AS limit_mb, a.grant_memory_mb AS",
+            " grant_mb FROM orca.attempts a WHERE a.step = s.id ORDER BY",
+            " a.attempt DESC",
             " LIMIT 1) u ON true WHERE s.run = $1 ORDER BY s.ord, s.id",
         ),
         Params().int64(Int64(run)),
@@ -460,6 +497,8 @@ def step_rows(mut db: State, run: Int) raises -> List[StepRow]:
                 int_or_zero(r.text("attempt_id")),
                 int_or_zero(r.text("from_run")),
                 usage_columns(r),
+                Int(r.int64("limit_mb")),
+                Int(r.int64("grant_mb")),
             )
         )
     return out^
@@ -753,6 +792,10 @@ struct AttemptRow(Copyable, Movable):
     var error: String
     var log: String
     var usage: Usage
+    var limit_mb: Int
+    """Its memory limit (`orca.cgroup`); 0 for none."""
+    var grant_mb: Int
+    """Its start's memory grant (`orca.resources`); 0 for none."""
 
 
 def attempt_rows(
@@ -768,7 +811,9 @@ def attempt_rows(
             " AS ended, coalesce(a.error, '') AS error, coalesce(a.log, '')",
             " AS log, coalesce(a.peak_rss_bytes, -1) AS peak,",
             " coalesce(a.cpu_seconds, -1) AS cpu, coalesce(a.peak_cpus, -1)",
-            " AS cpus FROM orca.attempts a JOIN orca.steps s ON s.id = a.step",
+            " AS cpus, coalesce(a.memory_limit_mb, 0) AS limit_mb,",
+            " coalesce(a.grant_memory_mb, 0) AS grant_mb FROM orca.attempts a",
+            " JOIN orca.steps s ON s.id = a.step",
             " JOIN orca.runs r ON r.id = s.run WHERE s.run = $1 AND ",
             cond,
             " ORDER BY a.attempt",
@@ -792,6 +837,8 @@ def attempt_rows(
                 r.text("error"),
                 r.text("log"),
                 usage_columns(r),
+                Int(r.int64("limit_mb")),
+                Int(r.int64("grant_mb")),
             )
         )
     return out^
