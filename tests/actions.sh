@@ -10,6 +10,7 @@
 # curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -40,7 +41,7 @@ fail() {
 ORCA_TOY_FAIL=2024-02 ./build/toy run --partitions 2024-01..2024-02 >> "$log" 2>&1 \
     && fail "the run didn't fail"
 
-port=$((20000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 ui=$!

@@ -21,6 +21,7 @@
 # curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 for b in wide narrow plain; do
     # shellcheck disable=SC2086
@@ -125,7 +126,7 @@ is "SELECT coalesce(cpus, '-') || ' ' || memory_gb FROM orca.pipelines WHERE nam
     || fail "narrow's request: $(q "SELECT cpus, memory_gb FROM orca.pipelines WHERE name = 'narrow'")"
 echo "ok   bad requests are refused; config show gives a request and its source"
 
-port=$((47000 + $$ % 1000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 pids="$pids $!"

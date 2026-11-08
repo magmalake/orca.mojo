@@ -19,6 +19,7 @@
 # python3 and curl.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -31,7 +32,7 @@ log=build/ec2.log
 dir=$PWD/build/fake-ec2
 rm -rf "$dir" build/ec2-logs
 mkdir -p "$dir"
-port=$((32000 + $$ % 2000))
+free_port port
 fake=
 sched=
 stop() {
@@ -72,6 +73,16 @@ xml = sys.stdin.read()
 items = re.findall(r'<instanceId>.*?</tagSet>', xml)
 print(sum(1 for i in items if '<key>orca.run</key><value>$1</value>' in i))
 "
+}
+# kept RUN ID: what's kept of instance ID's log and samples, and the end of
+# what the instance printed, for a failure to show.
+kept() {
+    echo
+    ls -l "$ORCA_LOGS/fanout/$1/cluster/" "$ORCA_LOGS/fanout/$1/metrics/" 2>&1
+    echo "--- the end of $2's log:"
+    tail -5 "$ORCA_LOGS/fanout/$1/cluster/worker-$2.log" 2>&1
+    echo "--- the end of what $2 printed:"
+    tail -20 "$dir/$2.log" 2>&1
 }
 ids_of() {  # the instance IDs of run $1 with role $2, from the calls' answers
     for f in "$dir"/*.sh; do
@@ -142,7 +153,8 @@ got=$(q "SELECT string_agg(role || ' ' || instance_type || ' ' || market || ' ' 
 [ "$got" = "head c7g.large on-demand true shut itself down,worker c7g.xlarge spot true terminated,worker c7g.xlarge spot true terminated by orca: its run had ended,worker c7g.xlarge spot true terminated by orca: its run had ended" ] \
     || fail "run $f1's instances: $got"
 for w in $workers; do
-    wait_log "$ORCA_LOGS/fanout/$f1/cluster/worker-$w.log" "trips on $w" 300 || fail "worker $w's log"
+    wait_log "$ORCA_LOGS/fanout/$f1/cluster/worker-$w.log" "trips on $w" 300 \
+        || fail "worker $w's log: $(kept "$f1" "$w")"
 done
 head_id=$(ids_of "$f1" head | head -1)
 [ -s "$ORCA_LOGS/fanout/$f1/cluster/head-$head_id.log" ] || fail "the head's log"
@@ -152,7 +164,8 @@ head_id=$(ids_of "$f1" head | head -1)
 m=$ORCA_LOGS/fanout/$f1/metrics
 lost=$(echo "$workers" | head -1)
 for i in "head-$head_id" $(for w in $workers; do [ "$w" = "$lost" ] || echo "worker-$w"; done); do
-    python3 tests/metrics_ok.py --rss "$m/$i.jsonl" > /dev/null || fail "run $f1's metrics of $i: $(ls "$m" | tr '\n' ' ')"
+    python3 tests/metrics_ok.py --rss "$m/$i.jsonl" > /dev/null \
+        || fail "run $f1's metrics of $i: $(ls "$m" | tr '\n' ' ')$(kept "$f1" "${i#*-}")"
 done
 [ "$(ls "$m" | grep -cv -e "^head-$head_id.jsonl$" -e "^worker-")" -eq 0 ] || fail "run $f1's metrics: $(ls "$m" | tr '\n' ' ')"
 [ ! -e "$m/worker-$lost.jsonl" ] || python3 tests/metrics_ok.py "$m/worker-$lost.jsonl" > /dev/null \

@@ -6,6 +6,7 @@
 # starts a throwaway server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 repo=https://github.com/magmalake/orca.mojo
 c1=1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
@@ -61,7 +62,7 @@ ORCA_IMAGE=orca:c1 ./build/toy-c1 resume "$r3" >> "$log" 2>&1 || fail "resume wi
 q "UPDATE orca.runs SET status = 'failed', heartbeat = NULL WHERE id = $r3" > /dev/null
 ./build/toy resume "$r3" >> "$log" 2>&1 || fail "resume without a source"
 
-port=$((20000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 pid=$!

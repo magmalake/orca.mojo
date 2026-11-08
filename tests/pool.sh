@@ -26,6 +26,7 @@
 # python3, curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -38,7 +39,7 @@ log=build/pool.log
 dir=$PWD/build/fake-ec2-pool
 rm -rf "$dir" build/pool-logs
 mkdir -p "$dir"
-port=$((38000 + $$ % 2000))
+free_port port
 fake=
 sched=
 ui=
@@ -147,7 +148,7 @@ done
 echo "ok   3 runs of fanout on one head and 2 workers, launched once, each run's logs its own"
 
 # Idle in the pool, on the fleet page.
-uport=$((18000 + $$ % 2000))
+free_port uport
 ORCA_UI_ADDR="127.0.0.1:$uport" ./build/orca ui >> "$log" 2>&1 &
 ui=$!
 i=0

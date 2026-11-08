@@ -16,6 +16,7 @@
 # curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -68,7 +69,7 @@ tick 2024-02-02T03:01Z
 [ "$(status_of 2024-07)" = failed ] || fail "the retry was started while paused"
 
 # The UI says so, and offers to unpause.
-port=$((26000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 ui=$!

@@ -13,6 +13,7 @@
 # throwaway server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # The pipelines and orca compile at once (scripts/mojo-build.sh).
 pids=
@@ -95,7 +96,7 @@ done
     || fail "the backfill's keys: $(q "SELECT partitions FROM orca.runs WHERE pipeline = 'slashes' ORDER BY id DESC LIMIT 1")"
 
 # The UI: a key's page at its name with %2F, and the failed one linked there.
-port=$((26000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 ui=$!

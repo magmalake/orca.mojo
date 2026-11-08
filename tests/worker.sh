@@ -21,6 +21,7 @@
 # server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src -I tests/lineage $DEP_INC tests/worker/wk.mojo -o build/wk &
@@ -62,7 +63,7 @@ is() { [ "$(q "$1")" = "$2" ]; }
 ./build/orca register --placement worker:t --image orca:test-1 --max-runs 2 ./build/wk >> "$log" 2>&1 || fail "register"
 is "SELECT placement || ' ' || image FROM orca.pipelines WHERE name = 'wk'" "worker:t orca:test-1" \
     || fail "the registration: $(q "SELECT placement, image FROM orca.pipelines")"
-port=$((47000 + $$ % 1000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 ui=$!

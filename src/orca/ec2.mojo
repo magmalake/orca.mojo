@@ -736,11 +736,15 @@ struct Ec2Runner(Movable):
                     ),
                     ";",
                 )
+            # Stopped with TERM, the loop ends between uploads: one going
+            # on finishes first (the trap waits for it), so it can't land
+            # after the last upload below with older lines.
             s.write(
                 " }; }\n",
-                "( while sleep ",
+                "( trap 'kill $nap 2>/dev/null; exit 0' TERM; while :; do",
+                " sleep ",
                 getenv("ORCA_CLUSTER_LOG_SECONDS", "30"),
-                "; do up; done ) &\nuploader=$!\n",
+                " & nap=$!; wait $nap; up; done ) &\nuploader=$!\n",
             )
         if samples:
             # Beside everything else: the script's processes, and in docker
@@ -853,7 +857,9 @@ struct Ec2Runner(Movable):
                 "wait $sampler 2>/dev/null\nkill $guard 2>/dev/null\n",
             )
         if keeps or samples:
-            s.write("kill $uploader 2>/dev/null\nup\n")
+            s.write(
+                "kill $uploader 2>/dev/null\nwait $uploader 2>/dev/null\nup\n"
+            )
         if pool:
             # A worker whose processes all ended on their own (drained, or
             # lost) shuts down as before; one whose run ended, and a head

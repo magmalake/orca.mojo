@@ -9,6 +9,7 @@
 # and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -41,7 +42,7 @@ bad_run=$(q "SELECT max(id) FROM orca.runs")
 # A value with markup in it, as an error message could have.
 q "UPDATE orca.steps SET error = '<script>alert(1)</script> & \"so\"' WHERE run = $bad_run AND status = 'failed'" > /dev/null
 
-port=$((18000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 # The deployment's own nav links: one good, one with markup, one not http(s).
 ORCA_UI_LINKS='Census ↗=https://census.example/?a=b, <b>x</b>=http://x.example, Bad=javascript:alert(1)' \
@@ -77,7 +78,7 @@ curl -fsS "$base/static/orca.css" | grep -qF '.menu:focus-within .menu__sub' || 
 # head has it, with the key and site "orca"; a key that isn't one adds nothing.
 echo "$nav" | grep -q 'ph/static/array.js' && fail "the PostHog snippet is there without ORCA_POSTHOG_KEY"
 for key in phc_TestKey_123 'phc_x");alert(1);//' not_a_key; do
-    php=$((port + 1))
+    free_port php
     ORCA_POSTHOG_KEY=$key ORCA_UI_ADDR="127.0.0.1:$php" ./build/orca ui >> "$log" 2>&1 &
     phpid=$!
     i=0

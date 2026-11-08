@@ -25,6 +25,7 @@
 # curl, jq and python3.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -39,8 +40,8 @@ proj=$PWD/build/notify-project
 posts=$PWD/build/notify-posts.jsonl
 rm -rf "$proj" "$posts" "$posts.fail" build/notify-logs
 mkdir -p "$proj"
-port=$((49000 + $$ % 500))
-uport=$((49500 + $$ % 500))
+free_port port
+free_port uport
 base="http://127.0.0.1:$uport"
 fake=
 ui=
@@ -201,6 +202,13 @@ sleep 2
 export ORCA_NOTIFY_FILL_STALL_HOURS=0.0003
 ORCA_NOW=$T0 ./build/orca tick >> "$log" 2>&1 || fail "tick"
 expect_posts 5 "a fill outside its window"
+# That tick started daily's first scheduled run. The next one has to find
+# it ended, or the fill waits behind it ("start first") and no later tick
+# here would start it.
+i=0
+while [ "$(q "SELECT count(*) FROM orca.runs WHERE pipeline = 'daily' AND status = 'running'")" -gt 0 ]; do
+    i=$((i + 1)); [ "$i" -lt 600 ] || fail "daily's scheduled run didn't finish"; sleep 0.1
+done
 NOW=2024-01-08T23:00Z
 ORCA_NOW=$NOW ./build/orca tick >> "$log" 2>&1 || fail "tick"
 expect_posts 6 "the stalled fill"

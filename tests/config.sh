@@ -30,6 +30,7 @@
 # git, jq, python3 and curl.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -217,7 +218,7 @@ echo "ok   a pipeline's env reaches its own runs on the local runner"
 # The pipeline page shows the registration as config show does, with the
 # flags over the file; the run page's settings link to it.
 "$orca" register --max-runs 3 "$root/build/toy" >> "$log" 2>&1 || fail "register --max-runs for the page"
-uport=$((19000 + $$ % 2000))
+free_port uport
 ORCA_UI_ADDR="127.0.0.1:$uport" "$orca" ui >> "$log" 2>&1 &
 ui=$!
 i=0
@@ -276,7 +277,7 @@ b64=$(base64 < orca.toml | tr -d '\n')
 dir=$root/build/fake-ec2-config
 rm -rf "$dir"
 mkdir -p "$dir"
-port=$((42000 + $$ % 2000))
+free_port port
 export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
 export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
 export ORCA_STALE_SECONDS=10 ORCA_START_SECONDS=60 ORCA_EC2_POOL_SECONDS=60

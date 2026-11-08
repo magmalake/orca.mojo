@@ -5,7 +5,8 @@ process running its user data under sh.
     python3 tests/fake_ec2.py <port> <dir>
 
 Every call is appended to <dir>/calls.jsonl as {"action", "params"}; each
-instance's script and output are <dir>/<id>.sh and <dir>/<id>.log, and its
+instance's script and output are <dir>/<id>.sh and <dir>/<id>.log, its /tmp
+is <dir>/<id>.tmp (the script's /tmp/orca-* files are moved there), and its
 environment has HOSTNAME set to its ID, so a test can tell instances apart.
 All instances share 127.0.0.1 as their private address. A process that
 exits is an instance that terminated, as `InstanceInitiatedShutdownBehavior
@@ -26,6 +27,7 @@ import datetime
 import http.server
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -78,8 +80,14 @@ def _run(p):
         COUNTER[0] += 1
         iid = f"i-{COUNTER[0]:017x}"
         path = os.path.join(DIR, f"{iid}.sh")
+        # A /tmp of its own, as an instance has: the scripts name their
+        # files there by run, start, role and ID, which every test's first
+        # run and instances share, so in the one /tmp a test's file could
+        # be another's, or what an earlier test's instance left.
+        tmp = os.path.join(DIR, f"{iid}.tmp")
+        os.makedirs(tmp, exist_ok=True)
         with open(path, "w") as f:
-            f.write(script)
+            f.write(re.sub(r"(?<=[\s>'\"])/tmp/orca-", tmp + "/orca-", script))
         env = dict(os.environ, HOSTNAME=iid)
         out = open(os.path.join(DIR, f"{iid}.log"), "w")
         proc = subprocess.Popen(

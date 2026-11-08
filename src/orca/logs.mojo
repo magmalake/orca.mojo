@@ -21,8 +21,8 @@ environment variables that hold a run's secrets (`orca register --secret`),
 and `mask` replaces their values with `***`.
 """
 
-from std.ffi import external_call
-from std.os import getenv, makedirs
+from std.ffi import c_int, external_call
+from std.os import getenv, makedirs, remove
 from std.os.path import exists
 
 from objectstore.fileio import FileIOResolver
@@ -146,14 +146,38 @@ def publish(location: String) raises:
 
 def write_location(location: String, data: Span[UInt8, _]) raises:
     """Writes `data` to `location`, local or remote, replacing it, with
-    secrets masked."""
+    secrets masked. A local file is replaced whole: written beside it and
+    renamed over it, so a reader (or a `put-log` killed with its instance)
+    never leaves or sees it truncated, as an object's PUT doesn't."""
     var masked = mask_bytes(data)
     if is_remote(location):
         FileIOResolver().write(location, Span(masked))
         return
     makedirs(_parent(location), exist_ok=True)
-    with open(location, "w") as f:
-        f.write_bytes(Span(masked))
+    var tmp = String(
+        location, ".", Int(external_call["getpid", c_int]()), ".tmp"
+    )
+    try:
+        with open(tmp, "w") as f:
+            f.write_bytes(Span(masked))
+    except e:
+        try:
+            remove(tmp)
+        except:
+            pass
+        raise e^
+    var to = location
+    if (
+        external_call["rename", c_int](
+            tmp.as_c_string_span(), to.as_c_string_span()
+        )
+        != 0
+    ):
+        try:
+            remove(tmp)
+        except:
+            pass
+        raise Error("orca: can't replace ", location)
 
 
 def read_location(location: String) raises -> List[UInt8]:
