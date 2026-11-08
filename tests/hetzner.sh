@@ -18,7 +18,15 @@
 # - each backup writes <time>.paused beside the dump: the pipelines paused
 #   by hand (manual1) and the ones the deploy paused (toy); list-backups
 #   says which dumps have one, and a restore unpauses only the ones the
-#   deploy paused (a dump without one leaves them all paused).
+#   deploy paused (a dump without one leaves them all paused);
+# - apply starts again only the containers whose spec (image, env file,
+#   flags, CGROUPS) changed, and says why; it refuses over running runs
+#   only when the scheduler would be replaced; --only and --all; plan
+#   changes nothing; Postgres is started once and never again;
+# - deploy.sh pauses, waits and registers only when the plan replaces the
+#   scheduler: a console-only deploy backs up and replaces the console and
+#   nothing else, a deploy of what runs does nothing; an app-only rollback
+#   goes on over running runs and registers nothing.
 set -eu
 cd "$(dirname "$0")/.."
 FAKE=$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner.XXXXXX")
@@ -158,5 +166,106 @@ rm "$FAKE/register-fails"
 sh deploy/hetzner/deploy.sh --dry-run --rollback > "$FAKE/out" 2>&1 || fail "a dry run"
 has "+ ssh root@<server-ip> orca-stack rollback"
 [ ! -s "$FAKE/docker.log" ] || fail "a dry run ran docker"
+
+# Only what changed starts again: each container has its spec as a label,
+# and an apply that changes nothing replaces nothing.
+stack resume > /dev/null
+stack apply --tag eee5555 --app console=- > /dev/null || fail "apply eee5555"
+grep -q '^orca.stack.spec=' "$FAKE/containers/scheduler/labels" || fail "no spec label"
+: > "$FAKE/docker.log"
+stack apply > "$FAKE/out" 2>&1 || fail "an apply of what runs"
+for c in scheduler ui sampler console; do has "$c: unchanged"; done
+grep -q 'run -d\|rm -f\|stop ' "$FAKE/docker.log" && fail "an unchanged apply started or stopped a container"
+
+# Runs running: an apply that keeps the scheduler goes on; one that would
+# replace it is refused and changes nothing.
+echo 2 > "$FAKE/running"
+: > "$FAKE/docker.log"
+stack apply --app console=fff6666 > "$FAKE/out" 2>&1 || fail "a console-only apply with runs running"
+has "console: replaced (image eee5555 -> fff6666)"
+has "scheduler: unchanged"
+grep -q 'run -d --name \(scheduler\|ui\|sampler\)' "$FAKE/docker.log" && fail "a console-only apply replaced more"
+stack apply --tag ggg7777 > "$FAKE/out" 2>&1 && fail "replaced the scheduler over running runs"
+has "2 run(s) running; restarting the scheduler (image eee5555 -> ggg7777) kills them"
+[ "$(stack tags)" = "orca eee5555, console fff6666" ] || fail "a refused apply changed the tags: $(stack tags)"
+grep -q '^ORCA_TAG=eee5555$' "$ORCA_CONF/stack.conf" || fail "a refused apply changed ORCA_TAG"
+echo 0 > "$FAKE/running"
+
+# plan says what apply would do, and changes nothing.
+: > "$FAKE/docker.log"
+stack plan --tag ggg7777 > "$FAKE/out" 2>&1 || fail "orca-stack plan"
+has "^scheduler replace image eee5555 -> ggg7777$"
+has "^console keep unchanged$"
+grep -q 'run -d\|rm -f' "$FAKE/docker.log" && fail "plan started or removed a container"
+[ "$(stack tags)" = "orca eee5555, console fff6666" ] || fail "plan changed the tags"
+
+# A census-only deploy: no pause, a backup, the console replaced and
+# nothing else, nothing registered.
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 || fail "a console-only deploy"
+has "  console replace image fff6666 -> hhh8888"
+has "the scheduler keeps running: not pausing anything"
+grep -q 'orca pause' "$FAKE/docker.log" && fail "a console-only deploy paused the pipelines"
+grep -q pg_dump "$FAKE/docker.log" || fail "a console-only deploy didn't back up"
+[ "$(grep -n 'pg_dump\|run -d --name console' "$FAKE/docker.log" | head -1 | grep -c pg_dump)" = 1 ] \
+    || fail "the backup wasn't before the console's start"
+grep -q 'run -d --name console' "$FAKE/docker.log" || fail "the console wasn't replaced"
+grep -q 'run -d --name \(scheduler\|ui\|sampler\)' "$FAKE/docker.log" && fail "a console-only deploy replaced more"
+grep -q 'orca register' "$FAKE/docker.log" && fail "a console-only deploy registered"
+has "the scheduler wasn't replaced: the pipelines stay registered as they are"
+[ "$(stack tags)" = "orca eee5555, console hhh8888" ] || fail "tags after a console deploy: $(stack tags)"
+
+# A deploy of what runs: nothing replaced, no backup, no pause.
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 || fail "a deploy of what runs"
+has "nothing to replace: not backing up"
+grep -q 'pg_dump\|run -d\|orca pause' "$FAKE/docker.log" && fail "a deploy of what runs did something"
+
+# A setting only orca.env has: the scheduler and the UI; CGROUPS: the
+# scheduler only; a tag pushed again: what runs it.
+echo ORCA_TEST_SETTING=1 >> "$ORCA_CONF/settings.env"
+stack apply > "$FAKE/out" 2>&1 || fail "apply after a setting"
+has "scheduler: replaced (settings: its env file changed)"
+has "ui: replaced (settings: its env file changed)"
+has "console: unchanged"
+has "sampler: unchanged"
+stack configure CGROUPS=1
+stack apply > "$FAKE/out" 2>&1 || fail "apply with CGROUPS=1"
+has "scheduler: replaced (options: its flags, mounts or CGROUPS changed)"
+has "ui: unchanged"
+echo sha256:0123456789abcdef0123 > "$FAKE/images/img_eee5555"
+stack apply > "$FAKE/out" 2>&1 || fail "apply after a push"
+has "scheduler: replaced (image eee5555 pushed again ("
+has "sampler: replaced (image eee5555 pushed again ("
+has "console: unchanged"
+
+# --all and --only.
+stack apply --all > "$FAKE/out" 2>&1 || fail "apply --all"
+for c in scheduler ui sampler console; do has "$c: replaced (--all)"; done
+: > "$FAKE/docker.log"
+stack apply --only console --app console=iii9999 > "$FAKE/out" 2>&1 || fail "apply --only console"
+has "console: replaced (image hhh8888 -> iii9999)"
+has "scheduler: left as it is (--only console)"
+grep -q 'run -d --name \(scheduler\|ui\|sampler\)' "$FAKE/docker.log" && fail "--only console replaced more"
+stack apply --only ui --tag jjj0000 > "$FAKE/out" 2>&1 && fail "--only with a new --tag"
+has "would leave the other containers on the old one"
+stack apply --only ui --app console=jjj0000 > "$FAKE/out" 2>&1 && fail "--only ui with --app console"
+[ "$(stack tags)" = "orca eee5555, console iii9999" ] || fail "tags after --only: $(stack tags)"
+
+# Rolling back an app only goes on over running runs and registers nothing.
+echo 1 > "$FAKE/running"
+: > "$FAKE/docker.log"
+deploy --rollback || fail "an app-only deploy.sh --rollback"
+has "  console replace image iii9999 -> hhh8888"
+has "the scheduler keeps running: not pausing anything"
+has "console: replaced (image iii9999 -> hhh8888)"
+has "the scheduler kept running, so the pipelines stay registered as they are"
+grep -q 'orca register\|orca pause\|run -d --name scheduler' "$FAKE/docker.log" && fail "an app-only rollback touched the scheduler"
+[ "$(stack tags)" = "orca eee5555, console hhh8888" ] || fail "tags after an app-only rollback: $(stack tags)"
+echo 0 > "$FAKE/running"
+
+# Postgres: started once, by the first apply, and never stopped or removed.
+[ "$(grep -c 'run -d --name postgres' "$FAKE/docker.all")" = 1 ] || fail "Postgres was started more than once"
+grep -q '\(stop\|rm\).* postgres$' "$FAKE/docker.all" && fail "Postgres was stopped or removed"
 
 echo "ok   hetzner"

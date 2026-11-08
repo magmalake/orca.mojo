@@ -79,8 +79,9 @@ Postgres can never start on the root disk). Then, over SSH, it puts the
 settings and secrets on the server (`/etc/orca`, mode 600, sent on standard
 input and never printed), installs `orca-stack` and the backup timer, and
 starts the containers. Run it again whenever `hetzner.env` changes: it
-fixes drift. It does not restart a scheduler that has runs running unless you
-add `--force` (a restart kills them).
+fixes drift, starting again only the containers whose settings changed
+(see [Deploying code](#deploying-code)). It does not restart a scheduler
+that has runs running unless you add `--force` (a restart kills them).
 
 Then, once per new database:
 
@@ -181,41 +182,83 @@ once memory is nearly full, which pressure should keep from happening.
 ## Deploying code
 
 ```sh
-./deploy.sh a1b2c3d                    # pulls ghcr.io/magmalake/orca:a1b2c3d, restarts scheduler, ui, sampler, apps, tunnel
+./deploy.sh a1b2c3d                    # pulls ghcr.io/magmalake/orca:a1b2c3d, starts again what changed
 ./deploy.sh a1b2c3d console=latest     # one app on another tag
+./deploy.sh --all a1b2c3d              # every container again, changed or not
 ./deploy.sh --rollback                 # back to the tags deployed before (see Rolling back)
 ```
 
 The tag is the project's image tag: see [Images](#images). This replaces
 `orca aws app` and `orca aws up` for code changes, and needs `hcloud` with a
-context like `up.sh`. Postgres is not restarted. Restarting the scheduler kills
-running runs, so `deploy.sh` does the safe sequence itself, logging each step:
+context like `up.sh`.
 
-1. copies this checkout's `orca-stack` to the server;
-2. `orca-stack quiesce`: pauses every pipeline that isn't paused, then waits
-   for the running runs to end, listing them each minute (`--timeout
-   SECONDS`, default 3600);
-3. `orca-stack backup-now`: a `pg_dump` to the bucket, as the nightly one
-   (below), and says where: `previous tag ac0c766, new tag b2b9558; backup
+**Only what changed starts again.** `orca-stack apply` compares what each
+container would be started with against what it runs, and leaves it
+running when nothing differs: the image (the tag, and the image's id, so a
+tag pushed again counts), the env file it reads (`orca.env`, `app.env`,
+`tunnel.env`, and `secret-fetch`), and its flags and mounts (`CGROUPS`'s
+among them). A hash of those is the container's `orca.stack.spec` label.
+It prints a line for each:
+
+```
+scheduler: unchanged
+ui: replaced (image ac0c766 -> b2b9558)
+sampler: replaced (image ac0c766 -> b2b9558)
+console: unchanged
+```
+
+The scheduler, UI and sampler run the orca tag, so a new orca tag replaces
+the three; an app on its own tag (the census console) is replaced only when
+its tag changes. Postgres is never restarted. A container started by an
+`orca-stack` from before the label has none, so the first apply with this
+one replaces every container once. `orca-stack plan` with the same
+arguments says what an apply would do (`ui replace image ac0c766 ->
+b2b9558`) and changes nothing; `apply --all` replaces every container, as
+`apply` did before, and `apply --only console` that one alone.
+
+**The scheduler.** Restarting it kills running runs, so `apply` refuses,
+while runs are running, only when the scheduler is to be replaced (`--force`
+kills them). `deploy.sh` asks for the plan first, and does the safe
+sequence itself, logging each step:
+
+1. copies this checkout's `orca-stack` to the server, and prints `orca-stack
+   plan`'s lines;
+2. if the plan replaces the scheduler, `orca-stack quiesce`: pauses every
+   pipeline that isn't paused, then waits for the running runs to end,
+   listing them each minute (`--timeout SECONDS`, default 3600). If it
+   doesn't, nothing is paused and running runs go on;
+3. if the plan replaces anything, `orca-stack backup-now`: a `pg_dump` to
+   the bucket, as the nightly one (below), and says where: `previous tag
+   ac0c766, new tag b2b9558; backup
    s3://<bucket>/backups/pg/20261108T101500Z.dump`. Beside the dump it
    writes `<time>.paused`, which pipelines were paused by hand (or the
    watchdog) and which by this deploy, and prints both. If the backup fails
    it unpauses what it paused and stops without deploying; `--no-backup`
    deploys without one;
-4. `orca-stack apply --tag <tag>`: pulls and restarts, and keeps the tags
-   it replaced (see [Rolling back](#rolling-back));
-5. `orca-stack register`: registers the pipelines from the new image
-   (`docker exec scheduler orca register`, its `orca.toml`), so queued runs
-   move to the new code before any starts;
-6. `orca-stack resume`: unpauses the pipelines it paused, and only those
-   (not ones the watchdog or you paused).
+4. `orca-stack apply --tag <tag>`: pulls, replaces what changed, and keeps
+   the tags it replaced (see [Rolling back](#rolling-back));
+5. if the scheduler was replaced, `orca-stack register`: registers the
+   pipelines from the new image (`docker exec scheduler orca register`, its
+   `orca.toml`), so queued runs move to the new code before any starts.
+   The pipelines are in the scheduler's image, so when it wasn't replaced
+   there is nothing new to register;
+6. if it paused them, `orca-stack resume`: unpauses the pipelines it
+   paused, and only those (not ones the watchdog or you paused).
 
-On a timeout, a failed apply or a failed registration it stops with the
-pipelines still paused and says so (after a failed registration: fix it,
-then `orca-stack register` and `orca-stack resume`, or `./deploy.sh
---rollback`); `ssh root@<ip> orca-stack resume` undoes the pause. `--force` skips
-the pause and the wait and kills the running runs. `orca-stack status` shows
-the running runs and what quiesce paused.
+So a deploy of a new orca tag pauses, waits, backs up, replaces the
+scheduler, UI, sampler and the apps that follow the orca tag, registers and
+unpauses. A census-only deploy (`./deploy.sh <the orca tag that runs>
+console=<sha>`) backs up and replaces the console, and nothing is paused,
+killed or registered. A deploy of what already runs does nothing: no
+backup, and every container is kept.
+
+On a timeout, a failed apply or a failed registration it stops, with the
+pipelines still paused if it paused them, and says so (after a failed
+registration: fix it, then `orca-stack register` and `orca-stack resume`,
+or `./deploy.sh --rollback`); `ssh root@<ip> orca-stack resume` undoes the
+pause. `--force` skips the pause and the wait and kills the running runs if
+the scheduler is replaced. `orca-stack status` shows the running runs and
+what quiesce paused.
 
 ## Rolling back
 
@@ -237,12 +280,14 @@ pipelines were paused by hand and which by the deploy. The tags are kept from th
 ./deploy.sh --rollback --force         # without waiting: kills the running runs
 ```
 
-It does what a deploy does (copies `orca-stack`, pauses and waits, backs
-up), then `orca-stack rollback`: applies the previous orca tag and the
-previous app tags (an app that ran the orca tag follows it again, and one no
-longer set up is left out), and registers the pipelines again (`docker exec
-scheduler orca register`, from the rolled-back image's `orca.toml`), before
-it unpauses anything. The older binaries have other registry hashes and maybe
+It does what a deploy does (copies `orca-stack`, asks for the plan, pauses
+and waits if the scheduler is replaced, backs up), then `orca-stack
+rollback`: applies the previous orca tag and the previous app tags (an app
+that ran the orca tag follows it again, and one no longer set up is left
+out), replacing the containers whose tags differ, and, if it replaced the
+scheduler, registers the pipelines again (`docker exec scheduler orca
+register`, from the rolled-back image's `orca.toml`), before it unpauses
+anything. The older binaries have other registry hashes and maybe
 another `orca.toml`, so the registration is what makes the scheduler start
 runs with the code that's deployed. On the server, `orca-stack rollback
 [--force]` does the same without the pause and the backup. A second rollback
@@ -250,19 +295,22 @@ goes forward again: the tags it replaced are now the previous ones.
 
 **Only an app.** The census console is an app with its own tag; rolling it
 back leaves the scheduler alone, so no run is killed and nothing needs
-registering:
+registering, with runs running or not:
 
 ```sh
 ssh root@<ip> orca-stack apply --app console=<sha>
 ```
 
-Apply checks for running runs anyway (it restarts every container, the
-scheduler too); with runs running either wait, or `./deploy.sh <orca-tag>
-console=<sha>` with the current orca tag, which waits for you.
+`./deploy.sh <the orca tag that runs> console=<sha>` does the same with a
+backup first, and so does `./deploy.sh --rollback` when the deploy before
+changed only the console: its plan keeps the scheduler, so nothing is
+paused, and `orca-stack rollback` registers the pipelines only when it
+replaced the scheduler.
 
-**Running runs.** As on a deploy: without `--force` it pauses the pipelines
-and waits up to `--timeout` for the running runs to end, and `orca-stack
-rollback` itself refuses while any run is running. With `--force` the
+**Running runs.** As on a deploy: when the scheduler is replaced, without
+`--force` it pauses the pipelines and waits up to `--timeout` for the
+running runs to end, and `orca-stack rollback` itself refuses while any run
+is running. With `--force` the
 scheduler's restart kills them. The registration then does what it does
 after any new build: queued runs, and failed ones waiting for a retry with
 no step done, move to the rolled-back code and start once the pipelines are
@@ -357,7 +405,7 @@ read-only. To turn it on:
 
 ```sh
 ssh root@<ip> orca-stack configure CGROUPS=1
-ssh root@<ip> orca-stack apply           # restarts the scheduler; pause first, or --force
+ssh root@<ip> orca-stack apply           # replaces the scheduler only; pause first, or --force
 ssh root@<ip> docker logs scheduler 2>&1 | grep 'run cgroups'
 # orca: run cgroups on: runs' cgroups go in /sys/fs/cgroup
 ```

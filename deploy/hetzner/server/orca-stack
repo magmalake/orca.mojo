@@ -4,8 +4,11 @@
 #
 #   configure [--keep-existing] KEY=VALUE...   stack settings (/etc/orca/stack.conf)
 #   app NAME PORT                              an app beside the UI (the census console)
-#   apply [--db-only] [--force] [--tag T] [--app NAME=T]...
-#                                              pull the images, (re)start the containers
+#   apply [--db-only] [--force] [--all | --only NAME] [--tag T] [--app NAME=T]...
+#                                              pull the images, start again the containers
+#                                              whose image or settings changed
+#   plan [--rollback | apply's arguments]      what apply would start again, and why;
+#                                              changes nothing
 #   status                                     containers, running runs, tags
 #   tags [--previous]                          what's deployed (or was before it)
 #   rollback [--force]                         apply the tags deployed before, and
@@ -20,6 +23,16 @@
 #   list-backups                               the dumps, and which have a <time>.paused
 #   restore [--force] <key|latest>             pg_restore into the (empty) database, then
 #                                              unpause what a deploy's quiesce had paused
+#
+# apply starts a container again only when what it would be started with
+# differs from what it runs: the image (a tag, or the same tag pushed
+# again), its env file, its flags and mounts (CGROUPS's among them). The
+# others keep running. Each container is labelled with a hash of that
+# (orca.stack.spec); apply prints "NAME: unchanged" or "NAME: replaced
+# (why)" for each. It refuses while runs are running only when the
+# scheduler is to be replaced (its restart kills them), unless --force.
+# --all starts every container again (Postgres excepted); --only NAME only
+# that one. Postgres is created once and never restarted by apply.
 #
 # Each apply that changes a tag keeps what was deployed before it:
 # $CONF/deployed has the tags the last apply started ("orca TAG", then "app
@@ -116,20 +129,13 @@ cmd_app() {
     grep -q "^$1 " "$CONF/apps" || echo "$1 $2 -" >> "$CONF/apps"
 }
 
-set_app_tag() { # NAME TAG
-    safe "$2"
-    grep -q "^$1 " "$CONF/apps" 2> /dev/null || die "no app $1 (orca-stack app NAME PORT)"
-    awk -v n="$1" -v t="$2" '$1 == n { $3 = t } { print }' "$CONF/apps" > "$CONF/apps.new"
-    mv "$CONF/apps.new" "$CONF/apps"
-}
-
-write_env() {
+write_env() { # DIR: the containers' env files, pg.env, orca.env and app.env, in DIR
     umask 077
     if [ ! -s "$CONF/db-password" ]; then
         openssl rand -hex 24 > "$CONF/db-password"
     fi
     pw=$(cat "$CONF/db-password")
-    printf 'POSTGRES_USER=orca\nPOSTGRES_DB=orca\nPOSTGRES_PASSWORD=%s\n' "$pw" > "$CONF/pg.env"
+    printf 'POSTGRES_USER=orca\nPOSTGRES_DB=orca\nPOSTGRES_PASSWORD=%s\n' "$pw" > "$1/pg.env"
     {
         cat "$CONF/settings.env"
         printf 'ORCA_DATABASE_URL=postgresql://orca:%s@postgres:5432/orca\n' "$pw"
@@ -144,14 +150,14 @@ ORCA_UI_LOGIN=required
 ORCA_UI_SECURE_COOKIES=1
 ORCA_UI_TRUST_PROXY=1
 EOS
-    } > "$CONF/orca.env"
+    } > "$1/orca.env"
     # An app reads the lake, not orca's database: no password. It gets the
     # UI's PostHog key as POSTHOG_KEY (the census console's analytics).
     {
         grep -E '^(AWS_REGION|AWS_ENDPOINT_URL_S3|ORCA_WAREHOUSE|ORCA_PUBLIC_WAREHOUSE)=' "$CONF/settings.env" || true
         sed -n 's/^ORCA_POSTHOG_KEY=/POSTHOG_KEY=/p' "$CONF/settings.env" | tail -n 1
         cat "$CONF/s3.env"
-    } > "$CONF/app.env"
+    } > "$1/app.env"
 }
 
 pull() { # IMAGE: fatal on failure (a trial run may use an image it has)
@@ -160,11 +166,15 @@ pull() { # IMAGE: fatal on failure (a trial run may use an image it has)
     die "can't pull $1"
 }
 
-run_container() { # NAME, then docker run's arguments (including the network)
-    name=$1
-    shift
-    docker rm -f "$name" > /dev/null 2>&1 || true
-    docker run -d --name "$name" --restart always "$@" > /dev/null
+login() {
+    if [ -n "$(conf_get GHCR_USER)" ] && [ -f "$CONF/ghcr-token" ]; then
+        docker login ghcr.io -u "$(conf_get GHCR_USER)" --password-stdin < "$CONF/ghcr-token" > /dev/null
+    fi
+}
+
+# A short hash of standard input.
+digest() {
+    if command -v sha256sum > /dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -c1-16
 }
 
 # The tags the stack is set to run: "orca TAG", then "app NAME TAG".
@@ -172,7 +182,7 @@ tags_now() {
     t=$(conf_get ORCA_TAG)
     echo "orca $t"
     [ -s "$CONF/apps" ] || return 0
-    while read -r name port atag; do
+    while read -r name port atag _; do
         [ "$atag" != - ] || atag=$t
         echo "app $name $atag"
     done < "$CONF/apps"
@@ -194,49 +204,262 @@ cmd_tags() {
     fi
 }
 
-cmd_apply() {
-    # A stack applied before deployed was kept: what it runs is its conf.
-    if [ ! -f "$CONF/deployed" ] && [ -f "$STATE/applied" ] && [ -n "$(conf_get ORCA_TAG)" ]; then
-        tags_now > "$CONF/deployed"
-    fi
+# apply's and plan's arguments: sets dbonly, force, all, only, newtag and
+# appsets ("NAME=TAG ...").
+apply_args() {
     dbonly=0
     force=0
+    all=0
+    only=
     newtag=
+    appsets=
     while [ $# -gt 0 ]; do
         case "$1" in
             --db-only) dbonly=1 ;;
             --force) force=1 ;;
-            --tag)
-                newtag=$2
-                shift
-                ;;
-            --app)
-                set_app_tag "${2%%=*}" "${2#*=}"
+            --all) all=1 ;;
+            --only | --tag | --app)
+                [ $# -ge 2 ] || die "$1 needs a value"
+                case "$1" in
+                    --only) only=$2 ;;
+                    --tag) newtag=$2 ;;
+                    --app) appsets="$appsets $2" ;;
+                esac
                 shift
                 ;;
             *) die "apply: unknown argument $1" ;;
         esac
         shift
     done
-    [ -z "$newtag" ] || {
-        safe "$newtag"
-        conf_set ORCA_TAG "$newtag"
-    }
-    [ "${ORCA_STACK_TEST:-}" = 1 ] || mountpoint -q "$DATA" || die "$DATA (the Volume) isn't mounted; Postgres must not start on the root disk"
+    [ -z "$newtag" ] || safe "$newtag"
+    [ -z "$only" ] || safe "$only"
+    [ "$all" = 0 ] || [ -z "$only" ] || die "--all or --only, not both"
+}
+
+# What apply is to run, from the conf and the arguments, without changing
+# the conf: sets image, tag and cf, and writes $CONF/apps.next (the apps,
+# with --app's tags), which APPS names.
+desired() {
     for f in settings.env s3.env stack.conf; do
         [ -f "$CONF/$f" ] || die "$CONF/$f is missing (deploy/hetzner/up.sh puts it there)"
     done
     image=$(conf_get ORCA_IMAGE)
-    tag=$(conf_get ORCA_TAG)
+    tag=${newtag:-$(conf_get ORCA_TAG)}
     [ -n "$image" ] && [ -n "$tag" ] || die "ORCA_IMAGE and ORCA_TAG aren't set"
     cf=$(conf_get CLOUDFLARED_IMAGE)
     cf=${cf:-cloudflare/cloudflared:latest}
-    mkdir -p "$DATA/pg" "$STATE/stage" "$STATE/backup" "$CONF/secrets"
-    write_env
-
-    if [ -n "$(conf_get GHCR_USER)" ] && [ -f "$CONF/ghcr-token" ]; then
-        docker login ghcr.io -u "$(conf_get GHCR_USER)" --password-stdin < "$CONF/ghcr-token" > /dev/null
+    if [ -n "$only" ] && [ -n "$newtag" ] && [ "$newtag" != "$(conf_get ORCA_TAG)" ]; then
+        die "--only $only with a new --tag would leave the other containers on the old one"
     fi
+    APPS=$CONF/apps.next
+    if [ -f "$CONF/apps" ]; then cp "$CONF/apps" "$APPS"; else : > "$APPS"; fi
+    for s in $appsets; do
+        n=${s%%=*}
+        t=${s#*=}
+        safe "$n"
+        safe "$t"
+        grep -q "^$n " "$APPS" || die "no app $n (orca-stack app NAME PORT)"
+        [ -z "$only" ] || [ "$only" = "$n" ] || die "--only $only with --app $n: $n wouldn't be started"
+        awk -v n="$n" -v t="$t" '$1 == n { $3 = t } { print }' "$APPS" > "$APPS.new"
+        mv "$APPS.new" "$APPS"
+    done
+}
+
+pull_all() {
+    pull "$image:$tag"
+    while read -r name port atag _; do
+        [ -n "$name" ] || continue
+        [ "$atag" != - ] || atag=$tag
+        pull "$image:$atag"
+    done < "$APPS"
+    [ ! -s "$CONF/tunnel.env" ] || pull "$cf"
+}
+
+# Each container but Postgres, in the order apply starts them: calls
+# CALLBACK NAME FILES IMAGE ARGS..., with FILES the files it's started with
+# (its env file and the like, read from ENVDIR; - for none), IMAGE what it
+# runs, and ARGS docker run's arguments after --name, --restart and the labels.
+containers() {
+    cb=$1
+    files="$ENVDIR/orca.env $CONF/secret-fetch"
+    # CGROUPS=1: a cgroup per run (docs/hetzner.md#a-cgroup-per-run).
+    # The scheduler's cgroup namespace is its own, and its /sys/fs/cgroup,
+    # which docker mounts read-only, is made writable before orca starts:
+    # remounting needs CAP_SYS_ADMIN, outside docker's AppArmor profile,
+    # and the capability is dropped (setpriv) before orca, and every run
+    # it starts, gets it. Its own cgroup is the container's: it can't
+    # touch any other container's or the host's.
+    if [ "$(conf_get CGROUPS)" = 1 ]; then
+        $cb scheduler "$files" "$image:$tag" --network orca --env-file "$CONF/orca.env" \
+            -v "$STATE/stage:/var/lib/orca/stage" \
+            -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
+            --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+            --entrypoint /bin/sh "$image:$tag" -c \
+            'mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/orca/bin/orca scheduler'
+    else
+        $cb scheduler "$files" "$image:$tag" --network orca --env-file "$CONF/orca.env" \
+            -v "$STATE/stage:/var/lib/orca/stage" \
+            -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
+            "$image:$tag" scheduler
+    fi
+    $cb ui "$files" "$image:$tag" --network orca --env-file "$CONF/orca.env" \
+        -v "$STATE/stage:/var/lib/orca/stage" \
+        -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
+        "$image:$tag" ui
+    # This machine's own samples, for the Control page: the host's processes
+    # and network, and each container's memory by name.
+    $cb sampler - "$image:$tag" --pid host --network host \
+        -v "$STATE/stage:/var/lib/orca/stage" \
+        -v /sys/fs/cgroup:/host/cgroup:ro -v /var/lib/docker/containers:/host/containers:ro "$image:$tag" \
+        sample --out /var/lib/orca/stage/control.jsonl --dirs /var/lib/orca/stage --keep 720 \
+        --cgroup /host/cgroup --names /host/containers
+    while read -r name port atag _; do
+        [ -n "$name" ] || continue
+        [ "$atag" != - ] || atag=$tag
+        $cb "$name" "$ENVDIR/app.env" "$image:$atag" --network orca --env-file "$CONF/app.env" -e "PORT=$port" \
+            --entrypoint "/opt/orca/bin/$name" "$image:$atag" < /dev/null
+    done < "$APPS"
+    # The tunnel: Cloudflare's routes point at http://ui:8270 and
+    # http://<app>:<port> on this network. Nothing listens on the host.
+    if [ -s "$CONF/tunnel.env" ]; then
+        # HTTP/2 unless tunnel.env says otherwise: QUIC (UDP 7844) timed out on
+        # Hetzner ("timeout: no recent network activity").
+        proto="-e TUNNEL_TRANSPORT_PROTOCOL=http2"
+        ! grep -q '^TUNNEL_TRANSPORT_PROTOCOL=' "$CONF/tunnel.env" || proto=
+        # shellcheck disable=SC2086
+        $cb cloudflared "$CONF/tunnel.env" "$cf" --network orca --env-file "$CONF/tunnel.env" $proto "$cf" tunnel --no-autoupdate run
+    fi
+}
+
+ref_change() { # OLD NEW: "OLDTAG -> NEWTAG", or the whole references if the repositories differ
+    if [ "${1%:*}" = "${2%:*}" ]; then
+        echo "${1##*:} -> ${2##*:}"
+    else
+        echo "$1 -> $2"
+    fi
+}
+
+# A container's spec is a hash of what it's started with: docker run's
+# arguments (the image reference, flags, mounts, CGROUPS's), the contents of
+# its files (the env file) and the image's id (a tag pushed again is another
+# image). apply labels each container with it (orca.stack.spec, and its
+# parts as orca.stack.args and orca.stack.files) and starts one again only
+# when it differs.
+#
+# plan_one NAME FILES IMAGE ARGS... (a containers callback): appends "NAME
+# keep|replace|skip SPEC ARGS FILES WHY" to $PLAN.
+plan_one() {
+    p_name=$1
+    p_files=$2
+    p_image=$3
+    shift 3
+    p_args=$(printf '%s\n' "$@" | digest)
+    # shellcheck disable=SC2086
+    p_fh=$(for f in $p_files; do [ "$f" = - ] || cat "$f" 2> /dev/null || true; done | digest)
+    p_id=$(docker image inspect -f '{{.Id}}' "$p_image" 2> /dev/null) || p_id=
+    p_spec=$(printf '%s %s %s\n' "$p_args" "$p_fh" "$p_id" | digest)
+    p_do=replace
+    if [ -n "$only" ] && [ "$only" != "$p_name" ]; then
+        p_do=skip
+        p_why="--only $only"
+    elif ! p_cur=$(docker inspect -f '{{.State.Status}} {{.Config.Image}} {{.Image}} {{index .Config.Labels "orca.stack.spec"}} {{index .Config.Labels "orca.stack.args"}} {{index .Config.Labels "orca.stack.files"}}' "$p_name" 2> /dev/null); then
+        p_why=new
+    else
+        read -r c_status c_image c_id c_spec c_args c_files << EOF
+$p_cur
+EOF
+        if [ "$c_status" != running ]; then
+            p_why="not running ($c_status)"
+        elif [ "$c_image" != "$p_image" ]; then
+            p_why="image $(ref_change "$c_image" "$p_image")"
+        elif [ -n "$p_id" ] && [ "$c_id" != "$p_id" ]; then
+            p_why="image ${p_image##*:} pushed again ($(printf %.12s "${c_id#sha256:}") -> $(printf %.12s "${p_id#sha256:}"))"
+        elif [ -z "$c_spec" ]; then
+            p_why="no orca.stack.spec label: started by an older orca-stack"
+        elif [ "$c_files" != "$p_fh" ]; then
+            p_why="settings: its env file changed"
+        elif [ "$c_args" != "$p_args" ]; then
+            p_why="options: its flags, mounts or CGROUPS changed"
+        elif [ "$c_spec" != "$p_spec" ]; then
+            p_why="spec changed"
+        elif [ "$all" = 1 ]; then
+            p_why="--all"
+        else
+            p_do=keep
+            p_why=unchanged
+        fi
+    fi
+    echo "$p_name $p_do $p_spec $p_args $p_fh $p_why" >> "$PLAN"
+}
+
+# act_one NAME FILES IMAGE ARGS... (a containers callback): does what $PLAN
+# says for NAME, and says so; appends the replaced ones to $replaced.
+act_one() {
+    a_name=$1
+    shift 3
+    read -r _ a_do a_spec a_args a_files a_why << EOF
+$(grep "^$a_name " "$PLAN")
+EOF
+    case "$a_do" in
+        skip)
+            echo "$a_name: left as it is ($a_why)"
+            return 0
+            ;;
+        keep)
+            echo "$a_name: unchanged"
+            return 0
+            ;;
+    esac
+    docker rm -f "$a_name" > /dev/null 2>&1 || true
+    docker run -d --name "$a_name" --restart always --label "orca.stack.spec=$a_spec" \
+        --label "orca.stack.args=$a_args" --label "orca.stack.files=$a_files" "$@" > /dev/null
+    echo "$a_name: replaced ($a_why)"
+    replaced="$replaced $a_name"
+}
+
+plan_why() { # NAME: why $PLAN replaces it
+    sed -n "s/^$1 replace [^ ]* [^ ]* [^ ]* //p" "$PLAN"
+}
+
+# plan [--rollback | apply's arguments]: what apply would do with them,
+# changing nothing (it pulls the images, to see whether a tag is another
+# image now). A line per container: "NAME keep unchanged", "NAME replace
+# WHY" or "NAME skip --only X". deploy.sh pauses the pipelines only when the
+# scheduler is replaced.
+cmd_plan() {
+    if [ "${1:-}" = --rollback ]; then
+        [ $# -eq 1 ] || die "plan --rollback takes nothing else"
+        rollback_args
+        # shellcheck disable=SC2086
+        set -- $args
+    fi
+    apply_args "$@"
+    [ "$dbonly" = 0 ] || die "plan: --db-only starts only Postgres"
+    desired
+    ENVDIR=$CONF/plan.d
+    rm -rf "$ENVDIR"
+    mkdir -m 700 "$ENVDIR"
+    write_env "$ENVDIR"
+    login
+    pull_all
+    PLAN=$ENVDIR/plan
+    : > "$PLAN"
+    containers plan_one
+    awk '{ printf "%s %s", $1, $2; for (i = 6; i <= NF; i++) printf " %s", $i; print "" }' "$PLAN"
+    rm -rf "$ENVDIR" "$APPS"
+}
+
+cmd_apply() {
+    # A stack applied before deployed was kept: what it runs is its conf.
+    if [ ! -f "$CONF/deployed" ] && [ -f "$STATE/applied" ] && [ -n "$(conf_get ORCA_TAG)" ]; then
+        tags_now > "$CONF/deployed"
+    fi
+    apply_args "$@"
+    [ "${ORCA_STACK_TEST:-}" = 1 ] || mountpoint -q "$DATA" || die "$DATA (the Volume) isn't mounted; Postgres must not start on the root disk"
+    desired
+    mkdir -p "$DATA/pg" "$STATE/stage" "$STATE/backup" "$CONF/secrets"
+    write_env "$CONF"
+    login
     docker network create orca > /dev/null 2>&1 || true
 
     # Postgres: created once; its data is on the Volume. Later applies leave it alone.
@@ -252,73 +475,37 @@ cmd_apply() {
         [ "$n" -lt 60 ] || die "Postgres isn't ready after 2 minutes"
         sleep 2
     done
+
+    if [ "$dbonly" = 0 ]; then
+        pull_all
+        ENVDIR=$CONF
+        PLAN=$CONF/plan
+        : > "$PLAN"
+        containers plan_one
+        # Only the scheduler's restart kills runs.
+        if grep -q '^scheduler replace ' "$PLAN" && [ "$force" = 0 ] && [ "$(running_runs)" -gt 0 ]; then
+            why=$(plan_why scheduler)
+            rm -f "$PLAN" "$APPS"
+            die "$(running_runs) run(s) running; restarting the scheduler ($why) kills them (pause the pipelines and wait, or --force)"
+        fi
+    fi
+    [ -z "$newtag" ] || conf_set ORCA_TAG "$newtag"
+    if [ -f "$CONF/apps" ] || [ -s "$APPS" ]; then
+        mv "$APPS" "$CONF/apps"
+        APPS=$CONF/apps
+    else
+        rm -f "$APPS"
+        APPS=/dev/null
+    fi
     [ "$dbonly" = 0 ] || {
         echo "orca-stack: postgres is up"
         return 0
     }
 
-    if [ "$force" = 0 ] && [ "$(running_runs)" -gt 0 ]; then
-        die "$(running_runs) run(s) running; restarting the scheduler kills them (pause the pipelines and wait, or --force)"
-    fi
-    pull "$image:$tag"
-    apps=
-    if [ -s "$CONF/apps" ]; then
-        while read -r name port atag; do
-            [ "$atag" != - ] || atag=$tag
-            pull "$image:$atag"
-            apps="$apps $name"
-        done < "$CONF/apps"
-    fi
-    [ ! -s "$CONF/tunnel.env" ] || pull "$cf"
-
-    for role in scheduler ui; do
-        # CGROUPS=1: a cgroup per run (docs/hetzner.md#a-cgroup-per-run).
-        # The scheduler's cgroup namespace is its own, and its /sys/fs/cgroup,
-        # which docker mounts read-only, is made writable before orca starts:
-        # remounting needs CAP_SYS_ADMIN, outside docker's AppArmor profile,
-        # and the capability is dropped (setpriv) before orca, and every run
-        # it starts, gets it. Its own cgroup is the container's: it can't
-        # touch any other container's or the host's.
-        if [ "$role" = scheduler ] && [ "$(conf_get CGROUPS)" = 1 ]; then
-            run_container $role --network orca --env-file "$CONF/orca.env" \
-                -v "$STATE/stage:/var/lib/orca/stage" \
-                -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
-                --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
-                --entrypoint /bin/sh "$image:$tag" -c \
-                'mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/orca/bin/orca scheduler'
-            continue
-        fi
-        run_container $role --network orca --env-file "$CONF/orca.env" \
-            -v "$STATE/stage:/var/lib/orca/stage" \
-            -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
-            "$image:$tag" $role
-    done
-    # This machine's own samples, for the Control page: the host's processes
-    # and network, and each container's memory by name.
-    run_container sampler --pid host --network host \
-        -v "$STATE/stage:/var/lib/orca/stage" \
-        -v /sys/fs/cgroup:/host/cgroup:ro -v /var/lib/docker/containers:/host/containers:ro "$image:$tag" \
-        sample --out /var/lib/orca/stage/control.jsonl --dirs /var/lib/orca/stage --keep 720 \
-        --cgroup /host/cgroup --names /host/containers
-    if [ -n "$apps" ]; then
-        while read -r name port atag; do
-            [ "$atag" != - ] || atag=$tag
-            run_container "$name" --network orca --env-file "$CONF/app.env" -e "PORT=$port" \
-                --entrypoint "/opt/orca/bin/$name" "$image:$atag"
-        done < "$CONF/apps"
-    fi
-    # The tunnel: Cloudflare's routes point at http://ui:8270 and
-    # http://<app>:<port> on this network. Nothing listens on the host.
-    if [ -s "$CONF/tunnel.env" ]; then
-        # HTTP/2 unless tunnel.env says otherwise: QUIC (UDP 7844) timed out on
-        # Hetzner ("timeout: no recent network activity").
-        proto="-e TUNNEL_TRANSPORT_PROTOCOL=http2"
-        ! grep -q '^TUNNEL_TRANSPORT_PROTOCOL=' "$CONF/tunnel.env" || proto=
-        # shellcheck disable=SC2086
-        run_container cloudflared --network orca --env-file "$CONF/tunnel.env" $proto "$cf" tunnel --no-autoupdate run
-    else
-        echo "orca-stack: no $CONF/tunnel.env, so no tunnel"
-    fi
+    replaced=
+    containers act_one
+    rm -f "$PLAN"
+    [ -s "$CONF/tunnel.env" ] || echo "orca-stack: no $CONF/tunnel.env, so no tunnel"
     date -u +%FT%TZ > "$STATE/applied"
     tags_now > "$CONF/deployed.new"
     if [ -f "$CONF/deployed" ] && ! cmp -s "$CONF/deployed" "$CONF/deployed.new"; then
@@ -344,33 +531,38 @@ cmd_register() {
     echo "$out" | sed 's/^/orca-stack: /'
 }
 
-cmd_rollback() {
-    force=
-    [ "${1:-}" != --force ] || force=--force
+# apply's arguments for the tags deployed before: sets args (and to, the
+# orca tag).
+rollback_args() {
     [ -s "$CONF/deployed.prev" ] || die "nothing to roll back to: no earlier deploy is recorded ($CONF/deployed.prev)"
-    if [ -z "$force" ] && [ "$(running_runs)" -gt 0 ]; then
-        die "$(running_runs) run(s) running; restarting the scheduler kills them (pause the pipelines and wait, or --force)"
-    fi
-    # apply moves deployed.prev, so the target is read first.
-    cp "$CONF/deployed.prev" "$CONF/rollback.to"
-    echo "orca-stack: rolling back from $(cmd_tags) to $(tags_line "$CONF/rollback.to")"
-    to=$(sed -n 's/^orca //p' "$CONF/rollback.to")
+    to=$(sed -n 's/^orca //p' "$CONF/deployed.prev")
     safe "$to"
     args="--tag $to"
     while read -r kind name atag; do
         [ "$kind" = app ] || continue
         if ! grep -q "^$name " "$CONF/apps" 2> /dev/null; then
-            echo "orca-stack: the app $name isn't set up any more; not starting it"
+            echo "orca-stack: the app $name isn't set up any more; not starting it" >&2
             continue
         fi
         # An app that ran the orca tag follows it again.
         [ "$atag" != "$to" ] || atag=-
         args="$args --app $name=$atag"
-    done < "$CONF/rollback.to"
-    rm -f "$CONF/rollback.to"
+    done < "$CONF/deployed.prev"
+}
+
+cmd_rollback() {
+    force=
+    [ "${1:-}" != --force ] || force=--force
+    rollback_args
+    echo "orca-stack: rolling back from $(cmd_tags) to $(tags_line "$CONF/deployed.prev")"
     # shellcheck disable=SC2086
     cmd_apply $args $force
-    cmd_register
+    # The pipelines are in the scheduler's image: registered again only
+    # when that changed.
+    case " $replaced " in
+        *" scheduler "*) cmd_register ;;
+        *) echo "orca-stack: the scheduler kept running, so the pipelines stay registered as they are" ;;
+    esac
     echo "orca-stack: rolled back to $(cmd_tags); orca-stack rollback again goes forward to $(cmd_tags --previous)"
 }
 
@@ -554,6 +746,7 @@ case "$sub" in
     configure) cmd_configure "$@" ;;
     app) cmd_app "$@" ;;
     apply) cmd_apply "$@" ;;
+    plan) cmd_plan "$@" ;;
     status) cmd_status ;;
     tags) cmd_tags "$@" ;;
     rollback) cmd_rollback "$@" ;;
@@ -564,5 +757,5 @@ case "$sub" in
     backup-now) cmd_backup_now ;;
     list-backups) cmd_list_backups ;;
     restore) cmd_restore "$@" ;;
-    *) die "usage: orca-stack configure|app|apply|status|tags|rollback|register|quiesce|resume|backup|list-backups|restore" ;;
+    *) die "usage: orca-stack configure|app|apply|plan|status|tags|rollback|register|quiesce|resume|backup|list-backups|restore" ;;
 esac

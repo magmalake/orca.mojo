@@ -1,19 +1,29 @@
 #!/bin/sh
 # A fake docker for tests/hetzner.sh: logs each call to $FAKE/docker.log and
-# answers what orca-stack asks. $FAKE/running is the count of running runs,
+# answers what orca-stack asks ($FAKE/docker.all keeps every call). $FAKE/running is the count of running runs,
 # $FAKE/backup-fails makes pg_dump fail, $FAKE/register-fails orca register.
 # The pipelines are toy and manual1; $FAKE/paused lists the paused ones,
 # which orca pause/unpause and an UPDATE of paused change. The aws-cli
 # container's bucket is $FAKE/bucket, and its /b the -v directory.
+#
+# Containers are directories in $FAKE/containers/<name>: image (the
+# reference it was started with), id (that image's id), status, labels
+# (KEY=VALUE lines) and aliases. An image's id is a hash of its reference,
+# or $FAKE/images/<reference with / and : as _> if there is one (a tag
+# pushed again).
 echo "docker $*" >> "$FAKE/docker.log"
+echo "docker $*" >> "$FAKE/docker.all"
 touch "$FAKE/paused"
-mkdir -p "$FAKE/bucket"
+mkdir -p "$FAKE/bucket" "$FAKE/containers" "$FAKE/images"
 unpause() { grep -vx "$1" "$FAKE/paused" > "$FAKE/paused.new" || true; mv "$FAKE/paused.new" "$FAKE/paused"; }
+image_id() {
+    f=$FAKE/images/$(echo "$1" | tr '/:' '__')
+    if [ -f "$f" ]; then cat "$f"; else echo "sha256:$(printf %s "$1" | cksum | cut -d' ' -f1)"; fi
+}
+C=$FAKE/containers
 all="$*"
 case "$all" in
     *"pg_isready"*) exit 0 ;;
-    "inspect -f"*) echo true ;;
-    "inspect postgres") exit 0 ;;
     *"status = 'running'"*) cat "$FAKE/running" 2> /dev/null || echo 0 ;;
     *"WHERE NOT paused"*) printf 'manual1\ntoy\n' | grep -vxF -f "$FAKE/paused" || true ;;
     *"WHERE paused ORDER BY name"*) sort "$FAKE/paused" ;;
@@ -57,5 +67,72 @@ case "$all" in
         [ ! -f "$FAKE/register-fails" ] || { echo "orca: no orca.toml" >&2; exit 1; }
         echo "registered toy"
         ;;
+    "image inspect -f "*) image_id "${all##* }" ;;
+    "image inspect "*) exit 0 ;;
+    "inspect -f {{.State.Running}} "*)
+        d=$C/${all##* }
+        [ -d "$d" ] || exit 1
+        if [ "$(cat "$d/status")" = running ]; then echo true; else echo false; fi
+        ;;
+    "inspect -f "*)
+        d=$C/${all##* }
+        [ -d "$d" ] || { echo "Error: No such object: ${all##* }" >&2; exit 1; }
+        label() { sed -n "s/^$1=//p" "$d/labels"; }
+        echo "$(cat "$d/status") $(cat "$d/image") $(cat "$d/id") $(label orca.stack.spec) $(label orca.stack.args) $(label orca.stack.files)"
+        ;;
+    "inspect "*) [ -d "$C/${all##* }" ] || exit 1 ;;
+    "run -d "*)
+        shift 2
+        name=""
+        labels=""
+        aliases=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --name) name=$2; shift 2 ;;
+                --label) labels="$labels$2
+"; shift 2 ;;
+                --network-alias) aliases="$aliases $2"; shift 2 ;;
+                --restart | --network | --env-file | -e | -v | --entrypoint | --cap-add | --security-opt | --pid) shift 2 ;;
+                -*) shift ;;
+                *) break ;;
+            esac
+        done
+        [ -n "$name" ] || { echo "fake docker: run without --name" >&2; exit 1; }
+        [ ! -d "$C/$name" ] || { echo "docker: Error response from daemon: Conflict. The container name \"/$name\" is already in use" >&2; exit 125; }
+        mkdir "$C/$name"
+        echo "$1" > "$C/$name/image"
+        image_id "$1" > "$C/$name/id"
+        echo running > "$C/$name/status"
+        printf '%s' "$labels" > "$C/$name/labels"
+        echo "$aliases" > "$C/$name/aliases"
+        echo "fake-id-$name"
+        ;;
+    "start "*)
+        [ -d "$C/$2" ] || exit 1
+        echo running > "$C/$2/status"
+        ;;
+    "stop "*)
+        n=${all##* }
+        [ -d "$C/$n" ] || exit 1
+        echo exited > "$C/$n/status"
+        ;;
+    "rm "*)
+        shift
+        f=
+        [ "$1" != -f ] || { f=1; shift; }
+        rc=0
+        for n in "$@"; do
+            [ -d "$C/$n" ] || { rc=1; continue; }
+            [ -n "$f" ] || [ "$(cat "$C/$n/status")" != running ] || { echo "docker: can't remove a running container" >&2; exit 1; }
+            rm -rf "${C:?}/$n"
+        done
+        exit "$rc"
+        ;;
+    "rename "*)
+        [ -d "$C/$2" ] && [ ! -d "$C/$3" ] || exit 1
+        mv "$C/$2" "$C/$3"
+        ;;
+    "logs "*) echo "fake log of ${all##* }" ;;
+    "ps "*) for d in "$C"/*; do [ ! -d "$d" ] || echo "${d##*/} $(cat "$d/status") $(cat "$d/image")"; done ;;
 esac
 exit 0
