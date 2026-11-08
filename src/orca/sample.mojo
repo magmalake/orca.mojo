@@ -126,6 +126,25 @@ def metrics_location(pipeline: String, run: Int, instance: String) -> String:
     return String(dir, "/metrics/", instance, ".jsonl")
 
 
+def machine_name(name: String) -> String:
+    """The worker's name as its runs' metrics file names it
+    (`metrics/worker-<name>.jsonl`): `worker-` and the name, with anything
+    but letters, digits, `.`, `-` and `_` made `_`."""
+    var out = String("worker-")
+    for b in name.as_bytes():
+        var c = Int(b)
+        var ok = (
+            (c >= 48 and c <= 57)
+            or (c >= 65 and c <= 90)
+            or (c >= 97 and c <= 122)
+            or c == 45
+            or c == 46
+            or c == 95
+        )
+        out.write(chr(c) if ok else "_")
+    return out^
+
+
 # ---------------------------------------------------------------------------
 # Parsing what Linux's /proc says (pure, for the tests)
 # ---------------------------------------------------------------------------

@@ -9,7 +9,8 @@
 #   for a worker, and no more: queued fill runs count against
 #   fill_max_runs, as the Fill card and the calendar show;
 # - two workers of --max-runs 1 claim one each, and each run's machine
-#   metrics are kept (metrics/worker-<name>.jsonl);
+#   metrics are kept (metrics/worker-<name>.jsonl), drawn on the worker's
+#   Pools machine page;
 # - killing one worker (its exact pid) queues its run again for the pool,
 #   audited, and the other worker finishes the fill: every partition done,
 #   one fill run each, never more than 2 queued or running at once;
@@ -173,6 +174,11 @@ curl -fsS "$base/pipelines/fillwk" | grep -q '6 / 6 done (100%)' \
     || fail "the page's fill line: $(curl -fsS "$base/pipelines/fillwk" | grep -o '[0-9]* / 6 done[^<]*')"
 c=$(curl -fsS "$base/pipelines/fillwk/calendar?month=2024")
 echo "$c" | jq -e '.counts.done == 6 and .counts.live == 0' > /dev/null || fail "the calendar: $(echo "$c" | jq -c .counts)"
+# The worker's machine page draws its latest run's samples.
+bid=$(q "SELECT id FROM orca.workers WHERE label = 'bgent'")
+mp=$(curl -fsS "$base/ops/pools/self-hosted/$bid") || fail "the machine page"
+echo "$mp" | grep -q 'Samples' && echo "$mp" | grep -q '<svg' && ! echo "$mp" | grep -q 'No samples' \
+    || fail "bgent's machine page has no samples: $(echo "$mp" | grep -o 'card__none[^<]*')"
 echo "ok   a killed worker's fill run is queued again, and the other worker completes the fill (at most $most at once)"
 
 # --- A UI run on a worker that restarts is queued again, not failed ---

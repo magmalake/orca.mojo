@@ -22,7 +22,7 @@ from orca.html import Html, url_encode
 from orca.json import quote
 from orca.metrics import metrics_html, parse_samples
 from orca.logs import read_location
-from orca.sample import metrics_location
+from orca.sample import machine_name, metrics_location
 from orca.state import State
 from orca.ui.layout import card_open, fact_item, not_found, page_html
 from orca.ui.terms import header_help, value_help
@@ -32,6 +32,7 @@ from orca.views.pools import (
     SELF_HOSTED,
     Machine,
     PoolCount,
+    WorkerRun,
     filtered,
     kind_of,
     machine,
@@ -587,9 +588,9 @@ def _worker_runs_html(mut h: Html, mut db: State, m: Machine) raises -> String:
         "runs",
         "Runs",
         (
-            "The runs this worker claimed, newest first. A worker samples"
-            " only its runs' own processes, not the machine: each run's"
-            " Resources card has what it used."
+            "The runs this worker claimed, newest first. Each run's"
+            " Resources card has what its processes used, and its Machines"
+            " card this machine's samples while it ran."
         ),
         "workers",
         facts=False,
@@ -629,4 +630,51 @@ def _worker_runs_html(mut h: Html, mut db: State, m: Machine) raises -> String:
         h.raw("</tbody></table></div>")
     j.write("]")
     h.raw("</section>")
+    _worker_charts(h, db, m, rs)
     return j^
+
+
+def _worker_charts(
+    mut h: Html, mut db: State, m: Machine, rs: List[WorkerRun]
+) raises:
+    """The machine's samples over its latest run, as that run's Machines
+    card draws them: the worker starts the sampler beside each run, which
+    writes `metrics/worker-<name>.jsonl` in the run's folder."""
+    card_open(
+        h,
+        "metrics",
+        "Samples",
+        (
+            "This machine every few seconds while the worker's latest run"
+            " ran: CPU, memory, fullest disk, disk io and network, with the"
+            " run's steps lined up under them, from the file the sampler the"
+            " worker started beside it wrote to the run's metrics folder."
+        ),
+        "metrics",
+        facts=False,
+    )
+    if len(rs) == 0:
+        h.raw('<p class="card__none">No run yet, so no samples.</p>')
+        h.raw("</section>")
+        return
+    ref r = rs[0]
+    var instance = machine_name(m.name)
+    var loc = metrics_location(r.pipeline, r.id, instance)
+    var text = String()
+    if loc:
+        try:
+            text = String(from_utf8_lossy=Span(read_location(loc)))
+        except:
+            pass
+    var got = parse_samples(instance, text)
+    h.raw("<p>Run ")
+    h.chip(String("/runs/", r.id), String(r.id))
+    h.raw("</p>")
+    if len(got.samples) == 0:
+        h.raw(
+            '<p class="card__none">No samples for it: the worker needs',
+            " ORCA_LOGS, and ORCA_SAMPLE_SECONDS above 0.</p>",
+        )
+    else:
+        metrics_html(h, [got^], step_spans(db, r.id), r.status == "running")
+    h.raw("</section>")

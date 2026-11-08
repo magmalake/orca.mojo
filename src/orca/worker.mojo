@@ -68,6 +68,7 @@ from orca.resources import host_room, run_env as grant_env
 from orca.sample import (
     _hostname,
     _sysctl_u64,
+    machine_name,
     metrics_location,
     parse_meminfo,
     sample_seconds,
@@ -106,25 +107,6 @@ def _memory_mb() -> Int:
             return 0
     else:
         return _sysctl_u64("hw.memsize") // (1024 * 1024)
-
-
-def machine_name(name: String) -> String:
-    """The worker's name as its runs' metrics file names it
-    (`metrics/worker-<name>.jsonl`): `worker-` and the name, with anything
-    but letters, digits, `.`, `-` and `_` made `_`."""
-    var out = String("worker-")
-    for b in name.as_bytes():
-        var c = Int(b)
-        var ok = (
-            (c >= 48 and c <= 57)
-            or (c >= 65 and c <= 90)
-            or (c >= 97 and c <= 122)
-            or c == 45
-            or c == 46
-            or c == 95
-        )
-        out.write(chr(c) if ok else "_")
-    return out^
 
 
 def _last_line(path: String) -> String:

@@ -38,7 +38,7 @@ from orca.store import (
     SUCCEEDED,
     Usage,
 )
-from orca.worker import machine_name
+from orca.sample import machine_name
 from orca.workers import (
     WorkerRun,
     version_refusal,

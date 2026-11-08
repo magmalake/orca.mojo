@@ -267,7 +267,8 @@ runs on, in pool `worker:<pool>`: its name, state (`live`, or `gone` when
 the token is revoked or expired or the worker hasn't been heard from for
 `ORCA_STALE_SECONDS`), image, CPUs, memory, current runs and last
 heartbeat, and the worker's token and label. Its page lists the runs it
-claimed. `/api/workers` is still each token as JSON, and `/ops/workers`
+claimed, and draws the machine's samples over its latest run (the
+sampler the worker starts beside each run). `/api/workers` is still each token as JSON, and `/ops/workers`
 redirects to Pools. A run's page says where it ran: the worker's name, and
 the token's id and label.
 
