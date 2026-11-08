@@ -178,6 +178,8 @@ struct StepSpan(Copyable, Movable):
     var status: String
     var start: Float64
     var end: Float64
+    var attempt: Int
+    """Its ID, which shows its card (`orca.step_cards`), or 0."""
 
 
 def _num(v: Value, ptr: String) -> Float64:
@@ -599,6 +601,8 @@ def metrics_svg(
         out.write(
             '<text class="tl__lane" x="0" y="',
             i * _LANE + 11,
+            '" data-step="',
+            escape(names[i]),
             '">',
             escape(names[i]),
             "</text>",
@@ -618,7 +622,18 @@ def metrics_svg(
             lane * _LANE + 2,
             '" width="',
             max(1, ax.x(s.end) - x),
-            '" height="10"><title>',
+            '" height="10"',
+        )
+        if s.attempt > 0:
+            out.write(
+                ' data-step="',
+                escape(s.step),
+                '" data-attempt="',
+                s.attempt,
+                '" tabindex="0"',
+            )
+        out.write(
+            "><title>",
             escape(s.step),
             " " if s.partition else "",
             escape(s.partition),

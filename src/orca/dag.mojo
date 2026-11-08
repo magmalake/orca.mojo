@@ -124,7 +124,17 @@ def dag_svg(steps: List[DagStep]) -> String:
             out.write(
                 '<a href="', escape(s.href), '" target="_blank" rel="noopener">'
             )
-        out.write('<g class="', cls, '"><title>', escape(s.name))
+        # Its card (`orca.step_cards`) on hover, focus or a tap: the link is
+        # the tab stop where there is one, the box where there isn't.
+        out.write(
+            '<g class="',
+            cls,
+            '" data-step="',
+            escape(s.name),
+            '"' if s.href else '" tabindex="0"',
+            "><title>",
+            escape(s.name),
+        )
         if s.status:
             out.write(": ", escape(s.status))
         if s.href:

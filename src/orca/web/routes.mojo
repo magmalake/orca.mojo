@@ -213,7 +213,7 @@ def _attempt_facts(mut db: State, call: Call) raises -> Page:
 
 
 def _code(mut db: State, call: Call) raises -> Page:
-    return code_page(call.query("u"))
+    return code_page(call.query("u"), call.query("at"))
 
 
 # ── pipelines ────────────────────────────────────────────────────────────────
