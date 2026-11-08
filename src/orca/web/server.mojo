@@ -34,23 +34,20 @@ from flare.net import SocketAddr
 
 from orca.api import worker as worker_api
 from orca.auth import audit, login_required
-from orca.html import Html, url_encode
+from orca.html import Html, query_param, url_encode
 from orca.json import quote
 from orca.state import State
-from orca.ui import (
-    Page,
-    _AUTH_SLOT,
-    _HERE_SLOT,
-    _USER_SLOT,
-    _bad_request,
-    _page,
-    _query,
-    _respond,
+from orca.ui.coverage import COVERAGE_STYLE
+from orca.ui.layout import (
+    AUTH_SLOT,
+    HERE_SLOT,
+    USER_SLOT,
+    bad_request,
     not_found,
+    page_html,
 )
-from orca.ui_coverage import COVERAGE_STYLE
-from orca.ui_style import STYLE
-from orca.ui_viz import VIZ_STYLE
+from orca.ui.style import STYLE
+from orca.ui.viz import VIZ_STYLE
 from orca.web.auth import (
     API_LOGIN,
     client,
@@ -64,7 +61,8 @@ from orca.web.auth import (
     sign_in,
     token_refused,
 )
-from orca.web.router import ACTION, AUTH, PAGE, Call, Route, answer, find
+from orca.web.page import Page, respond
+from orca.web.router import ACTION, AUTH, Call, PAGE, Route, answer, find
 from orca.web.routes import routes
 
 comptime DEFAULT_ADDR = "127.0.0.1:8270"
@@ -108,13 +106,13 @@ def _with_user(
         slot = String('<a class="top__user" href="/login">Log in</a>')
     else:
         slot = String()
-    page.html = page.html.replace(_USER_SLOT, slot)
+    page.html = page.html.replace(USER_SLOT, slot)
     page.html = page.html.replace(
-        String('<body class="', _AUTH_SLOT, '">'),
+        String('<body class="', AUTH_SLOT, '">'),
         '<body class="anon">' if required and not user else "<body>",
     )
-    page.html = page.html.replace(_HERE_SLOT, url_encode(here))
-    return _respond(page, json)
+    page.html = page.html.replace(HERE_SLOT, url_encode(here))
+    return respond(page, json)
 
 
 def _run_of(location: String, path: String) -> Int:
@@ -140,9 +138,9 @@ def _error(e: Error, json: Bool) -> Response:
     var page = Page(
         500,
         String('{"error": ', quote(String(e)), "}"),
-        _page("Error", "", h),
+        page_html("Error", "", h),
     )
-    var resp = _respond(page, json)
+    var resp = respond(page, json)
     resp.reason = "Internal Server Error"
     return resp^
 
@@ -152,9 +150,7 @@ def _stylesheet() raises -> Response:
     var resp = Response(
         status=200,
         reason="OK",
-        body=List[UInt8](
-            String(STYLE, VIZ_STYLE, COVERAGE_STYLE).as_bytes()
-        ),
+        body=List[UInt8](String(STYLE, VIZ_STYLE, COVERAGE_STYLE).as_bytes()),
     )
     resp.headers.set("Content-Type", "text/css; charset=utf-8")
     return resp^
@@ -164,11 +160,11 @@ struct Ui(Copyable, Handler):
     """The pages, the API and the actions, over the database at `url`."""
 
     var url: String
-    var routes: List[Route]
+    var table: List[Route]
 
     def __init__(out self, url: String):
         self.url = url
-        self.routes = routes()
+        self.table = routes()
 
     def serve(self, req: Request) raises -> Response:
         var path = _path_of(req.url)
@@ -176,15 +172,15 @@ struct Ui(Copyable, Handler):
         if path == STYLESHEET:
             return _stylesheet()
         if post and path.startswith("/api/worker/"):
-            return worker_api.respond(self.url, req)
-        var found = find(self.routes, req.method, path)
+            return worker_api.worker_response(self.url, req)
+        var found = find(self.table, req.method, path)
         if not found.route and req.method != "GET" and req.method != "HEAD":
             return _not_allowed()
 
         var by_script = scripted(req, path)
         var json = (
             "application/json" in req.headers.get("Accept")
-            or _query(req.url, "format") == "json"
+            or query_param(req.url, "format") == "json"
             or by_script
             or path.startswith("/api/")
         )
@@ -193,11 +189,9 @@ struct Ui(Copyable, Handler):
             and not (by_script and not req.headers.get("Origin"))
             and not same_origin(req)
         ):
-            return _respond(cross_origin(), json)
+            return respond(cross_origin(), json)
         if path == API_LOGIN and not by_script:
-            return _respond(
-                json_error(400, "a login for a token is JSON"), True
-            )
+            return respond(json_error(400, "a login for a token is JSON"), True)
 
         try:
             var db = State(self.url)
@@ -206,15 +200,15 @@ struct Ui(Copyable, Handler):
             call.form = call.body
             call.address = client(req)
             if path == API_LOGIN:
-                return _respond(found.route.value().handler(db, call), True)
+                return respond(found.route.value().handler(db, call), True)
             if not sign_in(db, req, call):
-                return _respond(token_refused(), True)
+                return respond(token_refused(), True)
             var required = login_required(db)
             if post and content_type(req) == "application/json":
                 try:
                     call.form = json_form(call.body)
                 except e:
-                    return _respond(_bad_request(String(e)), json)
+                    return respond(bad_request(String(e)), json)
 
             if not found.route:
                 var miss = found.miss if found.miss else String(
@@ -226,7 +220,7 @@ struct Ui(Copyable, Handler):
             ref route = found.route.value()
             call.params = found.params.copy()
             if route.kind == AUTH:
-                return _respond(route.handler(db, call), json)
+                return respond(route.handler(db, call), json)
             if route.kind == PAGE:
                 var page = route.handler(db, call)
                 var here = page.here if page.here else req.url

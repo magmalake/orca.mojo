@@ -15,9 +15,10 @@ A `GET` route answers `HEAD` too. A read (`GET`) that matches nothing is
 the actions take one.
 """
 
-from orca.html import url_decode
+from orca.html import query_param, url_decode
 from orca.state import State
-from orca.ui import Page, _query, not_found
+from orca.ui.layout import not_found
+from orca.web.page import Page
 
 comptime GET = 1
 """`GET`, and `HEAD` with it."""
@@ -72,11 +73,11 @@ struct Call(Movable):
 
     def query(self, name: StringSlice) -> String:
         """A query parameter's value, decoded, or empty."""
-        return _query(self.url, name)
+        return query_param(self.url, name)
 
     def field(self, name: StringSlice) -> String:
         """A field of the form, decoded, or empty."""
-        return _query(String("?", self.form), name)
+        return query_param(String("?", self.form), name)
 
     def param(self, name: String) raises -> String:
         """A `{name}` of the route's pattern, decoded."""

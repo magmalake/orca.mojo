@@ -22,19 +22,20 @@ and heartbeats or its runs' store calls: point `orca worker --remote` at
 it. Everything else there is 404.
 """
 
+from std.memory.alloc import unsafe_alloc
+
 from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
 from json import Value, loads
 from threads import AtomicFlag, WorkerPool
 from threads.ffi import OpaquePtr, opaque_ptr
-from std.memory.alloc import unsafe_alloc
 
 from orca.http_store import STORE_PATH
 from orca.json import quote
 from orca.state import State
 from orca.store import FINAL
-from orca.ui import Page, _respond
 from orca.web.auth import bearer
+from orca.web.page import Page, respond
 from orca.workers import (
     WorkerAuth,
     claim,
@@ -170,7 +171,7 @@ def answer(url: String, path: String, token: String, body: String) -> Page:
         return _error(500, String(e))
 
 
-def respond(url: String, req: Request) -> Response:
+def worker_response(url: String, req: Request) -> Response:
     """The response to a worker's `req`, which the UI's server and the
     worker listener both send."""
     var q = req.url.find("?")
@@ -183,7 +184,7 @@ def respond(url: String, req: Request) -> Response:
     )
     if page.status == 401:
         page.headers.append(("WWW-Authenticate", 'Bearer realm="orca"'))
-    return _respond(page, True)
+    return respond(page, True)
 
 
 # ── its own listener ─────────────────────────────────────────────────────────
@@ -200,8 +201,8 @@ struct WorkerServer(Copyable, Handler):
 
     def serve(self, req: Request) raises -> Response:
         if req.method == "POST" and req.url.startswith(PREFIX):
-            return respond(self.url, req)
-        return _respond(_error(404, String("orca: nothing at ", req.url)), True)
+            return worker_response(self.url, req)
+        return respond(_error(404, String("orca: nothing at ", req.url)), True)
 
 
 struct _Listening(Movable):

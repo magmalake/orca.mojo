@@ -1,0 +1,356 @@
+"""Pieces several pages draw: durations, times and partitions in a
+table's cells, a runs table with each row's actions, links to code, and a
+run's grant and usage as facts.
+"""
+
+from orca.html import Html, url_encode
+from orca.resources import gb_text
+from orca.sample import fixed1
+from orca.source import commit_url, web_url
+from orca.store import Usage
+from orca.ui.layout import act_button, fact_item
+from orca.usage import bytes_text, cpu_text, usage_text
+from orca.views.code import CodeLinks, CodeRef
+from orca.views.commands import cancel_cli, retry_cli, shell_quote
+from orca.views.runs import RunResources, RunRow, VersionRow
+
+
+def dataset_links(mut h: Html, names: List[String]):
+    for i in range(len(names)):
+        if i:
+            h.raw(", ")
+        h.link(String("/datasets/", url_encode(names[i])), names[i])
+
+
+def took_text(seconds: Int) -> String:
+    """A duration as `42s`, `3m 07s` or `2h 05m`; empty for a negative one."""
+    if seconds < 0:
+        return String()
+    if seconds < 60:
+        return String(seconds, "s")
+    if seconds < 3600:
+        return String(seconds // 60, "m ", _two(seconds % 60), "s")
+    return String(seconds // 3600, "h ", _two(seconds % 3600 // 60), "m")
+
+
+def took_long(seconds: Int) -> String:
+    """A duration as `42 s`, `3 min 21 s` or `2 h 5 min`."""
+    if seconds < 60:
+        return String(seconds, " s")
+    if seconds < 3600:
+        return String(seconds // 60, " min ", seconds % 60, " s")
+    return String(seconds // 3600, " h ", seconds % 3600 // 60, " min")
+
+
+def _two(n: Int) -> String:
+    return String("0", n) if n < 10 else String(n)
+
+
+def _when_cell(mut h: Html, utc: String):
+    """A `YYYY-MM-DDTHH:MM:SSZ` time as a table cell that the page's script
+    shows as how long ago it was, the full local time on hover."""
+    h.raw('<td class="mono"><time class="rel" datetime="')
+    h.text(utc)
+    h.raw('">')
+    h.text(utc)
+    h.raw("</time></td>")
+
+
+comptime _SHOWN_PARTITIONS = 2
+"""How many of a run's partitions its row in a table of runs names before
+saying how many more there are."""
+
+
+def _partitions_cell(mut h: Html, partitions: String):
+    """A run's partitions as a table cell: the first few, then `+N more`, with
+    the whole list in the tooltip."""
+    var parts = partitions.split(",")
+    h.raw('<td class="mono parts" title="')
+    h.text(partitions)
+    h.raw('">')
+    if len(parts) <= _SHOWN_PARTITIONS + 1:
+        h.text(partitions)
+    else:
+        for i in range(_SHOWN_PARTITIONS):
+            if i > 0:
+                h.raw(", ")
+            h.text(parts[i])
+        h.raw(
+            ' <span class="muted">+',
+            len(parts) - _SHOWN_PARTITIONS,
+            " more</span>",
+        )
+    h.raw("</td>")
+
+
+def code_link(mut h: Html, at: CodeRef):
+    """A link to a line of code: every one orca shows is drawn by this,
+    so they all look alike and unlike orca's own links."""
+    h.code(at.url, at.at, at.commit)
+
+
+def _code_html(mut h: Html, name: String, links: CodeLinks):
+    """`Code`: the pipeline, then its dista tasks, each linked to its line."""
+    if not links.pipeline and len(links.tasks) == 0:
+        return
+    h.raw("<dt>Code</dt><dd>")
+    if links.pipeline:
+        h.text("pipeline ", name, " ")
+        code_link(h, links.pipeline)
+    for i in range(len(links.tasks)):
+        h.raw(" · " if i or links.pipeline else "")
+        h.text("task ", links.tasks[i][0], " ")
+        code_link(h, links.tasks[i][1])
+    h.raw("</dd>")
+
+
+def step_cell(mut h: Html, name: String, links: CodeLinks, attempt: Int = -1):
+    """A step's name, then a link to its function where the code is known.
+    With `attempt` (0 for none yet), the name shows the step's card
+    (`orca.ui.step_cards`), and that attempt's on a run's page."""
+    var at = links.step(name)
+    h.raw("<td>")
+    if attempt >= 0:
+        h.raw('<span class="step-ref" data-step="')
+        h.text(name)
+        if attempt > 0:
+            h.raw('" data-attempt="', String(attempt))
+        h.raw('" tabindex="0">')
+        h.text(name)
+        h.raw("</span>")
+    else:
+        h.text(name)
+    if at:
+        h.raw(" ")
+        code_link(h, at)
+    h.raw("</td>")
+
+
+def source_html(mut h: Html, v: VersionRow):
+    """The commit, linked to its tree where the host is known."""
+    if not v.commit:
+        h.raw('<span class="muted">not recorded (built without')
+        h.raw(" <code>-D ORCA_COMMIT</code>)</span>")
+        return
+    var url = commit_url(v.source, v.commit)
+    var short = String(v.commit[byte = : min(12, v.commit.byte_length())])
+    if url:
+        h.code(url, short, v.commit)
+    else:
+        h.raw("<code>")
+        h.text(short)
+        h.raw("</code>")
+    if v.dirty:
+        h.raw(' <span class="muted">plus uncommitted changes</span>')
+    if v.source:
+        h.raw(' <span class="muted">of ')
+        var web = web_url(v.source)
+        if web:
+            h.code(web, v.source, "")
+        else:
+            h.text(v.source)
+        h.raw("</span>")
+
+
+def pause_button(mut h: Html, name: String, paused: Bool):
+    """Resume a paused pipeline, or pause an active one."""
+    var base = String("/pipelines/", url_encode(name))
+    if paused:
+        act_button(
+            h,
+            String(base, "/unpause"),
+            "Resume",
+            "resume",
+            String("orca unpause ", shell_quote(name)),
+        )
+    else:
+        act_button(
+            h,
+            String(base, "/pause"),
+            "Pause",
+            "pause",
+            String("orca pause ", shell_quote(name)),
+        )
+
+
+def row_actions(mut h: Html, r: RunRow):
+    """A runs table row's Cancel (queued or running) or Retry (failed)."""
+    if (r.status == "queued" or r.status == "running") and not (
+        r.cancel_requested
+    ):
+        act_button(
+            h,
+            String("/runs/", r.id, "/cancel"),
+            "Cancel",
+            "cancel",
+            cancel_cli(r),
+            danger=True,
+        )
+    elif r.status == "failed" or r.stalled:
+        act_button(
+            h,
+            String("/runs/", r.id, "/resume"),
+            "Retry",
+            "retry",
+            retry_cli(r),
+        )
+
+
+comptime TRIES = (
+    "Times the run's process was started: 1 is normal; more means retries,"
+    " a lost instance or a resume."
+)
+"""What a runs table's Tries column counts (`orca.runs.starts`)."""
+
+
+def runs_table_html(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
+    if len(runs) == 0:
+        h.raw('<p class="empty">No runs.</p>')
+        return
+    h.raw('<div class="scroll"><table><thead><tr><th>Run</th>')
+    if show_pipeline:
+        h.raw("<th>Pipeline</th>")
+    h.raw(
+        '<th>Created</th><th class="num">Took</th>',
+        "<th>Partitions</th><th>Trigger</th><th>Status</th>",
+        '<th class="num"><abbr title="',
+        TRIES,
+        '" aria-label="Tries: ',
+        TRIES,
+        '">Tries</abbr></th><th class="num"><abbr title="',
+        _PEAK,
+        '" aria-label="Peak memory: ',
+        _PEAK,
+        '">Peak</abbr></th></tr></thead><tbody>',
+    )
+    for r in runs:
+        h.raw("<tr><td>")
+        h.chip(String("/runs/", r.id), String(r.id))
+        h.raw("</td>")
+        if show_pipeline:
+            h.raw("<td>")
+            h.link(String("/pipelines/", url_encode(r.pipeline)), r.pipeline)
+            h.raw("</td>")
+        _when_cell(h, r.created)
+        h.num(took_text(r.seconds))
+        _partitions_cell(h, r.partitions)
+        h.raw("<td>")
+        h.term("trigger", r.trigger)
+        h.raw("</td>")
+        h.raw("<td>")
+        h.status(r.status)
+        if r.waiting_until:
+            h.raw(' <span class="muted">until ')
+            h.text(r.waiting_until)
+            h.raw("</span>")
+        row_actions(h, r)
+        h.raw("</td>")
+        # Empty for 0 and 1, so a run that took more draws the eye.
+        if r.starts > 1:
+            h.num(r.starts)
+        else:
+            h.raw('<td class="num"></td>')
+        usage_cell(h, r.usage)
+        h.raw("</tr>")
+    h.raw("</tbody></table></div>")
+
+
+comptime _PEAK = (
+    "The most memory the run's processes held at once, and in its title"
+    " the CPU they used; empty where it wasn't measured."
+)
+
+
+def usage_cell(mut h: Html, u: Usage):
+    """A `<td>` of a peak in memory, with the CPU in its title."""
+    if u.peak_rss_bytes < 0:
+        h.raw('<td class="num"></td>')
+        return
+    h.raw('<td class="num" title="')
+    h.text(usage_text(u))
+    h.raw('">')
+    h.text(bytes_text(u.peak_rss_bytes))
+    h.raw("</td>")
+
+
+comptime PEAK_HELP = (
+    "The most memory its processes held at once: the run's process and"
+    " what it started (dista's local workers too), sampled every second by"
+    " the scheduler or worker that started it, and at the end the largest"
+    " single process. Not measured on EC2 or Kubernetes."
+)
+
+
+comptime CPU_HELP = (
+    "The CPU time its processes used, user and system, and the most cores"
+    " they kept busy over one sample's second. macOS gives only the time, and"
+    " only for a process that made one attempt."
+)
+
+
+comptime _GRANT_HELP = (
+    "What its pipeline asks for (cpus and memory_gb in orca.toml), and what"
+    " its latest start was given of its host's CPUs and memory, fixed for"
+    " that start, in ORCA_GRANT_CPUS and ORCA_GRANT_MEMORY_MB. Compare it"
+    " with the peak below."
+)
+
+
+def request_text(cpus: String, memory_gb: String) -> String:
+    """`1..16 CPUs, 2..24 GB`."""
+    var text = String()
+    if cpus:
+        text.write(cpus, " CPU" if cpus == "1" else " CPUs")
+    if memory_gb:
+        if text:
+            text.write(", ")
+        text.write(memory_gb, " GB")
+    return text^
+
+
+def grant_facts(mut h: Html, r: RunResources):
+    """A run's Requested and Granted facts (`orca.resources`), when its
+    pipeline asked for any."""
+    if not r.any():
+        return
+    fact_item(h, "Requested", "request", _GRANT_HELP, "runners")
+    h.text(request_text(r.cpus, r.memory_gb))
+    h.raw("</dd>")
+    fact_item(h, "Granted", "grant", _GRANT_HELP, "runners")
+    var g = String()
+    if r.grant.cpus > 0:
+        g.write(r.grant.cpus, " CPU" if r.grant.cpus == 1 else " CPUs")
+    if r.grant.memory_mb > 0:
+        g.write(", " if g else "", gb_text(r.grant.memory_mb), " GB")
+    if g:
+        h.text(g)
+    else:
+        h.raw('<span class="muted">not yet: it hasn\'t started</span>')
+    h.raw("</dd>")
+
+
+def usage_facts(mut h: Html, u: Usage, live: Bool):
+    """A run's or an attempt's Peak memory and CPU used facts (`orca.usage`)."""
+    var none = String(
+        "recorded when its process ends" if live else "not measured"
+    )
+    fact_item(h, "Peak memory", "peak", PEAK_HELP, "runners")
+    if u.peak_rss_bytes >= 0:
+        h.text(bytes_text(u.peak_rss_bytes))
+    else:
+        h.raw('<span class="muted">', none, "</span>")
+    h.raw("</dd>")
+    fact_item(h, "CPU used", "cpu-used", CPU_HELP, "runners")
+    if u.cpu_seconds >= 0:
+        h.text(cpu_text(u.cpu_seconds))
+        if u.peak_cpus >= 0:
+            h.text(", up to ", fixed1(u.peak_cpus), " cores at once")
+    else:
+        h.raw('<span class="muted">', none, "</span>")
+    h.raw("</dd>")
+
+
+def named_code_link(mut h: Html, name: String, at: CodeRef):
+    """A link to a function's code labelled with its name; where it is
+    (`file.mojo:26`) is in its title, and in the source shown on hover."""
+    h.code_named(at.url, name, at.at, at.commit)

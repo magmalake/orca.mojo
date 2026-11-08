@@ -70,7 +70,7 @@ from orca.resources import canonical_cpus, canonical_memory_gb
 from orca.secrets import parse_secrets, secret_problem
 from orca.source import is_hex, web_url
 from orca.state import State
-from orca.terms import key_help
+from orca.ui.terms import key_help
 from orca.toml import (
     BOOLEAN,
     FLOAT,
@@ -978,7 +978,7 @@ struct Shown(Movable):
 
 
 comptime _VALUE_TERMS = ["placement", "fills", "fill_order", "spot"]
-"""The keys whose values are one of a fixed set (`orca.terms`)."""
+"""The keys whose values are one of a fixed set (`orca.ui.terms`)."""
 
 
 def config_html(

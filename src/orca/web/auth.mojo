@@ -45,7 +45,9 @@ from orca.tokens import (
     token_days,
     token_user,
 )
-from orca.ui import Page, _page, _respond, login_page, safe_next
+from orca.ui.layout import page_html
+from orca.ui.login import login_page, safe_next
+from orca.web.page import Page, respond
 from orca.web.router import Call
 
 comptime LOGIN = "/login"
@@ -184,7 +186,7 @@ def cross_origin() -> Page:
     h.text(why)
     h.raw("</p>")
     return Page(
-        403, String('{"error": ', quote(why), "}"), _page("Refused", "", h)
+        403, String('{"error": ', quote(why), "}"), page_html("Refused", "", h)
     )
 
 
@@ -192,7 +194,7 @@ def login_needed(req: Request, json: Bool) raises -> Response:
     """An action without a session: 401 for a script, to the login page for
     a browser, which comes back to the page the form was on."""
     if json:
-        return _respond(
+        return respond(
             Page(
                 401,
                 String('{"error": "log in first", "login": "/login"}'),

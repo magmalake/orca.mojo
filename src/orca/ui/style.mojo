@@ -274,7 +274,7 @@ th .help { margin-left: 0.25rem; vertical-align: 0; }
 .peek__ln { display: inline-block; width: 3.4em; padding-right: 0.9em; text-align: right;
   color: var(--faint); user-select: none; }
 .peek__msg { margin: 0; padding: 0.6rem 0.75rem; color: var(--muted); font-size: 0.8125rem; }
-/* A step's card (orca.step_cards), on hovering, focusing or tapping a step
+/* A step's card (orca.ui.step_cards), on hovering, focusing or tapping a step
    in the steps views: its signature, kind, types, datasets and recent
    runs, or on a run's page the attempt's. */
 [data-step] { cursor: help; }

@@ -31,11 +31,14 @@ from orca.actions import (
     resume_run,
     start_run,
 )
+from orca.api.pipelines import json_strings
 from orca.html import Html, url_encode
 from orca.json import quote
 from orca.state import State
-from orca.ui import Page, _bad_request, _dataset_href, _json_strings, _page
+from orca.ui.datasets import dataset_href
+from orca.ui.layout import bad_request, page_html
 from orca.watchdog import acknowledge, snooze as snooze_rule
+from orca.web.page import Page
 from orca.web.router import Call
 
 
@@ -90,7 +93,7 @@ def _acted(
             "true" if o.confirm else "false",
             "}",
         ),
-        _page("Not done", "", h),
+        page_html("Not done", "", h),
     )
 
 
@@ -120,7 +123,7 @@ def start(mut db: State, call: Call) raises -> Page:
     """`POST /pipelines/<name>/runs`: one run over `partitions`."""
     var keys = call.field("partitions")
     if _from_file(keys):
-        return _bad_request(_FROM_FILE)
+        return bad_request(_FROM_FILE)
     var o = start_run(db, call.param("name"), keys)
     return _acted(
         o,
@@ -136,7 +139,7 @@ def backfill(mut db: State, call: Call) raises -> Page:
     var name = call.param("name")
     var keys = call.field("partitions")
     if _from_file(keys):
-        return _bad_request(_FROM_FILE)
+        return bad_request(_FROM_FILE)
     var o = backfill_runs(
         db,
         name,
@@ -145,7 +148,7 @@ def backfill(mut db: State, call: Call) raises -> Page:
         allow_append=call.field("allow_append") == "1",
     )
     var j = String('{"queued": ', o.queued, ', "skipped": ')
-    _json_strings(j, o.skipped)
+    json_strings(j, o.skipped)
     j.write("}")
     return _acted(
         o,
@@ -252,7 +255,7 @@ def rebuild(mut db: State, call: Call) raises -> Page:
     var o = rebuild_downstream(db, name, call.field("partitions"))
     return _acted(
         o,
-        _dataset_href(name),
+        dataset_href(name),
         String('{"rebuild": ', o.run, "}"),
         String("/rebuilds/", o.run),
     )

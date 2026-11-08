@@ -15,7 +15,7 @@ until the moment it's escaped.
 
 from std.os import getenv
 
-from orca.terms import value_help
+from orca.ui.terms import value_help
 
 
 def escape(s: StringSlice) -> String:
@@ -82,6 +82,19 @@ def url_decode(s: StringSlice) -> String:
             out.append(c)
         i += 1
     return String(from_utf8_lossy=Span(out))
+
+
+def query_param(url: String, name: StringSlice) -> String:
+    """A query parameter's value, decoded, or empty."""
+    var q = url.find("?")
+    if q < 0:
+        return ""
+    for pair in url[byte = q + 1 :].split("&"):
+        var eq = pair.find("=")
+        var k = pair[byte=:eq] if eq >= 0 else pair
+        if k == name:
+            return url_decode(pair[byte = eq + 1 :]) if eq >= 0 else ""
+    return ""
 
 
 def _hex(c: UInt8) -> Int:
@@ -209,7 +222,7 @@ struct Html(Movable, Writable):
     def status(mut self, s: StringSlice):
         """A status as a badge, its class named after it (a space in the
         status is a hyphen in the class), with what it means on hover or
-        keyboard focus (`orca.terms`)."""
+        keyboard focus (`orca.ui.terms`)."""
         var e = escape(s)
         self.out.write("<span")
         self._tip(value_help("status", s))
@@ -258,7 +271,7 @@ struct Html(Movable, Writable):
         self.raw("</span></span>")
 
     def term(mut self, kind: StringSlice, value: StringSlice):
-        """`value`, one of a fixed set (`kind` in `orca.terms`): dotted
+        """`value`, one of a fixed set (`kind` in `orca.ui.terms`): dotted
         underlined, with what it means on hover, keyboard focus or a tap;
         plain text if the set doesn't know it."""
         var tip = value_help(kind, value)

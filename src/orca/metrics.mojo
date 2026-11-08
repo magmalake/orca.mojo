@@ -179,7 +179,7 @@ struct StepSpan(Copyable, Movable):
     var start: Float64
     var end: Float64
     var attempt: Int
-    """Its ID, which shows its card (`orca.step_cards`), or 0."""
+    """Its ID, which shows its card (`orca.ui.step_cards`), or 0."""
 
 
 def _num(v: Value, ptr: String) -> Float64:
