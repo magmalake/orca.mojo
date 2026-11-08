@@ -6,7 +6,7 @@ process running its user data under sh.
 
 Every call is appended to <dir>/calls.jsonl as {"action", "params"}; each
 instance's script and output are <dir>/<id>.sh and <dir>/<id>.log, its /tmp
-is <dir>/<id>.tmp (the script's "/tmp/" is rewritten to it), and its
+is <dir>/<id>.tmp (the script's /tmp/orca-* files are moved there), and its
 environment has HOSTNAME set to its ID, so a test can tell instances apart.
 All instances share 127.0.0.1 as their private address. A process that
 exits is an instance that terminated, as `InstanceInitiatedShutdownBehavior
@@ -27,6 +27,7 @@ import datetime
 import http.server
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -86,7 +87,7 @@ def _run(p):
         tmp = os.path.join(DIR, f"{iid}.tmp")
         os.makedirs(tmp, exist_ok=True)
         with open(path, "w") as f:
-            f.write(script.replace("/tmp/", tmp + "/"))
+            f.write(re.sub(r"(?<=[\s>'\"])/tmp/orca-", tmp + "/orca-", script))
         env = dict(os.environ, HOSTNAME=iid)
         out = open(os.path.join(DIR, f"{iid}.log"), "w")
         proc = subprocess.Popen(
