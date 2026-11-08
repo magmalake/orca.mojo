@@ -51,4 +51,10 @@ timeline="$ORCA_LOGS/fanout/$run/timeline.json"
 grep -q '"ph":"X"' "$timeline" || fail "the timeline isn't a Chrome trace"
 grep -q 'month_trips 2024-02\] 29 days' "$ORCA_LOGS/fanout/$run/month_trips/2024-02/1.log" \
     || fail "fanout's step log lacks its line"
+# `status` lists the latest runs; `--before` the ones older than a run.
+./build/toy status > "$log" 2>&1 || fail "status"
+[ "$(head -1 "$log" | cut -d' ' -f1)" = "$run" ] || fail "status doesn't list the newest run first"
+./build/toy status --before "$run" > "$log" 2>&1 || fail "status --before"
+grep -q "^$run " "$log" && fail "status --before lists that run"
+[ "$(head -1 "$log" | cut -d' ' -f1)" -lt "$run" ] || fail "status --before doesn't start under that run"
 echo "ok   logs"
