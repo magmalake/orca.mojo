@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.16.0 - 2026-11-08
+
+- **Each pipeline shows one coverage number before anyone clicks.** The
+  home page's table has a Coverage column (the percent over a thin bar,
+  the counts on hover, with a "?" like every column), and a pipeline's
+  Progress card a Coverage line (`1141 / 1407 days done (81%)`) linking to
+  its year calendar, or to Keys for a keyed pipeline. It's a daily or
+  monthly pipeline's partitions done of those in its range so far (its
+  first through the last that has ended), or a keyed pipeline's keys done
+  of the keys orca last read; done is what the calendar counts (every
+  mapped step succeeded in a run of the current code), and a pipeline with
+  nothing to count shows "—". The JSON has it as `coverage {done, total,
+  pct, unit}` on each pipeline of `/` and on `/api/pipelines/<name>`
+  (null for none). It's one query a pipeline, `orca.coverage`.
+- **Which keys are done is fast for a pipeline without a mapped step.**
+  The query the calendar, backfills and coverage share read every
+  succeeded run once per key for such a pipeline (1.2 s for 1,500 days
+  over 30,000 runs); it now reads their keys once (10 ms).
+
+- **Actions ask in a dialog in the UI's colours, not the browser's.**
+  Cancel, Rerun, Rerun from here, Rebuild downstream, a list's bulk Cancel
+  and a pipeline's Cancel queued runs ask in one `<dialog>`, light or dark,
+  saying what will happen ("Cancel run 4418?" / "It leaves the queue and
+  won't start."), with the safe button focused. Escape or a click outside
+  is no, and the focus goes back. Without scripts the forms post as before.
+  The run page's Status card Cancel and the bulk Cancel now ask too; Retry
+  and Backfill again don't.
+- **Code on hover on the lists.** A runs table's pipeline shows its
+  declaration at the commit the run ran, a failed run names its failed step
+  linked to its function, and the home page's pipelines (List and Timeline)
+  show theirs at the registered code. A card shows on hover, keyboard focus
+  or a first tap, survives a live refresh, and fetches nothing until a
+  hover.
+- **Every code card leads with its docstring's first sentence**, then the
+  rest in muted text. A pipeline without a docstring of its own uses its
+  module's.
+
+- **An older orca runs on a newer schema whose migrations since are
+  additive.** Each migration has a compatibility floor, the fewest
+  migrations a binary must know to keep working on its result, recorded in
+  `orca.schema_version.min_binary`. A binary behind the database now starts
+  when the recorded floor is within what it knows, logging `orca: the
+  database is at schema version 41, ahead of this binary's 40; its
+  migrations since are additive, so running on it`, and refuses only past a
+  floor-raising migration (so far 24, the warm pool's new key on
+  `orca.instances`). AGENTS.md has the rule for writing migrations that
+  keep rollbacks possible.
+- **`deploy.sh` backs up before it deploys, and `deploy.sh --rollback` goes
+  back.** Each deploy runs `orca-stack backup-now` after quiescing and
+  before applying (stopping if it fails, unless `--no-backup`) and prints
+  the previous tag, the new one and the dump's key. `orca-stack` keeps the
+  tags each apply replaced (`orca-stack tags --previous`, `ORCA_PREV_TAG`),
+  and `orca-stack rollback` applies them again and registers the pipelines.
+  docs/hetzner.md has a Rolling back runbook.
+
 ## 0.15.0 - 2026-11-08
 
 - **A log or samples file an EC2 instance keeps is never left empty.**
