@@ -146,15 +146,18 @@ cmd_app() {
     [ $# -eq 2 ] || [ $# -eq 3 ] || die "usage: app NAME PORT [CHECK]"
     safe "$1"
     safe "$2"
-    check=${3:-/}
-    safe "$check"
-    case "$check" in /*:* | [!/]*) die "app: CHECK is a path, like / or /healthz" ;; esac
+    check=${3:-}
+    if [ -n "$check" ]; then
+        safe "$check"
+        case "$check" in /*:* | [!/]*) die "app: CHECK is a path, like / or /healthz" ;; esac
+    fi
     touch "$CONF/apps"
-    if grep -q "^$1 " "$CONF/apps"; then
+    if ! grep -q "^$1 " "$CONF/apps"; then
+        echo "$1 $2 - ${check:-/}" >> "$CONF/apps"
+    elif [ -n "$check" ]; then
+        # Set up already (up.sh runs this each time): only a CHECK given changes it.
         awk -v n="$1" -v c="$check" '$1 == n { $4 = c } { print }' "$CONF/apps" > "$CONF/apps.new"
         mv "$CONF/apps.new" "$CONF/apps"
-    else
-        echo "$1 $2 - $check" >> "$CONF/apps"
     fi
 }
 

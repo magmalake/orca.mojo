@@ -291,6 +291,8 @@ grep -q 'stop -t 10 scheduler\|run -d --name scheduler-next' "$FAKE/docker.log" 
 grep -qw ui "$FAKE/containers/ui/aliases" || fail "the new ui has no alias ui"
 # An app, by its check path.
 stack app console 8080 /ready
+stack app console 8080
+grep -q '^console 8080 [^ ]* /ready$' "$ORCA_CONF/apps" || fail "app without a CHECK reset it: $(cat "$ORCA_CONF/apps")"
 : > "$FAKE/docker.log"
 stack apply --app console=lll2222 > "$FAKE/out" 2>&1 || fail "the console's apply"
 has "console: replaced (image hhh8888 -> lll2222), without downtime"
