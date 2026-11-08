@@ -15,7 +15,8 @@
 # - behind a TLS proxy (ORCA_UI_TRUST_PROXY=1, X-Forwarded-Proto) or with
 #   ORCA_UI_SECURE_COOKIES=1, an https Origin is the UI's own;
 # - 5 failed logins for a name in 15 minutes get 429, the right password
-#   included, until the window passes.
+#   included, until the window passes;
+# - /healthz answers 200 "ok" without a login, login required or not.
 #
 # Needs ORCA_DATABASE_URL (pixi run test-ui-login starts a throwaway server),
 # curl and jq.
@@ -173,6 +174,11 @@ until curl -fs "$base/" > /dev/null 2>&1; do
 done
 [ "$(post /pipelines/toy/runs partitions=2024-03 -H 'Accept: application/json')" = 401 ] \
     || fail "ORCA_UI_LOGIN=required with no users"
+# /healthz needs no login (orca-stack's deploys wait for it), and says only ok.
+[ "$(curl -s -o "$log.healthz" -w '%{http_code}' "$base/healthz")" = 200 ] || fail "/healthz with login required"
+[ "$(cat "$log.healthz")" = ok ] || fail "/healthz said: $(cat "$log.healthz")"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -I "$base/healthz")" = 200 ] || fail "HEAD /healthz"
+rm -f "$log.healthz"
 kill "$ui"
 
 # Behind a proxy that terminates TLS (ORCA_UI_TRUST_PROXY=1), the browser's

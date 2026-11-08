@@ -1,28 +1,53 @@
 #!/bin/sh
-# deploy.sh [--dry-run] [--force] [--no-backup] [--timeout SECONDS] [--yes] <orca-tag> [<app>=<tag> ...]
+# deploy.sh [--dry-run] [--force] [--all] [--no-backup] [--timeout SECONDS] [--yes] <orca-tag> [<app>=<tag> ...]
 # deploy.sh [--dry-run] [--force] [--no-backup] [--timeout SECONDS] [--yes] --rollback
 #
-# Code changes: pulls the images at the tags and restarts the scheduler, ui,
-# sampler, apps and tunnel from them (what `orca aws app` and `orca aws up`
-# did on AWS). The orca tag also becomes the default for the apps; an
+# Code changes: pulls the images at the tags and starts again the containers
+# whose image or settings changed (the scheduler, ui, sampler, apps and
+# tunnel; the others keep running), as `orca aws app` and `orca aws up` did
+# on AWS. The orca tag also becomes the default for the apps; an
 # <app>=<tag> argument gives one app another. Postgres is not restarted.
+# --all starts every container again, changed or not.
 #
-# Restarting the scheduler kills running runs, so it first quiesces: pauses
-# every pipeline that isn't paused, waits for the running runs to end (up to
-# --timeout, default 3600 s), deploys, then unpauses the pipelines it paused.
-# Pipelines that were already paused (by hand or by the watchdog) stay paused.
-# On a timeout or a failed deploy the pipelines stay paused, and the message
-# says how to undo it. --force skips all that and kills the running runs.
+# It first asks the server what the apply would replace (orca-stack plan,
+# one line per container) and goes on from that:
 #
-# Before it applies anything it backs the database up (orca-stack backup-now,
-# to s3://BUCKET/backups/pg/<time>.dump, with <time>.paused beside it: the
-# pipelines paused by hand and the ones this deploy paused, so a restore of
-# the dump unpauses only the latter) and stops if that fails, unless
-# --no-backup. After the apply, and before it unpauses anything, it registers
-# the pipelines from the new image (orca-stack register); if that fails the
-# pipelines stay paused. The server keeps the tags it ran before (orca-stack
-# tags --previous); --rollback applies those again, the same way
-# (docs/hetzner.md#rolling-back).
+# - The scheduler is replaced (a new orca tag, or its settings changed):
+#   restarting it kills running runs, so it quiesces first: pauses every
+#   pipeline that isn't paused, waits for the running runs to end (up to
+#   --timeout, default 3600 s), deploys, registers the pipelines from the
+#   new image (orca-stack register) and unpauses the pipelines it paused.
+#   Pipelines that were already paused (by hand or by the watchdog) stay
+#   paused. On a timeout, a failed deploy or a failed registration the
+#   pipelines stay paused, and the message says how to undo it. --force
+#   skips the pause and kills the running runs.
+# - The scheduler is replaced and the stack overlaps schedulers (OVERLAP=1
+#   in stack.conf, docs/overlap.md), and orca-stack can-overlap says the new
+#   image's scheduler may start beside the old one (no migration of it
+#   raises the floor past the old binary): nothing is paused and runs go
+#   on. The apply starts the new scheduler beside the old one and waits
+#   until it leads; it registers the pipelines from the new image, then
+#   waits (up to --timeout) for the old scheduler to drain its runs and
+#   exit, and removes it (orca-stack drain-old). A rollback, --force and a
+#   dry run don't overlap.
+# - The scheduler keeps running (an app's tag only, say the census
+#   console's): nothing is paused and runs go on; it backs up and applies,
+#   and nothing needs registering (the pipelines are in the scheduler's
+#   image, which didn't change).
+# - Nothing is replaced: no backup, and the apply keeps every container.
+#
+# The UI and the apps are replaced without downtime (orca-stack starts the
+# new one beside the old and waits until it's healthy). One that never is
+# fails the deploy after the rest is applied, the old one still serving; a
+# scheduler it replaced is registered first, and the pipelines stay paused.
+#
+# Before it applies anything that replaces a container it backs the
+# database up (orca-stack backup-now, to s3://BUCKET/backups/pg/<time>.dump,
+# with <time>.paused beside it: the pipelines paused by hand and the ones
+# this deploy paused, so a restore of the dump unpauses only the latter) and
+# stops if that fails, unless --no-backup. The server keeps the tags it ran
+# before (orca-stack tags --previous); --rollback applies those again, the
+# same way (docs/hetzner.md#rolling-back).
 set -eu
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -32,6 +57,7 @@ timeout=3600
 backup=1
 dump=
 rollback=0
+all=
 parse_common "$@"
 # shellcheck disable=SC2086
 set -- $REST
@@ -42,6 +68,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --force) force=--force ;;
         --no-backup) backup=0 ;;
+        --all) all=--all ;;
         --rollback) rollback=1 ;;
         --timeout)
             [ $# -ge 2 ] || die "--timeout needs a number of seconds"
@@ -60,9 +87,10 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-usage="usage: deploy.sh [--dry-run] [--force] [--no-backup] [--timeout SECONDS] <orca-tag> [<app>=<tag> ...] | --rollback"
+usage="usage: deploy.sh [--dry-run] [--force] [--all] [--no-backup] [--timeout SECONDS] <orca-tag> [<app>=<tag> ...] | --rollback"
 if [ "$rollback" = 1 ]; then
     [ -z "$tag" ] && [ -z "$args" ] || die "--rollback takes no tags: it applies the ones deployed before"
+    [ -z "$all" ] || die "--rollback replaces what differs from the tags before; --all isn't for it"
 else
     [ -n "$tag" ] || die "$usage"
 fi
@@ -98,19 +126,58 @@ else
 fi
 log "previous tag $was, new tag $to"
 
-if [ -n "$force" ]; then
-    log "--force: not pausing; running runs are killed"
+# What the apply would replace. A dry run doesn't ask, and shows the
+# longest way: the scheduler replaced.
+if [ "$rollback" = 1 ]; then
+    plan=$(remote_out "scheduler replace (a dry run assumes it)" orca-stack plan --rollback) \
+        || die "orca-stack plan --rollback failed; nothing was deployed"
 else
-    log "pausing the pipelines and waiting for running runs (up to ${timeout}s)"
+    # shellcheck disable=SC2086
+    plan=$(remote_out "scheduler replace (a dry run assumes it)" orca-stack plan --tag "$tag" $args $all) \
+        || die "orca-stack plan failed; nothing was deployed"
+fi
+log "the plan:"
+echo "$plan" | sed 's/^/  /'
+replaces=0
+scheduler=0
+! echo "$plan" | grep -q '^[^ ]* replace' || replaces=1
+! echo "$plan" | grep -q '^scheduler replace' || scheduler=1
+
+quiesced=0
+overlap=0
+if [ "$scheduler" = 1 ] && [ "$rollback" = 0 ] && [ -z "$force" ] && [ "$DRY_RUN" = 0 ]; then
+    if why=$(remote orca-stack can-overlap --tag "$tag"); then
+        overlap=1
+    else
+        log "not overlapping the schedulers: ${why#no: }"
+    fi
+fi
+if [ "$scheduler" = 0 ]; then
+    log "the scheduler keeps running: not pausing anything, runs go on"
+elif [ "$overlap" = 1 ]; then
+    log "the new scheduler starts beside the old one, which drains its runs: not pausing anything"
+elif [ -n "$force" ]; then
+    log "--force: not pausing; the scheduler is replaced, so running runs are killed"
+else
+    log "the scheduler is replaced: pausing the pipelines and waiting for running runs (up to ${timeout}s)"
     remote orca-stack quiesce --timeout "$timeout" \
         || die "not deployed; the pipelines it paused stay paused (ssh root@$IP orca-stack resume)"
+    quiesced=1
+fi
+# What a failure leaves paused.
+if [ "$quiesced" = 1 ]; then
+    left="the pipelines stay paused (fix it and rerun, or ssh root@$IP orca-stack resume)"
+else
+    left="nothing was paused"
 fi
 
-if [ "$backup" = 1 ]; then
+if [ "$replaces" = 0 ]; then
+    log "nothing to replace: not backing up"
+elif [ "$backup" = 1 ]; then
     log "backing up the database"
     if ! out=$(remote_out "orca-stack: backed up to s3://<bucket>/backups/pg/<time>.dump" orca-stack backup-now 2>&1); then
         echo "$out" >&2
-        [ -n "$force" ] || remote orca-stack resume || true
+        [ "$quiesced" = 0 ] || remote orca-stack resume || true
         die "the backup failed, so nothing was deployed (--no-backup deploys without one)"
     fi
     dump=$(echo "$out" | sed -n 's/^orca-stack: backed up to //p')
@@ -123,22 +190,43 @@ fi
 if [ "$rollback" = 1 ]; then
     log "rolling back to $to"
     remote orca-stack rollback ${force:+"$force"} \
-        || die "the rollback failed; the pipelines stay paused (fix it and rerun, or ssh root@$IP orca-stack resume)"
+        || die "the rollback failed; $left"
 else
     log "deploying $tag"
+    # A new UI or app that isn't healthy fails the apply after the others
+    # are applied: a scheduler it replaced is registered all the same.
+    failed=0
     # shellcheck disable=SC2086
-    remote orca-stack apply --tag "$tag" $args ${force:+"$force"} \
-        || die "the deploy failed; the pipelines stay paused (fix it and rerun, or ssh root@$IP orca-stack resume)"
-    log "registering the pipelines from $tag"
-    if [ -n "$force" ]; then
-        remote orca-stack register \
-            || die "$tag is deployed, but registering failed (fix it, then ssh root@$IP orca-stack register)"
-    else
-        remote orca-stack register \
-            || die "$tag is deployed, but registering failed; the pipelines stay paused (fix it, then ssh root@$IP orca-stack register and orca-stack resume; or ./deploy.sh --rollback)"
+    ov=
+    [ "$overlap" = 0 ] || ov=--overlap
+    # shellcheck disable=SC2086
+    applied=$(remote orca-stack apply --tag "$tag" $args $all ${force:+"$force"} $ov 2>&1) || failed=1
+    echo "$applied"
+    if [ "$failed" = 1 ] && ! echo "$applied" | grep -q '^scheduler: replaced'; then
+        die "the deploy failed; $left"
     fi
+    # The pipelines are in the scheduler's image: registered again when it
+    # was replaced.
+    if echo "$applied" | grep -q '^scheduler: replaced' || { [ "$DRY_RUN" = 1 ] && [ "$scheduler" = 1 ]; }; then
+        log "registering the pipelines from $tag"
+        if [ "$quiesced" = 0 ]; then
+            remote orca-stack register \
+                || die "$tag is deployed, but registering failed (fix it, then ssh root@$IP orca-stack register)"
+        else
+            remote orca-stack register \
+                || die "$tag is deployed, but registering failed; the pipelines stay paused (fix it, then ssh root@$IP orca-stack register and orca-stack resume; or ./deploy.sh --rollback)"
+        fi
+    else
+        log "the scheduler wasn't replaced: the pipelines stay registered as they are"
+    fi
+    if [ "$overlap" = 1 ] && echo "$applied" | grep -q '^scheduler: replaced'; then
+        log "waiting for the old scheduler to drain its runs (up to ${timeout}s)"
+        remote orca-stack drain-old --timeout "$timeout" \
+            || die "$tag is deployed and registered, but the old scheduler didn't go (ssh root@$IP orca-stack drain-old)"
+    fi
+    [ "$failed" = 0 ] || die "the deploy failed; $left"
 fi
-if [ -z "$force" ]; then
+if [ "$quiesced" = 1 ]; then
     log "unpausing the pipelines it paused"
     remote orca-stack resume
 fi
