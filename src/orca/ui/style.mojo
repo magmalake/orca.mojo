@@ -325,6 +325,13 @@ th .help { margin-left: 0.25rem; vertical-align: 0; }
 .filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: end; margin-bottom: 1rem; }
 .filters label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
 .filters input[type=search] { min-width: 0; }
+/* One height for every control in a filter row: selects, date and text
+   inputs, the status picker and the button differ by browser otherwise. */
+.filters select, .filters input:not([type=checkbox]), .filters .pick__value,
+.filters button { box-sizing: border-box; height: 2.25rem; padding-top: 0; padding-bottom: 0;
+  line-height: calc(2.25rem - 2px); font: inherit; font-size: 0.875rem; }
+.filters select { padding-left: 0.5rem; padding-right: 1.6rem; border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }
 .filters__quick { display: flex; flex-wrap: wrap; gap: 0.2rem 0.7rem; align-self: center; font-size: 0.8125rem; }
 .filters__quick a[aria-current] { font-weight: 600; text-decoration: none; color: var(--text); }
 .filters__clear { align-self: center; font-size: 0.8125rem; }
