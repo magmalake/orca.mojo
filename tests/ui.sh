@@ -208,9 +208,48 @@ ORCA_NOW=2024-01-15T00:00Z ./build/orca register ./build/daily >> "$log" 2>&1 ||
 [ "$(html /pipelines/daily | grep -o 'class="dag__box' | wc -l)" -eq 2 ] || fail "daily's DAG hasn't 2 boxes"
 [ "$(html /pipelines/daily | grep -o 'class="dag__edge' | wc -l)" -eq 1 ] || fail "daily's DAG hasn't 1 edge"
 page=$(html "/runs/$bad_run")
-echo "$page" | grep -q 'dag__box dag__box--failed"><title>measure' || fail "measure isn't failed in the DAG"
-echo "$page" | grep -q 'dag__box dag__box--skipped"><title>total' || fail "total isn't skipped in the DAG"
+echo "$page" | grep -q 'dag__box dag__box--failed" data-step="measure"[^>]*><title>measure' || fail "measure isn't failed in the DAG"
+echo "$page" | grep -q 'dag__box dag__box--skipped" data-step="total"[^>]*><title>total' || fail "total isn't skipped in the DAG"
 echo "$page" | grep -q 'data-poll="' && fail "an ended run's page still polls"
+# Step cards (orca.step_cards): what each step's card shows is in the page,
+# one JSON per Steps card, so a hover asks nothing; each step in the table,
+# graph and timeline shows it, on a run's page with that attempt's.
+cards() { sed -n 's/.*<script type="application\/json" class="step-cards">\([^<]*\)<\/script>.*/\1/p'; }
+pc=$(html /pipelines/toy | cards)
+echo "$pc" | jq -e . > /dev/null || fail "the pipeline's step cards aren't JSON: $pc"
+[ "$(echo "$pc" | jq -r '.steps | keys | join(",")')" = "days,measure,total" ] || fail "the step cards' steps: $pc"
+[ "$(echo "$pc" | jq -r '.steps.total | [.kind, .after, .input, .output] | join(" ")')" = "gather measure Seq[Measured] Int" ] \
+    || fail "total's card: $(echo "$pc" | jq -c .steps.total)"
+echo "$pc" | jq -r .steps.days.sig | grep -qF '<span class="hl hl--kw">def</span> <span class="hl hl--fn">days</span>(' \
+    || fail "days' card has no coloured signature"
+echo "$pc" | jq -r .steps.days.kind_help | grep -q 'once per partition' || fail "a card's kind has no meaning"
+[ "$(echo "$pc" | jq -r '.steps.measure.recent | [.runs, (.failed > 0), (.took | startswith("p50 "))] | join(" ")')" = "2 true true" ] \
+    || fail "measure's recent runs: $(echo "$pc" | jq -c .steps.measure)"
+pt=$(html '/pipelines/toy?steps=table')
+echo "$pt" | grep -qF '<section class="card steps" id="steps" data-tabs="orca.steps.view" data-tabs-param="steps" data-step-cards>' \
+    || fail "the pipeline's Steps card isn't one with cards"
+echo "$pt" | grep -qF '<td><span class="step-ref" data-step="days" tabindex="0">days</span></td>' || fail "the table's step shows no card"
+echo "$pt" | grep -q '<g class="dag__box" data-step="total" tabindex="0">' || fail "the graph's step shows no card"
+rc=$(html "/runs/$bad_run" | cards)
+failed_attempt=$(echo "$rc" | jq -r '.attempts | to_entries[] | select(.value.status == "failed") | .key' | head -1)
+[ -n "$failed_attempt" ] || fail "the run's step cards have no failed attempt: $rc"
+[ "$(echo "$rc" | jq -r ".attempts[\"$failed_attempt\"] | [.step, .partition, .href] | join(\" \")")" = "measure 2024-02 /runs/$bad_run/attempts/$failed_attempt" ] \
+    || fail "the failed attempt's card: $(echo "$rc" | jq -c ".attempts[\"$failed_attempt\"]")"
+echo "$rc" | jq -r ".attempts[\"$failed_attempt\"].error" | grep -q 'failing 2024-02 as asked' || fail "the attempt's card has no error"
+echo "$rc" | jq -e '.steps.measure.recent' > /dev/null && fail "a run's card has the pipeline's recent runs"
+echo "$pt" | grep -q 'data-step="measure" data-attempt=' && fail "the pipeline's table names an attempt"
+html "/runs/$bad_run" | grep -q "<span class=\"step-ref\" data-step=\"measure\" data-attempt=\"$failed_attempt\" tabindex=\"0\">measure</span>" \
+    || fail "the run's table step shows no attempt's card"
+html "/runs/$bad_run?steps=timeline" | grep -q "<rect class=\"tl__bar tl---1\"[^>]*data-step=\"measure\" data-attempt=\"$failed_attempt\" tabindex=\"0\"><title>" \
+    || fail "the timeline's bar shows no attempt's card"
+html "/runs/$bad_run/steps" | cards | jq -e ".attempts[\"$failed_attempt\"]" > /dev/null || fail "the live Steps card lost its cards"
+curl -fsS "$base/static/orca.css" | grep -qF '.scard {' || fail "the stylesheet has no step card"
+html / | grep -qF '"&at=" + m[2]' || fail "the step card doesn't ask /code for its signature"
+# /code?at= answers a def's signature and docstring: a line, or refused.
+gh="https://github.com/a/b/blob/abcdef1/x.mojo"
+for at in x 0 -3; do
+    [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/code?u=$(printf %s "$gh" | jq -sRr @uri)&at=$at")" = 400 ] || fail "/code took at=$at"
+done
 # The run page's cards, each fact with its help; Steps with Table,
 # Timeline and Graph tabs, the table first, ?steps= for the others; the
 # page's script follows a refresh (tests/lineage.sh has its Snapshots).
@@ -225,7 +264,7 @@ done
     || fail "a run page help button without its text"
 [ "$(echo "$page" | grep -o ' id="help-[^"]*"' | sort | uniq -d | wc -l)" -eq 0 ] || fail "two helps with one id"
 echo "$page" | grep -qF '<p class="hash">Code hash <code>' || fail "the run's code hash"
-echo "$page" | grep -qF '<section class="card steps" id="steps" data-tabs="orca.run.steps" data-tabs-param="steps">' \
+echo "$page" | grep -qF '<section class="card steps" id="steps" data-tabs="orca.run.steps" data-tabs-param="steps" data-step-cards>' \
     || fail "the run's Steps card"
 echo "$page" | grep -qF '<div id="steps-table" role="tabpanel" class="scroll">' || fail "the run's table isn't shown first"
 echo "$page" | grep -qF '<div id="steps-timeline" role="tabpanel" class="scroll steps__graph" hidden><svg' || fail "the run's timeline tab"

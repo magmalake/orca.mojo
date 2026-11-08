@@ -75,8 +75,8 @@ def test_svg() raises:
     var m = parse_samples("worker-i-1", _worker())
     var t0 = m.samples[0].t - 5
     var steps: List[StepSpan] = [
-        StepSpan("load", "2024-01", "succeeded", t0, t0 + 100),
-        StepSpan("compact", "", "failed", t0 + 100, t0 + 200),
+        StepSpan("load", "2024-01", "succeeded", t0, t0 + 100, 0),
+        StepSpan("compact", "", "failed", t0 + 100, t0 + 200, 0),
     ]
     var ax = axis_of([m.copy()], steps)
     assert_equal(ax[0], t0)

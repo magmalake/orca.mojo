@@ -191,6 +191,29 @@ colours it (`orca.highlight`, a small tokenizer, no library), so the
 browser needn't reach GitHub; a private repository's file it can't fetch
 says so, and the link still opens it.
 
+## Step cards
+
+Each step in the steps views (a pipeline's Steps card, Graph and Table,
+and a run's Table, Timeline and Graph) shows a card on hover, keyboard
+focus (each step is a tab stop) or a tap; Escape, a tap elsewhere or
+scrolling the step out of sight closes it. On a box that links to its
+code, as the graph's do, the first tap shows the card and the next opens
+the code.
+
+| Part | From |
+|---|---|
+| The signature, coloured, and its docstring's first paragraph, with a link to the line | the source at the commit the run ran or the pipeline is registered with: `/code?u=<file>&at=<line>` answers only the `def`'s lines and docstring, fetched once per step per page. Until it answers (or for a private repository, or code `orca locate` didn't map) the card shows the signature `describe` records, `def measure(mut ctx: Ctx, input: Measured) raises -> Measured`, its argument names orca's |
+| Kind (with what it means), `after=`, input and output types | the registration's `describe` |
+| Reads and Writes, linked to the datasets' pages | the step's `reads=` and `writes=` |
+| Pipeline page: its last runs' attempts, how many failed, the p50 and most its succeeded attempts took, and their peak memory's p50 and most | the attempts of the pipeline's latest 20 runs, with what each used where it was measured |
+| Run page, on an attempt (a timeline bar, or a table row's latest): its partition, number and status (linked to its page), start, end, how long it took, peak memory, CPU and cores, and its error's first line | that attempt |
+
+Everything but the docstring is in the page, one
+`<script type="application/json" class="step-cards">` in the Steps card,
+so a hover asks the server nothing; a run's live Steps card brings a new
+one each time it refreshes. Without scripts the page is as it was, and
+each bar and box keeps its title.
+
 ## Ops
 
 "Ops" in the nav has three pages, each linking the others:

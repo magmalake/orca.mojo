@@ -274,6 +274,25 @@ th .help { margin-left: 0.25rem; vertical-align: 0; }
 .peek__ln { display: inline-block; width: 3.4em; padding-right: 0.9em; text-align: right;
   color: var(--faint); user-select: none; }
 .peek__msg { margin: 0; padding: 0.6rem 0.75rem; color: var(--muted); font-size: 0.8125rem; }
+/* A step's card (orca.step_cards), on hovering, focusing or tapping a step
+   in the steps views: its signature, kind, types, datasets and recent
+   runs, or on a run's page the attempt's. */
+[data-step] { cursor: help; }
+.step-ref { text-decoration: underline dotted var(--muted); text-underline-offset: 0.2em; }
+[data-step]:focus-visible { outline: 2px solid var(--lake); outline-offset: 1px; }
+.scard { position: fixed; z-index: 30; width: min(28rem, calc(100vw - 1rem)); max-height: 70vh; overflow: auto;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow); font-size: 0.8125rem; color: var(--text); }
+.scard__head { padding: 0.45rem 0.75rem; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.scard__sig { margin: 0; padding: 0.5rem 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 0.75rem; line-height: 1.5; border-bottom: 1px solid var(--border); }
+.scard__doc { margin: 0; padding: 0.45rem 0.75rem 0; }
+.scard__src { margin: 0; padding: 0.3rem 0.75rem 0; font: 0.75rem var(--mono); }
+.scard__facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 0.75rem;
+  margin: 0; padding: 0.5rem 0.75rem 0.6rem; }
+.scard__facts dt { color: var(--muted); }
+.scard__facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.help__tip.tip { z-index: 40; }  /* a kind's meaning, over the card */
 /* Its colours (orca.highlight), from the theme's tokens. */
 .hl--kw { color: var(--ember); }
 .hl--fn { color: var(--live); font-weight: 600; }
