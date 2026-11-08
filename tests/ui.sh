@@ -591,7 +591,7 @@ html "/runs?pipeline=toy&status=failed" \
     || fail "a long list of partitions isn't cut short"
 q "UPDATE orca.runs SET partitions = 'hrabanazviking/RuneForgeAI-Project-Aesir,b' WHERE id = $bad_run" > /dev/null
 html "/runs?pipeline=toy&status=failed" \
-    | grep -qF '<td class="mono parts" title="hrabanazviking/RuneForgeAI-Project-Aesir,b">hrabanazviking/RuneForge…, b</td>' \
+    | grep -qF '<td class="mono parts" title="hrabanazviking/RuneForgeAI-Project-Aesir,b">hrabanazviking/RuneForg…, b</td>' \
     || fail "a long partition key isn't cut to 24 characters"
 q "UPDATE orca.runs SET partitions = '$was' WHERE id = $bad_run" > /dev/null
 page=$(html "/runs?pipeline=toy&status=succeeded&trigger=manual")
