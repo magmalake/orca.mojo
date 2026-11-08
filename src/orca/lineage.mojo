@@ -275,24 +275,75 @@ struct Commit(Copyable, Movable):
     var step: String
     var partition: String
     var ended: String
+    var attempt: Int
+    """The attempt that first committed it: with the snapshot, its place
+    in the list (`SnapshotCursor`)."""
+
+    def cursor(self) -> SnapshotCursor:
+        return SnapshotCursor(self.attempt, self.snapshot)
+
+
+@fieldwise_init
+struct SnapshotCursor(ImplicitlyCopyable, Movable, Writable):
+    """A place in a dataset's list of snapshots, `<attempt>.<snapshot>` in
+    a URL; attempt 0 is none."""
+
+    var attempt: Int
+    var snapshot: Int64
+
+    @staticmethod
+    def parse(s: String) -> SnapshotCursor:
+        """`<attempt>.<snapshot>`, or none if it isn't one."""
+        var dot = s.find(".")
+        if dot <= 0:
+            return SnapshotCursor(0, 0)
+        try:
+            var a = Int(s[byte=:dot])
+            var n = Int64(Int(s[byte = dot + 1 :]))
+            if a > 0:
+                return SnapshotCursor(a, n)
+        except:
+            pass
+        return SnapshotCursor(0, 0)
+
+    def write_to(self, mut w: Some[Writer]):
+        w.write(self.attempt, ".", self.snapshot)
 
 
 def commits(
-    mut db: State, dataset: String, limit: Int = 50
+    mut db: State,
+    dataset: String,
+    limit: Int = 50,
+    before: SnapshotCursor = SnapshotCursor(0, 0),
+    after: SnapshotCursor = SnapshotCursor(0, 0),
 ) raises -> List[Commit]:
-    """The dataset's snapshots orca committed, newest first."""
+    """The dataset's snapshots orca committed, newest first (by the attempt
+    that first committed each, then the snapshot): those after `before` if
+    it's set; with `after` set, the `limit` just before it, oldest first."""
     var rows = db.conn.query(
-        (
-            "SELECT * FROM (SELECT DISTINCT ON (c.snapshot_id) c.snapshot_id,"
-            " r.pipeline, r.id AS run, s.step, s.partition,"
-            " coalesce(to_char(a.ended AT TIME ZONE 'UTC',"
-            " 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') AS ended, c.attempt FROM"
-            " orca.commits c JOIN orca.attempts a ON a.id = c.attempt JOIN"
-            " orca.steps s ON s.id = a.step JOIN orca.runs r ON r.id = s.run"
-            " WHERE c.dataset = $1 ORDER BY c.snapshot_id, c.attempt) x ORDER"
-            " BY attempt DESC LIMIT $2"
+        String(
+            "SELECT * FROM (SELECT DISTINCT ON (c.snapshot_id) c.snapshot_id,",
+            " r.pipeline, r.id AS run, s.step, s.partition,",
+            " coalesce(to_char(a.ended AT TIME ZONE 'UTC',",
+            " 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') AS ended, c.attempt FROM",
+            " orca.commits c JOIN orca.attempts a ON a.id = c.attempt JOIN",
+            " orca.steps s ON s.id = a.step JOIN orca.runs r ON r.id = s.run",
+            # A snapshot's first attempt is under the cursor if any is.
+            " WHERE c.dataset = $1 AND ($3 = 0 OR (c.attempt, c.snapshot_id)",
+            " < ($3, $4)) ORDER BY c.snapshot_id, c.attempt) x WHERE ($5 = 0",
+            " OR (attempt, snapshot_id) > ($5, $6)) ORDER BY attempt ",
+            "ASC" if after.attempt else "DESC",
+            ", snapshot_id ",
+            "ASC" if after.attempt else "DESC",
+            " LIMIT $2",
         ),
-        Params().text(dataset).int64(Int64(limit)),
+        Params()
+        .text(dataset)
+        .int64(Int64(limit))
+        .int64(Int64(before.attempt))
+        .int64(before.snapshot)
+        .int64(Int64(after.attempt))
+        .int64(after.snapshot),
     )
     var out = List[Commit]()
     for r in rows:
@@ -304,6 +355,7 @@ def commits(
                 r.text("step"),
                 r.text("partition"),
                 r.text("ended"),
+                Int(r.int64("attempt")),
             )
         )
     return out^

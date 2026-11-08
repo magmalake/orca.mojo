@@ -575,7 +575,7 @@ struct HttpStore(Movable, RunStore):
         )
         return run_info_of(got["run"])
 
-    def runs(mut self, limit: Int) raises -> List[RunInfo]:
+    def runs(mut self, limit: Int, before: Int = 0) raises -> List[RunInfo]:
         Self._needs_db("status without a run")
         return List[RunInfo]()
 
