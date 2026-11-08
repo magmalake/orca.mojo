@@ -6,6 +6,7 @@ taxi run --partitions 2024-01..2024-03     starts a run and runs it
 taxi run ... --allow-new-code              ... with code the scheduler wasn't given
 taxi resume <run> [--allow-new-code]       continues a run at what's unfinished
 taxi status [<run>]                        the latest runs, or one run's steps
+taxi status --before <run>                 the 20 runs older than that one
 taxi sense                                 the current snapshot of each dataset it reads
 labels keys                                a keyed pipeline's keys snapshot, then its keys
 ```
@@ -94,7 +95,7 @@ comptime USAGE = """usage:
   <pipeline> run --partitions KEY[..KEY][,...] [--allow-new-code]   (YYYY-MM, or YYYY-MM-DD daily)
   <pipeline> run --partitions NAME[,...]|@all|@file:<path> [--allow-new-code]   (keyed)
   <pipeline> resume <run> [--allow-new-code]
-  <pipeline> status [<run>]
+  <pipeline> status [<run> | --before <run>]
   <pipeline> sense
   <pipeline> keys
   <pipeline> fires [<count>] [--after YYYY-MM-DDTHH:MM[:SS]Z]
@@ -423,10 +424,18 @@ def _resume[
 
 
 def _status[S: RunStore](mut store: S, args: List[String]) raises -> Int:
-    """`status`: the latest runs, or one run's steps."""
+    """`status`: the latest runs (`--before <run>`: the 20 older than it),
+    or one run's steps."""
     store.migrate()
-    if len(args) == 2:
-        for r in store.runs(20):
+    if len(args) == 2 or (len(args) == 4 and args[2] == "--before"):
+        var before = 0
+        if len(args) == 4:
+            try:
+                before = Int(args[3])
+            except:
+                _usage(String("not a run: ", args[3]))
+                return 2
+        for r in store.runs(20, before):
             print(r.id, r.pipeline, r.status, r.partitions)
         return 0
     if len(args) == 3:

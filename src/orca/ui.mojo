@@ -12,22 +12,25 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/api/pipelines/<name>` | the same as JSON, whatever is asked for |
 | `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=` a month or year, `?cov=month` or `year`: a daily one's tab, year by default, both from one read of the year in `orca.ui_coverage`) and as the Start runs form's date picker |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
-| `/runs` | runs, newest first, `?n=` (50, at most 500) to a page; `?pipeline=`, `?status=`, `?trigger=`; `?before=<id>`: older than that run |
+| `/runs` | runs, newest first, `?limit=` (or `?n=`; 50, at most 500) to a page; `?pipeline=`, `?status=`, `?trigger=`; `?before=<id>`: the page older than that run, `?after=<id>`: the page newer than it (keyset, so pages stay put as runs arrive); the JSON's `next`, `prev` (and `next_url`, `prev_url`) are the cursors either side. A pipeline's Runs tab pages the same, 20 to a page (`runs_page` in its JSON) |
+| `/runs/table` | a runs list's page as the fragment it refreshes from: `?view=list` (`/runs`), `pipeline` (a pipeline's Runs tab) or `home` (recent runs), with the list's filters, `limit` and cursor; `X-Poll-Every` says when to ask again (5 s while a run on it is queued or running, 30 s on the newest page otherwise), and an older page with nothing going on answers 286 |
+| `/home/pipelines` | the home page's table of pipelines, as the fragment it refreshes from (5 s while a run is queued or running, else 30 s) |
 | `/runs/<id>` | a run's cards (Status, Partitions & trigger, Code, Resources, Settings), its steps (`?steps=table` (default), `timeline` or `graph`: the Steps tab shown without scripts), its machines, and the snapshots each step read and wrote |
-| `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error |
+| `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error; its facts refresh from `/runs/<id>/attempts/<attempt>/facts` while it runs |
 | `/code` | `?u=` a link to a file at a commit on GitHub: its lines and each coloured as HTML (`orca.highlight`), as JSON, for the code shown on hover; the UI fetches the file, so a browser needn't reach GitHub |
 | `/runs/<id>/timeline.json` | the run's Dista timeline, which its page draws (`orca.ui_viz`) and Perfetto opens |
 | `/api/gantt` | the pipelines in dataset order with their runs over `?window=1h`, `6h`, `24h` (default) or `7d`, and the runs each started: the home page's Timeline tab (`orca.ui_viz`) |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
 | `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
 | `/ops` | redirects to `/ops/control`; "Ops" in the nav has Control, Fleet and Workers under it |
-| `/ops/control` | Control, the one machine running the scheduler, this UI, Postgres and control-placed runs: its own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`), and the watchdog's banner; `/api/system` is the same as JSON; `/system` redirects here (301) |
+| `/ops/control` | Control, the one machine running the scheduler, this UI, Postgres and control-placed runs: its own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`), and the watchdog's banner, refreshed every 30 s from `/ops/control/live`; `/api/system` is the same as JSON; `/system` redirects here (301) |
 | `/metrics` | Prometheus gauges: the control instance's CPU, memory, disk, network and containers' memory, runs running and queued, hosts, and errors in the last hour; open like the other pages (reads need no login) |
 | `/ops/fleet` | Fleet, the EC2 instances orca launches for runs, the machines it is paying for: hosts running and what they cost an hour, runs and errors per hour, a table of live hosts (`?sort=` a column, `&dir=desc`) and charts over `?range=24h` or `7d` (`orca.fleet`); `/ops/fleet/hosts` is the live part of it, and `/api/fleet` the same as JSON; `/fleet` and `/fleet/hosts` redirect here (301) |
-| `/ops/workers` | Workers, the machines running pipelines placed `worker:<pool>` (`orca.workers`): each worker token's pool, label, worker, image, last heartbeat, runs, CPUs and memory; `/api/workers` the same as JSON. A worker's own requests go to `/api/worker/...` with its token |
-| `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`orca.watchdog`); also the red banner on `/`, `/ops/fleet` and `/ops/control` |
+| `/ops/workers` | Workers, the machines running pipelines placed `worker:<pool>` (`orca.workers`): each worker token's pool, label, worker, image, last heartbeat, runs, CPUs and memory; `/api/workers` the same as JSON; refreshed every 10 s from `/ops/workers/live`. A worker's own requests go to `/api/worker/...` with its token |
+| `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`orca.watchdog`); also the red banner on `/`, `/ops/fleet` and `/ops/control`; the page refreshes every 30 s from `/watchdog/live` |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), what a rebuild of it runs, and its snapshots; `?preview=1&partitions=`: a rebuild's runs by level, queueing nothing |
+| `/datasets/<name>?before=<cursor>` | its snapshots 50 to a page, newest first; `?after=` for the newer page, the cursor `<attempt>.<snapshot>` (`snapshots_page` in the JSON) |
 | `/datasets/<name>/snapshots/<id>` | a snapshot's lineage (`orca.lineage`): its diagram, Upstream (`back` in the JSON: the snapshot, if a run wrote it, and the snapshots it was written from, with the run and step that wrote each and what that step read) and Downstream (`forward`: the snapshots written from it) |
 | `/rebuilds/<id>` | a rebuild's pipelines by level, with their runs (`orca.sensors`) |
 
@@ -157,7 +160,9 @@ from orca.fleet import (
 )
 from orca.html import Html, escape, url_decode, url_encode
 from orca.lineage import (
+    Commit,
     Made,
+    SnapshotCursor,
     SnapshotRef,
     back,
     commits,
@@ -685,9 +690,11 @@ def _runs(
     trigger: String = "",
     limit: Int = 100,
     before: Int = 0,
+    after: Int = 0,
 ) raises -> List[RunRow]:
     """Runs newest first, those of a pipeline, status or trigger if given,
-    and with ids under `before` if it's over 0."""
+    and with ids under `before` if it's over 0; with `after` over 0, the
+    `limit` runs just above it, oldest first."""
     var rows = db.conn.query(
         String(
             "SELECT id::text AS id, pipeline, partitions, trigger, status,",
@@ -711,14 +718,18 @@ def _runs(
             _RUN_USAGE,
             " WHERE ($1 = '' OR pipeline = $1) AND",
             " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) AND",
-            " ($5 = 0 OR id < $5) ORDER BY orca.runs.id DESC LIMIT $4",
+            " ($5 = 0 OR id < $5) AND ($6 = 0 OR id > $6) ORDER BY",
+            " orca.runs.id ",
+            "ASC" if after > 0 else "DESC",
+            " LIMIT $4",
         ),
         Params()
         .text(pipeline)
         .text(status)
         .text(trigger)
         .int64(Int64(limit))
-        .int64(Int64(before)),
+        .int64(Int64(before))
+        .int64(Int64(after)),
     )
     var out = List[RunRow]()
     for r in rows:
@@ -1621,36 +1632,52 @@ document.addEventListener("keydown", (e) => {
   if (a) a.click();
 });
 const sel = (el) => {
-  const s = document.getSelection();
+  const s = document.getSelection(), f = document.activeElement;
+  if (f && el.contains(f) && f.matches("input, textarea, select")) return true;
   return s && !s.isCollapsed && el.contains(s.anchorNode);
 };
+const rowKey = (tr) => { const a = tr.querySelector("a[href]"); return a ? a.getAttribute("href") : null; };
+const firstSeen = (el) => {
+  for (const tr of el.querySelectorAll("tbody tr")) {
+    const b = tr.getBoundingClientRect();
+    if (b.bottom > 0) return b.top < window.innerHeight ? [rowKey(tr), b.top] : null;
+  }
+  return null;
+};
 for (const el of document.querySelectorAll("[data-poll]")) {
-  const every = (parseFloat(el.dataset.pollEvery) || 2) * 1000;
+  let every = (parseFloat(el.dataset.pollEvery) || 2) * 1000;
   let timer = 0, last = null, done = false, bad = 0;
   const swap = (html) => {
     if (html === last || sel(el)) return;
     last = html;
     const open = [...el.querySelectorAll("details")].map((d) => d.open);
     const pos = [...el.querySelectorAll(".scroll, pre")].map((x) => [x.scrollLeft, x.scrollTop]);
+    const seen = el.getBoundingClientRect().top < 0 ? firstSeen(el) : null;
     el.innerHTML = html;
     el.querySelectorAll("details").forEach((d, i) => { if (open[i]) d.open = true; });
     el.querySelectorAll(".scroll, pre").forEach((x, i) => {
       if (pos[i]) { x.scrollLeft = pos[i][0]; x.scrollTop = pos[i][1]; }
     });
+    if (seen && seen[0]) {
+      const tr = [...el.querySelectorAll("tbody tr")].find((t) => rowKey(t) === seen[0]);
+      if (tr) window.scrollBy(0, tr.getBoundingClientRect().top - seen[1]);
+    }
     times(el);
     el.dispatchEvent(new Event("orca:swap", { bubbles: true }));
   };
   const tick = async () => {
     timer = 0;
     if (done || document.visibilityState === "hidden") return;
-    let r, again = every;
+    let r;
     try {
       r = await fetch(el.dataset.poll);
       bad = 0;
+      const n = parseFloat(r.headers.get("X-Poll-Every"));
+      if (n > 0) every = n * 1000;
       if (r.ok) swap(await r.text());
       if (r.status === 286) { done = true; return; }
-    } catch (e) { again = 5000 * Math.min(2 ** bad++, 12); }
-    timer = setTimeout(tick, again);
+      timer = setTimeout(tick, every);
+    } catch (e) { timer = setTimeout(tick, 5000 * Math.min(2 ** bad++, 12)); }
   };
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && !timer && !done) tick();
@@ -1660,10 +1687,15 @@ for (const el of document.querySelectorAll("[data-poll]")) {
 """
 """What makes a page live: each element with `data-poll` is replaced every
 two seconds (`data-poll-every` seconds) by what its path returns, until that answers 286 (htmx's "stop
-polling"), which a fragment does once what it shows has ended. It waits while the tab is hidden and
+polling"), which a fragment does once what it shows has ended. A fragment's
+`X-Poll-Every` header sets the seconds until the next ask (a runs list's
+newest page asks often while a run goes on, slowly otherwise). It waits while the tab is hidden and
 asks at once when it's shown again, backs off when a request fails, leaves
-the page alone when nothing changed or text in it is selected, and keeps
-open `<details>` and scrolled boxes as they were, and tells the page
+the page alone when nothing changed, text in it is selected or a field in
+it has the focus, and keeps
+open `<details>` and scrolled boxes as they were, and the table row at the
+top of the window where it was when rows are added above it (a row is
+known by its first link), and tells the page
 (an `orca:swap` event, so `_TABS` shows the tab chosen again). Each
 `<time class="rel">` reads as how long ago it was, in the viewer's locale,
 with the full local time in its tooltip; without scripts it stays UTC."""
@@ -2341,6 +2373,9 @@ struct Page(Movable):
     var location: String
     """Set for an action that was done: a browser is sent there with 303,
     and a script gets `json` with 200."""
+    var poll_every: Int
+    """Set for a live fragment: the seconds until the page asks again, sent
+    as `X-Poll-Every` (`_POLL`)."""
 
     def __init__(
         out self,
@@ -2349,12 +2384,14 @@ struct Page(Movable):
         var html: String,
         content_type: String = "",
         location: String = "",
+        poll_every: Int = 0,
     ):
         self.status = status
         self.json = json^
         self.html = html^
         self.content_type = content_type
         self.location = location
+        self.poll_every = poll_every
 
 
 def _runs_per_day(mut db: State, days: Int) raises -> List[DayRuns]:
@@ -2385,9 +2422,84 @@ def _runs_per_day(mut db: State, days: Int) raises -> List[DayRuns]:
     return out^
 
 
+def _pipelines_live(ps: List[PipelineRow]) -> Bool:
+    """Whether any of these pipelines has a run queued or running."""
+    for p in ps:
+        if p.running > 0 or p.queued > 0:
+            return True
+    return False
+
+
+def _home_pipelines(mut h: Html, ps: List[PipelineRow]):
+    """The home page's table of pipelines: schedules, next and last runs."""
+    h.raw(
+        '<section class="card"><div class="scroll"><table><thead><tr>',
+        "<th>Pipeline</th><th>Partitions</th><th>Schedule</th>",
+        "<th>Next run</th><th>Running</th><th>Queued</th><th>Last run</th>",
+        "</tr></thead><tbody>",
+    )
+    for p in ps:
+        h.raw("<tr><td>")
+        h.link(String("/pipelines/", url_encode(p.name)), p.name)
+        if p.paused:
+            h.raw(" ")
+            h.status("paused")
+        _pause_button(h, p.name, p.paused)
+        h.raw("</td>")
+        h.cell(p.kind, " from ", p.start if p.start else String("the start"))
+        if p.cron:
+            h.raw("<td><code>")
+            h.text(p.cron)
+            h.raw("</code> ")
+            h.text(p.tz)
+            h.raw("</td>")
+            h.mono(p.next_fire, " → ", p.next_partition)
+        else:
+            h.raw('<td class="muted">none</td><td></td>')
+        # The counts as badges, lit while they're not zero.
+        h.raw(
+            '<td><span class="badge',
+            " badge--running" if p.running > 0 else "",
+            '">',
+        )
+        h.text(p.running, " / ", p.max_runs)
+        h.raw(
+            '</span></td><td><span class="badge',
+            " badge--queued" if p.queued > 0 else "",
+            '">',
+        )
+        h.text(p.queued)
+        h.raw("</span></td><td>")
+        if p.last_run:
+            h.chip(String("/runs/", p.last_run), String(p.last_run))
+            h.raw(" ")
+            h.status(p.last_status)
+            h.raw(' <span class="mono muted">')
+            h.text(p.last_partitions)
+            h.raw("</span>")
+        h.raw("</td></tr>")
+    h.raw("</tbody></table></div></section>")
+
+
+def home_pipelines(mut db: State) raises -> Page:
+    """`/home/pipelines`: the home page's table of pipelines, as the
+    fragment it refreshes from; ask again in `_LIVE_EVERY` seconds while a
+    run is queued or running, else `_IDLE_EVERY`."""
+    var ps = _pipelines(db)
+    var h = Html()
+    _home_pipelines(h, ps)
+    return Page(
+        200,
+        String(),
+        h^.finish(),
+        "text/html; charset=utf-8",
+        poll_every=_LIVE_EVERY if _pipelines_live(ps) else _IDLE_EVERY,
+    )
+
+
 def home(mut db: State) raises -> Page:
     var ps = _pipelines(db)
-    var recent = _runs(db, limit=10)
+    var recent = runs_page(db, RunsQuery("home", "", "", "", _HOME_RUNS, 0, 0))
     var per_day = _runs_per_day(db, 30)
     var fleet = fleet_summary(db)
     var alerts = warnings(system_now(db))
@@ -2404,7 +2516,7 @@ def home(mut db: State) raises -> Page:
             j.write(", ")
         _json_pipeline(j, ps[i])
     j.write('], "runs": ')
-    _json_runs(j, recent)
+    _json_runs(j, recent.rows)
     j.write(', "runs_per_day": [')
     for i in range(len(per_day)):
         ref d = per_day[i]
@@ -2435,55 +2547,15 @@ def home(mut db: State) raises -> Page:
     else:
         # List and Timeline tabs over the table (orca.ui_viz).
         gantt_tabs(h)
+        # Refreshed while the page is open: often while a run is going on.
+        var live = _pipelines_live(ps)
         h.raw(
-            '<section class="card"><div class="scroll"><table><thead><tr>',
-            "<th>Pipeline</th><th>Partitions</th><th>Schedule</th>",
-            "<th>Next run</th><th>Running</th><th>Queued</th><th>Last run</th>",
-            "</tr></thead><tbody>",
+            '<div data-poll="/home/pipelines" data-poll-every="',
+            _LIVE_EVERY if live else _IDLE_EVERY,
+            '">',
         )
-        for p in ps:
-            h.raw("<tr><td>")
-            h.link(String("/pipelines/", url_encode(p.name)), p.name)
-            if p.paused:
-                h.raw(" ")
-                h.status("paused")
-            _pause_button(h, p.name, p.paused)
-            h.raw("</td>")
-            h.cell(
-                p.kind, " from ", p.start if p.start else String("the start")
-            )
-            if p.cron:
-                h.raw("<td><code>")
-                h.text(p.cron)
-                h.raw("</code> ")
-                h.text(p.tz)
-                h.raw("</td>")
-                h.mono(p.next_fire, " → ", p.next_partition)
-            else:
-                h.raw('<td class="muted">none</td><td></td>')
-            # The counts as badges, lit while they're not zero.
-            h.raw(
-                '<td><span class="badge',
-                " badge--running" if p.running > 0 else "",
-                '">',
-            )
-            h.text(p.running, " / ", p.max_runs)
-            h.raw(
-                '</span></td><td><span class="badge',
-                " badge--queued" if p.queued > 0 else "",
-                '">',
-            )
-            h.text(p.queued)
-            h.raw("</span></td><td>")
-            if p.last_run:
-                h.chip(String("/runs/", p.last_run), String(p.last_run))
-                h.raw(" ")
-                h.status(p.last_status)
-                h.raw(' <span class="mono muted">')
-                h.text(p.last_partitions)
-                h.raw("</span>")
-            h.raw("</td></tr>")
-        h.raw("</tbody></table></div></section>")
+        _home_pipelines(h, ps)
+        h.raw("</div>")
         gantt_panel(h)
     h.raw(
         '<section class="card"><h2>Runs per day</h2>',
@@ -2494,7 +2566,7 @@ def home(mut db: State) raises -> Page:
         "</div></section>",
     )
     h.raw('<section class="card"><h2>Recent runs</h2>')
-    _runs_table(h, recent, True)
+    _runs_list(h, recent)
     h.raw('<p class="more"><a href="/runs">All runs</a></p></section>')
     return Page(200, j^, _page("Pipelines", "/", h))
 
@@ -2597,6 +2669,22 @@ def _system_range(range: String) -> String:
     return range if range == "7d" or range == "14d" else String("24h")
 
 
+comptime _OPS_EVERY = 10
+"""Seconds between refreshes of the Workers page, as Fleet's hosts."""
+comptime _CONTROL_EVERY = 30
+"""Seconds between refreshes of the Control page's charts and alerts."""
+comptime _WATCHDOG_EVERY = 30
+"""Seconds between refreshes of the watchdog's rules and trips."""
+
+
+def _system_live(mut h: Html, mut db: State, span: String) raises:
+    """What the Control page refreshes: the watchdog's banner, the machine's
+    health over `span`, and the alerts sent."""
+    banner_html(h, active_trips(db))
+    system_html(h, system_now(db), system_charts(db, range_hours(span)), span)
+    notify_html(h, notify_configured(), recent_alerts(db))
+
+
 def system_page(mut db: State, range: String) raises -> Page:
     """The control instance's own health: CPU, memory, the disk Postgres is
     on and the network over `range`, and each container's memory."""
@@ -2614,10 +2702,14 @@ def system_page(mut db: State, range: String) raises -> Page:
             " lists the rules that pause pipelines.</p>"
         ),
     )
+    h.raw('<div data-poll="/ops/control/live?range=')
+    h.text(span)
+    h.raw('" data-poll-every="', _CONTROL_EVERY, '">')
     banner_html(h, active_trips(db))
     system_html(h, now, charts, span)
     var sent = recent_alerts(db)
     notify_html(h, notify_configured(), sent)
+    h.raw("</div>")
     var json = system_json(now, charts)
     var close = json.rfind("}")
     var with_alerts = String(
@@ -4311,6 +4403,7 @@ def pipeline(
     steps_view: String = "",
     tab_in: String = "",
     cov: String = "",
+    url: String = "",
 ) raises -> Page:
     """A pipeline's page, one of its tabs (`?tab=`): `overview`, `runs` or
     `operate`. With `preview` and `keys_in`, what its Start runs form would
@@ -4319,8 +4412,10 @@ def pipeline(
     (or year) its coverage calendar shows; both are on Operate, which they
     open when no tab is asked for. `steps_view` (`?steps=`) is `graph` or
     `table`, the view of its steps shown without scripts, and `cov`
-    (`?cov=`) `month` or `year`, its coverage's tab. The JSON is the
-    same on every tab."""
+    (`?cov=`) `month` or `year`, its coverage's tab. `url`'s
+    `?before=`, `?after=` and `?limit=` page its runs (the Runs tab's, and
+    `runs` in the JSON, with `runs_page`). The JSON is the same on every
+    tab."""
     var tab = tab_in if (tab_in == "runs" or tab_in == "operate") else String(
         "overview"
     )
@@ -4339,7 +4434,7 @@ def pipeline(
         fires = _fires(p, now(), 5)
     except:
         pass
-    var runs = _runs(db, pipeline=name, limit=20)
+    var runs = runs_page(db, runs_query(url, "pipeline", name))
     var fill = _fill_of(db, name)
     var usage = _usage_summary(db, name)
     var fol = follow(db, name, p.kind, p.start)
@@ -4389,8 +4484,10 @@ def pipeline(
     j.write('], "config": ')
     j.write(configs[0].json() if len(configs) > 0 else String("null"))
     j.write(', "runs": ')
-    _json_runs(j, runs)
-    j.write(', "usage": ', usage.json())
+    _json_runs(j, runs.rows)
+    j.write(', "runs_page": {')
+    _json_runs_page(j, runs)
+    j.write('}, "usage": ', usage.json())
     var keys = Optional[KeyCounts](None)
     if p.kind == "keyed":
         keys = _key_counts(db, name)
@@ -4517,7 +4614,7 @@ def pipeline(
         _control_html(h, p)
     else:
         h.raw("<h2>Runs</h2>")
-        _runs_table(h, runs, False)
+        _runs_list(h, runs)
         h.raw('<p class="more"><a href="/runs?pipeline=')
         h.text(url_encode(p.name))
         h.raw('">All its runs</a></p>')
@@ -4575,8 +4672,19 @@ sensors, `backfill`, a binary's `run`, the UI's start button, a rerun, a
 rebuild and a fill (`orca.fill`). The filter adds any others the table has."""
 
 comptime _RUNS_PAGE = 50
-"""Runs to a page of `/runs`, unless `?n=` says (at most `_RUNS_PAGE_MAX`)."""
+"""Runs to a page of `/runs`, unless `?limit=` (or the older `?n=`) says, at
+most `_RUNS_PAGE_MAX`."""
 comptime _RUNS_PAGE_MAX = 500
+comptime _PIPELINE_RUNS_PAGE = 20
+"""Runs to a page of a pipeline's Runs tab."""
+comptime _HOME_RUNS = 10
+"""Recent runs on the home page."""
+
+comptime _LIVE_EVERY = 5
+"""Seconds between refreshes of a list with a run going on."""
+comptime _IDLE_EVERY = 30
+"""Seconds between refreshes of a list's newest page with nothing going on:
+slow, only to show the runs a schedule or sensor starts."""
 
 comptime _SUBMIT_ON_CHANGE = (
     '<script>document.querySelector("form.filters").addEventListener('
@@ -4601,20 +4709,316 @@ def _grouped(n: Int) -> String:
     return out^
 
 
-def _runs_href(
-    pipeline: String, status: String, trigger: String, n: Int, before: Int
-) -> String:
-    """`/runs` with these filters, page size (unless the default) and
-    `before` (unless 0), each value encoded."""
-    var q = String()
-    for f in [("pipeline", pipeline), ("status", status), ("trigger", trigger)]:
-        if f[1]:
-            q.write("&" if q else "?", f[0], "=", url_encode(f[1]))
-    if n != _RUNS_PAGE:
-        q.write("&" if q else "?", "n=", n)
-    if before > 0:
-        q.write("&" if q else "?", "before=", before)
-    return String("/runs", q)
+@fieldwise_init
+struct RunsQuery(Copyable, Movable):
+    """Which runs a list shows: its filters, how many to a page, and where
+    the page is (keyset, by run id: under `before`, or the page just above
+    `after`; neither is the newest page)."""
+
+    var view: String
+    """`list` (`/runs`), `pipeline` (a pipeline's Runs tab) or `home`."""
+    var pipeline: String
+    var status: String
+    var trigger: String
+    var size: Int
+    var before: Int
+    var after: Int
+
+    def first(self) -> Bool:
+        """Whether this is the newest page, which new runs join."""
+        return self.before <= 0 and self.after <= 0
+
+    def default_size(self) -> Int:
+        if self.view == "pipeline":
+            return _PIPELINE_RUNS_PAGE
+        if self.view == "home":
+            return _HOME_RUNS
+        return _RUNS_PAGE
+
+    def _filters(self, mut q: String):
+        if self.view != "pipeline":
+            for f in [
+                ("pipeline", self.pipeline),
+                ("status", self.status),
+                ("trigger", self.trigger),
+            ]:
+                if f[1]:
+                    q.write("&" if q else "?", f[0], "=", url_encode(f[1]))
+
+    def href(self, before: Int = 0, after: Int = 0) -> String:
+        """This list's page under `before`, above `after`, or (neither) the
+        newest, with its filters and page size (unless the default)."""
+        var q = String("?tab=runs") if self.view == "pipeline" else String()
+        self._filters(q)
+        if self.size != self.default_size():
+            q.write("&" if q else "?", "limit=", self.size)
+        if before > 0:
+            q.write("&" if q else "?", "before=", before)
+        elif after > 0:
+            q.write("&" if q else "?", "after=", after)
+        if self.view == "pipeline":
+            return String("/pipelines/", url_encode(self.pipeline), q)
+        return String("/runs", q)
+
+    def here(self) -> String:
+        """The page this list is on: where its "Log in to ..." links come
+        back to."""
+        if self.view == "home":
+            return String("/")
+        return self.href(self.before, self.after)
+
+    def fragment(self) -> String:
+        """`/runs/table`: this page of the list, as the fragment it
+        refreshes from."""
+        var q = String("?view=", self.view)
+        if self.view == "pipeline":
+            q.write("&pipeline=", url_encode(self.pipeline))
+        else:
+            self._filters(q)
+        q.write("&limit=", self.size)
+        if self.before > 0:
+            q.write("&before=", self.before)
+        elif self.after > 0:
+            q.write("&after=", self.after)
+        return String("/runs/table", q)
+
+
+def runs_query(url: String, view: String, pipeline: String = "") -> RunsQuery:
+    """The list `url` asks for: `view`'s, filtered by `?pipeline=` (or, for a
+    pipeline's tab, `pipeline`), `?status=` and `?trigger=`, `?limit=` (or
+    `?n=`) to a page, at `?before=` or `?after=`."""
+    var v = view if (view == "pipeline" or view == "home") else String("list")
+    var q = RunsQuery(
+        v,
+        pipeline if v == "pipeline" else _query(url, "pipeline"),
+        _query(url, "status") if v == "list" else String(),
+        _query(url, "trigger") if v == "list" else String(),
+        0,
+        0,
+        0,
+    )
+    var n = _int(_query(url, "limit"))
+    if n <= 0:
+        n = _int(_query(url, "n"))
+    q.size = q.default_size() if n <= 0 else min(n, _RUNS_PAGE_MAX)
+    if v != "home":
+        q.before = max(0, _int(_query(url, "before")))
+        q.after = 0 if q.before > 0 else max(0, _int(_query(url, "after")))
+    return q^
+
+
+struct RunsPage(Movable):
+    """A page of a runs list, newest first, with how many runs that match
+    are newer and older than it."""
+
+    var q: RunsQuery
+    """As asked, but with no `after` when the page above it is the newest."""
+    var rows: List[RunRow]
+    var total: Int
+    var newer: Int
+    var older: Int
+
+    def __init__(
+        out self,
+        var q: RunsQuery,
+        var rows: List[RunRow],
+        total: Int,
+        newer: Int,
+        older: Int,
+    ):
+        self.q = q^
+        self.rows = rows^
+        self.total = total
+        self.newer = newer
+        self.older = older
+
+    def live(self) -> Bool:
+        """Whether a run on it is queued or running."""
+        for r in self.rows:
+            if _live(r.status):
+                return True
+        return False
+
+    def newer_href(self) -> String:
+        """The page above this one (the newest, if that's within a page),
+        or empty if this is the newest."""
+        if self.newer <= 0:
+            return String()
+        if self.newer <= self.q.size or len(self.rows) == 0:
+            return self.q.href()
+        return self.q.href(after=self.rows[0].id)
+
+    def older_href(self) -> String:
+        """The page under this one, or empty if this is the last."""
+        if self.older <= 0 or len(self.rows) == 0:
+            return String()
+        return self.q.href(before=self.rows[len(self.rows) - 1].id)
+
+
+def runs_page(mut db: State, var q: RunsQuery) raises -> RunsPage:
+    """The page of runs `q` asks for, and the counts around it. Paged by id
+    (keyset), so a page stays put while new runs arrive and each query reads
+    one range of an index (`orca.runs` by id, or `runs_pipeline_id`)."""
+    var rs: List[RunRow]
+    if q.after > 0:
+        # The `size` runs just above `after`, read upwards; if there aren't
+        # more than that, the page is the newest one.
+        rs = _runs(
+            db, q.pipeline, q.status, q.trigger, limit=q.size + 1, after=q.after
+        )
+        if len(rs) > q.size:
+            _ = rs.pop()
+            rs.reverse()
+        else:
+            q.after = 0
+            rs = _runs(db, q.pipeline, q.status, q.trigger, limit=q.size)
+    else:
+        rs = _runs(
+            db, q.pipeline, q.status, q.trigger, limit=q.size, before=q.before
+        )
+    if q.view == "home":
+        return RunsPage(q^, rs^, len(rs), 0, 0)
+    # How many match, and how many of them are above this page.
+    var top = rs[0].id + 1 if len(rs) > 0 else q.before
+    var counts = db.conn.query(
+        String(
+            "SELECT count(*) AS total, count(*) FILTER (WHERE $4 > 0 AND id",
+            " >= $4) AS newer FROM orca.runs WHERE ($1 = '' OR pipeline = $1)",
+            " AND ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3)",
+        ),
+        Params()
+        .text(q.pipeline)
+        .text(q.status)
+        .text(q.trigger)
+        .int64(Int64(top)),
+    )
+    var total = Int(counts.row(0).int64("total"))
+    var newer = Int(counts.row(0).int64("newer"))
+    var older = max(0, total - newer - len(rs))
+    return RunsPage(q^, rs^, total, newer, older)
+
+
+def _json_runs_page(mut j: String, p: RunsPage):
+    """A runs page's place, after its `runs`: the size, cursor and counts,
+    and the cursors of the pages either side (null where there's none):
+    `next` is the `before` of the older page, `prev` the `after` of the
+    newer one, and `next_url`, `prev_url` their paths."""
+    var newer = p.newer_href()
+    var older = p.older_href()
+    var n = len(p.rows)
+    j.write(
+        '"n": ',
+        p.q.size,
+        ', "limit": ',
+        p.q.size,
+        ', "before": ',
+        String(p.q.before) if p.q.before > 0 else String("null"),
+        ', "after": ',
+        String(p.q.after) if p.q.after > 0 else String("null"),
+        ', "total": ',
+        p.total,
+        ', "newer": ',
+        p.newer,
+        ', "older": ',
+        p.older,
+        ', "next_before": ',
+        String(p.rows[n - 1].id) if older else String("null"),
+        ', "next": ',
+        String(p.rows[n - 1].id) if older else String("null"),
+        ', "prev": ',
+        String(p.rows[0].id) if newer and n > 0 else String("null"),
+        ', "next_url": ',
+        quote(older) if older else String("null"),
+        ', "prev_url": ',
+        quote(newer) if newer else String("null"),
+    )
+
+
+def _pager_link(mut h: Html, rel: StaticString, href: String, label: String):
+    h.raw("<a")
+    if rel:
+        h.raw(' rel="', rel, '"')
+    h.raw(' href="')
+    h.text(href)
+    h.raw('">', label, "</a>")
+
+
+def _runs_pager(mut h: Html, p: RunsPage):
+    """Newest, Newer and Older, and where the page is among the runs that
+    match; nothing if it's all of them."""
+    var newer = p.newer_href()
+    var older = p.older_href()
+    if not newer and not older:
+        return
+    h.raw('<nav class="pager" aria-label="Pages of runs">')
+    if p.newer > p.q.size and len(p.rows) > 0:
+        _pager_link(h, "", p.q.href(), "« Newest")
+    if newer:
+        _pager_link(h, "prev", newer, "← Newer")
+    h.raw('<span class="pager__at">')
+    if len(p.rows) > 0:
+        h.text(
+            _grouped(p.newer + 1),
+            "–",
+            _grouped(p.newer + len(p.rows)),
+            " of ",
+            _grouped(p.total),
+        )
+    else:
+        h.text("none here, of ", _grouped(p.total))
+    h.raw("</span>")
+    if older:
+        _pager_link(h, "next", older, "Older →")
+    h.raw("</nav>")
+
+
+def _runs_list_html(mut h: Html, p: RunsPage):
+    """A runs table and its pager: what `/runs/table` answers."""
+    _runs_table(h, p.rows, p.q.view != "pipeline")
+    if p.q.view != "home":
+        _runs_pager(h, p)
+
+
+def _runs_list(mut h: Html, p: RunsPage):
+    """A runs table and its pager, refreshed from `/runs/table` while a run
+    on it is queued or running, and slowly while it's the newest page, so
+    new runs join it; an older page with nothing going on stays as it is."""
+    var live = p.live()
+    if live or p.q.first():
+        h.raw('<div data-poll="')
+        h.text(p.q.fragment())
+        h.raw(
+            '" data-poll-every="',
+            _LIVE_EVERY if live else _IDLE_EVERY,
+            '">',
+        )
+    else:
+        h.raw("<div>")
+    _runs_list_html(h, p)
+    h.raw("</div>")
+
+
+def _runs_fragment_query(url: String) -> RunsQuery:
+    """The list a `/runs/table` URL names."""
+    return runs_query(url, _query(url, "view"), _query(url, "pipeline"))
+
+
+def runs_table(mut db: State, url: String) raises -> Page:
+    """`/runs/table`: a runs list's page (`?view=list`, `pipeline` or
+    `home`, its filters, `limit` and cursor) as an HTML fragment. While it
+    has a run going on it says to ask again in `_LIVE_EVERY` seconds; else
+    the newest page says `_IDLE_EVERY`, and an older one answers 286."""
+    var p = runs_page(db, _runs_fragment_query(url))
+    var h = Html()
+    _runs_list_html(h, p)
+    var live = p.live()
+    return Page(
+        200 if live or p.q.first() else 286,
+        String(),
+        h^.finish(),
+        "text/html; charset=utf-8",
+        poll_every=_LIVE_EVERY if live else _IDLE_EVERY,
+    )
 
 
 def _select(
@@ -4659,79 +5063,25 @@ def _with_seen(
     return out^
 
 
-def runs(
-    mut db: State,
-    pipeline: String,
-    status: String,
-    trigger: String,
-    before: Int = 0,
-    n: Int = 0,
-) raises -> Page:
-    """`/runs`: a page of runs newest first, by id under `before` if it's
-    over 0, filtered; with how many match and links to the newer and older
-    pages."""
-    var size = _RUNS_PAGE if n <= 0 else min(n, _RUNS_PAGE_MAX)
-    var at = before if before > 0 else 0
-    var rs = _runs(db, pipeline, status, trigger, limit=size + 1, before=at)
-    var more = len(rs) > size
-    if more:
-        _ = rs.pop()
-    var next_before = rs[len(rs) - 1].id if more else 0
-
-    # How many match, and how many of them are newer than this page; then
-    # where the newer page starts: `size` runs above this one, or the first.
-    comptime matching = (
-        " FROM orca.runs WHERE ($1 = '' OR pipeline = $1) AND ($2 = '' OR"
-        " status = $2) AND ($3 = '' OR trigger = $3)"
-    )
-    var counts = db.conn.query(
-        String(
-            "SELECT count(*) AS total, count(*) FILTER (WHERE $4 > 0 AND id",
-            " >= $4) AS newer",
-            matching,
-        ),
-        Params().text(pipeline).text(status).text(trigger).int64(Int64(at)),
-    )
-    var total = Int(counts.row(0).int64("total"))
-    var newer = Int(counts.row(0).int64("newer"))
-    var newer_before = 0
-    if newer > size:
-        var top = db.conn.query(
-            String(
-                "SELECT id",
-                matching,
-                " AND id >= $4 ORDER BY id OFFSET $5 LIMIT 1",
-            ),
-            Params()
-            .text(pipeline)
-            .text(status)
-            .text(trigger)
-            .int64(Int64(at))
-            .int64(Int64(size - 1)),
-        )
-        newer_before = Int(top.row(0).int64("id")) + 1
-
+def runs(mut db: State, var q: RunsQuery) raises -> Page:
+    """`/runs`: a page of runs newest first, filtered, by id under
+    `q.before` or just above `q.after` (`runs_page`); with how many match
+    and links to the newest, newer and older pages, and refreshed while it
+    can change (`_runs_list`)."""
+    var p = runs_page(db, q^)
     var j = String('{"runs": ')
-    _json_runs(j, rs)
+    _json_runs(j, p.rows)
     j.write(
         ', "filters": {"pipeline": ',
-        quote(pipeline),
+        quote(p.q.pipeline),
         ', "status": ',
-        quote(status),
+        quote(p.q.status),
         ', "trigger": ',
-        quote(trigger),
-        '}, "n": ',
-        size,
-        ', "before": ',
-        String(at) if at > 0 else String("null"),
-        ', "total": ',
-        total,
-        ', "newer": ',
-        newer,
-        ', "next_before": ',
-        String(next_before) if more else String("null"),
-        "}",
+        quote(p.q.trigger),
+        "}, ",
     )
+    _json_runs_page(j, p)
+    j.write("}")
 
     var pipelines = List[String]()
     for r in db.conn.query("SELECT name FROM orca.pipelines ORDER BY name"):
@@ -4745,35 +5095,13 @@ def runs(
     var h = Html()
     h.raw("<h1>Runs</h1>")
     h.raw('<form class="filters" method="get" action="/runs">')
-    _select(h, "pipeline", pipelines, pipeline)
-    _select(h, "status", materialize[_RUN_STATUSES](), status)
-    _select(h, "trigger", triggers, trigger)
-    if size != _RUNS_PAGE:
-        h.raw('<input type="hidden" name="n" value="', size, '">')
+    _select(h, "pipeline", pipelines, p.q.pipeline)
+    _select(h, "status", materialize[_RUN_STATUSES](), p.q.status)
+    _select(h, "trigger", triggers, p.q.trigger)
+    if p.q.size != _RUNS_PAGE:
+        h.raw('<input type="hidden" name="limit" value="', p.q.size, '">')
     h.raw('<button type="submit">Filter</button></form>', _SUBMIT_ON_CHANGE)
-    _runs_table(h, rs, True)
-    if len(rs) > 0:
-        h.raw('<nav class="pager" aria-label="Pages of runs">')
-        if newer > 0:
-            h.link(
-                _runs_href(pipeline, status, trigger, size, newer_before),
-                "← Newer",
-            )
-        h.raw('<span class="pager__at">')
-        h.text(
-            _grouped(newer + 1),
-            "–",
-            _grouped(newer + len(rs)),
-            " of ",
-            _grouped(total),
-        )
-        h.raw("</span>")
-        if more:
-            h.link(
-                _runs_href(pipeline, status, trigger, size, next_before),
-                "Older →",
-            )
-        h.raw("</nav>")
+    _runs_list(h, p)
     return Page(200, j^, _page("Runs", "/runs", h))
 
 
@@ -6056,6 +6384,79 @@ def _log_html(mut h: Html, a: AttemptRow):
     h.raw("</pre>")
 
 
+def _attempt_facts(
+    mut h: Html,
+    mut db: State,
+    run: Int,
+    a: AttemptRow,
+    siblings: List[AttemptRow],
+) raises:
+    """An attempt's error and facts: its host, times, use, log file, code
+    and the step's other attempts."""
+    if a.error:
+        h.raw('<pre class="error">')
+        h.text(a.error)
+        h.raw("</pre>")
+    h.raw('<dl class="facts"><dt>Host</dt><dd>')
+    h.text(a.host)
+    h.raw("</dd><dt>Started</dt><dd>")
+    h.text(a.started)
+    h.raw("</dd><dt>Ended</dt><dd>")
+    h.text(a.ended)
+    h.raw("</dd>")
+    _usage_facts(h, a.usage, _live(a.status))
+    h.raw("<dt>Log file</dt><dd><code>")
+    h.text(a.log)
+    h.raw("</code></dd>")
+    var cache = Dict[String, CodeLinks]()
+    var at = _code_of(db, cache, "", run).step(a.step)
+    if at:
+        h.raw("<dt>Code</dt><dd>")
+        _code(h, at)
+        h.raw("</dd>")
+    if len(siblings) > 1:
+        h.raw("<dt>Attempts</dt><dd>")
+        for i in range(len(siblings)):
+            if i:
+                h.raw(" · ")
+            ref s = siblings[i]
+            if s.id == a.id:
+                h.text(s.attempt)
+            else:
+                h.link(
+                    String("/runs/", run, "/attempts/", s.id), String(s.attempt)
+                )
+            h.raw(" ")
+            h.status(s.status)
+            if s.usage.peak_rss_bytes >= 0:
+                h.raw(' <span class="muted">')
+                h.text(bytes_text(s.usage.peak_rss_bytes))
+                h.raw("</span>")
+        h.raw("</dd>")
+    h.raw("</dl>")
+
+
+def attempt_facts(mut db: State, run: Int, id: Int) raises -> Page:
+    """An attempt's error and facts, as a fragment; 286 once it's ended."""
+    var found = _attempts(db, run, "a.id = $2", id)
+    if len(found) == 0:
+        return not_found(String("no attempt ", id, " in run ", run))
+    var siblings = _attempts(
+        db,
+        run,
+        "a.step = (SELECT step FROM orca.attempts WHERE id = $2)",
+        id,
+    )
+    var h = Html()
+    _attempt_facts(h, db, run, found[0], siblings)
+    return Page(
+        200 if _live(found[0].status) else 286,
+        String(),
+        h^.finish(),
+        "text/html; charset=utf-8",
+    )
+
+
 def attempt(mut db: State, run: Int, id: Int) raises -> Page:
     var found = _attempts(db, run, "a.id = $2", id)
     if len(found) == 0:
@@ -6134,47 +6535,15 @@ def attempt(mut db: State, run: Int, id: Int) raises -> Page:
             step=a.step,
         )
     h.raw("</h1>")
-    if a.error:
-        h.raw('<pre class="error">')
-        h.text(a.error)
-        h.raw("</pre>")
-    h.raw('<dl class="facts"><dt>Host</dt><dd>')
-    h.text(a.host)
-    h.raw("</dd><dt>Started</dt><dd>")
-    h.text(a.started)
-    h.raw("</dd><dt>Ended</dt><dd>")
-    h.text(a.ended)
-    h.raw("</dd>")
-    _usage_facts(h, a.usage, _live(a.status))
-    h.raw("<dt>Log file</dt><dd><code>")
-    h.text(a.log)
-    h.raw("</code></dd>")
-    var cache = Dict[String, CodeLinks]()
-    var at = _code_of(db, cache, "", run).step(a.step)
-    if at:
-        h.raw("<dt>Code</dt><dd>")
-        _code(h, at)
-        h.raw("</dd>")
-    if len(siblings) > 1:
-        h.raw("<dt>Attempts</dt><dd>")
-        for i in range(len(siblings)):
-            if i:
-                h.raw(" · ")
-            ref s = siblings[i]
-            if s.id == a.id:
-                h.text(s.attempt)
-            else:
-                h.link(
-                    String("/runs/", run, "/attempts/", s.id), String(s.attempt)
-                )
-            h.raw(" ")
-            h.status(s.status)
-            if s.usage.peak_rss_bytes >= 0:
-                h.raw(' <span class="muted">')
-                h.text(bytes_text(s.usage.peak_rss_bytes))
-                h.raw("</span>")
-        h.raw("</dd>")
-    h.raw("</dl><h2>Log</h2>")
+    # What changes while it runs, refreshed until it ends.
+    if _live(a.status):
+        h.raw('<div data-poll="/runs/')
+        h.text(run, "/attempts/", a.id, "/facts")
+        h.raw('" data-poll-every="', _LIVE_EVERY, '">')
+    else:
+        h.raw("<div>")
+    _attempt_facts(h, db, run, a, siblings)
+    h.raw("</div><h2>Log</h2>")
     if _live(a.status):
         h.raw('<div data-poll="/runs/')
         h.text(run, "/attempts/", a.id, "/log")
@@ -6596,16 +6965,55 @@ def _rebuild_html(
     h.raw("</code></pre></form>")
 
 
+comptime _SNAPSHOTS_PAGE = 50
+"""Snapshots to a page of a dataset's list."""
+
+
 def dataset_page(
-    mut db: State, name: String, keys: String = "", preview: Bool = False
+    mut db: State,
+    name: String,
+    keys: String = "",
+    preview: Bool = False,
+    url: String = "",
 ) raises -> Page:
     """A dataset's page; with `preview` and `keys`, what a rebuild over them
-    would queue (`?preview=1&partitions=...`)."""
+    would queue (`?preview=1&partitions=...`). Its snapshots are paged
+    newest first by `url`'s `?before=` or `?after=` (`SnapshotCursor`)."""
     var ds = dataset_rows(db, name)
     if len(ds) == 0:
         return not_found(String("no dataset ", name))
     ref d = ds[0]
-    var cs = commits(db, name)
+    var page = _SNAPSHOTS_PAGE
+    var before = SnapshotCursor.parse(_query(url, "before"))
+    var after = SnapshotCursor(0, 0)
+    if not before.attempt:
+        after = SnapshotCursor.parse(_query(url, "after"))
+    var cs = List[Commit]()
+    var newer = before.attempt > 0
+    var older = False
+    if after.attempt:
+        cs = commits(db, name, page + 1, after=after)
+        if len(cs) > page:
+            _ = cs.pop()
+            cs.reverse()
+            newer = True
+            older = True
+        else:
+            after = SnapshotCursor(0, 0)
+    if not after.attempt:
+        cs = commits(db, name, page + 1, before=before)
+        older = len(cs) > page
+        if older:
+            _ = cs.pop()
+    var base = String("/datasets/", url_encode(name))
+    var newer_href = String()
+    var older_href = String()
+    if newer and len(cs) > 0:
+        newer_href = String(base, "?after=", cs[0].cursor())
+    elif newer:
+        newer_href = base.copy()
+    if older:
+        older_href = String(base, "?before=", cs[len(cs) - 1].cursor())
     var rbs = rebuilds(db, dataset=name, limit=10)
     var chain = downstream(db, name)
     var rp = Optional[RebuildPreview](None)
@@ -6676,7 +7084,24 @@ def dataset_page(
             quote(c.ended),
             "}",
         )
-    j.write("]}")
+    j.write(
+        '], "snapshots_page": {"n": ',
+        page,
+        ', "before": ',
+        quote(String(before)) if before.attempt else String("null"),
+        ', "after": ',
+        quote(String(after)) if after.attempt else String("null"),
+        ', "next": ',
+        quote(String(cs[len(cs) - 1].cursor())) if older else String("null"),
+        ', "prev": ',
+        quote(String(cs[0].cursor())) if newer
+        and len(cs) > 0 else String("null"),
+        ', "next_url": ',
+        quote(older_href) if older_href else String("null"),
+        ', "prev_url": ',
+        quote(newer_href) if newer_href else String("null"),
+        "}}",
+    )
 
     var h = Html()
     h.raw('<p class="crumb"><a href="/datasets">Datasets</a></p><h1>')
@@ -6722,6 +7147,15 @@ def dataset_page(
             h.mono(c.ended)
             h.raw("</tr>")
         h.raw("</tbody></table></div>")
+    if newer_href or older_href:
+        h.raw('<nav class="pager" aria-label="Pages of snapshots">')
+        if newer_href:
+            _pager_link(h, "", base, "« Newest")
+            _pager_link(h, "prev", newer_href, "← Newer")
+        h.raw('<span class="pager__at">', len(cs), " shown</span>")
+        if older_href:
+            _pager_link(h, "next", older_href, "Older →")
+        h.raw("</nav>")
     return Page(200, j^, _page(d.name, "/datasets", h))
 
 
@@ -7405,6 +7839,8 @@ def _respond(page: Page, json: Bool) -> Response:
             ),
         )
         resp.headers.set("Cache-Control", "no-store")
+        if page.poll_every > 0:
+            resp.headers.set("X-Poll-Every", String(page.poll_every))
         # A run's timeline, which Perfetto fetches from its own page.
         if raw and page.content_type == "application/json":
             resp.headers.set(
@@ -7860,12 +8296,18 @@ struct Ui(Copyable, Handler):
                 out.headers.set("Set-Cookie", _cookie_header("", 0))
                 return out^
             if not post:
+                # A list's fragment's login links go back to its page.
+                var here = req.url
+                if path == "/runs/table":
+                    here = _runs_fragment_query(req.url).here()
+                elif path == "/home/pipelines":
+                    here = "/"
                 return self._with_user(
                     self._page(db, req.url, path),
                     json,
                     user,
                     required,
-                    req.url,
+                    here,
                 )
             if required and not user:
                 return _login_needed(req, json)
@@ -7931,14 +8373,11 @@ struct Ui(Copyable, Handler):
             # A pipeline's page as JSON, the fill among it.
             return self._page(db, url, String(path[byte=4:]))
         if path == "/runs":
-            return runs(
-                db,
-                _query(url, "pipeline"),
-                _query(url, "status"),
-                _query(url, "trigger"),
-                before=_int(_query(url, "before")),
-                n=_int(_query(url, "n")),
-            )
+            return runs(db, runs_query(url, "list"))
+        if path == "/runs/table":
+            return runs_table(db, url)
+        if path == "/home/pipelines":
+            return home_pipelines(db)
         if path == "/code":
             return code_page(_query(url, "u"))
         if path.startswith("/runs/"):
@@ -7972,6 +8411,8 @@ struct Ui(Copyable, Handler):
                     return attempt(db, id, aid)
                 if parts[3] == "log":
                     return attempt_log(db, id, aid)
+                if parts[3] == "facts":
+                    return attempt_facts(db, id, aid)
         if path == "/ops":
             return Page(302, String(), String(), location="/ops/control")
         if path == "/system" or path == "/fleet" or path == "/fleet/hosts":
@@ -8007,10 +8448,28 @@ struct Ui(Copyable, Handler):
         if path == "/ops/workers" or path == "/api/workers":
             var rows = worker_rows(db)
             var h = Html()
+            h.raw(
+                '<div data-poll="/ops/workers/live" data-poll-every="',
+                _OPS_EVERY,
+                '">',
+            )
             workers_html(h, rows)
+            h.raw("</div>")
             return Page(
                 200, workers_json(rows), _page("Workers", "/ops/workers", h)
             )
+        if path == "/ops/workers/live":
+            var h = Html()
+            workers_html(h, worker_rows(db))
+            return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
+        if path == "/ops/control/live":
+            var h = Html()
+            _system_live(h, db, _system_range(_query(url, "range")))
+            return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
+        if path == "/watchdog/live":
+            var h = Html()
+            watchdog_html(h, rule_rows(db, watchdog_config()), active_trips(db))
+            return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
         if path == "/ops/control":
             return system_page(db, _query(url, "range"))
         if path == "/api/system":
@@ -8020,7 +8479,13 @@ struct Ui(Copyable, Handler):
             return metrics_page(db)
         if path == "/watchdog":
             var h = Html()
+            h.raw(
+                '<div data-poll="/watchdog/live" data-poll-every="',
+                _WATCHDOG_EVERY,
+                '">',
+            )
             watchdog_html(h, rule_rows(db, watchdog_config()), active_trips(db))
+            h.raw("</div>")
             return Page(
                 200,
                 watchdog_json(db, watchdog_config()),
@@ -8043,6 +8508,7 @@ struct Ui(Copyable, Handler):
                     name,
                     _query(url, "partitions"),
                     _query(url, "preview") == "1",
+                    url,
                 )
             if len(parts) == 3 and parts[1] == "snapshots":
                 var id: Int64
@@ -8073,6 +8539,7 @@ struct Ui(Copyable, Handler):
                     _query(url, "steps"),
                     _query(url, "tab"),
                     _query(url, "cov"),
+                    url,
                 )
             if len(parts) == 2 and parts[1] == "progress" and name:
                 return pipeline_progress(db, name)

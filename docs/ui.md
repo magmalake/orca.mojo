@@ -23,6 +23,60 @@ runs thinner, with a line from a run to the sensor or keyed runs its
 commits started. Its data is `GET /api/gantt?window=24h` (`1h`, `6h`,
 `24h`, `7d`).
 
+## Lists of runs, in pages
+
+`/runs`, a pipeline's Runs tab and a dataset's snapshots come a page at a
+time, newest first, with **« Newest**, **← Newer** and **Older →** under
+the table (the left and right arrow keys follow Newer and Older). Pages
+are keyed by run id, not counted from the top, so a page stays the same
+while new runs arrive and each one is a single index range, however far
+back it is:
+
+| Parameter | |
+|---|---|
+| `?limit=` | runs to a page: 50 on `/runs`, 20 on a pipeline's tab, at most 500 (`?n=` still works) |
+| `?before=<id>` | the page of runs older than that one |
+| `?after=<id>` | the page of runs just newer than it (the newest page once fewer than a page are left) |
+
+The filters (`?pipeline=`, `?status=`, `?trigger=`) and the page size are
+kept in every link. `/runs` says where the page is, `1–50 of 1,234`, from
+an indexed count (`runs_pipeline_id`, migration 37, for a pipeline's runs).
+The JSON keeps its fields (`runs`, `n`, `before`, `total`, `newer`,
+`next_before`) and adds `limit`, `after`, `older`, and the cursors either
+side: `next` (the `before` of the older page) and `prev` (the `after` of
+the newer one), null at the ends, with `next_url` and `prev_url`. With no
+parameters it's the same first page as before. A pipeline's page has the
+same as `runs_page` in its JSON (`/api/pipelines/<name>?before=...`).
+
+A dataset's snapshots are 50 to a page the same way, by the attempt that
+first committed each snapshot: `?before=<attempt>.<snapshot>`, `?after=`,
+and `snapshots_page` in the JSON. `<pipeline> status --before <run>`
+pages a store's runs on the command line, in Postgres, a SQLite file or
+memory alike.
+
+## Live pages
+
+A page with something going on refreshes that part by itself, from a
+fragment, only while the tab is visible. A refresh keeps open
+`<details>`, scrolled tables, the chosen tab, a field being typed in and
+the row at the top of the window, even when new rows arrive above it.
+
+| Page | What refreshes | How often |
+|---|---|---|
+| `/` | the pipelines table (`/home/pipelines`) and Recent runs | 5 s while a run is queued or running, else 30 s |
+| `/runs`, a pipeline's Runs tab | the table and its pager (`/runs/table`) | 5 s while a run on the page is queued or running; the newest page every 30 s otherwise, so new runs appear at its top; an older page stops once nothing on it is going on |
+| a pipeline's page, every tab | the Progress card | 5 s |
+| `/runs/<id>` | its facts, steps, DAG and machines (`/runs/<id>/live`) | 5 s, until the run ends |
+| `/runs/<id>/attempts/<a>` | its facts (`.../facts`) and its log (`.../log`) | 5 s and 2 s, until the attempt ends |
+| Ops: Control | its charts, containers and alerts (`/ops/control/live`) | 30 s |
+| Ops: Fleet | its hosts (`/ops/fleet/hosts`) | 10 s |
+| Ops: Workers | the workers (`/ops/workers/live`) | 10 s |
+| `/watchdog` | the rules and trips (`/watchdog/live`) | 30 s |
+
+A fragment answers 286 once it has nothing more to show, and the page
+stops asking; a list's fragment sends `X-Poll-Every` with the seconds to
+the next ask.
+
 ## A pipeline's page
 
 Three tabs, each its own page, so links and the back button work:
