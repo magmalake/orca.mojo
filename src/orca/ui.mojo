@@ -87,43 +87,13 @@ site without a preflight this server never allows.
 
 from std.os import getenv
 
-from flare.http import Handler, HttpServer, Request, Response, ServerConfig
-from flare.net import SocketAddr
+from flare.http import Request, Response
 from objectstore.http import Header, HttpClient
 from postgres import Params, Row
 
 from json import loads
 
-from orca.auth import (
-    SESSION_COOKIE,
-    audit,
-    close_session,
-    login_failed,
-    login_required,
-    open_session,
-    password_ok,
-    session_user,
-    too_many_failures,
-)
-from orca.tokens import (
-    clean_label,
-    issue_token,
-    revoke_token,
-    token_days,
-    token_user,
-)
-from orca.actions import (
-    Outcome,
-    backfill_runs,
-    cancel_run,
-    cancel_runs,
-    pause_pipeline,
-    rebuild_downstream,
-    rerun_from,
-    resume_run,
-    start_run,
-    stalled_sql,
-)
+from orca.actions import stalled_sql
 from orca.calendar import Calendar, calendar, calendar_json
 from orca.chart import DayRuns, runs_chart
 from orca.civil import Civil, now
@@ -216,13 +186,11 @@ from orca.store import Usage
 from orca.tz import Zone
 from orca.usage import bytes_text, cpu_text, usage_json, usage_text
 from orca.watchdog import (
-    acknowledge,
     active_trips,
     banner_html,
     config as watchdog_config,
     prometheus as watchdog_prometheus,
     rule_rows,
-    snooze as snooze_rule,
     trips_json,
     watchdog_html,
     watchdog_json,
@@ -237,13 +205,10 @@ from orca.ui_viz import (
 )
 from orca.workers import (
     ran_on,
-    worker_api,
     worker_rows,
     workers_html,
     workers_json,
 )
-
-comptime DEFAULT_ADDR = "127.0.0.1:8270"
 
 
 def _ts(col: StaticString) -> String:
@@ -2374,6 +2339,10 @@ struct Page(Movable):
     var poll_every: Int
     """Set for a live fragment: the seconds until the page asks again, sent
     as `X-Poll-Every` (`_POLL`)."""
+    var here: String
+    """Where a login link on it comes back to; empty for its own URL."""
+    var headers: List[Tuple[String, String]]
+    """More headers to send: a cookie, `WWW-Authenticate`."""
 
     def __init__(
         out self,
@@ -2390,6 +2359,8 @@ struct Page(Movable):
         self.content_type = content_type
         self.location = location
         self.poll_every = poll_every
+        self.here = String()
+        self.headers = List[Tuple[String, String]]()
 
 
 def _runs_per_day(mut db: State, days: Int) raises -> List[DayRuns]:
@@ -2731,6 +2702,102 @@ def metrics_page(mut db: State) raises -> Page:
         ),
         "text/plain; version=0.0.4; charset=utf-8",
     )
+
+
+def ops_home() -> Page:
+    """`/ops`: Control, the first of Ops' pages."""
+    return Page(302, String(), String(), location="/ops/control")
+
+
+def moved(url: String, path: String) -> Page:
+    """`/system`, `/fleet` and `/fleet/hosts`, the Ops pages' old homes:
+    moved for good, the query kept."""
+    var q = url.find("?")
+    var to = String("/ops/control") if path == "/system" else String(
+        "/ops", path
+    )
+    return Page(
+        301,
+        String(),
+        String(),
+        location=String(to, String(url[byte=q:]) if q >= 0 else String("")),
+    )
+
+
+def control_live(mut db: State, range: String) raises -> Page:
+    """`/ops/control/live`: Control's live part, as the fragment it
+    refreshes from."""
+    var h = Html()
+    _system_live(h, db, _system_range(range))
+    return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
+
+
+def system_api(mut db: State, range: String) raises -> Page:
+    """`/api/system`: Control as JSON."""
+    var page = system_page(db, range)
+    return Page(200, String(), page.json.copy(), "application/json")
+
+
+def workers_page(mut db: State) raises -> Page:
+    """`/ops/workers` (and `/api/workers`): each worker token's pool,
+    label, worker, image, last heartbeat, runs, CPUs and memory."""
+    var rows = worker_rows(db)
+    var h = Html()
+    h.raw(
+        '<div data-poll="/ops/workers/live" data-poll-every="',
+        _OPS_EVERY,
+        '">',
+    )
+    workers_html(h, rows)
+    h.raw("</div>")
+    return Page(200, workers_json(rows), _page("Workers", "/ops/workers", h))
+
+
+def workers_live(mut db: State) raises -> Page:
+    """`/ops/workers/live`: the workers' table, as the fragment it
+    refreshes from."""
+    var h = Html()
+    workers_html(h, worker_rows(db))
+    return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
+
+
+def watchdog_page(mut db: State) raises -> Page:
+    """`/watchdog`: the watchdog's rules with their last values, limits and
+    snoozes, and the trips with a pipeline still paused."""
+    var h = Html()
+    h.raw(
+        '<div data-poll="/watchdog/live" data-poll-every="',
+        _WATCHDOG_EVERY,
+        '">',
+    )
+    watchdog_html(h, rule_rows(db, watchdog_config()), active_trips(db))
+    h.raw("</div>")
+    return Page(
+        200,
+        watchdog_json(db, watchdog_config()),
+        _page("Watchdog", "", h),
+    )
+
+
+def watchdog_live(mut db: State) raises -> Page:
+    """`/watchdog/live`: the watchdog's page, as the fragment it refreshes
+    from."""
+    var h = Html()
+    watchdog_html(h, rule_rows(db, watchdog_config()), active_trips(db))
+    return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
+
+
+def watchdog_api(mut db: State) raises -> Page:
+    """`/api/watchdog`: the watchdog's page as JSON."""
+    var j = watchdog_json(db, watchdog_config())
+    return Page(200, j.copy(), j^, "application/json")
+
+
+def gantt_api(mut db: State, window: String) raises -> Page:
+    """`/api/gantt`: the home page's Timeline tab's pipelines and runs over
+    `window` (`orca.ui_viz`)."""
+    var j = gantt_json(db, window)
+    return Page(200, j.copy(), j^, "application/json")
 
 
 @fieldwise_init
@@ -7600,264 +7667,6 @@ def snapshot_page(mut db: State, name: String, id: Int64) raises -> Page:
     return Page(200, j^, _page(String(name, " @ ", id), "/datasets", h))
 
 
-# ── actions ──────────────────────────────────────────────────────────────────
-
-
-def _form(body: String, name: StringSlice) -> String:
-    """A field of an `application/x-www-form-urlencoded` body, decoded."""
-    return _query(String("?", body), name)
-
-
-def _acted(
-    o: Outcome,
-    back: String,
-    var json: String,
-    location: String,
-    again: String = "",
-    again_fields: List[Tuple[String, String]] = [],
-    again_label: String = "",
-) -> Page:
-    """The answer to an action: to `location` if it was done, or a 409
-    saying why not, with a way back to `back`, and to confirm if it asks:
-    posting `again_fields` to `again` with `again_label` on the button, or,
-    without `again`, resuming the run at `back` onto new code."""
-    if not o.refused:
-        return Page(303, json^, String(), location=location)
-    var h = Html()
-    h.raw("<h1>Not done</h1><p>")
-    h.text(o.refused)
-    h.raw("</p>")
-    if o.confirm and again:
-        h.raw('<form class="action" method="post" action="')
-        h.text(again)
-        h.raw('">')
-        for f in again_fields:
-            h.raw('<input type="hidden" name="')
-            h.text(f[0])
-            h.raw('" value="')
-            h.text(f[1])
-            h.raw('">')
-        h.raw('<button type="submit">')
-        h.text(again_label)
-        h.raw("</button></form>")
-    elif o.confirm:
-        h.raw('<form class="action" method="post" action="')
-        h.text(back, "/resume")
-        h.raw(
-            '"><input type="hidden" name="allow_new_code" value="1">',
-            '<button type="submit">Resume with the new code</button></form>',
-        )
-    h.raw('<p><a href="')
-    h.text(back)
-    h.raw('">Back</a></p>')
-    return Page(
-        409,
-        String(
-            '{"error": ',
-            quote(o.refused),
-            ', "confirm": ',
-            "true" if o.confirm else "false",
-            "}",
-        ),
-        _page("Not done", "", h),
-    )
-
-
-def _act(
-    mut db: State, path: String, body: String, user: String
-) raises -> Optional[Page]:
-    """Does the action `path` names, or None if it names none."""
-    var parts = path.split("/")
-    if len(parts) == 4 and parts[1] == "pipelines":
-        var name = url_decode(parts[2])
-        var back = String("/pipelines/", url_encode(name))
-        # Where a refused start or cancel goes back to: its form's tab.
-        var operate = String(back, "?tab=operate")
-        var keys = _form(body, "partitions")
-        if (parts[3] == "runs" or parts[3] == "backfill") and String(
-            keys.strip()
-        ).startswith("@file:"):
-            return _bad_request(
-                "partitions from a file (@file:) are for the command line,"
-                " which reads its own files; list the names, or use @all"
-            )
-        if parts[3] == "runs":
-            var o = start_run(db, name, keys)
-            var to = String("/runs/", o.run)
-            return _acted(o, operate, String('{"run": ', o.run, "}"), to)
-        if parts[3] == "backfill":
-            var rerun = _form(body, "rerun") == "1"
-            var o = backfill_runs(
-                db,
-                name,
-                keys,
-                rerun=rerun,
-                allow_append=_form(body, "allow_append") == "1",
-            )
-            var to = String("/runs?pipeline=", url_encode(name))
-            var j = String('{"queued": ', o.queued, ', "skipped": ')
-            _json_strings(j, o.skipped)
-            j.write("}")
-            return _acted(
-                o,
-                operate,
-                j^,
-                to,
-                String(back, "/backfill"),
-                [
-                    (String("partitions"), keys),
-                    (String("rerun"), String("1")),
-                    (String("allow_append"), String("1")),
-                ],
-                "Rerun them, appending again",
-            )
-        if parts[3] == "cancel":
-            var o = cancel_runs(db, name, keys if keys.strip() else "@all")
-            var to = String("/runs?pipeline=", url_encode(name))
-            return _acted(
-                o, operate, String('{"cancelled": ', o.queued, "}"), to
-            )
-        if parts[3] == "pause" or parts[3] == "unpause":
-            var paused = parts[3] == "pause"
-            var o = pause_pipeline(db, name, paused)
-            return _acted(
-                o,
-                back,
-                String('{"paused": ', "true" if paused else "false", "}"),
-                back,
-            )
-    if len(parts) == 4 and parts[1] == "watchdog" and parts[3] == "ack":
-        var which = 0
-        if String(parts[2]) != "all":
-            try:
-                which = Int(parts[2])
-            except:
-                return None
-        var n = acknowledge(db, which, user)
-        return _acted(
-            Outcome.done(0),
-            String("/watchdog"),
-            String('{"acknowledged": ', n, "}"),
-            String("/watchdog"),
-        )
-    if len(parts) == 4 and parts[1] == "watchdog" and parts[3] == "snooze":
-        var duration = _form(body, "duration")
-        try:
-            var secs = snooze_rule(db, url_decode(parts[2]), duration, "ui")
-            return _acted(
-                Outcome.done(0),
-                String("/watchdog"),
-                String('{"snoozed_seconds": ', secs, "}"),
-                String("/watchdog"),
-            )
-        except e:
-            return _acted(
-                Outcome.no(String(e)),
-                String("/watchdog"),
-                String(),
-                String("/watchdog"),
-            )
-    if len(parts) == 4 and parts[1] == "datasets" and parts[3] == "rebuild":
-        var name = url_decode(parts[2])
-        var o = rebuild_downstream(db, name, _form(body, "partitions"))
-        var to = String("/rebuilds/", o.run)
-        return _acted(
-            o, _dataset_href(name), String('{"rebuild": ', o.run, "}"), to
-        )
-    if len(parts) == 4 and parts[1] == "runs":
-        var id: Int
-        try:
-            id = Int(parts[2])
-        except:
-            return None
-        var back = String("/runs/", id)
-        var o: Outcome
-        if parts[3] == "resume":
-            o = resume_run(db, id, _form(body, "allow_new_code") == "1")
-        elif parts[3] == "rerun":
-            var step = _form(body, "step")
-            o = rerun_from(db, id, step, _form(body, "allow_append") == "1")
-            if o.refused and o.confirm:
-                return _acted(
-                    o,
-                    back,
-                    String('{"run": 0}'),
-                    back,
-                    String(back, "/rerun"),
-                    [
-                        (String("step"), step),
-                        (String("allow_append"), String("1")),
-                    ],
-                    "Rerun it, appending again",
-                )
-        elif parts[3] == "cancel":
-            o = cancel_run(db, id)
-        else:
-            return None
-        var to = String("/runs/", o.run)
-        return _acted(o, back, String('{"run": ', o.run, "}"), to)
-    return None
-
-
-def _scheme(req: Request) raises -> String:
-    """The scheme the browser used: behind a proxy (`ORCA_UI_TRUST_PROXY=1`)
-    the first of `X-Forwarded-Proto`, else `https` with
-    `ORCA_UI_SECURE_COOKIES=1` (secure cookies imply TLS in front), else
-    `http`."""
-    if getenv("ORCA_UI_TRUST_PROXY") == "1":
-        var fwd = req.headers.get("X-Forwarded-Proto")
-        if fwd:
-            var first = String(fwd.split(",")[0].strip()).lower()
-            if first == "http" or first == "https":
-                return first
-    if getenv("ORCA_UI_SECURE_COOKIES") == "1":
-        return "https"
-    return "http"
-
-
-def _without_default_port(origin: String) -> String:
-    """`origin` (`scheme://host[:port]`), lower case, without the scheme's
-    default port, which a browser leaves out of `Origin`."""
-    var o = origin.lower()
-    if o.startswith("https://") and o.endswith(":443"):
-        return String(o[byte = : o.byte_length() - 4])
-    if o.startswith("http://") and o.endswith(":80"):
-        return String(o[byte = : o.byte_length() - 3])
-    return o^
-
-
-def _bad_request(why: String) -> Page:
-    """A 400: the form asked for something the UI never does."""
-    var h = Html()
-    h.raw("<h1>Refused</h1><p>")
-    h.text(why)
-    h.raw("</p>")
-    return Page(
-        400, String('{"error": ', quote(why), "}"), _page("Refused", "", h)
-    )
-
-
-def _same_origin(req: Request) raises -> Bool:
-    """Whether a `POST` came from the UI's own pages: its `Origin`, or
-    without one its `Referer`, is this server as the browser addressed it,
-    by `Host` and the scheme `_scheme` gives. Host and scheme compare in
-    any case."""
-    var host = req.headers.get("Host")
-    if not host:
-        return False
-    var own = _without_default_port(String(_scheme(req), "://", host))
-    var origin = req.headers.get("Origin")
-    if origin:
-        return _without_default_port(origin) == own
-    var referer = req.headers.get("Referer")
-    if not referer:
-        return False
-    # The Referer's origin is what comes before the path's first '/'.
-    var rest = referer.find("/", referer.find("://") + 3)
-    var ref_origin = String(referer[byte=:rest]) if rest >= 0 else referer
-    return _without_default_port(ref_origin) == own
-
-
 # ── serving ──────────────────────────────────────────────────────────────────
 
 
@@ -7920,6 +7729,8 @@ def _respond(page: Page, json: Bool) -> Response:
             resp.headers.set(
                 "Access-Control-Allow-Origin", "https://ui.perfetto.dev"
             )
+        for h in page.headers:
+            resp.headers.set(h[0], h[1])
     except:
         pass
     return resp^
@@ -7938,56 +7749,18 @@ def _query(url: String, name: StringSlice) -> String:
     return ""
 
 
-def _is_action(path: String) -> Bool:
-    if path == "/login" or path == "/logout":
-        return True
-    if path == "/api/login" or path == "/api/logout":
-        return True
-    var parts = path.split("/")
-    if len(parts) != 4:
-        return False
-    if parts[1] == "pipelines":
-        return (
-            parts[3] == "runs"
-            or parts[3] == "backfill"
-            or parts[3] == "cancel"
-            or parts[3] == "pause"
-            or parts[3] == "unpause"
-        )
-    if parts[1] == "datasets":
-        return parts[3] == "rebuild"
-    if parts[1] == "watchdog":
-        return parts[3] == "snooze" or parts[3] == "ack"
-    return parts[1] == "runs" and (
-        parts[3] == "resume" or parts[3] == "rerun" or parts[3] == "cancel"
+def _bad_request(why: String) -> Page:
+    """A 400: the form asked for something the UI never does."""
+    var h = Html()
+    h.raw("<h1>Refused</h1><p>")
+    h.text(why)
+    h.raw("</p>")
+    return Page(
+        400, String('{"error": ', quote(why), "}"), _page("Refused", "", h)
     )
 
 
-def _cookie(req: Request, name: StringSlice) -> String:
-    """A cookie the request sent, or empty."""
-    for part in req.headers.get("Cookie").split(";"):
-        var kv = part.strip()
-        var eq = kv.find("=")
-        if eq > 0 and kv[byte=:eq] == name:
-            return String(kv[byte = eq + 1 :])
-    return ""
-
-
-def _cookie_header(token: String, max_age: Int) -> String:
-    """The session cookie: only for this site's requests (`SameSite`), out
-    of scripts' reach (`HttpOnly`), and with `ORCA_UI_SECURE_COOKIES=1`
-    (behind HTTPS) never sent in the clear."""
-    return String(
-        SESSION_COOKIE,
-        "=",
-        token,
-        "; Path=/; HttpOnly; SameSite=Strict; Max-Age=",
-        max_age,
-        "; Secure" if getenv("ORCA_UI_SECURE_COOKIES") == "1" else "",
-    )
-
-
-def _safe_next(next: String) -> String:
+def safe_next(next: String) -> String:
     """Where to go after logging in: a path on this site, else `/`."""
     if next.startswith("/") and not next.startswith("//") and "\\" not in next:
         return next
@@ -8003,7 +7776,7 @@ def login_page(next: String, why: String, status: Int = 200) -> Page:
         h.raw("</p>")
     h.raw('<form class="login" method="post" action="/login">')
     h.raw('<input type="hidden" name="next" value="')
-    h.text(_safe_next(next))
+    h.text(safe_next(next))
     h.raw(
         '"><label>Name <input name="name" autocomplete="username"',
         ' required></label><label>Password <input type="password"',
@@ -8020,627 +7793,3 @@ def login_page(next: String, why: String, status: Int = 200) -> Page:
         ),
         _page("Log in", "", h),
     )
-
-
-def _login(
-    mut db: State, body: String, json: Bool, address: String
-) raises -> Response:
-    var name = _form(body, "name")
-    if too_many_failures(db, name, address):
-        return _respond(
-            login_page(
-                _form(body, "next"),
-                "Too many failed logins; try again in 15 minutes.",
-                429,
-            ),
-            json,
-        )
-    var token = open_session(db, name, _form(body, "password"))
-    if not token:
-        login_failed(db, name, address)
-        return _respond(
-            login_page(_form(body, "next"), "Wrong name or password.", 401),
-            json,
-        )
-    var hours = Float64(getenv("ORCA_UI_SESSION_HOURS", "12"))
-    var out = _respond(
-        Page(
-            303,
-            String('{"user": ', quote(_form(body, "name")), "}"),
-            String(),
-            location=_safe_next(_form(body, "next")),
-        ),
-        json,
-    )
-    out.headers.set("Set-Cookie", _cookie_header(token, Int(hours * 3600.0)))
-    return out^
-
-
-def _client(req: Request) -> String:
-    """The address a request came from: the connection's peer, or behind a
-    proxy (`ORCA_UI_TRUST_PROXY=1`) the first address of
-    `X-Forwarded-For`, which only a proxy in front can be trusted to set."""
-    if getenv("ORCA_UI_TRUST_PROXY") == "1":
-        var fwd = req.headers.get("X-Forwarded-For")
-        if fwd:
-            return String(fwd.split(",")[0].strip())
-    return String(req.peer.ip)
-
-
-def _login_needed(req: Request, json: Bool) raises -> Response:
-    """An action without a session: 401 for a script, to the login page for
-    a browser, which comes back to the page the form was on."""
-    if json:
-        return _respond(
-            Page(
-                401,
-                String('{"error": "log in first", "login": "/login"}'),
-                String(),
-            ),
-            json,
-        )
-    var back = String("/")
-    var referer = req.headers.get("Referer")
-    var host = String("http://", req.headers.get("Host"))
-    if referer.startswith(String(host, "/")):
-        back = String(referer[byte = host.byte_length() :])
-    var out = Response(status=303, reason="See Other")
-    out.headers.set("Location", String("/login?next=", url_encode(back)))
-    return out^
-
-
-def _run_of(location: String, path: String) -> Int:
-    """The run an action made or acted on, from where it sent the browser or
-    its own path; 0 for none."""
-    for p in [location, path]:
-        if p.startswith("/runs/"):
-            var rest = p[byte=6:]
-            var end = rest.find("/")
-            try:
-                return Int(rest[byte=:end] if end >= 0 else rest)
-            except:
-                pass
-    return 0
-
-
-def _not_allowed() -> Response:
-    var resp = Response(status=405, reason="Method Not Allowed")
-    try:
-        resp.headers.set("Allow", "GET, HEAD")
-    except:
-        pass
-    return resp^
-
-
-def _cross_origin() -> Page:
-    var why = String(
-        "this form wasn't posted from orca ui's own pages (its Origin or",
-        " Referer isn't this server), so it's refused",
-    )
-    var h = Html()
-    h.raw("<h1>Refused</h1><p>")
-    h.text(why)
-    h.raw("</p>")
-    return Page(
-        403, String('{"error": ', quote(why), "}"), _page("Refused", "", h)
-    )
-
-
-# ── API tokens (orca.tokens) ─────────────────────────────────────────────────
-
-
-def _bearer(authorization: String) -> String:
-    """The token of `Authorization: Bearer <token>`, or empty for any other
-    header."""
-    var a = String(authorization.strip())
-    if not a.lower().startswith("bearer "):
-        return ""
-    return String(a[byte=7:].strip())
-
-
-def _content_type(req: Request) -> String:
-    """The request's media type, lower case, without its parameters, which
-    a cross-site page may set however it likes."""
-    var t = req.headers.get("Content-Type")
-    var semi = t.find(";")
-    var essence = String(t[byte=:semi]) if semi >= 0 else t
-    return String(essence.strip()).lower()
-
-
-def _json_form(body: String) raises -> String:
-    """A JSON object of strings, numbers and booleans (`orca.remote`'s
-    actions) as the form the UI's own pages post, so both go through `_act`
-    and are audited alike: true is `1`, false and null are left form."""
-    var v = loads(body if body.strip() else "{}")
-    if not v.is_object():
-        raise Error("an action's JSON is an object of its fields")
-    var form = String()
-    for kv in v.object_items():
-        var val: String
-        if kv[1].is_string():
-            val = kv[1].string_value()
-        elif kv[1].is_bool():
-            if not kv[1].bool_value():
-                continue
-            val = "1"
-        elif kv[1].is_int():
-            val = String(kv[1].int_value())
-        elif kv[1].is_null():
-            continue
-        else:
-            raise Error("an action's fields are strings, numbers or booleans")
-        form.write("&" if form else "", url_encode(kv[0]), "=", url_encode(val))
-    return form^
-
-
-def _json_error(status: Int, why: String) -> Response:
-    return _respond(
-        Page(status, String('{"error": ', quote(why), "}"), String()), True
-    )
-
-
-def _token_refused() -> Response:
-    """A request with a token that's no use: unknown, expired or revoked,
-    or an `Authorization` that isn't a bearer token. Cookies are never
-    looked at instead."""
-    var resp = _json_error(
-        401,
-        (
-            "this token is unknown, expired or revoked (orca login again), or"
-            " Authorization isn't Bearer <token>"
-        ),
-    )
-    try:
-        resp.headers.set("WWW-Authenticate", 'Bearer realm="orca"')
-    except:
-        pass
-    return resp^
-
-
-def _api_login(mut db: State, body: String, address: String) raises -> Response:
-    """`POST /api/login`: a new API token for a JSON `name` and `password`,
-    labelled `label`, lasting `days` (at most `ORCA_API_TOKEN_DAYS`).
-    Failures count against the same limit as `/login`'s, and the token is
-    in this answer only."""
-    var name: String
-    var password: String
-    var label = String()
-    var days = 0
-    try:
-        var v = loads(body)
-        name = v["name"].string_value()
-        password = v["password"].string_value()
-        if String("label") in v and v["label"].is_string():
-            label = v["label"].string_value()
-        if String("days") in v and v["days"].is_int():
-            days = Int(v["days"].int_value())
-    except:
-        return _json_error(
-            400, "a login is a JSON object with a name and a password"
-        )
-    if too_many_failures(db, name, address):
-        return _json_error(
-            429, "Too many failed logins; try again in 15 minutes."
-        )
-    if not password_ok(db, name, password):
-        login_failed(db, name, address, "cli")
-        return _json_error(401, "Wrong name or password.")
-    var got = issue_token(db, name, label, token_days(days))
-    audit(
-        db,
-        name,
-        "/api/login",
-        0,
-        String(clean_label(label), " from ", address),
-        "cli",
-    )
-    return _respond(
-        Page(
-            200,
-            String(
-                '{"user": ',
-                quote(name),
-                ', "token": ',
-                quote(got.token),
-                ', "expires": ',
-                quote(got.expires),
-                "}",
-            ),
-            String(),
-        ),
-        True,
-    )
-
-
-struct Ui(Copyable, Handler):
-    """The pages, over the database at `url`."""
-
-    var url: String
-
-    def __init__(out self, url: String):
-        self.url = url
-
-    def serve(self, req: Request) raises -> Response:
-        var q = req.url.find("?")
-        var path = String(req.url[byte=:q]) if q >= 0 else req.url
-        var json = (
-            "application/json" in req.headers.get("Accept")
-            or _query(req.url, "format") == "json"
-        )
-        if path == "/static/orca.css":
-            var resp = Response(
-                status=200,
-                reason="OK",
-                body=List[UInt8](String(STYLE, VIZ_STYLE).as_bytes()),
-            )
-            resp.headers.set("Content-Type", "text/css; charset=utf-8")
-            return resp^
-        var post = req.method == "POST"
-        if post and path.startswith("/api/worker/"):
-            # A remote worker (orca.workers): its token, its JSON, its calls.
-            var got = worker_api(
-                self.url,
-                path,
-                _bearer(req.headers.get("Authorization")),
-                String(from_utf8_lossy=Span(req.body)),
-            )
-            var status = got.status
-            var resp = _respond(Page(status, got.json.copy(), String()), True)
-            if status == 401:
-                resp.headers.set("WWW-Authenticate", 'Bearer realm="orca"')
-            return resp^
-        if post and not _is_action(path):
-            return _not_allowed()
-        if not post and req.method != "GET" and req.method != "HEAD":
-            return _not_allowed()
-        # A script's request (orca.remote): one with an `Authorization`
-        # header, or a JSON login for a token. A browser sends neither to
-        # another site without a CORS preflight, which the UI never
-        # answers, so with no `Origin` it needn't be the UI's own; the
-        # token, not a cookie, is what it acts with.
-        var authorization = req.headers.get("Authorization")
-        var api_login = path == "/api/login"
-        var scripted = (
-            (
-                authorization != ""
-                or (api_login and _content_type(req) == "application/json")
-            )
-            and path != "/login"
-            and path != "/logout"
-        )
-        if scripted or path.startswith("/api/"):
-            json = True
-        if (
-            post
-            and not (scripted and not req.headers.get("Origin"))
-            and not _same_origin(req)
-        ):
-            return _respond(_cross_origin(), json)
-        if api_login and not scripted:
-            return _json_error(400, "a login for a token is JSON")
-        try:
-            var db = State(self.url)
-            var body = String(from_utf8_lossy=Span(req.body))
-            if api_login:
-                return _api_login(db, body, _client(req))
-            var token = String()
-            var user: String
-            var source = String("ui")
-            if authorization:
-                var bearer = _bearer(authorization)
-                user = token_user(db, bearer)
-                if not user:
-                    return _token_refused()
-                source = "cli"
-                if path == "/api/logout":
-                    _ = revoke_token(db, bearer)
-                    audit(db, user, path, 0, "", source)
-                    return _respond(
-                        Page(200, String('{"revoked": true}'), String()), True
-                    )
-            else:
-                token = _cookie(req, SESSION_COOKIE)
-                user = session_user(db, token)
-                if path == "/api/logout":
-                    return _token_refused()
-            var required = login_required(db)
-            if post and _content_type(req) == "application/json":
-                try:
-                    body = _json_form(body)
-                except e:
-                    return _respond(_bad_request(String(e)), json)
-            if path == "/login":
-                if not post:
-                    return self._with_user(
-                        login_page(_query(req.url, "next"), ""),
-                        json,
-                        user,
-                        required,
-                    )
-                return _login(db, body, json, _client(req))
-            if path == "/logout":
-                if token:
-                    close_session(db, token)
-                var out = _respond(
-                    Page(303, String('{"user": null}'), String(), location="/"),
-                    json,
-                )
-                out.headers.set("Set-Cookie", _cookie_header("", 0))
-                return out^
-            if not post:
-                # A list's fragment's login links go back to its page.
-                var here = req.url
-                if path == "/runs/table":
-                    here = _runs_fragment_query(req.url).here()
-                elif path == "/home/pipelines":
-                    here = "/"
-                return self._with_user(
-                    self._page(db, req.url, path),
-                    json,
-                    user,
-                    required,
-                    here,
-                )
-            if required and not user:
-                return _login_needed(req, json)
-            var done = _act(db, path, body, user)
-            if not done:
-                return _respond(not_found(String("nothing at ", path)), json)
-            var page = done.take()
-            if page.status == 303 and user:
-                audit(
-                    db, user, path, _run_of(page.location, path), body, source
-                )
-            return self._with_user(page^, json, user, required)
-        except e:
-            var h = Html()
-            h.raw("<h1>Error</h1><pre>")
-            h.text(e)
-            h.raw("</pre>")
-            var page = Page(
-                500,
-                String('{"error": ', quote(String(e)), "}"),
-                _page("Error", "", h),
-            )
-            var resp = _respond(page, json)
-            resp.reason = "Internal Server Error"
-            return resp^
-
-    def _with_user(
-        self,
-        var page: Page,
-        json: Bool,
-        user: String,
-        required: Bool,
-        here: String = "/",
-    ) -> Response:
-        """The page, with who's logged in (or a way to log in) in its
-        header."""
-        var slot: String
-        if user:
-            var h = Html()
-            h.raw('<span class="top__user">')
-            h.text(user)
-            h.raw(
-                ' <form method="post" action="/logout"><button type="submit">',
-                "Log out</button></form></span>",
-            )
-            slot = h^.finish()
-        elif required:
-            slot = String('<a class="top__user" href="/login">Log in</a>')
-        else:
-            slot = String()
-        page.html = page.html.replace(_USER_SLOT, slot)
-        page.html = page.html.replace(
-            String('<body class="', _AUTH_SLOT, '">'),
-            '<body class="anon">' if required and not user else "<body>",
-        )
-        page.html = page.html.replace(_HERE_SLOT, url_encode(here))
-        return _respond(page, json)
-
-    def _page(self, mut db: State, url: String, path: String) raises -> Page:
-        if path == "/" or path == "":
-            return home(db)
-        if path.startswith("/api/pipelines/"):
-            # A pipeline's page as JSON, the fill among it.
-            return self._page(db, url, String(path[byte=4:]))
-        if path == "/runs":
-            return runs(db, runs_query(url, "list"))
-        if path == "/runs/table":
-            return runs_table(db, url)
-        if path == "/home/pipelines":
-            return home_pipelines(db)
-        if path == "/code":
-            return code_page(_query(url, "u"))
-        if path.startswith("/runs/"):
-            var parts = path[byte=6:].split("/")
-            var id: Int
-            try:
-                id = Int(parts[0])
-            except:
-                return not_found(String("no run ", parts[0]))
-            if len(parts) == 1:
-                return run(db, id, _query(url, "steps"))
-            if len(parts) == 2 and parts[1] == "live":
-                return run_live(db, id)
-            if len(parts) == 2 and parts[1] == "steps":
-                return run_steps(db, id)
-            if len(parts) == 2 and parts[1] == "metrics":
-                return run_metrics(db, id)
-            if len(parts) == 2 and parts[1] == "timeline.json":
-                return timeline(db, id)
-            if len(parts) == 2 and parts[1] == "driver.log":
-                return driver_log(db, id)
-            if len(parts) == 3 and parts[1] == "cluster":
-                return cluster_log(db, id, String(parts[2]))
-            if len(parts) >= 3 and len(parts) <= 4 and parts[1] == "attempts":
-                var aid: Int
-                try:
-                    aid = Int(parts[2])
-                except:
-                    return not_found(String("no attempt ", parts[2]))
-                if len(parts) == 3:
-                    return attempt(db, id, aid)
-                if parts[3] == "log":
-                    return attempt_log(db, id, aid)
-                if parts[3] == "facts":
-                    return attempt_facts(db, id, aid)
-        if path == "/ops":
-            return Page(302, String(), String(), location="/ops/control")
-        if path == "/system" or path == "/fleet" or path == "/fleet/hosts":
-            # The pages' old homes: moved for good, query kept.
-            var q = url.find("?")
-            var to = String("/ops/control") if path == "/system" else String(
-                "/ops", path
-            )
-            return Page(
-                301,
-                String(),
-                String(),
-                location=String(
-                    to, String(url[byte=q:]) if q >= 0 else String("")
-                ),
-            )
-        if path == "/ops/fleet":
-            return fleet_page(
-                db,
-                _query(url, "sort"),
-                _query(url, "dir"),
-                _query(url, "range"),
-            )
-        if path == "/ops/fleet/hosts":
-            return fleet_hosts_page(
-                db,
-                _query(url, "sort"),
-                _query(url, "dir"),
-                _query(url, "range"),
-            )
-        if path == "/api/fleet":
-            return fleet_api(db, _query(url, "range"))
-        if path == "/ops/workers" or path == "/api/workers":
-            var rows = worker_rows(db)
-            var h = Html()
-            h.raw(
-                '<div data-poll="/ops/workers/live" data-poll-every="',
-                _OPS_EVERY,
-                '">',
-            )
-            workers_html(h, rows)
-            h.raw("</div>")
-            return Page(
-                200, workers_json(rows), _page("Workers", "/ops/workers", h)
-            )
-        if path == "/ops/workers/live":
-            var h = Html()
-            workers_html(h, worker_rows(db))
-            return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
-        if path == "/ops/control/live":
-            var h = Html()
-            _system_live(h, db, _system_range(_query(url, "range")))
-            return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
-        if path == "/watchdog/live":
-            var h = Html()
-            watchdog_html(h, rule_rows(db, watchdog_config()), active_trips(db))
-            return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
-        if path == "/ops/control":
-            return system_page(db, _query(url, "range"))
-        if path == "/api/system":
-            var page = system_page(db, _query(url, "range"))
-            return Page(200, String(), page.json.copy(), "application/json")
-        if path == "/metrics":
-            return metrics_page(db)
-        if path == "/watchdog":
-            var h = Html()
-            h.raw(
-                '<div data-poll="/watchdog/live" data-poll-every="',
-                _WATCHDOG_EVERY,
-                '">',
-            )
-            watchdog_html(h, rule_rows(db, watchdog_config()), active_trips(db))
-            h.raw("</div>")
-            return Page(
-                200,
-                watchdog_json(db, watchdog_config()),
-                _page("Watchdog", "", h),
-            )
-        if path == "/api/gantt":
-            var j = gantt_json(db, _query(url, "window"))
-            return Page(200, j.copy(), j^, "application/json")
-        if path == "/api/watchdog":
-            var j = watchdog_json(db, watchdog_config())
-            return Page(200, j.copy(), j^, "application/json")
-        if path == "/datasets":
-            return datasets_page(db)
-        if path.startswith("/datasets/"):
-            var parts = path[byte=10:].split("/")
-            var name = url_decode(parts[0])
-            if len(parts) == 1 and name:
-                return dataset_page(
-                    db,
-                    name,
-                    _query(url, "partitions"),
-                    _query(url, "preview") == "1",
-                    url,
-                )
-            if len(parts) == 3 and parts[1] == "snapshots":
-                var id: Int64
-                try:
-                    id = Int64(Int(parts[2]))
-                except:
-                    return not_found(String("no snapshot ", parts[2]))
-                return snapshot_page(db, name, id)
-        if path.startswith("/rebuilds/"):
-            var id: Int
-            try:
-                id = Int(path[byte=10:])
-            except:
-                return not_found(String("no rebuild ", path[byte=10:]))
-            return rebuild_page(db, id)
-        if path.startswith("/pipelines/"):
-            var parts = path[byte=11:].split("/")
-            var name = url_decode(parts[0])
-            if len(parts) == 1 and name:
-                return pipeline(
-                    db,
-                    name,
-                    _query(url, "partitions"),
-                    _query(url, "rerun") == "1",
-                    _query(url, "preview") == "1",
-                    _query(url, "cal"),
-                    _query(url, "allow_append") == "1",
-                    _query(url, "steps"),
-                    _query(url, "tab"),
-                    url,
-                )
-            if len(parts) == 2 and parts[1] == "progress" and name:
-                return pipeline_progress(db, name)
-            if len(parts) == 2 and parts[1] == "calendar" and name:
-                return calendar_page(db, name, _query(url, "month"))
-            if len(parts) == 3 and parts[1] == "keys" and name:
-                return key_page(db, name, url_decode(parts[2]))
-        return not_found(String("nothing at ", path))
-
-
-def read_page(mut db: State, url: String) raises -> Page:
-    """What `GET url` answers, for `orca` commands that print a page's JSON
-    over the database (`orca.remote`)."""
-    var q = url.find("?")
-    var path = String(url[byte=:q]) if q >= 0 else url
-    return Ui("")._page(db, url, path)
-
-
-def act(mut db: State, path: String, form: String) raises -> Optional[Page]:
-    """The action `path` with the fields of `form`, as the UI's button does
-    it, or None if `path` names none (`orca.remote`). Not audited: the
-    command acts as whoever can reach the database."""
-    return _act(db, path, form, "")
-
-
-def serve_ui(url: String, addr: String) raises:
-    """Serves the pages on `addr` until the process is stopped."""
-    var cfg = ServerConfig()
-    cfg.idle_timeout_ms = 30_000
-    cfg.write_timeout_ms = 30_000
-    var server = HttpServer.bind(SocketAddr.parse(addr), cfg^)
-    print("orca ui on http://", addr, sep="")
-    server.serve(Ui(url))

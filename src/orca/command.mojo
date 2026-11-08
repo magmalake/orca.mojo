@@ -86,7 +86,7 @@ from orca.state import State
 from orca.watchdog import acknowledge, snooze as snooze_rule
 from orca.auth import audit
 from orca.tokens import revoke_user_tokens, user_tokens
-from orca.ui import DEFAULT_ADDR, serve_ui
+from orca.web.server import DEFAULT_ADDR, serve_ui
 from orca.worker import worker_command
 from orca.workers import (
     create_worker_token,

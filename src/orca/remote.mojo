@@ -51,7 +51,8 @@ from orca.json import quote
 from orca.lineage import SnapshotRef
 from orca.scheduler import file_names
 from orca.state import State
-from orca.ui import _took, act, read_page
+from orca.ui import _took
+from orca.web.server import act, read_page
 from orca.usage import usage_of, usage_text
 from orca.watchdog import status_lines
 
