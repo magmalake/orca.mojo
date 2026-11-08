@@ -28,6 +28,7 @@ from std.sys import stderr
 from postgres import Connection, Params, Transaction
 
 from orca.heartbeat import Beater, Heartbeat
+from orca.live import stale_limit
 from orca.store import (
     CANCELLED,
     DEFERRED,
@@ -683,6 +684,27 @@ def _migrations() -> List[List[String]]:
                 " OR pending ORDER BY coalesce(sent_at, next_try)"
             ),
         ],
+        # Scheduler instances (docs/overlap.md): a row each `orca scheduler`
+        # with ORCA_OVERLAP=on keeps fresh, with the migrations it knows,
+        # whether it leads or drains, and the runs its processes are; and on
+        # each local or control-placed run the instance that started it.
+        [
+            """CREATE TABLE orca.schedulers (
+            id bigserial PRIMARY KEY,
+            host text NOT NULL,
+            pid int NOT NULL,
+            image text NOT NULL DEFAULT '',
+            known int NOT NULL,
+            started timestamptz NOT NULL DEFAULT now(),
+            last_seen timestamptz NOT NULL DEFAULT now(),
+            role text NOT NULL DEFAULT 'waiting',
+            lead_since timestamptz,
+            drain_asked timestamptz,
+            draining_since timestamptz,
+            ended timestamptz,
+            running text)""",
+            "ALTER TABLE orca.runs ADD COLUMN instance bigint",
+        ],
     ]
 
 
@@ -702,6 +724,11 @@ def _floor_raisers() -> List[Int]:
     41 (`orca.alerts`, Ops › Alerts) is additive: a new table, which the
     binaries before it neither read nor write; their alerts are only
     missing from it.
+
+    42 (`orca.schedulers`, `runs.instance`: docs/overlap.md) is additive:
+    the binaries before it don't write instance rows, and start runs with
+    `instance` left as it was, which no live instance lists, so it holds
+    nothing.
     """
     return [1, 24]
 
@@ -759,6 +786,53 @@ def schema_ahead(have: Int, floor: Int, known: Int) raises -> Bool:
 
 
 comptime _MIGRATION_LOCK = 0x6F726361  # "orca"
+
+
+def live_older(
+    mut tx: Transaction, floor: Int
+) raises -> List[Tuple[Int, String, Int]]:
+    """The scheduler instances (docs/overlap.md) still going, seen within
+    the stale limit and not ended, that know fewer than `floor` migrations:
+    each one's id, host and how many it knows. None where `orca.schedulers`
+    doesn't exist yet."""
+    var out = List[Tuple[Int, String, Int]]()
+    var t = tx.query(
+        "SELECT to_regclass('orca.schedulers') IS NOT NULL AS ok"
+    ).row(0)
+    if not t.bool("ok"):
+        return out^
+    for r in tx.query(
+        (
+            "SELECT id, host, known FROM orca.schedulers WHERE ended IS NULL"
+            " AND last_seen > now() - make_interval(secs => $1) AND known < $2"
+            " ORDER BY id"
+        ),
+        Params().float64(stale_limit()).int64(Int64(floor)),
+    ):
+        out.append((Int(r.int64("id")), r.text("host"), Int(r.int64("known"))))
+    return out^
+
+
+def _refuse_overlap(mut tx: Transaction, floor: Int) raises:
+    """Raises if a scheduler instance that knows fewer than `floor`
+    migrations is still going: migrating would raise the schema's floor
+    past it, and it would go on over a schema it can't run on. Such a
+    deploy stops the old scheduler first (docs/overlap.md#migrations)."""
+    var old = live_older(tx, floor)
+    if len(old) == 0:
+        return
+    raise Error(
+        "orca: this binary's migrations need a binary that knows at least ",
+        floor,
+        ", and scheduler instance ",
+        old[0][0],
+        " on ",
+        old[0][1],
+        " knows ",
+        old[0][2],
+        " and is still going; stop it, and wait for its runs, before",
+        " deploying this one (docs/overlap.md#migrations)",
+    )
 
 
 struct State(Movable):
@@ -821,6 +895,9 @@ struct State(Movable):
             " END AS floor FROM orca.schema_version"
         ).row(0)
         var have = Int(row.int64("v"))
+        var raises_to = migration_floor(known)
+        if have < known and raises_to > Int(row.int64("floor")):
+            _refuse_overlap(tx, raises_to)
         if schema_ahead(have, Int(row.int64("floor")), known):
             print(
                 "orca: the database is at schema version ",

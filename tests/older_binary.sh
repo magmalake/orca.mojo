@@ -34,7 +34,7 @@ q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
 latest=$(q "SELECT max(version) FROM orca.schema_version")
 [ "$latest" -ge 41 ] || fail "schema version $latest"
 
-# An older one, two migrations behind (40 and 41 are additive).
+# An older one, two migrations behind (41 and 42 are additive).
 older=$((latest - 2))
 ORCA_TEST_MIGRATIONS=$older ./build/orca register ./build/toy > /dev/null 2> "$log.err" \
     || { cat "$log.err" >> "$log"; fail "an older binary's register"; }
