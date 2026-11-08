@@ -23,6 +23,7 @@ from store_suite import (
     check_killed_anywhere_then_resumed,
     check_reads_are_pinned_across_attempts,
     check_resume_skips_what_succeeded,
+    check_runs_pages,
     check_versions,
 )
 
@@ -47,9 +48,9 @@ def test_migrate_is_idempotent() raises:
     var db = _db()
     db.migrate()
     assert_equal(
-        _count("SELECT max(version) AS n FROM orca.schema_version"), 36
+        _count("SELECT max(version) AS n FROM orca.schema_version"), 37
     )
-    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 36)
+    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 37)
 
 
 def test_a_queued_run_can_be_claimed() raises:
@@ -135,6 +136,11 @@ def test_pg_lost_run_stops() raises:
 def test_pg_reads_are_pinned_across_attempts() raises:
     var s = _store()
     check_reads_are_pinned_across_attempts(s)
+
+
+def test_pg_runs_pages() raises:
+    var s = _store()
+    check_runs_pages(s)
 
 
 def test_pg_versions() raises:

@@ -628,11 +628,16 @@ struct SqliteStore(Movable, RunStore):
             raise Error("orca: no run ", run)
         return got[0].copy()
 
-    def runs(mut self, limit: Int) raises -> List[RunInfo]:
+    def runs(mut self, limit: Int, before: Int = 0) raises -> List[RunInfo]:
+        # By the rowid, a range of the table's own b-tree.
         var st = self._stmt(
-            String(Self._RUN_COLUMNS, " ORDER BY id DESC LIMIT ?1")
+            String(
+                Self._RUN_COLUMNS,
+                " WHERE ?2 = 0 OR id < ?2 ORDER BY id DESC LIMIT ?1",
+            )
         )
         st.bind_int(1, limit)
+        st.bind_int(2, before)
         return self._run_infos(st)
 
     def steps(mut self, run: Int) raises -> List[StepInfo]:

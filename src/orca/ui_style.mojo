@@ -304,7 +304,7 @@ th .help { margin-left: 0.25rem; vertical-align: 0; }
 /* Forms: filters, actions, and logging in. */
 .filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: end; margin-bottom: 1rem; }
 .filters label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
-.pager { display: flex; gap: 1rem; align-items: baseline; margin-top: 0.8rem; font-size: 0.875rem; }
+.pager { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: baseline; margin-top: 0.8rem; font-size: 0.875rem; }
 .pager__at { color: var(--muted); font-variant-numeric: tabular-nums; }
 input, button, select { font: inherit; padding: 0.35rem 0.6rem; border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }

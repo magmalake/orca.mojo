@@ -171,6 +171,29 @@ def check_reads_are_pinned_across_attempts[S: RunStore](mut s: S) raises:
     assert_equal(pinned["/wh/in"], 101)
 
 
+def check_runs_pages[S: RunStore](mut s: S) raises:
+    """`runs` pages newest first, each from under the last run of the one
+    before, with no run twice and none skipped."""
+    # One run first, so none of the five is 0, which `before` doesn't take.
+    _ = new_run(s, "a:1")
+    var made = List[Int]()
+    for _ in range(5):
+        made.append(new_run(s, "a:1"))
+    var p1 = s.runs(2)
+    assert_equal(len(p1), 2)
+    assert_equal(p1[0].id, made[4])
+    assert_equal(p1[1].id, made[3])
+    var p2 = s.runs(2, p1[1].id)
+    assert_equal(len(p2), 2)
+    assert_equal(p2[0].id, made[2])
+    assert_equal(p2[1].id, made[1])
+    # The last of these five, then whatever this store had before them.
+    var p3 = s.runs(2, p2[1].id)
+    assert_equal(p3[0].id, made[0])
+    for r in s.runs(100, made[0]):
+        assert_true(r.id not in made)
+
+
 def check_versions[S: RunStore](mut s: S) raises:
     var run = new_run(s, "a:1")
     var v = s.version("retrying", "h", "{}", "img")
