@@ -199,20 +199,27 @@ holds nothing.
   the newest instance again on the next tick.
 - **The UI restarts.** Nothing changes for runs: they don't talk to it.
 
-## The stack (next PR)
+## The stack (#246)
 
-The Hetzner change is a follow-up, stacked on #244 (stack #245), so this
-PR doesn't touch `deploy/hetzner/`:
+The Hetzner change is #246, stacked on #244 (stack #245), so this PR
+doesn't touch `deploy/hetzner/`. With `OVERLAP=1` in stack.conf (off by
+default) the containers get `ORCA_OVERLAP=on`, and:
 
-- the scheduler container named per tag (`scheduler-<tag>`), with
-  `ORCA_OVERLAP=on`, the cgroup flags as now, and no shared stage directory
-  (each container stages its own runs' output);
-- `deploy.sh` runs `orca scheduler can-overlap` in the new image; on `yes`
-  it starts the new scheduler beside the old one, waits for `orca
-  scheduler wait-lead`, registers, replaces the UI, then waits for the old
-  container to exit (its drain, `ORCA_DRAIN_SECONDS`) and removes it; on
-  `no` it quiesces and replaces as today;
+- `deploy.sh` asks `orca-stack can-overlap --tag <tag>`, which runs the new
+  image's `orca scheduler can-overlap`; on `no` it quiesces and replaces as
+  today, saying why;
+- on `yes`, `orca-stack apply --overlap` starts the new scheduler as
+  `scheduler-next` beside the old one, sets the old one's restart policy to
+  `no` (a restart after its drain would be the newest instance and take
+  the lead back), renames it `scheduler-old` and the new one `scheduler`,
+  and waits for `orca scheduler wait-lead`;
+- the deploy registers the pipelines, then `orca-stack drain-old` asks the
+  old instance to drain, waits for its container to exit (bounded by the
+  deploy's `--timeout`, then stopped), and removes it;
 - `orca-stack status` lists the instances (`orca scheduler status`).
+
+Each container stages its own runs' output in the shared stage volume
+under names of their own (run and start), so nothing collides.
 
 ## Status (PR #242)
 
@@ -227,5 +234,5 @@ real instances on one Postgres: a drain with runs in flight, `max_runs`
 across both, no double start or requeue of the draining one's runs, a
 drain that runs out and its requeue, register's wait, and the floor cases).
 
-Next: the stack (above), the instances on Ops' System page, and making
+Next: the stack (#246, above), the instances on Ops' System page, and making
 `ORCA_OVERLAP=on` the default once proven.
