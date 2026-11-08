@@ -1,1 +1,1 @@
-The backfill and rebuild forms no longer say the command line works only on the control instance; `orca login` (#111) runs it from anywhere.
+The backfill and rebuild forms show one copyable line, `orca login <this UI> && orca --remote <this UI> backfill ...`, with a Copy button; Ops › Control's Memory pressure and Runs cards explain each value with a (?).
