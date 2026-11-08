@@ -1,5 +1,135 @@
 # Changelog
 
+## 0.15.0 - 2026-11-08
+
+- **A log or samples file an EC2 instance keeps is never left empty.**
+  `put-log` and `keep-log` (and the Kubernetes runner's log copies) wrote a
+  local `ORCA_LOGS` file in place, truncating it first, so an instance
+  terminated mid-copy, or a page read at that moment, could find the file
+  empty or half written; it is now written beside it and renamed over it.
+  An instance's last upload also waits for one still going, which could
+  otherwise land after it with older lines.
+- **A run's `started` is when the scheduler started it.** It was the time the
+  tick's transaction began, before the start waited on locks and counted
+  slots and the vCPU budget, so a run that correctly waited for another to
+  end could look as if it had run beside it (the runs list, the timeline,
+  and `tests/kind.sh`'s budget check).
+
+- **The web layer in modules, behind one router.** `orca ui`'s 8,600-line
+  `orca.ui` is four packages: `orca.web` (the server, a route table with a
+  method-aware router in place of `serve()`'s chain of `if
+  path.startswith(...)`, sessions and API tokens as a wrapper around the
+  routes), `orca.api` (the actions, the worker API with its own route
+  table, and the JSON writers), `orca.ui` (a module per page) and
+  `orca.views` (the typed rows both draw from; the run and pipeline pages
+  read a `RunView` and a `PipelineView` once for their HTML and their
+  JSON). Pages, JSON and the worker API answer as before, byte for byte;
+  only a malformed path's 404 can say it differently (`/runs/x/bogus` is
+  "nothing at /runs/x/bogus", not "no run x"). The
+  `orca.ui_style`, `orca.ui_viz`, `orca.ui_coverage`, `orca.terms` and
+  `orca.step_cards` modules are `orca.ui.style`, `.viz`, `.coverage`,
+  `.terms` and `.step_cards`. DESIGN.md, "Web layer", has the module map.
+- **`ORCA_WORKER_ADDR`: the worker API on a listener of its own.** Set to a
+  `host:port`, `orca ui` also serves `/api/worker/...` there, from a thread
+  of its own, so a slow page can't hold up a worker's claims, heartbeats
+  and store calls; everything else there is 404, and the UI's port keeps
+  answering the worker API too. Unset, nothing changes.
+  `docs/workers.md#a-listener-of-its-own`, `tests/ui.sh`.
+
+- **Fills on worker pools.** A pipeline placed `worker:<pool>` with `fills = "all"` has its fill runs queued as a local one's are (same order, window and partitions), held for a worker of the pool to claim. `fill_max_runs` caps its fill runs across the whole pool, queued ones included; each worker's `--max-runs` and grants cap one machine. The pipeline page and `/api/pipelines/<name>` count the queued fill runs (`fill.queued`).
+- **A run whose worker is gone is queued again.** A run claimed by a worker that hasn't been seen for half the stale limit, or that restarted without it, is queued again for the pool whatever its trigger (a manual, UI or rerun run no longer fails `interrupted`), within `run_retries` starts; one claimed and never started gets its start back. Each is audited (`/api/worker/requeue`) and logged.
+- **Machine metrics on workers.** `orca worker` starts `<binary> sample` beside each run, writing `metrics/worker-<name>.jsonl` under `ORCA_LOGS`, so worker runs have the Machines card, and the worker's Pools machine page draws its latest run's samples.
+- **A worker's claim no longer stalls behind one pipeline's queue.** The claim looked at the pool's 50 oldest queued runs, so one pipeline at its `max_runs` with more queued runs than that hid every other pipeline's runs, and a worker with room ran one pipeline at a time. It now looks at the oldest queued run of each pipeline.
+
+- **Runs lists filter by status, date, partition and run, and act on many
+  runs at once.** `/runs` and a pipeline's Runs tab have a filter bar (a
+  plain `GET` form; JavaScript only submits it on change): any of several
+  statuses, each with its count under the other filters (`counts` in the
+  JSON), the trigger, created `from`/`to` a day or time and quick picks
+  (`since=1h`, `today`, `24h`, `7d`), a partition glob or part (`key=2023-08-*`,
+  `key=modular/`) and a run id (`run=`, which goes to it). The filters
+  combine with the keyset pager, are kept in every link, the live refresh
+  and the `1–50 of N` count, and are the same parameters on the JSON
+  (`filters` gains `statuses`, `since`, `from`, `to`, `key`, `run`; `status`
+  still reads as before). Logged in, rows can be ticked (the page's at once,
+  or all that match, their number on the box and checked again by the
+  action) and cancelled, retried if failed, or backfilled again over their
+  partitions: `POST /runs/bulk`, which says what it did ("Cancelled 12
+  runs, 3 already finished") and audits each run as its own action. An index
+  on `runs.created` (migration 38) keeps a date filter one index range on
+  200,000 runs. `<pipeline> status --status failed,queued` filters a store's
+  runs on the command line, on Postgres, SQLite and in memory.
+
+- **Ops › Pools: one page for every machine runs are placed on.** Fleet
+  and Workers are one page, `/ops/pools`: a row per machine of each pool,
+  the EC2 instances orca launches (`ec2`, live and for an hour after they
+  end), a Kubernetes run's pods (`kubernetes`, on that runner) and the
+  machines running `orca worker` (`worker:<pool>`), with its kind, state
+  (`live`, `draining`, `gone`), image, CPUs, memory, runs, last heartbeat,
+  CPU and the worker as columns of its row, each with its help. `?pool=`
+  and `?kind=` filter it with plain links; with EC2 in view it keeps
+  Fleet's cards and charts; it refreshes every 10 s from
+  `/ops/pools/live`, and `/api/pools` is its JSON. A machine's page
+  (`/ops/pools/<kind>/<id>`) has an instance's samples over its run, or
+  the runs a worker claimed. The Ops menu is Control, Pools and Watchdog.
+  `/ops/fleet`, `/ops/workers`, their fragments and `/fleet` redirect to
+  Pools with the kind they showed (301), and still answer their JSON to a
+  script that asks for JSON; `/api/fleet` and `/api/workers` are
+  unchanged. `docs/ui.md#pools`, `tests/fleet.sh`.
+
+- **Admission by memory pressure.** On the local runner, the control host
+  and each remote worker, no new run starts while Linux's pressure stall
+  information reads `some avg10` over `ORCA_ADMIT_MEMORY_PRESSURE` (10%; 0
+  turns it off); runs already going go on. A waiting run says why, as the
+  grants' reasons do: `waiting: memory pressure 23% (limit 10%)` on its
+  page, its pipeline's **Waiting**, the home and runs pages and the JSON
+  (`... on worker <name>` for a worker's pool). The hold ends under half
+  the limit, or after 30 s at most it. A hold that outlasts
+  `ORCA_ADMIT_PRESSURE_GRACE_SECONDS` (600) with none of orca's runs going
+  is logged, raises the new `memory-pressure` alert once, and lets runs
+  start one at a time. The file read is the nearest cgroup's
+  `memory.pressure` with a memory limit (a container run with `--memory`),
+  else the host's `/proc/pressure/memory`, or `ORCA_MEMORY_PRESSURE_FILE`;
+  without PSI (macOS, `psi=0`) nothing changes and the log says so once.
+  `orca.pressure`, `orca.admission`; migration 40. docs/orca-toml.md,
+  "Memory pressure"; `tests/pressure.sh`.
+- **The pressure, shown.** Ops › Control has a Memory pressure card
+  (`memory_pressure` in `/api/system`), `/api/workers`
+  each worker's, `/metrics` the gauges `orca_memory_pressure_some_avg10`
+  (and `_avg60`, `_avg300`, `full_*`) and
+  `orca_admission_memory_pressure_held` by `host`, and `orca status` a line.
+- **Runs get `ORCA_MEMORY_PRESSURE_FILE`**, the PSI file their host's
+  pressure is read from (now reserved in `env`), and `orca.memory_pressure()`
+  reads it, so a step can lower its own parallelism while it's high.
+
+- **Each local, control-placed and worker run gets a cgroup with a memory
+  limit, and an out-of-memory kill retries bigger** (#201). Where orca can
+  make cgroup v2 cgroups (`orca scheduler`, `orca worker`), each start gets
+  `orca-run-<run>-<start>-<pid>` beside the leaf `orca` the scheduler moves
+  itself into: `memory.high` at its grant, else its request's maximum, else
+  `ORCA_RUN_MEMORY_MB` (default what the host can grant; on the control
+  placement at most `ORCA_CONTROL_MEMORY_MB`), and `memory.max`
+  `ORCA_RUN_MEMORY_MARGIN` (25) percent above, with `memory.oom.group` on.
+  The process is placed in it between `fork` and `exec` (the child writes
+  `0` to a `cgroup.procs` descriptor the parent opened). At the reap,
+  `memory.events`' `oom_kill` (or a stale-heartbeat kill while held at the
+  limit) fails the attempts `out of memory at <limit>: ...` instead of
+  signal 9, and raises `orca.pipelines.memory_raised_mb` to
+  `ORCA_RUN_MEMORY_GROWTH` (1.5) times the limit, up to `memory_gb`'s
+  maximum: admission makes it the request's minimum for the retry and the
+  pipeline's later runs; registering a different `memory_gb` resets it.
+  Cgroups are emptied (`cgroup.kill`) and removed when runs end, and a
+  scheduler that starts removes those a dead one left. The run's page shows
+  Memory limit, the Steps table each attempt's limit beside its peak, the
+  attempt page its limit and grant, and Ops › Control a Runs card of the
+  runs going with their cgroup's memory against their limit (`runs` in
+  `/api/system`); the JSON has `memory_limit`, `memory_limit_mb` and
+  `grant_memory_mb`. Migration 39. Where cgroups aren't available (macOS,
+  cgroup v1, no delegation, `ORCA_CGROUPS=0`) the scheduler says why once
+  and runs as before. On the Hetzner server, `orca-stack configure
+  CGROUPS=1` gives the scheduler's container a private cgroup namespace and
+  a writable `/sys/fs/cgroup` (off by default; docs/hetzner.md).
+
 ## 0.14.0 - 2026-11-08
 
 - **Each run's peak memory and CPU** (#200). The scheduler samples each
