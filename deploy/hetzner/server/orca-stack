@@ -16,8 +16,10 @@
 #   backup                                     pg_dump to s3://BUCKET/backups/pg/<time>.dump
 #                                              (a failure is pushed: orca notify --kind backup-failed)
 #   backup-now                                 the same, without the push (deploy.sh's)
-#   list-backups
-#   restore [--force] <key|latest>             pg_restore into the (empty) database
+#                                              (both write <time>.paused beside the dump: what was paused)
+#   list-backups                               the dumps, and which have a <time>.paused
+#   restore [--force] <key|latest>             pg_restore into the (empty) database, then
+#                                              unpause what a deploy's quiesce had paused
 #
 # Each apply that changes a tag keeps what was deployed before it:
 # $CONF/deployed has the tags the last apply started ("orca TAG", then "app
@@ -333,7 +335,7 @@ cmd_register() {
     n=0
     until out=$(docker exec scheduler orca register 2>&1); do
         n=$((n + 1))
-        [ "$n" -lt 15 ] || {
+        [ "$n" -lt "${ORCA_STACK_REGISTER_TRIES:-15}" ] || {
             echo "$out" >&2
             die "orca register failed"
         }
@@ -426,21 +428,53 @@ cmd_resume() {
     echo "orca-stack: unpaused"
 }
 
+# The pipelines paused as a dump is taken, for the dump's <time>.paused:
+# "paused_by_deploy NAME..." (those quiesce paused, $STATE/paused-by-quiesce)
+# and "paused_by_hand NAME..." (the others: by hand or by the watchdog).
+paused_lists() {
+    paused=$(psql_q "SELECT name FROM orca.pipelines WHERE paused ORDER BY name" 2> /dev/null) || paused=
+    by_deploy=
+    by_hand=
+    for p in $paused; do
+        if [ -f "$STATE/paused-by-quiesce" ] && grep -qx "$p" "$STATE/paused-by-quiesce"; then
+            by_deploy="$by_deploy $p"
+        else
+            by_hand="$by_hand $p"
+        fi
+    done
+    echo "# pipelines paused when the dump was taken"
+    echo "paused_by_hand$by_hand"
+    echo "paused_by_deploy$by_deploy"
+}
+
+dumps() { # the dumps' names in the bucket, oldest first
+    s3 s3 ls "s3://$(conf_get BUCKET)/backups/pg/" | awk '{print $4}' | grep '\.dump$' | sort || true
+}
+
 cmd_backup_now() {
     bucket=$(conf_get BUCKET)
     keep=$(conf_get BACKUP_KEEP)
     keep=${keep:-14}
     [ -n "$bucket" ] || die "no BUCKET"
     mkdir -p "$STATE/backup"
-    name=$(date -u +%Y%m%dT%H%M%SZ).dump
+    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    name=$stamp.dump
+    # What's paused first: quiesce has paused everything, so nothing changes
+    # in between during a deploy.
+    paused_lists > "$STATE/backup/$stamp.paused"
     # The same dump the AWS control instance's backup makes (docs/replace-control.md).
     docker exec postgres pg_dump -U orca -d orca -n orca -Fc > "$STATE/backup/$name"
     docker exec -i postgres pg_restore --list < "$STATE/backup/$name" > /dev/null || die "the dump doesn't read back"
     s3 s3 cp "/b/$name" "s3://$bucket/backups/pg/$name" > /dev/null
-    rm -f "$STATE/backup/$name"
-    # Keep the newest $keep (the names sort by time).
-    s3 s3 ls "s3://$bucket/backups/pg/" | awk '{print $4}' | sort | awk -v k="$keep" '{ a[NR] = $0 } END { for (i = 1; i <= NR - k; i++) print a[i] }' | while read -r old; do
-        [ -z "$old" ] || s3 s3 rm "s3://$bucket/backups/pg/$old" > /dev/null
+    s3 s3 cp "/b/$stamp.paused" "s3://$bucket/backups/pg/$stamp.paused" > /dev/null
+    echo "orca-stack: paused then (in $stamp.paused): by hand:$(sed -n 's/^paused_by_hand//p' "$STATE/backup/$stamp.paused"); by a deploy:$(sed -n 's/^paused_by_deploy//p' "$STATE/backup/$stamp.paused")"
+    rm -f "$STATE/backup/$name" "$STATE/backup/$stamp.paused"
+    # Keep the newest $keep (the names sort by time), each with its .paused.
+    dumps | awk -v k="$keep" '{ a[NR] = $0 } END { for (i = 1; i <= NR - k; i++) print a[i] }' | while read -r old; do
+        [ -z "$old" ] || {
+            s3 s3 rm "s3://$bucket/backups/pg/$old" > /dev/null
+            s3 s3 rm "s3://$bucket/backups/pg/${old%.dump}.paused" > /dev/null 2>&1 || true
+        }
     done
     echo "orca-stack: backed up to s3://$bucket/backups/pg/$name"
 }
@@ -462,7 +496,11 @@ cmd_backup() {
 }
 
 cmd_list_backups() {
-    s3 s3 ls "s3://$(conf_get BUCKET)/backups/pg/"
+    s3 s3 ls "s3://$(conf_get BUCKET)/backups/pg/" > "$STATE/backup/list" || die "can't list s3://$(conf_get BUCKET)/backups/pg/"
+    awk '$4 ~ /\.paused$/ { p[substr($4, 1, length($4) - 7)] = 1 }
+        $4 ~ /\.dump$/ { d[NR] = $0; n[NR] = substr($4, 1, length($4) - 5) }
+        END { for (i in d) print d[i] (p[n[i]] ? "   paused state recorded" : "   no paused state") }' "$STATE/backup/list" | sort
+    rm -f "$STATE/backup/list"
 }
 
 cmd_restore() {
@@ -475,7 +513,7 @@ cmd_restore() {
     bucket=$(conf_get BUCKET)
     key=$1
     if [ "$key" = latest ]; then
-        key="backups/pg/$(s3 s3 ls "s3://$bucket/backups/pg/" | awk '{print $4}' | sort | tail -n 1)"
+        key="backups/pg/$(dumps | tail -n 1)"
     fi
     case "$key" in backups/pg/*.dump) ;; *) die "a key like backups/pg/20261107T023000Z.dump, or latest" ;; esac
     safe "$key"
@@ -490,6 +528,23 @@ cmd_restore() {
     docker exec -i postgres pg_restore -U orca -d orca --no-owner --exit-on-error < "$STATE/backup/$f"
     rm -f "$STATE/backup/$f"
     echo "$key" > "$STATE/restored"
+    # The dump has the pipelines quiesce paused as paused: back as they were
+    # before that deploy. The others stay as they were.
+    side=${key%.dump}.paused
+    if s3 s3 ls "s3://$bucket/$side" 2> /dev/null | awk '{print $4}' | grep -qx "${side##*/}" \
+        && s3 s3 cp "s3://$bucket/$side" /b/restore.paused > /dev/null; then
+        by_deploy=$(sed -n 's/^paused_by_deploy//p' "$STATE/backup/restore.paused")
+        by_hand=$(sed -n 's/^paused_by_hand//p' "$STATE/backup/restore.paused")
+        rm -f "$STATE/backup/restore.paused"
+        for p in $by_deploy; do
+            case "$p" in *[!A-Za-z0-9._-]*) echo "orca-stack: not unpausing '$p' (an unexpected name)"; continue ;; esac
+            psql_q "UPDATE orca.pipelines SET paused = false WHERE name = '$p'" > /dev/null
+            echo "orca-stack: unpaused $p (a deploy had paused it)"
+        done
+        echo "orca-stack: paused by hand or the watchdog, so still paused:${by_hand:- none}"
+    else
+        echo "orca-stack: $key has no ${side##*/}: every pipeline paused in it stays paused (docker exec scheduler orca unpause <name>)"
+    fi
     echo "orca-stack: restored $key; now: orca-stack apply"
 }
 

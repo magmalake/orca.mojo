@@ -197,16 +197,23 @@ running runs, so `deploy.sh` does the safe sequence itself, logging each step:
    SECONDS`, default 3600);
 3. `orca-stack backup-now`: a `pg_dump` to the bucket, as the nightly one
    (below), and says where: `previous tag ac0c766, new tag b2b9558; backup
-   s3://<bucket>/backups/pg/20261108T101500Z.dump`. If the backup fails it
-   unpauses what it paused and stops without deploying; `--no-backup`
+   s3://<bucket>/backups/pg/20261108T101500Z.dump`. Beside the dump it
+   writes `<time>.paused`, which pipelines were paused by hand (or the
+   watchdog) and which by this deploy, and prints both. If the backup fails
+   it unpauses what it paused and stops without deploying; `--no-backup`
    deploys without one;
 4. `orca-stack apply --tag <tag>`: pulls and restarts, and keeps the tags
    it replaced (see [Rolling back](#rolling-back));
-5. `orca-stack resume`: unpauses the pipelines it paused, and only those
+5. `orca-stack register`: registers the pipelines from the new image
+   (`docker exec scheduler orca register`, its `orca.toml`), so queued runs
+   move to the new code before any starts;
+6. `orca-stack resume`: unpauses the pipelines it paused, and only those
    (not ones the watchdog or you paused).
 
-On a timeout or a failed apply it stops with the pipelines still paused and
-says so; `ssh root@<ip> orca-stack resume` undoes the pause. `--force` skips
+On a timeout, a failed apply or a failed registration it stops with the
+pipelines still paused and says so (after a failed registration: fix it,
+then `orca-stack register` and `orca-stack resume`, or `./deploy.sh
+--rollback`); `ssh root@<ip> orca-stack resume` undoes the pause. `--force` skips
 the pause and the wait and kills the running runs. `orca-stack status` shows
 the running runs and what quiesce paused.
 
@@ -219,7 +226,8 @@ and each app's), `/etc/orca/deployed.prev` what ran before, and
 tags again keeps the earlier ones. `ssh root@<ip> orca-stack status` shows
 both (`deployed: b2b9558   before: ac0c766`), `orca-stack tags [--previous]`
 prints one. `deploy.sh` also backs the database up just before each apply
-and prints the dump's key. The tags are kept from the first deploy with this
+and prints the dump's key, with a `<time>.paused` beside it saying which
+pipelines were paused by hand and which by the deploy. The tags are kept from the first deploy with this
 `orca-stack` on; before that, the stack's conf is taken as what ran.
 
 **The whole stack.** From the laptop:
@@ -291,10 +299,17 @@ and the UI first, and the rollback starts them again. If a `deploy.sh
 --rollback` already stopped at registering, with the scheduler's log
 refusing the schema, the old images are deployed already (and `rollback`
 would now go forward): restore, then `orca-stack apply` and `orca-stack
-register` instead of the last line. That dump was taken
-while the deploy had the pipelines paused, so they come back paused:
-unpause the ones the deploy's log lists (`orca-stack: paused <name>`) with
-`docker exec scheduler orca unpause <name>`. What happened in orca's database since the
+register` instead of the last line.
+
+That dump was taken while the deploy had the pipelines paused. `orca-stack
+restore` reads the dump's `<time>.paused` and unpauses the pipelines the
+deploy paused, so the stack comes back as it was before the deploy; the
+ones paused by hand or by the watchdog stay paused, and it prints both.
+`list-backups` says which dumps have one (`paused state recorded`). A dump
+without one (taken before orca-stack wrote them) leaves every pipeline that
+was paused in it paused, and says so: unpause the ones the deploy's log
+lists (`orca-stack: paused <name>`) with `docker exec scheduler orca
+unpause <name>`. What happened in orca's database since the
 dump is lost: runs and their steps, attempts and logs' records, sensor
 progress, registrations, users and tokens added, watchdog trips. The
 warehouse isn't in the dump: snapshots committed since stay in the tables,
@@ -391,6 +406,10 @@ The server runs `orca-stack backup` every night at 02:30 UTC
 orca-backup` on the server). It writes `pg_dump -n orca -Fc` (the format
 [replace-control.md](replace-control.md) uses), checks that it reads back,
 uploads it to `s3://<bucket>/backups/pg/<time>.dump`, and keeps the newest 14.
+Beside each dump is `<time>.paused`: the pipelines paused when it was taken,
+as `paused_by_hand` and `paused_by_deploy` (the ones a deploy's quiesce
+paused), which a restore uses to unpause the latter
+([Rolling back](#rolling-back)).
 
 ```sh
 ./backup.sh            # now, e.g. before a risky step
