@@ -77,6 +77,13 @@ from orca.config import (
     show_json,
     shown,
 )
+from orca.instances import (
+    ask_drain,
+    instances,
+    overlap_on,
+    overlap_refusal,
+    wait_for_lead,
+)
 from orca.scheduler import Scheduler
 from orca.control import fetch_secret
 from orca.ec2 import vcpus
@@ -153,7 +160,15 @@ comptime USAGE = """usage:
                                     the scheduler's: once per kind and subject
                                     in ORCA_NOTIFY_MIN_SECONDS)
   orca tick
-  orca scheduler
+  orca scheduler                    (with ORCA_OVERLAP=on an instance that
+                                    leads, or drains once a newer one runs:
+                                    docs/overlap.md)
+  orca scheduler status             (the instances: role, runs, last seen)
+  orca scheduler drain <id>         (asks instance <id> to drain and exit)
+  orca scheduler can-overlap        (exit 0 if this binary can start beside
+                                    the scheduler going now, 1 if a deploy
+                                    must stop it first; doesn't migrate)
+  orca scheduler wait-lead [--timeout S]   (until the newest instance leads)
   orca ui
   orca sample --out <location>|- [--pid PID] [--match PATH] [--dirs D,...]
               [--seconds S] [--count N] [--keep N]
@@ -481,11 +496,14 @@ def _command(args: List[String], target: String) raises -> Int:
         s.wait_for_binaries = True
         s.tick(now())
         return 0
+    if cmd == "scheduler" and len(args) >= 3:
+        return _scheduler(url, args)
     if cmd == "scheduler" and len(args) == 2:
         var s = Scheduler(url)
         s.say_pressure()
         s.contain()
-        while True:
+        s.join()
+        while not s.finished:
             # A tick that fails (the database is down) is tried again; the
             # state it would have changed is all in Postgres.
             try:
@@ -493,11 +511,17 @@ def _command(args: List[String], target: String) raises -> Int:
             except e:
                 print("orca: tick failed:", e)
                 try:
-                    s = Scheduler(url)
-                    s.contain()
+                    if s.instance > 0:
+                        # Its processes stay its own (docs/overlap.md).
+                        s.reconnect(url)
+                    else:
+                        s = Scheduler(url)
+                        s.contain()
                 except:
                     pass
-            sleep(1.0)
+            if not s.finished:
+                sleep(1.0)
+        return 0
     if cmd == "lineage" and (len(args) == 3 or len(args) == 4):
         var db = State(url)
         db.migrate()
@@ -776,6 +800,53 @@ def _config_binaries(file: ProjectConfig) raises -> List[String]:
     return out^
 
 
+def _scheduler(url: String, args: List[String]) raises -> Int:
+    """`orca scheduler <status|drain|can-overlap|wait-lead>`: the scheduler
+    instances (`orca.instances`, docs/overlap.md)."""
+    var db = State(url)
+    var sub = args[2]
+    if sub == "can-overlap" and len(args) == 3:
+        # Doesn't migrate: it's asked before the new image runs anything.
+        var why = overlap_refusal(db)
+        if why:
+            print("no:", why)
+            return 1
+        print("yes")
+        return 0
+    db.migrate()
+    if sub == "status" and len(args) == 3:
+        for line in instances(db):
+            print(line)
+        return 0
+    if sub == "drain" and len(args) == 4:
+        var id: Int
+        try:
+            id = Int(args[3])
+        except:
+            _usage(String("not an instance: ", args[3]))
+            return 2
+        if not ask_drain(db, id):
+            raise Error("orca: no live scheduler instance ", id)
+        print("asked scheduler instance", id, "to drain")
+        return 0
+    if sub == "wait-lead" and (len(args) == 3 or len(args) == 5):
+        var timeout = 600.0
+        if len(args) == 5:
+            if args[3] != "--timeout":
+                _usage(String("unknown option: ", args[3]))
+            timeout = Float64(args[4])
+        if not wait_for_lead(db, timeout):
+            raise Error(
+                "orca: the newest scheduler instance doesn't lead after ",
+                Int(timeout),
+                " s",
+            )
+        print("the newest scheduler instance leads")
+        return 0
+    _usage(String("unknown scheduler command: ", sub))
+    return 2
+
+
 def _register(url: String, args: List[String]) raises -> Int:
     """`orca register`: each binary's pipeline, with how its runs run from
     the project's orca.toml and the flags (`orca.config`)."""
@@ -863,6 +934,17 @@ def _register(url: String, args: List[String]) raises -> Int:
             _usage("register needs a pipeline binary, or an orca.toml")
         paths = _config_binaries(file)
     var s = Scheduler(url)
+    # Registered under an instance that drains, the new code could start
+    # under the old image (docs/overlap.md#deploying): with ORCA_OVERLAP=on
+    # a handover going on is waited for, ORCA_REGISTER_WAIT_SECONDS (120).
+    var wait = Float64(getenv("ORCA_REGISTER_WAIT_SECONDS", "120"))
+    if overlap_on() and not wait_for_lead(s.db, wait):
+        raise Error(
+            "orca: a scheduler handover is going on and the newest instance",
+            " doesn't lead after ",
+            Int(wait),
+            " s; register once it does (orca scheduler status)",
+        )
     for k in range(len(paths)):
         var got = s.register(paths[k], now(), flags, file)
         if file.is_file() and not file.has(got):
