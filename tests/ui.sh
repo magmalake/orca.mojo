@@ -684,5 +684,27 @@ html /watchdog | grep -qF '<div data-poll="/watchdog/live" data-poll-every="30">
 curl -fsS "$base/watchdog/live" | grep -qF '<h1>Watchdog</h1>' || fail "the watchdog fragment"
 echo "ok   live pages: Workers, Control, the watchdog"
 
+# The worker API on a listener of its own (ORCA_WORKER_ADDR, orca.api.worker):
+# a worker's calls there, and nothing else; the UI's port keeps answering
+# them too.
+wtok=$(./build/orca worker-token create --pool uitest --label ui 2>> "$log") || fail "worker-token create"
+wport=$((port + 3)); uport=$((port + 4))
+ORCA_UI_ADDR="127.0.0.1:$uport" ORCA_WORKER_ADDR="127.0.0.1:$wport" ./build/orca ui >> "$log" 2>&1 &
+wpid=$!
+i=0
+until curl -fs "http://127.0.0.1:$uport/" > /dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui with ORCA_WORKER_ADDR didn't start"; sleep 0.1
+done
+beat() { curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $2" -d '{"name": "w-ui", "slots": 0}' "$1/api/worker/claim"; }
+[ "$(beat "http://127.0.0.1:$wport" "$wtok")" = 200 ] || fail "a heartbeat on the worker listener"
+[ "$(beat "http://127.0.0.1:$wport" orca_nope)" = 401 ] || fail "a bad token on the worker listener"
+[ "$(beat "http://127.0.0.1:$uport" "$wtok")" = 200 ] || fail "a heartbeat on the UI's port, beside a worker listener"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$wport/")" = 404 ] || fail "the worker listener answers a page"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$wport/api/pipelines/toy")" = 404 ] \
+    || fail "the worker listener answers the API"
+[ "$(q "SELECT name FROM orca.workers WHERE label = 'ui'")" = w-ui ] || fail "the heartbeat wasn't recorded"
+kill "$wpid"
+echo "ok   the worker API on ORCA_WORKER_ADDR"
+
 kill "$pid"
 echo "ok   ui"

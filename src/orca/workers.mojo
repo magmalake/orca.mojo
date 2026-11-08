@@ -23,14 +23,10 @@ token gets nothing here, and a worker token gets nothing elsewhere. It
 lasts `--days` (default and at most `ORCA_WORKER_TOKEN_DAYS`, 365). A
 revoked token stays listed, as revoked, and is answered 401.
 
-**The API**, each a `POST` of JSON with `Authorization: Bearer <token>`:
-
-| Path | |
-|---|---|
-| `/api/worker/claim` | the worker's own heartbeat (`name`, `image`, `cpus`, `memory_mb`, `running`), and with `slots` > 0 the oldest queued run of its pool it may take: its spec, or `null` |
-| `/api/worker/release` | a run it was given and won't start (`run`, `start`, `why`): queued again, held saying why |
-| `/api/worker/exited` | a run's process ended (`run`, `start`, `code`, `last`): a run it never claimed fails with why; with `pid`, `max_rss` and `marks`, the process's samples, its attempts' peak memory and CPU are recorded (`orca.usage`) |
-| `/api/worker/store/<call>` | a `RunStore` call of a run this worker claimed, made on `orca.state.PgStore` |
+**The API** (`orca.api.worker`): `/api/worker/claim`, the worker's
+heartbeat and its claims; `/api/worker/release`, a run it won't start;
+`/api/worker/exited`, a run's process ended; `/api/worker/store/<call>`,
+`store_call`, a `RunStore` call of a run it claimed.
 
 A claim takes, under its pipeline's lock, a queued run whose pipeline isn't
 paused and has fewer than `max_runs` live runs, and starts it as the
@@ -376,15 +372,17 @@ def _seen(mut db: State, w: WorkerAuth, v: Value) raises:
         ),
         Params()
         .int64(Int64(w.id))
-        .text(_str(v, "name"))
-        .text(_str(v, "image"))
+        .text(text_field(v, "name"))
+        .text(text_field(v, "image"))
         .int32(Int32(cpus))
         .int64(mem)
-        .text(_str(v, "running")),
+        .text(text_field(v, "running")),
     )
 
 
-def _str(v: Value, key: String) raises -> String:
+def text_field(v: Value, key: String) raises -> String:
+    """A field of a worker's JSON as text: a number's digits, empty for
+    none or null."""
     if key not in v or v[key].is_null():
         return ""
     if v[key].is_int():
@@ -404,8 +402,8 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     var slots = Int(v["slots"].int_value()) if String("slots") in v else 0
     if slots <= 0:
         return String('{"run": null}')
-    var image = _str(v, "image")
-    var name = _str(v, "name")
+    var image = text_field(v, "image")
+    var name = text_field(v, "name")
     # What the worker's host can grant (orca.resources), from a worker that
     # says; -1 from one that doesn't, whose runs aren't admitted.
     var room_cpus = -1
@@ -564,7 +562,7 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
 def release(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     """`/api/worker/release`: puts back a run the worker was given and won't
     start (its spec isn't for this worker's image), held saying why."""
-    var why = _str(v, "why")
+    var why = text_field(v, "why")
     var n = db.conn.execute(
         (
             "UPDATE orca.runs SET status = 'queued', owner = NULL, heartbeat ="
@@ -589,12 +587,12 @@ def exited(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     var run = _num(v, "run")
     var why = String(
         "its process on ",
-        _str(v, "name") if _str(v, "name") else String("a worker"),
+        text_field(v, "name") if text_field(v, "name") else String("a worker"),
         " exited ",
         _num(v, "code"),
         " before claiming it",
     )
-    var last = _str(v, "last")
+    var last = text_field(v, "last")
     if last:
         why.write(": ", last)
     var n = db.conn.execute(
@@ -680,8 +678,8 @@ def store_call(
         State(url),
         url,
         Int(run),
-        _str(v, "owner"),
-        _str(v, "registry_hash"),
+        text_field(v, "owner"),
+        text_field(v, "registry_hash"),
     )
     if call == "run_info":
         return String('{"run": ', run_info_json(store.run_info(Int(run))), "}")
@@ -689,33 +687,33 @@ def store_call(
         var stale = (
             v["stale"].float_value() if String("stale") in v else stale_limit()
         )
-        store.claim(Int(run), _str(v, "owner"), stale)
+        store.claim(Int(run), text_field(v, "owner"), stale)
         return "{}"
     if call == "version":
-        if _str(v, "pipeline") != pipeline:
+        if text_field(v, "pipeline") != pipeline:
             raise Error(FINAL, "orca: run ", run, " is of pipeline ", pipeline)
         var n = store.version(
             pipeline,
-            _str(v, "registry_hash"),
+            text_field(v, "registry_hash"),
             v["describe"].raw_json(),
-            _str(v, "image"),
+            text_field(v, "image"),
         )
         return String('{"version": ', n, "}")
     if call == "ran_version":
         store.ran_version(Int(run), Int(_num(v, "version")))
         return "{}"
     if call == "interrupt":
-        var n = store.interrupt(Int(run), _str(v, "why"))
+        var n = store.interrupt(Int(run), text_field(v, "why"))
         return String('{"n": ', n, "}")
     if call == "prior":
         return String('{"steps": ', prior_json(store.prior(Int(run))), "}")
     if call == "steps":
         return String('{"steps": ', steps_json(store.steps(Int(run))), "}")
     if call == "start_attempt":
-        var input = bytes_of_hex(_str(v, "input"))
+        var input = bytes_of_hex(text_field(v, "input"))
         var n = store.start_attempt_once(
-            _str(v, "step"),
-            _str(v, "partition"),
+            text_field(v, "step"),
+            text_field(v, "partition"),
             Int(_num(v, "ord")),
             Span(input),
         )
@@ -723,26 +721,28 @@ def store_call(
             '{"attempt": ', n, ', "attempt_id": ', store.attempt_id(), "}"
         )
     if call == "finish_attempt":
-        var output = bytes_of_hex(_str(v, "output"))
+        var output = bytes_of_hex(text_field(v, "output"))
         store.finish_attempt_once(
-            _str(v, "step"),
-            _str(v, "partition"),
+            text_field(v, "step"),
+            text_field(v, "partition"),
             Int(_num(v, "attempt")),
-            _str(v, "status"),
+            text_field(v, "status"),
             Span(output),
-            _str(v, "error"),
+            text_field(v, "error"),
         )
         return "{}"
     if call == "skip":
         store.skip_once(
-            _str(v, "step"),
-            _str(v, "partition"),
+            text_field(v, "step"),
+            text_field(v, "partition"),
             Int(_num(v, "ord")),
-            _str(v, "reason"),
+            text_field(v, "reason"),
         )
         return "{}"
     if call == "pinned_reads":
-        var pins = store.pinned_reads(_str(v, "step"), _str(v, "partition"))
+        var pins = store.pinned_reads(
+            text_field(v, "step"), text_field(v, "partition")
+        )
         return String('{"pins": ', pins_json(pins), "}")
     if call == "record":
         var attempt = _num(v, "attempt_id")
@@ -751,7 +751,9 @@ def store_call(
         store.record(
             v["commit"].bool_value(),
             TableSnapshot(
-                _str(v, "table"), _num(v, "snapshot"), _str(v, "dataset")
+                text_field(v, "table"),
+                _num(v, "snapshot"),
+                text_field(v, "dataset"),
             ),
         )
         return "{}"
@@ -759,13 +761,13 @@ def store_call(
         var attempt = _num(v, "attempt_id")
         _check_attempt(db, run, attempt)
         store.at_attempt(attempt)
-        store.set_log("", "", 0, _str(v, "path"))
+        store.set_log("", "", 0, text_field(v, "path"))
         return "{}"
     if call == "fence":
         store.fence()
         return "{}"
     if call == "finish_run":
-        store.finish_run(_str(v, "status"))
+        store.finish_run(text_field(v, "status"))
         return "{}"
     if call == "defer_run":
         store.defer_run(_num(v, "until"))
@@ -775,80 +777,13 @@ def store_call(
         return String('{"cancel": ', "true" if c else "false", "}")
     if call == "beat":
         var why = beat_run(
-            store.db.conn, Int(run), _str(v, "owner"), _str(v, "timeouts")
+            store.db.conn,
+            Int(run),
+            text_field(v, "owner"),
+            text_field(v, "timeouts"),
         )
         return String('{"stop": ', quote(why), "}")
     raise Error("orca: no store call ", call)
-
-
-@fieldwise_init
-struct Answer(Movable):
-    """What a worker request is answered: a status and its JSON."""
-
-    var status: Int
-    var json: String
-
-
-def _error(status: Int, why: String) -> Answer:
-    return Answer(status, String('{"error": ', quote(why), "}"))
-
-
-def worker_api(
-    url: String, path: String, bearer: String, body: String
-) -> Answer:
-    """A worker's request to `path` (under `/api/worker/`), with the token
-    `bearer`, over the database at `url`."""
-    try:
-        var db = State(url)
-        var w = worker_of(db, bearer)
-        if not w:
-            return _error(
-                401,
-                (
-                    "orca: this worker token is unknown, expired or revoked"
-                    " (orca worker-token create)"
-                ),
-            )
-        var v: Value
-        try:
-            v = loads(body if body.strip() else "{}")
-            if not v.is_object():
-                raise Error("not an object")
-        except:
-            return _error(400, "orca: a worker's request is a JSON object")
-        var pool = _str(v, "pool")
-        if pool and pool != w.value().pool:
-            return _error(
-                403,
-                String(
-                    "orca: this worker token is for pool ",
-                    w.value().pool,
-                    ", not ",
-                    pool,
-                ),
-            )
-        if path == "/api/worker/claim":
-            return Answer(200, claim(db, w.value(), v))
-        if path == "/api/worker/release":
-            return Answer(200, release(db, w.value(), v))
-        if path == "/api/worker/exited":
-            return Answer(200, exited(db, w.value(), v))
-        if path.startswith(STORE_PATH):
-            var call = String(path[byte = STORE_PATH.byte_length() :])
-            try:
-                return Answer(200, store_call(db, url, w.value(), call, v))
-            except e:
-                var msg = String(e)
-                if msg.startswith(FINAL):
-                    var bare = String(msg[byte = FINAL.byte_length() :])
-                    var status = 403 if " claimed; stopping" in bare else 409
-                    return _error(status, bare)
-                if msg.startswith("orca: not committing"):
-                    return _error(409, msg)
-                return _error(500, msg)
-        return _error(404, String("orca: nothing at ", path))
-    except e:
-        return _error(500, String(e))
 
 
 # ── Ops ──────────────────────────────────────────────────────────────────────

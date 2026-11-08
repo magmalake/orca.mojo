@@ -20,6 +20,7 @@ Its commands:
     ./build/orca tick
     ./build/orca scheduler
     ./build/orca ui                 # http://127.0.0.1:8270, or ORCA_UI_ADDR
+                                    # (the worker API on ORCA_WORKER_ADDR too)
     ./build/orca sample --out m.jsonl --pid 1234   # machine metrics
     ./build/orca lineage lake.report [<snapshot>]
     ./build/orca rebuild raw.events 2024-03
@@ -579,7 +580,11 @@ def _command(args: List[String], target: String) raises -> Int:
     if cmd == "ui" and len(args) == 2:
         var db = State(url)
         db.migrate()
-        serve_ui(url, getenv("ORCA_UI_ADDR", DEFAULT_ADDR))
+        serve_ui(
+            url,
+            getenv("ORCA_UI_ADDR", DEFAULT_ADDR),
+            getenv("ORCA_WORKER_ADDR"),
+        )
         return 0
     _usage()
     return 2

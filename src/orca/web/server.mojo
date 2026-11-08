@@ -32,6 +32,7 @@ own as well (`orca.api.worker`).
 from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
 
+from orca.api import worker as worker_api
 from orca.auth import audit, login_required
 from orca.html import Html, url_encode
 from orca.json import quote
@@ -51,7 +52,6 @@ from orca.ui_style import STYLE
 from orca.ui_viz import VIZ_STYLE
 from orca.web.auth import (
     API_LOGIN,
-    bearer,
     client,
     content_type,
     cross_origin,
@@ -65,7 +65,6 @@ from orca.web.auth import (
 )
 from orca.web.router import ACTION, AUTH, PAGE, Call, Route, answer, find
 from orca.web.routes import routes
-from orca.workers import worker_api
 
 comptime DEFAULT_ADDR = "127.0.0.1:8270"
 comptime STYLESHEET = "/static/orca.css"
@@ -158,21 +157,6 @@ def _stylesheet() raises -> Response:
     return resp^
 
 
-def _worker(url: String, req: Request) -> Response:
-    """A remote worker's request (`orca.workers`): its token, its JSON, its
-    calls."""
-    var got = worker_api(
-        url,
-        _path_of(req.url),
-        bearer(req.headers.get("Authorization")),
-        String(from_utf8_lossy=Span(req.body)),
-    )
-    var page = Page(got.status, got.json.copy(), String())
-    if got.status == 401:
-        page.headers.append(("WWW-Authenticate", 'Bearer realm="orca"'))
-    return _respond(page, True)
-
-
 struct Ui(Copyable, Handler):
     """The pages, the API and the actions, over the database at `url`."""
 
@@ -189,7 +173,7 @@ struct Ui(Copyable, Handler):
         if path == STYLESHEET:
             return _stylesheet()
         if post and path.startswith("/api/worker/"):
-            return _worker(self.url, req)
+            return worker_api.respond(self.url, req)
         var found = find(self.routes, req.method, path)
         if not found.route and req.method != "GET" and req.method != "HEAD":
             return _not_allowed()
@@ -279,11 +263,15 @@ def act(mut db: State, path: String, form: String) raises -> Optional[Page]:
     return answer(routes(), db, call^, ACTION)
 
 
-def serve_ui(url: String, addr: String) raises:
-    """Serves the pages on `addr` until the process is stopped."""
+def serve_ui(url: String, addr: String, worker_addr: String = "") raises:
+    """Serves the pages on `addr` until the process is stopped, and the
+    worker API on `worker_addr` too, if one is given (`orca.api.worker`)."""
     var cfg = ServerConfig()
     cfg.idle_timeout_ms = 30_000
     cfg.write_timeout_ms = 30_000
     var server = HttpServer.bind(SocketAddr.parse(addr), cfg^)
+    if worker_addr:
+        worker_api.listen(url, worker_addr)
+        print("orca ui: the worker API on http://", worker_addr, sep="")
     print("orca ui on http://", addr, sep="")
     server.serve(Ui(url))
