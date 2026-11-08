@@ -28,7 +28,7 @@ the requests in the handler itself (`Counting`) and stops the loop with
 `HttpServer.close()` once there are none.
 """
 
-from std.ffi import c_int, external_call
+from std.ffi import c_int, c_uint, external_call
 from std.os import getenv
 from std.time import perf_counter_ns, sleep
 
@@ -63,13 +63,16 @@ def _readable(fd: c_int, timeout_ms: Int) -> Bool:
     """Whether `fd` has something to read, waiting up to `timeout_ms`."""
     # struct pollfd { int fd; short events; short revents; }; `events` is
     # the low half of the second int on the little-endian targets orca runs
-    # on. nfds_t is unsigned int on macOS and unsigned long on Linux:
-    # passed as a 64-bit Int, each reads its own width of it.
+    # on. The argument types are flare's (`flare.net._libc._poll`): one
+    # program can't declare `poll` twice with different ones.
     var p = Array[Int32, 2](fill=0)
     p[0] = Int32(fd)
     p[1] = _POLLIN
     return (
-        external_call["poll", c_int](p.unsafe_ptr(), 1, c_int(timeout_ms)) > 0
+        external_call["poll", c_int](
+            p.unsafe_ptr().unsafe_bitcast[NoneType](), c_uint(1), c_int(timeout_ms)
+        )
+        > 0
     )
 
 
