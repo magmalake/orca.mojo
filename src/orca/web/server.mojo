@@ -174,7 +174,8 @@ struct Ui(Copyable, Handler):
         if post and path.startswith("/api/worker/"):
             return worker_api.worker_response(self.url, req)
         var found = find(self.table, req.method, path)
-        if not found.route and req.method != "GET" and req.method != "HEAD":
+        var reading = req.method == "GET" or req.method == "HEAD"
+        if not found.route and not (reading or (post and found.miss)):
             return _not_allowed()
 
         var by_script = scripted(req, path)
@@ -210,6 +211,11 @@ struct Ui(Copyable, Handler):
                 except e:
                     return respond(bad_request(String(e)), json)
 
+            if not found.route and post:
+                # An action's path, but for a number that isn't one.
+                if required and not call.user:
+                    return login_needed(req, json)
+                return respond(not_found(String("nothing at ", path)), json)
             if not found.route:
                 var miss = found.miss if found.miss else String(
                     "nothing at ", path

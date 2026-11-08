@@ -12,7 +12,8 @@ that isn't one (`/runs/x`, `/runs/1/attempts/x/log`) is answered 404,
 
 A `GET` route answers `HEAD` too. A read (`GET`) that matches nothing is
 404, "nothing at <path>"; a `POST` that matches nothing is 405, since only
-the actions take one.
+the actions take one, unless it's an action's but for its number, which
+is 404.
 """
 
 from orca.html import query_param, url_decode
