@@ -17,6 +17,7 @@
 # curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC tests/usage/hog.mojo -o build/hog &
@@ -88,7 +89,7 @@ check() {
     fi
 }
 
-port=$((49000 + $$ % 1000))
+free_port port
 base="http://127.0.0.1:$port"
 ./build/orca register ./build/hog >> "$log" 2>&1 || fail "register"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &

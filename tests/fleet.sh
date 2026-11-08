@@ -9,6 +9,7 @@
 # curl, jq and python3.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -94,7 +95,7 @@ tick
 [ "$(q "SELECT count(*) FROM orca.fleet_hourly WHERE hour < now() - interval '8 days'")" -eq 0 ] || fail "old hours were kept"
 echo "ok   the scheduler keeps the instances' samples, once, for 30 minutes"
 
-port=$((18000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 pid=$!
@@ -175,12 +176,16 @@ echo "ok   /fleet, /fleet/hosts and /system redirect; /ops goes to Control"
 order() { html "$1" | grep -o '<code>[a-z]*-\{0,1\}[a-z0-9-]*</code>' | sed 's/<[^>]*>//g' | tr '\n' ' '; }
 want="control head-i-head worker-i-w1 worker-i-w2 worker-i-w3 "
 [ "$(order /ops/fleet)" = "$want" ] || fail "default order: $(order /ops/fleet)"
-# The control instance's CPU is this machine's, so only the rest is fixed.
-want="head-i-head worker-i-w1 worker-i-w2 "
-[ "$(order '/ops/fleet?sort=cpu&dir=desc' | cut -d' ' -f1-3 | sed 's/$/ /')" = "$want" ] || fail "by CPU, highest first: $(order '/ops/fleet?sort=cpu&dir=desc')"
-[ "$(order '/ops/fleet/hosts?sort=cpu&dir=desc' | cut -d' ' -f1-3 | sed 's/$/ /')" = "$want" ] || fail "the fragment's order"
-# A host with no samples counts as 0%: first or second, after an idle control.
-order '/ops/fleet?sort=cpu&dir=asc' | awk '{print $1, $2}' | grep -q "worker-i-w3" || fail "by CPU, lowest first: a host with no samples is lowest"
+# The control instance's CPU is this machine's, anywhere from idle to busy,
+# so it's left out: the rest is fixed. (Taking the first three assumed this
+# machine was under 30% busy.)
+others() { order "$1" | tr ' ' '\n' | grep -vx control | tr '\n' ' '; }
+want="head-i-head worker-i-w1 worker-i-w2 worker-i-w3 "
+[ "$(others '/ops/fleet?sort=cpu&dir=desc')" = "$want" ] || fail "by CPU, highest first: $(order '/ops/fleet?sort=cpu&dir=desc')"
+[ "$(others '/ops/fleet/hosts?sort=cpu&dir=desc')" = "$want" ] || fail "the fragment's order: $(order '/ops/fleet/hosts?sort=cpu&dir=desc')"
+# A host with no samples counts as 0%: the lowest.
+[ "$(others '/ops/fleet?sort=cpu&dir=asc' | cut -d' ' -f1)" = worker-i-w3 ] \
+    || fail "by CPU, lowest first: a host with no samples is lowest: $(order '/ops/fleet?sort=cpu&dir=asc')"
 [ "$(order '/ops/fleet/hosts?sort=uptime&dir=desc' | cut -d' ' -f1)" = "head-i-head" ] || fail "by uptime, longest first"
 [ "$(order '/ops/fleet?sort=nonsense')" = "$(order /ops/fleet)" ] || fail "an unknown column is the default order"
 html '/ops/fleet?sort=cpu&dir=desc' | grep -qF '<th class="num" aria-sort="descending"><a class="sortby" href="/ops/fleet?sort=cpu&amp;dir=asc&amp;range=24h#hosts">CPU ▼</a>' \
@@ -205,7 +210,7 @@ html /ops/fleet | grep -qF '&lt;b&gt;x&lt;/b&gt;' || fail "the escaped instance 
 # On the local runner the page says that no instances are launched; on others
 # it doesn't.
 html /ops/fleet | grep -q 'launches no instances' && fail "the local-runner notice on a scheduler with no runner set"
-lport=$((port + 1))
+free_port lport
 ORCA_FIXED_COST="€8.49/month" ORCA_RUNNER=local ORCA_UI_ADDR="127.0.0.1:$lport" ./build/orca ui >> "$log" 2>&1 &
 lpid=$!
 i=0

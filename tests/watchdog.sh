@@ -26,6 +26,7 @@
 # server), python3, curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -38,8 +39,8 @@ log=build/watchdog.log
 dir=$PWD/build/fake-ec2-watchdog
 rm -rf "$dir" build/watchdog-logs
 mkdir -p "$dir"
-port=$((38000 + $$ % 2000))
-uport=$((18000 + $$ % 2000))
+free_port port
+free_port uport
 base="http://127.0.0.1:$uport"
 fake=
 sched=

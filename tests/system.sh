@@ -8,6 +8,7 @@
 # curl, jq and python3.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
@@ -94,7 +95,7 @@ tick
 [ ! -e "$ORCA_LOGS/control/2000-01-01.jsonl" ] || fail "an old day file was kept"
 echo "ok   rows and day files older than 14 days are dropped"
 
-port=$((18000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 pid=$!

@@ -81,7 +81,7 @@ test-kill = { cmd = "scripts/with-postgres.sh tests/kill.sh" }
 # process aborts mid-step under the scheduler.
 test-crash = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_crash.mojo -o build/test-crash && ./build/test-crash && scripts/with-postgres.sh tests/crash.sh" }
 test-tasks = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_tasks.mojo -o build/test-tasks && ./build/test-tasks" }
-test-logs = { cmd = "rm -f build/logs.db build/logs.db-wal build/logs.db-shm && ORCA_DATABASE_URL=sqlite:build/logs.db tests/logs.sh" }
+test-logs = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_logs.mojo -o build/test-logs && ./build/test-logs && rm -f build/logs.db build/logs.db-wal build/logs.db-shm && ORCA_DATABASE_URL=sqlite:build/logs.db tests/logs.sh" }
 test-scheduler = { cmd = "scripts/with-postgres.sh tests/scheduler.sh" }
 test-chaos = { cmd = "scripts/with-postgres.sh tests/chaos.sh" }
 # The same over a SQLite file (orca.sqlite_store), with no server.

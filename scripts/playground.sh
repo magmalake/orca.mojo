@@ -15,6 +15,7 @@
 # removes everything. ORCA_UI_ADDR changes the address.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 if [ -z "${ORCA_DATABASE_URL:-}" ]; then
     exec scripts/with-postgres.sh "$0" "$@"
 fi
@@ -54,7 +55,7 @@ ORCA_TOY_FAIL=2024-05 ./build/toy run --partitions 2024-04..2024-06 >> "$log" 2>
 ./build/fanout run --partitions 2024-01 >> "$log" 2>&1
 
 echo "two fanout runs on the stand-in EC2, their workers scaling from 0 to 3 ..."
-port=$((33000 + $$ % 2000))
+free_port port
 python3 tests/fake_ec2.py "$port" "$dir/ec2" >> "$log" 2>&1 &
 fake=$!
 pids="$fake"

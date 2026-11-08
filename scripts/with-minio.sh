@@ -11,6 +11,7 @@
 #
 # Usage: with-minio.sh <command...>
 set -eu
+. "$(dirname "$0")/../tests/port.sh"
 
 if [ "$#" -eq 0 ]; then
     echo "usage: with-minio.sh <command...>" >&2
@@ -25,9 +26,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-port=$((30000 + $$ % 5000))
+free_port port
+free_port console
 export MINIO_ROOT_USER=orca-test MINIO_ROOT_PASSWORD=orca-test-secret
-minio server "$work/data" --address "127.0.0.1:$port" --console-address "127.0.0.1:$((port + 1))" \
+minio server "$work/data" --address "127.0.0.1:$port" --console-address "127.0.0.1:$console" \
     > "$work/server.log" 2>&1 &
 pid=$!
 i=0

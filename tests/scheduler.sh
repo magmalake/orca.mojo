@@ -159,4 +159,24 @@ tick 2024-08-15T12:00Z
 settle
 [ "$(q "SELECT count(*) FROM orca.runs WHERE pipeline = 'daily' AND status = 'succeeded'")" -eq 1 ] \
     || fail "the daily run didn't succeed"
+
+# A run's start is when it started, not when the tick's transaction began:
+# here that waits 2 s for the pipeline's row, as it would for another
+# scheduler's tick, and the start comes after. (Recorded as the transaction's
+# start, a run that waited for another to end could look as if it ran beside
+# it: tests/kind.sh's budget check.)
+out=$(ORCA_NOW=2024-08-02T04:00Z ./build/orca backfill --rerun toy 2024-05) || fail "backfill exited $?"
+[ "$out" = "queued 1 runs" ] || fail "backfill of 2024-05: $out"
+psql "$ORCA_DATABASE_URL" -Atq -c "BEGIN; SELECT name FROM orca.pipelines WHERE name = 'toy' FOR UPDATE; SELECT pg_sleep(2); COMMIT" > /dev/null &
+locker=$!
+i=0
+until [ "$(q "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation WHERE c.relname = 'pipelines' AND l.mode = 'RowShareLock' AND l.pid <> pg_backend_pid()")" -gt 0 ]; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "the pipeline's row wasn't locked"; sleep 0.05
+done
+before=$(q "SELECT extract(epoch FROM clock_timestamp())")
+ORCA_TOY_SLEEP=0 ORCA_NOW=2024-08-02T04:00Z ./build/orca tick >> "$log" 2>&1 || fail "tick behind the lock"
+wait "$locker"
+waited=$(q "SELECT round(extract(epoch FROM started) - $before, 1) FROM orca.runs WHERE pipeline = 'toy' AND partitions = '2024-05' ORDER BY id DESC LIMIT 1")
+awk -v w="$waited" 'BEGIN { exit !(w >= 1) }' || fail "the run's start is ${waited}s after the tick began, before the lock was let go"
+settle
 echo "ok   scheduler"

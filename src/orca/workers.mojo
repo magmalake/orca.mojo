@@ -500,7 +500,8 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
         var got = tx.query(
             (
                 "UPDATE orca.runs SET status = 'running', owner = $2, heartbeat"
-                " = NULL, started = now(), ended = NULL, starts = starts + 1,"
+                " = NULL, started = clock_timestamp(), ended = NULL, starts ="
+                " starts + 1,"
                 " retry_at = NULL, error = NULL, waiting_since = NULL,"
                 " cpu_millis = 0, placement = $3, held = NULL, worker = $4,"
                 " request_cpus = nullif($5, ''), request_memory_gb ="

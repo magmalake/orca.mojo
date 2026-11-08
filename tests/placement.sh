@@ -23,6 +23,7 @@
 # server), python3, curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 for b in toy fanout daily; do
     # shellcheck disable=SC2086
@@ -35,8 +36,8 @@ log=build/placement.log
 dir=$PWD/build/fake-ec2-placement
 rm -rf "$dir" build/placement-logs build/placement-stage
 mkdir -p "$dir"
-port=$((38000 + $$ % 1000))
-uiport=$((port + 1000))
+free_port port
+free_port uiport
 base="http://127.0.0.1:$uiport"
 fake=
 sched=
