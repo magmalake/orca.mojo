@@ -23,6 +23,7 @@ which `interrupt` marks failed when the run is resumed.
 
 from std.ffi import external_call
 from std.os import getenv
+from std.sys import stderr
 
 from postgres import Connection, Params, Transaction
 
@@ -50,7 +51,29 @@ from orca.store import (
 
 
 def _migrations() -> List[List[String]]:
-    """Each migration is a list of statements; its version is its index + 1."""
+    """Each migration is a list of statements; its version is its index + 1.
+
+    **Rollbacks.** A binary older than the database runs on it if every
+    migration it doesn't know is additive, so a migration must leave the
+    schema working for the binaries before it, or be listed in
+    `_floor_raisers` (see there, and AGENTS.md's "Migrations"):
+
+    - add a column only nullable or with a default; never NOT NULL without
+      one, which an older binary's INSERTs (which name their columns) don't
+      fill;
+    - add tables, indexes and nullable foreign keys freely, but a foreign
+      key onto a table an older binary deletes from (users, sessions,
+      api_tokens, notifications, fleet, system and watchdog rows) must be
+      `ON DELETE CASCADE` or `SET NULL`, or its delete fails;
+    - don't rename, drop or retype a column or table, tighten a constraint
+      or change a key an `ON CONFLICT` names, and don't write a value an
+      older binary reads and acts on (a new run or step status) or store a
+      different meaning in an old column: each of those raises the floor.
+
+    The queries keep this possible: they name the columns they insert and
+    select (`SELECT *` only over a subquery that names them), and read rows
+    by column name, never by position.
+    """
     return [
         [
             """CREATE TABLE orca.pipelines (
@@ -621,6 +644,74 @@ def _migrations() -> List[List[String]]:
     ]
 
 
+def _floor_raisers() -> List[Int]:
+    """The migrations a binary must know to run on a database that has had
+    them: those that rename, drop or retype what older binaries use, or
+    change what it means. Every other migration is additive (`_migrations`
+    says what that allows), and a binary that doesn't know it runs on its
+    schema anyway.
+
+    - 1 creates the schema.
+    - 24 (the EC2 warm pool) replaces `orca.instances`' primary key on `id`
+      with one on `(id, run, start)`: an instance has a row per run it
+      served, so the binaries before it, which update and end an instance
+      by `id` alone, would touch its earlier rows too.
+    """
+    return [1, 24]
+
+
+def migration_floor(version: Int) -> Int:
+    """The fewest migrations a binary must know to run on a database at
+    schema version `version`: the newest floor-raising migration up to it."""
+    var floor = 0
+    for v in _floor_raisers():
+        if v <= version and v > floor:
+            floor = v
+    return floor
+
+
+def known_migrations() raises -> Int:
+    """How many migrations this binary knows: all of `_migrations`, or fewer
+    under `ORCA_TEST_MIGRATIONS=N`, which the tests use to act as an older
+    binary on a database a newer one migrated."""
+    var n = len(_migrations())
+    var test = getenv("ORCA_TEST_MIGRATIONS")
+    if test:
+        var t = Int(test)
+        if 0 <= t < n:
+            return t
+    return n
+
+
+def schema_ahead(have: Int, floor: Int, known: Int) raises -> Bool:
+    """Whether a binary that knows `known` migrations runs on a database at
+    schema version `have` without migrating it: False when the database
+    isn't ahead (the binary applies what it lacks), True when it's ahead
+    with only additive migrations since (`floor`, the fewest migrations the
+    database says a binary must know, is at most `known`). Raises when the
+    database needs a newer binary, or doesn't say (`floor` < 0)."""
+    if have <= known:
+        return False
+    if floor < 0 or floor > known:
+        var why = String(
+            "a migration since needs a binary that knows at least ",
+            floor,
+        ) if floor >= 0 else String(
+            "it doesn't record which binaries can run on it"
+        )
+        raise Error(
+            "orca: the database is at schema version ",
+            have,
+            ", newer than this binary's ",
+            known,
+            ", and ",
+            why,
+            "; deploy a newer binary, or restore a backup taken before the",
+            " upgrade (docs/hetzner.md#rolling-back)",
+        )
+    return True
+
+
 comptime _MIGRATION_LOCK = 0x6F726361  # "orca"
 
 
@@ -648,31 +739,65 @@ struct State(Movable):
             Params().int64(_MIGRATION_LOCK),
         )
         _ = tx.execute("CREATE SCHEMA IF NOT EXISTS orca")
+        # A row per migration applied, with the fewest migrations a binary
+        # must know to run on the schema it left (`min_binary`, null on the
+        # rows of binaries before it, which this fills in for those it knows).
         _ = tx.execute(
             "CREATE TABLE IF NOT EXISTS orca.schema_version (version int NOT"
             " NULL)"
         )
-        var have = Int(
-            tx.query(
-                "SELECT coalesce(max(version), 0) AS v FROM orca.schema_version"
-            )
-            .row(0)
-            .int64("v")
+        _ = tx.execute(
+            "ALTER TABLE orca.schema_version ADD COLUMN IF NOT EXISTS"
+            " min_binary int"
         )
         var migrations = _migrations()
-        if have > len(migrations):
-            raise Error(
+        var known = known_migrations()
+        var unfloored = List[Int]()
+        for r in tx.query(
+            (
+                "SELECT version FROM orca.schema_version WHERE min_binary IS"
+                " NULL AND version BETWEEN 1 AND $1"
+            ),
+            Params().int64(Int64(known)),
+        ):
+            unfloored.append(Int(r.int64("version")))
+        for v in unfloored:
+            _ = tx.execute(
+                (
+                    "UPDATE orca.schema_version SET min_binary = $2 WHERE"
+                    " version = $1"
+                ),
+                Params().int64(Int64(v)).int64(Int64(migration_floor(v))),
+            )
+        var row = tx.query(
+            "SELECT coalesce(max(version), 0) AS v, CASE WHEN bool_or("
+            "min_binary IS NULL) THEN -1 ELSE coalesce(max(min_binary), 0)"
+            " END AS floor FROM orca.schema_version"
+        ).row(0)
+        var have = Int(row.int64("v"))
+        if schema_ahead(have, Int(row.int64("floor")), known):
+            print(
                 "orca: the database is at schema version ",
                 have,
-                ", newer than this binary's ",
-                len(migrations),
+                ", ahead of this binary's ",
+                known,
+                "; its migrations since are additive, so running on it",
+                sep="",
+                file=stderr,
             )
-        for v in range(have, len(migrations)):
+            tx.commit()
+            return
+        for v in range(have, known):
             for stmt in migrations[v]:
                 _ = tx.execute(stmt)
             _ = tx.execute(
-                "INSERT INTO orca.schema_version VALUES ($1)",
-                Params().int64(Int64(v + 1)),
+                (
+                    "INSERT INTO orca.schema_version (version, min_binary)"
+                    " VALUES ($1, $2)"
+                ),
+                Params()
+                .int64(Int64(v + 1))
+                .int64(Int64(migration_floor(v + 1))),
             )
         tx.commit()
 

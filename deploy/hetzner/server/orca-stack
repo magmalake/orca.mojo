@@ -6,13 +6,23 @@
 #   app NAME PORT                              an app beside the UI (the census console)
 #   apply [--db-only] [--force] [--tag T] [--app NAME=T]...
 #                                              pull the images, (re)start the containers
-#   status                                     containers, running runs
+#   status                                     containers, running runs, tags
+#   tags [--previous]                          what's deployed (or was before it)
+#   rollback [--force]                         apply the tags deployed before, and
+#                                              register the pipelines again
+#   register                                   docker exec scheduler orca register
 #   quiesce [--timeout SECONDS]                pause every pipeline, wait for runs to end
 #   resume                                     unpause what quiesce paused
 #   backup                                     pg_dump to s3://BUCKET/backups/pg/<time>.dump
 #                                              (a failure is pushed: orca notify --kind backup-failed)
+#   backup-now                                 the same, without the push (deploy.sh's)
 #   list-backups
 #   restore [--force] <key|latest>             pg_restore into the (empty) database
+#
+# Each apply that changes a tag keeps what was deployed before it:
+# $CONF/deployed has the tags the last apply started ("orca TAG", then "app
+# NAME TAG" for each app, its own tag or the orca tag), $CONF/deployed.prev
+# the ones before, and stack.conf's ORCA_PREV_TAG the orca tag of those.
 #
 # The containers and the environment are the ones deploy/aws/orca.yaml makes
 # (same images, same names, same env variable names), minus Caddy and the
@@ -155,7 +165,38 @@ run_container() { # NAME, then docker run's arguments (including the network)
     docker run -d --name "$name" --restart always "$@" > /dev/null
 }
 
+# The tags the stack is set to run: "orca TAG", then "app NAME TAG".
+tags_now() {
+    t=$(conf_get ORCA_TAG)
+    echo "orca $t"
+    [ -s "$CONF/apps" ] || return 0
+    while read -r name port atag; do
+        [ "$atag" != - ] || atag=$t
+        echo "app $name $atag"
+    done < "$CONF/apps"
+}
+
+tags_line() { # FILE: its tags on one line: "T" if the apps run the orca tag, else "orca T, console U"
+    awk '$1 == "orca" { o = $2 } $1 == "app" { a = a ", " $2 " " $3; if ($3 != o) d = 1 } END { print d ? "orca " o a : o }' "$1"
+}
+
+cmd_tags() {
+    if [ "${1:-}" = --previous ]; then
+        [ ! -s "$CONF/deployed.prev" ] || tags_line "$CONF/deployed.prev"
+    elif [ -s "$CONF/deployed" ]; then
+        tags_line "$CONF/deployed"
+    elif [ -f "$STATE/applied" ]; then
+        tags_now > "$CONF/deployed.now"
+        tags_line "$CONF/deployed.now"
+        rm -f "$CONF/deployed.now"
+    fi
+}
+
 cmd_apply() {
+    # A stack applied before deployed was kept: what it runs is its conf.
+    if [ ! -f "$CONF/deployed" ] && [ -f "$STATE/applied" ] && [ -n "$(conf_get ORCA_TAG)" ]; then
+        tags_now > "$CONF/deployed"
+    fi
     dbonly=0
     force=0
     newtag=
@@ -277,13 +318,65 @@ cmd_apply() {
         echo "orca-stack: no $CONF/tunnel.env, so no tunnel"
     fi
     date -u +%FT%TZ > "$STATE/applied"
+    tags_now > "$CONF/deployed.new"
+    if [ -f "$CONF/deployed" ] && ! cmp -s "$CONF/deployed" "$CONF/deployed.new"; then
+        mv "$CONF/deployed" "$CONF/deployed.prev"
+        conf_set ORCA_PREV_TAG "$(sed -n 's/^orca //p' "$CONF/deployed.prev")"
+    fi
+    mv "$CONF/deployed.new" "$CONF/deployed"
     echo "orca-stack: applied $image:$tag"
+}
+
+# The pipelines as the scheduler's image has them (its orca.toml). The
+# scheduler may still be starting after an apply.
+cmd_register() {
+    n=0
+    until out=$(docker exec scheduler orca register 2>&1); do
+        n=$((n + 1))
+        [ "$n" -lt 15 ] || {
+            echo "$out" >&2
+            die "orca register failed"
+        }
+        sleep 2
+    done
+    echo "$out" | sed 's/^/orca-stack: /'
+}
+
+cmd_rollback() {
+    force=
+    [ "${1:-}" != --force ] || force=--force
+    [ -s "$CONF/deployed.prev" ] || die "nothing to roll back to: no earlier deploy is recorded ($CONF/deployed.prev)"
+    if [ -z "$force" ] && [ "$(running_runs)" -gt 0 ]; then
+        die "$(running_runs) run(s) running; restarting the scheduler kills them (pause the pipelines and wait, or --force)"
+    fi
+    # apply moves deployed.prev, so the target is read first.
+    cp "$CONF/deployed.prev" "$CONF/rollback.to"
+    echo "orca-stack: rolling back from $(cmd_tags) to $(tags_line "$CONF/rollback.to")"
+    to=$(sed -n 's/^orca //p' "$CONF/rollback.to")
+    safe "$to"
+    args="--tag $to"
+    while read -r kind name atag; do
+        [ "$kind" = app ] || continue
+        if ! grep -q "^$name " "$CONF/apps" 2> /dev/null; then
+            echo "orca-stack: the app $name isn't set up any more; not starting it"
+            continue
+        fi
+        # An app that ran the orca tag follows it again.
+        [ "$atag" != "$to" ] || atag=-
+        args="$args --app $name=$atag"
+    done < "$CONF/rollback.to"
+    rm -f "$CONF/rollback.to"
+    # shellcheck disable=SC2086
+    cmd_apply $args $force
+    cmd_register
+    echo "orca-stack: rolled back to $(cmd_tags); orca-stack rollback again goes forward to $(cmd_tags --previous)"
 }
 
 cmd_status() {
     docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
     echo "running runs: $(running_runs)"
     echo "tag: $(conf_get ORCA_TAG)   applied: $(cat "$STATE/applied" 2> /dev/null || echo never)"
+    echo "deployed: $(cmd_tags)   before: $(cmd_tags --previous)"
     [ ! -f "$STATE/paused-by-quiesce" ] || echo "paused by quiesce: $(tr '\n' ' ' < "$STATE/paused-by-quiesce")"
 }
 
@@ -349,7 +442,7 @@ cmd_backup_now() {
     s3 s3 ls "s3://$bucket/backups/pg/" | awk '{print $4}' | sort | awk -v k="$keep" '{ a[NR] = $0 } END { for (i = 1; i <= NR - k; i++) print a[i] }' | while read -r old; do
         [ -z "$old" ] || s3 s3 rm "s3://$bucket/backups/pg/$old" > /dev/null
     done
-    echo "orca-stack: backed up to backups/pg/$name"
+    echo "orca-stack: backed up to s3://$bucket/backups/pg/$name"
 }
 
 # A failed backup is a push to the phone (orca notify, if alerts are set up):
@@ -407,11 +500,14 @@ case "$sub" in
     app) cmd_app "$@" ;;
     apply) cmd_apply "$@" ;;
     status) cmd_status ;;
+    tags) cmd_tags "$@" ;;
+    rollback) cmd_rollback "$@" ;;
+    register) cmd_register ;;
     quiesce) cmd_quiesce "$@" ;;
     resume) cmd_resume ;;
     backup) cmd_backup ;;
     backup-now) cmd_backup_now ;;
     list-backups) cmd_list_backups ;;
     restore) cmd_restore "$@" ;;
-    *) die "usage: orca-stack configure|app|apply|status|quiesce|resume|backup|list-backups|restore" ;;
+    *) die "usage: orca-stack configure|app|apply|status|tags|rollback|register|quiesce|resume|backup|list-backups|restore" ;;
 esac

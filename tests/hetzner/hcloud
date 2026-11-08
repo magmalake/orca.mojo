@@ -1,0 +1,3 @@
+#!/bin/sh
+# A fake hcloud for tests/hetzner.sh.
+[ "$*" != "server ip orca" ] || echo 192.0.2.1

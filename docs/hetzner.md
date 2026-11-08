@@ -183,6 +183,7 @@ once memory is nearly full, which pressure should keep from happening.
 ```sh
 ./deploy.sh a1b2c3d                    # pulls ghcr.io/magmalake/orca:a1b2c3d, restarts scheduler, ui, sampler, apps, tunnel
 ./deploy.sh a1b2c3d console=latest     # one app on another tag
+./deploy.sh --rollback                 # back to the tags deployed before (see Rolling back)
 ```
 
 The tag is the project's image tag: see [Images](#images). This replaces
@@ -194,14 +195,117 @@ running runs, so `deploy.sh` does the safe sequence itself, logging each step:
 2. `orca-stack quiesce`: pauses every pipeline that isn't paused, then waits
    for the running runs to end, listing them each minute (`--timeout
    SECONDS`, default 3600);
-3. `orca-stack apply --tag <tag>`: pulls and restarts;
-4. `orca-stack resume`: unpauses the pipelines it paused, and only those
+3. `orca-stack backup-now`: a `pg_dump` to the bucket, as the nightly one
+   (below), and says where: `previous tag ac0c766, new tag b2b9558; backup
+   s3://<bucket>/backups/pg/20261108T101500Z.dump`. If the backup fails it
+   unpauses what it paused and stops without deploying; `--no-backup`
+   deploys without one;
+4. `orca-stack apply --tag <tag>`: pulls and restarts, and keeps the tags
+   it replaced (see [Rolling back](#rolling-back));
+5. `orca-stack resume`: unpauses the pipelines it paused, and only those
    (not ones the watchdog or you paused).
 
 On a timeout or a failed apply it stops with the pipelines still paused and
 says so; `ssh root@<ip> orca-stack resume` undoes the pause. `--force` skips
 the pause and the wait and kills the running runs. `orca-stack status` shows
 the running runs and what quiesce paused.
+
+## Rolling back
+
+**What is kept.** Each apply that changes a tag records the tags it
+replaced on the server: `/etc/orca/deployed` has what runs now (the orca tag
+and each app's), `/etc/orca/deployed.prev` what ran before, and
+`ORCA_PREV_TAG` in `/etc/orca/stack.conf` that orca tag. Applying the same
+tags again keeps the earlier ones. `ssh root@<ip> orca-stack status` shows
+both (`deployed: b2b9558   before: ac0c766`), `orca-stack tags [--previous]`
+prints one. `deploy.sh` also backs the database up just before each apply
+and prints the dump's key. The tags are kept from the first deploy with this
+`orca-stack` on; before that, the stack's conf is taken as what ran.
+
+**The whole stack.** From the laptop:
+
+```sh
+./deploy.sh --rollback                 # quiesce, backup, orca-stack rollback, resume
+./deploy.sh --rollback --force         # without waiting: kills the running runs
+```
+
+It does what a deploy does (copies `orca-stack`, pauses and waits, backs
+up), then `orca-stack rollback`: applies the previous orca tag and the
+previous app tags (an app that ran the orca tag follows it again, and one no
+longer set up is left out), and registers the pipelines again (`docker exec
+scheduler orca register`, from the rolled-back image's `orca.toml`), before
+it unpauses anything. The older binaries have other registry hashes and maybe
+another `orca.toml`, so the registration is what makes the scheduler start
+runs with the code that's deployed. On the server, `orca-stack rollback
+[--force]` does the same without the pause and the backup. A second rollback
+goes forward again: the tags it replaced are now the previous ones.
+
+**Only an app.** The census console is an app with its own tag; rolling it
+back leaves the scheduler alone, so no run is killed and nothing needs
+registering:
+
+```sh
+ssh root@<ip> orca-stack apply --app console=<sha>
+```
+
+Apply checks for running runs anyway (it restarts every container, the
+scheduler too); with runs running either wait, or `./deploy.sh <orca-tag>
+console=<sha>` with the current orca tag, which waits for you.
+
+**Running runs.** As on a deploy: without `--force` it pauses the pipelines
+and waits up to `--timeout` for the running runs to end, and `orca-stack
+rollback` itself refuses while any run is running. With `--force` the
+scheduler's restart kills them. The registration then does what it does
+after any new build: queued runs, and failed ones waiting for a retry with
+no step done, move to the rolled-back code and start once the pipelines are
+unpaused; a run with steps done by the newer code fails, saying how to
+resume it (`--allow-new-code`, or Resume with the new code in the UI); and a
+manual, UI or rerun run whose process died is failed with an error.
+
+**The schema.** Postgres is not rolled back: the older orca runs on the
+newer schema. That works while every migration it doesn't know is
+additive (new tables, indexes, and columns that are nullable or have a
+default); the scheduler and UI then log `orca: the database is at schema
+version 41, ahead of this binary's 40; its migrations since are additive,
+so running on it` and go on. A migration that renames, drops or retypes
+something, or changes what a value means, raises the floor (AGENTS.md's
+Migrations; the list is `_floor_raisers` in `src/orca/state.mojo`), and an
+orca from before it refuses to start: `orca: the database is at schema
+version N, newer than this binary's M, and a migration since needs a binary
+that knows at least K`. This applies from orca 0.16.0 (the first that
+records floors) on: a rollback to an image with an older orca still stops
+at any newer schema, additive or not, and needs the restore below.
+
+**Crossing a floor-raising migration.** Then the database has to go back
+too, to the backup taken before the upgrade:
+
+```sh
+ssh root@<ip> orca-stack list-backups      # the dumps, by time
+ssh root@<ip> orca-stack restore --force backups/pg/20261108T101500Z.dump
+ssh root@<ip> orca-stack rollback --force  # the old images on it, registered again
+```
+
+`deploy.sh`'s line before the upgrade's apply named the dump (`backup
+s3://<bucket>/backups/pg/...`). `orca-stack restore` stops the scheduler
+and the UI first, and the rollback starts them again. If a `deploy.sh
+--rollback` already stopped at registering, with the scheduler's log
+refusing the schema, the old images are deployed already (and `rollback`
+would now go forward): restore, then `orca-stack apply` and `orca-stack
+register` instead of the last line. That dump was taken
+while the deploy had the pipelines paused, so they come back paused:
+unpause the ones the deploy's log lists (`orca-stack: paused <name>`) with
+`docker exec scheduler orca unpause <name>`. What happened in orca's database since the
+dump is lost: runs and their steps, attempts and logs' records, sensor
+progress, registrations, users and tokens added, watchdog trips. The
+warehouse isn't in the dump: snapshots committed since stay in the tables,
+and the runs that made them are gone from orca's history, so a rebuild or
+backfill of those keys runs them again.
+
+**Finding a sha.** Images are tagged by the project's short commit sha on
+GHCR (and `latest`), never by version: `orca-stack tags --previous` has the
+one before, the project's `git log --oneline` the others (an image exists
+for each commit main's image job pushed; its log ends with `<short-sha>:
+digest: sha256:...`), and the package's page on GitHub lists them.
 
 ## Rescaling for an import
 
