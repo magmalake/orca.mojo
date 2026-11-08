@@ -6,3 +6,6 @@
   a deploy paused; `orca-stack restore` unpauses the latter after restoring,
   leaving the hand-paused ones paused, and `list-backups` says which dumps
   have one.
+- **The home page's pipelines table puts each pipeline's state first.**
+  Coverage, Running and Queued now come right after the name, and the
+  partitions, schedule, next run and last run after them.

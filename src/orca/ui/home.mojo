@@ -107,14 +107,15 @@ def _home_pipelines(
     covs: List[Optional[Coverage]],
     srcs: Dict[String, String],
 ):
-    """The home page's table of pipelines: partitions and coverage,
-    schedules, next and last runs. A pipeline's name shows its declaration
+    """The home page's table of pipelines: after each name its state at a
+    glance (coverage, running and queued runs), then its partitions,
+    schedule, next and last runs. A pipeline's name shows its declaration
     on hover (`data-src`, the page's `_PEEK`), at the registered code."""
     h.raw(
         '<section class="card"><div class="scroll"><table><thead><tr>',
-        "<th>Pipeline</th><th>Partitions</th>",
-        '<th class="num">Coverage</th><th>Schedule</th>',
-        "<th>Next run</th><th>Running</th><th>Queued</th><th>Last run</th>",
+        '<th>Pipeline</th><th class="num">Coverage</th>',
+        "<th>Running</th><th>Queued</th><th>Partitions</th><th>Schedule</th>",
+        "<th>Next run</th><th>Last run</th>",
         "</tr></thead><tbody>",
     )
     for i in range(len(ps)):
@@ -135,17 +136,7 @@ def _home_pipelines(
             h.status("paused")
         pause_button(h, p.name, p.paused)
         h.raw("</td>")
-        h.cell(p.kind, " from ", p.start if p.start else String("the start"))
         _coverage_cell(h, p, covs[i])
-        if p.cron:
-            h.raw("<td><code>")
-            h.text(p.cron)
-            h.raw("</code> ")
-            h.text(p.tz)
-            h.raw("</td>")
-            h.mono(p.next_fire, " → ", p.next_partition)
-        else:
-            h.raw('<td class="muted">none</td><td></td>')
         # The counts as badges, lit while they're not zero.
         h.raw(
             '<td><span class="badge',
@@ -159,7 +150,18 @@ def _home_pipelines(
             '">',
         )
         h.text(p.queued)
-        h.raw("</span></td><td>")
+        h.raw("</span></td>")
+        h.cell(p.kind, " from ", p.start if p.start else String("the start"))
+        if p.cron:
+            h.raw("<td><code>")
+            h.text(p.cron)
+            h.raw("</code> ")
+            h.text(p.tz)
+            h.raw("</td>")
+            h.mono(p.next_fire, " → ", p.next_partition)
+        else:
+            h.raw('<td class="muted">none</td><td></td>')
+        h.raw("<td>")
         if p.last_run:
             h.chip(String("/runs/", p.last_run), String(p.last_run))
             h.raw(" ")

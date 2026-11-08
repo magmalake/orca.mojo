@@ -547,6 +547,14 @@ grep -q 'pager' "$log.frag" && fail "the home page's recent runs have a pager"
 [ "$(grep -o '<tr><td><a class="chip"' "$log.frag" | wc -l)" -eq 10 ] || fail "the home page's fragment hasn't 10 runs"
 [ "$(frag /home/pipelines)" = 200 ] || fail "the home page's pipelines fragment"
 grep -qF '<section class="card"><div class="scroll"><table><thead><tr><th>Pipeline' "$log.frag" || fail "the pipelines fragment isn't the table"
+# Its state at a glance right after each name: Coverage, Running, Queued,
+# then the rest; each header keeps its "?".
+cols=$(sed -n 's|.*<table><thead><tr>\(.*\)</tr></thead>.*|\1|p' "$log.frag" | head -n 1 | grep -o '<th[^>]*>[A-Za-z ]*' | sed 's/<th[^>]*>//' | tr '\n' ,)
+[ "$cols" = "Pipeline,Coverage,Running,Queued,Partitions,Schedule,Next run,Last run," ] \
+    || fail "the pipelines table's columns: $cols"
+for c in Coverage Running Queued Partitions Schedule; do
+    grep -qF "aria-label=\"About $c\"" "$log.frag" || fail "the pipelines table's $c has no help"
+done
 grep -qiE '^X-Poll-Every: (5|30)' "$log.h" || fail "the pipelines fragment doesn't say when to ask again"
 # Tries: the header says what it counts, and a cell has a number only when
 # the run was started more than once; the JSON keeps `starts`.
