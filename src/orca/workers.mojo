@@ -64,7 +64,8 @@ from orca.http_store import (
 from orca.civil import now
 from orca.json import quote
 from orca.live import dead_sql, stale_limit, start_grace
-from orca.resources import Grant, Room, admit
+from orca.cgroup import growth_pct_of, oom_text, raised_mb, raised_request
+from orca.resources import Grant, Request, Room, admit
 from orca.scheduler import registered
 from orca.state import PgStore, State, beat_run
 from orca.store import FINAL, TableSnapshot
@@ -490,6 +491,13 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
             tx.rollback()
             continue
         var request = p.request()
+        if request.memory_min_mb > 0:
+            # At least what an out-of-memory kill raised it to.
+            request.memory_min_mb = raised_request(
+                request.memory_min_mb,
+                request.memory_max_mb,
+                p.memory_raised_mb,
+            )
         var grant = Grant.none()
         var admitted = request.any() and room_cpus >= 0
         if admitted:
@@ -608,6 +616,61 @@ def release(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     return String('{"released": ', "true" if n == 1 else "false", "}")
 
 
+def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
+    """A worker's run's cgroup (`orca.cgroup`), at its process's end: its
+    limit on the attempts it made, and after an out-of-memory kill, while
+    the start is still this worker's, those left running failed saying so
+    and the pipeline's memory raised, up to its request's maximum."""
+    var run = _num(v, "run")
+    var start = _num(v, "start")
+    var limit = Int(_num(v, "memory_limit_mb"))
+    var kill = (
+        Int(_num(v, "memory_max_mb")) if String("memory_max_mb") in v else limit
+    )
+    var rows = db.conn.query(
+        (
+            "SELECT r.pipeline, coalesce(r.grant_memory_mb, 0) AS grant_mb,"
+            " coalesce(p.memory_gb, '') AS memory_gb, r.status = 'running' AS"
+            " running FROM orca.runs r JOIN orca.pipelines p ON p.name ="
+            " r.pipeline WHERE r.id = $1 AND r.worker = $2 AND r.starts = $3"
+        ),
+        Params().int64(run).int64(Int64(w.id)).int64(start),
+    )
+    if len(rows) != 1:
+        return
+    var r = rows.row(0)
+    _ = db.conn.execute(
+        (
+            "UPDATE orca.attempts a SET memory_limit_mb = $3, grant_memory_mb"
+            " = nullif($4, 0) FROM orca.steps st WHERE st.id = a.step AND"
+            " st.run = $1 AND a.host LIKE '%:' || $2 AND a.memory_limit_mb IS"
+            " NULL"
+        ),
+        Params()
+        .int64(run)
+        .text(String(_num(v, "pid")))
+        .int64(Int64(limit))
+        .int64(r.int64("grant_mb")),
+    )
+    if _num(v, "oom") != 1 or not r.bool("running"):
+        return
+    var ceiling = limit
+    if r.text("memory_gb"):
+        ceiling = Request.of("", r.text("memory_gb")).memory_max_mb
+    var g = getenv("ORCA_RUN_MEMORY_GROWTH")
+    var next = raised_mb(limit, growth_pct_of(g) if g else 150, ceiling)
+    var why = oom_text(limit, kill, next)
+    _ = db.interrupt(Int(run), why)
+    _ = db.conn.execute(
+        (
+            "UPDATE orca.pipelines SET memory_raised_mb ="
+            " greatest(coalesce(memory_raised_mb, 0), $2) WHERE name = $1"
+        ),
+        Params().text(r.text("pipeline")).int64(Int64(next)),
+    )
+    print("run", run, "on", w.user(), why)
+
+
 def exited(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     """`/api/worker/exited`: fails a run whose process ended before it
     claimed it, as the scheduler's reap does for a local run, and records
@@ -647,6 +710,8 @@ def exited(mut db: State, w: WorkerAuth, v: Value) raises -> String:
             worker=w.id,
             start=Int(_num(v, "start")),
         )
+    if String("memory_limit_mb") in v and String("pid") in v:
+        _contained_exit(db, w, v)
     return String(
         '{"failed": ', "true" if n == 1 else "false", ', "usage": ', used, "}"
     )

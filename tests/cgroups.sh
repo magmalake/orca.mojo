@@ -1,0 +1,196 @@
+#!/bin/sh
+# Containment (orca.cgroup), Linux only: a run whose step holds more than its
+# cgroup's memory.max is killed by the kernel, it alone; its attempt fails
+# "out of memory at <limit>"; its retry has a bigger limit and succeeds; the
+# pipeline's next run starts from that limit; the run page, its JSON and
+# Ops > Control's show the limits; no run cgroup or process is left; and a
+# scheduler that starts removes an empty cgroup a dead one left.
+#
+# The scheduler makes the cgroups under its own cgroup, which it has to be
+# able to write (delegated). Where it isn't, and `sudo -n` works (GitHub's
+# runners), this makes a delegated one: a cgroup under the root owned by
+# this user, which this shell moves into, as systemd's Delegate=yes would.
+# Elsewhere (macOS, cgroup v1, no delegation and no sudo) it says why and
+# skips.
+#
+# Needs ORCA_DATABASE_URL (pixi run test-cgroups starts a throwaway server),
+# curl and jq.
+set -eu
+cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
+
+skip() {
+    echo "cgroups: skipped: $*"
+    exit 0
+}
+[ "$(uname)" = Linux ] || skip "cgroups are Linux's ($(uname))"
+grep -q '^0::' /proc/self/cgroup || skip "no cgroup v2 hierarchy (cgroup v1?)"
+[ -f /sys/fs/cgroup/cgroup.controllers ] || skip "no cgroup v2 at /sys/fs/cgroup"
+
+own=$(sed -n 's/^0:://p' /proc/self/cgroup)
+made=
+back=
+# Whether orca, in this shell's cgroup, could make cgroups there: the files
+# it writes are this user's (or root's, for root) and memory is delegated.
+writable() {
+    d=/sys/fs/cgroup${own%/}
+    [ "$own" = / ] && d=/sys/fs/cgroup
+    case "$d" in */orca) d=${d%/orca} ;; esac
+    grep -qw memory "$d/cgroup.controllers" 2> /dev/null && [ -w "$d/cgroup.procs" ] \
+        && [ -w "$d/cgroup.subtree_control" ] && touch "$d/cgroup.procs" 2> /dev/null
+}
+if ! writable; then
+    if sudo -n true 2> /dev/null && grep -qw memory /sys/fs/cgroup/cgroup.subtree_control; then
+        made=/sys/fs/cgroup/orca-test-$$
+        sudo mkdir "$made"
+        sudo chown -R "$(id -u):$(id -g)" "$made"
+        back=/sys/fs/cgroup${own}
+        sudo sh -c "echo $$ > $made/cgroup.procs"
+        own=${made#/sys/fs/cgroup}
+        echo "cgroups: made $made, delegated to $(id -un) with sudo"
+    else
+        skip "this shell's cgroup ($own) isn't writable, and there's no sudo to make one"
+    fi
+fi
+
+mkdir -p build
+# shellcheck disable=SC2086
+scripts/mojo-build.sh -I src $DEP_INC tests/cgroups/grower.mojo -o build/grower &
+b1=$!
+# shellcheck disable=SC2086
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+b2=$!
+wait "$b1"
+wait "$b2"
+log=build/cgroups.log
+: > "$log"
+rm -f build/cgroups-*.out
+export ORCA_STALE_SECONDS=5 ORCA_START_SECONDS=20 ORCA_SAMPLE_SECONDS=0 ORCA_RETRY_SECONDS=1
+# A run without a request has 200 MB, and is killed past it (no margin, so
+# no throttling between memory.high and memory.max); after a
+# kill it asks for twice that. Its step holds 300 MiB: over the first limit,
+# under the second.
+export ORCA_RUN_MEMORY_MB=200 ORCA_RUN_MEMORY_MARGIN=0 ORCA_RUN_MEMORY_GROWTH=2 GROW_MB=300
+pids=
+sched=
+cleanup() {
+    for p in $pids $sched; do kill "$p" 2> /dev/null || true; done
+    if [ -n "$made" ]; then
+        sleep 1
+        sudo sh -c "echo $$ > $back/cgroup.procs" 2> /dev/null || true
+        for d in "$made"/*/; do [ -d "$d" ] && sudo rmdir "$d" 2> /dev/null; done
+        sudo rmdir "$made" 2> /dev/null || echo "cgroups: $made is left"
+    fi
+}
+trap cleanup EXIT
+fail() {
+    echo "FAIL: $*"
+    tail -30 "$log"
+    for f in build/cgroups-*.out; do [ -f "$f" ] && { echo "== $f"; tail -25 "$f"; }; done
+    exit 1
+}
+q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+until_() {
+    t=$1; what=$2; shift 2
+    i=0
+    until "$@"; do
+        i=$((i + 1)); [ "$i" -lt $((t * 10)) ] || fail "$what"; sleep 0.1
+    done
+}
+is() { [ "$(q "$1")" = "$2" ]; }
+said() { grep -q "$1" build/cgroups-sched.out; }
+start_scheduler() {
+    ./build/orca scheduler >> build/cgroups-sched.out 2>&1 &
+    sched=$!
+    until_ 20 "the scheduler didn't say whether runs get cgroups" said "orca: run cgroups"
+}
+
+free_port port
+base="http://127.0.0.1:$port"
+./build/orca register ./build/grower >> "$log" 2>&1 || fail "register"
+ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+pids="$pids $!"
+until_ 10 "orca ui didn't start" curl -fs "$base/" -o /dev/null
+start_scheduler
+if ! said "orca: run cgroups on"; then
+    why=$(grep "orca: run cgroups" build/cgroups-sched.out | head -1)
+    [ -z "$made" ] || fail "orca can't use the cgroup made for it: $why"
+    skip "$why"
+fi
+cgbase=$(sed -n "s/^orca: run cgroups on: runs' cgroups go in //p" build/cgroups-sched.out | head -1)
+echo "cgroups: runs' cgroups go in $cgbase" >> "$log"
+
+# Killed at 200 MB, then retried at 400.
+./build/orca backfill grower 2024-01 >> "$log" 2>&1 || fail "backfill 2024-01"
+r1=$(q "SELECT max(id) FROM orca.runs")
+until_ 120 "run $r1 didn't succeed: $(q "SELECT id, status, starts, error FROM orca.runs WHERE id = $r1")" \
+    is "SELECT status FROM orca.runs WHERE id = $r1" succeeded
+kill -0 "$sched" 2> /dev/null || fail "the out-of-memory kill took the scheduler with it"
+# The limits go on the attempts when the process is reaped, just after.
+until_ 10 "run $r1's last attempt has no limit" \
+    is "SELECT count(*) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r1 AND a.status = 'succeeded' AND a.memory_limit_mb IS NOT NULL" 1
+attempts="SELECT a.attempt, a.status, coalesce(a.memory_limit_mb, 0), coalesce(a.error, '') FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r1 ORDER BY a.attempt"
+q "$attempts" >> "$log"
+first=$(q "$attempts" | head -1)
+case "$first" in
+    "1|failed|200|out of memory at 200 MB: "*"memory.max (200 MB)"*"its retry asks for 400 MB") ;;
+    *) fail "run $r1's first attempt isn't an out-of-memory kill at 200 MB: $first" ;;
+esac
+last=$(q "$attempts" | tail -1)
+case "$last" in
+    *"|succeeded|400|") ;;
+    *) fail "run $r1's last attempt didn't succeed at 400 MB: $last" ;;
+esac
+is "SELECT memory_raised_mb FROM orca.pipelines WHERE name = 'grower'" 400 \
+    || fail "the pipeline's memory wasn't raised: $(q "SELECT memory_raised_mb FROM orca.pipelines")"
+is "SELECT memory_limit_mb || ' ' || memory_max_mb FROM orca.runs WHERE id = $r1" "400 400" \
+    || fail "run $r1's limit: $(q "SELECT memory_limit_mb, memory_max_mb FROM orca.runs WHERE id = $r1")"
+
+# The next run starts from the raised value.
+./build/orca backfill grower 2024-02 >> "$log" 2>&1 || fail "backfill 2024-02"
+r2=$(q "SELECT max(id) FROM orca.runs")
+until_ 60 "run $r2 didn't succeed: $(q "SELECT id, status, starts, error FROM orca.runs WHERE id = $r2")" \
+    is "SELECT status FROM orca.runs WHERE id = $r2" succeeded
+until_ 10 "run $r2's attempt has no limit" \
+    is "SELECT count(*) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r2 AND a.memory_limit_mb = 400" 1
+is "SELECT starts || ' ' || memory_limit_mb FROM orca.runs WHERE id = $r2" "1 400" \
+    || fail "run $r2 didn't start at 400 MB: $(q "SELECT starts, memory_limit_mb FROM orca.runs WHERE id = $r2")"
+
+# The pages and their JSON.
+curl -fs "$base/runs/$r1" > build/cgroups-run.out || fail "GET /runs/$r1"
+grep -q 'Memory limit<span class="help">' build/cgroups-run.out || fail "the run's page has no Memory limit"
+grep -q '<span class="muted"> / 400 MB</span>' build/cgroups-run.out || fail "the steps table has no limit beside the peak"
+curl -fs -H 'Accept: application/json' "$base/runs/$r1" > build/cgroups-run.json || fail "GET /runs/$r1 JSON"
+jq -e '.run.memory_limit.limit_mb == 400 and .run.memory_limit.max_mb == 400 and .steps[0].memory_limit_mb == 400' \
+    build/cgroups-run.json > /dev/null || fail "the run's JSON: $(cat build/cgroups-run.json)"
+a1=$(q "SELECT a.id FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r1 AND a.attempt = 1")
+curl -fs -H 'Accept: application/json' "$base/runs/$r1/attempts/$a1" > build/cgroups-attempt.json || fail "GET the attempt's JSON"
+jq -e '.attempt.memory_limit_mb == 200 and (.attempt.error | startswith("out of memory at 200 MB"))' \
+    build/cgroups-attempt.json > /dev/null || fail "the attempt's JSON: $(cat build/cgroups-attempt.json)"
+
+# Ops > Control lists a run going with its memory against its limit.
+./build/orca backfill grower 2024-03 >> "$log" 2>&1 || fail "backfill 2024-03"
+r3=$(q "SELECT max(id) FROM orca.runs")
+until_ 30 "run $r3 didn't start" is "SELECT status FROM orca.runs WHERE id = $r3" running
+until_ 20 "Ops > Control has no run $r3: $(curl -fs -H 'Accept: application/json' "$base/ops/control" | jq -c .runs)" \
+    sh -c "curl -fs -H 'Accept: application/json' '$base/ops/control' | jq -e '.runs[] | select(.run == $r3 and .memory_limit_mb == 400 and .memory_max_mb == 400)' > /dev/null"
+until_ 60 "run $r3 didn't succeed" is "SELECT status FROM orca.runs WHERE id = $r3" succeeded
+
+# Nothing is left: no run's cgroup, no grower process.
+until_ 10 "run cgroups are left: $(ls -d "$cgbase"/orca-run-* 2> /dev/null)" \
+    sh -c "! ls -d '$cgbase'/orca-run-* > /dev/null 2>&1"
+if ps -eo args | grep -q '^[^ ]*build/grower resume'; then
+    fail "grower processes are left: $(ps -eo pid,args | grep 'build/grower')"
+fi
+
+# A scheduler that starts removes an empty cgroup a dead one left.
+kill "$sched"
+wait "$sched" 2> /dev/null || true
+sched=
+sh -c 'exit 0' &
+dead=$!
+wait "$dead"
+mkdir "$cgbase/orca-run-999-1-$dead" || fail "can't make a stale cgroup in $cgbase"
+start_scheduler
+until_ 10 "the stale cgroup orca-run-999-1-$dead is left" sh -c "[ ! -d '$cgbase/orca-run-999-1-$dead' ]"
+echo "cgroups: ok"
