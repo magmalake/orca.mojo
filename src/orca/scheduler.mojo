@@ -3465,6 +3465,8 @@ struct Scheduler(Movable):
         a row of `orca.audit` (user `scheduler`, action
         `/api/worker/requeue`); returns each run with why."""
         var out = List[Tuple[Int, String]]()
+        # In this query orca.runs is `r` (`dead` names it by the table).
+        var gone = dead_sql("$2", self.start_grace, "r")
         var rows = tx.query(
             String(
                 "WITH lost AS (SELECT r.id, r.owner = '",
@@ -3485,9 +3487,9 @@ struct Scheduler(Movable):
                 " ((r.owner = '",
                 _WORKER_OWNER,
                 "' AND r.started <= now() - make_interval(secs => $2)) OR ",
-                dead,
+                gone,
                 ")) OR (",
-                dead,
+                gone,
                 " AND NOT (r.id::text = ANY (string_to_array(coalesce(",
                 "w.running, ''), ','))))) FOR UPDATE OF r) UPDATE orca.runs u",
                 " SET status = 'queued', owner = NULL, heartbeat = NULL,",
