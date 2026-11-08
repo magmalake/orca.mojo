@@ -1,0 +1,18 @@
+# A PR that changes code adds a changelog fragment, changes/<pr>-<slug>.md
+# (changes/README.md); the label no-changelog skips the check.
+name: changelog
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+jobs:
+  fragment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          run-install: false
+      - run: pixi global install --channel https://mojoshelf.org/channel mojoshelf
+      - run: shelf changes check
