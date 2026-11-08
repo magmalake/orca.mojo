@@ -159,6 +159,14 @@ td code { font-size: 0.8125rem; }
 .status--cancelled, .status--deferred { color: var(--muted); background: var(--surface-2); border-color: var(--border-strong); }
 .status--skipped, .status--not-done { color: var(--faint); background: transparent;
   border-style: dashed; }
+/* A machine's state on Pools (orca.ui.pools): live, draining, gone. */
+.status--live { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+.status--draining { color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+.status--gone { color: var(--faint); background: transparent; border-style: dashed; }
+tr.pools__gone td { color: var(--muted); }
+.pools__pools { margin: -0.25rem 0 1rem; }
 h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
 
 /* Facts about a pipeline, a run, a dataset. */

@@ -10,4 +10,5 @@ typed rows: the query layer `orca.ui` and `orca.api` share.
 | `orca.views.datasets` | a dataset's writers and readers, a rebuild's preview |
 | `orca.views.start` | what Start runs would queue |
 | `orca.views.commands` | the `orca` command lines pages show beside their buttons |
+| `orca.views.pools` | Ops' Pools: a `Machine` per EC2 instance, Kubernetes run and worker |
 """

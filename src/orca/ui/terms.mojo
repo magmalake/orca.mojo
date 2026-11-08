@@ -307,6 +307,70 @@ def _context_header(key: String) -> StaticString:
             "Why the snapshot's keys weren't run: they aren't this "
             "pipeline's partitions."
         )
+    # Ops' Pools (orca.ui.pools): a row per machine, the worker in its row.
+    if key == "pools:Machine":
+        return (
+            "The machine: an EC2 instance's id, a Kubernetes run's pods, or "
+            "the host name a self-hosted worker gave (its token's label until "
+            "it has claimed). Click for its page."
+        )
+    if key == "pools:Pool":
+        return (
+            "Where a placement sends runs: ec2 (instances orca launches), "
+            "kubernetes (a run's pods) or worker:&lt;pool&gt; (the machines "
+            "running orca worker for that pool). Click to show only it."
+        )
+    if key == "pools:Kind":
+        return (
+            "ec2: an instance orca launched and pays for. k8s: a run's pods "
+            "on the cluster. self-hosted: a machine of your own running orca "
+            "worker."
+        )
+    if key == "pools:State":
+        return (
+            "live: up and taking work. draining: the scheduler is letting it "
+            "finish before it goes. gone: an instance that ended (listed for "
+            "an hour), or a worker revoked, expired or not heard from for "
+            "ORCA_STALE_SECONDS. Beside it, what it is doing."
+        )
+    if key == "pools:Image":
+        return (
+            "The image tag its runs need: the pipeline's image on EC2 and "
+            "Kubernetes, the worker's ORCA_IMAGE as it said."
+        )
+    if key == "pools:CPUs":
+        return (
+            "Its vCPUs: the instance type's (or its sampler's count), the "
+            "CPU a run's pods asked for, or the cores the worker said it has."
+        )
+    if key == "pools:Memory":
+        return (
+            "Its memory: the instance type's, or what the worker said it has."
+        )
+    if key == "pools:Runs":
+        return "The runs on it now. Click one for its page."
+    if key == "pools:Last heartbeat":
+        return (
+            "When it was last heard from: an instance's last sample, a "
+            "worker's last claim, a run's pods' last heartbeat."
+        )
+    if key == "pools:CPU":
+        return (
+            "Its CPU in use at the last sample, and over the last ten "
+            "minutes. Only EC2 instances are sampled for Ops."
+        )
+    if key == "pools:Worker":
+        return (
+            "What orca runs there: a run's head or a dista worker on EC2; "
+            "orca worker, signed in with the token named (hover for when it "
+            "expires); or a run's pods."
+        )
+    if key == "pools:Uptime":
+        return "How long since it launched (a pod: since its run started)."
+    if key == "pools:Expires":
+        return "When the worker's token stops working."
+    if key == "pools:Ended":
+        return "When the instance ended, and why."
     if key == "config:Key":
         return (
             "The setting's name, as orca.toml and orca register's flags "
@@ -317,6 +381,21 @@ def _context_header(key: String) -> StaticString:
 
 def _value(key: String) -> StaticString:
     """Each value's help, by `<kind>:<value>`."""
+    if key == "machine:live":
+        return "Up, and taking work or doing it."
+    if key == "machine:draining":
+        return "The scheduler is letting it finish its work before it goes."
+    if key == "machine:gone":
+        return (
+            "Ended (an instance), or no longer heard from (a worker: revoked, "
+            "expired or quiet)."
+        )
+    if key == "machine_kind:ec2":
+        return "An EC2 instance orca launched for a run, and pays for."
+    if key == "machine_kind:k8s":
+        return "A run's pods on the Kubernetes runner's cluster."
+    if key == "machine_kind:self-hosted":
+        return "A machine of your own, running orca worker for its pool."
     if key == "status:queued":
         return "Waiting to start: its turn, or room for its placement."
     if key == "status:running":
