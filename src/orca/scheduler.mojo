@@ -192,7 +192,14 @@ from orca.system import (
     trim as trim_system,
 )
 from orca.kube import KubeRunner, RunSpec, cpu_millis
-from orca.live import dead_sql, live_runs, live_sql, stale_limit, start_grace
+from orca.live import (
+    RUNNER_POOL,
+    dead_sql,
+    live_runs,
+    live_sql,
+    stale_limit,
+    start_grace,
+)
 from orca.logs import is_remote, publish, read_location, run_dir, stage_of
 from orca.month import Month
 from orca.name import Name, parse_names, sort_texts
@@ -2773,7 +2780,13 @@ struct Scheduler(Movable):
                         id,
                         "(its heartbeat went stale)",
                     )
+        # A run of `orca runner` whose runner is gone (or no longer has it)
+        # and whose heartbeat is stale is queued again whatever its trigger,
+        # as a dead worker's is; one its live runner still holds isn't dead
+        # (orca.live.held_sql), so nothing below ends or restarts it.
+        var lost = List[Tuple[Int, String]]()
         if not fill:
+            lost = self._requeue_lost(tx, p, dead, "")
             self._end_dead(tx, p, dead)
         var live = Int(
             tx.query(
@@ -3022,8 +3035,8 @@ struct Scheduler(Movable):
                                 " request_memory_gb = nullif($5, ''),"
                                 " grant_cpus = nullif($6, 0), grant_memory_mb ="
                                 " nullif($7, 0), memory_limit_mb = NULL,"
-                                " memory_max_mb = NULL, memory_bytes = NULL"
-                                " WHERE id = $1 RETURNING starts"
+                                " memory_max_mb = NULL, memory_bytes = NULL,"
+                                " worker = NULL WHERE id = $1 RETURNING starts"
                             ),
                             Params()
                             .int64(id)
@@ -3039,6 +3052,13 @@ struct Scheduler(Movable):
                     )
                 )
         tx.commit()
+        for l in lost:
+            print(
+                String("requeued run ", l[0], " of ", p.name),
+                ": ",
+                l[1],
+                sep="",
+            )
         for i in range(len(ids)):
             var id = ids[i]
             var grant = grants[i] if admitted else Grant.none()
@@ -3271,8 +3291,15 @@ struct Scheduler(Movable):
         it, and once `starts - deferrals` is past `run_retries` it is left
         to `_end_dead`, so a run that kills its workers can't loop. Each is
         a row of `orca.audit` (user `scheduler`, action
-        `/api/worker/requeue`); returns each run with why."""
+        `/api/worker/requeue`); returns each run with why.
+
+        The same for a local or control-placed run of `orca runner` (a
+        worker of pool `local`, docs/runner.md), queued again for the
+        scheduler to start (`waiting` empty): its runner gone, or seen
+        without it, and its heartbeat stale."""
         var out = List[Tuple[Int, String]]()
+        # In this query orca.runs is `r`.
+        var gone = dead_sql("$2", self.start_grace, "r")
         var rows = tx.query(
             String(
                 "WITH lost AS (SELECT r.id, r.owner = '",
@@ -3285,7 +3312,10 @@ struct Scheduler(Movable):
                 " || w.label || ' (token ' || w.id || ') no longer runs it'",
                 " END AS why FROM orca.runs r JOIN orca.workers w ON w.id =",
                 " r.worker WHERE r.pipeline = $1 AND r.status = 'running' AND",
-                " r.placement LIKE 'worker:%' AND NOT r.cancel_requested AND",
+                " (r.placement LIKE 'worker:%' OR (r.placement IN ('local',",
+                " 'control') AND w.pool = '",
+                RUNNER_POOL,
+                "')) AND NOT r.cancel_requested AND",
                 " (r.owner = '",
                 _WORKER_OWNER,
                 "' OR r.starts - r.deferrals <= $3) AND (((w.last_seen IS NULL",
@@ -3293,13 +3323,13 @@ struct Scheduler(Movable):
                 " ((r.owner = '",
                 _WORKER_OWNER,
                 "' AND r.started <= now() - make_interval(secs => $2)) OR ",
-                dead,
+                gone,
                 ")) OR (",
-                dead,
+                gone,
                 " AND NOT (r.id::text = ANY (string_to_array(coalesce(",
                 "w.running, ''), ','))))) FOR UPDATE OF r) UPDATE orca.runs u",
                 " SET status = 'queued', owner = NULL, heartbeat = NULL,",
-                " retry_at = NULL, held = $4, starts = CASE WHEN",
+                " retry_at = NULL, held = nullif($4, ''), starts = CASE WHEN",
                 " lost.unstarted THEN u.starts - 1 ELSE u.starts END FROM lost",
                 " WHERE u.id = lost.id RETURNING u.id, lost.why,",
                 " lost.unstarted",

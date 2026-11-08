@@ -224,7 +224,7 @@ def _kubernetes(mut db: State, mut out: List[Machine], one: String) raises:
         " orca.pipelines p ON p.name = r.pipeline WHERE r.status =",
         " 'running' AND coalesce(r.placement, 'default') IN ('default', '')",
         " AND NOT ",
-        dead_sql(String(stale), start_grace(stale)),
+        dead_sql(String(stale), start_grace(stale), "r"),
         " AND ('orca-' || r.id || '-' || r.starts) = $1" if one else (
             " AND $1 = ''"
         ),
