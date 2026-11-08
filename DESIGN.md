@@ -93,7 +93,7 @@ With `ORCA_DATABASE_URL=sqlite:<path>` (`sqlite:///var/orca/runs.db` for an abso
 
 Connection settings come from the environment: `ORCA_DATABASE_URL`, `ORCA_WAREHOUSE`, `ORCA_LOGS` (a directory or `s3://`), and dista's own variables.
 
-**The scheduler, from phase 2, is a separate generic `orca` binary** that depends on orca's core, postgres and flare, and on no pipeline. It knows a pipeline by its `describe` output and starts runs by executing the pipeline binary: a subprocess locally, a Kubernetes Job in phase 5. That answers the vision's "where step code runs": the scheduler never links a pipeline's dependencies, which is the same split dista is making between its generic head and the user's driver. It also means a scheduler restart doesn't kill running runs; they're separate processes writing to Postgres themselves.
+**The scheduler, from phase 2, is a separate generic `orca` binary** that depends on orca's core, postgres and flare, and on no pipeline. It knows a pipeline by its `describe` output and starts runs by executing the pipeline binary: a subprocess locally, a Kubernetes Job in phase 5. That answers the vision's "where step code runs": the scheduler never links a pipeline's dependencies, which is the same split dista is making between its generic head and the user's driver. It also means a scheduler restart doesn't kill running runs; they're separate processes writing to Postgres themselves. In a container, though, the runs die with the scheduler's container; `orca runner` (`ORCA_LOCAL_RUNNER=runner`, [docs/runner.md](docs/runner.md)) owns them instead, so the scheduler and the UI can restart while runs go on.
 
 ## State in Postgres
 

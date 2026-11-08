@@ -88,7 +88,7 @@ from orca.watchdog import acknowledge, snooze as snooze_rule
 from orca.auth import audit
 from orca.tokens import revoke_user_tokens, user_tokens
 from orca.web.server import DEFAULT_ADDR, serve_ui
-from orca.worker import worker_command
+from orca.worker import runner_command, worker_command
 from orca.workers import (
     create_worker_token,
     revoke_worker_token,
@@ -154,6 +154,9 @@ comptime USAGE = """usage:
                                     in ORCA_NOTIFY_MIN_SECONDS)
   orca tick
   orca scheduler
+  orca runner [--name N] [--max-runs N] [--poll-seconds S] [--dir D]
+                                    (starts what the scheduler assigns it with
+                                    ORCA_LOCAL_RUNNER=runner: docs/runner.md)
   orca ui
   orca sample --out <location>|- [--pid PID] [--match PATH] [--dirs D,...]
               [--seconds S] [--count N] [--keep N]
@@ -481,6 +484,9 @@ def _command(args: List[String], target: String) raises -> Int:
         s.wait_for_binaries = True
         s.tick(now())
         return 0
+    if cmd == "runner":
+        # Starts the runs the scheduler assigns it (docs/runner.md).
+        return runner_command(args, url)
     if cmd == "scheduler" and len(args) == 2:
         var s = Scheduler(url)
         s.say_pressure()

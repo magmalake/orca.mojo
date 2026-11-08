@@ -227,3 +227,18 @@ replaces the scheduler and the UI freely, and the runner only when its
 image or settings changed (#230), with a drain. That change is left for a
 follow-up PR, so this one doesn't touch `deploy/hetzner/` while #230 and
 #231 are being built there.
+
+## Status (PR #242)
+
+Built: the adoption rule (`orca.live.held_sql`, part of `dead_sql`, and
+`_requeue_lost` widened to the runner's runs), `ORCA_LOCAL_RUNNER`, the
+scheduler's assignment and its hold while no runner is seen, the give-back
+of an unclaimed assignment, `orca runner` over `orca.worker.Worker` with
+`orca.workers.runner_call`, and the reserved pool. Tested by
+`tests/adopt.sh` and `tests/runner.sh`.
+
+Next: the drain (`orca runner` stopping its claims and waiting for its runs
+on a signal or a command), a runner that adopts the processes its
+predecessor left (their `keep-log`, usage and cgroup), the stack's `runner`
+container, the runner's cgroup path verified on Linux (`tests/cgroups.sh`
+with a runner), and making `runner` the default once proven.
