@@ -97,6 +97,21 @@ def query_param(url: String, name: StringSlice) -> String:
     return ""
 
 
+def query_values(url: String, name: StringSlice) -> List[String]:
+    """Each value of a query parameter given once or more, decoded, in
+    order."""
+    var out = List[String]()
+    var q = url.find("?")
+    if q < 0:
+        return out^
+    for pair in url[byte = q + 1 :].split("&"):
+        var eq = pair.find("=")
+        var k = pair[byte=:eq] if eq >= 0 else pair
+        if k == name:
+            out.append(url_decode(pair[byte = eq + 1 :]) if eq >= 0 else "")
+    return out^
+
+
 def _hex(c: UInt8) -> Int:
     if c >= 48 and c <= 57:
         return Int(c) - 48

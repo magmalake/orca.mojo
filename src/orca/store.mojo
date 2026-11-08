@@ -442,10 +442,14 @@ trait RunStore(Store):
         """The run; raises if there's no such run."""
         ...
 
-    def runs(mut self, limit: Int, before: Int = 0) raises -> List[RunInfo]:
+    def runs(
+        mut self, limit: Int, before: Int = 0, status: String = ""
+    ) raises -> List[RunInfo]:
         """The latest `limit` runs, newest first; with `before` (unless 0),
         those older than run `before` (with ids under it, but in memory):
-        the next page, keyed by the last run of the one before."""
+        the next page, keyed by the last run of the one before. With
+        `status`, a status or several comma-separated, only runs with one
+        of them."""
         ...
 
     def steps(mut self, run: Int) raises -> List[StepInfo]:
@@ -743,14 +747,19 @@ struct MemoryStore(Movable, RunStore):
             r.error,
         )
 
-    def runs(mut self, limit: Int, before: Int = 0) raises -> List[RunInfo]:
+    def runs(
+        mut self, limit: Int, before: Int = 0, status: String = ""
+    ) raises -> List[RunInfo]:
         var out = List[RunInfo]()
         var i = len(self._runs) - 1
         # Run `-i` is the i-th: under `before` once i is past -before.
         if before != 0:
             i = min(i, -before - 1)
+        var wanted = status_list(status)
         while i >= 0 and len(out) < limit:
-            out.append(self.run_info(-i))
+            var r = self.run_info(-i)
+            if len(wanted) == 0 or r.status in wanted:
+                out.append(r^)
             i -= 1
         return out^
 
@@ -903,3 +912,14 @@ struct MemoryStore(Movable, RunStore):
     ) raises:
         if self._attempt >= 0:
             self._attempts[self._attempt].log = path
+
+
+def status_list(status: String) -> List[String]:
+    """`runs`' `status`, a status or several comma-separated, as a list,
+    each once; empty for any."""
+    var out = List[String]()
+    for s in status.split(","):
+        var t = String(s.strip())
+        if t and t not in out:
+            out.append(t^)
+    return out^

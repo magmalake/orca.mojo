@@ -129,7 +129,7 @@ def home_pipelines(mut db: State) raises -> Page:
 
 def home(mut db: State) raises -> Page:
     var ps = pipeline_rows(db)
-    var recent = runs_page(db, RunsQuery("home", "", "", "", HOME_RUNS, 0, 0))
+    var recent = runs_page(db, RunsQuery.newest("home", HOME_RUNS))
     var per_day = _runs_per_day(db, 30)
     var fleet = fleet_summary(db)
     var alerts = warnings(system_now(db))

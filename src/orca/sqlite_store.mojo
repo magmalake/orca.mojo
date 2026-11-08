@@ -48,6 +48,7 @@ from orca.store import (
     RunInfo,
     RunResult,
     RunStore,
+    status_list,
     StepInfo,
     StepRun,
     TableSnapshot,
@@ -628,16 +629,20 @@ struct SqliteStore(Movable, RunStore):
             raise Error("orca: no run ", run)
         return got[0].copy()
 
-    def runs(mut self, limit: Int, before: Int = 0) raises -> List[RunInfo]:
+    def runs(
+        mut self, limit: Int, before: Int = 0, status: String = ""
+    ) raises -> List[RunInfo]:
         # By the rowid, a range of the table's own b-tree.
         var st = self._stmt(
             String(
                 Self._RUN_COLUMNS,
-                " WHERE ?2 = 0 OR id < ?2 ORDER BY id DESC LIMIT ?1",
+                " WHERE (?2 = 0 OR id < ?2) AND (?3 = '' OR instr(',' || ?3",
+                " || ',', ',' || status || ',') > 0) ORDER BY id DESC LIMIT ?1",
             )
         )
         st.bind_int(1, limit)
         st.bind_int(2, before)
+        st.bind_text(3, String(",").join(status_list(status)))
         return self._run_infos(st)
 
     def steps(mut self, run: Int) raises -> List[StepInfo]:
