@@ -17,8 +17,10 @@ pixi run playground          # or the playground: example pipelines and runs, de
 ## Home: List and Timeline
 
 `/` has two tabs, remembered in the browser. **List** (the default, no
-JavaScript needed) is the pipelines with their partitions, their
-[coverage](#coverage-in-one-number), schedules and last runs.
+JavaScript needed) is the pipelines, each name followed by its state at a
+glance: its [coverage](#coverage-in-one-number), its running runs (of its
+`max_runs`) and its queued ones, then its partitions, schedule, next run
+and last run. On a phone the table scrolls sideways under the names.
 **Timeline** draws each pipeline's runs over 1 h, 6 h, 24 h or 7 d, a row
 per pipeline in dataset order, indented by depth, coloured by status, fill
 runs thinner, with a line from a run to the sensor or keyed runs its

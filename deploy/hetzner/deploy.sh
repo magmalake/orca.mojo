@@ -15,10 +15,14 @@
 # says how to undo it. --force skips all that and kills the running runs.
 #
 # Before it applies anything it backs the database up (orca-stack backup-now,
-# to s3://BUCKET/backups/pg/<time>.dump) and stops if that fails, unless
-# --no-backup. The server keeps the tags it ran before (orca-stack tags
-# --previous); --rollback applies those again, the same way, and registers
-# the pipelines again (docs/hetzner.md#rolling-back).
+# to s3://BUCKET/backups/pg/<time>.dump, with <time>.paused beside it: the
+# pipelines paused by hand and the ones this deploy paused, so a restore of
+# the dump unpauses only the latter) and stops if that fails, unless
+# --no-backup. After the apply, and before it unpauses anything, it registers
+# the pipelines from the new image (orca-stack register); if that fails the
+# pipelines stay paused. The server keeps the tags it ran before (orca-stack
+# tags --previous); --rollback applies those again, the same way
+# (docs/hetzner.md#rolling-back).
 set -eu
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -111,6 +115,7 @@ if [ "$backup" = 1 ]; then
     fi
     dump=$(echo "$out" | sed -n 's/^orca-stack: backed up to //p')
     log "previous tag $was, new tag $to; backup ${dump:-$out}"
+    echo "$out" | grep '^orca-stack: paused then' || true
 else
     log "--no-backup: not backing up; previous tag $was, new tag $to"
 fi
@@ -124,6 +129,14 @@ else
     # shellcheck disable=SC2086
     remote orca-stack apply --tag "$tag" $args ${force:+"$force"} \
         || die "the deploy failed; the pipelines stay paused (fix it and rerun, or ssh root@$IP orca-stack resume)"
+    log "registering the pipelines from $tag"
+    if [ -n "$force" ]; then
+        remote orca-stack register \
+            || die "$tag is deployed, but registering failed (fix it, then ssh root@$IP orca-stack register)"
+    else
+        remote orca-stack register \
+            || die "$tag is deployed, but registering failed; the pipelines stay paused (fix it, then ssh root@$IP orca-stack register and orca-stack resume; or ./deploy.sh --rollback)"
+    fi
 fi
 if [ -z "$force" ]; then
     log "unpausing the pipelines it paused"

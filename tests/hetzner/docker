@@ -2,19 +2,57 @@
 # A fake docker for tests/hetzner.sh: logs each call to $FAKE/docker.log and
 # answers what orca-stack asks. $FAKE/running is the count of running runs,
 # $FAKE/backup-fails makes pg_dump fail, $FAKE/register-fails orca register.
+# The pipelines are toy and manual1; $FAKE/paused lists the paused ones,
+# which orca pause/unpause and an UPDATE of paused change. The aws-cli
+# container's bucket is $FAKE/bucket, and its /b the -v directory.
 echo "docker $*" >> "$FAKE/docker.log"
-case "$*" in
+touch "$FAKE/paused"
+mkdir -p "$FAKE/bucket"
+unpause() { grep -vx "$1" "$FAKE/paused" > "$FAKE/paused.new" || true; mv "$FAKE/paused.new" "$FAKE/paused"; }
+all="$*"
+case "$all" in
     *"pg_isready"*) exit 0 ;;
     "inspect -f"*) echo true ;;
     "inspect postgres") exit 0 ;;
     *"status = 'running'"*) cat "$FAKE/running" 2> /dev/null || echo 0 ;;
-    *"WHERE NOT paused"*) echo toy ;;
+    *"WHERE NOT paused"*) printf 'manual1\ntoy\n' | grep -vxF -f "$FAKE/paused" || true ;;
+    *"WHERE paused ORDER BY name"*) sort "$FAKE/paused" ;;
+    *"SET paused = false WHERE name = '"*)
+        n=${all#*WHERE name = \'}
+        unpause "${n%%\'*}"
+        ;;
+    "exec scheduler orca pause "*) echo "${all##* }" >> "$FAKE/paused" ;;
+    "exec scheduler orca unpause "*) unpause "${all##* }" ;;
     *pg_dump*)
         [ ! -f "$FAKE/backup-fails" ] || { echo "pg_dump: connection refused" >&2; exit 1; }
         echo dump
         ;;
-    *"pg_restore --list"*) cat > /dev/null ;;
-    *"amazon/aws-cli s3 ls"*) ;;
+    *"pg_restore"*) cat > /dev/null ;;
+    *amazon/aws-cli*)
+        b=
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -v) b=${2%%:/b}; shift 2 ;;
+                amazon/aws-cli) shift; break ;;
+                *) shift ;;
+            esac
+        done
+        path() { case "$1" in s3://*) echo "$FAKE/bucket/${1##*/}" ;; /b/*) echo "$b/${1#/b/}" ;; esac; }
+        case "$2" in
+            ls)
+                prefix=${3##*/}
+                for f in "$FAKE/bucket"/*; do
+                    [ -f "$f" ] || continue
+                    case "${f##*/}" in "$prefix"*) echo "2026-11-08 10:00:00 4 ${f##*/}" ;; esac
+                done
+                ;;
+            cp)
+                [ -f "$(path "$3")" ] || exit 1
+                cp "$(path "$3")" "$(path "$4")"
+                ;;
+            rm) rm -f "$(path "$3")" ;;
+        esac
+        ;;
     *"exec scheduler orca register"*)
         [ ! -f "$FAKE/register-fails" ] || { echo "orca: no orca.toml" >&2; exit 1; }
         echo "registered toy"

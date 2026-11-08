@@ -199,6 +199,9 @@ echo "$h" | grep -qF 'aria-label="About Coverage"' || fail "the Coverage column 
 echo "$h" | grep -qF '<td class="num"><a class="covpct" href="/pipelines/daily?tab=operate&amp;cov=year#coverage" title="3 / 78 days done (3%)">3%' \
     || fail "daily's row: $(echo "$h" | grep -o '<a class="covpct"[^>]*>[^<]*' | tr '\n' ' ')"
 echo "$h" | grep -qF 'href="/pipelines/toy?tab=operate#coverage" title="1 / 2 months done (50%)">50%' || fail "toy's row"
+# Coverage is the first cell after the name, then Running and Queued.
+get '/home/pipelines' | grep -qE '</td><td class="num"><a class="covpct" href="/pipelines/daily\?[^"]*"[^>]*>3%.*</a></td><td><span class="badge[^"]*">[0-9]+ / [0-9]+</span></td><td><span class="badge[^"]*">[0-9]+</span></td><td>[a-z]+ from' \
+    || fail "daily's row isn't name, Coverage, Running, Queued, Partitions"
 echo "$h" | grep -qF 'href="/pipelines/fake_keyed#keys" title="1 / 3 keys done (33%)">33%' || fail "fake_keyed's row"
 j=$(curl -fsS -H 'Accept: application/json' "$base/")
 echo "$j" | jq -e '[.pipelines[] | {(.name): .coverage.pct}] | add == {daily: 3.8, fake_keyed: 33.3, toy: 50}' > /dev/null \
