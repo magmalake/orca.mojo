@@ -70,7 +70,9 @@ def _readable(fd: c_int, timeout_ms: Int) -> Bool:
     p[1] = _POLLIN
     return (
         external_call["poll", c_int](
-            p.unsafe_ptr().unsafe_bitcast[NoneType](), c_uint(1), c_int(timeout_ms)
+            p.unsafe_ptr().unsafe_bitcast[NoneType](),
+            c_uint(1),
+            c_int(timeout_ms),
         )
         > 0
     )
