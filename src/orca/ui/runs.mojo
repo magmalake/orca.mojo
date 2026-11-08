@@ -1,26 +1,30 @@
 """`/runs`, the runs list: newest first, filtered by pipeline, status
-and trigger, a page at a time (`orca.views.runs.RunsPage`); `/runs/table`
-is a list's page as the fragment it refreshes from, for `/runs`, a
-pipeline's Runs tab and the home page.
+(any of several, each with its count), trigger, when it was created, a run
+and its partitions, a page at a time (`orca.views.runs.RunsPage`), and its
+runs picked to cancel, retry or backfill again in one go
+(`orca.api.actions.bulk`); `/runs/table` is a list's page as the fragment
+it refreshes from, for `/runs`, a pipeline's Runs tab and the home page.
 """
 
-from orca.api.runs import json_runs, json_runs_page
-from orca.html import Html, query_param
+from orca.api.runs import json_runs, json_runs_page, runs_filters_json
+from orca.html import Html, query_param, url_encode
 from orca.json import quote
 from orca.state import State
-from orca.ui.layout import IDLE_EVERY, LIVE_EVERY, page_html
+from orca.ui.layout import HERE_SLOT, IDLE_EVERY, LIVE_EVERY, page_html
 from orca.ui.parts import runs_table_html
 from orca.views.runs import (
     RUNS_PAGE,
     RunsPage,
     RunsQuery,
+    int_or_zero,
     runs_page,
     runs_query,
 )
 from orca.web.page import Page
+from orca.api.actions import BULK_MAX
 
 
-comptime _RUN_STATUSES: List[String] = [
+comptime RUN_STATUSES: List[String] = [
     "queued",
     "running",
     "deferred",
@@ -32,7 +36,7 @@ comptime _RUN_STATUSES: List[String] = [
 through them; a deferred run waits for its `retry_at`."""
 
 
-comptime _RUN_TRIGGERS: List[String] = [
+comptime RUN_TRIGGERS: List[String] = [
     "schedule",
     "sensor",
     "backfill",
@@ -48,14 +52,17 @@ rebuild and a fill (`orca.fill`). The filter adds any others the table has."""
 
 
 comptime _SUBMIT_ON_CHANGE = (
-    '<script>document.querySelector("form.filters").addEventListener('
-    '"change", (e) => e.currentTarget.submit());</script>'
+    "<script>for (const f of"
+    ' document.querySelectorAll("form.filters")) f.addEventListener("change",'
+    ' (e) => { if (e.target.matches("select, input[type=checkbox],'
+    ' input[type=date]")) f.submit(); });</script>'
 )
-"""Filtering as soon as a choice changes; the Filter button does the same
-without JavaScript."""
+"""Filtering as soon as a choice changes (a dropdown, a status, a date);
+the Filter button, or Enter in a field, does the same without
+JavaScript."""
 
 
-def _grouped(n: Int) -> String:
+def grouped(n: Int) -> String:
     """`n` with commas between thousands: 1,234."""
     var digits = String(n if n >= 0 else -n)
     var out = String("-" if n < 0 else "")
@@ -94,14 +101,14 @@ def _runs_pager(mut h: Html, p: RunsPage):
     h.raw('<span class="pager__at">')
     if len(p.rows) > 0:
         h.text(
-            _grouped(p.newer + 1),
+            grouped(p.newer + 1),
             "–",
-            _grouped(p.newer + len(p.rows)),
+            grouped(p.newer + len(p.rows)),
             " of ",
-            _grouped(p.total),
+            grouped(p.total),
         )
     else:
-        h.text("none here, of ", _grouped(p.total))
+        h.text("none here, of ", grouped(p.total))
     h.raw("</span>")
     if older:
         pager_link(h, "next", older, "Older →")
@@ -110,7 +117,7 @@ def _runs_pager(mut h: Html, p: RunsPage):
 
 def _runs_list_html(mut h: Html, p: RunsPage):
     """A runs table and its pager: what `/runs/table` answers."""
-    runs_table_html(h, p.rows, p.q.view != "pipeline")
+    runs_table_html(h, p.rows, p.q.view == "list", pick=p.q.view != "home")
     if p.q.view != "home":
         _runs_pager(h, p)
 
@@ -201,43 +208,265 @@ def _with_seen(
     return out^
 
 
-def runs(mut db: State, var q: RunsQuery) raises -> Page:
+def _quick() -> List[Tuple[String, String]]:
+    """The quick picks of when runs were created (`?since=`)."""
+    return [
+        (String("1h"), String("last hour")),
+        (String("today"), String("today")),
+        (String("24h"), String("24 h")),
+        (String("7d"), String("7 days")),
+    ]
+
+
+def _hidden(mut h: Html, name: StaticString, value: String):
+    h.raw('<input type="hidden" name="', name, '" value="')
+    h.text(value)
+    h.raw('">')
+
+
+def _moment_input(
+    mut h: Html, label: StaticString, name: StaticString, v: String
+):
+    """A date field, or a date and time one for a value with a time."""
+    h.raw(
+        "<label>",
+        label,
+        ' <input type="',
+        "datetime-local" if v.byte_length() > 10 else "date",
+        '" name="',
+        name,
+        '" value="',
+    )
+    h.text(v)
+    h.raw('"></label>')
+
+
+def runs_filters_html(
+    mut h: Html,
+    mut db: State,
+    p: RunsPage,
+    pipelines: List[String] = [],
+) raises:
+    """The filter bar over a runs list: a GET form, so it works without
+    JavaScript, that keeps the page size; pipeline (on `/runs`, from
+    `pipelines`), status (any of them, each with its runs under the other
+    filters), trigger, created from and to, a partition (a glob or a part
+    of one) and a run; the quick picks of when, and a link that clears
+    them."""
+    ref q = p.q
+    var action = String(
+        "/pipelines/", url_encode(q.pipeline)
+    ) if q.view == "pipeline" else String("/runs")
+    h.raw('<form class="filters" method="get" action="')
+    h.text(action)
+    h.raw('" aria-label="Filter runs">')
+    if q.view == "pipeline":
+        _hidden(h, "tab", "runs")
+    else:
+        _select(h, "pipeline", pipelines, q.pipeline)
+    # Status: checkboxes in a disclosure, each with its count.
+    var picked = q.statuses()
+    var shown = materialize[RUN_STATUSES]()
+    for c in p.counts:
+        if c[0] not in shown:
+            shown.append(c[0])
+    for s in picked:
+        if s not in shown:
+            shown.append(s)
+    h.raw(
+        '<details class="pick"><summary><span class="pick__name">status</span>',
+        ' <span class="pick__value">',
+    )
+    h.text(String(", ").join(picked) if len(picked) > 0 else String("any"))
+    h.raw('</span></summary><div class="pick__menu">')
+    for s in shown:
+        var n = p.count_of(s)
+        h.raw(
+            '<label class="pick__item"><input type="checkbox" name="status"'
+            ' value="'
+        )
+        h.text(s)
+        h.raw('"', " checked" if s in picked else "", "> ")
+        h.status(s)
+        h.raw(' <span class="pick__n">', grouped(n), "</span></label>")
+    h.raw("</div></details>")
+    var triggers = _with_seen(
+        materialize[RUN_TRIGGERS](),
+        db,
+        "SELECT DISTINCT trigger AS v FROM orca.runs ORDER BY v",
+    )
+    _select(h, "trigger", triggers, q.trigger)
+    _moment_input(h, "from", "from", q.start)
+    _moment_input(h, "to", "to", q.end)
+    h.raw(
+        '<label>partitions <input type="search" name="key" size="14"',
+        ' placeholder="2023-08-* or a name" value="',
+    )
+    h.text(q.key)
+    h.raw(
+        '"></label><label>run <input type="search" name="run" size="7"',
+        ' inputmode="numeric" placeholder="id" value="',
+    )
+    if q.run > 0:
+        h.text(q.run)
+    h.raw('"></label>')
+    if q.since:
+        _hidden(h, "since", q.since)
+    if q.size != q.default_size():
+        h.raw('<input type="hidden" name="limit" value="', q.size, '">')
+    h.raw('<button type="submit">Filter</button>')
+    # When: quick picks, as links that keep the other filters.
+    h.raw('<span class="filters__quick" aria-label="Created">')
+    for t in _quick():
+        var c = q.at_newest()
+        c.since = String(t[0])
+        c.start = String()
+        c.end = String()
+        h.raw('<a href="')
+        h.text(c.href())
+        h.raw('"', ' aria-current="true"' if q.since == t[0] else "", ">")
+        h.raw(t[1], "</a>")
+    if q.since:
+        var c = q.at_newest()
+        c.since = String()
+        h.raw('<a href="')
+        h.text(c.href())
+        h.raw('">any time</a>')
+    h.raw("</span>")
+    if q.filtered():
+        h.raw('<a class="filters__clear" href="')
+        h.text(q.unfiltered().href())
+        h.raw('">Clear filters</a>')
+    h.raw("</form>", _SUBMIT_ON_CHANGE)
+
+
+def _runs_word(n: Int) -> String:
+    return String(grouped(n), " run" if n == 1 else " runs")
+
+
+def runs_done_html(mut h: Html, url: String):
+    """What a bulk action did (`orca.api.actions.bulk`, which sends the
+    browser back with `?did=` and its counts), said over the list."""
+    var did = query_param(url, "did")
+    if did != "cancel" and did != "retry" and did != "backfill":
+        return
+    var done = int_or_zero(query_param(url, "done"))
+    var skipped = int_or_zero(query_param(url, "skipped"))
+    var refused = int_or_zero(query_param(url, "refused"))
+    var queued = int_or_zero(query_param(url, "queued"))
+    var t = String()
+    if did == "cancel":
+        t.write("Cancelled ", _runs_word(done))
+        if skipped:
+            t.write(", ", grouped(skipped), " already finished")
+        t.write(". Running ones stop before their next step.")
+    elif did == "retry":
+        t.write("Queued ", _runs_word(done), " again")
+        if skipped:
+            t.write(", ", grouped(skipped), " not failed")
+        if refused:
+            t.write(
+                ", ",
+                grouped(refused),
+                " ran older code (resume each from its page)",
+            )
+        t.write(".")
+    else:
+        t.write(
+            "Queued ",
+            _runs_word(queued),
+            " over the partitions of ",
+            _runs_word(done),
+        )
+        if skipped:
+            t.write(", ", grouped(skipped), " with none")
+        if refused:
+            t.write(", ", grouped(refused), " pipelines refused")
+        t.write(".")
+    h.raw('<p class="notice" role="status">')
+    h.text(t)
+    h.raw("</p>")
+
+
+def runs_bulk_html(mut h: Html, p: RunsPage):
+    """The form the runs list's checkboxes belong to (`form="bulk-runs"`):
+    cancel, retry or backfill again the runs ticked, or every run that
+    matches the filters, its number on the box that picks them, which the
+    action checks is still so. Hidden until logged in, where login is on
+    (`act__need`)."""
+    if p.total == 0:
+        return
+    h.raw(
+        '<form id="bulk-runs" class="bulk act__need" method="post"',
+        ' action="/runs/bulk" aria-label="Act on runs">',
+    )
+    for f in p.q.fields():
+        h.raw('<input type="hidden" name="')
+        h.text(f[0])
+        h.raw('" value="')
+        h.text(f[1])
+        h.raw('">')
+    h.raw('<span class="bulk__what">The ticked runs')
+    if p.total > len(p.rows) and p.total <= BULK_MAX:
+        h.raw(
+            '</span><label class="bulk__all"><input type="checkbox" name="all"',
+            ' value="1"> or all ',
+            grouped(p.total),
+            " that match",
+            "</label>",
+        )
+        h.raw('<input type="hidden" name="expect" value="', p.total, '">')
+    else:
+        h.raw("</span>")
+        h.raw('<input type="hidden" name="expect" value="', p.total, '">')
+    h.raw(
+        '<button type="submit" name="do" value="cancel" class="danger">',
+        "Cancel</button>",
+        '<button type="submit" name="do" value="retry">Retry failed</button>',
+        '<button type="submit" name="do" value="backfill">Backfill again',
+        "</button></form>",
+        '<p class="act__login bulk__login"><a href="/login?next=',
+        HERE_SLOT,
+        '">Log in</a> to cancel, retry or backfill runs from here.</p>',
+    )
+
+
+def runs(mut db: State, var q: RunsQuery, url: String = "") raises -> Page:
     """`/runs`: a page of runs newest first, filtered, by id under
     `q.before` or just above `q.after` (`runs_page`); with how many match
     and links to the newest, newer and older pages, and refreshed while it
-    can change (`runs_list`)."""
+    can change (`runs_list`). `?run=` a run that's there goes to its
+    page."""
     var p = runs_page(db, q^)
     var j = String('{"runs": ')
     json_runs(j, p.rows)
-    j.write(
-        ', "filters": {"pipeline": ',
-        quote(p.q.pipeline),
-        ', "status": ',
-        quote(p.q.status),
-        ', "trigger": ',
-        quote(p.q.trigger),
-        "}, ",
-    )
+    j.write(", ")
+    runs_filters_json(j, p)
+    j.write(", ")
     json_runs_page(j, p)
     j.write("}")
 
     var pipelines = List[String]()
     for r in db.conn.query("SELECT name FROM orca.pipelines ORDER BY name"):
         pipelines.append(r.text("name"))
-    var triggers = _with_seen(
-        materialize[_RUN_TRIGGERS](),
-        db,
-        "SELECT DISTINCT trigger AS v FROM orca.runs ORDER BY v",
-    )
 
     var h = Html()
     h.raw("<h1>Runs</h1>")
-    h.raw('<form class="filters" method="get" action="/runs">')
-    _select(h, "pipeline", pipelines, p.q.pipeline)
-    _select(h, "status", materialize[_RUN_STATUSES](), p.q.status)
-    _select(h, "trigger", triggers, p.q.trigger)
-    if p.q.size != RUNS_PAGE:
-        h.raw('<input type="hidden" name="limit" value="', p.q.size, '">')
-    h.raw('<button type="submit">Filter</button></form>', _SUBMIT_ON_CHANGE)
+    runs_filters_html(h, db, p, pipelines)
+    runs_done_html(h, url)
+    runs_bulk_html(h, p)
     runs_list(h, p)
+    if jumped(p):
+        return Page(
+            303,
+            j^,
+            page_html("Runs", "/runs", h),
+            location=String("/runs/", p.q.run),
+        )
     return Page(200, j^, page_html("Runs", "/runs", h))
+
+
+def jumped(p: RunsPage) -> Bool:
+    """Whether the list was asked for one run (`?run=`) and has it: the
+    page goes to the run's own."""
+    return p.q.run > 0 and len(p.rows) == 1 and p.rows[0].id == p.q.run

@@ -16,7 +16,7 @@ stylesheet is served before any route is looked up.
 | `/api/pipelines/<name>` | the same as JSON, whatever is asked for |
 | `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=` a month or year, `?cov=month` or `year`: a daily one's tab, year by default, both from one read of the year in `orca.ui.coverage`) and as the Start runs form's date picker |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
-| `/runs` | runs, newest first, `?limit=` (or `?n=`; 50, at most 500) to a page; `?pipeline=`, `?status=`, `?trigger=`; `?before=<id>`: the page older than that run, `?after=<id>`: the page newer than it (keyset, so pages stay put as runs arrive); the JSON's `next`, `prev` (and `next_url`, `prev_url`) are the cursors either side. A pipeline's Runs tab pages the same, 20 to a page (`runs_page` in its JSON) |
+| `/runs` | runs, newest first, `?limit=` (or `?n=`; 50, at most 500) to a page; `?pipeline=`, `?status=` (one or more), `?trigger=`, `?from=`, `?to=`, `?since=`, `?key=` (a partition: a glob or a part), `?run=` (goes to that run); `?before=<id>`: the page older than that run, `?after=<id>`: the page newer than it (keyset, so pages stay put as runs arrive); the JSON's `next`, `prev` (and `next_url`, `prev_url`) are the cursors either side. A pipeline's Runs tab pages and filters the same, 20 to a page (`runs_page` in its JSON). Each status's count under the other filters is the JSON's `counts` |
 | `/runs/table` | a runs list's page as the fragment it refreshes from: `?view=list` (`/runs`), `pipeline` (a pipeline's Runs tab) or `home` (recent runs), with the list's filters, `limit` and cursor; `X-Poll-Every` says when to ask again (5 s while a run on it is queued or running, 30 s on the newest page otherwise), and an older page with nothing going on answers 286 |
 | `/home/pipelines` | the home page's table of pipelines, as the fragment it refreshes from (5 s while a run is queued or running, else 30 s) |
 | `/runs/<id>` | a run's cards (Status, Partitions & trigger, Code, Resources, Settings), its steps (`?steps=table` (default), `timeline` or `graph`: the Steps tab shown without scripts), its machines, and the snapshots each step read and wrote |
@@ -80,7 +80,7 @@ from orca.ui.run import (
     run_steps,
     timeline,
 )
-from orca.ui.runs import runs, runs_fragment_query, runs_table
+from orca.ui.runs import jumped, runs, runs_fragment_query, runs_table
 from orca.views.pipelines import PipelineAsk, pipeline_view
 from orca.views.runs import run_view, runs_query
 from orca.web.auth import (
@@ -172,6 +172,7 @@ def routes() -> List[Route]:
         action("/watchdog/{trip:int}/ack", actions.acknowledge_trip, "trip"),
         action("/watchdog/{rule}/snooze", actions.snooze),
         action("/datasets/{name}/rebuild", actions.rebuild),
+        action("/runs/bulk", actions.bulk),
         action("/runs/{id:int}/resume", actions.resume, "run"),
         action("/runs/{id:int}/rerun", actions.rerun, "run"),
         action("/runs/{id:int}/cancel", actions.cancel, "run"),
@@ -192,7 +193,7 @@ def _home_pipelines(mut db: State, call: Call) raises -> Page:
 
 
 def _runs(mut db: State, call: Call) raises -> Page:
-    return runs(db, runs_query(call.url, "list"))
+    return runs(db, runs_query(call.url, "list"), call.url)
 
 
 def _runs_table(mut db: State, call: Call) raises -> Page:
@@ -271,6 +272,13 @@ def _pipeline(mut db: State, call: Call) raises -> Page:
     var v = pipeline_view(db, ask)
     if not v:
         return not_found(String("no pipeline ", ask.name))
+    if ask.shown_tab() == "runs" and jumped(v.value().runs):
+        return Page(
+            303,
+            pipeline_json(v.value(), ask),
+            String(),
+            location=String("/runs/", v.value().runs.q.run),
+        )
     return Page(
         200,
         pipeline_json(v.value(), ask),
