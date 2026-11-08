@@ -1,10 +1,15 @@
 #!/bin/sh
-# The fleet page (orca.fleet): the scheduler keeps the last half hour of
-# each live instance's samples, and the control instance's, in Postgres
-# (a pass again adds nothing, an instance whose file is missing is skipped,
-# old samples go); /ops/fleet, its fragment and /api/fleet render hosts, cost,
+# The fleet (orca.fleet) and Ops' Pools (orca.ui.pools): the scheduler keeps
+# the last half hour of each live instance's samples, and the control
+# instance's, in Postgres (a pass again adds nothing, an instance whose file
+# is missing is skipped, old samples go); /api/fleet renders hosts, cost,
 # runs and errors from those rows and from `orca.instances`, with no S3 or
-# file reads of their own; the home page has a strip of the same.
+# file reads of its own; /ops/pools lists those instances and remote
+# workers' machines a row each, filtered by pool and kind, with Fleet's
+# cards and charts, refreshed from its fragment; a machine's page has its
+# samples; /ops/fleet and /ops/workers redirect to it and keep their JSON;
+# on the Kubernetes runner a live run's pods are a machine; the home page
+# has a strip of the same.
 # Needs ORCA_DATABASE_URL (pixi run test-fleet starts a throwaway server),
 # curl, jq and python3.
 set -eu
@@ -106,6 +111,37 @@ done
 html() { curl -fsS "$base$1" || fail "GET $1"; }
 json() { curl -fsS -H 'Accept: application/json' "$base$1" || fail "GET $1 as JSON"; }
 
+# Self-hosted machines: a worker of pool bgent that has said who it is and
+# what it runs, and one of pool gh that never has.
+wtok=$(./build/orca worker-token create --pool bgent --label lap 2>> "$log") || fail "worker-token create"
+./build/orca worker-token create --pool gh --label box > /dev/null 2>> "$log" || fail "a second worker token"
+wid=$(q "SELECT id FROM orca.workers WHERE label = 'lap'")
+bid=$(q "SELECT id FROM orca.workers WHERE label = 'box'")
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $wtok" \
+    -d "{\"name\": \"w-lap\", \"slots\": 0, \"cpus\": 8, \"memory_mb\": 16384, \"image\": \"orca:t1\", \"running\": \"$run\"}" \
+    "$base/api/worker/claim")
+[ "$code" = 200 ] || fail "the worker's heartbeat answered $code"
+
+# A machine's page: an instance's samples over its run, from the file its
+# sampler uploaded (as the run page's Machines card reads it).
+mpage=$(html /ops/pools/ec2/i-w1)
+echo "$mpage" | grep -qF '<p class="crumb"><a href="/ops/pools">Pools</a> · <a href="/ops/pools?pool=ec2">ec2</a></p><h1>i-w1' \
+    || fail "the machine page's heading"
+echo "$mpage" | grep -qF '<a href="/ops/pools" aria-current="page">Pools</a>' || fail "the machine page isn't under Pools"
+echo "$mpage" | grep -q 'mx__legend' || fail "no samples chart on the machine page"
+echo "$mpage" | grep -qF "<a class=\"chip\" href=\"/runs/$run\">$run</a>" || fail "the machine page's run"
+echo "$mpage" | grep -qF '4 GiB' || fail "the machine page's memory"
+json /ops/pools/ec2/i-w1 | jq -e '.machine | .state == "live" and .kind == "ec2" and .cpus == 2 and .memory_mb == 4096 and .process == "worker"' > /dev/null \
+    || fail "the machine's JSON: $(json /ops/pools/ec2/i-w1)"
+wpage=$(html "/ops/pools/self-hosted/$wid")
+echo "$wpage" | grep -qF '<h1>w-lap <span data-tip=' || fail "the worker's page: $wpage"
+echo "$wpage" | grep -qF '<code>orca:t1</code>' || fail "the worker's image"
+echo "$wpage" | grep -qF "It hasn't claimed a run." || fail "the worker's runs"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/ops/pools/ec2/i-nope")" = 404 ] || fail "an unknown instance"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/ops/pools/self-hosted/x")" = 404 ] || fail "a worker that isn't a number"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/ops/pools/nope/1")" = 404 ] || fail "an unknown kind"
+echo "ok   a machine's page"
+
 # Remove the logs: the pages must not read a file or a bucket.
 rm -rf "$ORCA_LOGS" "$control"
 
@@ -133,36 +169,108 @@ echo "$api" | jq -e '.charts | .hours == 24 and (.labels_utc | length) == 24 and
 curl -fsS "$base/api/fleet?range=7d" | jq -e '.charts.hours == 168 and (.charts.labels_utc | length) == 168' > /dev/null || fail "?range=7d"
 echo "ok   /api/fleet"
 
-page=$(html /ops/fleet)
-echo "$page" | grep -qF '<a href="/ops/fleet" aria-current="page">Fleet</a>' || fail "Fleet isn't in the Ops menu, current"
+# One that ended ten minutes ago: Pools lists it, gone, for an hour.
+q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched, ended, why) VALUES
+   ('i-gone', $run, 1, 'worker', 'c7g.large', 'spot', now() - interval '1 hour', now() - interval '10 minutes', 'drained')" > /dev/null
+
+page=$(html /ops/pools)
+echo "$page" | grep -qF '<a href="/ops/pools" aria-current="page">Pools</a>' || fail "Pools isn't in the Ops menu, current"
 echo "$page" | grep -qF '<a href="/ops" aria-current="page" aria-haspopup="true">Ops</a>' || fail "Ops isn't current"
-echo "$page" | grep -qF '<a href="/ops/control">Control</a>' || fail "the intro and menu don't link Control"
-echo "$page" | grep -q 'EC2 instances orca launches for runs' || fail "the Fleet intro"
-echo "$page" | grep -qF 'data-poll="/ops/fleet/hosts?sort=&amp;dir=asc&amp;range=24h" data-poll-every="10"' || fail "the hosts don't poll every 10 s"
+echo "$page" | grep -qF '<a href="/ops/control">Control</a><a href="/ops/pools" aria-current="page">Pools</a><a href="/watchdog">Watchdog</a></div>' \
+    || fail "the Ops menu isn't Control, Pools and Watchdog"
+echo "$page" | grep -q 'the instances orca launches for runs' || fail "the Pools intro"
+echo "$page" | grep -qF 'data-poll="/ops/pools/live" data-poll-every="10"' || fail "the machines don't poll every 10 s"
+# Fleet's cards and charts, with EC2 in view.
 echo "$page" | grep -qF '<span class="stat__v">5</span>' || fail "hosts running"
 echo "$page" | grep -qF '1 head, 3 workers, control' || fail "heads and workers"
 echo "$page" | grep -qF 'c7g.large x2' || fail "the instance types"
 echo "$page" | grep -qF '~$0.32/h' || fail "the cost"
 echo "$page" | grep -qF 'estimate, on-demand us-east-2; 1 unpriced' || fail "the cost isn't labelled an estimate"
 echo "$page" | grep -qF 'step attempts, 1 runs' || fail "errors: attempts and runs"
-echo "$page" | grep -qF "<a class=\"chip\" href=\"/runs/$run\">$run</a>" || fail "the run link"
-echo "$page" | grep -qF '<code>head-i-head</code>' || fail "the head's row"
-echo "$page" | grep -qF '<code>control</code>' || fail "the control's row"
-echo "$page" | grep -q '<td class="num">3h 05m</td>' || fail "the head's uptime"
-echo "$page" | grep -q 'no samples yet' || fail "the starting host's row"
-[ "$(echo "$page" | grep -o '<svg class="spark" viewBox="0 0 80 22"[^>]*aria-label="CPU over the last 10 minutes"><polyline' | wc -l | tr -d ' ')" -eq 4 ] \
-    || fail "not a CPU sparkline per sampled host"
-echo "$page" | grep -qF 'aria-label="Hosts over time"' || fail "no hosts chart"
-echo "$page" | grep -qF 'aria-label="Runs per hour"' || fail "no runs chart"
-echo "$page" | grep -qF 'aria-label="Fleet CPU"' || fail "no CPU chart"
-echo "$page" | grep -qF 'aria-label="Fleet network"' || fail "no network chart"
+for c in 'Hosts over time' 'Runs per hour' 'Fleet CPU' 'Fleet network'; do
+    echo "$page" | grep -qF "aria-label=\"$c\"" || fail "no $c chart"
+done
 echo "$page" | grep -qF 'class="fl--bad"' || fail "no failures overlaid on the runs"
-echo "$page" | grep -qF '<strong>24h</strong> <a href="/ops/fleet?range=7d">7d</a>' || fail "the range choice"
-html '/ops/fleet?range=7d' | grep -qF '<strong>7d</strong>' || fail "the 7d range"
-echo "ok   /ops/fleet"
+echo "$page" | grep -qF '<strong>24h</strong> <a href="/ops/pools?range=7d">7d</a>' || fail "the range choice"
+html '/ops/pools?range=7d' | grep -qF '<strong>7d</strong>' || fail "the 7d range"
+html '/ops/pools?kind=ec2&range=7d' | grep -qF '<a href="/ops/pools?kind=ec2&amp;range=24h">24h</a>' || fail "the range keeps the filter"
+# A row per machine, both kinds: the live instances and one that ended ten
+# minutes ago, and the workers' machines; not the control host, which is
+# Control.
+rows() { html "$1" | grep -o '<a href="/ops/pools/[a-z0-9-]*/[a-zA-Z0-9-]*"><code>[^<]*</code>' | sed 's/.*<code>//; s/<.code>//' | tr '\n' ' '; }
+want="i-head i-w1 i-w2 i-w3 i-gone w-lap box "
+[ "$(rows /ops/pools)" = "$want" ] || fail "the machines: $(rows /ops/pools)"
+echo "$page" | grep -qF '<code>control</code>' && fail "the control host is a row"
+echo "$page" | grep -qF "<a href=\"/ops/pools/ec2/i-head\"><code>i-head</code></a></td><td><a href=\"/ops/pools?pool=ec2\">ec2</a></td><td><span class=\"term\"" \
+    || fail "the head's row"
+echo "$page" | grep -qF "<a href=\"/ops/pools/self-hosted/$wid\"><code>w-lap</code></a></td><td><a href=\"/ops/pools?pool=worker%3Abgent\">worker:bgent</a>" \
+    || fail "the worker's row"
+echo "$page" | grep -qF '<code>orca worker</code> <span class="muted" title="expires ' || fail "the worker process's columns"
+echo "$page" | grep -qF 'token '"$wid"' · lap' || fail "the worker's token in its row"
+echo "$page" | grep -qF '<td class="mono">orca:t1</td><td class="num">8</td><td class="num">16 GiB</td>' || fail "the worker's image, CPUs and memory"
+echo "$page" | grep -q 'no samples yet' || fail "the starting host's row"
+[ "$(echo "$page" | grep -o '<svg class="spark" viewBox="0 0 80 22"[^>]*aria-label="CPU over the last 10 minutes"><polyline' | wc -l | tr -d ' ')" -eq 3 ] \
+    || fail "not a CPU sparkline per sampled instance"
+# Help on every column, from orca.ui.terms.
+for c in Machine Pool Kind State Image CPUs Memory Runs 'Last heartbeat' CPU Worker; do
+    echo "$page" | grep -qF "aria-label=\"About $c\"" || fail "no help on the $c column"
+done
+# The API: the same machines, and the pools they are in.
+api=$(curl -fsS "$base/api/pools")
+[ "$(curl -fsS -o /dev/null -w '%{content_type}' "$base/api/pools")" = "application/json" ] || fail "/api/pools' content type"
+echo "$api" | jq -e '[.machines[] | {(.name): .state}] | add | .["i-head"] == "live" and .["i-w2"] == "draining"
+    and .["i-w3"] == "live" and .["i-gone"] == "gone" and .["w-lap"] == "live" and .box == "gone"' > /dev/null \
+    || fail "the states: $(echo "$api" | jq -c '[.machines[] | [.name, .state, .detail]]')"
+echo "$api" | jq -e '[.machines[] | {(.name): .detail}] | add | .["i-w3"] == "starting" and .["i-head"] == "running" and .["i-gone"] == "ended" and .box == "not seen" and .["w-lap"] == "running"' > /dev/null \
+    || fail "the details: $(echo "$api" | jq -c '[.machines[] | [.name, .detail]]')"
+echo "$api" | jq -e --argjson r "$run" '.machines[] | select(.name == "w-lap") | .pool == "worker:bgent" and .kind == "self-hosted" and .runs == [$r]
+    and .cpus == 8 and .memory_mb == 16384 and .image == "orca:t1" and .label == "lap" and .seen_seconds_ago >= 0' > /dev/null \
+    || fail "the worker's machine: $(echo "$api" | jq -c '.machines[] | select(.name == "w-lap")')"
+echo "$api" | jq -e '.machines[] | select(.name == "i-gone") | .ended | test("Z: drained$")' > /dev/null || fail "the ended instance"
+echo "$api" | jq -e '.pools == [{"pool": "ec2", "kind": "ec2", "machines": 5, "live": 4}, {"pool": "worker:bgent", "kind": "self-hosted", "machines": 1, "live": 1}, {"pool": "worker:gh", "kind": "self-hosted", "machines": 1, "live": 0}]' > /dev/null \
+    || fail "the pools: $(echo "$api" | jq -c .pools)"
+json /ops/pools | jq -e '(.machines | length) == 7' > /dev/null || fail "/ops/pools' JSON via Accept"
+echo "ok   /ops/pools lists every pool's machines, EC2 and self-hosted"
 
-# The old URLs moved for good (the query kept); the API paths didn't move.
-for pair in '/fleet|/ops/fleet' '/fleet?range=7d&sort=cpu|/ops/fleet?range=7d&sort=cpu' '/fleet/hosts?sort=cpu|/ops/fleet/hosts?sort=cpu' '/system?range=7d|/ops/control?range=7d' '/ops|/ops/control'; do
+# Filters, as query parameters with plain links.
+[ "$(rows '/ops/pools?kind=self-hosted')" = "w-lap box " ] || fail "kind=self-hosted: $(rows '/ops/pools?kind=self-hosted')"
+[ "$(rows '/ops/pools?kind=ec2')" = "i-head i-w1 i-w2 i-w3 i-gone " ] || fail "kind=ec2"
+[ "$(rows '/ops/pools?pool=ec2')" = "i-head i-w1 i-w2 i-w3 i-gone " ] || fail "pool=ec2"
+[ "$(rows '/ops/pools?pool=worker:bgent')" = "w-lap " ] || fail "pool=worker:bgent"
+[ "$(rows '/ops/pools?pool=worker%3Agh&kind=self-hosted')" = "box " ] || fail "pool and kind"
+[ "$(rows '/ops/pools?pool=worker:bgent&kind=ec2')" = "" ] || fail "a pool of another kind"
+[ "$(rows '/ops/pools?kind=nonsense')" = "$want" ] || fail "an unknown kind is all"
+sh=$(html '/ops/pools?kind=self-hosted')
+echo "$sh" | grep -qF '<a class="ptabs__tab" href="/ops/pools?kind=self-hosted" aria-current="page">Self-hosted <span class="muted">2</span></a>' \
+    || fail "the Self-hosted tab"
+echo "$sh" | grep -qF '<a class="ptabs__tab" href="/ops/pools">All <span class="muted">7</span></a>' || fail "the All tab"
+echo "$sh" | grep -qF '<a href="/ops/pools?pool=worker%3Abgent&amp;kind=self-hosted">worker:bgent</a> <span class="muted">1/1</span>' \
+    || fail "the pool links keep the kind"
+echo "$sh" | grep -qF 'data-poll="/ops/pools/live?kind=self-hosted"' || fail "the poll keeps the filter"
+echo "$sh" | grep -q 'class="stats' && fail "Fleet's cards without EC2 in view"
+echo "$sh" | grep -q 'aria-label="Fleet CPU"' && fail "Fleet's charts without EC2 in view"
+[ "$(curl -fsS "$base/api/pools?kind=ec2" | jq -c '[.machines[].kind] | unique')" = '["ec2"]' ] || fail "/api/pools?kind=ec2"
+[ "$(curl -fsS "$base/api/pools?pool=worker:bgent" | jq -c '[.filters.pool, [.machines[].name]]')" = '["worker:bgent",["w-lap"]]' ] \
+    || fail "/api/pools?pool=worker:bgent"
+echo "ok   Pools filters by pool and kind"
+
+# The live part, as a fragment that never ends.
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/ops/pools/live")" = 200 ] || fail "the fragment doesn't answer 200"
+html /ops/pools/live | grep -q '<html' && fail "the fragment is a page"
+html /ops/pools/live | grep -qF '<span class="stat__v">5</span>' || fail "the fragment's cards"
+[ "$(rows '/ops/pools/live?kind=self-hosted')" = "w-lap box " ] || fail "the fragment's filter"
+html '/ops/pools/live?kind=self-hosted' | grep -qF 'aria-label="About Last heartbeat"' || fail "the fragment's column help"
+q "UPDATE orca.workers SET revoked = now() WHERE id = $wid" > /dev/null
+html '/ops/pools/live?kind=self-hosted' | grep -qF '<span class="muted">revoked</span>' || fail "the fragment doesn't follow a revoke"
+q "UPDATE orca.workers SET revoked = NULL WHERE id = $wid" > /dev/null
+echo "ok   /ops/pools/live"
+
+# Fleet and Workers moved to Pools for good (the range kept); asked for
+# JSON, they answer what they did; the API paths didn't move.
+for pair in '/ops/fleet|/ops/pools?kind=ec2' '/ops/fleet?range=7d&sort=cpu|/ops/pools?kind=ec2&range=7d' '/ops/fleet/hosts?sort=cpu|/ops/pools/live?kind=ec2' \
+    '/ops/workers|/ops/pools?kind=self-hosted' '/ops/workers/live|/ops/pools/live?kind=self-hosted' \
+    '/fleet|/ops/pools?kind=ec2' '/fleet?range=7d&sort=cpu|/ops/pools?kind=ec2&range=7d' '/fleet/hosts?sort=cpu|/ops/pools/live?kind=ec2' \
+    '/system?range=7d|/ops/control?range=7d' '/ops|/ops/control'; do
     from=${pair%%|*}
     to=${pair##*|}
     got=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$base$from")
@@ -170,46 +278,37 @@ for pair in '/fleet|/ops/fleet' '/fleet?range=7d&sort=cpu|/ops/fleet?range=7d&so
     [ "$from" != /ops ] || code=302
     [ "$got" = "$code $base$to" ] || fail "$from redirects to: $got"
 done
-echo "ok   /fleet, /fleet/hosts and /system redirect; /ops goes to Control"
-
-# Sorting, by query parameter, in the page and its fragment.
-order() { html "$1" | grep -o '<code>[a-z]*-\{0,1\}[a-z0-9-]*</code>' | sed 's/<[^>]*>//g' | tr '\n' ' '; }
-want="control head-i-head worker-i-w1 worker-i-w2 worker-i-w3 "
-[ "$(order /ops/fleet)" = "$want" ] || fail "default order: $(order /ops/fleet)"
-# The control instance's CPU is this machine's, anywhere from idle to busy,
-# so it's left out: the rest is fixed. (Taking the first three assumed this
-# machine was under 30% busy.)
-others() { order "$1" | tr ' ' '\n' | grep -vx control | tr '\n' ' '; }
-want="head-i-head worker-i-w1 worker-i-w2 worker-i-w3 "
-[ "$(others '/ops/fleet?sort=cpu&dir=desc')" = "$want" ] || fail "by CPU, highest first: $(order '/ops/fleet?sort=cpu&dir=desc')"
-[ "$(others '/ops/fleet/hosts?sort=cpu&dir=desc')" = "$want" ] || fail "the fragment's order: $(order '/ops/fleet/hosts?sort=cpu&dir=desc')"
-# A host with no samples counts as 0%: the lowest.
-[ "$(others '/ops/fleet?sort=cpu&dir=asc' | cut -d' ' -f1)" = worker-i-w3 ] \
-    || fail "by CPU, lowest first: a host with no samples is lowest: $(order '/ops/fleet?sort=cpu&dir=asc')"
-[ "$(order '/ops/fleet/hosts?sort=uptime&dir=desc' | cut -d' ' -f1)" = "head-i-head" ] || fail "by uptime, longest first"
-[ "$(order '/ops/fleet?sort=nonsense')" = "$(order /ops/fleet)" ] || fail "an unknown column is the default order"
-html '/ops/fleet?sort=cpu&dir=desc' | grep -qF '<th class="num" aria-sort="descending"><a class="sortby" href="/ops/fleet?sort=cpu&amp;dir=asc&amp;range=24h#hosts">CPU ▼</a>' \
-    || fail "the sorted header"
-html '/ops/fleet?sort=cpu&dir=desc' | grep -qF 'data-poll="/ops/fleet/hosts?sort=cpu&amp;dir=desc&amp;range=24h"' || fail "the poll keeps the sort"
-[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/ops/fleet/hosts")" = 200 ] || fail "the fragment doesn't answer 200 forever"
-html /ops/fleet/hosts | grep -q '<html' && fail "the fragment is a page"
-echo "ok   /fleet sorts, and its fragment keeps the sort"
+curl -fsS -L "$base/ops/workers" | grep -qF '<h1>Pools</h1>' || fail "/ops/workers doesn't land on Pools"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: application/json' "$base/ops/fleet")" = 200 ] || fail "/ops/fleet as JSON redirects"
+json /ops/fleet | jq -e '.summary.hosts == 5 and (.hosts | length) == 5 and .charts.hours == 24' > /dev/null || fail "/ops/fleet's JSON via Accept"
+[ "$(json /ops/fleet | jq -c '[.summary.hosts, [.hosts[].id]]')" \
+    = "$(curl -fsS "$base/api/fleet" | jq -c '[.summary.hosts, [.hosts[].id]]')" ] || fail "/ops/fleet's JSON isn't /api/fleet's"
+[ "$(curl -fsS "$base/ops/fleet?format=json&range=7d" | jq .charts.hours)" = 168 ] || fail "/ops/fleet?format=json&range=7d"
+json '/ops/fleet?sort=cpu&dir=desc' | jq -e '[.hosts[] | select(.id != "control") | .id] == ["i-head", "i-w1", "i-w2", "i-w3"]' > /dev/null \
+    || fail "/ops/fleet's JSON sorted: $(json '/ops/fleet?sort=cpu&dir=desc' | jq -c '[.hosts[].id]')"
+json /ops/workers | jq -e '.workers | map(.label) | sort == ["box", "lap"]' > /dev/null || fail "/ops/workers' JSON"
+[ "$(json /ops/workers | jq -c .)" = "$(curl -fsS "$base/api/workers" | jq -c .)" ] || fail "/ops/workers' JSON isn't /api/workers'"
+curl -fsS "$base/api/workers" | jq -e '.workers[] | select(.label == "lap") | .name == "w-lap" and .cpus == 8 and .pool == "bgent"' > /dev/null \
+    || fail "/api/workers: $(curl -fsS "$base/api/workers")"
+echo "ok   /ops/fleet and /ops/workers redirect to Pools and keep their JSON; /fleet, /fleet/hosts and /system redirect; /ops goes to Control"
 
 # The home page: a strip of the same numbers, each linking to its detail.
 page=$(html /)
 echo "$page" | grep -qF '<div class="stats stats--compact">' || fail "no strip on /"
-echo "$page" | grep -qF '<a class="stat" href="/ops/fleet#hosts"><span class="stat__k">Hosts' || fail "the strip's hosts link"
+echo "$page" | grep -qF '<a class="stat" href="/ops/pools?kind=ec2#machines"><span class="stat__k">Hosts' || fail "the strip's hosts link"
 echo "$page" | grep -qF 'href="/runs?status=failed"' || fail "the strip's errors link"
 json / | jq -e '.fleet.hosts == 5' > /dev/null || fail "/'s JSON has no fleet"
-json /ops/fleet | jq -e '.summary.hosts == 5 and (.hosts | length) == 5' > /dev/null || fail "/fleet's JSON via Accept"
 
 # A value from the database is escaped.
 q "UPDATE orca.instances SET instance_type = '<b>x</b>' WHERE id = 'i-w3'" > /dev/null
-html /ops/fleet | grep -qF '<b>x</b>' && fail "an instance type's markup reached the page"
-html /ops/fleet | grep -qF '&lt;b&gt;x&lt;/b&gt;' || fail "the escaped instance type"
+q "UPDATE orca.workers SET name = '<i>w</i>' WHERE id = $bid" > /dev/null
+html /ops/pools | grep -qF '<b>x</b>' && fail "an instance type's markup reached the page"
+html /ops/pools | grep -qF '&lt;b&gt;x&lt;/b&gt;' || fail "the escaped instance type"
+html /ops/pools | grep -qF '<i>w</i>' && fail "a worker's name's markup reached the page"
+html /ops/pools | grep -qF '&lt;i&gt;w&lt;/i&gt;' || fail "the escaped worker name"
 # On the local runner the page says that no instances are launched; on others
 # it doesn't.
-html /ops/fleet | grep -q 'launches no instances' && fail "the local-runner notice on a scheduler with no runner set"
+html /ops/pools | grep -q 'launches no instances' && fail "the local-runner notice on a scheduler with no runner set"
 free_port lport
 ORCA_FIXED_COST="€8.49/month" ORCA_RUNNER=local ORCA_UI_ADDR="127.0.0.1:$lport" ./build/orca ui >> "$log" 2>&1 &
 lpid=$!
@@ -217,18 +316,41 @@ i=0
 until curl -fs "http://127.0.0.1:$lport/" > /dev/null 2>&1; do
     i=$((i + 1)); [ "$i" -lt 100 ] || { kill "$lpid"; fail "the second orca ui didn't start"; }; sleep 0.1
 done
-lpage=$(curl -fsS "http://127.0.0.1:$lport/ops/fleet")
+lpage=$(curl -fsS "http://127.0.0.1:$lport/ops/pools")
 lhome=$(curl -fsS "http://127.0.0.1:$lport/")
 kill "$lpid"
 wait "$lpid" 2> /dev/null || true
 echo "$lpage" | grep -q 'runner is <code>local</code>: it runs every run on its own machine and launches no instances' \
-    || fail "no local-runner notice on /ops/fleet"
+    || fail "no local-runner notice on /ops/pools"
 for pg in "$lpage" "$lhome"; do
     echo "$pg" | grep -q 'stat__k">Cost</span><span class="stat__v">€8.49/month</span><span class="stat__s">fixed price: the local runner launches no instances' \
         || fail "the local runner's cost tile"
     echo "$pg" | grep -q 'us-east-2\|Cost now\|on-demand' && fail "EC2 price text on the local runner's page"
 done
-html /ops/fleet | grep -q 'Cost now' || fail "the EC2 cost tile is gone on another runner"
-echo "ok   Ops > Fleet says the local runner launches no instances"
+html /ops/pools | grep -q 'Cost now' || fail "the EC2 cost tile is gone on another runner"
+echo "ok   Ops > Pools says the local runner launches no instances"
+
+# On the Kubernetes runner, a live run of the default placement is a
+# machine of pool kubernetes: its pods, as the runner names them.
+q "UPDATE orca.runs SET status = 'running', started = now(), heartbeat = now(), cpu_millis = 1500 WHERE id = $run" > /dev/null
+starts=$(q "SELECT starts FROM orca.runs WHERE id = $run")
+free_port kport
+ORCA_RUNNER=kubernetes ORCA_UI_ADDR="127.0.0.1:$kport" ./build/orca ui >> "$log" 2>&1 &
+kpid=$!
+i=0
+until curl -fs "http://127.0.0.1:$kport/" > /dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || { kill "$kpid"; fail "the third orca ui didn't start"; }; sleep 0.1
+done
+kapi=$(curl -fsS "http://127.0.0.1:$kport/api/pools?kind=k8s")
+kpage=$(curl -fsS "http://127.0.0.1:$kport/ops/pools?pool=kubernetes")
+kmachine=$(curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$kport/ops/pools/k8s/orca-$run-$starts")
+kill "$kpid"
+wait "$kpid" 2> /dev/null || true
+echo "$kapi" | jq -e --arg n "orca-$run-$starts" --argjson r "$run" '(.machines | length) == 1 and (.machines[0] | .name == $n and .pool == "kubernetes"
+    and .state == "live" and .cpus == 2 and .runs == [$r] and .process == "pods")' > /dev/null || fail "the kubernetes pool: $kapi"
+echo "$kpage" | grep -qF "<code>orca-$run-$starts</code>" || fail "the pods' row"
+[ "$kmachine" = 200 ] || fail "the pods' page answered $kmachine"
+[ "$(curl -fsS "$base/api/pools?kind=k8s" | jq '.machines | length')" = 0 ] || fail "pods on another runner"
+echo "ok   Pools lists a Kubernetes run's pods"
 kill "$pid"
 echo "ok   fleet"

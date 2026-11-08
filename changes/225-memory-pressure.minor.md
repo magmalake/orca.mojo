@@ -15,7 +15,7 @@
   `orca.pressure`, `orca.admission`; migration 39. docs/orca-toml.md,
   "Memory pressure"; `tests/pressure.sh`.
 - **The pressure, shown.** Ops › Control has a Memory pressure card
-  (`memory_pressure` in `/api/system`), Ops › Workers and `/api/workers`
+  (`memory_pressure` in `/api/system`), `/api/workers`
   each worker's, `/metrics` the gauges `orca_memory_pressure_some_avg10`
   (and `_avg60`, `_avg300`, `full_*`) and
   `orca_admission_memory_pressure_held` by `host`, and `orca status` a line.

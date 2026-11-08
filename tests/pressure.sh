@@ -186,7 +186,6 @@ until_ 20 "the worker's run wasn't held: $(q "SELECT status, held FROM orca.runs
     is "SELECT status || ' ' || held FROM orca.runs WHERE id = $r5" "queued $wwant"
 json /api/workers | jq -e '.workers[0].memory_pressure.some.avg10 == 40 and .workers[0].memory_pressure.held != null' > /dev/null \
     || fail "the workers' JSON: $(json /api/workers | jq -c '.workers[0]')"
-curl -fsS "$base/ops/workers" | grep -q 'claims none' || fail "Ops > Workers doesn't say the worker holds"
 curl -fsS "$base/metrics" | grep -q '^orca_admission_memory_pressure_held{host="worker:[0-9]*"} 1' \
     || fail "/metrics has no worker hold"
 sleep 1

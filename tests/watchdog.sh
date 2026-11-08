@@ -6,7 +6,7 @@
 #
 # - a run of fanout launches 3 instances, which trips "launches": both
 #   pipelines are paused (the run going on finishes), with audit rows from
-#   `watchdog`, a trip row, a red banner on /, /ops/fleet and /ops/control, /watchdog,
+#   `watchdog`, a trip row, a red banner on /, /ops/pools and /ops/control, /watchdog,
 #   /api/watchdog, `orca watchdog status`, and /metrics gauges;
 # - a run queued for a paused pipeline stays queued;
 # - snoozing the rule (the command, and the UI's form) is audited, and
@@ -114,7 +114,7 @@ sleep 4
 echo "ok   a run going on finishes; a new one waits behind the pause"
 
 # What it looks like.
-for p in / /ops/fleet /ops/control; do
+for p in / /ops/pools /ops/control; do
     page=$(curl -fsS "$base$p")
     echo "$page" | grep -q 'class="alert alert--trip"' || fail "no banner on $p"
     echo "$page" | grep -q 'Watchdog paused pipelines: launches' || fail "the banner on $p names no rule"
@@ -137,7 +137,7 @@ echo "$out" | grep -q '^launches .*TRIPPED' || fail "orca watchdog status: $out"
 echo "$out" | grep -q '^trip launches at .*paused fanout toy' || fail "orca watchdog status trips: $out"
 ./build/orca --remote "$base" watchdog status | grep -q '^launches .*TRIPPED' || fail "orca --remote watchdog status"
 ./build/orca watchdog status --json | jq -e '.trips | length == 1' > /dev/null || fail "orca watchdog status --json"
-echo "ok   the banner on /, /ops/fleet and /ops/control, /watchdog, /metrics and the status command show the trip"
+echo "ok   the banner on /, /ops/pools and /ops/control, /watchdog, /metrics and the status command show the trip"
 
 # Snoozing, and unpausing clears.
 ./build/orca watchdog snooze nope 1h > /dev/null 2>&1 && fail "snoozing no rule"
@@ -153,7 +153,7 @@ curl -fsS "$base/api/watchdog" | jq -e '(.rules[] | select(.rule == "launches") 
 curl -fsS "$base/" | grep -q 'Paused: <a href="/pipelines/fanout">fanout</a>\. ' || fail "toy unpaused: the trip should list only fanout"
 ./build/orca unpause fanout > /dev/null || fail "unpause fanout"
 curl -fsS "$base/" | grep -q 'alert--trip' && fail "the banner stays after unpausing"
-curl -fsS "$base/ops/fleet" | grep -q 'alert--trip' && fail "the banner stays on /ops/fleet"
+curl -fsS "$base/ops/pools" | grep -q 'alert--trip' && fail "the banner stays on /ops/pools"
 [ "$(tripped launches)" = 0 ] || fail "the gauge stays 1"
 # The toy's queued run starts, and nothing pauses again while snoozed.
 t1=$(q "SELECT id FROM orca.runs WHERE pipeline = 'toy'")

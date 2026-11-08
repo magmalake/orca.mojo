@@ -55,7 +55,6 @@ from orca.admission import (
     worker_host,
 )
 from orca.control import WORKER_PREFIX, pool_of, pool_problem
-from orca.html import Html
 from orca.http_store import (
     STORE_PATH,
     Body,
@@ -66,7 +65,6 @@ from orca.http_store import (
     steps_json,
 )
 from orca.json import quote
-from orca.pressure import pct_text
 from orca.live import dead_sql, stale_limit, start_grace
 from orca.resources import Grant, Room, admit
 from orca.scheduler import registered
@@ -852,18 +850,6 @@ def store_call(
 # ── Ops ──────────────────────────────────────────────────────────────────────
 
 
-def _ago_text(s: Int) -> String:
-    if s < 0:
-        return "never"
-    if s < 120:
-        return String(s, " s ago")
-    if s < 7200:
-        return String(s // 60, " min ago")
-    if s < 172800:
-        return String(s // 3600, " h ago")
-    return String(s // 86400, " days ago")
-
-
 def workers_json(rows: List[WorkerRow]) -> String:
     var out = String('{"workers": [')
     for i in range(len(rows)):
@@ -888,75 +874,3 @@ def workers_json(rows: List[WorkerRow]) -> String:
         )
     out.write("]}")
     return out^
-
-
-def workers_html(mut h: Html, rows: List[WorkerRow]):
-    """Ops' Workers: a row per worker token."""
-    h.raw("<h1>Workers</h1>")
-    h.raw(
-        "<p>Machines that run the runs of pipelines placed",
-        " <code>worker:&lt;pool&gt;</code>, talking only to this UI's API",
-        " (<code>orca worker</code>). A token is made with <code>orca",
-        " worker-token create --pool &lt;pool&gt;</code>.</p>",
-    )
-    if len(rows) == 0:
-        h.raw('<p class="muted">No worker tokens yet.</p>')
-        return
-    h.raw(
-        "<table><thead><tr><th>Token</th><th>Pool</th><th>Label</th>",
-        "<th>Worker</th><th>Image</th><th>Last seen</th><th>Running</th>",
-        "<th>CPUs</th><th>Memory</th><th>Memory pressure</th>",
-        "<th>Expires</th></tr></thead><tbody>",
-    )
-    for r in rows:
-        h.raw("<tr><td>")
-        h.text(r.id)
-        if r.state != "live":
-            h.raw(' <span class="muted">')
-            h.text(r.state)
-            h.raw("</span>")
-        h.raw("</td>")
-        h.cell(r.pool)
-        h.cell(r.label)
-        h.cell(r.name if r.name else String("-"))
-        h.cell(r.image if r.image else String("-"))
-        h.raw('<td title="')
-        h.text(r.last_seen)
-        h.raw('">')
-        h.text(_ago_text(r.seen_ago))
-        h.raw("</td><td>")
-        if r.running:
-            var first = True
-            for id in r.running.split(","):
-                if not first:
-                    h.raw(", ")
-                first = False
-                h.link(String("/runs/", id), String(id))
-        else:
-            h.raw('<span class="muted">none</span>')
-        h.raw("</td>")
-        h.cell(String(r.cpus) if r.cpus else String("-"))
-        h.cell(String(r.memory_mb, " MB") if r.memory_mb else String("-"))
-        _pressure_cell(h, r.pressure)
-        h.cell(r.expires)
-        h.raw("</tr>")
-    h.raw("</tbody></table>")
-
-
-def _pressure_cell(mut h: Html, row: Optional[PressureRow]):
-    """A worker's memory pressure: `some avg10`, and why it claims nothing
-    while it holds."""
-    if not row or not row.value().fresh():
-        h.cell("-")
-        return
-    ref r = row.value().report
-    if not r.has:
-        h.raw('<td class="muted">no PSI</td>')
-        return
-    h.raw("<td>")
-    h.text(pct_text(r.some10), "%")
-    if r.held:
-        h.raw('<div class="muted">')
-        h.text(r.held.removeprefix("waiting: "), ": claims none")
-        h.raw("</div>")
-    h.raw("</td>")

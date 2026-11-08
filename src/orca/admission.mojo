@@ -1,5 +1,5 @@
 """Admission by memory pressure, where it shows (#202): each host's newest
-reading in `orca.pressure`, for Ops › Control, Ops › Workers, `/metrics`,
+reading in `orca.pressure`, for Ops › Control, `/api/workers`, `/metrics`,
 `orca status` and the home and runs pages, and the alert when a hold has
 nothing of orca's to wait for.
 
