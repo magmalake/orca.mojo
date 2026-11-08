@@ -386,6 +386,7 @@ On every tick, after a pipeline's other runs have started, the scheduler queues 
 - **One partition per fill run**, in `fill_order`. The run's trigger is `fill` (`orca.runs.trigger`), so the runs page can filter for them.
 - **A partition is taken** when it's done in a run of any of the pipeline's code, when a live run has it, or when a fill run of it was ever queued. A fill never runs a partition twice. A fill run that fails is retried like a scheduled run, up to `run_retries`. A partition whose fill run failed past its retries, or was cancelled, is left to a person: `orca backfill`, or resume in the UI. Running done partitions again stays `orca backfill --rerun`.
 - **Fill runs don't count against `max_runs`.** At most `fill_max_runs` fill runs are going, beside up to `max_runs` other runs.
+- **On a worker pool** (`placement = "worker:<pool>"`) the scheduler queues the fill runs the same way and leaves them for a worker of the pool to claim. `fill_max_runs` caps the fill runs going across the whole pool, the queued ones included; each worker's `--max-runs` caps what one machine takes. See [Fills on a pool](workers.md#fills-on-a-pool).
 - **Fill runs never starve scheduled runs.** While any of the pipeline's scheduled, backfill or other runs are queued, no fill run starts. Fill runs still take room in the stack-wide limits (`ORCA_VCPU_BUDGET`, the control instance's slots) once they're going.
 
 ### What stops a fill
@@ -401,7 +402,7 @@ The pipeline page and `/api/pipelines/<name>` say which of these stopped it, in 
 | `price unknown` | Neither orca.fleet's price table nor a Kubernetes cluster can price the run. The [cost estimate](#the-cost-estimate) fails closed. |
 | `budget` | Today's estimated spend plus what the next run may cost would go over `fill_budget_per_day`. It starts again at 00:00 UTC. |
 | `waiting` | Other runs of the pipeline are queued, and they start first. |
-| `at fill_max_runs` | As many fill runs are going as `fill_max_runs` allows. |
+| `at fill_max_runs` | As many fill runs are going as `fill_max_runs` allows: running, or on a worker pool queued for a worker. |
 
 ### The cost estimate
 

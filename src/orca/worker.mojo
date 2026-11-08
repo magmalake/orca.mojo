@@ -19,7 +19,11 @@ data and logs go where the worker's own `ORCA_WAREHOUSE` and `ORCA_LOGS`
 say, as any run's do. When the process ends, its output is appended to
 the run's `driver.log` by `<binary> keep-log`, which also fails the
 attempts a crash left running; a process that ended before claiming its
-run has the run failed, saying why (`/api/worker/exited`). Each poll the
+run has the run failed, saying why (`/api/worker/exited`). Beside each
+run's process it starts `<binary> sample` (`orca.sample`, unless
+`ORCA_SAMPLE_SECONDS=0`), which writes this machine's metrics to
+`<ORCA_LOGS>/<pipeline>/<run>/metrics/worker-<name>.jsonl`, so the run's
+page has its Machines card, as a local run's does. Each poll the
 worker samples its runs' process trees, as the scheduler samples a local
 run's, and sends the samples with `/api/worker/exited`, so their attempts
 get their peak memory and CPU (`orca.usage`). Where the worker can make
@@ -41,7 +45,9 @@ rather than started, though the UI shouldn't hand it one
 **Dying.** A worker that's killed takes its runs with it: each run's
 heartbeat thread exits its process once its parent isn't the worker
 (`ORCA_WORKER_PID`), so the run's heartbeat goes stale and the scheduler
-requeues it, for this worker or another, as it does any dead run.
+queues it again, for this worker or another, whatever its trigger
+(`orca.scheduler`'s `_requeue_lost`); a run this worker claimed and never
+started has its start given back.
 """
 
 from std.ffi import c_int, external_call
@@ -68,7 +74,15 @@ from orca.pressure import (
 )
 from orca.proc import Reaped, reap, spawn
 from orca.resources import host_room, run_env as grant_env
-from orca.sample import _hostname, _sysctl_u64, parse_meminfo, tree_usage
+from orca.sample import (
+    _hostname,
+    _sysctl_u64,
+    machine_name,
+    metrics_location,
+    parse_meminfo,
+    sample_seconds,
+    tree_usage,
+)
 from orca.store import FINAL
 from orca.usage import Meter, marks_json
 from orca.workers import (
@@ -280,6 +294,25 @@ struct Worker(Movable):
             flush=True,
         )
         self.running[pid] = _Running(spec.copy(), stage, env^)
+        # The machine's metrics while the run's process lives, as the
+        # scheduler's beside a local run (orca.sample): the Machines card.
+        var metrics = metrics_location(
+            spec.pipeline, spec.run, machine_name(self.name)
+        )
+        if metrics and sample_seconds() > 0:
+            try:
+                _ = spawn(
+                    [
+                        spec.binary,
+                        "sample",
+                        "--out",
+                        metrics,
+                        "--pid",
+                        String(pid),
+                    ]
+                )
+            except e:
+                print("orca worker: no sampler for run", spec.run, ":", e)
 
     def _sample(mut self):
         """Samples each run's process tree (none on macOS)."""

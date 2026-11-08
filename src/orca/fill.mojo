@@ -29,6 +29,15 @@ hour outside `fill_window`, the day's budget, the pipeline's other queued
 runs (a scheduled or backfilled run starts first, so fills never starve
 them), and `fill_max_runs`. Fill runs don't count against `max_runs`.
 
+**On a worker pool** (`placement = "worker:<pool>"`) the scheduler queues
+the fill runs the same way, in the same order and within the same limits,
+and leaves them queued, held for a worker of the pool to claim
+(`orca.workers`). `fill_max_runs` caps the pipeline's live fill runs
+across the whole pool, queued ones included, so the fill never has more
+than that many going whatever the number of workers; each worker's
+`--max-runs` and its grants cap what one machine takes. A worker pool's
+runs cost nothing more than its machines, which run anyway.
+
 **The cost estimate** is conservative, and fails closed. A fill run's
 cost is its instances' time (`orca.instances`) at `orca.fleet`'s on-demand
 price table, times `COST_MARGIN` for what the table leaves out (EBS,
@@ -248,11 +257,12 @@ def run_hourly(
     placed: String, head_type: String, worker_type: String, workers: Int
 ) -> Float64:
     """US dollars an hour of one of the pipeline's runs where it's `placed`:
-    0 on the control host or as a local process, the head and its most
+    0 on the control host, as a local process or on a worker pool's
+    machines (which run anyway), the head and its most
     workers at on-demand prices on EC2 (a type left empty is the runner's,
     `ORCA_EC2_HEAD_TYPE` / `ORCA_EC2_WORKER_TYPE`), and -1 for a price that
     isn't known (a type not in `orca.fleet`'s table, or Kubernetes)."""
-    if placed == "control" or placed == "local":
+    if placed == "control" or placed == "local" or placed.startswith("worker:"):
         return 0.0
     if placed != "ec2":
         return -1.0
@@ -303,8 +313,8 @@ struct FillPipeline(Copyable, Movable):
     var tz: String
     var paused: Bool
     var placed: String
-    """Where its runs would start: `control`, `ec2`, `kubernetes` or
-    `local`."""
+    """Where its runs would start: `control`, `ec2`, `kubernetes`, `local`
+    or `worker:<pool>`."""
     var head_type: String
     var worker_type: String
     var workers: Int
@@ -329,6 +339,10 @@ struct FillStatus(Copyable, Movable):
     """Partitions no run has taken yet."""
     var running: Int
     """Fill runs running now."""
+    var queued: Int
+    """Fill runs queued and not yet started: on a worker pool, those
+    waiting for a worker to claim them. They count against
+    `fill_max_runs` as the running ones do."""
     var rate: Float64
     """Partitions an hour the fill runs did lately; 0 for none."""
     var eta_seconds: Int
@@ -359,6 +373,7 @@ struct FillStatus(Copyable, Movable):
         self.retrying = 0
         self.left = 0
         self.running = 0
+        self.queued = 0
         self.rate = 0.0
         self.eta_seconds = -1
         self.spent = 0.0
@@ -455,6 +470,17 @@ def fill_status(
         Params().text(p.name).float64(stale),
     ).row(0)
     s.running = Int(running.int64("n"))
+    s.queued = Int(
+        tx.query(
+            (
+                "SELECT count(*) AS n FROM orca.runs WHERE pipeline = $1 AND"
+                " trigger = 'fill' AND status = 'queued'"
+            ),
+            Params().text(p.name),
+        )
+        .row(0)
+        .int64("n")
+    )
     var elapsed = List[Int]()
     var each = running.text("each")
     if each.byte_length() > 2:
@@ -614,12 +640,24 @@ def fill_status(
             others,
             " scheduled or backfill runs are queued, and start first",
         )
-    elif s.running >= p.fill.max_runs:
+    elif s.running + s.queued >= p.fill.max_runs:
         s.idle = String(
-            "at fill_max_runs: ", s.running, " of ", p.fill.max_runs, " going"
+            "at fill_max_runs: ",
+            s.running + s.queued,
+            " of ",
+            p.fill.max_runs,
+            " going",
         )
+        if s.queued > 0:
+            s.idle.write(
+                " (",
+                s.queued,
+                " waiting for a worker)" if p.placed.startswith(
+                    "worker:"
+                ) else " queued)",
+            )
     if not s.idle:
-        s.slots = p.fill.max_runs - s.running
+        s.slots = p.fill.max_runs - s.running - s.queued
         # On a budget, as many as it holds.
         if s.budget >= 0 and s.hourly > 0:
             var one = COST_MARGIN * s.hourly * Float64(expected) / 3600.0
@@ -658,6 +696,8 @@ def status_json(s: FillStatus) -> String:
         s.left,
         ', "running": ',
         s.running,
+        ', "queued": ',
+        s.queued,
         ', "rate_per_hour": ',
         Float64(Int(s.rate * 100.0 + 0.5)) / 100.0,
         ', "eta_seconds": ',

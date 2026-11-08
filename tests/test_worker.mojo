@@ -38,6 +38,7 @@ from orca.store import (
     SUCCEEDED,
     Usage,
 )
+from orca.sample import machine_name
 from orca.workers import (
     WorkerRun,
     version_refusal,
@@ -207,6 +208,12 @@ def test_urls() raises:
     for bad in ["http://orca.mlake.dev", "ftp://x", "orca.mlake.dev"]:
         with assert_raises(contains="https://"):
             _ = check_state_url(bad)
+
+
+def test_machine_name() raises:
+    assert_equal(machine_name("bgent"), "worker-bgent")
+    assert_equal(machine_name("ip-10-0-1-5.local"), "worker-ip-10-0-1-5.local")
+    assert_equal(machine_name("a/b c"), "worker-a_b_c")
 
 
 def test_refusal() raises:

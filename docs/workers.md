@@ -32,7 +32,58 @@ Or `orca register --placement worker:bgent`. A pool's name is 1 to 32 of
 queued, held "waiting for a worker of pool bgent", and the pipeline's page
 says so. `max_runs` and `orca pause` apply as for any pipeline: a worker is
 given a run only while its pipeline isn't paused and has fewer than
-`max_runs` live runs. Fills (`fills = "all"`) don't run on workers yet.
+`max_runs` live runs.
+
+## Fills on a pool
+
+A pool-placed pipeline with `fills = "all"` fills its range as a local one
+does ([orca.toml](orca-toml.md#fills)): the scheduler queues its fill runs
+in the same order (`fill_order`), within the same `fill_window`, and never
+over a partition that is done or in a queued or running run, or that a fill
+run ever took. It doesn't start them: they stay queued, held "waiting for
+a worker of pool <pool>", until a worker claims one.
+
+**The budget.** `fill_max_runs` caps the pipeline's live fill runs across
+the whole pool: the ones running on any worker and the ones queued for
+one. So a fill never has more than `fill_max_runs` runs going, however many
+workers the pool has, and the scheduler queues a new one only as one ends.
+What one machine takes is that worker's own `--max-runs` and, for a
+pipeline with a request, what its host can grant. Fill runs don't count
+against `max_runs`, and the pipeline's other runs are claimed first. A
+worker's machine runs anyway, so a pool's fill runs cost nothing against
+`fill_budget_per_day`. The pipeline page's Fill line and the coverage
+calendar count the queued fill runs as live.
+
+A two-machine pool, the server and a Mac, filling gharchive two at a time,
+oldest first:
+
+```toml
+[pipelines.gharchive]
+placement = "worker:gharchive"
+fills = "all"
+fill_order = "oldest"
+fill_max_runs = 2      # across the pool
+```
+
+```sh
+# On the server, once: a token per machine.
+orca worker-token create --pool gharchive --label hetzner
+orca worker-token create --pool gharchive --label bgent
+
+# On each machine, its own token in worker.env (below), one run at a time:
+docker run -d --name orca-worker --restart always --env-file worker.env \
+    -v "$PWD/secrets:/etc/orca/secrets:ro" -v "$PWD/secret-fetch:/etc/orca/secret-fetch:ro" \
+    ghcr.io/<owner>/<image>:<tag> worker --pool gharchive --max-runs 1 \
+    --name hetzner --remote https://orca.example.com    # --name bgent on the Mac
+```
+
+With `fill_max_runs = 2` and `--max-runs 1` on each, each machine runs one
+fill run; with `--max-runs 2` on both, still two at once in all, wherever
+they land. Give each machine its own token: the scheduler tells which runs
+a worker still has by what its token's worker last said.
+
+When a worker dies, its fill runs are queued again for the pool (below),
+so the fill goes on on the other machine.
 
 ## Tokens
 
@@ -182,18 +233,33 @@ that can't be made within half the stale limit refuses the commit.
 - **A dead worker.** Each run's heartbeat thread beats over the API. It
   also exits its process once the worker that started it (`ORCA_WORKER_PID`)
   isn't its parent any more. So when a worker is killed, or its machine
-  goes to sleep, the run's heartbeat goes stale, and the scheduler queues
-  the run again for a worker. That is the dead-run rule every runner has,
-  within `run_retries`. As on every runner, a run the scheduler doesn't
-  retry (manual, UI or rerun) fails instead, `interrupted: its process
-  stopped`, and can be resumed from the UI. A machine that wakes up finds
-  its run lost at its next call, and a commit is fenced.
+  goes to sleep, the run's heartbeat goes stale. A run whose worker is
+  gone is queued again for the pool, whatever its trigger (a manual, UI or
+  rerun run too, which on other runners fails `interrupted`): one whose
+  heartbeat is stale and whose worker hasn't been seen for half the stale
+  limit (`ORCA_STALE_SECONDS`), or has been seen since without it (a
+  restarted worker). Its next start resumes it after its last step done.
+  A run a worker claimed and never started has its start given back. Each
+  is a row of `orca.audit` (user `scheduler`, action
+  `/api/worker/requeue`, saying why) and a line of the scheduler's log.
+  A run that started counts that start, and past `run_retries` it fails as
+  on any runner, so a run that takes its worker down can't loop. A run
+  whose process stopped while its worker goes on is the dead-run rule
+  every runner has: queued again within `run_retries` if the scheduler
+  retries its trigger, else failed `interrupted: its process stopped`,
+  resumable from the UI. A machine that wakes up finds its run lost at
+  its next call, and a commit is fenced.
 - **A process that never claimed its run** (a missing binary, a `resume`
   that refused) has the run failed, saying why (`/api/worker/exited`).
 - **What a run uses.** The worker samples each run's process tree every
   poll, as the scheduler does a local run's, and sends the samples with
   `/api/worker/exited`; the UI records each attempt's peak memory and CPU
-  from them ([the UI](ui.md#what-a-run-uses)).
+  from them ([the UI](ui.md#what-a-run-uses)). Beside each run's process
+  it also starts `<binary> sample`, as the scheduler does beside a local
+  run, which writes the machine's metrics to
+  `<ORCA_LOGS>/<pipeline>/<run>/metrics/worker-<name>.jsonl`, so the run's
+  page has its Machines card (`ORCA_SAMPLE_SECONDS=0` in the worker's
+  environment turns it off).
 - **Versions.** A run needs its pipeline's image (`orca register
   --image`; `orca config show <pipeline>` prints it) to be the worker's
   (`--image`, `ORCA_IMAGE`), both empty included, so there's no silent
@@ -211,7 +277,8 @@ runs on, in pool `worker:<pool>`: its name, state (`live`, or `gone` when
 the token is revoked or expired or the worker hasn't been heard from for
 `ORCA_STALE_SECONDS`), image, CPUs, memory, current runs and last
 heartbeat, and the worker's token and label. Its page lists the runs it
-claimed. `/api/workers` is still each token as JSON, and `/ops/workers`
+claimed, and draws the machine's samples over its latest run (the
+sampler the worker starts beside each run). `/api/workers` is still each token as JSON, and `/ops/workers`
 redirects to Pools. A run's page says where it ran: the worker's name, and
 the token's id and label.
 

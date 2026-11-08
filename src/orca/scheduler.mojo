@@ -57,7 +57,9 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   `--placement ec2` waits on a scheduler whose runner isn't `ec2`. One with
   `--placement worker:<pool>` is never started here: a remote worker of the
   pool claims its queued runs over the UI's API (`orca.workers`), and the
-  scheduler queues its due retries and its dead runs again for one.
+  scheduler queues its due retries and its dead runs again for one, its
+  fill runs too (held for a worker, `fill_max_runs` across the pool), and
+  a run whose worker is gone whatever its trigger.
 - **Sensors and rebuilds** (`orca.sensors`). A sensor pipeline's pass
   looks for snapshots of the datasets it reads, in `orca.commits` on every
   tick and from `<binary> sense` every `ORCA_SENSE_SECONDS` (asked in a
@@ -245,6 +247,9 @@ comptime _HOST_LOCK = 0x6F726364  # "orcd"
 """Held while a start is weighed against what this host's running runs
 weren't granted (`orca.resources`)."""
 
+comptime _WORKER_OWNER = "worker"
+"""A run's owner once a worker claimed it and before its process did
+(`orca.workers.WORKER_OWNER`, which imports this module)."""
 comptime _RETRIED = "trigger IN ('schedule', 'backfill', 'sensor', 'fill')"
 """The runs the scheduler retries."""
 comptime RETRIED_SQL = _RETRIED
@@ -2663,7 +2668,9 @@ struct Scheduler(Movable):
         var pool = pool_of(p.placement)
         if pool:
             # A remote worker of the pool starts them (orca.workers).
-            if not fill:
+            if fill:
+                self._fill_for_workers(p, now, pool)
+            else:
                 self._requeue_for_workers(p, now, pool)
             return
         var dead = self._dead("$2")
@@ -3170,20 +3177,36 @@ struct Scheduler(Movable):
         mut self, p: Registered, now: Int64, pool: String
     ) raises:
         """What `_start` does for a pipeline placed `worker:<pool>`, whose
-        runs a worker of the pool claims (`orca.workers`): ends the runs
-        that can't go on as for any pipeline, and queues again, for a
-        worker to claim, the retries and deferred runs that are due and
-        the runs whose process died (a worker that stopped, or a machine
-        that went to sleep) with retries left. Its queued runs say they
-        wait for a worker."""
+        runs a worker of the pool claims (`orca.workers`): queues again
+        the runs of a worker that's gone (`_requeue_lost`), whatever their
+        trigger; ends the runs that can't go on as for any pipeline; and
+        queues again, for a worker to claim, the retries and deferred runs
+        that are due and the runs whose process died with retries left.
+        Its queued runs say they wait for a worker (its fill runs, while
+        fills are off, that they wait for fills)."""
         var dead = self._dead("$2")
+        var waiting = String("held: waiting for a worker of pool ", pool)
         var tx = self.db.conn.begin()
         _ = tx.query(
             "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
             Params().text(p.name),
         )
+        var lost = self._requeue_lost(tx, p, dead, waiting)
         self._end_dead(tx, p, dead)
-        var waiting = String("held: waiting for a worker of pool ", pool)
+        if not p.fill.all:
+            _ = tx.execute(
+                (
+                    "UPDATE orca.runs SET held = $2 WHERE pipeline = $1 AND"
+                    " status = 'queued' AND trigger = 'fill' AND held IS"
+                    " DISTINCT FROM $2"
+                ),
+                Params()
+                .text(p.name)
+                .text(
+                    'held: fills are off (fills isn\'t "all"), so no worker'
+                    " is given it"
+                ),
+            )
         var n = tx.execute(
             String(
                 "UPDATE orca.runs SET status = 'queued', owner = NULL,",
@@ -3212,8 +3235,158 @@ struct Scheduler(Movable):
             Params().text(p.name).text(waiting),
         )
         tx.commit()
+        for l in lost:
+            print(
+                String(
+                    "requeued run ", l[0], " of ", p.name, " for pool ", pool
+                ),
+                ": ",
+                l[1],
+                sep="",
+            )
         if n > 0:
             print("requeued", n, "runs of", p.name, "for pool", pool)
+
+    def _requeue_lost(
+        mut self,
+        mut tx: Transaction,
+        p: Registered,
+        dead: String,
+        waiting: String,
+    ) raises -> List[Tuple[Int, String]]:
+        """Queues again, for the pool, `p`'s runs whose worker is gone,
+        whatever their trigger (a manual, UI or rerun run too, which a dead
+        process would fail): a running run whose worker hasn't been seen
+        for half the stale limit (killed, or its machine asleep or off the
+        network), or whose process died while the worker, seen since,
+        doesn't say it has it (restarted). Nothing ran it past its last
+        step, so its next start resumes it. A run the worker claimed but
+        never started has its start given back; one that started counts
+        it, and once `starts - deferrals` is past `run_retries` it is left
+        to `_end_dead`, so a run that kills its workers can't loop. Each is
+        a row of `orca.audit` (user `scheduler`, action
+        `/api/worker/requeue`); returns each run with why."""
+        var out = List[Tuple[Int, String]]()
+        var rows = tx.query(
+            String(
+                "WITH lost AS (SELECT r.id, r.owner = '",
+                _WORKER_OWNER,
+                "' AS unstarted, CASE WHEN w.last_seen IS NULL OR w.last_seen",
+                " <= now() - make_interval(secs => $2 / 2) THEN 'worker ' ||",
+                " w.label || ' (token ' || w.id || ') stopped: not seen for '",
+                " || coalesce(extract(epoch FROM now() -",
+                " w.last_seen)::bigint::text || ' s', 'ever') ELSE 'worker '",
+                " || w.label || ' (token ' || w.id || ') no longer runs it'",
+                " END AS why FROM orca.runs r JOIN orca.workers w ON w.id =",
+                " r.worker WHERE r.pipeline = $1 AND r.status = 'running' AND",
+                " r.placement LIKE 'worker:%' AND NOT r.cancel_requested AND",
+                " (r.owner = '",
+                _WORKER_OWNER,
+                "' OR r.starts - r.deferrals <= $3) AND (((w.last_seen IS NULL",
+                " OR w.last_seen <= now() - make_interval(secs => $2 / 2)) AND",
+                " ((r.owner = '",
+                _WORKER_OWNER,
+                "' AND r.started <= now() - make_interval(secs => $2)) OR ",
+                dead,
+                ")) OR (",
+                dead,
+                " AND NOT (r.id::text = ANY (string_to_array(coalesce(",
+                "w.running, ''), ','))))) FOR UPDATE OF r) UPDATE orca.runs u",
+                " SET status = 'queued', owner = NULL, heartbeat = NULL,",
+                " retry_at = NULL, held = $4, starts = CASE WHEN",
+                " lost.unstarted THEN u.starts - 1 ELSE u.starts END FROM lost",
+                " WHERE u.id = lost.id RETURNING u.id, lost.why,",
+                " lost.unstarted",
+            ),
+            Params()
+            .text(p.name)
+            .float64(self.stale)
+            .int64(Int64(p.run_retries))
+            .text(waiting),
+        )
+        for r in rows:
+            var why = r.text("why")
+            if r.bool("unstarted"):
+                why.write(", before starting it")
+            out.append((Int(r.int64("id")), why))
+            _ = tx.execute(
+                (
+                    "INSERT INTO orca.audit (username, action, run, detail,"
+                    " source) VALUES ('scheduler', '/api/worker/requeue', $1,"
+                    " $2, 'scheduler')"
+                ),
+                Params()
+                .int64(r.int64("id"))
+                .text(String("queued again: ", why)),
+            )
+        return out^
+
+    def _fill_for_workers(
+        mut self, p: Registered, now: Int64, pool: String
+    ) raises:
+        """`_start`'s fill pass for a pipeline placed `worker:<pool>`: as
+        for a local one, but what may start is queued for a worker of the
+        pool to claim rather than started. Within `orca.fill.fill_status`'s
+        slots (`fill_max_runs` less its fill runs running or queued, so the
+        cap holds across the whole pool), the due retries, deferred runs
+        and fill runs whose process died with retries left are queued
+        again first, then new fill runs over the partitions nothing has
+        filled, in `fill_order`."""
+        var dead = self._dead("$2")
+        var waiting = String("held: waiting for a worker of pool ", pool)
+        var tx = self.db.conn.begin()
+        _ = tx.query(
+            "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
+            Params().text(p.name),
+        )
+        var status = fill_status(tx, fill_pipeline(p), now, p.run_retries)
+        var free = status.slots
+        var again = 0
+        if free > 0:
+            again = tx.execute(
+                String(
+                    "UPDATE orca.runs SET status = 'queued', owner = NULL,",
+                    " heartbeat = NULL, retry_at = NULL, held = $5 WHERE id IN",
+                    " (SELECT id FROM orca.runs WHERE pipeline = $1 AND",
+                    " trigger = 'fill' AND ((status = 'deferred' AND retry_at",
+                    " <= $4) OR (status = 'failed' AND retry_at <= $4 AND",
+                    " starts - deferrals BETWEEN 1 AND $3) OR (status =",
+                    " 'running' AND ",
+                    dead,
+                    " AND starts - deferrals <= $3)) ORDER BY id LIMIT $6)",
+                ),
+                Params()
+                .text(p.name)
+                .float64(self.stale)
+                .int64(Int64(p.run_retries))
+                .int64(now)
+                .text(waiting)
+                .int64(Int64(free)),
+            )
+        var ids = List[Int64]()
+        ref next = status.next_keys
+        for i in range(min(free - again, len(next))):
+            ids.append(
+                tx.query(
+                    (
+                        "INSERT INTO orca.runs (pipeline, registry_hash,"
+                        " partitions, trigger, status, held) VALUES ($1, $2,"
+                        " $3, 'fill', 'queued', $4) RETURNING id"
+                    ),
+                    Params()
+                    .text(p.name)
+                    .text(p.registry_hash)
+                    .text(next[i])
+                    .text(waiting),
+                )
+                .row(0)
+                .int64("id")
+            )
+        tx.commit()
+        if again > 0:
+            print("requeued", again, "fill runs of", p.name, "for pool", pool)
+        for i in range(len(ids)):
+            print("fill", p.name, next[i], "run", ids[i], "for pool", pool)
 
     def _start_control(
         mut self,
