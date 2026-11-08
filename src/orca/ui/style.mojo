@@ -124,6 +124,12 @@ td.num { font-family: var(--mono); font-size: 0.78rem; }
 td.parts { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
 td.error { white-space: normal; color: var(--bad); font-family: var(--mono); font-size: 0.8rem; max-width: 32rem; }
 td code { font-size: 0.8125rem; }
+/* A pipeline's coverage on the home page: the percent over a thin bar. */
+.covpct { display: inline-grid; gap: 2px; min-width: 3.2rem; color: var(--text); text-decoration: none; }
+.covpct:hover { color: var(--lake); }
+.covpct__bar { display: block; height: 3px; border-radius: 2px; overflow: hidden;
+  background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); }
+.covpct__bar > span { display: block; height: 100%; background: var(--ok); }
 
 /* A run's number, a count, a status. */
 .chip { display: inline-block; font-family: var(--mono); font-size: 0.75rem; line-height: 1.5;

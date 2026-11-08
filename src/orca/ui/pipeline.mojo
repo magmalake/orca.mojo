@@ -9,6 +9,7 @@ from postgres import Params
 
 from orca.civil import now
 from orca.config import config_html
+from orca.coverage import Coverage
 from orca.dag import DagStep, dag_svg
 from orca.fill import FillStatus, eta_text, money
 from orca.follow import Follow, follow
@@ -18,7 +19,7 @@ from orca.sample import fixed1
 from orca.scheduler import done_keys, registered
 from orca.source import web_url
 from orca.state import State
-from orca.ui.coverage import coverage_html, follow_html
+from orca.ui.coverage import coverage_href, coverage_html, follow_html
 from orca.ui.datasets import dataset_href, snapshot_href
 from orca.ui.layout import docs_link, fact_item, help_tip, not_found, page_html
 from orca.ui.parts import (
@@ -39,6 +40,7 @@ from orca.ui.runs import (
 )
 from orca.ui.start import start_html
 from orca.ui.step_cards import AttemptCard, cards_script
+from orca.ui.terms import COVERAGE_HELP
 from orca.usage import bytes_text, cpu_text
 from orca.views.code import CodeLinks, code_links
 from orca.views.pipelines import (
@@ -51,6 +53,7 @@ from orca.views.pipelines import (
     UsageSummary,
     fill_of,
     next_fires,
+    pipeline_coverage,
     pipeline_rows,
 )
 from orca.views.runs import VersionRow
@@ -59,7 +62,7 @@ from orca.web.page import Page
 
 
 def _keys_html(mut h: Html, name: String, k: KeyCounts):
-    h.raw("<h2>Keys", docs_link("partitions"), "</h2>")
+    h.raw('<h2 id="keys">Keys', docs_link("partitions"), "</h2>")
     if k.error:
         h.raw('<p class="empty">Its keys can\'t be read: ')
         h.text(k.error)
@@ -277,10 +280,11 @@ def _progress_html(
     p: PipelineRow,
     fill: Optional[FillStatus],
     fires: List[Fire],
+    cov: Optional[Coverage],
     f: Optional[Follow] = None,
 ):
     """The Progress card's facts: the runs going, the fill, a failing
-    sensor, the next fire. Its own fragment too, which the page refreshes
+    sensor, the next fire, the coverage. Its own fragment too, which the page refreshes
     (`/pipelines/<name>/progress`)."""
     h.raw('<dl class="facts">')
     fact_item(
@@ -374,19 +378,32 @@ def _progress_html(
         h.raw("</code>")
         h.text(", fills ", fires[0].partition)
         h.raw("</dd>")
-    if p.kind == "daily" or p.kind == "monthly":
-        fact_item(
-            h,
-            "Coverage",
-            "coverage",
-            (
-                "Which days or months a run has done, failed or not reached"
-                " yet, as a calendar on the Operate tab."
-            ),
-            "partitions",
-        )
-        h.raw('<a href="?tab=operate#coverage">The calendar</a></dd>')
+    _coverage_fact(h, p, cov)
     h.raw("</dl>")
+
+
+def _coverage_fact(mut h: Html, p: PipelineRow, cov: Optional[Coverage]):
+    """The Progress card's Coverage (`orca.coverage`): done of total and
+    the percent, linking to the year calendar (a monthly pipeline's year,
+    a keyed one's Keys); "—" when there's nothing to count."""
+    var dated = p.kind == "daily" or p.kind == "monthly"
+    if not dated and p.kind != "keyed":
+        return
+    fact_item(h, "Coverage", "coverage", COVERAGE_HELP, "partitions")
+    var href = coverage_href(p.name, p.kind)
+    if cov:
+        h.raw('<a href="')
+        h.text(href)
+        h.raw('">')
+        h.text(cov.value().text())
+        h.raw("</a>")
+    else:
+        h.raw('<span class="muted">—</span>')
+        if dated:
+            h.raw(' · <a href="')
+            h.text(href)
+            h.raw('">The calendar</a>')
+    h.raw("</dd>")
 
 
 def pipeline_progress(mut db: State, name: String) raises -> Page:
@@ -405,6 +422,7 @@ def pipeline_progress(mut db: State, name: String) raises -> Page:
         ps[0],
         fill_of(db, name),
         fires,
+        pipeline_coverage(db, ps[0]),
         follow(db, name, ps[0].kind, ps[0].start),
     )
     return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
@@ -671,7 +689,16 @@ def pipeline_html(
     var base = String("/pipelines/", url_encode(p.name))
     _tabs_html(h, base, tab)
     _cards_html(
-        h, p, tab, v.fill, v.fires, v.steps, links, v.usage, v.following
+        h,
+        p,
+        tab,
+        v.fill,
+        v.fires,
+        v.coverage,
+        v.steps,
+        links,
+        v.usage,
+        v.following,
     )
     if tab == "overview":
         _steps_html(
@@ -821,6 +848,7 @@ def _cards_html(
     tab: String,
     fill: Optional[FillStatus],
     fires: List[Fire],
+    cov: Optional[Coverage],
     steps: List[StepDef],
     links: CodeLinks,
     usage: UsageSummary,
@@ -838,7 +866,7 @@ def _cards_html(
     )
     h.text(base, "/progress")
     h.raw('" data-poll-every="5">')
-    _progress_html(h, p, fill, fires, f)
+    _progress_html(h, p, fill, fires, cov, f)
     h.raw("</div></section>")
     if tab != "overview":
         h.raw("</div>")

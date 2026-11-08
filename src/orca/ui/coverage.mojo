@@ -365,6 +365,20 @@ def coverage_html(
     h.raw("</div></section><script>", _COVERAGE_JS, "</script>")
 
 
+def coverage_href(name: String, kind: String) -> String:
+    """Where a pipeline's coverage number links (`orca.coverage`): its
+    Coverage card, a daily one's on the Year tab, or a keyed one's Keys
+    on the Overview."""
+    var href = String("/pipelines/", url_encode(name))
+    if kind == "keyed":
+        href.write("#keys")
+    elif kind == "daily":
+        href.write("?tab=operate&cov=year#coverage")
+    else:
+        href.write("?tab=operate#coverage")
+    return href^
+
+
 def _key_links(
     mut h: Html, base: String, unit: String, what: String, keys: List[String]
 ):

@@ -33,6 +33,11 @@ fail() {
 
 ./build/orca register ./build/daily >> "$log" 2>&1 || fail "register daily"
 ./build/orca register ./build/toy >> "$log" 2>&1 || fail "register toy"
+# A keyed pipeline (its binary a script), for its coverage; its `keys`
+# notes each call in $FAKE_KEYS.calls.
+export FAKE_KEYS="$PWD/build/calendar-keys"
+rm -f "$FAKE_KEYS".*
+./build/orca register tests/fake_keyed >> "$log" 2>&1 || fail "register fake_keyed"
 hash=$(./build/daily describe | jq -r .registry_hash)
 # Done: a real run over three days. Failed, queued, running, and one that
 # succeeded as other code (so not done for this one).
@@ -153,6 +158,52 @@ echo "$y" | grep -qF 'data-view="month" href="/pipelines/daily?cal=2023-12&amp;c
 t=$(get '/pipelines/toy?tab=operate')
 echo "$t" | grep -qF 'id="coverage"' && echo "$t" | grep -qF 'data-view="year"' && fail "a monthly pipeline has tabs"
 echo "ok   calendar: coverage's month and year"
+
+# Coverage in one number (orca.coverage). daily's range so far is
+# 2024-01-01..2024-03-18 (today is 03-19 in New York, still going): 78
+# days, 3 done; failed, queued, running and other code's aren't. toy's is
+# 2024-01..2024-02: January done, February failed.
+j=$(curl -fsS -H 'Accept: application/json' "$base/api/pipelines/daily")
+echo "$j" | jq -e '.pipeline.coverage == {done: 3, total: 78, pct: 3.8, unit: "day"}' > /dev/null \
+    || fail "daily's coverage: $(echo "$j" | jq -c .pipeline.coverage)"
+p=$(get '/pipelines/daily/progress')
+echo "$p" | grep -qF '<a href="/pipelines/daily?tab=operate&amp;cov=year#coverage">3 / 78 days done (3%)</a>' \
+    || fail "the Progress card's Coverage: $(echo "$p" | grep -o 'Coverage<.*' | head -c 600)"
+echo "$p" | grep -qF 'aria-label="About Coverage"' || fail "Coverage on the Progress card has no help"
+get '/pipelines/toy/progress' | grep -qF '<a href="/pipelines/toy?tab=operate#coverage">1 / 2 months done (50%)</a>' \
+    || fail "toy's Coverage"
+# A keyed pipeline whose keys haven't been read has none; once they are,
+# its keys done of them: ann done, bob failed, cy never run.
+h=$(get '/home/pipelines')
+echo "$h" | grep -qF '<td class="num muted">—</td>' || fail "fake_keyed's coverage isn't a dash"
+# (The list never runs `keys`; the pipeline's own page would.)
+[ "$(curl -fsS -H 'Accept: application/json' "$base/" | jq -c '.pipelines[] | select(.name == "fake_keyed") | .coverage')" = null ] \
+    || fail "fake_keyed has coverage before its keys"
+[ "$(q "SELECT count(*) FROM orca.keys")" = 0 ] || fail "the list read fake_keyed's keys"
+q "INSERT INTO orca.keys (pipeline, snapshot_id, keys) VALUES ('fake_keyed', 7, E'ann\\nbob\\ncy')" > /dev/null
+k=$(q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
+    VALUES ('fake_keyed', '0x4e75', 'ann,bob', 'manual', 'failed') RETURNING id" | head -1)
+q "INSERT INTO orca.steps (run, step, partition, ord, status) VALUES
+    ($k, 'label', 'ann', 0, 'succeeded'), ($k, 'label', 'bob', 0, 'failed')" > /dev/null
+j=$(curl -fsS -H 'Accept: application/json' "$base/api/pipelines/fake_keyed")
+echo "$j" | jq -e '.pipeline.coverage == {done: 1, total: 3, pct: 33.3, unit: "key"} and .keys.total == 3' > /dev/null \
+    || fail "fake_keyed's coverage: $(echo "$j" | jq -c '[.pipeline.coverage, .keys]')"
+get '/pipelines/fake_keyed/progress' | grep -qF '<a href="/pipelines/fake_keyed#keys">1 / 3 keys done (33%)</a>' \
+    || fail "fake_keyed's Progress card"
+get '/pipelines/fake_keyed' | grep -qF '<h2 id="keys">Keys' || fail "no #keys to link to"
+# The home page: a Coverage column with its help, each pipeline's percent
+# linking where its Progress card does, the counts on hover; the same in
+# its JSON.
+h=$(get '/')
+echo "$h" | grep -qF 'aria-label="About Coverage"' || fail "the Coverage column has no help"
+echo "$h" | grep -qF '<td class="num"><a class="covpct" href="/pipelines/daily?tab=operate&amp;cov=year#coverage" title="3 / 78 days done (3%)">3%' \
+    || fail "daily's row: $(echo "$h" | grep -o '<a class="covpct"[^>]*>[^<]*' | tr '\n' ' ')"
+echo "$h" | grep -qF 'href="/pipelines/toy?tab=operate#coverage" title="1 / 2 months done (50%)">50%' || fail "toy's row"
+echo "$h" | grep -qF 'href="/pipelines/fake_keyed#keys" title="1 / 3 keys done (33%)">33%' || fail "fake_keyed's row"
+j=$(curl -fsS -H 'Accept: application/json' "$base/")
+echo "$j" | jq -e '[.pipelines[] | {(.name): .coverage.pct}] | add == {daily: 3.8, fake_keyed: 33.3, toy: 50}' > /dev/null \
+    || fail "the list's coverage: $(echo "$j" | jq -c '[.pipelines[] | [.name, .coverage]]')"
+echo "ok   calendar: coverage in one number"
 
 # A range as the picker writes it: the preview, then the backfill, queue
 # the days that aren't done or live, and no others.

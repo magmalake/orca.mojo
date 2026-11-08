@@ -772,14 +772,20 @@ comptime DONE_SQL = (
     " orca.steps st JOIN orca.runs r ON r.id = st.run JOIN p ON"
     " r.registry_hash = p.registry_hash WHERE r.pipeline = $1 AND st.step ="
     " m.step AND st.partition = k.key AND st.status = 'succeeded')) ELSE"
-    " EXISTS (SELECT 1 FROM orca.runs r JOIN p ON r.registry_hash ="
-    " p.registry_hash WHERE r.pipeline = $1 AND r.status = 'succeeded' AND"
-    " k.key = ANY (string_to_array(r.partitions, ','))) END"
+    " false END UNION ALL SELECT k.key FROM k WHERE k.key IN (SELECT"
+    " unnest(string_to_array(r.partitions, ',')) FROM orca.runs r JOIN p ON"
+    " r.registry_hash = p.registry_hash WHERE NOT EXISTS (SELECT 1 FROM m)"
+    " AND r.pipeline = $1 AND r.status = 'succeeded')"
 )
 """Of the comma-separated keys `$2`, those done for pipeline `$1`: every
 mapped step has succeeded for the key in a run of the pipeline's current
 code. A pipeline with no mapped step has a key done when a run of its
-current code over it succeeded."""
+current code over it succeeded. The two are separate halves, each empty
+when the other applies. The first looks each key's steps up by index (the
+`CASE` keeps Postgres from hashing every step of every pipeline instead);
+the second joins the keys to its runs' keys, read once, rather than
+scanning the runs again for each key (1.2 s for 1,500 keys over 30,000
+runs when it was a `CASE` branch too, 10 ms now)."""
 
 
 @fieldwise_init

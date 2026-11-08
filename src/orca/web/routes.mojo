@@ -10,9 +10,9 @@ stylesheet is served before any route is looked up.
 
 | Path | |
 |---|---|
-| `/` | pipelines, with their schedules, next runs and last runs |
+| `/` | pipelines, with their coverage (`orca.coverage`: partitions or keys done of those it has, `coverage` in the JSON), schedules, next runs and last runs |
 | `/pipelines/<name>` | `?tab=overview` (default), `runs` or `operate`, each its own page; a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`orca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; its registration as `orca config show` prints it (`#config`, Overview); `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing; `?steps=graph` or `table`: the Steps tab shown without scripts |
-| `/pipelines/<name>/progress` | the page's Progress card (runs going, fill, how far a sensor is behind what it follows (`orca.follow`), next run), as an HTML fragment the page refreshes every 5 s |
+| `/pipelines/<name>/progress` | the page's Progress card (runs going, fill, how far a sensor is behind what it follows (`orca.follow`), next run, coverage), as an HTML fragment the page refreshes every 5 s |
 | `/api/pipelines/<name>` | the same as JSON, whatever is asked for |
 | `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=` a month or year, `?cov=month` or `year`: a daily one's tab, year by default, both from one read of the year in `orca.ui.coverage`) and as the Start runs form's date picker |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
