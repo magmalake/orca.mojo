@@ -578,6 +578,10 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.runs ADD COLUMN grant_cpus int",
             "ALTER TABLE orca.runs ADD COLUMN grant_memory_mb bigint",
         ],
+        # Pages of one pipeline's runs (`/runs?pipeline=`, its Runs tab),
+        # newest first by id under a cursor: one range of this index, and
+        # their count an index-only scan.
+        ["CREATE INDEX runs_pipeline_id ON orca.runs (pipeline, id DESC)"],
     ]
 
 
@@ -882,16 +886,20 @@ struct State(Movable):
             .bool("cancel_requested")
         )
 
-    def runs(mut self, limit: Int = 20) raises -> List[RunInfo]:
-        """The latest runs, newest first."""
+    def runs(
+        mut self, limit: Int = 20, before: Int = 0
+    ) raises -> List[RunInfo]:
+        """The latest runs, newest first; those under `before` if it isn't
+        0."""
         var out = List[RunInfo]()
         var rows = self.conn.query(
             (
                 "SELECT id, pipeline, registry_hash, partitions, status,"
                 " coalesce(owner, '') AS owner, coalesce(error, '') AS error"
-                " FROM orca.runs ORDER BY id DESC LIMIT $1"
+                " FROM orca.runs WHERE $2 = 0 OR id < $2 ORDER BY id DESC"
+                " LIMIT $1"
             ),
-            Params().int64(Int64(limit)),
+            Params().int64(Int64(limit)).int64(Int64(before)),
         )
         for r in rows:
             out.append(
@@ -1207,8 +1215,8 @@ struct PgStore(Movable, RunStore):
     def run_info(mut self, run: Int) raises -> RunInfo:
         return self.db.run_info(run)
 
-    def runs(mut self, limit: Int) raises -> List[RunInfo]:
-        return self.db.runs(limit)
+    def runs(mut self, limit: Int, before: Int = 0) raises -> List[RunInfo]:
+        return self.db.runs(limit, before)
 
     def steps(mut self, run: Int) raises -> List[StepInfo]:
         return self.db.steps(run)

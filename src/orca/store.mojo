@@ -442,8 +442,10 @@ trait RunStore(Store):
         """The run; raises if there's no such run."""
         ...
 
-    def runs(mut self, limit: Int) raises -> List[RunInfo]:
-        """The latest `limit` runs, newest first."""
+    def runs(mut self, limit: Int, before: Int = 0) raises -> List[RunInfo]:
+        """The latest `limit` runs, newest first; with `before` (unless 0),
+        those older than run `before` (with ids under it, but in memory):
+        the next page, keyed by the last run of the one before."""
         ...
 
     def steps(mut self, run: Int) raises -> List[StepInfo]:
@@ -741,9 +743,12 @@ struct MemoryStore(Movable, RunStore):
             r.error,
         )
 
-    def runs(mut self, limit: Int) raises -> List[RunInfo]:
+    def runs(mut self, limit: Int, before: Int = 0) raises -> List[RunInfo]:
         var out = List[RunInfo]()
         var i = len(self._runs) - 1
+        # Run `-i` is the i-th: under `before` once i is past -before.
+        if before != 0:
+            i = min(i, -before - 1)
         while i >= 0 and len(out) < limit:
             out.append(self.run_info(-i))
             i -= 1

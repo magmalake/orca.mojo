@@ -300,12 +300,20 @@ html "/runs/$live/attempts/$a" | grep -q "data-poll=\"/runs/$live/attempts/$a/lo
     || fail "a running attempt's page doesn't poll"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/attempts/$a/log")
 [ "$code" = 200 ] || fail "a running attempt's log answered $code"
+# Its facts (times, use, the step's attempts) refresh too, until it ends.
+html "/runs/$live/attempts/$a" | grep -q "data-poll=\"/runs/$live/attempts/$a/facts\" data-poll-every=\"5\"" \
+    || fail "a running attempt's facts don't refresh"
+code=$(curl -s -o "$log.af" -w '%{http_code}' "$base/runs/$live/attempts/$a/facts")
+[ "$code" = 200 ] || fail "a running attempt's facts answered $code"
+grep -qF '<dl class="facts"><dt>Host</dt>' "$log.af" || fail "the facts fragment hasn't the facts"
 wait "$toy" || fail "the slow run failed"
 code=$(curl -s -o "$log.frag" -w '%{http_code}' "$base/runs/$live/live")
 [ "$code" = 286 ] || fail "the ended run's fragment answered $code"
 grep -q 'status--succeeded">succeeded</span></h2>' "$log.frag" || fail "the fragment doesn't show the run succeeded"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/attempts/$a/log")" = 286 ] \
     || fail "the ended attempt's log didn't answer 286"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/attempts/$a/facts")" = 286 ] \
+    || fail "the ended attempt's facts didn't answer 286"
 
 # A run with Dista tasks: its timeline, as Chrome's trace format.
 ./build/fanout run --partitions 2024-01 >> "$log" 2>&1 || fail "fanout failed"
@@ -344,42 +352,121 @@ echo "$page" | grep -qF '<button type="submit">Filter</button>' || fail "the Fil
 html '/runs?trigger=%3Cb%3E' | grep -qF '<option value="&lt;b&gt;" selected>&lt;b&gt;</option>' \
     || fail "an unknown trigger isn't kept, escaped"
 
-# Paging by id: 60 more runs, 25 to a page, across the boundaries with the
-# filters kept.
+# Paging by id (keyset): 60 more runs, 25 to a page, across the boundaries
+# with the filters kept, newer pages by `after`, and pages that stay put
+# while new runs arrive.
 q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, ended)
    SELECT 'toy', registry_hash, '2023-01', 'schedule', 'succeeded', now()
    FROM orca.runs, generate_series(1, 60) WHERE id = $ok_run" > /dev/null
-f='pipeline=toy&status=succeeded&trigger=schedule&n=25'
+f='pipeline=toy&status=succeeded&trigger=schedule&limit=25'
+fa='pipeline=toy&amp;status=succeeded&amp;trigger=schedule&amp;limit=25'
 p1=$(json "/runs?$f")
-echo "$p1" | jq -e '(.runs | length) == 25 and .total == 60 and .newer == 0 and .before == null and .n == 25
+echo "$p1" | jq -e '(.runs | length) == 25 and .total == 60 and .newer == 0 and .older == 35
+    and .before == null and .after == null and .n == 25 and .limit == 25
     and .filters == {"pipeline": "toy", "status": "succeeded", "trigger": "schedule"}
-    and .next_before == .runs[-1].id and ([.runs[].trigger] | unique) == ["schedule"]' > /dev/null \
+    and .next_before == .runs[-1].id and .next == .runs[-1].id and .prev == null and .prev_url == null
+    and .next_url == "/runs?pipeline=toy&status=succeeded&trigger=schedule&limit=25&before=\(.next)"
+    and ([.runs[].trigger] | unique) == ["schedule"]' > /dev/null \
     || fail "the first page's JSON: $(echo "$p1" | jq -c 'del(.runs)')"
 b2=$(echo "$p1" | jq .next_before)
 page=$(html "/runs?$f")
 echo "$page" | grep -qF '<span class="pager__at">1–25 of 60</span>' || fail "the first page's range"
-echo "$page" | grep -q 'Newer' && fail "the first page links newer runs"
-echo "$page" | grep -qF "<a href=\"/runs?pipeline=toy&amp;status=succeeded&amp;trigger=schedule&amp;n=25&amp;before=$b2\">Older →</a>" \
+echo "$page" | grep -qE 'Newer|Newest' && fail "the first page links newer runs"
+echo "$page" | grep -qF "<a rel=\"next\" href=\"/runs?$fa&amp;before=$b2\">Older →</a>" \
     || fail "the first page's Older link"
-echo "$page" | grep -qF '<input type="hidden" name="n" value="25">' || fail "the form doesn't keep n"
+echo "$page" | grep -qF '<input type="hidden" name="limit" value="25">' || fail "the form doesn't keep the page size"
+# The newest page refreshes from its fragment, filters and size kept:
+# slowly, as nothing on it is going on.
+echo "$page" | grep -qF "<div data-poll=\"/runs/table?view=list&amp;$fa\" data-poll-every=\"30\">" \
+    || fail "the newest page doesn't refresh"
 p2=$(json "/runs?$f&before=$b2")
-echo "$p2" | jq -e --argjson b "$b2" '(.runs | length) == 25 and .newer == 25 and .runs[0].id < $b
-    and .runs[0].id == ([.runs[].id] | max)' > /dev/null || fail "the second page: $(echo "$p2" | jq -c "del(.runs)")"
+echo "$p2" | jq -e --argjson b "$b2" '(.runs | length) == 25 and .newer == 25 and .older == 10 and .runs[0].id < $b
+    and .runs[0].id == ([.runs[].id] | max) and .prev == .runs[0].id
+    and .prev_url == "/runs?pipeline=toy&status=succeeded&trigger=schedule&limit=25"' > /dev/null \
+    || fail "the second page: $(echo "$p2" | jq -c "del(.runs)")"
 [ "$(echo "$p1" "$p2" | jq -s '[.[].runs[].id] | unique | length')" -eq 50 ] || fail "pages overlap"
 page=$(html "/runs?$f&before=$b2")
 echo "$page" | grep -qF '<span class="pager__at">26–50 of 60</span>' || fail "the second page's range"
-echo "$page" | grep -qF '<a href="/runs?pipeline=toy&amp;status=succeeded&amp;trigger=schedule&amp;n=25">← Newer</a>' \
+echo "$page" | grep -qF "<a rel=\"prev\" href=\"/runs?$fa\">← Newer</a>" \
     || fail "the second page's Newer link isn't the first page"
+echo "$page" | grep -q 'Newest' && fail "the second page links the newest as well as Newer, the same page"
+echo "$page" | grep -q 'data-poll="/runs/table' && fail "an older page with nothing going on refreshes"
 b3=$(echo "$p2" | jq .next_before)
 p3=$(json "/runs?$f&before=$b3")
-echo "$p3" | jq -e '(.runs | length) == 10 and .next_before == null and .newer == 50' > /dev/null \
+echo "$p3" | jq -e '(.runs | length) == 10 and .next_before == null and .next == null and .newer == 50 and .older == 0' > /dev/null \
     || fail "the last page: $(echo "$p3" | jq -c 'del(.runs)')"
+top3=$(echo "$p3" | jq '.runs[0].id')
 page=$(html "/runs?$f&before=$b3")
 echo "$page" | grep -qF '<span class="pager__at">51–60 of 60</span>' || fail "the last page's range"
 echo "$page" | grep -q 'Older' && fail "the last page links older runs"
-echo "$page" | grep -qF "before=$b2\">← Newer</a>" || fail "the last page's Newer link isn't the second page"
+echo "$page" | grep -qF "<a rel=\"prev\" href=\"/runs?$fa&amp;after=$top3\">← Newer</a>" \
+    || fail "the last page's Newer link isn't the page above it"
+echo "$page" | grep -qF "<a href=\"/runs?$fa\">« Newest</a>" || fail "the last page doesn't link the newest"
+# The page above the last is the second, by `after`; just under the top,
+# `after` is the newest page.
+pa=$(json "/runs?$f&after=$top3")
+[ "$(echo "$pa" | jq -c '[.runs[].id]')" = "$(echo "$p2" | jq -c '[.runs[].id]')" ] \
+    || fail "after=$top3 isn't the second page: $(echo "$pa" | jq -c '[.runs[].id]')"
+echo "$pa" | jq -e --argjson a "$top3" '.after == $a and .newer == 25 and .older == 10' > /dev/null \
+    || fail "the page above the last: $(echo "$pa" | jq -c 'del(.runs)')"
+near=$(echo "$p1" | jq '.runs[3].id')
+pn=$(json "/runs?$f&after=$near")
+[ "$(echo "$pn" | jq -c '[.after, [.runs[].id]]')" = "$(echo "$p1" | jq -c '[null, [.runs[].id]]')" ] \
+    || fail "after a run near the top isn't the newest page"
+# New runs: the newest page shows them, an older one stays as it was.
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, ended)
+   SELECT 'toy', registry_hash, '2023-01', 'schedule', 'succeeded', now()
+   FROM orca.runs, generate_series(1, 3) WHERE id = $ok_run" > /dev/null
+[ "$(json "/runs?$f&before=$b2" | jq -c '[.runs[].id]')" = "$(echo "$p2" | jq -c '[.runs[].id]')" ] \
+    || fail "the second page moved when new runs arrived"
+json "/runs?$f" | jq -e --argjson t "$(echo "$p1" | jq '.runs[0].id')" '.total == 63 and .runs[0].id > $t' > /dev/null \
+    || fail "the newest page doesn't have the new runs"
 [ "$(json '/runs?n=100000' | jq .n)" -eq 500 ] || fail "n isn't capped at 500"
+[ "$(json '/runs?limit=100000' | jq .limit)" -eq 500 ] || fail "limit isn't capped at 500"
+[ "$(json '/runs?pipeline=toy&n=7' | jq '[.limit, (.runs | length)] | join(" ")' -r)" = "7 7" ] || fail "n isn't still the page size"
 [ "$(json /runs | jq .n)" -eq 50 ] || fail "the default page isn't 50"
+# The fragment a list refreshes from: the table and pager, and when to ask
+# again: soon while a run on it is going on, slowly on the newest page,
+# never (286) for an older page with nothing going on.
+frag() { curl -s -D "$log.h" -o "$log.frag" -w '%{http_code}' "$base$1"; }
+[ "$(frag "/runs/table?view=list&$f")" = 200 ] || fail "the newest page's fragment"
+grep -qi '^X-Poll-Every: 30' "$log.h" || fail "the idle newest page's fragment doesn't say 30 s"
+grep -qF '<span class="pager__at">1–25 of 63</span>' "$log.frag" || fail "the fragment's pager"
+head -c 30 "$log.frag" | grep -qF '<div class="scroll"><table>' || fail "the fragment isn't the table"
+[ "$(frag "/runs/table?view=list&$f&before=$b2")" = 286 ] || fail "an idle older page's fragment didn't answer 286"
+mid=$(echo "$p2" | jq '.runs[5].id')
+q "UPDATE orca.runs SET status = 'running', started = now(), ended = NULL WHERE id = $mid" > /dev/null
+[ "$(frag "/runs/table?view=list&pipeline=toy&limit=25&before=$b2")" = 200 ] \
+    || fail "an older page with a running run stopped refreshing"
+grep -qi '^X-Poll-Every: 5' "$log.h" || fail "a page with a running run doesn't refresh every 5 s"
+html "/runs?pipeline=toy&limit=25&before=$b2" \
+    | grep -qF "<div data-poll=\"/runs/table?view=list&amp;pipeline=toy&amp;limit=25&amp;before=$b2\" data-poll-every=\"5\">" \
+    || fail "an older page with a running run doesn't refresh"
+q "UPDATE orca.runs SET status = 'succeeded', ended = now() WHERE id = $mid" > /dev/null
+# A pipeline's Runs tab: 20 to a page, its own pager and fragment, and its
+# JSON's runs_page; the home page's recent runs, without a pager.
+page=$(html "/pipelines/toy?tab=runs")
+echo "$page" | grep -qF '<div data-poll="/runs/table?view=pipeline&amp;pipeline=toy&amp;limit=20" data-poll-every="30">' \
+    || fail "the Runs tab doesn't refresh"
+pj=$(json "/api/pipelines/toy")
+echo "$pj" | jq -e '(.runs | length) == 20 and .runs_page.limit == 20 and .runs_page.next == .runs[-1].id
+    and .runs_page.prev == null and .runs_page.total > 60' > /dev/null || fail "the pipeline's runs_page: $(echo "$pj" | jq -c .runs_page)"
+pb=$(echo "$pj" | jq .runs_page.next)
+echo "$page" | grep -qF "<a rel=\"next\" href=\"/pipelines/toy?tab=runs&amp;before=$pb\">Older →</a>" \
+    || fail "the Runs tab's Older link"
+json "/api/pipelines/toy?tab=runs&before=$pb" | jq -e --argjson b "$pb" '.runs[0].id < $b and .runs_page.newer == 20' > /dev/null \
+    || fail "the Runs tab's second page"
+html "/pipelines/toy?tab=runs&before=$pb" | grep -qF '<a rel="prev" href="/pipelines/toy?tab=runs">← Newer</a>' \
+    || fail "the Runs tab's Newer link"
+[ "$(frag "/runs/table?view=pipeline&pipeline=toy&limit=20")" = 200 ] || fail "the Runs tab's fragment"
+grep -q '<th>Pipeline</th>' "$log.frag" && fail "the Runs tab's fragment has a Pipeline column"
+html / | grep -qF '<div data-poll="/runs/table?view=home&amp;limit=10" data-poll-every="' || fail "the home page's recent runs don't refresh"
+[ "$(frag "/runs/table?view=home&limit=10")" = 200 ] || fail "the home page's recent runs' fragment"
+grep -q 'pager' "$log.frag" && fail "the home page's recent runs have a pager"
+[ "$(grep -o '<tr><td><a class="chip"' "$log.frag" | wc -l)" -eq 10 ] || fail "the home page's fragment hasn't 10 runs"
+[ "$(frag /home/pipelines)" = 200 ] || fail "the home page's pipelines fragment"
+grep -qF '<th>Pipeline</th><th>Partitions</th><th>Schedule</th>' "$log.frag" || fail "the pipelines fragment isn't the table"
+grep -qiE '^X-Poll-Every: (5|30)' "$log.h" || fail "the pipelines fragment doesn't say when to ask again"
 # Tries: the header says what it counts, and a cell has a number only when
 # the run was started more than once; the JSON keeps `starts`.
 q "UPDATE orca.runs SET starts = 3 WHERE id = $bad_run" > /dev/null
@@ -443,7 +530,7 @@ echo "$page" | grep -qF '<button type="button" role="tab" class="vtabs__tab" dat
 echo "$page" | grep -qF 'data-view="timeline" aria-selected="false" aria-controls="pipelines-gantt">Timeline</button>' \
     || fail "the home page has no Timeline tab"
 echo "$page" | grep -qF '<div class="vtabs" hidden>' || fail "the tabs show without scripts"
-echo "$page" | grep -qF '<div id="pipelines-list" role="tabpanel"><section class="card"><div class="scroll"><table>' \
+echo "$page" | grep -qE '<div id="pipelines-list" role="tabpanel"><div data-poll="/home/pipelines" data-poll-every="(5|30)"><section class="card"><div class="scroll"><table>' \
     || fail "the list isn't the tabs' first panel"
 echo "$page" | grep -qF 'id="pipelines-gantt" role="tabpanel" data-src="/api/gantt" hidden>' \
     || fail "the timeline panel isn't hidden until asked for"
@@ -502,6 +589,38 @@ echo "$g" | jq -e --argjson up "$up" --argjson down "$down" --argjson f "$fillin
     || fail "the 1 h window"
 [ "$(json '/api/gantt?window=x' | jq -r .window)" = 24h ] || fail "an unknown window isn't 24h"
 echo "ok   the home page's timeline: tabs, rows in dataset order, runs and what started them"
+
+# A dataset's snapshots, 50 to a page by the attempt that committed each
+# and then the snapshot: 59 more of raw.a, all from one attempt.
+q "INSERT INTO orca.commits (attempt, table_name, snapshot_id, dataset)
+   SELECT $at, 'raw/a', 100 + g, 'raw.a' FROM generate_series(1, 59) g" > /dev/null
+d1=$(json /datasets/raw.a)
+echo "$d1" | jq -e '(.snapshots | length) == 50 and .snapshots_page.n == 50 and .snapshots_page.prev == null
+    and .snapshots_page.before == null and (.snapshots_page.next | test("^[0-9]+[.]110$"))
+    and .snapshots[0].snapshot == 159' > /dev/null || fail "raw.a's first page: $(echo "$d1" | jq -c .snapshots_page)"
+dc=$(echo "$d1" | jq -r .snapshots_page.next)
+html /datasets/raw.a | grep -qF "<span class=\"pager__at\">50 shown</span><a rel=\"next\" href=\"/datasets/raw.a?before=$dc\">Older →</a>" \
+    || fail "raw.a's Older link"
+d2=$(json "/datasets/raw.a?before=$dc")
+echo "$d2" | jq -e '(.snapshots | length) == 10 and .snapshots_page.next == null and .snapshots_page.prev != null
+    and .snapshots[-1].snapshot == 7' > /dev/null || fail "raw.a's second page: $(echo "$d2" | jq -c .snapshots_page)"
+[ "$(echo "$d1" "$d2" | jq -s '[.[].snapshots[].snapshot] | unique | length')" -eq 60 ] || fail "raw.a's pages overlap or skip"
+html "/datasets/raw.a?before=$dc" | grep -qF '<a href="/datasets/raw.a">« Newest</a>' || fail "raw.a's second page doesn't link the newest"
+[ "$(json "/datasets/raw.a?after=$(echo "$d2" | jq -r .snapshots_page.prev)" | jq -c '[.snapshots_page.after, [.snapshots[].snapshot]]')" \
+    = "$(echo "$d1" | jq -c '[null, [.snapshots[].snapshot]]')" ] || fail "the page above raw.a's second isn't the first"
+echo "ok   a dataset's snapshots, in pages"
+
+# The Ops pages and the watchdog refresh at their own pace, from fragments.
+html /ops/workers | grep -qF '<div data-poll="/ops/workers/live" data-poll-every="10"><h1>Workers</h1>' \
+    || fail "Workers doesn't refresh"
+curl -fsS "$base/ops/workers/live" | grep -qF '<h1>Workers</h1>' || fail "the Workers fragment"
+html '/ops/control?range=7d' | grep -qF '<div data-poll="/ops/control/live?range=7d" data-poll-every="30">' \
+    || fail "Control doesn't refresh"
+curl -fsS "$base/ops/control/live?range=7d" > /dev/null || fail "the Control fragment"
+html /watchdog | grep -qF '<div data-poll="/watchdog/live" data-poll-every="30"><h1>Watchdog</h1>' \
+    || fail "the watchdog page doesn't refresh"
+curl -fsS "$base/watchdog/live" | grep -qF '<h1>Watchdog</h1>' || fail "the watchdog fragment"
+echo "ok   live pages: Workers, Control, the watchdog"
 
 kill "$pid"
 echo "ok   ui"
