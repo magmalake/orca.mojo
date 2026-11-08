@@ -173,5 +173,47 @@ got=$(q "SELECT string_agg(partitions, ',' ORDER BY partitions) FROM orca.runs W
 [ "$got" = 2024-03-05,2024-03-06,2024-03-07,2024-03-12,2024-03-14,2024-03-15 ] || fail "the multi-range queued $got"
 echo "ok   calendar: a picked range queues the right partitions"
 
+# A sensor that follows another pipeline's dataset: how far behind it is.
+# daily becomes a sensor of up.days, which toy committed for 2024-03-01..08
+# (a step a day), and a snapshot it sensed itself started a run of
+# 2024-03-18 that failed. The backfill above queued 03-05..07.
+j=$(curl -fsS -H 'Accept: application/json' "$base/api/pipelines/daily")
+echo "$j" | jq -e '.follow == null' > /dev/null || fail "a pipeline that isn't a sensor follows: $(echo "$j" | jq -c .follow)"
+q "UPDATE orca.pipelines SET describe = jsonb_set(jsonb_set(describe, '{sensor}', 'true'),
+    '{steps,0,reads}', '[\"up.days\"]') WHERE name = 'daily'" > /dev/null
+up=$(q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
+    SELECT 'toy', registry_hash, '2024-03-01..2024-03-08', 'manual', 'succeeded' FROM orca.pipelines WHERE name = 'toy' RETURNING id" | head -1)
+q "WITH s AS (INSERT INTO orca.steps (run, step, partition, ord, status)
+      SELECT $up, 'write', to_char(d, 'YYYY-MM-DD'), 0, 'succeeded'
+      FROM generate_series('2024-03-01'::date, '2024-03-08'::date, '1 day') d RETURNING id, partition),
+    a AS (INSERT INTO orca.attempts (step, attempt, status, host, registry_hash)
+      SELECT id, 1, 'succeeded', 'h', 'x' FROM s RETURNING id)
+    INSERT INTO orca.commits (attempt, table_name, snapshot_id, dataset)
+      SELECT id, 'up.days', id, 'up.days' FROM a" > /dev/null
+r18=$(q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
+    VALUES ('daily', '$hash', '2024-03-18', 'sensor', 'failed') RETURNING id" | head -1)
+q "INSERT INTO orca.sensed (pipeline, dataset, snapshot_id, run) VALUES ('daily', 'up.days', 999, $r18)" > /dev/null
+j=$(curl -fsS -H 'Accept: application/json' "$base/api/pipelines/daily")
+echo "$j" | jq -e '.follow | .datasets == ["up.days"] and .upstream == ["toy"] and .unit == "day"
+    and .available == 9 and .done == 3 and .behind == 6
+    and .live == {count: 3, first: ["2024-03-05", "2024-03-06", "2024-03-07"]}
+    and .failed == {count: 1, first: ["2024-03-18"]}
+    and .waiting == {count: 2, first: ["2024-03-01", "2024-03-08"]}' > /dev/null \
+    || fail "what daily follows: $(echo "$j" | jq -c .follow)"
+p=$(get '/pipelines/daily/progress')
+echo "$p" | grep -qF 'toy (up.days): 3 of 9 days done; <span class="warn">6 behind</span>: 3 running or queued, 1 failed and 2 not queued yet' \
+    || fail "the Progress card's Following: $(echo "$p" | grep -o 'toy (up.days)[^<]*')"
+echo "$p" | grep -qF 'Not queued: <a href="/pipelines/daily?cal=2024-03&amp;cov=month#coverage">2024-03-01</a>, <a' \
+    || fail "the days not queued aren't linked"
+page=$(get '/pipelines/daily?tab=operate')
+echo "$page" | grep -qF '<li class="cal__day cal--behind" data-key="2024-03-01" title="2024-03-01: behind what it follows">' \
+    || fail "2024-03-01 isn't behind"
+echo "$page" | grep -qF 'cal--behind" data-key="2024-03-08"' || fail "2024-03-08 isn't behind"
+echo "$page" | grep -qF 'cal--open" data-key="2024-03-09"' || fail "2024-03-09 isn't open"
+echo "$page" | grep -qF '<span class="cal__key cal--behind"></span> 2 behind what it follows' || fail "no behind in the legend"
+echo "$page" | grep -qF 'Behind: up.days has it' || fail "no help for behind"
+get '/pipelines/toy?tab=operate' | grep -qF 'cal--behind' && fail "toy follows nothing"
+echo "ok   calendar: how far a sensor is behind what it follows"
+
 kill "$ui" 2> /dev/null || true
 ui=

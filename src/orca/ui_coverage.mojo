@@ -7,7 +7,10 @@ a strip of every month of its range linking to their years). Both are in
 the page; the links work without scripts (`?cov=month|year`, with `?cal=`
 the month or year), and with them the tabs switch in place and the choice
 is kept in `localStorage`, as the Steps tabs are. Year is the default. A
-monthly pipeline's card is its year of months, as before.
+monthly pipeline's card is its year of months, as before. For a sensor,
+the days what it follows has but it hasn't done, failed or started are
+`behind` (`orca.follow`), and `follow_html` is its Progress card's
+Following line.
 
 One calendar is read for both tabs (`year_calendar`): the month is cut out
 of the year, so the card costs the same three queries as a month did.
@@ -22,6 +25,7 @@ from orca.calendar import (
     year_of,
 )
 from orca.civil import Civil, now
+from orca.follow import LISTED, Follow
 from orca.html import Html, url_encode
 from orca.month import days_in
 from orca.state import State
@@ -29,7 +33,7 @@ from orca.state import State
 
 def states() -> List[String]:
     """The states, in the legend's order."""
-    return ["done", "failed", "live", "open", "outside"]
+    return ["done", "failed", "live", "behind", "open", "outside"]
 
 
 def month_name(month: Int) -> String:
@@ -55,6 +59,8 @@ def state_words(state: String) -> String:
         return "running or queued"
     if state == "open":
         return "not run"
+    if state == "behind":
+        return "behind what it follows"
     if state == "outside":
         return "outside the pipeline's range"
     return state
@@ -114,17 +120,50 @@ def _cell(mut h: Html, key: String, state: String, label: String):
     h.raw("</span></li>")
 
 
-def _legend(mut h: Html, counts: List[Int]):
+def _legend(mut h: Html, counts: List[Int], follows: List[String]):
+    """The states with their counts; `behind` only for a sensor, with what
+    it means under it."""
     h.raw('<p class="muted cal__legend">')
     var names = states()
+    var first = True
     for i in range(len(names)):
-        h.raw("" if i == 0 else " · ")
+        if names[i] == "behind" and len(follows) == 0:
+            continue
+        h.raw("" if first else " · ")
+        first = False
         h.raw('<span class="cal__key cal--', names[i], '"></span> ')
         h.text(counts[i], " ", state_words(names[i]))
     h.raw("</p>")
+    if len(follows) > 0:
+        h.raw('<p class="muted cal__legend cov__help">')
+        h.text(
+            "Behind: ",
+            _names(follows),
+            (
+                " has it, but no run of this pipeline has done it, failed on"
+                " it or is going; a backfill queues it."
+            ),
+        )
+        h.raw("</p>")
 
 
-def _month_html(mut h: Html, base: String, c: Calendar, view: String):
+def _names(names: List[String]) -> String:
+    var s = String()
+    for i in range(len(names)):
+        s.write(
+            "" if i == 0 else (" and " if i == len(names) - 1 else ", "),
+            names[i],
+        )
+    return s^
+
+
+def _month_html(
+    mut h: Html,
+    base: String,
+    c: Calendar,
+    view: String,
+    follows: List[String],
+):
     """A month of days (a year of months for a monthly pipeline), as the
     card has always drawn it."""
     var daily = c.kind == "daily"
@@ -162,7 +201,7 @@ def _month_html(mut h: Html, base: String, c: Calendar, view: String):
     var counts = List[Int]()
     for s in states():
         counts.append(c.count(s))
-    _legend(h, counts)
+    _legend(h, counts, follows)
     h.raw("</div>")
 
 
@@ -179,7 +218,7 @@ def _summary(y: Year, month: Int) -> String:
     return s^
 
 
-def _year_html(mut h: Html, base: String, y: Year):
+def _year_html(mut h: Html, base: String, y: Year, follows: List[String]):
     """Twelve small months, the year's legend, and the range strip."""
     _nav(
         h,
@@ -220,7 +259,7 @@ def _year_html(mut h: Html, base: String, y: Year):
     var counts = List[Int]()
     for s in states():
         counts.append(y.count(s))
-    _legend(h, counts)
+    _legend(h, counts, follows)
     if len(y.strip) < 2:
         return
     h.raw(
@@ -261,18 +300,26 @@ def coverage_html(
     start: String,
     cal: String,
     view: String,
+    f: Optional[Follow] = None,
 ) raises:
     """The pipeline page's Coverage card; `cal` is the month or year to
-    show (`?cal=`, today's if empty) and `view` the tab (`?cov=`)."""
+    show (`?cal=`, today's if empty) and `view` the tab (`?cov=`). With `f`
+    (a sensor's `follow`), what it follows has but it hasn't done is
+    `behind`."""
     var base = String("/pipelines/", url_encode(name))
+    var upstream = Dict[String, Bool]()
+    var follows = List[String]()
+    if f:
+        upstream = f.value().keys.copy()
+        follows = f.value().datasets.copy()
     if kind != "daily":
         h.raw(
             '<section class="card cov" id="coverage"><div class="steps__head">',
             '<h2>Coverage</h2></div><div class="cov__body">',
         )
         try:
-            var c = calendar(db, name, kind, start, cal)
-            _month_html(h, base, c, "")
+            var c = calendar(db, name, kind, start, cal, upstream)
+            _month_html(h, base, c, "", follows)
         except e:
             h.raw('<p class="refused">')
             h.text(String(e))
@@ -293,7 +340,7 @@ def coverage_html(
         h.text(String(e))
         h.raw("</p></div></section>")
         return
-    var y = year_calendar(db, name, start, ym[0])
+    var y = year_calendar(db, name, start, ym[0], upstream)
     var c = month_of(y, ym[1])
     for v in [("month", "Month"), ("year", "Year")]:
         var on = (v[0] == "year") == year
@@ -308,14 +355,72 @@ def coverage_html(
         " hidden" if year else "",
         ">",
     )
-    _month_html(h, base, c, "month")
+    _month_html(h, base, c, "month", follows)
     h.raw(
         '</div><div id="coverage-year" role="tabpanel" class="cov__body"',
         "" if year else " hidden",
         ">",
     )
-    _year_html(h, base, y)
+    _year_html(h, base, y, follows)
     h.raw("</div></section><script>", _COVERAGE_JS, "</script>")
+
+
+def _key_links(
+    mut h: Html, base: String, unit: String, what: String, keys: List[String]
+):
+    """`what: 2023-08-17, 2023-08-18 and 9 more`, each linking its month (a
+    monthly pipeline's year) on the coverage calendar."""
+    if len(keys) == 0:
+        return
+    h.raw('<span class="follow__keys">')
+    h.text(what, ": ")
+    for i in range(min(len(keys), LISTED)):
+        h.raw(", " if i else "", '<a href="')
+        var period = String(keys[i][byte=:7]) if unit == "day" else String(
+            keys[i][byte=:4]
+        )
+        h.text(base, "?cal=", period)
+        if unit == "day":
+            h.raw("&amp;cov=month")
+        h.raw('#coverage">')
+        h.text(keys[i])
+        h.raw("</a>")
+    if len(keys) > LISTED:
+        h.text(" and ", len(keys) - LISTED, " more")
+    h.raw("</span>")
+
+
+def follow_html(mut h: Html, name: String, f: Follow):
+    """The Progress card's Following line: what the sensor follows, how
+    many of its days (months) are done, and what's behind, by state, with
+    the first of each linked."""
+    var base = String("/pipelines/", url_encode(name))
+    var unit = String(f.unit, "" if f.available == 1 else "s")
+    if f.upstream:
+        h.text(_names(f.upstream), " (", _names(f.datasets), "): ")
+    else:
+        h.text(_names(f.datasets), ": ")
+    if f.available == 0:
+        h.text("nothing to follow yet")
+        return
+    h.text(f.done, " of ", f.available, " ", unit, " done")
+    if f.behind() == 0:
+        h.text(", none behind")
+        return
+    h.raw('; <span class="warn">')
+    h.text(f.behind(), " behind")
+    h.raw("</span>")
+    var parts = List[String]()
+    if f.live:
+        parts.append(String(len(f.live), " running or queued"))
+    if f.failed:
+        parts.append(String(len(f.failed), " failed"))
+    if f.waiting:
+        parts.append(String(len(f.waiting), " not queued yet"))
+    h.text(": ", _names(parts))
+    _key_links(h, base, f.unit, "Running or queued", f.live)
+    _key_links(h, base, f.unit, "Failed", f.failed)
+    _key_links(h, base, f.unit, "Not queued", f.waiting)
 
 
 comptime _COVERAGE_JS = """
@@ -375,6 +480,11 @@ comptime COVERAGE_STYLE = """
 .cov--3 { background: color-mix(in srgb, var(--ok) 70%, var(--surface)); }
 .cov--all { background: var(--ok); border-color: var(--ok); }
 .cov--here { border-color: var(--ember); border-bottom-width: 3px; }
+.cal--behind { background: color-mix(in srgb, var(--warn) 18%, var(--surface)); border-color: var(--warn); }
+.cal--behind::after { content: "\\2026"; color: var(--warn); }
+.cov__grid .cal--behind { border-color: var(--warn); }
+.cal__key.cal--behind::after { content: none; }
+.follow__keys { display: block; font-size: 0.8125rem; color: var(--muted); }
 .cov__ends { display: flex; justify-content: space-between; margin: 0; font-size: 0.7rem; }
 @media (max-width: 640px) {
   .cov__months { grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); gap: 0.75rem; }

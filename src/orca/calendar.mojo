@@ -11,6 +11,8 @@ they win:
 - `live`: in a queued, deferred or running run (`live_sql`).
 - `done`: what a backfill counts as done (`DONE_SQL`).
 - `failed`: not done, and the last run over it failed.
+- `behind`: none of these, but a dataset the sensor pipeline follows has
+  it (`orca.follow`); only on the page's coverage.
 - `open`: none of the above, so a backfill would queue it.
 
 Daily and monthly keys are zero-padded, so they compare as text.
@@ -105,10 +107,16 @@ def _period_of(
 
 
 def calendar(
-    mut db: State, pipeline: String, kind: String, start: String, period: String
+    mut db: State,
+    pipeline: String,
+    kind: String,
+    start: String,
+    period: String,
+    upstream: Dict[String, Bool] = {},
 ) raises -> Calendar:
     """`pipeline`'s calendar of `period` (see `Calendar.period`; today's if
-    empty), with `start` its first partition (or empty)."""
+    empty), with `start` its first partition (or empty); keys in `upstream`
+    that are only open are `behind`."""
     if kind != "daily" and kind != "monthly":
         raise Error(pipeline, " has ", kind, " partitions, not dated ones")
     var t = Civil.of(now())
@@ -134,7 +142,13 @@ def calendar(
             <= cal.today else String()
         )
     cal.cells = _cells(
-        db, pipeline, start, cal.today, keys, done_keys(db, pipeline, keys)
+        db,
+        pipeline,
+        start,
+        cal.today,
+        keys,
+        done_keys(db, pipeline, keys),
+        upstream,
     )
     return cal^
 
@@ -169,9 +183,12 @@ def _cells(
     today: String,
     keys: List[String],
     done: Dict[String, Bool],
+    upstream: Dict[String, Bool] = {},
 ) raises -> List[Cell]:
-    """Each of `keys` with its state, given which are `done`: the live runs
-    and the last run of each key are a query each, whatever the keys."""
+    """Each of `keys` with its state, given which are `done` and which the
+    datasets a sensor follows have (`upstream`, `orca.follow`): the live
+    runs and the last run of each key are a query each, whatever the
+    keys."""
     var joined = String()
     for i in range(len(keys)):
         joined.write("," if i else "", keys[i])
@@ -193,6 +210,8 @@ def _cells(
             state = "done"
         elif k in failed:
             state = "failed"
+        elif k in upstream:
+            state = "behind"
         else:
             state = "open"
         cells.append(Cell(k, state))
@@ -285,7 +304,11 @@ def year_of(text: String, today: Civil) raises -> Tuple[Int, Int]:
 
 
 def year_calendar(
-    mut db: State, pipeline: String, start: String, year: Int
+    mut db: State,
+    pipeline: String,
+    start: String,
+    year: Int,
+    upstream: Dict[String, Bool] = {},
 ) raises -> Year:
     """The days of `year` of the daily `pipeline` that starts at `start`
     (or has no start), and its range strip. Three queries, as for a month:
@@ -326,7 +349,7 @@ def year_calendar(
                         asked.append(k)
             m = m.next()
     var done = done_keys(db, pipeline, asked)
-    y.cells = _cells(db, pipeline, start, y.today, keys, done)
+    y.cells = _cells(db, pipeline, start, y.today, keys, done, upstream)
     for m in months:
         var n = 0
         var total = 0
@@ -395,3 +418,16 @@ def calendar_json(c: Calendar) -> String:
         )
     j.write("}}")
     return j^
+
+
+def states_of(
+    mut db: State,
+    pipeline: String,
+    start: String,
+    today: String,
+    keys: List[String],
+) raises -> List[Cell]:
+    """Each of `keys` with its state, as on the calendar: three queries."""
+    return _cells(
+        db, pipeline, start, today, keys, done_keys(db, pipeline, keys)
+    )

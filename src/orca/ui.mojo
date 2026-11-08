@@ -8,7 +8,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 |---|---|
 | `/` | pipelines, with their schedules, next runs and last runs |
 | `/pipelines/<name>` | `?tab=overview` (default), `runs` or `operate`, each its own page; a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`orca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; its registration as `orca config show` prints it (`#config`, Overview); `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing; `?steps=graph` or `table`: the Steps tab shown without scripts |
-| `/pipelines/<name>/progress` | the page's Progress card (runs going, fill, next run), as an HTML fragment the page refreshes every 5 s |
+| `/pipelines/<name>/progress` | the page's Progress card (runs going, fill, how far a sensor is behind what it follows (`orca.follow`), next run), as an HTML fragment the page refreshes every 5 s |
 | `/api/pipelines/<name>` | the same as JSON, whatever is asked for |
 | `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=` a month or year, `?cov=month` or `year`: a daily one's tab, year by default, both from one read of the year in `orca.ui_coverage`) and as the Start runs form's date picker |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
@@ -223,7 +223,8 @@ from orca.watchdog import (
     watchdog_json,
 )
 from orca.ui_style import STYLE
-from orca.ui_coverage import COVERAGE_STYLE, coverage_html
+from orca.follow import Follow, follow, follow_json
+from orca.ui_coverage import COVERAGE_STYLE, coverage_html, follow_html
 from orca.ui_viz import (
     VIZ_STYLE,
     gantt_json,
@@ -3696,7 +3697,11 @@ def _usage_facts(mut h: Html, u: Usage, live: Bool):
 
 
 def _progress_html(
-    mut h: Html, p: PipelineRow, fill: Optional[FillStatus], fires: List[Fire]
+    mut h: Html,
+    p: PipelineRow,
+    fill: Optional[FillStatus],
+    fires: List[Fire],
+    f: Optional[Follow] = None,
 ):
     """The Progress card's facts: the runs going, the fill, a failing
     sensor, the next fire. Its own fragment too, which the page refreshes
@@ -3744,6 +3749,21 @@ def _progress_html(
             _FILLS_DOCS,
         )
         _fill_html(h, fill.value())
+        h.raw("</dd>")
+    if f:
+        _fact(
+            h,
+            "Following",
+            "following",
+            (
+                "A sensor runs the partitions of the tables it reads as they"
+                " get snapshots. This is how many of those partitions it has"
+                " done, and the ones it hasn't: going, failed, or not queued"
+                " yet (a backfill queues them). They are behind on Coverage."
+            ),
+            "sensors",
+        )
+        follow_html(h, p.name, f.value())
         h.raw("</dd>")
     if p.sense_error:
         _fact(
@@ -3802,7 +3822,13 @@ def pipeline_progress(mut db: State, name: String) raises -> Page:
     except:
         pass
     var h = Html()
-    _progress_html(h, ps[0], _fill_of(db, name), fires)
+    _progress_html(
+        h,
+        ps[0],
+        _fill_of(db, name),
+        fires,
+        follow(db, name, ps[0].kind, ps[0].start),
+    )
     return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
 
 
@@ -4083,6 +4109,7 @@ def _cards_html(
     steps: List[StepDef],
     links: CodeLinks,
     usage: UsageSummary,
+    f: Optional[Follow] = None,
 ):
     """The pipeline page's cards: what's going on (refreshed while the page
     is open), and on the Overview tab how it's set up, its code and what
@@ -4096,7 +4123,7 @@ def _cards_html(
     )
     h.text(base, "/progress")
     h.raw('" data-poll-every="5">')
-    _progress_html(h, p, fill, fires)
+    _progress_html(h, p, fill, fires, f)
     h.raw("</div></section>")
     if tab != "overview":
         h.raw("</div>")
@@ -4315,10 +4342,12 @@ def pipeline(
     var runs = _runs(db, pipeline=name, limit=20)
     var fill = _fill_of(db, name)
     var usage = _usage_summary(db, name)
+    var fol = follow(db, name, p.kind, p.start)
 
     var j = String('{"pipeline": ')
     _json_pipeline(j, p)
     j.write(', "fill": ', status_json(fill.value()) if fill else "null")
+    j.write(', "follow": ', follow_json(fol.value()) if fol else "null")
     j.write(', "steps": [')
     for i in range(len(steps)):
         if i:
@@ -4422,7 +4451,7 @@ def pipeline(
     )
     var base = String("/pipelines/", url_encode(p.name))
     _tabs_html(h, base, tab)
-    _cards_html(h, p, tab, fill, fires, steps, links, usage)
+    _cards_html(h, p, tab, fill, fires, steps, links, usage, fol)
     if tab == "overview":
         _steps_html(h, p.name, steps, links, steps_view)
         if keys:
@@ -4474,7 +4503,7 @@ def pipeline(
             config_html(h, configs[0], repo, links.pipeline.url)
     elif tab == "operate":
         if p.kind == "daily" or p.kind == "monthly":
-            coverage_html(h, db, p.name, p.kind, p.start, cal, cov)
+            coverage_html(h, db, p.name, p.kind, p.start, cal, cov, fol)
         if p.binary:
             var regs = registered(db, name)
             _start_html(
