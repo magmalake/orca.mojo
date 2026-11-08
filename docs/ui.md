@@ -129,6 +129,7 @@ the row at the top of the window, even when new rows arrive above it.
 | a pipeline's page, every tab | the Progress card | 5 s |
 | `/runs/<id>` | its facts, steps, DAG and machines (`/runs/<id>/live`) | 5 s, until the run ends |
 | `/runs/<id>/attempts/<a>` | its facts (`.../facts`) and its log (`.../log`) | 5 s and 2 s, until the attempt ends |
+| Ops: Alerts | the table of alerts and its pager (`/ops/alerts/live`, with the page's filters) | 30 s on the newest page; an older page doesn't refresh |
 | Ops: Control | its charts, containers and alerts (`/ops/control/live`) | 30 s |
 | Ops: Pools | its machines, filters and, with EC2 in view, Fleet's cards (`/ops/pools/live`, with the page's filters) | 10 s |
 | `/watchdog` | the rules and trips (`/watchdog/live`) | 30 s |
@@ -473,10 +474,12 @@ each bar and box keeps its title.
 
 ## Ops
 
-"Ops" in the nav has three pages, each linking the others:
+"Ops" in the nav has four pages, each linking the others; `/ops` opens
+Alerts, the first:
 
 | Page | What it shows |
 |---|---|
+| Ops › Alerts (`/ops/alerts`, `/api/alerts`) | every [alert](alerts.md) sent to the phone, newest first, with its links and whether it is still open. See [Alerts](#alerts) |
 | Ops › Control (`/ops/control`, `/api/system`) | the one machine running the scheduler, the UI, Postgres and local and control-placed runs: CPU, memory, disk, network and each container's memory over `?range=24h`, `7d` or `14d`; its **Memory pressure** (PSI `some` and `full` avg10, avg60 and avg300, the file read, and whether new runs wait for it: [orca.toml](orca-toml.md#memory-pressure)), `memory_pressure` in the JSON, null without a reading in the last minute; whether [alerts](alerts.md) are on and the last ones; the [watchdog](watchdog.md)'s banner; the local and control-placed runs going, each with its cgroup's memory against its limit, its kill line and its grant (`runs` in the JSON) |
 | Ops › Pools (`/ops/pools`, `/api/pools`) | every machine runs are placed on, a row each, by pool: the EC2 instances orca launches, a Kubernetes run's pods, the machines running [`orca worker`](workers.md). See [Pools](#pools) |
 | Ops › Watchdog (`/watchdog`, `/api/watchdog`) | the rules that pause pipelines, and their trips. See [the watchdog page](#the-watchdog-page) |
@@ -495,6 +498,36 @@ fragments to `/ops/pools/live` with the same filter. A script that asks
 them for JSON (`Accept: application/json`, `?format=json`) gets Fleet's and
 Workers' JSON as before, with no redirect; `/api/fleet` and `/api/workers`
 are unchanged.
+
+### Alerts
+
+Ops › Alerts lists every alert orca has pushed to ntfy, or is about to,
+newest first and 50 to a page, so what reached the phone can be found in
+the UI too. Each row has:
+
+| Column | |
+|---|---|
+| When | when it was raised (or resolved), as how long ago; the full time on hover |
+| Kind | run failed, watchdog trip, fill stalled, disk, worker lost, memory pressure, backup failed, or a script's own kind; an all-clear says "resolved" after it. Its priority is on hover |
+| Alert | its title and message, as they were sent |
+| Links | what it is about: the run, the pipelines it paused or names, the watchdog's rule, the worker, or Control |
+| Delivered | sent; waiting; failed, retrying (with the error ntfy's server or the network gave); or not sent, when a newer alert or its resolution replaced it before it went |
+| State | for the alerts that end (a watchdog trip, a stalled fill, the disk, memory pressure, and a kind `orca notify --resolved` has ended): open, resolved with when, or raised again when the same alert was sent anew first |
+
+Open alerts are tinted red, and a line above the table counts them and
+links to `?state=open`. The filters are `?kind=` (each kind with its count)
+and `?state=open` or `resolved`; `?before=<id>` and `?after=<id>` page it
+(the arrow keys too), `?limit=` sets the size (at most 500). `/api/alerts`
+is the same as JSON: `alerts` (each with its `links`, `delivery`, `error`,
+`state` and `resolved`), `open`, `total`, `kinds`, and the cursors `next`
+and `prev` with their URLs. `orca alerts [--kind K] [--open|--resolved]
+[--limit N] [--json]` prints the newest 20, over the database or
+`--remote`.
+
+Alerts are kept for 90 days in `orca.alerts`, a row per alert raised and
+per "resolved". One held back because the same alert went out within
+`ORCA_NOTIFY_MIN_SECONDS` isn't sent, so it has no row; the
+[watchdog](watchdog.md)'s trips are all on its page.
 
 ### Pools
 

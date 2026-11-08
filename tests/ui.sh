@@ -68,9 +68,9 @@ echo "$nav" | grep -qF '<a href="https://census.example/?a=b" target="_blank" re
     || fail "ORCA_UI_LINKS' link isn't in the nav"
 echo "$nav" | grep -qF '>&lt;b&gt;x&lt;/b&gt;</a>' || fail "an ORCA_UI_LINKS label isn't escaped"
 echo "$nav" | grep -q 'javascript:' && fail "a javascript: link from ORCA_UI_LINKS is in the nav"
-# Ops: one top-level link with Control, Pools and Watchdog under it, as plain
+# Ops: one top-level link with Alerts, Control, Pools and Watchdog under it, as plain
 # links; the old System, Fleet and Workers items are gone.
-echo "$nav" | grep -qF '<div class="menu"><a href="/ops" aria-haspopup="true">Ops</a><div class="menu__sub"><a href="/ops/control">Control</a><a href="/ops/pools">Pools</a><a href="/watchdog">Watchdog</a></div></div>' \
+echo "$nav" | grep -qF '<div class="menu"><a href="/ops" aria-haspopup="true">Ops</a><div class="menu__sub"><a href="/ops/alerts">Alerts</a><a href="/ops/control">Control</a><a href="/ops/pools">Pools</a><a href="/watchdog">Watchdog</a></div></div>' \
     || fail "the Ops menu isn't in the nav"
 echo "$nav" | grep -qE '<a href="/(system|fleet|ops/fleet|ops/workers)"' && fail "the old System, Fleet or Workers nav item is still there"
 curl -fsS "$base/static/orca.css" | grep -qF '.menu:focus-within .menu__sub' || fail "the Ops menu doesn't open on keyboard focus"
@@ -625,7 +625,7 @@ echo "$page" | grep -qF '<dialog id="ask" class="ask" role="alertdialog" aria-la
     || fail "the run page has no ask dialog"
 echo "$page" | grep -qF 'ask.showModal();' || fail "the dialog isn't shown modal"
 echo "$page" | grep -qF 'f.requestSubmit(b && b.form === f ? b : undefined)' || fail "yes doesn't submit the form again"
-for path in / /runs "/runs/$ok_run" "/runs/$bad_run" /pipelines/toy "/pipelines/toy?tab=runs" /datasets /ops/control /watchdog; do
+for path in / /runs "/runs/$ok_run" "/runs/$bad_run" /pipelines/toy "/pipelines/toy?tab=runs" /datasets /ops/alerts /ops/control /watchdog; do
     # (alert( after ; or > is the escaped <script>alert(1) a step's error has.)
     html "$path" | grep -qE '(^|[ (!=;])(confirm|prompt)\(|(^|[ (!=])alert\(' && fail "$path calls a native dialog"
 done

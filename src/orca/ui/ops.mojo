@@ -1,7 +1,8 @@
 """The Ops pages: Control (`/ops/control`, the machine running the
 scheduler, the UI and Postgres; `orca.system`), the watchdog (`/watchdog`;
 `orca.watchdog`) and Prometheus' `/metrics`, with the fragments each
-refreshes from; Pools (`/ops/pools`) is `orca.ui.pools`. Fleet and
+refreshes from; Alerts (`/ops/alerts`, where `/ops` goes) is
+`orca.ui.alerts` and Pools (`/ops/pools`) is `orca.ui.pools`. Fleet and
 Workers' old paths redirect to Pools (`moved`, `to_pools`).
 """
 
@@ -129,8 +130,8 @@ def metrics_page(mut db: State) raises -> Page:
 
 
 def ops_home() -> Page:
-    """`/ops`: Control, the first of Ops' pages."""
-    return Page(302, String(), String(), location="/ops/control")
+    """`/ops`: Alerts, the first of Ops' pages."""
+    return Page(302, String(), String(), location="/ops/alerts")
 
 
 def moved(url: String, path: String) -> Page:

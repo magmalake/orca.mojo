@@ -641,6 +641,48 @@ def _migrations() -> List[List[String]]:
             held_since timestamptz,
             updated timestamptz NOT NULL DEFAULT now())""",
         ],
+        # Every alert sent, a row each (orca.notify, Ops › Alerts):
+        # `orca.notifications` keeps only the latest per kind and subject,
+        # for dedup and retries; this keeps each one raised and each
+        # 'resolved', with whether it was delivered and when its alert
+        # resolved. Seeded with what `orca.notifications` still holds.
+        [
+            """CREATE TABLE orca.alerts (
+            id bigserial PRIMARY KEY,
+            kind text NOT NULL,
+            subject text NOT NULL,
+            event text NOT NULL,
+            title text NOT NULL,
+            body text NOT NULL,
+            priority text NOT NULL,
+            tags text NOT NULL DEFAULT '',
+            url text NOT NULL DEFAULT '',
+            pipelines text,
+            run bigint,
+            created timestamptz NOT NULL DEFAULT now(),
+            delivery text NOT NULL DEFAULT 'pending',
+            attempts int NOT NULL DEFAULT 0,
+            sent_at timestamptz,
+            error text,
+            resolved_at timestamptz,
+            resolved_by bigint)""",
+            "CREATE INDEX alerts_kind_id ON orca.alerts (kind, id DESC)",
+            (
+                "CREATE INDEX alerts_open ON orca.alerts (kind, subject) WHERE"
+                " resolved_at IS NULL"
+            ),
+            "CREATE INDEX alerts_created ON orca.alerts (created)",
+            (
+                "INSERT INTO orca.alerts (kind, subject, event, title, body,"
+                " priority, tags, url, created, delivery, attempts, sent_at,"
+                " error) SELECT kind, subject, CASE WHEN state = 'resolved'"
+                " THEN 'resolved' ELSE 'raised' END, title, body, priority,"
+                " tags, click, coalesce(sent_at, next_try), CASE WHEN pending"
+                " THEN 'pending' ELSE 'sent' END, attempts, sent_at,"
+                " last_error FROM orca.notifications WHERE sent_at IS NOT NULL"
+                " OR pending ORDER BY coalesce(sent_at, next_try)"
+            ),
+        ],
     ]
 
 
@@ -656,6 +698,10 @@ def _floor_raisers() -> List[Int]:
       with one on `(id, run, start)`: an instance has a row per run it
       served, so the binaries before it, which update and end an instance
       by `id` alone, would touch its earlier rows too.
+
+    41 (`orca.alerts`, Ops › Alerts) is additive: a new table, which the
+    binaries before it neither read nor write; their alerts are only
+    missing from it.
     """
     return [1, 24]
 

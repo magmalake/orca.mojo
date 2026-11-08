@@ -26,7 +26,8 @@ stylesheet is served before any route is looked up.
 | `/api/gantt` | the pipelines in dataset order with their runs over `?window=1h`, `6h`, `24h` (default) or `7d`, and the runs each started: the home page's Timeline tab (`orca.ui.viz`) |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
 | `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
-| `/ops` | redirects to `/ops/control`; "Ops" in the nav has Control, Pools and Watchdog under it |
+| `/ops` | redirects to `/ops/alerts`; "Ops" in the nav has Alerts, Control, Pools and Watchdog under it |
+| `/ops/alerts` | Alerts (`orca.ui.alerts`): every alert sent (`orca.alerts`), newest first, 50 to a page (`?limit=`, at most 500; `?before=<id>`, `?after=<id>`), `?kind=` and `?state=open` or `resolved`; its kind, title and message, links, whether ntfy took it and whether it is still open; the newest page refreshes every 30 s from `/ops/alerts/live`; `/api/alerts` is the same as JSON |
 | `/ops/control` | Control, the one machine running the scheduler, this UI, Postgres and local and control-placed runs (so not a pool on Pools): its own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`), and the watchdog's banner, refreshed every 30 s from `/ops/control/live`; `/api/system` is the same as JSON; `/system` redirects here (301) |
 | `/metrics` | Prometheus gauges: the control instance's CPU, memory, disk, network and containers' memory, runs running and queued, hosts, and errors in the last hour; open like the other pages (reads need no login) |
 | `/ops/pools` | Pools, every machine runs are placed on (`orca.ui.pools`, `orca.views.pools`): a row per EC2 instance orca launched (live, and gone for an hour after it ended), per live Kubernetes run's pods (on the Kubernetes runner) and per worker token's machine (`orca.workers`), with its pool, kind, state, image, CPUs, memory, runs, last heartbeat, CPU and worker; `?pool=` (`ec2`, `kubernetes`, `worker:<pool>`) and `?kind=` (`ec2`, `k8s`, `self-hosted`) filter it; with EC2 in view, Fleet's cards (`orca.fleet`) and its charts over `?range=24h` or `7d`; refreshed every 10 s from `/ops/pools/live`; `/api/pools` the same as JSON |
@@ -55,6 +56,7 @@ from orca.api.ops import (
 from orca.api.pipelines import calendar_page, pipeline_json
 from orca.api.runs import run_json
 from orca.state import State
+from orca.ui.alerts import alerts, alerts_api, alerts_live
 from orca.ui.attempt import attempt, attempt_facts, attempt_log
 from orca.ui.code import code_page
 from orca.ui.datasets import (
@@ -150,9 +152,12 @@ def routes() -> List[Route]:
         page("/datasets/{name}", _dataset),
         page("/datasets/{name}/snapshots/{id:int}", _snapshot, "snapshot"),
         page("/rebuilds/{id:int}", _rebuild, "rebuild"),
-        # Ops: Control, Pools, the watchdog; Fleet and Workers moved to
-        # Pools, their JSON paths kept.
+        # Ops: Alerts, Control, Pools, the watchdog; Fleet and Workers moved
+        # to Pools, their JSON paths kept.
         page("/ops", _ops),
+        page("/ops/alerts", _alerts),
+        page("/ops/alerts/live", _alerts_live),
+        page("/api/alerts", _alerts_api),
         page("/system", _moved),
         page("/fleet", _fleet),
         page("/fleet/hosts", _fleet),
@@ -346,6 +351,18 @@ def _rebuild(mut db: State, call: Call) raises -> Page:
 
 def _ops(mut db: State, call: Call) raises -> Page:
     return ops_home()
+
+
+def _alerts(mut db: State, call: Call) raises -> Page:
+    return alerts(db, call.url)
+
+
+def _alerts_live(mut db: State, call: Call) raises -> Page:
+    return alerts_live(db, call.url)
+
+
+def _alerts_api(mut db: State, call: Call) raises -> Page:
+    return alerts_api(db, call.url)
 
 
 def _moved(mut db: State, call: Call) raises -> Page:

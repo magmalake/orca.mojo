@@ -142,6 +142,9 @@ comptime USAGE = """usage:
   orca watchdog snooze <rule> <duration>   (2h, 30m, 1d; off ends it)
   orca watchdog ack [--all|<trip id>]   (keep a trip's pipelines paused and
                                     clear its banner; status still lists it)
+  orca alerts [--kind K] [--open|--resolved] [--limit N] [--json]
+                                    (the alerts sent, newest first: Ops ›
+                                    Alerts)
   orca notify test                  (sends a test message to ORCA_NOTIFY_URL,
                                     orca.notify)
   orca notify --kind K [--subject S] [--title T] [--priority high|default|
@@ -173,7 +176,7 @@ comptime USAGE = """usage:
   orca login [<url>] [--user NAME] [--days N] [--label L]
   orca logout [<url>]
   orca --remote <url> backfill|start|cancel|pause|unpause|resume|rerun|
-                      rebuild|status|lineage|watchdog ...
+                      rebuild|status|lineage|watchdog|alerts ...
                 (to a deployed orca ui, as the user orca login logged in;
                 or ORCA_REMOTE=<url>)"""
 
@@ -425,6 +428,7 @@ def _command(args: List[String], target: String) raises -> Int:
         return 0
     if (
         cmd == "watchdog"
+        or cmd == "alerts"
         or cmd == "status"
         or cmd == "start"
         or cmd == "resume"

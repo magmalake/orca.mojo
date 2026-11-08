@@ -19,6 +19,9 @@
 # - ntfy down: the tick still succeeds at once, the alert waits in Postgres
 #   and goes when the server is back;
 # - Ops > Control and /api/system say alerts are configured and list them;
+# - Ops > Alerts (/ops/alerts, where /ops goes) has a row per alert sent
+#   (orca.alerts), the trip resolved by its 'resolved', the disk open; its
+#   filters, pages, live fragment and JSON, and orca alerts (and --remote);
 # - neither the topic nor the token is anywhere in the log or the pages.
 #
 # Needs ORCA_DATABASE_URL (pixi run test-notify starts a throwaway server),
@@ -324,6 +327,73 @@ curl -fsS "$base/api/system" | jq -e '.notify.configured == true and (.notify.re
     || fail "/api/system's notify: $(curl -fsS "$base/api/system" | jq -c .notify)"
 echo "$page" | grep -q "127.0.0.1:$port" && fail "the URL is on the page"
 echo "ok   Ops > Control lists whether alerts are on and the last ones"
+
+# --- Ops > Alerts ------------------------------------------------------------------
+# Every alert sent has a row (orca.alerts): the test message is sent
+# directly, so it has none.
+[ "$(q "SELECT count(*) FROM orca.alerts WHERE delivery = 'sent'")" -eq $(($(count) - 1)) ] \
+    || fail "rows sent: $(q "SELECT id, kind, event, delivery FROM orca.alerts ORDER BY id")"
+[ "$(q "SELECT count(*) FROM orca.alerts WHERE delivery <> 'sent'")" -eq 0 ] || fail "rows not sent: $(q "SELECT id, kind, delivery, error FROM orca.alerts WHERE delivery <> 'sent'")"
+[ "$(q "SELECT string_agg(run::text, ',' ORDER BY run) FROM orca.alerts WHERE kind = 'run-failed' AND pipelines = 'toy'")" = "$run,$spent" ] \
+    || fail "the failed runs' rows: $(q "SELECT id, run, pipelines FROM orca.alerts WHERE kind = 'run-failed'")"
+# The watchdog trip, resolved by its 'resolved'; the second trip was held back.
+[ "$(q "SELECT count(*) FROM orca.alerts WHERE kind = 'watchdog' AND event = 'raised' AND pipelines = 'toy'
+        AND resolved_by = (SELECT id FROM orca.alerts WHERE kind = 'watchdog' AND event = 'resolved')")" -eq 1 ] \
+    || fail "the watchdog's rows: $(q "SELECT id, event, pipelines, resolved_at, resolved_by FROM orca.alerts WHERE kind = 'watchdog'")"
+# The disk alert raised while ntfy was down failed first, then went.
+[ "$(q "SELECT attempts >= 2 AND resolved_at IS NULL FROM orca.alerts WHERE kind = 'disk' ORDER BY id DESC LIMIT 1")" = t ] \
+    || fail "the disk's last row: $(q "SELECT id, attempts, delivery, error, resolved_at FROM orca.alerts WHERE kind = 'disk'")"
+location=$(curl -s -o /dev/null -w '%{redirect_url}' "$base/ops")
+[ "$location" = "$base/ops/alerts" ] || fail "/ops goes to $location"
+apage=$(curl -fsS "$base/ops/alerts")
+echo "$apage" | grep -qF '<a href="/ops/alerts" aria-current="page">Alerts</a><a href="/ops/control">Control</a>' || fail "Alerts isn't first in the Ops menu, current"
+echo "$apage" | grep -qF "orca: toy run $spent failed" || fail "the failed run isn't listed"
+echo "$apage" | grep -qF "<a href=\"/runs/$spent\">run $spent</a>" || fail "no link to the failed run"
+echo "$apage" | grep -qF '<a href="/pipelines/toy">toy</a>' || fail "no link to the pipeline"
+echo "$apage" | grep -qF ">watchdog trip</span>" || fail "the trip isn't listed"
+echo "$apage" | grep -qF '<a href="/watchdog">rule failing</a>' || fail "no link to the watchdog rule"
+echo "$apage" | grep -qF 'class="alerts__open"' || fail "the open disk alert isn't marked"
+echo "$apage" | grep -qF 'data-poll="/ops/alerts/live" data-poll-every="30"' || fail "the page doesn't refresh"
+echo "$apage" | grep -qF 'class="help"' || fail "no help on the column headers"
+echo "$apage" | grep -qE "SECRETVALUE|SECRETTOKEN|127.0.0.1:$port" && fail "a secret or the URL is on Alerts"
+api() { curl -fsS "$base/api/alerts$1"; }
+total=$(q "SELECT count(*) FROM orca.alerts")
+newest=$(q "SELECT max(id) FROM orca.alerts")
+api "" | jq -e --argjson total "$total" --argjson newest "$newest" \
+    '.configured and .total == $total and .open == 1 and .alerts[0].id == $newest
+     and ([.alerts[].id] == ([.alerts[].id] | sort | reverse))' > /dev/null \
+    || fail "/api/alerts: $(api "" | jq -c '{total, open, ids: [.alerts[].id]}')"
+api "?kind=run-failed" | jq -e --argjson spent "$spent" \
+    '(.alerts | length) == 2 and all(.alerts[]; .kind == "run-failed" and .state == null and .delivery == "sent")
+     and any(.alerts[]; .run == $spent and .pipelines == ["toy"] and (.links[0].href == "/runs/\($spent)"))' > /dev/null \
+    || fail "?kind=run-failed: $(api "?kind=run-failed" | jq -c .alerts)"
+api "?state=open" | jq -e '(.alerts | length) == 1 and .alerts[0].kind == "disk" and .alerts[0].state == "open"' > /dev/null \
+    || fail "?state=open: $(api "?state=open" | jq -c .alerts)"
+api "?state=resolved&kind=watchdog" | jq -e '(.alerts | length) == 2 and any(.alerts[]; .event == "raised" and .state == "resolved")
+     and any(.alerts[]; .event == "resolved" and .priority == "low")' > /dev/null \
+    || fail "?state=resolved&kind=watchdog: $(api "?state=resolved&kind=watchdog" | jq -c .alerts)"
+curl -fsS "$base/ops/alerts?kind=run-failed" | grep -qF ">watchdog trip</span>" && fail "the kind filter shows a trip"
+# A page at a time: the next page is older, its previous page the first.
+first=$(api "?limit=3")
+echo "$first" | jq -e '(.alerts | length) == 3 and .prev == null and .next != null' > /dev/null || fail "?limit=3: $(echo "$first" | jq -c '{next, prev}')"
+second=$(curl -fsS -H 'Accept: application/json' "$base$(echo "$first" | jq -r .next_url)")
+echo "$second" | jq -e --argjson last "$(echo "$first" | jq '.alerts[2].id')" \
+    '(.alerts | length) == 3 and .alerts[0].id < $last and .prev != null' > /dev/null || fail "the second page: $(echo "$second" | jq -c '[.alerts[].id]')"
+back=$(curl -fsS -H 'Accept: application/json' "$base$(echo "$second" | jq -r .prev_url)")
+[ "$(echo "$back" | jq -c '[.alerts[].id]')" = "$(echo "$first" | jq -c '[.alerts[].id]')" ] || fail "back to the first page: $(echo "$back" | jq -c '[.alerts[].id]')"
+# The page's JSON is the API's.
+[ "$(curl -fsS -H 'Accept: application/json' "$base/ops/alerts?kind=disk" | jq -c .)" = "$(api "?kind=disk" | jq -c .)" ] || fail "the page's JSON isn't /api/alerts'"
+# The live fragment: the newest page every 30 s, an older one done (286).
+curl -fsS -D build/notify-live.h "$base/ops/alerts/live" | grep -qF '<table class="alerts">' || fail "the live fragment"
+grep -qi '^x-poll-every: 30' build/notify-live.h || fail "the fragment's X-Poll-Every: $(cat build/notify-live.h)"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$base/ops/alerts/live?before=$newest")" = 286 ] || fail "an older page's fragment isn't done"
+# orca alerts, over the database and --remote.
+out=$(./build/orca alerts --kind run-failed 2>&1) || fail "orca alerts: $out"
+[ "$(echo "$out" | grep -c "run-failed")" -eq 2 ] || fail "orca alerts --kind run-failed: $out"
+echo "$out" | grep -qF "orca: toy run $spent failed" || fail "orca alerts' title: $out"
+out=$(./build/orca --remote "http://127.0.0.1:$uport" alerts --open --json 2>&1) || fail "orca --remote alerts: $out"
+echo "$out" | jq -e '.open == 1 and (.alerts | length) == 1 and .alerts[0].kind == "disk"' > /dev/null || fail "orca --remote alerts --open --json: $out"
+echo "ok   Ops > Alerts lists each alert sent, with its links, delivery and state; filters, pages, JSON and orca alerts"
 
 # --- no secret anywhere --------------------------------------------------------------
 curl -fsS "$base/api/system" > build/notify-api.json

@@ -176,8 +176,8 @@ q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, laun
 page=$(html /ops/pools)
 echo "$page" | grep -qF '<a href="/ops/pools" aria-current="page">Pools</a>' || fail "Pools isn't in the Ops menu, current"
 echo "$page" | grep -qF '<a href="/ops" aria-current="page" aria-haspopup="true">Ops</a>' || fail "Ops isn't current"
-echo "$page" | grep -qF '<a href="/ops/control">Control</a><a href="/ops/pools" aria-current="page">Pools</a><a href="/watchdog">Watchdog</a></div>' \
-    || fail "the Ops menu isn't Control, Pools and Watchdog"
+echo "$page" | grep -qF '<a href="/ops/alerts">Alerts</a><a href="/ops/control">Control</a><a href="/ops/pools" aria-current="page">Pools</a><a href="/watchdog">Watchdog</a></div>' \
+    || fail "the Ops menu isn't Alerts, Control, Pools and Watchdog"
 echo "$page" | grep -q 'the instances orca launches for runs' || fail "the Pools intro"
 echo "$page" | grep -qF 'data-poll="/ops/pools/live" data-poll-every="10"' || fail "the machines don't poll every 10 s"
 # Fleet's cards and charts, with EC2 in view.
@@ -270,7 +270,7 @@ echo "ok   /ops/pools/live"
 for pair in '/ops/fleet|/ops/pools?kind=ec2' '/ops/fleet?range=7d&sort=cpu|/ops/pools?kind=ec2&range=7d' '/ops/fleet/hosts?sort=cpu|/ops/pools/live?kind=ec2' \
     '/ops/workers|/ops/pools?kind=self-hosted' '/ops/workers/live|/ops/pools/live?kind=self-hosted' \
     '/fleet|/ops/pools?kind=ec2' '/fleet?range=7d&sort=cpu|/ops/pools?kind=ec2&range=7d' '/fleet/hosts?sort=cpu|/ops/pools/live?kind=ec2' \
-    '/system?range=7d|/ops/control?range=7d' '/ops|/ops/control'; do
+    '/system?range=7d|/ops/control?range=7d' '/ops|/ops/alerts'; do
     from=${pair%%|*}
     to=${pair##*|}
     got=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$base$from")

@@ -4,7 +4,7 @@
 # it doesn't know are additive, and refuses once one raised the floor
 # (src/orca/state.mojo's `_floor_raisers`; 24 is one):
 #
-# - a binary that knows 38 of 40 registers, ticks and runs a run, says once
+# - a binary that knows 39 of 41 registers, ticks and runs a run, says once
 #   that the database is ahead, and leaves the schema version alone;
 # - one that knows 23 exits with why, and starts nothing.
 #
@@ -32,9 +32,9 @@ q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
 # This binary migrates the database to the latest.
 ./build/orca register ./build/toy >> "$log" 2>&1 || fail "register"
 latest=$(q "SELECT max(version) FROM orca.schema_version")
-[ "$latest" -ge 40 ] || fail "schema version $latest"
+[ "$latest" -ge 41 ] || fail "schema version $latest"
 
-# An older one, two migrations behind (39 and 40 are additive).
+# An older one, two migrations behind (40 and 41 are additive).
 older=$((latest - 2))
 ORCA_TEST_MIGRATIONS=$older ./build/orca register ./build/toy > /dev/null 2> "$log.err" \
     || { cat "$log.err" >> "$log"; fail "an older binary's register"; }

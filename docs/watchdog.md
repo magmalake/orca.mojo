@@ -56,7 +56,8 @@ A rule past a limit, and not snoozed, trips:
 - it records a trip in `orca.watchdog_trips`, with every check's value and
   limit and which one tripped;
 - it shows a red banner on `/`, Ops › Control and Ops › Pools;
-- it sends a high-priority alert if [alerts](alerts.md) are set up.
+- it sends a high-priority alert if [alerts](alerts.md) are set up, listed
+  on Ops › Alerts with the pipelines it paused, open until it resolves.
 
 Pipelines that were already paused are left alone, and a trip that pauses
 nothing isn't recorded. Paused pipelines start no new runs, fills included.

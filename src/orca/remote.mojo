@@ -28,7 +28,8 @@ others can read is refused, as ssh refuses a key.
 The commands that can go to a UI are `backfill` (`--rerun`, and
 `--preview`, which queues nothing), `start`, `cancel` (a pipeline's keys,
 or one run), `pause` and `unpause`, `resume` and `rerun` of a run,
-`rebuild`, and the reads `status` and `lineage`. An action is a `POST` of
+`rebuild`, and the reads `status`, `lineage`, `watchdog status` and
+`alerts`. An action is a `POST` of
 JSON to the path the UI's own button posts to, with `Authorization: Bearer
 <token>`, so it's the same code, the same checks and the same row of
 `orca.audit` as the button's, from `cli`. Reads are the pages' JSON,
@@ -72,6 +73,7 @@ def is_remote_command(cmd: String) -> Bool:
         or cmd == "status"
         or cmd == "lineage"
         or cmd == "watchdog"
+        or cmd == "alerts"
     )
 
 
@@ -778,6 +780,47 @@ def _print_made(ms: List[Value]) raises:
         print(line)
 
 
+def alert_lines(json: String) raises -> List[String]:
+    """`orca alerts`' lines from `/api/alerts`' JSON: a line per alert,
+    newest first, its time, kind, state and delivery, then its title."""
+    var v = loads(json)
+    var out = List[String]()
+    if not v["configured"].bool_value():
+        out.append("alerts aren't configured (ORCA_NOTIFY_URL)")
+    var n = 0
+    for a in v["alerts"].array_items():
+        n += 1
+        var kind = a["kind"].string_value()
+        if a["event"].string_value() == "resolved":
+            kind = String(kind, " resolved")
+        var line = String(a["created"].string_value(), "  ", kind)
+        while line.byte_length() < 44:
+            line.write(" ")
+        var state = (
+            String() if a["state"].is_null() else a["state"].string_value()
+        )
+        line.write(state)
+        while line.byte_length() < 54:
+            line.write(" ")
+        var d = a["delivery"].string_value()
+        if d == "pending" and not a["error"].is_null():
+            d = "failing"
+        line.write(d)
+        while line.byte_length() < 64:
+            line.write(" ")
+        line.write(a["title"].string_value())
+        out.append(line^)
+    if n == 0:
+        out.append("no alerts")
+    elif not v["next"].is_null():
+        out.append(
+            String(
+                "(", n, " newest of ", v["total"].int_value(), "; --limit N)"
+            )
+        )
+    return out^
+
+
 def api_command(mut api: Api, args: List[String]) raises -> Int:
     """Runs `args` (`orca <command> ...`) through `api`, printing what the
     command prints over the database."""
@@ -787,7 +830,10 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
     var rest = List[String]()
     for i in range(2, n):
         if args[i] == "--json" and (
-            cmd == "status" or cmd == "lineage" or cmd == "watchdog"
+            cmd == "status"
+            or cmd == "lineage"
+            or cmd == "watchdog"
+            or cmd == "alerts"
         ):
             json_out = True
         else:
@@ -808,6 +854,32 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
             print(got)
         else:
             for line in status_lines(got):
+                print(line)
+        return 0
+    if cmd == "alerts":
+        var q = String("/api/alerts?")
+        var limit = String("20")
+        var i = 0
+        while i < len(rest):
+            if rest[i] == "--open" or rest[i] == "--resolved":
+                q.write("&state=", rest[i][byte=2:])
+                i += 1
+            elif rest[i] == "--limit" and i + 1 < len(rest):
+                limit = rest[i + 1]
+                i += 2
+            elif rest[i] == "--kind" and i + 1 < len(rest):
+                q.write("&kind=", url_encode(rest[i + 1]))
+                i += 2
+            else:
+                raise Error(
+                    "usage: orca alerts [--kind K] [--open|--resolved]",
+                    " [--limit N] [--json]",
+                )
+        var got = api.get(String(q, "&limit=", url_encode(limit)))
+        if json_out:
+            print(got)
+        else:
+            for line in alert_lines(got):
                 print(line)
         return 0
     if cmd == "lineage" and (len(rest) == 1 or len(rest) == 2):

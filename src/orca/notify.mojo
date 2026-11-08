@@ -31,6 +31,14 @@ the scheduler calls on every tick, tries it again after a wait that doubles
 no retry of its own, and a failure is logged without the URL, so a down ntfy
 costs the scheduler at most one timeout a tick, and never an exception.
 `resolve` sends a low-priority 'resolved' once, for an alert that was sent.
+
+**Each one is kept** (`orca.alerts`, Ops › Alerts): a row per alert raised
+and per 'resolved', with its words, its link, the pipelines and run it is
+about, whether it was delivered (`delivery`: pending, sent, or dropped when
+a newer one replaced it before it went, with the last error of a try that
+failed) and, on a raised one, when it resolved (`resolved_at`, and the row
+that resolved it, or a later raise of the same alert). Held-back alerts
+aren't sent, so they have no row. Kept 90 days.
 """
 
 from std.os import getenv
@@ -199,11 +207,14 @@ def alert(
     title: String,
     body: String,
     click: String = "",
+    pipelines: String = "",
+    run: Int = 0,
 ) raises -> Bool:
     """Records the alert `kind` about `subject` as firing and sends it, unless
     the same one was sent in the last `min_seconds()` (or is pending). Returns
-    whether it will be sent (now, or by a later `flush`). Never raises for a
-    send that fails; Postgres errors do."""
+    whether it will be sent (now, or by a later `flush`). `pipelines` (comma
+    separated) and `run` are what it is about, for its row on Ops › Alerts.
+    Never raises for a send that fails; Postgres errors do."""
     if not configured():
         return False
     var rows = db.conn.query(
@@ -223,6 +234,22 @@ def alert(
                     "UPDATE orca.notifications SET title = $3, body = $4,"
                     " priority = $5, tags = $6, click = $7 WHERE kind = $1"
                     " AND subject = $2"
+                ),
+                Params()
+                .text(kind)
+                .text(subject)
+                .text(title)
+                .text(body)
+                .text(priority)
+                .text(tags)
+                .text(click),
+            )
+            _ = db.conn.execute(
+                (
+                    "UPDATE orca.alerts SET title = $3, body = $4, priority ="
+                    " $5, tags = $6, url = $7 WHERE id = (SELECT max(id) FROM"
+                    " orca.alerts WHERE kind = $1 AND subject = $2 AND event ="
+                    " 'raised' AND delivery = 'pending')"
                 ),
                 Params()
                 .text(kind)
@@ -255,8 +282,68 @@ def alert(
         .text(tags)
         .text(click),
     )
+    var id = _record(
+        db,
+        kind,
+        subject,
+        "raised",
+        title,
+        body,
+        priority,
+        tags,
+        click,
+        pipelines,
+        run,
+    )
+    # An earlier raise of it still open is repeated by this one.
+    _ = db.conn.execute(
+        (
+            "UPDATE orca.alerts SET resolved_at = now(), resolved_by = $3"
+            " WHERE kind = $1 AND subject = $2 AND event = 'raised' AND"
+            " resolved_at IS NULL AND id < $3"
+        ),
+        Params().text(kind).text(subject).int64(id),
+    )
     _ = flush(db)
     return True
+
+
+def _record(
+    mut db: State,
+    kind: String,
+    subject: String,
+    event: StaticString,
+    title: String,
+    body: String,
+    priority: String,
+    tags: String,
+    click: String,
+    pipelines: String = "",
+    run: Int = 0,
+) raises -> Int64:
+    """A row of `orca.alerts` for an alert raised or resolved, waiting to be
+    sent; the earlier ones of its kind and subject that hadn't gone are
+    dropped, since `orca.notifications` now holds this one instead. Returns
+    its id."""
+    _ = db.conn.execute(
+        (
+            "UPDATE orca.alerts SET delivery = 'dropped', error = 'replaced"
+            " before it was sent' WHERE kind = $1 AND subject = $2 AND"
+            " delivery = 'pending'"
+        ),
+        Params().text(kind).text(subject),
+    )
+    var p = Params().text(kind).text(subject).text(String(event))
+    p = p^.text(title).text(body).text(priority).text(tags).text(click)
+    var rows = db.conn.query(
+        (
+            "INSERT INTO orca.alerts (kind, subject, event, title, body,"
+            " priority, tags, url, pipelines, run) VALUES ($1, $2, $3, $4, $5,"
+            " $6, $7, $8, nullif($9, ''), nullif($10, 0)) RETURNING id"
+        ),
+        p^.text(pipelines).int64(Int64(run)),
+    )
+    return rows.row(0).int64("id")
 
 
 def is_firing(mut db: State, kind: String, subject: String) raises -> Bool:
@@ -312,7 +399,40 @@ def resolve(
         ),
         Params().text(kind).text(subject).text(title).text(body).text(click),
     )
-    if len(rows) == 1 and rows.row(0).bool("pending"):
+    if len(rows) != 1:
+        return
+    var pending = rows.row(0).bool("pending")
+    var by = Int64(0)
+    if pending:
+        by = _record(
+            db,
+            kind,
+            subject,
+            "resolved",
+            title,
+            body,
+            "low",
+            "white_check_mark",
+            click,
+        )
+    else:
+        _ = db.conn.execute(
+            (
+                "UPDATE orca.alerts SET delivery = 'dropped', error ="
+                " 'resolved before it was sent' WHERE kind = $1 AND subject ="
+                " $2 AND delivery = 'pending'"
+            ),
+            Params().text(kind).text(subject),
+        )
+    _ = db.conn.execute(
+        (
+            "UPDATE orca.alerts SET resolved_at = now(), resolved_by ="
+            " nullif($3, 0) WHERE kind = $1 AND subject = $2 AND event ="
+            " 'raised' AND resolved_at IS NULL"
+        ),
+        Params().text(kind).text(subject).int64(by),
+    )
+    if pending:
         _ = flush(db)
 
 
@@ -367,6 +487,15 @@ def flush(mut db: State) raises -> Int:
                 ),
                 Params().text(kind).text(subject),
             )
+            _ = db.conn.execute(
+                (
+                    "UPDATE orca.alerts SET delivery = 'sent', sent_at ="
+                    " now(), attempts = attempts + 1, error = NULL WHERE id ="
+                    " (SELECT max(id) FROM orca.alerts WHERE kind = $1 AND"
+                    " subject = $2 AND delivery = 'pending')"
+                ),
+                Params().text(kind).text(subject),
+            )
             sent += 1
             continue
         var attempts = Int(r.int64("attempts")) + 1
@@ -384,6 +513,14 @@ def flush(mut db: State) raises -> Int:
             .text(failure)
             .float64(Float64(wait)),
         )
+        _ = db.conn.execute(
+            (
+                "UPDATE orca.alerts SET attempts = attempts + 1, error = $3"
+                " WHERE id = (SELECT max(id) FROM orca.alerts WHERE kind = $1"
+                " AND subject = $2 AND delivery = 'pending')"
+            ),
+            Params().text(kind).text(subject).text(failure),
+        )
         print(
             "orca: notify:",
             kind,
@@ -398,6 +535,10 @@ def flush(mut db: State) raises -> Int:
             "DELETE FROM orca.notifications WHERE NOT pending AND coalesce("
             "sent_at, last_sent) < now() - interval '30 days'"
         ),
+        Params(),
+    )
+    _ = db.conn.execute(
+        "DELETE FROM orca.alerts WHERE created < now() - interval '90 days'",
         Params(),
     )
     return sent
@@ -538,4 +679,11 @@ def notify_html(mut h: Html, on: Bool, sent: List[Sent]):
         else:
             h.cell(String("resolved") if s.state == "resolved" else "sent")
         h.raw("</tr>")
-    h.raw("</tbody></table>")
+    h.raw(
+        '</tbody></table><p class="muted">Every one, with what it links to',
+        (
+            ' and whether it is still open: <a href="/ops/alerts">Ops ›'
+            " Alerts</a>."
+        ),
+        "</p>",
+    )

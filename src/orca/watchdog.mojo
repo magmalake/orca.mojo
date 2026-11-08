@@ -905,6 +905,7 @@ def trip(mut db: State, r: Reading) raises -> List[String]:
                     joined.replace(",", ", "),
                 ),
                 ui_link("/ops/control"),
+                pipelines=joined,
             )
         except e:
             print("orca: notify: can't record the watchdog alert:", e)
