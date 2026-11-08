@@ -12,6 +12,7 @@ that changes something, through `orca.actions`.
 | `/runs/<id>/resume` | queue a failed, cancelled or stalled run again; `allow_new_code=1` confirms new code |
 | `/runs/<id>/rerun` | a new run from `step` on, the steps before it copied |
 | `/runs/<id>/cancel` | cancel a run, before its next attempt if it's running |
+| `/runs/bulk` | `do=cancel`, `retry` or `backfill` the runs picked from a list: each `run=<id>`, or with `all=1` every run its filters (`view`, `pipeline`, `status`, ...) match, if there are still `expect` of them |
 | `/datasets/<name>/rebuild` | rebuild every pipeline downstream over `partitions` |
 
 Each answers `303 See Other` to the page of what it made (a script gets
@@ -21,7 +22,11 @@ audits each one done as its user's.
 """
 
 from orca.actions import (
+    Bulk,
     Outcome,
+    backfill_picked,
+    cancel_runs_picked,
+    resume_failed,
     backfill_runs,
     cancel_run,
     cancel_runs,
@@ -32,11 +37,13 @@ from orca.actions import (
     start_run,
 )
 from orca.api.pipelines import json_strings
-from orca.html import Html, url_encode
+from orca.auth import audit
+from orca.html import Html, query_values, url_encode
 from orca.json import quote
 from orca.state import State
 from orca.ui.datasets import dataset_href
 from orca.ui.layout import bad_request, page_html
+from orca.views.runs import count_runs, int_or_zero, run_ids, runs_query
 from orca.watchdog import acknowledge, snooze as snooze_rule
 from orca.web.page import Page
 from orca.web.router import Call
@@ -309,3 +316,182 @@ def cancel(mut db: State, call: Call) raises -> Page:
     running."""
     var id = call.int("id")
     return _run_acted(cancel_run(db, id), id)
+
+
+# ── runs picked from a list ──────────────────────────────────────────────────
+
+
+comptime BULK_MAX = 2000
+"""The most runs one action from a list does: more is refused, to be
+narrowed with the filters."""
+
+
+def _ids_json(mut j: String, ids: List[Int]):
+    j.write("[")
+    for i in range(len(ids)):
+        j.write(", " if i else "", ids[i])
+    j.write("]")
+
+
+def bulk(mut db: State, call: Call) raises -> Page:
+    """`POST /runs/bulk`: `do` (`cancel`, `retry` or `backfill`) to the runs
+    picked from a list (`orca.ui.runs`), each a `run` field, or with
+    `all=1` all those the list's filters match (the form's `view`,
+    `pipeline`, `status`, `trigger`, `from`, `to`, `since`, `key`, `run`),
+    if there are still the `expect` the page said; otherwise it asks again
+    with the number there are now. At most `BULK_MAX`. Answers 303 to the
+    list, which says what was done; each run acted on is audited as its own
+    action's (`/runs/<id>/cancel`, `/runs/<id>/resume`), and each backfill
+    as its pipeline's."""
+    var form = String("?", call.form)
+    var q = runs_query(form, call.field("view"), call.field("pipeline"))
+    q.before = 0
+    q.after = 0
+    if q.view == "home":
+        q.view = "list"
+    var back = q.href()
+    var what = call.field("do")
+    if what != "cancel" and what != "retry" and what != "backfill":
+        return bad_request("do is cancel, retry or backfill")
+    var ids = List[Int]()
+    if call.field("all") == "1":
+        var n = count_runs(db, q)
+        if n > BULK_MAX:
+            return _acted(
+                Outcome.no(
+                    String(
+                        n,
+                        " runs match these filters, more than the ",
+                        BULK_MAX,
+                        " one action does; narrow them",
+                    )
+                ),
+                back,
+                String(),
+                back,
+            )
+        if n != int_or_zero(call.field("expect")):
+            var again = List[Tuple[String, String]]()
+            for f in q.fields():
+                again.append(f.copy())
+            again.append((String("do"), what))
+            again.append((String("all"), String("1")))
+            again.append((String("expect"), String(n)))
+            if call.field("allow_append") == "1":
+                again.append((String("allow_append"), String("1")))
+            return _acted(
+                Outcome.no(
+                    String(
+                        n,
+                        " runs match these filters now, not the ",
+                        int_or_zero(call.field("expect")),
+                        " the page said",
+                    ),
+                    confirm=True,
+                ),
+                back,
+                String(),
+                back,
+                String("/runs/bulk"),
+                again,
+                String(_verb(what), " all ", n),
+            )
+        ids = run_ids(db, q, BULK_MAX)
+    else:
+        for v in query_values(form, "run"):
+            var id = int_or_zero(v)
+            if id > 0 and id not in ids:
+                ids.append(id)
+        if len(ids) > BULK_MAX:
+            return bad_request(String("at most ", BULK_MAX, " runs at once"))
+    if len(ids) == 0:
+        return _acted(
+            Outcome.no("no runs were picked: tick some, or all that match"),
+            back,
+            String(),
+            back,
+        )
+    var b: Bulk
+    if what == "cancel":
+        b = cancel_runs_picked(db, ids)
+    elif what == "retry":
+        b = resume_failed(db, ids)
+    else:
+        b = backfill_picked(db, ids, call.field("allow_append") == "1")
+        if b.confirm:
+            var again = List[Tuple[String, String]]()
+            for f in q.fields():
+                again.append(f.copy())
+            again.append((String("do"), what))
+            for id in ids:
+                again.append((String("run"), String(id)))
+            again.append((String("allow_append"), String("1")))
+            return _acted(
+                Outcome.no(b.confirm, confirm=True),
+                back,
+                String(),
+                back,
+                String("/runs/bulk"),
+                again,
+                "Backfill them, appending again",
+            )
+    if call.user:
+        var action = String("/resume") if what == "retry" else String("/cancel")
+        if what != "backfill":
+            for id in b.done:
+                audit(
+                    db,
+                    call.user,
+                    String("/runs/", id, action),
+                    id,
+                    "bulk",
+                    call.source,
+                )
+        for p in b.pipelines:
+            audit(
+                db,
+                call.user,
+                String("/pipelines/", url_encode(p[0]), "/backfill"),
+                0,
+                String("partitions=", url_encode(p[1]), "&rerun=1&bulk=1"),
+                call.source,
+            )
+    var j = String('{"do": ', quote(what), ', "done": ')
+    _ids_json(j, b.done)
+    j.write(', "skipped": ')
+    _ids_json(j, b.skipped)
+    j.write(', "refused": [')
+    for i in range(len(b.refused)):
+        j.write(
+            ", " if i else "",
+            '{"run": ',
+            String(b.refused[i][0]) if b.refused[i][0] else String("null"),
+            ', "why": ',
+            quote(b.refused[i][1]),
+            "}",
+        )
+    j.write('], "queued": ', b.queued, "}")
+    var to = String(
+        back,
+        "&" if "?" in back else "?",
+        "did=",
+        what,
+        "&done=",
+        len(b.done),
+        "&skipped=",
+        len(b.skipped),
+        "&refused=",
+        len(b.refused),
+    )
+    if what == "backfill":
+        to.write("&queued=", b.queued)
+    return Page(303, j^, String(), location=to^)
+
+
+def _verb(what: String) -> String:
+    """A bulk action's button, before "all <n>"."""
+    if what == "cancel":
+        return String("Cancel")
+    if what == "retry":
+        return String("Retry the failed of")
+    return String("Backfill again")

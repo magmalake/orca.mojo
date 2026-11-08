@@ -192,6 +192,23 @@ def check_runs_pages[S: RunStore](mut s: S) raises:
     assert_equal(p3[0].id, made[0])
     for r in s.runs(100, made[0]):
         assert_true(r.id not in made)
+    # By status: one of several, newest first, paged the same way.
+    var ended = new_run(s, "a:1")
+    s.finish_run("failed")
+    var won = new_run(s, "a:1")
+    s.finish_run("succeeded")
+    var failed = s.runs(1, status="failed")
+    assert_equal(len(failed), 1)
+    assert_equal(failed[0].id, ended)
+    var either = s.runs(2, status="succeeded, failed")
+    assert_equal(len(either), 2)
+    assert_equal(either[0].id, won)
+    assert_equal(either[1].id, ended)
+    for r in s.runs(100, ended, "failed,succeeded"):
+        assert_true(r.status == "failed" or r.status == "succeeded")
+        assert_true(r.id != ended and r.id != won)
+    for r in s.runs(100, status="queued"):
+        assert_equal(r.status, "queued")
 
 
 def check_versions[S: RunStore](mut s: S) raises:

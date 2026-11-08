@@ -344,19 +344,32 @@ def rerun_from(
     return Outcome.done(Int(id))
 
 
+def _cancel_set(kill_seconds: StaticString) -> String:
+    """`UPDATE orca.runs SET ...` for cancelling the runs its `WHERE` names:
+    one not running is `cancelled` at once, a running one gets
+    `cancel_requested` and, at `kill_seconds` (a parameter) from now, its
+    `cancel_at`."""
+    return String(
+        "UPDATE orca.runs SET cancel_requested = true, status = CASE WHEN",
+        " status = 'running' THEN status ELSE 'cancelled' END, ended = CASE",
+        " WHEN status = 'running' THEN ended ELSE now() END, cancel_at = CASE",
+        " WHEN status = 'running' THEN coalesce(cancel_at, now() +",
+        " make_interval(secs => ",
+        kill_seconds,
+        ")) END",
+    )
+
+
 def cancel_run(mut db: State, run: Int) raises -> Outcome:
     """Cancels a run: a queued, deferred or failed one at once (it isn't
     started again), a running one before its next attempt, or, if its step
     is still going `ORCA_CANCEL_KILL_SECONDS` later, by stopping its process
     (`orca.heartbeat`)."""
     var rows = db.conn.query(
-        (
-            "UPDATE orca.runs SET cancel_requested = true, status = CASE WHEN"
-            " status = 'running' THEN status ELSE 'cancelled' END, ended ="
-            " CASE WHEN status = 'running' THEN ended ELSE now() END,"
-            " cancel_at = CASE WHEN status = 'running' THEN coalesce(cancel_at,"
-            " now() + make_interval(secs => $2)) END WHERE id = $1 AND status"
-            " IN ('queued', 'running', 'failed', 'deferred') RETURNING id"
+        String(
+            _cancel_set("$2"),
+            " WHERE id = $1 AND status IN ('queued', 'running', 'failed',",
+            " 'deferred') RETURNING id",
         ),
         Params().int64(Int64(run)).float64(cancel_kill_seconds()),
     )
@@ -411,14 +424,8 @@ def cancel_runs(
             return Outcome.no(String(e))
     var done = db.conn.query(
         String(
-            "UPDATE orca.runs SET cancel_requested = true, status = CASE WHEN",
-            " status = 'running' THEN status ELSE 'cancelled' END, ended =",
-            " CASE WHEN status = 'running' THEN ended ELSE now() END,",
-            (
-                " cancel_at = CASE WHEN status = 'running' THEN"
-                " coalesce(cancel_at,"
-            ),
-            " now() + make_interval(secs => $5)) END WHERE",
+            _cancel_set("$5"),
+            " WHERE",
             " pipeline = $1 AND ($2 OR string_to_array(partitions, ',') &&",
             " string_to_array($3, ',')) AND (status IN ('queued', 'deferred')",
             " OR (status = 'running' AND NOT cancel_requested) OR (status =",
@@ -468,3 +475,177 @@ def _unregistered(pipeline: String) -> String:
         " isn't registered with a binary (orca register), so the scheduler",
         " can't start its runs",
     )
+
+
+# ── in bulk, from a runs list ───────────────────────────────────────────────
+
+
+@fieldwise_init
+struct Bulk(Movable):
+    """What an action on runs picked from a list did (`orca.api.actions.bulk`)."""
+
+    var done: List[Int]
+    """The runs it acted on: cancelled (or asked to stop), queued again, or
+    whose partitions were backfilled."""
+    var skipped: List[Int]
+    """The runs it left as they were: ended already, or not failed."""
+    var refused: List[Tuple[Int, String]]
+    """Runs (or, as 0, a pipeline's) it couldn't act on, and why."""
+    var queued: Int
+    """The runs a backfill queued."""
+    var confirm: String
+    """Why a backfill waits to be confirmed (its steps append), or empty;
+    nothing was done then."""
+    var pipelines: List[Tuple[String, String]]
+    """Each pipeline a backfill queued runs of, and its partitions."""
+
+    @staticmethod
+    def none() -> Self:
+        return Self(
+            List[Int](),
+            List[Int](),
+            List[Tuple[Int, String]](),
+            0,
+            String(),
+            List[Tuple[String, String]](),
+        )
+
+
+def _id_list(runs: List[Int]) -> String:
+    """`runs` as `1,2,3`, for `string_to_array($n, ',')::bigint[]`."""
+    var out = String()
+    for r in runs:
+        out.write("," if out else "", r)
+    return out^
+
+
+def cancel_runs_picked(mut db: State, runs: List[Int]) raises -> Bulk:
+    """Cancels, as `cancel_run` does each, those of `runs` that are queued,
+    deferred or running (and not already stopping); the others are left as
+    they are, and skipped."""
+    var b = Bulk.none()
+    if len(runs) == 0:
+        return b^
+    for r in db.conn.query(
+        String(
+            _cancel_set("$2"),
+            " WHERE id = ANY(string_to_array($1, ',')::bigint[]) AND (status",
+            " IN ('queued', 'deferred') OR (status = 'running' AND NOT",
+            " cancel_requested)) RETURNING id::bigint AS id",
+        ),
+        Params().text(_id_list(runs)).float64(cancel_kill_seconds()),
+    ):
+        b.done.append(Int(r.int64("id")))
+    for id in runs:
+        if id not in b.done and id not in b.skipped:
+            b.skipped.append(id)
+    return b^
+
+
+def resume_failed(mut db: State, runs: List[Int]) raises -> Bulk:
+    """Queues again, as `resume_run` does each (Retry on a runs list), those
+    of `runs` that failed or stalled. One whose pipeline's code has changed
+    since is refused, to be resumed from its page; the others are skipped."""
+    var b = Bulk.none()
+    if len(runs) == 0:
+        return b^
+    var failed = List[Int]()
+    for r in db.conn.query(
+        String(
+            "SELECT id::bigint AS id FROM orca.runs WHERE id =",
+            " ANY(string_to_array($1, ',')::bigint[]) AND (status = 'failed'",
+            " OR ",
+            stalled_sql(),
+            ")",
+        ),
+        Params().text(_id_list(runs)),
+    ):
+        failed.append(Int(r.int64("id")))
+    for id in runs:
+        if id not in failed:
+            if id not in b.skipped:
+                b.skipped.append(id)
+            continue
+        var o = resume_run(db, id, False)
+        if o.refused:
+            b.refused.append((id, o.refused))
+        else:
+            b.done.append(id)
+    return b^
+
+
+def backfill_picked(
+    mut db: State, runs: List[Int], allow_append: Bool
+) raises -> Bulk:
+    """What `orca backfill --rerun` does, over the partitions of `runs`, a
+    backfill per pipeline: a queued run for each of them that isn't in a
+    live run. If a pipeline's steps append to what they write, nothing is
+    done until `allow_append` confirms it (`confirm` says why)."""
+    var b = Bulk.none()
+    if len(runs) == 0:
+        return b^
+    # Each pipeline's partitions, in the order of its runs, each once.
+    var names = List[String]()
+    var keys = List[List[String]]()
+    var of = List[List[Int]]()
+    for r in db.conn.query(
+        (
+            "SELECT id::bigint AS id, pipeline, partitions FROM orca.runs"
+            " WHERE id = ANY(string_to_array($1, ',')::bigint[]) ORDER BY id"
+        ),
+        Params().text(_id_list(runs)),
+    ):
+        var name = r.text("pipeline")
+        var i = -1
+        for j in range(len(names)):
+            if names[j] == name:
+                i = j
+        if i < 0:
+            names.append(name)
+            keys.append(List[String]())
+            of.append(List[Int]())
+            i = len(names) - 1
+        of[i].append(Int(r.int64("id")))
+        for k in r.text("partitions").split(","):
+            var key = String(k.strip())
+            if key and key not in keys[i]:
+                keys[i].append(key^)
+    for id in runs:
+        var seen = False
+        for ids in of:
+            if id in ids:
+                seen = True
+        if not seen and id not in b.skipped:
+            b.skipped.append(id)
+    # Every pipeline checked before any is backfilled, so a confirmation
+    # asked for does all of them or none.
+    var joined = List[String]()
+    for i in range(len(names)):
+        joined.append(String(",").join(keys[i]))
+        var p = _pipeline(db, names[i])
+        if not p:
+            continue
+        if not allow_append:
+            try:
+                var why = rerun_refusal(db, p.value(), joined[i])
+                if why:
+                    b.confirm = why^
+                    return b^
+            except e:
+                pass
+    for i in range(len(names)):
+        if len(keys[i]) == 0:
+            for id in of[i]:
+                b.skipped.append(id)
+            continue
+        var o = backfill_runs(
+            db, names[i], joined[i], rerun=True, allow_append=True
+        )
+        if o.refused:
+            b.refused.append((0, String(names[i], ": ", o.refused)))
+            continue
+        b.queued += o.queued
+        b.pipelines.append((names[i], joined[i]))
+        for id in of[i]:
+            b.done.append(id)
+    return b^

@@ -304,6 +304,40 @@ th .help { margin-left: 0.25rem; vertical-align: 0; }
 /* Forms: filters, actions, and logging in. */
 .filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: end; margin-bottom: 1rem; }
 .filters label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
+.filters input[type=search] { min-width: 0; }
+.filters__quick { display: flex; flex-wrap: wrap; gap: 0.2rem 0.7rem; align-self: center; font-size: 0.8125rem; }
+.filters__quick a[aria-current] { font-weight: 600; text-decoration: none; color: var(--text); }
+.filters__clear { align-self: center; font-size: 0.8125rem; }
+details.pick { position: relative; }
+details.pick > summary { list-style: none; cursor: pointer; display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
+details.pick > summary::-webkit-details-marker { display: none; }
+.pick__value { display: block; padding: 0.35rem 1.6rem 0.35rem 0.6rem; border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 1rem;
+  max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; position: relative; }
+.pick__value::after { content: "▾"; position: absolute; right: 0.5rem; color: var(--muted); }
+.pick__menu { position: absolute; z-index: 30; top: 100%; left: 0; margin-top: 0.25rem; min-width: 12rem;
+  display: grid; gap: 0.15rem; padding: 0.4rem; border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); background: var(--surface); box-shadow: 0 6px 18px rgb(0 0 0 / 0.15); }
+.pick__item { display: flex; gap: 0.45rem; align-items: center; padding: 0.15rem 0.3rem; font-size: 0.875rem; color: var(--text); }
+.pick__item input { margin: 0; }
+.pick__n { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+th.pick, td.pick { width: 1.5rem; padding-right: 0; }
+td.pick input, th.pick input { margin: 0; vertical-align: middle; }
+form.bulk { display: flex; flex-wrap: wrap; gap: 0.5rem 0.8rem; align-items: center; margin: 0 0 0.6rem; font-size: 0.875rem; }
+.bulk__what, .bulk__all { color: var(--muted); }
+.bulk__all { display: flex; gap: 0.35rem; align-items: center; }
+form.bulk button { font-size: 0.8125rem; padding: 0.2rem 0.6rem; }
+p.bulk__login { margin: 0 0 0.6rem; font-size: 0.8125rem; color: var(--muted); }
+body.anon p.bulk__login { display: block; }
+.notice { padding: 0.5rem 0.75rem; border: 1px solid var(--border-strong); border-left: 3px solid var(--lake);
+  border-radius: var(--radius-sm); background: var(--surface); font-size: 0.875rem; }
+@media (max-width: 40rem) {
+  .filters { gap: 0.5rem 0.6rem; }
+  .filters label, details.pick { flex: 1 1 8.5rem; }
+  .filters label input, .filters label select { width: 100%; }
+  .pick__value { max-width: none; }
+  .filters__quick { flex-basis: 100%; }
+}
 .pager { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: baseline; margin-top: 0.8rem; font-size: 0.875rem; }
 .pager__at { color: var(--muted); font-variant-numeric: tabular-nums; }
 input, button, select { font: inherit; padding: 0.35rem 0.6rem; border: 1px solid var(--border-strong);

@@ -80,7 +80,7 @@ from orca.ui.run import (
     run_steps,
     timeline,
 )
-from orca.ui.runs import runs, runs_fragment_query, runs_table
+from orca.ui.runs import jumped, runs, runs_fragment_query, runs_table
 from orca.views.pipelines import PipelineAsk, pipeline_view
 from orca.views.runs import run_view, runs_query
 from orca.web.auth import (
@@ -172,6 +172,7 @@ def routes() -> List[Route]:
         action("/watchdog/{trip:int}/ack", actions.acknowledge_trip, "trip"),
         action("/watchdog/{rule}/snooze", actions.snooze),
         action("/datasets/{name}/rebuild", actions.rebuild),
+        action("/runs/bulk", actions.bulk),
         action("/runs/{id:int}/resume", actions.resume, "run"),
         action("/runs/{id:int}/rerun", actions.rerun, "run"),
         action("/runs/{id:int}/cancel", actions.cancel, "run"),
@@ -192,7 +193,7 @@ def _home_pipelines(mut db: State, call: Call) raises -> Page:
 
 
 def _runs(mut db: State, call: Call) raises -> Page:
-    return runs(db, runs_query(call.url, "list"))
+    return runs(db, runs_query(call.url, "list"), call.url)
 
 
 def _runs_table(mut db: State, call: Call) raises -> Page:
@@ -271,6 +272,13 @@ def _pipeline(mut db: State, call: Call) raises -> Page:
     var v = pipeline_view(db, ask)
     if not v:
         return not_found(String("no pipeline ", ask.name))
+    if ask.shown_tab() == "runs" and jumped(v.value().runs):
+        return Page(
+            303,
+            pipeline_json(v.value(), ask),
+            String(),
+            location=String("/runs/", v.value().runs.q.run),
+        )
     return Page(
         200,
         pipeline_json(v.value(), ask),

@@ -8,7 +8,7 @@ keyset by run id, so pages stay put as runs arrive).
 from postgres import Params, Row
 
 from orca.actions import stalled_sql
-from orca.html import query_param, url_encode
+from orca.html import query_param, query_values, url_decode, url_encode
 from orca.json import quote
 from orca.lineage import SnapshotRef
 from orca.logs import location_exists, run_dir
@@ -223,16 +223,19 @@ started."""
 
 def run_rows(
     mut db: State,
-    pipeline: String = "",
-    status: String = "",
-    trigger: String = "",
+    q: RunsQuery,
     limit: Int = 100,
     before: Int = 0,
     after: Int = 0,
 ) raises -> List[RunRow]:
-    """Runs newest first, those of a pipeline, status or trigger if given,
-    and with ids under `before` if it's over 0; with `after` over 0, the
-    `limit` runs just above it, oldest first."""
+    """The runs `q`'s filters let through (`runs_where`), newest first, with
+    ids under `before` if it's over 0; with `after` over 0, the `limit` runs
+    just above it, oldest first."""
+    var w = runs_where(q)
+    if before > 0:
+        w.int("orca.runs.id < ?", before)
+    if after > 0:
+        w.int("orca.runs.id > ?", after)
     var rows = db.conn.query(
         String(
             "SELECT id::text AS id, pipeline, partitions, trigger, status,",
@@ -254,20 +257,13 @@ def run_rows(
             _USAGE_COLUMNS,
             " FROM orca.runs",
             _RUN_USAGE,
-            " WHERE ($1 = '' OR pipeline = $1) AND",
-            " ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3) AND",
-            " ($5 = 0 OR id < $5) AND ($6 = 0 OR id > $6) ORDER BY",
-            " orca.runs.id ",
+            w.sql,
+            " ORDER BY orca.runs.id ",
             "ASC" if after > 0 else "DESC",
-            " LIMIT $4",
+            " LIMIT ",
+            w.next(),
         ),
-        Params()
-        .text(pipeline)
-        .text(status)
-        .text(trigger)
-        .int64(Int64(limit))
-        .int64(Int64(before))
-        .int64(Int64(after)),
+        w.params.copy().int64(Int64(limit)),
     )
     var out = List[RunRow]()
     for r in rows:
@@ -519,10 +515,31 @@ struct RunsQuery(Copyable, Movable):
     """`list` (`/runs`), `pipeline` (a pipeline's Runs tab) or `home`."""
     var pipeline: String
     var status: String
+    """A status, or several comma-separated (`?status=` given more than once
+    is joined so): runs with any of them."""
     var trigger: String
     var size: Int
     var before: Int
     var after: Int
+    var since: String
+    """`?since=`: created in the last `<n>h` or `<n>d` (`1h`, `24h`, `7d`),
+    or `today` (since midnight UTC)."""
+    var start: String
+    """`?from=`: created at or after it, `YYYY-MM-DD` or
+    `YYYY-MM-DDTHH:MM[:SS]`, UTC."""
+    var end: String
+    """`?to=`: created by the end of that day (or at or before that time)."""
+    var run: Int
+    """`?run=`: only that run."""
+    var key: String
+    """`?key=`: runs with a partition that matches it: a glob (`2023-08-*`,
+    `?` for one character) matched against each of its partitions, or else
+    any part of them (`modular/` for a keyed pipeline's repositories)."""
+
+    @staticmethod
+    def newest(view: String, size: Int) -> Self:
+        """The newest page of `view`'s runs, unfiltered."""
+        return Self(view, "", "", "", size, 0, 0, "", "", "", 0, "")
 
     def first(self) -> Bool:
         """Whether this is the newest page, which new runs join."""
@@ -535,15 +552,62 @@ struct RunsQuery(Copyable, Movable):
             return HOME_RUNS
         return RUNS_PAGE
 
+    def statuses(self) -> List[String]:
+        """The statuses asked for, each once."""
+        var out = List[String]()
+        for s in self.status.split(","):
+            var t = String(s.strip())
+            if t and t not in out:
+                out.append(t^)
+        return out^
+
+    def filtered(self) -> Bool:
+        """Whether a filter is set (a pipeline's tab's own pipeline isn't
+        one)."""
+        return (
+            (self.view != "pipeline" and self.pipeline != "")
+            or self.status != ""
+            or self.trigger != ""
+            or self.since != ""
+            or self.start != ""
+            or self.end != ""
+            or self.run > 0
+            or self.key != ""
+        )
+
+    def unfiltered(self) -> Self:
+        """The same list with no filters, at its newest page."""
+        var q = Self.newest(self.view, self.size)
+        if self.view == "pipeline":
+            q.pipeline = self.pipeline
+        return q^
+
+    def at_newest(self) -> Self:
+        """The same filters, at the newest page."""
+        var q = self.copy()
+        q.before = 0
+        q.after = 0
+        return q^
+
     def _filters(self, mut q: String):
-        if self.view != "pipeline":
-            for f in [
-                ("pipeline", self.pipeline),
-                ("status", self.status),
-                ("trigger", self.trigger),
-            ]:
-                if f[1]:
-                    q.write("&" if q else "?", f[0], "=", url_encode(f[1]))
+        for f in [
+            (
+                String("pipeline"),
+                self.pipeline if self.view != "pipeline" else String(),
+            ),
+            (String("status"), self.status),
+            (String("trigger"), self.trigger),
+            (String("from"), self.start),
+            (String("to"), self.end),
+            (String("since"), self.since),
+            (String("key"), self.key),
+            (
+                String("run"),
+                String(self.run) if self.run > 0 else String(),
+            ),
+        ]:
+            if f[1]:
+                q.write("&" if q else "?", f[0], "=", url_encode(f[1]))
 
     def href(self, before: Int = 0, after: Int = 0) -> String:
         """This list's page under `before`, above `after`, or (neither) the
@@ -569,12 +633,11 @@ struct RunsQuery(Copyable, Movable):
 
     def fragment(self) -> String:
         """`/runs/table`: this page of the list, as the fragment it
-        refreshes from."""
+        refreshes from, with its filters."""
         var q = String("?view=", self.view)
         if self.view == "pipeline":
             q.write("&pipeline=", url_encode(self.pipeline))
-        else:
-            self._filters(q)
+        self._filters(q)
         q.write("&limit=", self.size)
         if self.before > 0:
             q.write("&before=", self.before)
@@ -582,21 +645,147 @@ struct RunsQuery(Copyable, Movable):
             q.write("&after=", self.after)
         return String("/runs/table", q)
 
+    def fields(self) -> List[Tuple[String, String]]:
+        """The list as form fields (`view`, `pipeline`, the filters and
+        `limit`), for a form that acts on the runs it shows."""
+        var out: List[Tuple[String, String]] = [
+            (String("view"), self.view),
+            (String("pipeline"), self.pipeline),
+        ]
+        var q = String()
+        self._filters(q)
+        for pair in q.split("&"):
+            var p = String(pair.removeprefix("?"))
+            var eq = p.find("=")
+            if eq > 0 and String(p[byte=:eq]) != "pipeline":
+                out.append(
+                    (String(p[byte=:eq]), url_decode(p[byte = eq + 1 :]))
+                )
+        if self.size != self.default_size():
+            out.append((String("limit"), String(self.size)))
+        return out^
+
+
+def _digits(s: StringSlice, start: Int, n: Int) -> Bool:
+    var b = s.as_bytes()
+    if start + n > len(b):
+        return False
+    for i in range(start, start + n):
+        if b[i] < 48 or b[i] > 57:
+            return False
+    return True
+
+
+def _number(s: StringSlice, start: Int, n: Int) -> Int:
+    """The `n` digits at `start` as a number (`_digits` says they are)."""
+    var b = s.as_bytes()
+    var v = 0
+    for i in range(start, min(start + n, len(b))):
+        v = v * 10 + Int(b[i]) - 48
+    return v
+
+
+def moment(s: String) -> String:
+    """`s` as a UTC time the filters take, `YYYY-MM-DD` or
+    `YYYY-MM-DDTHH:MM[:SS]` (a space for the `T`, a `Z` at the end and
+    `HH:MM:SS` all allowed), or empty if it's neither."""
+    var t = String(s.strip().removesuffix("Z").removesuffix("z"))
+    var b = t.as_bytes()
+    var n = len(b)
+    if not (
+        n >= 10
+        and _digits(t, 0, 4)
+        and b[4] == 45
+        and _digits(t, 5, 2)
+        and b[7] == 45
+        and _digits(t, 8, 2)
+    ):
+        return String()
+    var month = _number(t, 5, 2)
+    var day = _number(t, 8, 2)
+    if month < 1 or month > 12 or day < 1 or day > 31:
+        return String()
+    if n == 10:
+        return t^
+    if not (
+        (n == 16 or n == 19)
+        and (b[10] == 84 or b[10] == 32)
+        and _digits(t, 11, 2)
+        and b[13] == 58
+        and _digits(t, 14, 2)
+    ):
+        return String()
+    if n == 19 and not (b[16] == 58 and _digits(t, 17, 2)):
+        return String()
+    var hour = _number(t, 11, 2)
+    var minute = _number(t, 14, 2)
+    if hour > 23 or minute > 59:
+        return String()
+    return String(t[byte=:10], "T", t[byte=11:])
+
+
+def since_interval(since: String) -> String:
+    """`?since=`'s `<n>h` or `<n>d` as a Postgres interval (`24 hours`), or
+    empty if it isn't one (`today` is its own)."""
+    var b = since.as_bytes()
+    var n = len(b)
+    if n < 2 or n > 5 or not _digits(since, 0, n - 1):
+        return String()
+    var count = _number(since, 0, n - 1)
+    if count <= 0:
+        return String()
+    if b[n - 1] == 104 and count <= 24 * 366:
+        return String(count, " hours")
+    if b[n - 1] == 100 and count <= 3660:
+        return String(count, " days")
+    return String()
+
+
+def key_like(key: String) -> String:
+    """A glob of partitions (`*` any characters, `?` one) as a `LIKE`
+    pattern, with `%`, `_` and `\\` taken as themselves; empty if it has no
+    `*` or `?`."""
+    if "*" not in key and "?" not in key:
+        return String()
+    var out = String()
+    for c in key.codepoint_slices():
+        if c == "*":
+            out.write("%")
+        elif c == "?":
+            out.write("_")
+        elif c == "%" or c == "_" or c == "\\":
+            out.write("\\", c)
+        else:
+            out.write(c)
+    return out^
+
 
 def runs_query(url: String, view: String, pipeline: String = "") -> RunsQuery:
     """The list `url` asks for: `view`'s, filtered by `?pipeline=` (or, for a
-    pipeline's tab, `pipeline`), `?status=` and `?trigger=`, `?limit=` (or
-    `?n=`) to a page, at `?before=` or `?after=`."""
+    pipeline's tab, `pipeline`), `?status=` (one or more), `?trigger=`,
+    `?since=`, `?from=`, `?to=`, `?run=` and `?key=`, `?limit=` (or `?n=`)
+    to a page, at `?before=` or `?after=`. A time or `since` that isn't one
+    is left out."""
     var v = view if (view == "pipeline" or view == "home") else String("list")
-    var q = RunsQuery(
-        v,
-        pipeline if v == "pipeline" else query_param(url, "pipeline"),
-        query_param(url, "status") if v == "list" else String(),
-        query_param(url, "trigger") if v == "list" else String(),
-        0,
-        0,
-        0,
-    )
+    var q = RunsQuery.newest(v, 0)
+    q.pipeline = pipeline if v == "pipeline" else query_param(url, "pipeline")
+    if v != "home":
+        var statuses = String()
+        for s in query_values(url, "status"):
+            if s.strip():
+                statuses.write("," if statuses else "", s.strip())
+        q.status = statuses^
+        q.status = String(",").join(q.statuses())
+        q.trigger = query_param(url, "trigger")
+        var since = String(query_param(url, "since").strip())
+        if since == "today" or since_interval(since):
+            q.since = since^
+        q.start = moment(query_param(url, "from"))
+        q.end = moment(query_param(url, "to"))
+        q.run = max(
+            0, int_or_zero(String(query_param(url, "run").strip().lstrip("#")))
+        )
+        q.key = String(query_param(url, "key").strip())
     var n = int_or_zero(query_param(url, "limit"))
     if n <= 0:
         n = int_or_zero(query_param(url, "n"))
@@ -609,9 +798,85 @@ def runs_query(url: String, view: String, pipeline: String = "") -> RunsQuery:
     return q^
 
 
+struct RunsWhere(Movable):
+    """A runs list's filters as SQL over `orca.runs`: `sql` (` WHERE ...`)
+    and its `params`, numbered in order, so a filter that isn't set adds
+    nothing to the plan."""
+
+    var sql: String
+    var params: Params
+
+    def __init__(out self):
+        self.sql = String(" WHERE true")
+        self.params = Params()
+
+    def text(mut self, clause: StaticString, v: String):
+        """`AND clause`, its `?` the next parameter, `v`."""
+        self.sql.write(
+            " AND ", String(clause).replace("?", String("$", len(self.params) + 1))
+        )
+        self.params = self.params.copy().text(v)
+
+    def int(mut self, clause: StaticString, v: Int):
+        self.sql.write(
+            " AND ", String(clause).replace("?", String("$", len(self.params) + 1))
+        )
+        self.params = self.params.copy().int64(Int64(v))
+
+    def next(self) -> String:
+        """The next parameter's placeholder."""
+        return String("$", len(self.params) + 1)
+
+
+def runs_where(q: RunsQuery, with_status: Bool = True) -> RunsWhere:
+    """The runs `q`'s filters let through, with its statuses unless not
+    `with_status` (for the counts of each)."""
+    var w = RunsWhere()
+    if q.pipeline:
+        w.text("pipeline = ?", q.pipeline)
+    if with_status and q.status:
+        var ss = q.statuses()
+        if len(ss) == 1:
+            w.text("status = ?", ss[0])
+        else:
+            w.text("status = ANY(string_to_array(?, ','))", q.status)
+    if q.trigger:
+        w.text("trigger = ?", q.trigger)
+    if q.run > 0:
+        w.int("id = ?", q.run)
+    if q.since == "today":
+        w.sql.write(
+            " AND created >= date_trunc('day', now() AT TIME ZONE 'UTC') AT"
+            " TIME ZONE 'UTC'"
+        )
+    elif q.since:
+        w.text("created >= now() - ?::interval", since_interval(q.since))
+    if q.start:
+        w.text("created >= (?::timestamp AT TIME ZONE 'UTC')", q.start)
+    if q.end:
+        if q.end.byte_length() == 10:
+            w.text(
+                "created < ((?::date + 1)::timestamp AT TIME ZONE 'UTC')", q.end
+            )
+        else:
+            w.text("created <= (?::timestamp AT TIME ZONE 'UTC')", q.end)
+    if q.key:
+        var like = key_like(q.key)
+        if like:
+            w.text(
+                "EXISTS (SELECT 1 FROM unnest(string_to_array(partitions,"
+                " ',')) k WHERE k LIKE ?)",
+                like,
+            )
+        else:
+            w.text("strpos(lower(partitions), lower(?)) > 0", q.key)
+    return w^
+
+
 struct RunsPage(Movable):
     """A page of a runs list, newest first, with how many runs that match
-    are newer and older than it."""
+    are newer and older than it, and how many of each status match its
+    other filters."""
 
     var q: RunsQuery
     """As asked, but with no `after` when the page above it is the newest."""
@@ -619,6 +884,9 @@ struct RunsPage(Movable):
     var total: Int
     var newer: Int
     var older: Int
+    var counts: List[Tuple[String, Int]]
+    """Each status's runs under the list's other filters, most first; empty
+    for the home page's."""
 
     def __init__(
         out self,
@@ -627,12 +895,20 @@ struct RunsPage(Movable):
         total: Int,
         newer: Int,
         older: Int,
+        var counts: List[Tuple[String, Int]],
     ):
         self.q = q^
         self.rows = rows^
         self.total = total
         self.newer = newer
         self.older = older
+        self.counts = counts^
+
+    def count_of(self, status: String) -> Int:
+        for c in self.counts:
+            if c[0] == status:
+                return c[1]
+        return 0
 
     def live(self) -> Bool:
         """Whether a run on it is queued or running."""
@@ -660,44 +936,83 @@ struct RunsPage(Movable):
 def runs_page(mut db: State, var q: RunsQuery) raises -> RunsPage:
     """The page of runs `q` asks for, and the counts around it. Paged by id
     (keyset), so a page stays put while new runs arrive and each query reads
-    one range of an index (`orca.runs` by id, or `runs_pipeline_id`)."""
+    one range of an index (`orca.runs` by id, `runs_pipeline_id`, or with
+    a status `runs_status_id` and `runs_pipeline_status_id`)."""
     var rs: List[RunRow]
     if q.after > 0:
         # The `size` runs just above `after`, read upwards; if there aren't
         # more than that, the page is the newest one.
-        rs = run_rows(
-            db, q.pipeline, q.status, q.trigger, limit=q.size + 1, after=q.after
-        )
+        rs = run_rows(db, q, limit=q.size + 1, after=q.after)
         if len(rs) > q.size:
             _ = rs.pop()
             rs.reverse()
         else:
             q.after = 0
-            rs = run_rows(db, q.pipeline, q.status, q.trigger, limit=q.size)
+            rs = run_rows(db, q, limit=q.size)
     else:
-        rs = run_rows(
-            db, q.pipeline, q.status, q.trigger, limit=q.size, before=q.before
-        )
+        rs = run_rows(db, q, limit=q.size, before=q.before)
     if q.view == "home":
-        return RunsPage(q^, rs^, len(rs), 0, 0)
+        return RunsPage(q^, rs^, len(rs), 0, 0, [])
     # How many match, and how many of them are above this page.
     var top = rs[0].id + 1 if len(rs) > 0 else q.before
-    var counts = db.conn.query(
+    var w = runs_where(q)
+    var counted = db.conn.query(
         String(
-            "SELECT count(*) AS total, count(*) FILTER (WHERE $4 > 0 AND id",
-            " >= $4) AS newer FROM orca.runs WHERE ($1 = '' OR pipeline = $1)",
-            " AND ($2 = '' OR status = $2) AND ($3 = '' OR trigger = $3)",
+            "SELECT count(*) AS total, count(*) FILTER (WHERE ",
+            w.next(),
+            " > 0 AND id >= ",
+            w.next(),
+            ") AS newer FROM orca.runs",
+            w.sql,
         ),
-        Params()
-        .text(q.pipeline)
-        .text(q.status)
-        .text(q.trigger)
-        .int64(Int64(top)),
+        w.params.copy().int64(Int64(top)),
     )
-    var total = Int(counts.row(0).int64("total"))
-    var newer = Int(counts.row(0).int64("newer"))
+    var total = Int(counted.row(0).int64("total"))
+    var newer = Int(counted.row(0).int64("newer"))
     var older = max(0, total - newer - len(rs))
-    return RunsPage(q^, rs^, total, newer, older)
+    # Each status's, under the other filters.
+    var ws = runs_where(q, with_status=False)
+    var counts = List[Tuple[String, Int]]()
+    for r in db.conn.query(
+        String(
+            "SELECT status, count(*) AS n FROM orca.runs",
+            ws.sql,
+            " GROUP BY status ORDER BY n DESC, status",
+        ),
+        ws.params.copy(),
+    ):
+        counts.append((r.text("status"), Int(r.int64("n"))))
+    return RunsPage(q^, rs^, total, newer, older, counts^)
+
+
+def run_ids(mut db: State, q: RunsQuery, limit: Int) raises -> List[Int]:
+    """The ids of the runs `q`'s filters let through, newest first, at most
+    `limit` (its page and size aside)."""
+    var w = runs_where(q)
+    var out = List[Int]()
+    for r in db.conn.query(
+        String(
+            "SELECT id::bigint AS id FROM orca.runs",
+            w.sql,
+            " ORDER BY id DESC LIMIT ",
+            w.next(),
+        ),
+        w.params.copy().int64(Int64(limit)),
+    ):
+        out.append(Int(r.int64("id")))
+    return out^
+
+
+def count_runs(mut db: State, q: RunsQuery) raises -> Int:
+    """How many runs `q`'s filters let through."""
+    var w = runs_where(q)
+    return Int(
+        db.conn.query(
+            String("SELECT count(*) AS n FROM orca.runs", w.sql), w.params.copy()
+        )
+        .row(0)
+        .int64("n")
+    )
 
 
 def live_status(status: String) -> Bool:

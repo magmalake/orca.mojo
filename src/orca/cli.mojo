@@ -7,6 +7,7 @@ taxi run ... --allow-new-code              ... with code the scheduler wasn't gi
 taxi resume <run> [--allow-new-code]       continues a run at what's unfinished
 taxi status [<run>]                        the latest runs, or one run's steps
 taxi status --before <run>                 the 20 runs older than that one
+taxi status --status failed,queued         the latest runs with one of those statuses
 taxi sense                                 the current snapshot of each dataset it reads
 labels keys                                a keyed pipeline's keys snapshot, then its keys
 ```
@@ -95,7 +96,7 @@ comptime USAGE = """usage:
   <pipeline> run --partitions KEY[..KEY][,...] [--allow-new-code]   (YYYY-MM, or YYYY-MM-DD daily)
   <pipeline> run --partitions NAME[,...]|@all|@file:<path> [--allow-new-code]   (keyed)
   <pipeline> resume <run> [--allow-new-code]
-  <pipeline> status [<run> | --before <run>]
+  <pipeline> status [<run> | --before <run>] [--status <s>[,<s>...]]
   <pipeline> sense
   <pipeline> keys
   <pipeline> fires [<count>] [--after YYYY-MM-DDTHH:MM[:SS]Z]
@@ -424,18 +425,32 @@ def _resume[
 
 
 def _status[S: RunStore](mut store: S, args: List[String]) raises -> Int:
-    """`status`: the latest runs (`--before <run>`: the 20 older than it),
-    or one run's steps."""
+    """`status`: the latest runs (`--before <run>`: the 20 older than it;
+    `--status failed[,queued...]`: only those), or one run's steps."""
     store.migrate()
-    if len(args) == 2 or (len(args) == 4 and args[2] == "--before"):
+    var listing = len(args) >= 4 and (
+        args[2] == "--before" or args[2] == "--status"
+    )
+    if len(args) == 2 or listing:
         var before = 0
-        if len(args) == 4:
-            try:
-                before = Int(args[3])
-            except:
-                _usage(String("not a run: ", args[3]))
+        var status = String()
+        var i = 2
+        while i < len(args):
+            if i + 1 >= len(args) or (
+                args[i] != "--before" and args[i] != "--status"
+            ):
+                _usage(String("unexpected: ", args[i]))
                 return 2
-        for r in store.runs(20, before):
+            if args[i] == "--status":
+                status = args[i + 1]
+            else:
+                try:
+                    before = Int(args[i + 1])
+                except:
+                    _usage(String("not a run: ", args[i + 1]))
+                    return 2
+            i += 2
+        for r in store.runs(20, before, status):
             print(r.id, r.pipeline, r.status, r.partitions)
         return 0
     if len(args) == 3:

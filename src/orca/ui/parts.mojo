@@ -188,11 +188,23 @@ comptime TRIES = (
 """What a runs table's Tries column counts (`orca.runs.starts`)."""
 
 
-def runs_table_html(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
+def runs_table_html(
+    mut h: Html, runs: List[RunRow], show_pipeline: Bool, pick: Bool = False
+):
+    """A table of runs; with `pick`, a checkbox before each, for the list's
+    bulk actions (`form="bulk-runs"`, `orca.ui.runs.runs_bulk_html`), and
+    one in the header that ticks the page's (with JavaScript)."""
     if len(runs) == 0:
         h.raw('<p class="empty">No runs.</p>')
         return
-    h.raw('<div class="scroll"><table><thead><tr><th>Run</th>')
+    h.raw('<div class="scroll"><table><thead><tr>')
+    if pick:
+        h.raw(
+            '<th class="pick act__need"><input type="checkbox"',
+            ' class="pick__all" form="bulk-runs" aria-label="Tick every run on',
+            ' this page"></th>',
+        )
+    h.raw("<th>Run</th>")
     if show_pipeline:
         h.raw("<th>Pipeline</th>")
     h.raw(
@@ -209,7 +221,17 @@ def runs_table_html(mut h: Html, runs: List[RunRow], show_pipeline: Bool):
         '">Peak</abbr></th></tr></thead><tbody>',
     )
     for r in runs:
-        h.raw("<tr><td>")
+        h.raw("<tr>")
+        if pick:
+            h.raw(
+                '<td class="pick act__need"><input type="checkbox" name="run"',
+                ' form="bulk-runs" value="',
+                r.id,
+                '" aria-label="Tick run ',
+                r.id,
+                '"></td>',
+            )
+        h.raw("<td>")
         h.chip(String("/runs/", r.id), String(r.id))
         h.raw("</td>")
         if show_pipeline:
