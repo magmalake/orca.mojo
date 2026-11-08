@@ -482,7 +482,8 @@ def _unregistered(pipeline: String) -> String:
 
 @fieldwise_init
 struct Bulk(Movable):
-    """What an action on runs picked from a list did (`orca.api.actions.bulk`)."""
+    """What an action on runs picked from a list did (`orca.api.actions.bulk`).
+    """
 
     var done: List[Int]
     """The runs it acted on: cancelled (or asked to stop), queued again, or
@@ -513,10 +514,10 @@ struct Bulk(Movable):
 
 def _id_list(runs: List[Int]) -> String:
     """`runs` as `1,2,3`, for `string_to_array($n, ',')::bigint[]`."""
-    var out = String()
+    var ids = String()
     for r in runs:
-        out.write("," if out else "", r)
-    return out^
+        ids.write("," if ids else "", r)
+    return ids^
 
 
 def cancel_runs_picked(mut db: State, runs: List[Int]) raises -> Bulk:

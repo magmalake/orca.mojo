@@ -117,9 +117,7 @@ def _runs_pager(mut h: Html, p: RunsPage):
 
 def _runs_list_html(mut h: Html, p: RunsPage):
     """A runs table and its pager: what `/runs/table` answers."""
-    runs_table_html(
-        h, p.rows, p.q.view == "list", pick=p.q.view != "home"
-    )
+    runs_table_html(h, p.rows, p.q.view == "list", pick=p.q.view != "home")
     if p.q.view != "home":
         _runs_pager(h, p)
 
@@ -226,7 +224,9 @@ def _hidden(mut h: Html, name: StaticString, value: String):
     h.raw('">')
 
 
-def _moment_input(mut h: Html, label: StaticString, name: StaticString, v: String):
+def _moment_input(
+    mut h: Html, label: StaticString, name: StaticString, v: String
+):
     """A date field, or a date and time one for a value with a time."""
     h.raw(
         "<label>",
@@ -254,10 +254,9 @@ def runs_filters_html(
     of one) and a run; the quick picks of when, and a link that clears
     them."""
     ref q = p.q
-    var action = (
-        String("/pipelines/", url_encode(q.pipeline)) if q.view
-        == "pipeline" else String("/runs")
-    )
+    var action = String(
+        "/pipelines/", url_encode(q.pipeline)
+    ) if q.view == "pipeline" else String("/runs")
     h.raw('<form class="filters" method="get" action="')
     h.text(action)
     h.raw('" aria-label="Filter runs">')
@@ -282,7 +281,10 @@ def runs_filters_html(
     h.raw('</span></summary><div class="pick__menu">')
     for s in shown:
         var n = p.count_of(s)
-        h.raw('<label class="pick__item"><input type="checkbox" name="status" value="')
+        h.raw(
+            '<label class="pick__item"><input type="checkbox" name="status"'
+            ' value="'
+        )
         h.text(s)
         h.raw('"', " checked" if s in picked else "", "> ")
         h.status(s)
@@ -456,7 +458,10 @@ def runs(mut db: State, var q: RunsQuery, url: String = "") raises -> Page:
     runs_list(h, p)
     if jumped(p):
         return Page(
-            303, j^, page_html("Runs", "/runs", h), location=String("/runs/", p.q.run)
+            303,
+            j^,
+            page_html("Runs", "/runs", h),
+            location=String("/runs/", p.q.run),
         )
     return Page(200, j^, page_html("Runs", "/runs", h))
 

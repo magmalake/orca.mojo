@@ -235,9 +235,7 @@ def runs_filters_json(mut j: String, p: RunsPage):
         '}, "counts": {',
     )
     for i in range(len(p.counts)):
-        j.write(
-            ", " if i else "", quote(p.counts[i][0]), ": ", p.counts[i][1]
-        )
+        j.write(", " if i else "", quote(p.counts[i][0]), ": ", p.counts[i][1])
     j.write("}")
 
 

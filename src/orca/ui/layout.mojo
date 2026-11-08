@@ -55,7 +55,7 @@ document.addEventListener("submit", (e) => {
 document.addEventListener("change", (e) => {
   const t = e.target;
   if (!t.matches || !t.matches("input.pick__all")) return;
-  for (const x of t.closest("table").querySelectorAll('input[name="run"]')) x.checked = t.checked;
+  for (const x of t.closest("table").querySelectorAll('input[name="pick"]')) x.checked = t.checked;
 });
 document.addEventListener("keydown", (e) => {
   const t = e.target;
@@ -86,9 +86,9 @@ for (const el of document.querySelectorAll("[data-poll]")) {
     const open = [...el.querySelectorAll("details")].map((d) => d.open);
     const pos = [...el.querySelectorAll(".scroll, pre")].map((x) => [x.scrollLeft, x.scrollTop]);
     const seen = el.getBoundingClientRect().top < 0 ? firstSeen(el) : null;
-    const ticked = new Set([...el.querySelectorAll('input[name="run"]:checked')].map((x) => x.value));
+    const ticked = new Set([...el.querySelectorAll('input[name="pick"]:checked')].map((x) => x.value));
     el.innerHTML = html;
-    el.querySelectorAll('input[name="run"]').forEach((x) => { if (ticked.has(x.value)) x.checked = true; });
+    el.querySelectorAll('input[name="pick"]').forEach((x) => { if (ticked.has(x.value)) x.checked = true; });
     el.querySelectorAll("details").forEach((d, i) => { if (open[i]) d.open = true; });
     el.querySelectorAll(".scroll, pre").forEach((x, i) => {
       if (pos[i]) { x.scrollLeft = pos[i][0]; x.scrollTop = pos[i][1]; }

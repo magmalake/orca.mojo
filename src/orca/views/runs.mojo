@@ -813,13 +813,15 @@ struct RunsWhere(Movable):
     def text(mut self, clause: StaticString, v: String):
         """`AND clause`, its `?` the next parameter, `v`."""
         self.sql.write(
-            " AND ", String(clause).replace("?", String("$", len(self.params) + 1))
+            " AND ",
+            String(clause).replace("?", String("$", len(self.params) + 1)),
         )
         self.params = self.params.copy().text(v)
 
     def int(mut self, clause: StaticString, v: Int):
         self.sql.write(
-            " AND ", String(clause).replace("?", String("$", len(self.params) + 1))
+            " AND ",
+            String(clause).replace("?", String("$", len(self.params) + 1)),
         )
         self.params = self.params.copy().int64(Int64(v))
 
@@ -864,8 +866,10 @@ def runs_where(q: RunsQuery, with_status: Bool = True) -> RunsWhere:
         var like = key_like(q.key)
         if like:
             w.text(
-                "EXISTS (SELECT 1 FROM unnest(string_to_array(partitions,"
-                " ',')) k WHERE k LIKE ?)",
+                (
+                    "EXISTS (SELECT 1 FROM unnest(string_to_array(partitions,"
+                    " ',')) k WHERE k LIKE ?)"
+                ),
                 like,
             )
         else:
@@ -1008,7 +1012,8 @@ def count_runs(mut db: State, q: RunsQuery) raises -> Int:
     var w = runs_where(q)
     return Int(
         db.conn.query(
-            String("SELECT count(*) AS n FROM orca.runs", w.sql), w.params.copy()
+            String("SELECT count(*) AS n FROM orca.runs", w.sql),
+            w.params.copy(),
         )
         .row(0)
         .int64("n")

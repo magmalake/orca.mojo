@@ -39,8 +39,8 @@ back it is:
 | `?before=<id>` | the page of runs older than that one |
 | `?after=<id>` | the page of runs just newer than it (the newest page once fewer than a page are left) |
 
-The filters (`?pipeline=`, `?status=`, `?trigger=`) and the page size are
-kept in every link. `/runs` says where the page is, `1–50 of 1,234`, from
+The filters ([below](#filtering-runs)) and the page size are kept in every
+link. `/runs` says where the page is, `1–50 of 1,234`, from
 an indexed count (`runs_pipeline_id`, migration 37, for a pipeline's runs).
 The JSON keeps its fields (`runs`, `n`, `before`, `total`, `newer`,
 `next_before`) and adds `limit`, `after`, `older`, and the cursors either
@@ -48,6 +48,63 @@ side: `next` (the `before` of the older page) and `prev` (the `after` of
 the newer one), null at the ends, with `next_url` and `prev_url`. With no
 parameters it's the same first page as before. A pipeline's page has the
 same as `runs_page` in its JSON (`/api/pipelines/<name>?before=...`).
+
+### Filtering runs
+
+Over the table is a filter bar, a plain `GET` form, so it works without
+JavaScript (with it, a dropdown, a status box or a date filters as soon as
+it changes; text fields filter on Enter). `/runs` and a pipeline's Runs tab
+take the same parameters, and so do their JSON
+(`/api/pipelines/<name>?status=failed`); each is kept in every link, the
+pager's `1–50 of N` counts what matches, and the newest page keeps
+refreshing with them applied (its `/runs/table` fragment carries them).
+
+| Parameter | |
+|---|---|
+| `?status=` | runs with any of the statuses: `?status=failed&status=queued`, or `failed,queued`. The box lists every status with its runs under the other filters, which the JSON has as `counts` |
+| `?trigger=` | `schedule`, `sensor`, `backfill`, `fill`, `manual`, `ui`, `rerun`, `rebuild` |
+| `?pipeline=` | on `/runs` |
+| `?from=`, `?to=` | created on or after, and by the end of, a day (`2024-06-01`) or at a time (`2024-06-01T09:30`), UTC; one that isn't a time is left out |
+| `?since=` | created in the last `1h`, `24h`, `7d` (any `<n>h` or `<n>d`), or `today` since midnight UTC: the quick picks beside the dates |
+| `?key=` | a partition: a glob matched against each of a run's partitions (`2023-08-*`, `?` for one character), or else any part of them (`modular/` for a keyed pipeline's repositories) |
+| `?run=` | one run: the page goes to it (`/runs/<id>`), the JSON is the list of it |
+
+The JSON's `filters` has each (`status` as it was, comma-joined, and
+`statuses` as a list; null for those not set), and `counts` each status's
+runs; a pipeline's JSON has both in its `runs_page`. A filter by date is
+one range of `runs_created` (migration 38), a status one of
+`runs_pipeline_status`; a partition glob reads every run of what the
+other filters leave, which on 200,000 runs is 80 ms without a pipeline
+and a few with one.
+
+### Acting on many runs
+
+Logged in (or with login off), each row has a checkbox and the bar over
+the table acts on the runs ticked: **Cancel** (queued, deferred and
+running ones, as each row's Cancel does; the others are left), **Retry
+failed** (failed and stalled ones queued again, as each row's Retry does,
+except one whose code has changed, which is resumed from its own page)
+and **Backfill again** (what `orca backfill --rerun` does, over the
+partitions of the runs ticked, a backfill per pipeline; one whose steps
+append asks first, for all of them). The header's box ticks the page's
+runs; ticks survive the table refreshing. **or all N that match** acts on
+every run the filters match, its number on the box: the action checks
+there are still that many, and if not says how many there are now, with a
+button to do it to those. One action does at most 2,000 runs. Logged out,
+the boxes and buttons give way to a link to log in.
+
+It's a `POST /runs/bulk` with `do` (`cancel`, `retry`, `backfill`), each
+run ticked as `pick=<id>`, or `all=1&expect=<n>` and the list's filters
+(`view`, `pipeline`, `status`, ...). It answers `303` back to the list,
+which says what it did ("Cancelled 12 runs, 3 already finished"), or to
+JSON its `done`, `skipped` and `refused` runs and how many a backfill
+`queued`. Each run acted on is a row of `orca.audit` as its own action's
+(`/runs/<id>/cancel`, `/runs/<id>/resume`, with detail `bulk`), each
+pipeline backfilled as `/pipelines/<name>/backfill`, beside the row of
+`/runs/bulk` itself.
+
+`<pipeline> status --status failed,queued` lists a store's runs by status
+on the command line, in Postgres, a SQLite file or memory alike.
 
 A dataset's snapshots are 50 to a page the same way, by the attempt that
 first committed each snapshot: `?before=<attempt>.<snapshot>`, `?after=`,

@@ -12,7 +12,7 @@ that changes something, through `orca.actions`.
 | `/runs/<id>/resume` | queue a failed, cancelled or stalled run again; `allow_new_code=1` confirms new code |
 | `/runs/<id>/rerun` | a new run from `step` on, the steps before it copied |
 | `/runs/<id>/cancel` | cancel a run, before its next attempt if it's running |
-| `/runs/bulk` | `do=cancel`, `retry` or `backfill` the runs picked from a list: each `run=<id>`, or with `all=1` every run its filters (`view`, `pipeline`, `status`, ...) match, if there are still `expect` of them |
+| `/runs/bulk` | `do=cancel`, `retry` or `backfill` the runs picked from a list: each `pick=<id>`, or with `all=1` every run its filters (`view`, `pipeline`, `status`, ...) match, if there are still `expect` of them |
 | `/datasets/<name>/rebuild` | rebuild every pipeline downstream over `partitions` |
 
 Each answers `303 See Other` to the page of what it made (a script gets
@@ -335,7 +335,7 @@ def _ids_json(mut j: String, ids: List[Int]):
 
 def bulk(mut db: State, call: Call) raises -> Page:
     """`POST /runs/bulk`: `do` (`cancel`, `retry` or `backfill`) to the runs
-    picked from a list (`orca.ui.runs`), each a `run` field, or with
+    picked from a list (`orca.ui.runs`), each a `pick` field, or with
     `all=1` all those the list's filters match (the form's `view`,
     `pipeline`, `status`, `trigger`, `from`, `to`, `since`, `key`, `run`),
     if there are still the `expect` the page said; otherwise it asks again
@@ -398,7 +398,7 @@ def bulk(mut db: State, call: Call) raises -> Page:
             )
         ids = run_ids(db, q, BULK_MAX)
     else:
-        for v in query_values(form, "run"):
+        for v in query_values(form, "pick"):
             var id = int_or_zero(v)
             if id > 0 and id not in ids:
                 ids.append(id)
@@ -424,7 +424,7 @@ def bulk(mut db: State, call: Call) raises -> Page:
                 again.append(f.copy())
             again.append((String("do"), what))
             for id in ids:
-                again.append((String("run"), String(id)))
+                again.append((String("pick"), String(id)))
             again.append((String("allow_append"), String("1")))
             return _acted(
                 Outcome.no(b.confirm, confirm=True),

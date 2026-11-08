@@ -224,7 +224,7 @@ def runs_table_html(
         h.raw("<tr>")
         if pick:
             h.raw(
-                '<td class="pick act__need"><input type="checkbox" name="run"',
+                '<td class="pick act__need"><input type="checkbox" name="pick"',
                 ' form="bulk-runs" value="',
                 r.id,
                 '" aria-label="Tick run ',

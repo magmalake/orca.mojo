@@ -583,6 +583,10 @@ def _migrations() -> List[List[String]]:
         # newest first by id under a cursor: one range of this index, and
         # their count an index-only scan.
         ["CREATE INDEX runs_pipeline_id ON orca.runs (pipeline, id DESC)"],
+        # A runs list filtered by when its runs were created (`?from=`,
+        # `?to=`, `?since=`): one range of this index, for its page and its
+        # counts, where without it each is a scan of every run.
+        ["CREATE INDEX runs_created ON orca.runs (created)"],
     ]
 
 

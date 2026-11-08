@@ -312,14 +312,15 @@ details.pick { position: relative; }
 details.pick > summary { list-style: none; cursor: pointer; display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
 details.pick > summary::-webkit-details-marker { display: none; }
 .pick__value { display: block; padding: 0.35rem 1.6rem 0.35rem 0.6rem; border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 1rem;
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
   max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; position: relative; }
 .pick__value::after { content: "▾"; position: absolute; right: 0.5rem; color: var(--muted); }
 .pick__menu { position: absolute; z-index: 30; top: 100%; left: 0; margin-top: 0.25rem; min-width: 12rem;
   display: grid; gap: 0.15rem; padding: 0.4rem; border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm); background: var(--surface); box-shadow: 0 6px 18px rgb(0 0 0 / 0.15); }
-.pick__item { display: flex; gap: 0.45rem; align-items: center; padding: 0.15rem 0.3rem; font-size: 0.875rem; color: var(--text); }
+.filters .pick__item { display: flex; gap: 0.45rem; align-items: center; padding: 0.15rem 0.3rem; font-size: 0.875rem; color: var(--text); }
 .pick__item input { margin: 0; }
+.pick__item .status { flex: none; }
 .pick__n { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 th.pick, td.pick { width: 1.5rem; padding-right: 0; }
 td.pick input, th.pick input { margin: 0; vertical-align: middle; }
