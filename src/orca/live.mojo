@@ -47,6 +47,28 @@ comptime RUNNER_POOL = "local"
 remote worker's."""
 
 
+comptime RUNNER_OWNER = "runner"
+"""A local or control-placed run's owner once the scheduler assigned it to
+`orca runner`, until the runner claims it (owner `worker`)."""
+
+
+def runner_live(mut tx: Transaction, stale: Float64) raises -> Bool:
+    """Whether an `orca runner` has been seen within half of `stale`."""
+    return (
+        len(
+            tx.query(
+                (
+                    "SELECT 1 FROM orca.workers WHERE pool = $1 AND revoked IS"
+                    " NULL AND last_seen > now() - make_interval(secs => $2 /"
+                    " 2) LIMIT 1"
+                ),
+                Params().text(RUNNER_POOL).float64(stale),
+            )
+        )
+        == 1
+    )
+
+
 def held_sql(stale: String, t: String = "orca.runs") -> String:
     """SQL true for a run of table reference `t` (`orca.runs`, or its alias
     in the query) that a live `orca runner` holds: a local or control-placed

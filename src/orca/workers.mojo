@@ -73,7 +73,13 @@ from orca.http_store import (
 )
 from orca.civil import now
 from orca.json import quote
-from orca.live import dead_sql, stale_limit, start_grace
+from orca.live import (
+    RUNNER_OWNER,
+    RUNNER_POOL,
+    dead_sql,
+    stale_limit,
+    start_grace,
+)
 from orca.cgroup import growth_pct_of, oom_text, raised_mb, raised_request
 from orca.resources import Grant, Request, Room, admit
 from orca.scheduler import registered
@@ -773,9 +779,152 @@ def exited(mut db: State, w: WorkerAuth, v: Value) raises -> String:
         )
     if String("memory_limit_mb") in v and String("pid") in v:
         _contained_exit(db, w, v)
+    var over = text_field(v, "over")
+    if over and n == 0:
+        # The runner killed it over the control placement's memory cap
+        # (orca.control): its attempts fail saying so, while the run is
+        # still this worker's at this start.
+        var mine = db.conn.query(
+            (
+                "SELECT 1 FROM orca.runs WHERE id = $1 AND starts = $2 AND"
+                " worker = $3 AND status = 'running'"
+            ),
+            Params().int64(run).int64(_num(v, "start")).int64(Int64(w.id)),
+        )
+        if len(mine) == 1:
+            _ = db.interrupt(Int(run), over)
+            print("run", run, "on", w.user(), over)
     return String(
         '{"failed": ', "true" if n == 1 else "false", ', "usage": ', used, "}"
     )
+
+
+# ── the runner (docs/runner.md) ──────────────────────────────────────────────
+
+
+def runner_auth(mut db: State, label: String) raises -> WorkerAuth:
+    """The `orca.workers` row of `orca runner` `label`, of the reserved
+    pool `local`, made the first time: its token hash is of a token no one
+    is given, so nothing claims for it over the API."""
+    var rows = db.conn.query(
+        (
+            "SELECT id FROM orca.workers WHERE pool = $1 AND label = $2 AND"
+            " revoked IS NULL AND expires > now() ORDER BY id DESC LIMIT 1"
+        ),
+        Params().text(RUNNER_POOL).text(label),
+    )
+    var id: Int
+    if len(rows) == 1:
+        id = Int(rows.row(0).int64("id"))
+    else:
+        id = Int(
+            db.conn.query(
+                (
+                    "INSERT INTO orca.workers (token_hash, pool, label,"
+                    " created_by, expires) VALUES ($1, $2, $3, 'orca runner',"
+                    " now() + interval '100 years') RETURNING id"
+                ),
+                Params()
+                .text(token_hash(new_token()))
+                .text(RUNNER_POOL)
+                .text(label),
+            )
+            .row(0)
+            .int64("id")
+        )
+    return WorkerAuth(id, RUNNER_POOL, label)
+
+
+def claim_assigned(mut db: State, w: WorkerAuth, v: Value) raises -> String:
+    """The runner's claim: marks it seen and keeps what it says of itself,
+    as `/api/worker/claim` does, and, with `slots`, takes the oldest run
+    the scheduler assigned it (`RUNNER_OWNER`): owner `worker` and the
+    runner's row, audited. No admission here: the scheduler decided. The
+    answer is a worker's (`{"run": <spec>|null}`) with `local`, what the
+    control host's start needs beside the spec: the run's placement, its
+    pipeline's request maximum and the memory an out-of-memory kill raised
+    it to (`orca.cgroup.start_limit_mb`)."""
+    _ = db.conn.execute(
+        "UPDATE orca.workers SET last_seen = now() WHERE id = $1",
+        Params().int64(Int64(w.id)),
+    )
+    _seen(db, w, v)
+    var slots = Int(v["slots"].int_value()) if String("slots") in v else 0
+    if slots <= 0:
+        return String('{"run": null}')
+    var tx = db.conn.begin()
+    var got = tx.query(
+        (
+            "UPDATE orca.runs SET owner = $1, worker = $2 WHERE id = (SELECT"
+            " id FROM orca.runs WHERE status = 'running' AND owner = $3 AND"
+            " worker IS NULL AND placement IN ('local', 'control') ORDER BY id"
+            " LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id, pipeline, starts,"
+            " allow_new_code, partitions, placement, coalesce(grant_cpus, 0)"
+            " AS grant_cpus, coalesce(grant_memory_mb, 0) AS grant_mb"
+        ),
+        Params().text(WORKER_OWNER).int64(Int64(w.id)).text(RUNNER_OWNER),
+    )
+    if len(got) != 1:
+        tx.rollback()
+        return String('{"run": null}')
+    var r = got.row(0)
+    var id = r.int64("id")
+    var ps = registered(db, r.text("pipeline"))
+    if len(ps) == 0:
+        # Gone since it was assigned: given back to the scheduler.
+        tx.rollback()
+        return String('{"run": null}')
+    ref p = ps[0]
+    var spec = WorkerRun(
+        Int(id),
+        Int(r.int64("starts")),
+        p.name,
+        p.binary,
+        p.registry_hash,
+        r.text("partitions"),
+        r.bool("allow_new_code"),
+        p.image,
+        p.env.copy(),
+        p.secrets.copy(),
+        Grant(Int(r.int64("grant_cpus")), Int(r.int64("grant_mb"))),
+    )
+    var placement = r.text("placement")
+    _ = tx.execute(
+        (
+            "INSERT INTO orca.audit (username, action, run, detail, source)"
+            " VALUES ($1, '/api/worker/claim', $2, $3, 'runner')"
+        ),
+        Params()
+        .text(w.user())
+        .int64(id)
+        .text(String("start ", spec.start, " on the runner, ", placement)),
+    )
+    tx.commit()
+    return String(
+        '{"run": ',
+        worker_run_json(spec),
+        ', "local": ',
+        Body()
+        .text("placement", placement)
+        .int("memory_max_mb", Int64(p.request().memory_max_mb))
+        .int("memory_raised_mb", Int64(p.memory_raised_mb))
+        .finish(),
+        "}",
+    )
+
+
+def runner_call(
+    mut db: State, w: WorkerAuth, path: String, v: Value
+) raises -> String:
+    """What the worker API answers `path` with, for `orca runner`, which
+    calls it on its own connection rather than over HTTPS."""
+    if path == "/api/worker/claim":
+        return claim_assigned(db, w, v)
+    if path == "/api/worker/exited":
+        return exited(db, w, v)
+    if path == "/api/worker/release":
+        return release(db, w, v)
+    raise Error("orca runner: no call ", path)
 
 
 # ── store calls ──────────────────────────────────────────────────────────────

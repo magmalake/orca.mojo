@@ -60,6 +60,12 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   scheduler queues its due retries and its dead runs again for one, its
   fill runs too (held for a worker, `fill_max_runs` across the pool), and
   a run whose worker is gone whatever its trigger.
+  With `ORCA_LOCAL_RUNNER=runner` the local and control-placed runs this
+  scheduler admits aren't forked here: each start is assigned (`owner =
+  'runner'`) to `orca runner` (docs/runner.md), which claims it, and while
+  no runner is seen they wait, held saying so. A runner's run is left
+  alone while its runner holds it (`orca.live.held_sql`), and queued again
+  by the dead-worker rule once it doesn't and its heartbeat is stale.
 - **Sensors and rebuilds** (`orca.sensors`). A sensor pipeline's pass
   looks for snapshots of the datasets it reads, in `orca.commits` on every
   tick and from `<binary> sense` every `ORCA_SENSE_SECONDS` (asked in a
@@ -193,7 +199,9 @@ from orca.system import (
 )
 from orca.kube import KubeRunner, RunSpec, cpu_millis
 from orca.live import (
+    RUNNER_OWNER,
     RUNNER_POOL,
+    runner_live,
     dead_sql,
     live_runs,
     live_sql,
@@ -1204,6 +1212,13 @@ struct Scheduler(Movable):
     var _cgroups_next: Int
     """When the runs' cgroups' memory is next recorded, on the monotonic
     clock."""
+    var use_runner: Bool
+    """`ORCA_LOCAL_RUNNER=runner`: local and control-placed runs are
+    assigned to `orca runner` rather than forked here (docs/runner.md)."""
+    var _going: Int
+    """With `use_runner`, the local and control-placed runs going, as this
+    tick's start counted them: memory pressure's "none of orca's runs
+    going"."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -1264,6 +1279,20 @@ struct Scheduler(Movable):
         self._unswept = List[String]()
         self._stalled = Dict[Int, Bool]()
         self._cgroups_next = 0
+        var local = getenv("ORCA_LOCAL_RUNNER", "process")
+        if local != "process" and local != "runner":
+            raise Error(
+                "orca: ORCA_LOCAL_RUNNER is process or runner, not ", local
+            )
+        self.use_runner = local == "runner"
+        self._going = 0
+
+    def _idle(self) -> Bool:
+        """Whether none of orca's runs is going on this host: none of its
+        own children, or with the runner none of the runner's."""
+        if self.use_runner:
+            return self._going == 0
+        return len(self._spawned) == 0
 
     def say_pressure(self):
         """Says once, for `orca scheduler`, where this host's memory
@@ -1770,6 +1799,23 @@ struct Scheduler(Movable):
                 except e:
                     print("orca: can't keep the driver log at", log, ":", e)
         var readings = self._sample()
+        if self.use_runner:
+            try:
+                self._going = Int(
+                    self.db.conn.query(
+                        String(
+                            "SELECT count(*) AS n FROM orca.runs WHERE status",
+                            " = 'running' AND placement IN ('local',",
+                            " 'control') AND NOT ",
+                            self._dead("$1"),
+                        ),
+                        Params().float64(self.stale),
+                    )
+                    .row(0)
+                    .int64("n")
+                )
+            except e:
+                print("orca: can't count the runner's runs:", e)
         try:
             self._pressure()
         except e:
@@ -1863,7 +1909,7 @@ struct Scheduler(Movable):
         self._pressure_unread = not psi
         var was = self.admission.hold
         var now = Float64(t) / 1e9
-        self.admission.observe(psi, now, len(self._spawned) == 0)
+        self.admission.observe(psi, now, self._idle())
         ref a = self.admission
         var r = Report.of(self.psi, a, now)
         if a.held() and not was:
@@ -2785,7 +2831,31 @@ struct Scheduler(Movable):
         # as a dead worker's is; one its live runner still holds isn't dead
         # (orca.live.held_sql), so nothing below ends or restarts it.
         var lost = List[Tuple[Int, String]]()
+        var assigned = self.use_runner and (control or placed == "local")
         if not fill:
+            # Assigned to the runner, and not claimed within the start
+            # grace: back in the queue, the start given back.
+            var back = tx.execute(
+                (
+                    "UPDATE orca.runs SET status = 'queued', owner = NULL,"
+                    " started = NULL, starts = starts - 1 WHERE pipeline = $1"
+                    " AND status = 'running' AND owner = $2 AND worker IS NULL"
+                    " AND started <= now() - make_interval(secs => $3)"
+                ),
+                Params()
+                .text(p.name)
+                .text(RUNNER_OWNER)
+                .float64(self.start_grace),
+            )
+            if back > 0:
+                print(
+                    "orca:",
+                    back,
+                    "runs of",
+                    p.name,
+                    "assigned to the runner weren't claimed in time: queued",
+                    " again",
+                )
             lost = self._requeue_lost(tx, p, dead, "")
             self._end_dead(tx, p, dead)
         var live = Int(
@@ -2815,6 +2885,12 @@ struct Scheduler(Movable):
                 p.run_retries,
             )
             free = 0 if settling or hold else status.value().slots
+        if assigned and free > 0 and not hold:
+            if not runner_live(tx, self.stale):
+                hold = String(
+                    "held: waiting for the runner (ORCA_LOCAL_RUNNER=runner)"
+                )
+                free = 0
         var need = 0
         if control:
             need = 0  # no instance: nothing of the budget
@@ -2855,7 +2931,7 @@ struct Scheduler(Movable):
         # over the limit, but one at a time once a hold has lasted its
         # grace with none of orca's runs going.
         if (control or placed == "local") and free > 0 and not hold:
-            var allowed = self.admission.allows(len(self._spawned) == 0)
+            var allowed = self.admission.allows(self._idle())
             if allowed == 0:
                 hold = self.admission.hold
                 free = 0
@@ -3026,7 +3102,7 @@ struct Scheduler(Movable):
                         tx.query(
                             (
                                 "UPDATE orca.runs SET status = 'running', owner"
-                                " = 'scheduler', heartbeat = NULL, started ="
+                                " = $8, heartbeat = NULL, started ="
                                 " clock_timestamp(), ended = NULL, starts ="
                                 " starts + 1,"
                                 " retry_at = NULL, error = NULL, waiting_since"
@@ -3045,7 +3121,12 @@ struct Scheduler(Movable):
                             .text(p.cpus if admitted else String())
                             .text(p.memory_gb if admitted else String())
                             .int64(Int64(grant.cpus))
-                            .int64(Int64(grant.memory_mb)),
+                            .int64(Int64(grant.memory_mb))
+                            .text(
+                                String(RUNNER_OWNER) if assigned else String(
+                                    "scheduler"
+                                )
+                            ),
                         )
                         .row(0)
                         .int64("starts")
@@ -3073,6 +3154,10 @@ struct Scheduler(Movable):
                     grant.memory_mb,
                     "MB (0: not asked for)",
                 )
+            if assigned:
+                # The runner claims it and starts it (orca.workers).
+                print("assigned", p.name, "run", id, "to the runner")
+                continue
             if control:
                 self._start_control(p, Int(id), starts[i], new_code[i], grant)
                 continue
