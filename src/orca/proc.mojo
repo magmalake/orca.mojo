@@ -89,9 +89,7 @@ def spawn(
     if pid == 0:
         if procs_fd >= 0:
             # 0 is the writer: this process, into the run's cgroup.
-            _ = external_call["write", Int](
-                procs_fd, zero.unsafe_ptr(), Int(1)
-            )
+            _ = external_call["write", Int](procs_fd, zero.unsafe_ptr(), Int(1))
         if group:
             _ = external_call["setpgid", c_int](c_int(0), c_int(0))
         if log:

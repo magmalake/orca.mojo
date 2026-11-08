@@ -126,6 +126,7 @@ from orca.cgroup import (
     Cgroups,
     Contained,
     MemoryKnobs,
+    at_limit,
     ceiling_mb,
     oom_text,
     put as put_cgroup,
@@ -1148,6 +1149,9 @@ struct Scheduler(Movable):
     """A local or control-placed run's process to its cgroup."""
     var _unswept: List[String]
     """Runs' cgroups to remove once their processes have left them."""
+    var _stalled: Dict[Int, Bool]
+    """Contained runs' processes killed for a stale heartbeat while held at
+    their memory limit: out of memory, as a kill at memory.max is."""
     var _cgroups_next: Int
     """When the runs' cgroups' memory is next recorded, on the monotonic
     clock."""
@@ -1205,6 +1209,7 @@ struct Scheduler(Movable):
         self.cgroups = Cgroups.off("off: not the scheduler's loop")
         self._contained = Dict[Int, Contained]()
         self._unswept = List[String]()
+        self._stalled = Dict[Int, Bool]()
         self._cgroups_next = 0
 
     def contain(mut self) raises:
@@ -1259,7 +1264,9 @@ struct Scheduler(Movable):
                 p.memory_raised_mb,
                 cap,
             )
-            c.ceiling_mb = ceiling_mb(req.memory_max_mb, self.room.memory_mb, cap)
+            c.ceiling_mb = ceiling_mb(
+                req.memory_max_mb, self.room.memory_mb, cap
+            )
             if c.limit_mb <= 0:
                 return c^
             var made = self.cgroups.make(run, start, c.limit_mb)
@@ -1295,11 +1302,21 @@ struct Scheduler(Movable):
             c = self._contained.pop(pid)
         except:
             return
-        if code != 0 and not over and Cgroups.oom_kills(c.path) > 0:
+        var stalled = self._stalled.pop(pid, False)
+        if (
+            code != 0
+            and not over
+            and (stalled or Cgroups.oom_kills(c.path) > 0)
+        ):
             var next = raised_mb(
                 c.limit_mb, self.cgroups.knobs.growth_pct, c.ceiling_mb
             )
-            over = oom_text(c.limit_mb, c.kill_mb, next)
+            over = oom_text(
+                c.limit_mb,
+                c.kill_mb,
+                next,
+                stalled and Cgroups.oom_kills(c.path) == 0,
+            )
             print("run", c.run, "pid", pid, over)
             try:
                 _ = self.db.conn.execute(
@@ -2623,6 +2640,15 @@ struct Scheduler(Movable):
                     if e.value[0] == id:
                         pid = e.key
                 if pid > 0:
+                    if pid in self._contained:
+                        # Throttled at its limit (memory.high) rather than
+                        # wedged: out of memory.
+                        try:
+                            ref c = self._contained[pid]
+                            if at_limit(Cgroups.current(c.path), c.limit_mb):
+                                self._stalled[pid] = True
+                        except:
+                            pass
                     if pid in self._control:
                         # Its own process group: its forked workers too.
                         _ = external_call["kill", c_int](c_int(-pid), c_int(9))

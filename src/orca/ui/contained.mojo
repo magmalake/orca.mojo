@@ -90,9 +90,8 @@ def host_runs_html(mut h: Html, runs: List[HostRun]):
                     "%)",
                 )
             h.num(
-                bytes_text(r.memory_bytes) if r.memory_bytes >= 0 else String(
-                    "-"
-                ),
+                bytes_text(r.memory_bytes) if r.memory_bytes
+                >= 0 else String("-"),
                 pct,
             )
             h.num(mb_text(r.limit_mb))

@@ -281,9 +281,7 @@ def usage_cell(mut h: Html, u: Usage, limit_mb: Int = 0, grant_mb: Int = 0):
         return
     var title = usage_text(u) if u.peak_rss_bytes >= 0 else String()
     if limit_mb > 0:
-        title.write(
-            "; " if title else "", "memory limit ", mb_text(limit_mb)
-        )
+        title.write("; " if title else "", "memory limit ", mb_text(limit_mb))
         if grant_mb > 0:
             title.write(", granted ", mb_text(grant_mb))
     h.raw('<td class="num" title="')

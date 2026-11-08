@@ -300,6 +300,20 @@ and `grant` (`cpus`, `memory_mb`), both null for a pipeline without one.
 A queued run held for room shows why under **Held**, and `held` in the
 JSON.
 
+Where the scheduler (or worker) gives runs a cgroup of their own
+([docs/hetzner.md](hetzner.md#a-cgroup-per-run), `orca.cgroup`), the run's
+page also has **Memory limit**: its latest start's `memory.high` (its grant,
+request maximum or `ORCA_RUN_MEMORY_MB`) and the `memory.max` past which the
+kernel kills it. The Steps table's Peak cell reads `312 MB / 1 GB`: the
+latest attempt's peak against the limit it ran under (its grant in the
+title), and an attempt's page has its own limit and grant. An attempt the
+kernel killed for its memory fails `out of memory at <limit>: ...`, saying
+what the retry asks for: 1.5 times as much, up to the request's maximum,
+which the pipeline's later runs ask for too. In the JSON, a run has
+`memory_limit` (`limit_mb`, `max_mb`, `current_bytes` while it runs), and each
+step and attempt `memory_limit_mb` and `grant_memory_mb`; null without a
+cgroup.
+
 Not measured: runs on EC2 or Kubernetes (their machines' samples are under
 Machines), runs no scheduler or worker started (`<binary> run`), and on
 macOS, which has no `/proc`, the peak cores, and an attempt that shares
@@ -374,14 +388,14 @@ each bar and box keeps its title.
 
 | Page | What it shows |
 |---|---|
-| Ops › Control (`/ops/control`, `/api/system`) | the one machine running the scheduler, the UI, Postgres and control-placed runs: CPU, memory, disk, network and each container's memory over `?range=24h`, `7d` or `14d`; whether [alerts](alerts.md) are on and the last ones; the [watchdog](watchdog.md)'s banner |
+| Ops › Control (`/ops/control`, `/api/system`) | the one machine running the scheduler, the UI, Postgres and control-placed runs: CPU, memory, disk, network and each container's memory over `?range=24h`, `7d` or `14d`; whether [alerts](alerts.md) are on and the last ones; the [watchdog](watchdog.md)'s banner; the local and control-placed runs going, each with its cgroup's memory against its limit, its kill line and its grant (`runs` in the JSON) |
 | Ops › Fleet (`/ops/fleet`, `/api/fleet`) | the EC2 instances orca launches for runs: hosts up and their cost an hour, runs and errors per hour, live hosts, charts. On the local runner its Cost tile says "fixed price" and shows `ORCA_FIXED_COST` |
 | Ops › Workers (`/ops/workers`, `/api/workers`) | each [worker token](workers.md#tokens): pool, label, worker, image, last heartbeat, runs, CPUs and memory |
 
 Each section's heading links to it, so a link can open at one chart:
 
 - Control: `#cpu`, `#memory`, `#disk`, `#network`, `#containers`,
-  `#container-memory`
+  `#runs`, `#container-memory`
 - Fleet: `#hosts`, `#hours`, `#runs`, `#fleet-cpu`, `#fleet-network`
 
 `/system`, `/fleet` and `/fleet/hosts` redirect to the new paths.

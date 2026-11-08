@@ -115,15 +115,24 @@ def _mb_text(mb: Int) -> String:
     return String(gb_text(mb), " GB") if mb >= 1024 else String(mb, " MB")
 
 
-def oom_text(limit_mb: Int, kill_mb: Int, next_mb: Int) -> String:
-    """An attempt's error after the kernel killed its run for its memory."""
-    var t = String(
-        "out of memory at ",
-        _mb_text(limit_mb),
-        ": the run's processes passed its cgroup's memory.max (",
-        _mb_text(kill_mb),
-        ") and the kernel killed them",
-    )
+def oom_text(
+    limit_mb: Int, kill_mb: Int, next_mb: Int, stalled: Bool = False
+) -> String:
+    """An attempt's error after the kernel killed its run for its memory,
+    or, `stalled`, after the scheduler killed it for a heartbeat that went
+    stale while it was held at its limit."""
+    var t = String("out of memory at ", _mb_text(limit_mb), ": ")
+    if stalled:
+        t.write(
+            "the run's processes were held at their cgroup's memory.high,",
+            " throttled, until its heartbeat went stale",
+        )
+    else:
+        t.write(
+            "the run's processes passed its cgroup's memory.max (",
+            _mb_text(kill_mb),
+            ") and the kernel killed them",
+        )
     if next_mb > limit_mb:
         t.write("; its retry asks for ", _mb_text(next_mb))
     else:
@@ -164,6 +173,14 @@ def has_word(text: String, word: String) -> Bool:
         if String(w) == word:
             return True
     return False
+
+
+def at_limit(current_bytes: Int, limit_mb: Int) -> Bool:
+    """Whether a cgroup's memory, `current_bytes`, is at its limit (within
+    5%): one throttled there."""
+    return current_bytes >= 0 and current_bytes * 100 >= (
+        limit_mb * 1024 * 1024 * 95
+    )
 
 
 def run_name(run: Int, start: Int, owner: Int) -> String:
@@ -329,9 +346,7 @@ struct Cgroups(Copyable, Movable):
         if not own:
             return Cgroups.off("off: no cgroup v2 hierarchy (cgroup v1?)")
         if not exists(String(ROOT, "/cgroup.controllers")):
-            return Cgroups.off(
-                String("off: no cgroup v2 mounted at ", ROOT)
-            )
+            return Cgroups.off(String("off: no cgroup v2 mounted at ", ROOT))
         var dir = String(ROOT, own) if own != "/" else String(ROOT)
         var base = dir
         var leaf_name = String(own[byte = own.rfind("/") + 1 :])
@@ -411,7 +426,9 @@ struct Cgroups(Copyable, Movable):
                 String("off: can't set memory.high in a cgroup in ", base)
             )
         return Cgroups(
-            base, String("on: runs' cgroups go in ", base), MemoryKnobs(0, 25, 150)
+            base,
+            String("on: runs' cgroups go in ", base),
+            MemoryKnobs(0, 25, 150),
         )
 
     def make(

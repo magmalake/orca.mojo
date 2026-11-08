@@ -94,7 +94,10 @@ def test_oom_text() raises:
 
 def test_own_path() raises:
     assert_equal(own_path("0::/\n"), "/")
-    assert_equal(own_path("0::/system.slice/docker-abc.scope\n"), "/system.slice/docker-abc.scope")
+    assert_equal(
+        own_path("0::/system.slice/docker-abc.scope\n"),
+        "/system.slice/docker-abc.scope",
+    )
     # Hybrid: v1 controllers first, the unified line last.
     assert_equal(
         own_path("12:memory:/x\n11:cpu:/x\n0::/user.slice\n"), "/user.slice"
@@ -104,9 +107,7 @@ def test_own_path() raises:
 
 
 def test_events() raises:
-    var text = (
-        "low 0\nhigh 1520\nmax 27\noom 1\noom_kill 4\noom_group_kill 1\n"
-    )
+    var text = "low 0\nhigh 1520\nmax 27\noom 1\noom_kill 4\noom_group_kill 1\n"
     assert_equal(event(text, "oom_kill"), 4)
     assert_equal(event(text, "oom_group_kill"), 1)
     assert_equal(event(text, "high"), 1520)

@@ -66,10 +66,11 @@ log=build/cgroups.log
 : > "$log"
 rm -f build/cgroups-*.out
 export ORCA_STALE_SECONDS=5 ORCA_START_SECONDS=20 ORCA_SAMPLE_SECONDS=0 ORCA_RETRY_SECONDS=1
-# A run without a request has 200 MB, and is killed past 210 MB; after a
+# A run without a request has 200 MB, and is killed past it (no margin, so
+# no throttling between memory.high and memory.max); after a
 # kill it asks for twice that. Its step holds 300 MiB: over the first limit,
 # under the second.
-export ORCA_RUN_MEMORY_MB=200 ORCA_RUN_MEMORY_MARGIN=5 ORCA_RUN_MEMORY_GROWTH=2 GROW_MB=300
+export ORCA_RUN_MEMORY_MB=200 ORCA_RUN_MEMORY_MARGIN=0 ORCA_RUN_MEMORY_GROWTH=2 GROW_MB=300
 pids=
 sched=
 cleanup() {
@@ -125,11 +126,14 @@ r1=$(q "SELECT max(id) FROM orca.runs")
 until_ 120 "run $r1 didn't succeed: $(q "SELECT id, status, starts, error FROM orca.runs WHERE id = $r1")" \
     is "SELECT status FROM orca.runs WHERE id = $r1" succeeded
 kill -0 "$sched" 2> /dev/null || fail "the out-of-memory kill took the scheduler with it"
+# The limits go on the attempts when the process is reaped, just after.
+until_ 10 "run $r1's last attempt has no limit" \
+    is "SELECT count(*) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r1 AND a.status = 'succeeded' AND a.memory_limit_mb IS NOT NULL" 1
 attempts="SELECT a.attempt, a.status, coalesce(a.memory_limit_mb, 0), coalesce(a.error, '') FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r1 ORDER BY a.attempt"
 q "$attempts" >> "$log"
 first=$(q "$attempts" | head -1)
 case "$first" in
-    "1|failed|200|out of memory at 200 MB: "*"memory.max (210 MB)"*"its retry asks for 400 MB") ;;
+    "1|failed|200|out of memory at 200 MB: "*"memory.max (200 MB)"*"its retry asks for 400 MB") ;;
     *) fail "run $r1's first attempt isn't an out-of-memory kill at 200 MB: $first" ;;
 esac
 last=$(q "$attempts" | tail -1)
@@ -139,7 +143,7 @@ case "$last" in
 esac
 is "SELECT memory_raised_mb FROM orca.pipelines WHERE name = 'grower'" 400 \
     || fail "the pipeline's memory wasn't raised: $(q "SELECT memory_raised_mb FROM orca.pipelines")"
-is "SELECT memory_limit_mb || ' ' || memory_max_mb FROM orca.runs WHERE id = $r1" "400 420" \
+is "SELECT memory_limit_mb || ' ' || memory_max_mb FROM orca.runs WHERE id = $r1" "400 400" \
     || fail "run $r1's limit: $(q "SELECT memory_limit_mb, memory_max_mb FROM orca.runs WHERE id = $r1")"
 
 # The next run starts from the raised value.
@@ -147,6 +151,8 @@ is "SELECT memory_limit_mb || ' ' || memory_max_mb FROM orca.runs WHERE id = $r1
 r2=$(q "SELECT max(id) FROM orca.runs")
 until_ 60 "run $r2 didn't succeed: $(q "SELECT id, status, starts, error FROM orca.runs WHERE id = $r2")" \
     is "SELECT status FROM orca.runs WHERE id = $r2" succeeded
+until_ 10 "run $r2's attempt has no limit" \
+    is "SELECT count(*) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r2 AND a.memory_limit_mb = 400" 1
 is "SELECT starts || ' ' || memory_limit_mb FROM orca.runs WHERE id = $r2" "1 400" \
     || fail "run $r2 didn't start at 400 MB: $(q "SELECT starts, memory_limit_mb FROM orca.runs WHERE id = $r2")"
 
@@ -155,7 +161,7 @@ curl -fs "$base/runs/$r1" > build/cgroups-run.out || fail "GET /runs/$r1"
 grep -q 'Memory limit<span class="help">' build/cgroups-run.out || fail "the run's page has no Memory limit"
 grep -q '<span class="muted"> / 400 MB</span>' build/cgroups-run.out || fail "the steps table has no limit beside the peak"
 curl -fs -H 'Accept: application/json' "$base/runs/$r1" > build/cgroups-run.json || fail "GET /runs/$r1 JSON"
-jq -e '.run.memory_limit.limit_mb == 400 and .run.memory_limit.max_mb == 420 and .steps[0].memory_limit_mb == 400' \
+jq -e '.run.memory_limit.limit_mb == 400 and .run.memory_limit.max_mb == 400 and .steps[0].memory_limit_mb == 400' \
     build/cgroups-run.json > /dev/null || fail "the run's JSON: $(cat build/cgroups-run.json)"
 a1=$(q "SELECT a.id FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r1 AND a.attempt = 1")
 curl -fs -H 'Accept: application/json' "$base/runs/$r1/attempts/$a1" > build/cgroups-attempt.json || fail "GET the attempt's JSON"
@@ -167,7 +173,7 @@ jq -e '.attempt.memory_limit_mb == 200 and (.attempt.error | startswith("out of 
 r3=$(q "SELECT max(id) FROM orca.runs")
 until_ 30 "run $r3 didn't start" is "SELECT status FROM orca.runs WHERE id = $r3" running
 until_ 20 "Ops > Control has no run $r3: $(curl -fs -H 'Accept: application/json' "$base/ops/control" | jq -c .runs)" \
-    sh -c "curl -fs -H 'Accept: application/json' '$base/ops/control' | jq -e '.runs[] | select(.run == $r3 and .memory_limit_mb == 400 and .memory_max_mb == 420)' > /dev/null"
+    sh -c "curl -fs -H 'Accept: application/json' '$base/ops/control' | jq -e '.runs[] | select(.run == $r3 and .memory_limit_mb == 400 and .memory_max_mb == 400)' > /dev/null"
 until_ 60 "run $r3 didn't succeed" is "SELECT status FROM orca.runs WHERE id = $r3" succeeded
 
 # Nothing is left: no run's cgroup, no grower process.

@@ -57,9 +57,8 @@ struct RunResources(Copyable, Movable):
             ', "max_mb": ',
             self.max_mb,
             ', "current_bytes": ',
-            String(self.memory_bytes) if self.memory_bytes >= 0 else String(
-                "null"
-            ),
+            String(self.memory_bytes) if self.memory_bytes
+            >= 0 else String("null"),
             "}",
         )
 

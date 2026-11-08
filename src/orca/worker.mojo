@@ -222,7 +222,14 @@ struct Worker(Movable):
         if spec.allow_new_code:
             argv.append("--allow-new-code")
         var cg = Contained(
-            spec.run, spec.start, spec.pipeline, "", 0, 0, 0, spec.grant.memory_mb
+            spec.run,
+            spec.start,
+            spec.pipeline,
+            "",
+            0,
+            0,
+            0,
+            spec.grant.memory_mb,
         )
         if self.cgroups.on():
             var default = self.cgroups.knobs.default_mb
@@ -303,12 +310,12 @@ struct Worker(Movable):
             var cg = self.contained.pop(pid)
             var oom = code != 0 and Cgroups.oom_kills(cg.path) > 0
             if oom:
-                print("run", r.spec.run, "pid", pid, "out of memory", flush=True)
-            body = (
-                body^.int("memory_limit_mb", Int64(cg.limit_mb))
-                .int("memory_max_mb", Int64(cg.kill_mb))
-                .int("oom", Int64(1 if oom else 0))
-            )
+                print(
+                    "run", r.spec.run, "pid", pid, "out of memory", flush=True
+                )
+            body = body^.int("memory_limit_mb", Int64(cg.limit_mb)).int(
+                "memory_max_mb", Int64(cg.kill_mb)
+            ).int("oom", Int64(1 if oom else 0))
             _ = put_cgroup(String(cg.path, "/cgroup.kill"), "1")
             if not Cgroups.remove(cg.path):
                 self.unswept.append(cg.path)

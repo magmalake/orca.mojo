@@ -597,9 +597,9 @@ def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
     var run = _num(v, "run")
     var start = _num(v, "start")
     var limit = Int(_num(v, "memory_limit_mb"))
-    var kill = Int(_num(v, "memory_max_mb")) if String(
-        "memory_max_mb"
-    ) in v else limit
+    var kill = (
+        Int(_num(v, "memory_max_mb")) if String("memory_max_mb") in v else limit
+    )
     var rows = db.conn.query(
         (
             "SELECT r.pipeline, coalesce(r.grant_memory_mb, 0) AS grant_mb,"
