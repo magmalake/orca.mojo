@@ -39,7 +39,9 @@ def test_write_location_replaces_whole() raises:
 def test_write_location_makes_its_directory() raises:
     var path = String(_dir(), "/a/b/driver.log")
     write_location(path, String("run succeeded\n").as_bytes())
-    assert_equal(String(unsafe_from_utf8=read_location(path)), "run succeeded\n")
+    assert_equal(
+        String(unsafe_from_utf8=read_location(path)), "run succeeded\n"
+    )
     remove(path)
     assert_false(exists(path))
 
