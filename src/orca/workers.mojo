@@ -454,12 +454,13 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
             refused = why
             _ = db.conn.execute(
                 (
-                    "UPDATE orca.runs SET held = $2 WHERE id = $1 AND status ="
-                    " 'queued'"
+                    "UPDATE orca.runs SET held = $2 WHERE pipeline = $1 AND"
+                    " status = 'queued' AND (trigger = 'fill') = $3"
                 ),
                 Params()
-                .int64(id)
-                .text(String("held: ", w.user(), " can't run it: ", why)),
+                .text(p.name)
+                .text(String("held: ", w.user(), " can't run it: ", why))
+                .bool(fill),
             )
             continue
         var tx = db.conn.begin()
@@ -515,10 +516,10 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
                 refused = fit[1]
                 _ = db.conn.execute(
                     (
-                        "UPDATE orca.runs SET held = $2 WHERE id = $1 AND"
-                        " status = 'queued'"
+                        "UPDATE orca.runs SET held = $2 WHERE pipeline = $1"
+                        " AND status = 'queued' AND (trigger = 'fill') = $3"
                     ),
-                    Params().int64(id).text(fit[1]),
+                    Params().text(p.name).text(fit[1]).bool(fill),
                 )
                 continue
             grant = fit[0][0]
