@@ -306,8 +306,35 @@ def _context_header(key: String) -> StaticString:
         return "ui: this site. cli: the orca command, with a token."
     if key == "alerts:Kind":
         return (
-            "What raised the alert: a watchdog trip, a failed run, a "
-            "stalled fill, a disk, a quiet worker."
+            "What raised the alert: a watchdog trip, a run that failed with "
+            "no retry left, a stalled fill, the control disk filling, a "
+            "worker gone quiet, memory pressure holding runs, a failed "
+            "backup or another script's orca notify; 'resolved' is the "
+            "all-clear sent once it ended. Its priority is on hover."
+        )
+    if key == "alerts:When":
+        return "When the alert was raised, or resolved; the full time on hover."
+    if key == "alerts:Alert":
+        return "The title and the message, as they were sent to the phone."
+    if key == "alerts:Links":
+        return (
+            "What the alert is about: its run, the pipelines it paused or "
+            "names, the watchdog's rule, the worker, or Control."
+        )
+    if key == "alerts:Delivered":
+        return (
+            "Whether ntfy took it: sent; waiting for its first try; failed, "
+            "retrying (the error, tried again after a wait that doubles up "
+            "to 15 minutes); or not sent, when a newer one or its "
+            "resolution replaced it first."
+        )
+    if key == "alerts:State":
+        return (
+            "For alerts that end (a watchdog trip, a stalled fill, the disk, "
+            "memory pressure): open while it still holds, resolved once it "
+            "ended, or raised again when the same alert was sent anew "
+            "before that. Empty for one that doesn't end, such as a run "
+            "failed."
         )
     if key == "alerts:Status":
         return "sent, pending (it will be tried again) or resolved."

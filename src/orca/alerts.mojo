@@ -144,6 +144,8 @@ def failed_runs(
                 why if why else String("failed; see the run"),
             ),
             ui_link(String("/runs/", id)),
+            pipelines=pipeline,
+            run=Int(id),
         ):
             n += 1
     return n
@@ -234,6 +236,7 @@ def fill(
             String("\n", s.idle) if s.idle else String(),
         ),
         ui_link(String("/pipelines/", pipeline)),
+        pipelines=pipeline,
     )
 
 

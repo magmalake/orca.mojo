@@ -70,5 +70,10 @@ calls it when the backup fails.
 
 ## Where it shows
 
-Ops › Control and `/api/system` (`notify`) say whether alerts are on and
-list the last ones sent.
+Ops › Alerts (`/ops/alerts`, `/api/alerts`, `orca alerts`) lists every
+alert sent, newest first: its kind, title and message, links to the run,
+pipeline or watchdog rule, whether ntfy took it, and whether an alert that
+ends (a watchdog trip, a stalled fill, the disk, memory pressure) is still
+open. Each is a row of `orca.alerts`, kept 90 days; see
+[the UI](ui.md#alerts). Ops › Control and `/api/system` (`notify`) say
+whether alerts are on and list the last few.

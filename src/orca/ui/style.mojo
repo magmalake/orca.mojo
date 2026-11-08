@@ -172,6 +172,18 @@ td code { font-size: 0.8125rem; }
   border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
 .status--gone { color: var(--faint); background: transparent; border-style: dashed; }
 tr.pools__gone td { color: var(--muted); }
+/* Ops › Alerts (orca.ui.alerts): an open alert's row, the message under its title. */
+tr.alerts__open td { background: color-mix(in srgb, var(--bad) 6%, transparent); }
+tr.alerts__open td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
+td.alerts__msg { white-space: normal; min-width: 16rem; max-width: 34rem; }
+td.alerts__links { white-space: normal; max-width: 13rem; }
+td.alerts__delivery { white-space: normal; max-width: 14rem; }
+.alerts__err { display: block; margin-top: 0.2rem; font-family: var(--mono); font-size: 0.75rem; color: var(--bad); }
+td.alerts__state time { font-size: 0.75rem; color: var(--muted); }
+.alerts__body { display: block; color: var(--muted); font-size: 0.8125rem; white-space: pre-line; }
+.alerts__kind { white-space: nowrap; }
+.alerts__summary { margin: 0 0 0.8rem; font-size: 0.875rem; color: var(--muted); }
+.alerts__summary strong { color: var(--bad); }
 .pools__pools { margin: -0.25rem 0 1rem; }
 h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
 
