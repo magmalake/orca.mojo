@@ -71,6 +71,7 @@ test-steps = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_steps.moj
 test-cron = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_cron.mojo -o build/test-cron && ./build/test-cron" }
 test-warehouse = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_warehouse.mojo -o build/test-warehouse && ./build/test-warehouse" }
 test-cli = { cmd = "tests/cli.sh" }
+test-hetzner = { cmd = "tests/hetzner.sh" }
 test-compile-fail = { cmd = "tests/compile_fail.sh" }
 # The executor over every store that needs no server (tests/store_suite.mojo),
 # then over Postgres, with what only Postgres has.
@@ -100,6 +101,7 @@ test-remote = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_remote.m
 test-notify = { cmd = "scripts/with-postgres.sh tests/notify.sh" }
 test-watchdog = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_watchdog.mojo -o build/test-watchdog && ./build/test-watchdog && scripts/with-postgres.sh tests/watchdog.sh" }
 test-pause = { cmd = "scripts/with-postgres.sh tests/pause.sh" }
+test-older-binary = { cmd = "scripts/with-postgres.sh tests/older_binary.sh" }
 # The ec2 runner against a stand-in EC2 API; needs python3.
 test-versions = { cmd = "scripts/with-postgres.sh tests/versions.sh" }
 test-new-code = { cmd = "scripts/with-postgres.sh tests/new_code.sh" }
@@ -167,9 +169,9 @@ test-kind = { cmd = "tests/kind.sh" }
 build-shared = { cmd = "scripts/build-shared.sh" }
 # CI runs these two halves on runners of their own; `test` is both.
 # The executor, stores, workers, clouds and the data a run makes:
-test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-compile-fail", "test-store", "test-state", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-worker-procs", "test-no-workers", "test-pool", "test-secrets", "test-placement", "test-usage", "test-resources", "test-grants", "test-pressure", "test-cgroups", "test-aws", "test-source", "test-highlight", "test-step-cards", "test-graph", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
+test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-hetzner", "test-compile-fail", "test-store", "test-state", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-worker-procs", "test-no-workers", "test-pool", "test-secrets", "test-placement", "test-usage", "test-resources", "test-grants", "test-pressure", "test-cgroups", "test-aws", "test-source", "test-highlight", "test-step-cards", "test-graph", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
 # The scheduler, the UI, and what a registration and its code control:
-test-scheduler-ui = { depends-on = ["build-shared", "test-toml", "test-config", "test-fill", "test-pool-fills", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-system", "test-actions", "test-calendar", "test-ui-login", "test-remote", "test-worker-api", "test-pause", "test-watchdog", "test-notify", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
+test-scheduler-ui = { depends-on = ["build-shared", "test-toml", "test-config", "test-fill", "test-pool-fills", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-system", "test-actions", "test-calendar", "test-ui-login", "test-remote", "test-worker-api", "test-pause", "test-older-binary", "test-watchdog", "test-notify", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
 test = { depends-on = ["test-executor", "test-scheduler-ui"] }
 toy = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout" }

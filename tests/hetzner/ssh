@@ -1,0 +1,27 @@
+#!/bin/sh
+# A fake ssh for tests/hetzner.sh: the "server" is this machine, with
+# orca-stack installed at $FAKE/orca-stack and the fake docker on its PATH.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o | -i) shift 2 ;;
+        root@*)
+            shift
+            break
+            ;;
+        *) shift ;;
+    esac
+done
+case "$1" in
+    "install -D -m 755 /dev/stdin /usr/local/sbin/orca-stack")
+        cat > "$FAKE/orca-stack"
+        chmod 755 "$FAKE/orca-stack"
+        ;;
+    orca-stack)
+        shift
+        exec "$FAKE/orca-stack" "$@"
+        ;;
+    *)
+        echo "fake ssh: unexpected command: $*" >&2
+        exit 1
+        ;;
+esac

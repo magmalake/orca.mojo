@@ -1,0 +1,23 @@
+#!/bin/sh
+# A fake docker for tests/hetzner.sh: logs each call to $FAKE/docker.log and
+# answers what orca-stack asks. $FAKE/running is the count of running runs,
+# $FAKE/backup-fails makes pg_dump fail, $FAKE/register-fails orca register.
+echo "docker $*" >> "$FAKE/docker.log"
+case "$*" in
+    *"pg_isready"*) exit 0 ;;
+    "inspect -f"*) echo true ;;
+    "inspect postgres") exit 0 ;;
+    *"status = 'running'"*) cat "$FAKE/running" 2> /dev/null || echo 0 ;;
+    *"WHERE NOT paused"*) echo toy ;;
+    *pg_dump*)
+        [ ! -f "$FAKE/backup-fails" ] || { echo "pg_dump: connection refused" >&2; exit 1; }
+        echo dump
+        ;;
+    *"pg_restore --list"*) cat > /dev/null ;;
+    *"amazon/aws-cli s3 ls"*) ;;
+    *"exec scheduler orca register"*)
+        [ ! -f "$FAKE/register-fails" ] || { echo "orca: no orca.toml" >&2; exit 1; }
+        echo "registered toy"
+        ;;
+esac
+exit 0

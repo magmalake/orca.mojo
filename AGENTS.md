@@ -7,6 +7,28 @@ entry (`shelf changes new <pr>-<slug> --bump minor`; changes/README.md).
 `shelf release apply` moves fragments into CHANGELOG.md. If the PR number
 isn't known yet, use a slug and rename the file once the PR exists.
 
+## Migrations
+
+A deploy can be rolled back to an older image without restoring the
+database, because an older orca runs on a newer schema as long as every
+migration it doesn't know is additive (`schema_ahead` in
+`src/orca/state.mojo`). Keep new migrations additive:
+
+- add columns only nullable or with a default, never `NOT NULL` without one;
+- add tables and indexes freely; a foreign key onto a table orca deletes
+  from needs `ON DELETE CASCADE` or `SET NULL`;
+- don't rename, drop or retype anything, tighten a constraint, change a key
+  an `ON CONFLICT` names, write a status or other value older code reads and
+  acts on, or give an old column a new meaning.
+
+A migration that has to do one of those adds its version to
+`_floor_raisers`, with why; from then on a rollback past it needs the
+backup (docs/hetzner.md#rolling-back). Queries name their columns (in
+`INSERT` and `SELECT`; `SELECT *` only over a subquery that names them) and
+read rows by column name, so a new column never shifts what older code
+reads. Bookkeeping for the migrations themselves (`orca.schema_version`) is
+set up in `State.migrate` before them, not as a numbered migration.
+
 ## Writing fast data code
 
 Orca runs pipelines whose stages read Iceberg tables and transform their rows. Before writing or speeding up code that loops over record batches,

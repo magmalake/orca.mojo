@@ -2,7 +2,7 @@
 only Postgres has. Run under scripts/with-postgres.sh, which sets
 ORCA_DATABASE_URL to a throwaway database."""
 
-from std.os import getenv
+from std.os import getenv, setenv, unsetenv
 from std.testing import (
     TestSuite,
     assert_equal,
@@ -14,6 +14,7 @@ from std.testing import (
 from postgres import Connection, Params
 
 from orca import PgStore, RunResult, State, parse_months
+from orca.state import migration_floor, schema_ahead
 from store_suite import (
     Touching,
     check_a_store_that_lost_its_run_stops,
@@ -51,6 +52,87 @@ def test_migrate_is_idempotent() raises:
         _count("SELECT max(version) AS n FROM orca.schema_version"), 40
     )
     assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 40)
+
+
+def test_each_version_records_its_floor() raises:
+    _ = _db()
+    assert_equal(
+        _count(
+            "SELECT count(*) AS n FROM orca.schema_version WHERE min_binary"
+            " IS NULL"
+        ),
+        0,
+    )
+    assert_equal(
+        _count("SELECT max(min_binary) AS n FROM orca.schema_version"), 24
+    )
+    assert_equal(migration_floor(1), 1)
+    assert_equal(migration_floor(23), 1)
+    assert_equal(migration_floor(24), 24)
+    assert_equal(migration_floor(40), 24)
+
+
+def test_the_schema_check() raises:
+    assert_false(schema_ahead(40, 24, 40))
+    assert_false(schema_ahead(12, 1, 40))
+    assert_true(schema_ahead(41, 24, 40))
+    assert_true(schema_ahead(41, 40, 40))
+    with assert_raises(contains="needs a binary that knows at least 41"):
+        _ = schema_ahead(41, 41, 40)
+    with assert_raises(contains="doesn't record"):
+        _ = schema_ahead(41, -1, 40)
+
+
+def test_an_older_binary_runs_on_additive_migrations() raises:
+    _ = _db()
+    # A binary that knows 30 migrations: 31..40 are additive.
+    _ = setenv("ORCA_TEST_MIGRATIONS", "30", True)
+    try:
+        var old = State(getenv("ORCA_DATABASE_URL"))
+        old.migrate()
+        # It runs on the schema, and doesn't touch the versions.
+        _ = _new_run(old, "a:1")
+        assert_equal(
+            _count("SELECT max(version) AS n FROM orca.schema_version"), 40
+        )
+        # One that knows 23 doesn't: 24 raised the floor.
+        _ = setenv("ORCA_TEST_MIGRATIONS", "23", True)
+        with assert_raises(contains="needs a binary that knows at least 24"):
+            var older = State(getenv("ORCA_DATABASE_URL"))
+            older.migrate()
+    finally:
+        _ = unsetenv("ORCA_TEST_MIGRATIONS")
+
+
+def test_floors_are_filled_in_for_an_older_database() raises:
+    _ = _db()
+    # As a database the binaries before min_binary migrated left it.
+    var conn = Connection(getenv("ORCA_DATABASE_URL"))
+    _ = conn.execute("UPDATE orca.schema_version SET min_binary = NULL")
+    # An older binary can't tell what it may run on.
+    _ = setenv("ORCA_TEST_MIGRATIONS", "30", True)
+    try:
+        with assert_raises(contains="doesn't record"):
+            var older = State(getenv("ORCA_DATABASE_URL"))
+            older.migrate()
+    finally:
+        _ = unsetenv("ORCA_TEST_MIGRATIONS")
+    # This one knows every version's floor and fills them in.
+    _ = _db()
+    assert_equal(
+        _count(
+            "SELECT count(*) AS n FROM orca.schema_version WHERE min_binary ="
+            " 24"
+        ),
+        17,
+    )
+    assert_equal(
+        _count(
+            "SELECT count(*) AS n FROM orca.schema_version WHERE min_binary"
+            " IS NULL"
+        ),
+        0,
+    )
 
 
 def test_a_queued_run_can_be_claimed() raises:
