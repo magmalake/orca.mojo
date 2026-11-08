@@ -230,6 +230,7 @@ def _pipeline(mut db: State, call: Call) raises -> Page:
         call.query("allow_append") == "1",
         call.query("steps"),
         call.query("tab"),
+        call.query("cov"),
         call.url,
     )
 

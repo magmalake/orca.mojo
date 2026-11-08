@@ -48,6 +48,7 @@ from orca.ui import (
     _respond,
     not_found,
 )
+from orca.ui_coverage import COVERAGE_STYLE
 from orca.ui_style import STYLE
 from orca.ui_viz import VIZ_STYLE
 from orca.web.auth import (
@@ -151,7 +152,9 @@ def _stylesheet() raises -> Response:
     var resp = Response(
         status=200,
         reason="OK",
-        body=List[UInt8](String(STYLE, VIZ_STYLE).as_bytes()),
+        body=List[UInt8](
+            String(STYLE, VIZ_STYLE, COVERAGE_STYLE).as_bytes()
+        ),
     )
     resp.headers.set("Content-Type", "text/css; charset=utf-8")
     return resp^

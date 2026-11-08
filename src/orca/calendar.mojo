@@ -11,6 +11,8 @@ they win:
 - `live`: in a queued, deferred or running run (`live_sql`).
 - `done`: what a backfill counts as done (`DONE_SQL`).
 - `failed`: not done, and the last run over it failed.
+- `behind`: none of these, but a dataset the sensor pipeline follows has
+  it (`orca.follow`); only on the page's coverage.
 - `open`: none of the above, so a backfill would queue it.
 
 Daily and monthly keys are zero-padded, so they compare as text.
@@ -105,10 +107,16 @@ def _period_of(
 
 
 def calendar(
-    mut db: State, pipeline: String, kind: String, start: String, period: String
+    mut db: State,
+    pipeline: String,
+    kind: String,
+    start: String,
+    period: String,
+    upstream: Dict[String, Bool] = {},
 ) raises -> Calendar:
     """`pipeline`'s calendar of `period` (see `Calendar.period`; today's if
-    empty), with `start` its first partition (or empty)."""
+    empty), with `start` its first partition (or empty); keys in `upstream`
+    that are only open are `behind`."""
     if kind != "daily" and kind != "monthly":
         raise Error(pipeline, " has ", kind, " partitions, not dated ones")
     var t = Civil.of(now())
@@ -121,23 +129,7 @@ def calendar(
     )
     var keys = List[String]()
     if daily:
-        cal.period = String(Month(ym[0], ym[1]))
-        var before = Month(ym[0], ym[1]).prev()
-        var after = Month(ym[0], ym[1]).next()
-        var n = days_in(ym[0], ym[1])
-        for d in range(1, n + 1):
-            keys.append(String(Day(ym[0], ym[1], d)))
-        var before_last = String(
-            Day(before.year, before.month, days_in(before.year, before.month))
-        )
-        cal.prev = String(before) if (
-            not start or before_last >= start
-        ) else String()
-        cal.next = (
-            String(after) if String(Day(after.year, after.month, 1))
-            <= cal.today else String()
-        )
-        cal.weekday = (Civil(ym[0], ym[1], 1, 0, 0, 0).weekday() + 6) % 7
+        keys = _frame_month(cal, ym[0], ym[1])
     else:
         cal.period = _pad(ym[0], 4)
         for m in range(1, 13):
@@ -149,10 +141,57 @@ def calendar(
             _pad(ym[0] + 1, 4) if String(Month(ym[0] + 1, 1))
             <= cal.today else String()
         )
+    cal.cells = _cells(
+        db,
+        pipeline,
+        start,
+        cal.today,
+        keys,
+        done_keys(db, pipeline, keys),
+        upstream,
+    )
+    return cal^
+
+
+def _frame_month(mut cal: Calendar, year: Int, month: Int) -> List[String]:
+    """Sets `cal`'s period, neighbours and weekday for the days of `month`
+    of `year`, from its `start` and `today`, and returns their keys."""
+    cal.period = String(Month(year, month))
+    var before = Month(year, month).prev()
+    var after = Month(year, month).next()
+    var keys = List[String]()
+    for d in range(1, days_in(year, month) + 1):
+        keys.append(String(Day(year, month, d)))
+    var before_last = String(
+        Day(before.year, before.month, days_in(before.year, before.month))
+    )
+    cal.prev = String(before) if (
+        not cal.start or before_last >= cal.start
+    ) else String()
+    cal.next = (
+        String(after) if String(Day(after.year, after.month, 1))
+        <= cal.today else String()
+    )
+    cal.weekday = (Civil(year, month, 1, 0, 0, 0).weekday() + 6) % 7
+    return keys^
+
+
+def _cells(
+    mut db: State,
+    pipeline: String,
+    start: String,
+    today: String,
+    keys: List[String],
+    done: Dict[String, Bool],
+    upstream: Dict[String, Bool] = {},
+) raises -> List[Cell]:
+    """Each of `keys` with its state, given which are `done` and which the
+    datasets a sensor follows have (`upstream`, `orca.follow`): the live
+    runs and the last run of each key are a query each, whatever the
+    keys."""
     var joined = String()
     for i in range(len(keys)):
         joined.write("," if i else "", keys[i])
-    var done = done_keys(db, pipeline, keys)
     var live = Dict[String, Bool]()
     for r in db.conn.query(live_sql(), Params().text(pipeline)):
         live[r.text("key")] = True
@@ -160,9 +199,10 @@ def calendar(
     for r in db.conn.query(_LAST_SQL, Params().text(pipeline).text(joined)):
         if r.text("status") == "failed":
             failed[r.text("key")] = True
+    var cells = List[Cell]()
     for k in keys:
         var state: String
-        if (start and k < start) or k > cal.today:
+        if (start and k < start) or k > today:
             state = "outside"
         elif k in live:
             state = "live"
@@ -170,9 +210,169 @@ def calendar(
             state = "done"
         elif k in failed:
             state = "failed"
+        elif k in upstream:
+            state = "behind"
         else:
             state = "open"
-        cal.cells.append(Cell(k, state))
+        cells.append(Cell(k, state))
+    return cells^
+
+
+@fieldwise_init
+struct Share(Copyable, Movable):
+    """Of one month in a daily pipeline's range, how many days are done."""
+
+    var key: String
+    """`YYYY-MM`."""
+    var done: Int
+    var total: Int
+    """Its days in the range: from the start to today."""
+
+
+comptime STRIP_YEARS = 10
+"""The range strip's most years, ending at today's."""
+
+
+struct Year(Movable):
+    """A daily pipeline's days of one year, and how done each month of its
+    range is."""
+
+    var pipeline: String
+    var start: String
+    var today: String
+    var year: Int
+    var prev: String
+    """The year before (`YYYY`), empty if it ends before the start."""
+    var next: String
+    """The year after, empty if it starts after today."""
+    var cells: List[Cell]
+    """Each day of the year, January 1 first."""
+    var strip: List[Share]
+    """Each month from the start's (at most `STRIP_YEARS` back) to today's,
+    empty for a pipeline without a start."""
+
+    def __init__(out self, pipeline: String, start: String):
+        self.pipeline = pipeline
+        self.start = start
+        self.today = String()
+        self.year = 0
+        self.prev = String()
+        self.next = String()
+        self.cells = List[Cell]()
+        self.strip = List[Share]()
+
+    def first(self, month: Int) -> Int:
+        """The index in `cells` of `month`'s first day."""
+        var i = 0
+        for m in range(1, month):
+            i += days_in(self.year, m)
+        return i
+
+    def count(self, state: String, month: Int = 0) -> Int:
+        """The days in `state`, of `month` (1 to 12) or of the year (0)."""
+        var lo = 0 if month == 0 else self.first(month)
+        var hi = len(self.cells) if month == 0 else lo + days_in(
+            self.year, month
+        )
+        var n = 0
+        for i in range(lo, hi):
+            if self.cells[i].state == state:
+                n += 1
+        return n
+
+
+def year_of(text: String, today: Civil) raises -> Tuple[Int, Int]:
+    """The year and month a coverage link names: `YYYY-MM`, or `YYYY` with
+    today's month in today's year, December before it and January after;
+    today's if `text` is empty."""
+    if not text:
+        return (today.year, today.month)
+    if text.byte_length() == 4:
+        var y: Int
+        try:
+            y = Int(text)
+        except:
+            raise Error("not a year (YYYY) or month (YYYY-MM): '", text, "'")
+        if y < 0:
+            raise Error("not a year (YYYY) or month (YYYY-MM): '", text, "'")
+        var m = today.month if y == today.year else (
+            12 if y < today.year else 1
+        )
+        return (y, m)
+    var m = Month.parse(text)
+    return (m.year, m.month)
+
+
+def year_calendar(
+    mut db: State,
+    pipeline: String,
+    start: String,
+    year: Int,
+    upstream: Dict[String, Bool] = {},
+) raises -> Year:
+    """The days of `year` of the daily `pipeline` that starts at `start`
+    (or has no start), and its range strip. Three queries, as for a month:
+    which days are done (of the year and the strip's range together), the
+    live runs, and each of the year's days' last run."""
+    var t = Civil.of(now())
+    var y = Year(pipeline, start)
+    y.year = year
+    y.today = String(Day(t.year, t.month, t.day))
+    y.prev = _pad(year - 1, 4) if (
+        year > 0 and (not start or String(Day(year - 1, 12, 31)) >= start)
+    ) else String()
+    y.next = (
+        _pad(year + 1, 4) if String(Day(year + 1, 1, 1))
+        <= y.today else String()
+    )
+    var keys = List[String]()
+    for m in range(1, 13):
+        for d in range(1, days_in(year, m) + 1):
+            keys.append(String(Day(year, m, d)))
+    # The strip's days, from the start (or STRIP_YEARS back) to today; the
+    # year's own are asked for once.
+    var asked = keys.copy()
+    var months = List[Month]()
+    if start:
+        var first = Day.parse(start)
+        var lo = Month(first.year, first.month)
+        if lo.year < t.year - STRIP_YEARS + 1:
+            lo = Month(t.year - STRIP_YEARS + 1, 1)
+        var m = lo.copy()
+        var last = Month(t.year, t.month)
+        while not (last < m):
+            months.append(m.copy())
+            if m.year != year:
+                for d in range(1, days_in(m.year, m.month) + 1):
+                    var k = String(Day(m.year, m.month, d))
+                    if k >= start and k <= y.today:
+                        asked.append(k)
+            m = m.next()
+    var done = done_keys(db, pipeline, asked)
+    y.cells = _cells(db, pipeline, start, y.today, keys, done, upstream)
+    for m in months:
+        var n = 0
+        var total = 0
+        for d in range(1, days_in(m.year, m.month) + 1):
+            var k = String(Day(m.year, m.month, d))
+            if k < start or k > y.today:
+                continue
+            total += 1
+            if k in done:
+                n += 1
+        y.strip.append(Share(String(m), n, total))
+    return y^
+
+
+def month_of(y: Year, month: Int) -> Calendar:
+    """The month view of `month` (1 to 12) of `y`, from its cells."""
+    var cal = Calendar(y.pipeline, "daily")
+    cal.start = y.start
+    cal.today = y.today
+    _ = _frame_month(cal, y.year, month)
+    var lo = y.first(month)
+    for i in range(lo, lo + days_in(y.year, month)):
+        cal.cells.append(y.cells[i].copy())
     return cal^
 
 
@@ -218,3 +418,16 @@ def calendar_json(c: Calendar) -> String:
         )
     j.write("}}")
     return j^
+
+
+def states_of(
+    mut db: State,
+    pipeline: String,
+    start: String,
+    today: String,
+    keys: List[String],
+) raises -> List[Cell]:
+    """Each of `keys` with its state, as on the calendar: three queries."""
+    return _cells(
+        db, pipeline, start, today, keys, done_keys(db, pipeline, keys)
+    )
