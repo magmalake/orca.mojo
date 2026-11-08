@@ -23,10 +23,9 @@ def test_write_location_replaces_whole() raises:
     # A reader that has the file open keeps the old one: the new is another
     # file renamed over it. Truncated in place, this read would see the new
     # bytes, or none.
-    var old = open(path, "r")
-    write_location(path, String("trips on w1\nmore\n").as_bytes())
-    assert_equal(old.read(), "trips on w1\n")
-    old.close()
+    with open(path, "r") as old:
+        write_location(path, String("trips on w1\nmore\n").as_bytes())
+        assert_equal(old.read(), "trips on w1\n")
     assert_equal(
         String(unsafe_from_utf8=read_location(path)), "trips on w1\nmore\n"
     )
