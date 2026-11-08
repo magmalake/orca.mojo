@@ -106,9 +106,51 @@ The header is four cards, side by side on a wide screen:
   (`cpus`, `memory_gb` in [orca.toml](orca-toml.md#requests-and-grants))
   has it here too, as **Requested**, and `request` in the JSON.
 
+A sensor that runs when another pipeline's dataset gets a snapshot (the
+census's mojo_repos and mojo_activity follow gharchive) has **Following**
+on its Progress card: the pipelines and datasets it follows, how many of
+their days (months) in its range it has done, and the rest broken down
+into running or queued, failed and not queued yet, the first few of each
+linking to their month on Coverage (`toy (up.days): 3 of 9 days done; 6
+behind: 3 running or queued, 1 failed and 2 not queued yet`). What they
+have is every partition orca knows of: those of each snapshot another
+pipeline's succeeded attempt committed (`orca.commits`) and those of the
+runs the sensor's own sensed snapshots started (`orca.sensed`), mapped to
+its kind. The page's JSON (and `/api/pipelines/<name>`) has it as
+`follow`: `datasets`, `upstream`, `unit`, `available`, `done`, `behind`,
+and `live`, `failed` and `waiting`, each a `count` and its `first` eight
+keys; null for a pipeline that isn't a dated sensor. It's one query for
+the keys and the calendar's three for their states.
+
 While its oldest queued run waits for room on its host, the Progress card
 says why under **Waiting** (`waiting: needs 2 GB, 1.3 GB free of grants`),
 and the JSON has it as `waiting` (null otherwise).
+
+### Coverage
+
+Operate's **Coverage** card is a dated pipeline's partitions on a
+calendar, each coloured by its state: done, failed, running or queued, not
+run, or outside the pipeline's range (before its start, or after today).
+Hover a day for its date and state.
+
+A daily pipeline's card has two tabs, **Month** and **Year**, remembered
+in the browser like the Steps tabs; Year is the default. Year is twelve
+small months (Monday to Sunday, like Month), each named with how many of
+its days in the range are done (`28/31 done, 1 failed`) and linking to
+that month; `‹ 2026 ›` moves a year within the range. Under it, a strip
+has every month of the range (the last ten years at most), darker the
+more of its days are done, each linking to its year. The tabs and arrows
+are links (`?cal=2026` or `?cal=2026-03`, `&cov=year` or `month`), so all
+of it works without scripts. A monthly pipeline's card is a year of
+months, a keyed pipeline has none.
+
+For a sensor (`orca.sensors`), days the datasets it follows have but no run
+of it has done, failed on or is running are **behind**, in amber, with a
+line under the legend saying what that means.
+
+The card reads one year for both tabs: which days are done (of the year
+and the strip's range together), the live runs, and each day's last run,
+three queries whatever the view.
 
 Each fact's name has a "?" that explains it, with a link to the docs.
 Steps shows a Graph and a Table tab (`?steps=graph|table`). Hovering any

@@ -108,11 +108,50 @@ echo "$page" | grep -qF '<input name="partitions" required' || fail "no text fie
 echo "$page" | grep -qF '<div class="cal" hidden data-calendar="/pipelines/daily/calendar"></div>' || fail "no hidden picker"
 echo "$page" | grep -qF '<li class="cal__day cal--done" data-key="2024-03-02" title="2024-03-02: done">' || fail "coverage lacks 2024-03-02 done"
 echo "$page" | grep -qF 'cal--failed" data-key="2024-03-06"' || fail "coverage lacks 2024-03-06 failed"
-echo "$page" | grep -qF 'href="/pipelines/daily?cal=2024-02#coverage"' || fail "coverage lacks its previous-month link"
+echo "$page" | grep -qF 'href="/pipelines/daily?cal=2024-02&amp;cov=month#coverage"' || fail "coverage lacks its previous-month link"
 get '/pipelines/daily?cal=2024-02' | grep -qF 'data-key="2024-02-29"' || fail "coverage of February"
 get '/pipelines/toy?tab=operate' | grep -qF 'data-key="2024-02" title="2024-02: failed"' || fail "monthly coverage"
 get '/pipelines/daily?cal=bad' | grep -qF 'class="refused"' || fail "coverage of a bad month"
 echo "ok   calendar: text field fallback and coverage"
+
+# Coverage's Month and Year tabs: a daily pipeline opens on Year, both are
+# in the page, and ?cov= picks one without scripts.
+echo "$page" | grep -qF 'data-view="year" href="/pipelines/daily?cal=2024&amp;cov=year#coverage" aria-selected="true"' \
+    || fail "Year isn't the default tab"
+echo "$page" | grep -qF 'data-view="month" href="/pipelines/daily?cal=2024-03&amp;cov=month#coverage" aria-selected="false"' \
+    || fail "no Month tab for this month"
+echo "$page" | grep -qF '<div id="coverage-month" role="tabpanel" class="cov__body" hidden>' || fail "the month isn't hidden"
+echo "$page" | grep -qF '<div id="coverage-year" role="tabpanel" class="cov__body">' || fail "the year is hidden"
+m=$(get '/pipelines/daily?cov=month')
+echo "$m" | grep -qF '<div id="coverage-month" role="tabpanel" class="cov__body">' || fail "?cov=month hides the month"
+echo "$m" | grep -qF '<div id="coverage-year" role="tabpanel" class="cov__body" hidden>' || fail "?cov=month shows the year"
+echo "$m" | grep -qF 'id="start"' || fail "?cov= doesn't open Operate"
+# The year: twelve months of cells, each with its share done (of its days
+# from the start to today) and its failures, its name linking its month.
+[ "$(echo "$page" | grep -o 'class="cov__month"' | wc -l | tr -d ' ')" = 12 ] || fail "not twelve months"
+echo "$page" | grep -qF 'href="/pipelines/daily?cal=2024-03&amp;cov=month#coverage">March</a><span class="cov__sum">3/20 done, 1 failed</span>' \
+    || fail "March's summary: $(echo "$page" | grep -o 'March</a><span class="cov__sum">[^<]*')"
+echo "$page" | grep -qF 'January</a><span class="cov__sum">0/31 done</span>' || fail "January's summary"
+echo "$page" | grep -qF 'April</a><span class="cov__sum">not in range</span>' || fail "April's summary"
+echo "$page" | grep -qF 'aria-label="Days of February 2024"' || fail "no February grid"
+echo "$page" | grep -qF '<li class="cal__day cal--failed" data-key="2024-03-06" title="2024-03-06: failed"><span class="sr">' \
+    || fail "the year's cells lack their tooltip"
+[ "$(echo "$page" | grep -o 'data-key="2024-' | wc -l | tr -d ' ')" = $((366 + 31)) ] || fail "not the year's days and the month's"
+echo "$page" | grep -qF '<span class="cal__key cal--done"></span> 3 done' || fail "the year's legend"
+# The strip: each month of the range, linking its year.
+echo "$page" | grep -qF '<a class="cov__bar cov--0 cov--here" href="/pipelines/daily?cal=2024&amp;cov=year#coverage" title="2024-03: 3/20 done (15%)">' \
+    || fail "the strip lacks March"
+[ "$(echo "$page" | grep -o 'class="cov__bar' | wc -l | tr -d ' ')" = 3 ] || fail "the strip isn't three months"
+# A year before the start: all outside, its next year linked, none before.
+y=$(get '/pipelines/daily?cal=2023&cov=year')
+echo "$y" | grep -qF 'href="/pipelines/daily?cal=2024&amp;cov=year#coverage" aria-label="Next year"' || fail "2023's next year"
+echo "$y" | grep -qF 'aria-label="Previous year"' && fail "a year before 2023"
+echo "$y" | grep -qF 'December</a><span class="cov__sum">not in range</span>' || fail "2023 isn't outside"
+echo "$y" | grep -qF 'data-view="month" href="/pipelines/daily?cal=2023-12&amp;cov=month' || fail "a past year's month isn't December"
+# A monthly pipeline keeps its year of months, with no tabs.
+t=$(get '/pipelines/toy?tab=operate')
+echo "$t" | grep -qF 'id="coverage"' && echo "$t" | grep -qF 'data-view="year"' && fail "a monthly pipeline has tabs"
+echo "ok   calendar: coverage's month and year"
 
 # A range as the picker writes it: the preview, then the backfill, queue
 # the days that aren't done or live, and no others.
@@ -133,6 +172,48 @@ c=$(get '/pipelines/daily/calendar?month=2024-03')
 got=$(q "SELECT string_agg(partitions, ',' ORDER BY partitions) FROM orca.runs WHERE pipeline = 'daily' AND trigger = 'backfill'")
 [ "$got" = 2024-03-05,2024-03-06,2024-03-07,2024-03-12,2024-03-14,2024-03-15 ] || fail "the multi-range queued $got"
 echo "ok   calendar: a picked range queues the right partitions"
+
+# A sensor that follows another pipeline's dataset: how far behind it is.
+# daily becomes a sensor of up.days, which toy committed for 2024-03-01..08
+# (a step a day), and a snapshot it sensed itself started a run of
+# 2024-03-18 that failed. The backfill above queued 03-05..07.
+j=$(curl -fsS -H 'Accept: application/json' "$base/api/pipelines/daily")
+echo "$j" | jq -e '.follow == null' > /dev/null || fail "a pipeline that isn't a sensor follows: $(echo "$j" | jq -c .follow)"
+q "UPDATE orca.pipelines SET describe = jsonb_set(jsonb_set(describe, '{sensor}', 'true'),
+    '{steps,0,reads}', '[\"up.days\"]') WHERE name = 'daily'" > /dev/null
+up=$(q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
+    SELECT 'toy', registry_hash, '2024-03-01..2024-03-08', 'manual', 'succeeded' FROM orca.pipelines WHERE name = 'toy' RETURNING id" | head -1)
+q "WITH s AS (INSERT INTO orca.steps (run, step, partition, ord, status)
+      SELECT $up, 'write', to_char(d, 'YYYY-MM-DD'), 0, 'succeeded'
+      FROM generate_series('2024-03-01'::date, '2024-03-08'::date, '1 day') d RETURNING id, partition),
+    a AS (INSERT INTO orca.attempts (step, attempt, status, host, registry_hash)
+      SELECT id, 1, 'succeeded', 'h', 'x' FROM s RETURNING id)
+    INSERT INTO orca.commits (attempt, table_name, snapshot_id, dataset)
+      SELECT id, 'up.days', id, 'up.days' FROM a" > /dev/null
+r18=$(q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
+    VALUES ('daily', '$hash', '2024-03-18', 'sensor', 'failed') RETURNING id" | head -1)
+q "INSERT INTO orca.sensed (pipeline, dataset, snapshot_id, run) VALUES ('daily', 'up.days', 999, $r18)" > /dev/null
+j=$(curl -fsS -H 'Accept: application/json' "$base/api/pipelines/daily")
+echo "$j" | jq -e '.follow | .datasets == ["up.days"] and .upstream == ["toy"] and .unit == "day"
+    and .available == 9 and .done == 3 and .behind == 6
+    and .live == {count: 3, first: ["2024-03-05", "2024-03-06", "2024-03-07"]}
+    and .failed == {count: 1, first: ["2024-03-18"]}
+    and .waiting == {count: 2, first: ["2024-03-01", "2024-03-08"]}' > /dev/null \
+    || fail "what daily follows: $(echo "$j" | jq -c .follow)"
+p=$(get '/pipelines/daily/progress')
+echo "$p" | grep -qF 'toy (up.days): 3 of 9 days done; <span class="warn">6 behind</span>: 3 running or queued, 1 failed and 2 not queued yet' \
+    || fail "the Progress card's Following: $(echo "$p" | grep -o 'toy (up.days)[^<]*')"
+echo "$p" | grep -qF 'Not queued: <a href="/pipelines/daily?cal=2024-03&amp;cov=month#coverage">2024-03-01</a>, <a' \
+    || fail "the days not queued aren't linked"
+page=$(get '/pipelines/daily?tab=operate')
+echo "$page" | grep -qF '<li class="cal__day cal--behind" data-key="2024-03-01" title="2024-03-01: behind what it follows">' \
+    || fail "2024-03-01 isn't behind"
+echo "$page" | grep -qF 'cal--behind" data-key="2024-03-08"' || fail "2024-03-08 isn't behind"
+echo "$page" | grep -qF 'cal--open" data-key="2024-03-09"' || fail "2024-03-09 isn't open"
+echo "$page" | grep -qF '<span class="cal__key cal--behind"></span> 2 behind what it follows' || fail "no behind in the legend"
+echo "$page" | grep -qF 'Behind: up.days has it' || fail "no help for behind"
+get '/pipelines/toy?tab=operate' | grep -qF 'cal--behind' && fail "toy follows nothing"
+echo "ok   calendar: how far a sensor is behind what it follows"
 
 kill "$ui" 2> /dev/null || true
 ui=

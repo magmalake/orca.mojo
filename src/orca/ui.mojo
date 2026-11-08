@@ -8,9 +8,9 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 |---|---|
 | `/` | pipelines, with their schedules, next runs and last runs |
 | `/pipelines/<name>` | `?tab=overview` (default), `runs` or `operate`, each its own page; a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`orca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; its registration as `orca config show` prints it (`#config`, Overview); `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing; `?steps=graph` or `table`: the Steps tab shown without scripts |
-| `/pipelines/<name>/progress` | the page's Progress card (runs going, fill, next run), as an HTML fragment the page refreshes every 5 s |
+| `/pipelines/<name>/progress` | the page's Progress card (runs going, fill, how far a sensor is behind what it follows (`orca.follow`), next run), as an HTML fragment the page refreshes every 5 s |
 | `/api/pipelines/<name>` | the same as JSON, whatever is asked for |
-| `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=`) and as the Start runs form's date picker |
+| `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=` a month or year, `?cov=month` or `year`: a daily one's tab, year by default, both from one read of the year in `orca.ui_coverage`) and as the Start runs form's date picker |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
 | `/runs` | runs, newest first, `?limit=` (or `?n=`; 50, at most 500) to a page; `?pipeline=`, `?status=`, `?trigger=`; `?before=<id>`: the page older than that run, `?after=<id>`: the page newer than it (keyset, so pages stay put as runs arrive); the JSON's `next`, `prev` (and `next_url`, `prev_url`) are the cursors either side. A pipeline's Runs tab pages the same, 20 to a page (`runs_page` in its JSON) |
 | `/runs/table` | a runs list's page as the fragment it refreshes from: `?view=list` (`/runs`), `pipeline` (a pipeline's Runs tab) or `home` (recent runs), with the list's filters, `limit` and cursor; `X-Poll-Every` says when to ask again (5 s while a run on it is queued or running, 30 s on the newest page otherwise), and an older page with nothing going on answers 286 |
@@ -124,7 +124,7 @@ from orca.actions import (
     start_run,
     stalled_sql,
 )
-from orca.calendar import Calendar, calendar, calendar_json
+from orca.calendar import calendar, calendar_json
 from orca.chart import DayRuns, runs_chart
 from orca.civil import Civil, now
 from orca.logs import location_exists, read_location, run_dir
@@ -236,6 +236,8 @@ from orca.watchdog import (
     watchdog_json,
 )
 from orca.ui_style import STYLE
+from orca.follow import Follow, follow, follow_json
+from orca.ui_coverage import COVERAGE_STYLE, coverage_html, follow_html
 from orca.ui_viz import (
     VIZ_STYLE,
     gantt_json,
@@ -3429,112 +3431,6 @@ def calendar_page(mut db: State, name: String, month: String) raises -> Page:
         return _bad_request(String(e))
 
 
-def _month_name(month: Int) -> String:
-    var names = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-    ]
-    return String(names[month - 1])
-
-
-def _state_words(state: String) -> String:
-    if state == "live":
-        return "running or queued"
-    if state == "open":
-        return "not run"
-    if state == "outside":
-        return "outside the pipeline's range"
-    return state
-
-
-def _cal_title(c: Calendar) raises -> String:
-    if c.kind == "monthly":
-        return c.period
-    var y = c.period[byte=:4]
-    var m = Int(c.period[byte=5:7])
-    return String(_month_name(m), " ", y)
-
-
-def _coverage_html(
-    mut h: Html, mut db: State, p: PipelineRow, cal: String
-) raises:
-    """The pipeline page's coverage: its calendar with each day's state,
-    read-only, a month (or year) at a time with links to the next, so it
-    needs no scripts."""
-    var daily = p.kind == "daily"
-    var base = String("/pipelines/", url_encode(p.name))
-    h.raw('<h2 id="coverage">Coverage</h2><div class="cal cal--static"')
-    h.raw(' role="group" aria-label="')
-    h.text("Days" if daily else "Months", " of ", p.name)
-    h.raw('">')
-    var c: Calendar
-    try:
-        c = calendar(db, p.name, p.kind, p.start, cal)
-    except e:
-        h.raw('<p class="refused">')
-        h.text(String(e))
-        h.raw("</p></div>")
-        return
-    h.raw('<div class="cal__head">')
-    if c.prev:
-        h.raw('<a rel="prev" href="')
-        h.text(base, "?cal=", c.prev, "#coverage")
-        h.raw(
-            '" aria-label="Previous ', "month" if daily else "year", '">‹</a>'
-        )
-    else:
-        h.raw('<span aria-hidden="true">‹</span>')
-    h.raw('<strong aria-live="polite">')
-    h.text(_cal_title(c))
-    h.raw("</strong>")
-    if c.next:
-        h.raw('<a rel="next" href="')
-        h.text(base, "?cal=", c.next, "#coverage")
-        h.raw('" aria-label="Next ', "month" if daily else "year", '">›</a>')
-    else:
-        h.raw('<span aria-hidden="true">›</span>')
-    h.raw('</div><ul class="cal__grid')
-    h.raw(" cal__grid--days" if daily else " cal__grid--months", '">')
-    if daily:
-        for w in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]:
-            h.raw('<li class="cal__dow" aria-hidden="true">', w, "</li>")
-        for _ in range(c.weekday):
-            h.raw('<li class="cal__pad" aria-hidden="true"></li>')
-    for i in range(len(c.cells)):
-        ref cell = c.cells[i]
-        h.raw('<li class="cal__day cal--', cell.state, '" data-key="')
-        h.text(cell.key)
-        h.raw('" title="')
-        h.text(cell.key, ": ", _state_words(cell.state))
-        h.raw('">')
-        if daily:
-            h.text(i + 1)
-        else:
-            h.text(_month_name(i + 1)[byte=:3])
-        h.raw('<span class="sr">')
-        h.text(", ", cell.key, " ", _state_words(cell.state))
-        h.raw("</span></li>")
-    h.raw('</ul><p class="muted cal__legend">')
-    var first = True
-    for s in ["done", "failed", "live", "open", "outside"]:
-        var n = c.count(String(s))
-        h.raw("" if first else " · ")
-        first = False
-        h.raw('<span class="cal__key cal--', s, '"></span> ')
-        h.text(n, " ", _state_words(String(s)))
-    h.raw("</p></div>")
-
-
 comptime _CAL_SCRIPT = """
 (() => {
   const root = document.querySelector("[data-calendar]");
@@ -4068,7 +3964,11 @@ def _usage_facts(mut h: Html, u: Usage, live: Bool):
 
 
 def _progress_html(
-    mut h: Html, p: PipelineRow, fill: Optional[FillStatus], fires: List[Fire]
+    mut h: Html,
+    p: PipelineRow,
+    fill: Optional[FillStatus],
+    fires: List[Fire],
+    f: Optional[Follow] = None,
 ):
     """The Progress card's facts: the runs going, the fill, a failing
     sensor, the next fire. Its own fragment too, which the page refreshes
@@ -4116,6 +4016,21 @@ def _progress_html(
             _FILLS_DOCS,
         )
         _fill_html(h, fill.value())
+        h.raw("</dd>")
+    if f:
+        _fact(
+            h,
+            "Following",
+            "following",
+            (
+                "A sensor runs the partitions of the tables it reads as they"
+                " get snapshots. This is how many of those partitions it has"
+                " done, and the ones it hasn't: going, failed, or not queued"
+                " yet (a backfill queues them). They are behind on Coverage."
+            ),
+            "sensors",
+        )
+        follow_html(h, p.name, f.value())
         h.raw("</dd>")
     if p.sense_error:
         _fact(
@@ -4174,7 +4089,13 @@ def pipeline_progress(mut db: State, name: String) raises -> Page:
     except:
         pass
     var h = Html()
-    _progress_html(h, ps[0], _fill_of(db, name), fires)
+    _progress_html(
+        h,
+        ps[0],
+        _fill_of(db, name),
+        fires,
+        follow(db, name, ps[0].kind, ps[0].start),
+    )
     return Page(200, String(), h^.finish(), "text/html; charset=utf-8")
 
 
@@ -4457,6 +4378,7 @@ def _cards_html(
     steps: List[StepDef],
     links: CodeLinks,
     usage: UsageSummary,
+    f: Optional[Follow] = None,
 ):
     """The pipeline page's cards: what's going on (refreshed while the page
     is open), and on the Overview tab how it's set up, its code and what
@@ -4470,7 +4392,7 @@ def _cards_html(
     )
     h.text(base, "/progress")
     h.raw('" data-poll-every="5">')
-    _progress_html(h, p, fill, fires)
+    _progress_html(h, p, fill, fires, f)
     h.raw("</div></section>")
     if tab != "overview":
         h.raw("</div>")
@@ -4657,6 +4579,7 @@ def pipeline(
     allow_append: Bool = False,
     steps_view: String = "",
     tab_in: String = "",
+    cov: String = "",
     url: String = "",
 ) raises -> Page:
     """A pipeline's page, one of its tabs (`?tab=`): `overview`, `runs` or
@@ -4665,14 +4588,15 @@ def pipeline(
     `&allow_append=1` for a rerun that appends again); `cal` is the month
     (or year) its coverage calendar shows; both are on Operate, which they
     open when no tab is asked for. `steps_view` (`?steps=`) is `graph` or
-    `table`, the view of its steps shown without scripts. `url`'s
+    `table`, the view of its steps shown without scripts, and `cov`
+    (`?cov=`) `month` or `year`, its coverage's tab. `url`'s
     `?before=`, `?after=` and `?limit=` page its runs (the Runs tab's, and
     `runs` in the JSON, with `runs_page`). The JSON is the same on every
     tab."""
     var tab = tab_in if (tab_in == "runs" or tab_in == "operate") else String(
         "overview"
     )
-    if not tab_in and (preview or cal or keys_in):
+    if not tab_in and (preview or cal or cov or keys_in):
         tab = "operate"
     var ps = _pipelines(db, name)
     if len(ps) == 0:
@@ -4690,10 +4614,12 @@ def pipeline(
     var runs = runs_page(db, runs_query(url, "pipeline", name))
     var fill = _fill_of(db, name)
     var usage = _usage_summary(db, name)
+    var fol = follow(db, name, p.kind, p.start)
 
     var j = String('{"pipeline": ')
     _json_pipeline(j, p)
     j.write(', "fill": ', status_json(fill.value()) if fill else "null")
+    j.write(', "follow": ', follow_json(fol.value()) if fol else "null")
     j.write(', "steps": [')
     for i in range(len(steps)):
         if i:
@@ -4799,7 +4725,7 @@ def pipeline(
     )
     var base = String("/pipelines/", url_encode(p.name))
     _tabs_html(h, base, tab)
-    _cards_html(h, p, tab, fill, fires, steps, links, usage)
+    _cards_html(h, p, tab, fill, fires, steps, links, usage, fol)
     if tab == "overview":
         _steps_html(
             h,
@@ -4861,7 +4787,7 @@ def pipeline(
             config_html(h, configs[0], repo, links.pipeline.url)
     elif tab == "operate":
         if p.kind == "daily" or p.kind == "monthly":
-            _coverage_html(h, db, p, cal)
+            coverage_html(h, db, p.name, p.kind, p.start, cal, cov, fol)
         if p.binary:
             var regs = registered(db, name)
             _start_html(
@@ -8464,7 +8390,9 @@ struct Ui(Copyable, Handler):
             var resp = Response(
                 status=200,
                 reason="OK",
-                body=List[UInt8](String(STYLE, VIZ_STYLE).as_bytes()),
+                body=List[UInt8](
+                    String(STYLE, VIZ_STYLE, COVERAGE_STYLE).as_bytes()
+                ),
             )
             resp.headers.set("Content-Type", "text/css; charset=utf-8")
             return resp^
@@ -8803,6 +8731,7 @@ struct Ui(Copyable, Handler):
                     _query(url, "allow_append") == "1",
                     _query(url, "steps"),
                     _query(url, "tab"),
+                    _query(url, "cov"),
                     url,
                 )
             if len(parts) == 2 and parts[1] == "progress" and name:
