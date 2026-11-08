@@ -148,7 +148,7 @@ def pipeline_rows(mut db: State, name: String = "") raises -> List[PipelineRow]:
                 " coalesce(p.cpus, '') AS cpus, coalesce(p.memory_gb, '') AS"
                 " memory_gb, coalesce((SELECT r.held FROM orca.runs r WHERE"
                 " r.pipeline = p.name AND r.status = 'queued' AND r.held LIKE"
-                " 'waiting: needs %' ORDER BY r.id LIMIT 1), '') AS waiting, "
+                " 'waiting: %' ORDER BY r.id LIMIT 1), '') AS waiting, "
             ),
             utc_sql("p.sense_error_at"),
             (

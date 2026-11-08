@@ -18,6 +18,13 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# The tests' runs start whatever the runner's own memory pressure (#202): a
+# runner compiling Mojo beside them can stall on memory, and no test's timing
+# should hang on that. The scheduler still reads the runner's PSI file;
+# tests/pressure.sh sets a limit of its own over a fixture file.
+env:
+  ORCA_ADMIT_MEMORY_PRESSURE: "0"
+
 jobs:
   # A release PR (only versions, CHANGELOG.md, revs and locks change; see
   # tools/release_only.py in magmalake/.github) skips the nightly leg, kind,

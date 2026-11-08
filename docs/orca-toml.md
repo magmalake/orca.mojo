@@ -79,7 +79,7 @@ the file's only: no flag sets them.
 - `fills = "all"` for a keyed pipeline, a sensor, or one with no first partition. `orca register` refuses it with the file and line, because it has to see the pipeline first; see [Fills](#fills).
 - An `env` name that isn't a valid variable name.
 - An `env` name that looks like a secret (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*DATABASE_URL*`). Put those in `secrets` instead.
-- An `env` variable that orca sets itself: `ORCA_DATABASE_URL`, `ORCA_IMAGE`, `ORCA_SECRETS`, `ORCA_WORKERS`, `DISTA_ROLE`, `DISTA_HEAD`, `DISTA_ADVERTISE`, `ORCA_GRANT_CPUS`, `ORCA_GRANT_MEMORY_MB`.
+- An `env` variable that orca sets itself: `ORCA_DATABASE_URL`, `ORCA_IMAGE`, `ORCA_SECRETS`, `ORCA_WORKERS`, `DISTA_ROLE`, `DISTA_HEAD`, `DISTA_ADVERTISE`, `ORCA_GRANT_CPUS`, `ORCA_GRANT_MEMORY_MB`, `ORCA_MEMORY_PRESSURE_FILE`.
 
 Each refusal names the file and line, and nothing is registered:
 
@@ -207,6 +207,56 @@ env = { DISTA_WORKER_SLOTS = "auto", GHARCHIVE_PARALLEL = "auto" }
 - **The control placement's memory cap** (`ORCA_CONTROL_MEMORY_MB`, 1024)
   still kills a control-placed run over it, whatever its grant: set it at
   least as high as the largest `memory_gb` maximum you place there.
+
+### Memory pressure
+
+Requests are estimates, and a host can be short of memory while its grants
+add up: page cache, Postgres, a run past its estimate. So on top of
+`max_runs`, `fill_max_runs` and the grants, the scheduler reads the host's
+memory pressure each tick: Linux's pressure stall information (PSI), the
+share of time tasks were stalled waiting for memory. It applies to every
+pipeline started on the local runner or the control host, with a request or
+without one, and to the runs a [remote worker](workers.md) claims, which
+reads its own host's.
+
+| Variable | Default | |
+|---|---|---|
+| `ORCA_ADMIT_MEMORY_PRESSURE` | 10 | the `some avg10` percent over which no new run starts; 0 turns it off |
+| `ORCA_ADMIT_PRESSURE_GRACE_SECONDS` | 600 | how long a hold lasts with none of orca's runs going before runs start one at a time |
+| `ORCA_MEMORY_PRESSURE_FILE` | found | the PSI file to read instead of the one orca finds |
+
+- **The hold.** While `some avg10` is over the limit, no new run starts on
+  that host; runs already going go on. A queued run says why, on its page,
+  its pipeline's (**Waiting**), the runs and home pages, and in the JSON:
+  `waiting: memory pressure 23% (limit 10%)`; on a worker's pool, `... on
+  worker <name>`. The hold ends once `avg10` is under half the limit, or has
+  stayed at most the limit for 30 s (`... 7%, easing (limit 10%)` until
+  then), so a reading at the limit doesn't flap.
+- **Never forever.** A hold that has lasted the grace with none of orca's
+  runs going on the host isn't orca's doing: the scheduler (or worker) logs
+  it, raises the `memory-pressure` [alert](alerts.md) once, and starts runs
+  there one at a time until the pressure eases.
+- **Which file.** In order: `ORCA_MEMORY_PRESSURE_FILE`; the cgroup v2
+  `memory.pressure` of the nearest cgroup, from the scheduler's own up,
+  whose `memory.max` is a limit (a Docker container run with `--memory`);
+  the host's `/proc/pressure/memory`; the scheduler's own cgroup's
+  `memory.pressure` though it has no limit. Without any (macOS, or a kernel
+  built or booted without PSI) nothing is held, and the scheduler says so
+  once when it starts. [hetzner.md](hetzner.md#memory-pressure) has what
+  that means in the stack's container.
+- **Runs can read it too.** Every run started on the local runner, the
+  control host or a worker gets `ORCA_MEMORY_PRESSURE_FILE`, the file its
+  host's pressure was read from, which `env` can't set. A step can poll it
+  (`orca.memory_pressure()`, which returns the `some` and `full` averages,
+  or None) and lower its own parallelism while it's high. The file is
+  Linux's: `some avg10=1.53 avg60=0.87 avg300=0.24 total=1234567`, then a
+  `full` line the same; read it whole, as often as every second.
+- **Where it shows.** Ops › Control's **Memory pressure** card and
+  `memory_pressure` in `/api/system` (and in `/` and `/runs`' JSON); each
+  worker's on Ops › Workers and in `/api/workers`; the gauges
+  `orca_memory_pressure_some_avg10` (`_avg60`, `_avg300`, `full_*`) and
+  `orca_admission_memory_pressure_held` on `/metrics`, labelled by `host`;
+  and a line of `orca status`.
 
 ### "auto" from the grant
 

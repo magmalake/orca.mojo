@@ -149,6 +149,35 @@ left out runs on the scheduler's runner, here the local one. The Fleet page
 rule reads "fixed price" and never trips; its launch, idle, failing, stuck
 and control rules stay on.
 
+## Memory pressure
+
+Grants are estimates, and on one server everything shares the memory:
+Postgres, the UI, the page cache and every run. So the scheduler also
+stops starting runs while the machine stalls on memory
+([orca.toml](orca-toml.md#memory-pressure)): while Linux's pressure stall
+information reads `some avg10` over `ORCA_ADMIT_MEMORY_PRESSURE` (10%, in
+`orca.env`; 0 turns it off), new runs wait, saying `waiting: memory
+pressure 23% (limit 10%)`, and the runs already going go on. Ops › Control
+has the current reading, and `/metrics` and `orca status` too.
+
+What it reads, here: the scheduler runs in a container and its runs are
+child processes in that container. Inside a container
+`/proc/pressure/memory` is the host's (PSI isn't namespaced), while the
+container's own cgroup has `/sys/fs/cgroup/memory.pressure`. The stack
+starts the scheduler with no `--memory` limit, so its cgroup can't run
+short by itself, and the scheduler reads the host's file: the right signal
+when Postgres and the runs compete for the server's memory. Give the
+scheduler's container a `--memory` limit and it reads its own cgroup's
+instead, which stalls at that limit even with the host at ease. The log's
+first lines say which (`orca: memory pressure from /proc/pressure/memory
+(the host's) ...`). Ubuntu's kernel has PSI on; on a kernel without it (or
+booted with `psi=0`) nothing is held and the log says so once.
+
+Each run gets `ORCA_MEMORY_PRESSURE_FILE`, the same file, to poll if it
+wants to lower its own parallelism (`orca.memory_pressure()`). The
+watchdog's memory rule stays the last line of defence: it pauses pipelines
+once memory is nearly full, which pressure should keep from happening.
+
 ## Deploying code
 
 ```sh

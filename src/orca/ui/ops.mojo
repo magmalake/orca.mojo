@@ -7,6 +7,13 @@ Prometheus' `/metrics`, with the fragments each refreshes from.
 
 from std.os import getenv
 
+from orca.admission import (
+    pressure_html,
+    pressure_prometheus,
+    pressure_rows,
+    row_json,
+    scheduler_pressure,
+)
 from orca.fleet import (
     charts_html,
     charts_json,
@@ -157,6 +164,7 @@ def _system_live(mut h: Html, mut db: State, span: String) raises:
     health over `span`, and the alerts sent."""
     banner_html(h, active_trips(db))
     system_html(h, system_now(db), system_charts(db, range_hours(span)), span)
+    pressure_html(h, scheduler_pressure(db))
     notify_html(h, notify_configured(), recent_alerts(db))
 
 
@@ -182,6 +190,8 @@ def system_page(mut db: State, range: String) raises -> Page:
     h.raw('" data-poll-every="', _CONTROL_EVERY, '">')
     banner_html(h, active_trips(db))
     system_html(h, now, charts, span)
+    var pressure = scheduler_pressure(db)
+    pressure_html(h, pressure)
     var sent = recent_alerts(db)
     notify_html(h, notify_configured(), sent)
     h.raw("</div>")
@@ -191,6 +201,8 @@ def system_page(mut db: State, range: String) raises -> Page:
         json[byte=:close],
         ', "notify": ',
         notify_json(notify_configured(), sent),
+        ', "memory_pressure": ',
+        row_json(pressure),
         "}",
     )
     return Page(200, with_alerts, page_html("Control", "/ops/control", h))
@@ -204,6 +216,7 @@ def metrics_page(mut db: State) raises -> Page:
         String(),
         String(
             prometheus(system_now(db), fleet_summary(db)),
+            pressure_prometheus(pressure_rows(db)),
             watchdog_prometheus(db, watchdog_config()),
         ),
         "text/plain; version=0.0.4; charset=utf-8",

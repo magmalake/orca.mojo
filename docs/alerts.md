@@ -24,6 +24,7 @@ this for you: see [hetzner.md](hetzner.md#alerts-on-your-phone-ntfy).
 | `fill-stalled` | a [fill](orca-toml.md#fills) has had no fill run finish in `ORCA_NOTIFY_FILL_STALL_HOURS` (2) | high; "moving again" once it is |
 | `disk` | the control host's fullest disk is over `ORCA_NOTIFY_DISK_PERCENT` (85) | high; "fine again" once it is under |
 | `worker-lost` | a [remote worker](workers.md) holding runs has been quiet for `ORCA_NOTIFY_WORKER_SECONDS` (300) | default |
+| `memory-pressure` | the scheduler's host, or a worker's, has held new runs for [memory pressure](orca-toml.md#memory-pressure) for `ORCA_ADMIT_PRESSURE_GRACE_SECONDS` (600) with none of orca's runs going there; runs then start one at a time | high; "has eased" once it doesn't hold |
 | anything | a script ran `orca notify --kind <kind> ...` | as given |
 
 Each is one POST of plain text with ntfy's `Title`, `Priority`, `Tags` and

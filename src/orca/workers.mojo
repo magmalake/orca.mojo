@@ -44,6 +44,16 @@ from std.os import getenv
 from json import Value, loads
 from postgres import Params
 
+from orca.admission import (
+    PressureRow,
+    Report,
+    alert_stuck,
+    pressure_rows,
+    record as record_pressure,
+    resolve_stuck,
+    row_json,
+    worker_host,
+)
 from orca.control import WORKER_PREFIX, pool_of, pool_problem
 from orca.html import Html
 from orca.http_store import (
@@ -56,6 +66,7 @@ from orca.http_store import (
     steps_json,
 )
 from orca.json import quote
+from orca.pressure import pct_text
 from orca.live import dead_sql, stale_limit, start_grace
 from orca.resources import Grant, Room, admit
 from orca.scheduler import registered
@@ -205,12 +216,18 @@ struct WorkerRow(Copyable, Movable):
     var running: String
     """The runs it's running, comma-separated, as it said."""
     var expires: String
+    var pressure: Optional[PressureRow]
+    """Its host's newest memory pressure reading (`orca.admission`), if
+    it sent one."""
 
 
 def worker_rows(mut db: State) raises -> List[WorkerRow]:
     """Every worker token, newest first."""
     comptime ts = '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\''
     var out = List[WorkerRow]()
+    var pressure = Dict[String, PressureRow]()
+    for p in pressure_rows(db):
+        pressure[p.host] = p.copy()
     for r in db.conn.query(
         String(
             "SELECT id, pool, label, CASE WHEN revoked IS NOT NULL THEN",
@@ -240,6 +257,7 @@ def worker_rows(mut db: State) raises -> List[WorkerRow]:
                 Int(r.int64("mem")),
                 r.text("running"),
                 r.text("expires"),
+                pressure.get(worker_host(Int(r.int64("id")))),
             )
         )
     return out^
@@ -378,6 +396,50 @@ def _seen(mut db: State, w: WorkerAuth, v: Value) raises:
         .int64(mem)
         .text(text_field(v, "running")),
     )
+    if String("pressure") in v and v["pressure"].is_object():
+        _pressure_seen(db, w, v, Report.from_json(v["pressure"]))
+
+
+def _pressure_seen(mut db: State, w: WorkerAuth, v: Value, r: Report) raises:
+    """Keeps a worker's memory pressure (`orca.admission`), says on its
+    pool's queued runs that they wait for it while it claims none, and
+    alerts once a hold has nothing of orca's to wait for."""
+    record_pressure(db, worker_host(w.id), r)
+    var name = text_field(v, "name")
+    var who = String("worker ", name) if name else w.user()
+    var suffix = String(" on ", who)
+    if r.held:
+        _ = db.conn.execute(
+            (
+                "UPDATE orca.runs r SET held = $2 FROM orca.pipelines p WHERE"
+                " p.name = r.pipeline AND p.placement = $1 AND r.status ="
+                " 'queued' AND r.trigger <> 'fill' AND (r.held IS NULL OR"
+                " starts_with(r.held, 'held: waiting for a worker of pool ')"
+                " OR (starts_with(r.held, 'waiting: memory pressure ') AND"
+                " right(r.held, length($3)) = $3)) AND r.held IS DISTINCT FROM"
+                " $2"
+            ),
+            Params()
+            .text(w.placement())
+            .text(String(r.held, suffix))
+            .text(suffix),
+        )
+        if r.stuck:
+            alert_stuck(db, who, r)
+        return
+    _ = db.conn.execute(
+        (
+            "UPDATE orca.runs r SET held = $2 FROM orca.pipelines p WHERE"
+            " p.name = r.pipeline AND p.placement = $1 AND r.status = 'queued'"
+            " AND starts_with(r.held, 'waiting: memory pressure ') AND"
+            " right(r.held, length($3)) = $3"
+        ),
+        Params()
+        .text(w.placement())
+        .text(String("held: waiting for a worker of pool ", w.pool))
+        .text(suffix),
+    )
+    resolve_stuck(db, who, r)
 
 
 def text_field(v: Value, key: String) raises -> String:
@@ -821,6 +883,7 @@ def workers_json(rows: List[WorkerRow]) -> String:
             .int("memory_mb", Int64(r.memory_mb))
             .text("running", r.running)
             .text("expires", r.expires)
+            .raw("memory_pressure", row_json(r.pressure))
             .finish()
         )
     out.write("]}")
@@ -842,7 +905,8 @@ def workers_html(mut h: Html, rows: List[WorkerRow]):
     h.raw(
         "<table><thead><tr><th>Token</th><th>Pool</th><th>Label</th>",
         "<th>Worker</th><th>Image</th><th>Last seen</th><th>Running</th>",
-        "<th>CPUs</th><th>Memory</th><th>Expires</th></tr></thead><tbody>",
+        "<th>CPUs</th><th>Memory</th><th>Memory pressure</th>",
+        "<th>Expires</th></tr></thead><tbody>",
     )
     for r in rows:
         h.raw("<tr><td>")
@@ -873,6 +937,26 @@ def workers_html(mut h: Html, rows: List[WorkerRow]):
         h.raw("</td>")
         h.cell(String(r.cpus) if r.cpus else String("-"))
         h.cell(String(r.memory_mb, " MB") if r.memory_mb else String("-"))
+        _pressure_cell(h, r.pressure)
         h.cell(r.expires)
         h.raw("</tr>")
     h.raw("</tbody></table>")
+
+
+def _pressure_cell(mut h: Html, row: Optional[PressureRow]):
+    """A worker's memory pressure: `some avg10`, and why it claims nothing
+    while it holds."""
+    if not row or not row.value().fresh():
+        h.cell("-")
+        return
+    ref r = row.value().report
+    if not r.has:
+        h.raw('<td class="muted">no PSI</td>')
+        return
+    h.raw("<td>")
+    h.text(pct_text(r.some10), "%")
+    if r.held:
+        h.raw('<div class="muted">')
+        h.text(r.held.removeprefix("waiting: "), ": claims none")
+        h.raw("</div>")
+    h.raw("</td>")

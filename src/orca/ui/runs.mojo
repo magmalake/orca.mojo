@@ -6,10 +6,12 @@ runs picked to cancel, retry or backfill again in one go
 it refreshes from, for `/runs`, a pipeline's Runs tab and the home page.
 """
 
+from orca.admission import held_warning, row_json, scheduler_pressure
 from orca.api.runs import json_runs, json_runs_page, runs_filters_json
 from orca.html import Html, query_param, url_encode
 from orca.json import quote
 from orca.state import State
+from orca.system import alert_html
 from orca.ui.layout import HERE_SLOT, IDLE_EVERY, LIVE_EVERY, page_html
 from orca.ui.parts import runs_table_html
 from orca.views.runs import (
@@ -444,7 +446,8 @@ def runs(mut db: State, var q: RunsQuery, url: String = "") raises -> Page:
     runs_filters_json(j, p)
     j.write(", ")
     json_runs_page(j, p)
-    j.write("}")
+    var pressure = scheduler_pressure(db)
+    j.write(', "memory_pressure": ', row_json(pressure), "}")
 
     var pipelines = List[String]()
     for r in db.conn.query("SELECT name FROM orca.pipelines ORDER BY name"):
@@ -452,6 +455,9 @@ def runs(mut db: State, var q: RunsQuery, url: String = "") raises -> Page:
 
     var h = Html()
     h.raw("<h1>Runs</h1>")
+    var held = held_warning(pressure)
+    if held:
+        alert_html(h, [held])
     runs_filters_html(h, db, p, pipelines)
     runs_done_html(h, url)
     runs_bulk_html(h, p)

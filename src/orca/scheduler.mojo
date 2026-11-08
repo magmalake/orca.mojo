@@ -38,6 +38,11 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
 - **`max_runs`.** Under a lock on the pipeline's row, the runs that are live
   (a fresh heartbeat, or started by the scheduler less than the stale limit
   ago) are counted, and only that many fewer than `max_runs` are started.
+- **Memory pressure** (`orca.pressure`, `orca.admission`). On the local
+  runner and for control-placed runs, none starts while this host's PSI
+  `some avg10` is over `ORCA_ADMIT_MEMORY_PRESSURE` (10%), each queued run
+  `held` saying so; then the grants of a pipeline with a request
+  (`orca.resources`).
 - **Backfills queue what isn't done.** A key is done when every mapped
   step has succeeded for it in a run of the pipeline's current code
   (`DONE_SQL`). A backfill drops the keys that are done or in a live run
@@ -193,6 +198,21 @@ from orca.resources import (
     host_room,
     resolve_auto,
     run_env as grant_env,
+)
+from orca.admission import (
+    SCHEDULER_HOST,
+    Report,
+    alert_stuck,
+    record as record_pressure,
+    resolve_stuck,
+)
+from orca.pressure import (
+    Admission,
+    Source,
+    find_source,
+    pct_text,
+    pressure_env,
+    read_psi,
 )
 from orca.state import State
 from orca.watchdog import check as check_watchdog, config as watchdog_config
@@ -1122,6 +1142,17 @@ struct Scheduler(Movable):
     var _meters: Dict[Int, Meter]
     """A local or control-placed run's process to its samples, recorded on
     its attempts when it's reaped (`orca.usage`)."""
+    var psi: Source
+    """Where this host's memory pressure is read from (`orca.pressure`),
+    found once; none on macOS or without PSI."""
+    var admission: Admission
+    """Whether runs may start on this host for its memory pressure, from
+    each tick's reading."""
+    var _pressure_kept: Int
+    """When the reading was last kept in `orca.pressure`, on the monotonic
+    clock."""
+    var _pressure_unread: Bool
+    """The file was found but last couldn't be read (said once)."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -1173,6 +1204,33 @@ struct Scheduler(Movable):
         self._kept = Dict[Int, _ControlProc]()
         self._keeping = Dict[Int, String]()
         self._meters = Dict[Int, Meter]()
+        self.psi = find_source()
+        self.admission = Admission.from_env()
+        self._pressure_kept = 0
+        self._pressure_unread = False
+
+    def say_pressure(self):
+        """Says once, for `orca scheduler`, where this host's memory
+        pressure is read from and what it holds (`orca.pressure`)."""
+        if not self.psi:
+            print(
+                "orca: no memory pressure to read here (no PSI: macOS, or a",
+                " kernel without it); runs start on counts and grants alone",
+                sep="",
+            )
+        elif self.admission.limit <= 0:
+            print(
+                "orca: memory pressure from",
+                self.psi.describe(),
+                "- admission by it is off (ORCA_ADMIT_MEMORY_PRESSURE=0)",
+            )
+        else:
+            print(
+                "orca: memory pressure from",
+                self.psi.describe(),
+                "- no new runs start here while some avg10 is over",
+                String(pct_text(self.admission.limit), "%"),
+            )
 
     def register(
         mut self,
@@ -1476,6 +1534,10 @@ struct Scheduler(Movable):
                 except e:
                     print("orca: can't keep the driver log at", log, ":", e)
         var readings = self._sample()
+        try:
+            self._pressure()
+        except e:
+            print("orca: can't keep the memory pressure:", e)
         if self.runner:
             try:
                 var n = self.runner.value().sweep(self.db)
@@ -1546,6 +1608,42 @@ struct Scheduler(Movable):
             # After its other runs, so a fill never takes their place.
             if p.fill.all:
                 self._start(p, now, fill=True)
+
+    def _pressure(mut self) raises:
+        """Reads this host's memory pressure (`orca.pressure`) for this
+        tick's starts, says when a hold starts and ends, alerts once when
+        one has nothing of orca's to wait for, and keeps the reading in
+        `orca.pressure` every 5 s and on each change of hold (with no
+        reading where there's no PSI, so Ops says so)."""
+        var t = Int(perf_counter_ns())
+        var psi = read_psi(self.psi.path)
+        if self.psi and not psi and not self._pressure_unread:
+            print(
+                "orca: can't read memory pressure from",
+                self.psi.path,
+                "- nothing is held until it reads",
+            )
+        self._pressure_unread = not psi
+        var was = self.admission.hold
+        var now = Float64(t) / 1e9
+        self.admission.observe(psi, now, len(self._spawned) == 0)
+        ref a = self.admission
+        var r = Report.of(self.psi, a, now)
+        if a.held() and not was:
+            print("orca:", a.hold, "- no new runs start on this host")
+        if a.released:
+            print(
+                "orca: memory pressure",
+                String(pct_text(r.some10), "%"),
+                "- runs start on this host again",
+            )
+            resolve_stuck(self.db, "the scheduler's host", r)
+        if a.stuck:
+            alert_stuck(self.db, "the scheduler's host", r)
+        var changed = (was.byte_length() > 0) != a.held()
+        if changed or t - self._pressure_kept >= 5_000_000_000:
+            record_pressure(self.db, SCHEDULER_HOST, r)
+            self._pressure_kept = t
 
     def _exited(
         mut self,
@@ -2498,6 +2596,16 @@ struct Scheduler(Movable):
                     free = 0
                 else:
                     free = min(free, self.limits.max_runs - used)
+        # Memory pressure (orca.pressure): on this host, no start while it's
+        # over the limit, but one at a time once a hold has lasted its
+        # grace with none of orca's runs going.
+        if (control or placed == "local") and free > 0 and not hold:
+            var allowed = self.admission.allows(len(self._spawned) == 0)
+            if allowed == 0:
+                hold = self.admission.hold
+                free = 0
+            elif allowed > 0:
+                free = min(free, allowed)
         # A request (orca.resources): on this host, a start only if its
         # minimum fits what the running runs weren't granted, each with its
         # grant. A pipeline without one is started as ever.
@@ -2744,7 +2852,7 @@ struct Scheduler(Movable):
             # Its own variables, from orca.toml, its grant
             # (orca.resources), and its secrets, read now and named in
             # ORCA_SECRETS for masking; the rest it inherits.
-            var env = grant_env(p.env, grant)
+            var env = grant_env(p.env, grant, pressure_env(self.psi))
             try:
                 var secrets = List[Tuple[String, String]]()
                 for s in p.secrets:
@@ -2886,9 +2994,9 @@ struct Scheduler(Movable):
             var secrets = List[Tuple[String, String]]()
             for s in p.secrets:
                 secrets.append((s[0], fetch_secret(s[1])))
-            var env = grant_env(
-                p.env, grant, run_env(self.limits, p.image, secrets)
-            )
+            var extra = run_env(self.limits, p.image, secrets)
+            extra.extend(pressure_env(self.psi))
+            var env = grant_env(p.env, grant, extra)
             var location = String()
             var stage = String()
             if self.logs:

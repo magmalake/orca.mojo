@@ -49,6 +49,7 @@ from orca.civil import now, parse_time
 from orca.html import url_encode
 from orca.json import quote
 from orca.lineage import SnapshotRef
+from orca.pressure import pct_text
 from orca.scheduler import file_names
 from orca.state import State
 from orca.ui.parts import took_text
@@ -660,6 +661,40 @@ def _status_line(p: Value) raises -> String:
     return line^
 
 
+def pressure_status(v: Value) raises -> String:
+    """`orca status`'s line for the scheduler's host's memory pressure
+    (`memory_pressure` in `/`'s JSON, `orca.admission`), or empty for
+    none."""
+    if String("memory_pressure") not in v or v["memory_pressure"].is_null():
+        return ""
+    var m = v["memory_pressure"]
+    if m["some"].is_null() and m["path"].string_value():
+        return String("memory pressure: can't read ", m["path"].string_value())
+    if m["some"].is_null():
+        return "memory pressure: none to read (no PSI on the scheduler's host)"
+    var line = String(
+        "memory pressure: ",
+        _pct(m["some"]["avg10"].float_or(0.0)),
+        "% (avg10; ",
+        _pct(m["some"]["avg60"].float_or(0.0)),
+        "% avg60): ",
+    )
+    var limit = m["limit"].float_or(0.0)
+    if m["held"].is_string():
+        line.write(m["held"].string_value())
+        if m["stuck"].bool_or(False):
+            line.write(", one at a time with nothing else going")
+    elif limit <= 0.0:
+        line.write("admission by pressure is off")
+    else:
+        line.write("starting runs (limit ", _pct(limit), "%)")
+    return line^
+
+
+def _pct(x: Float64) -> String:
+    return pct_text(x)
+
+
 def print_status(json: String, one: Bool) raises:
     """`orca status`'s lines from `/`'s JSON, or with `one` a pipeline's
     page's: its line, any sensing error, and its latest runs."""
@@ -671,6 +706,10 @@ def print_status(json: String, one: Bool) raises:
         ps = v["pipelines"].array_items()
     if len(ps) == 0:
         print("no pipelines")
+    if not one:
+        var pressure = pressure_status(v)
+        if pressure:
+            print(pressure)
     for p in ps:
         print(_status_line(p))
         var se = p["sense_error"]

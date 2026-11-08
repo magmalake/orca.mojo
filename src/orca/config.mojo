@@ -119,6 +119,7 @@ comptime _RESERVED_ENV = [
     "DISTA_ADVERTISE",
     "ORCA_GRANT_CPUS",
     "ORCA_GRANT_MEMORY_MB",
+    "ORCA_MEMORY_PRESSURE_FILE",
 ]
 """Variables orca gives a run itself, which `env` can't set."""
 

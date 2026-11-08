@@ -96,6 +96,16 @@ queued, held saying which worker had no room, for another worker of the
 pool. A worker from before requests says nothing of its room, and its runs
 are started as before.
 
+A worker also reads its own host's [memory pressure](orca-toml.md#memory-pressure)
+each poll (the same files, in the same order, and the same
+`ORCA_ADMIT_MEMORY_PRESSURE` of its own environment) and claims nothing while
+`some avg10` is over the limit; the runs it has go on. It sends the reading
+with its heartbeat, so its pool's queued runs say `waiting: memory pressure
+23% (limit 10%) on worker <name>`, and Ops › Workers and `/api/workers`
+show it. A hold that lasts `ORCA_ADMIT_PRESSURE_GRACE_SECONDS` (600) with
+none of its runs going lets it claim one at a time, and raises the
+`memory-pressure` alert once. Its runs get `ORCA_MEMORY_PRESSURE_FILE` too.
+
 ## A worker on another machine
 
 The simplest worker is the server's own image in Docker, at the same tag,

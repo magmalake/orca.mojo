@@ -180,9 +180,11 @@ and `live`, `failed` and `waiting`, each a `count` and its `first` eight
 keys; null for a pipeline that isn't a dated sensor. It's one query for
 the keys and the calendar's three for their states.
 
-While its oldest queued run waits for room on its host, the Progress card
-says why under **Waiting** (`waiting: needs 2 GB, 1.3 GB free of grants`),
-and the JSON has it as `waiting` (null otherwise).
+While its oldest queued run waits on its host, the Progress card says why
+under **Waiting**, and the JSON has it as `waiting` (null otherwise): for
+room (`waiting: needs 2 GB, 1.3 GB free of grants`), or for the host's
+[memory pressure](orca-toml.md#memory-pressure) to ease (`waiting: memory
+pressure 23% (limit 10%)`, `... on worker <name>` for a worker's pool).
 
 ### Coverage
 
@@ -297,8 +299,10 @@ latest start asked for) and **Granted** (what it was given of its host, in
 well under the grant means the request can come down, one at the grant
 that it may need more. The run's JSON has `request` (`cpus`, `memory_gb`)
 and `grant` (`cpus`, `memory_mb`), both null for a pipeline without one.
-A queued run held for room shows why under **Held**, and `held` in the
-JSON.
+A queued run held for room or by memory pressure shows why under
+**Held**, and `held` in the JSON. While the scheduler's host holds new runs
+for its memory pressure, the home page and Runs say so at the top (and
+their JSON has `memory_pressure`).
 
 Not measured: runs on EC2 or Kubernetes (their machines' samples are under
 Machines), runs no scheduler or worker started (`<binary> run`), and on
@@ -374,9 +378,9 @@ each bar and box keeps its title.
 
 | Page | What it shows |
 |---|---|
-| Ops › Control (`/ops/control`, `/api/system`) | the one machine running the scheduler, the UI, Postgres and control-placed runs: CPU, memory, disk, network and each container's memory over `?range=24h`, `7d` or `14d`; whether [alerts](alerts.md) are on and the last ones; the [watchdog](watchdog.md)'s banner |
+| Ops › Control (`/ops/control`, `/api/system`) | the one machine running the scheduler, the UI, Postgres and control-placed runs: CPU, memory, disk, network and each container's memory over `?range=24h`, `7d` or `14d`; its **Memory pressure** (PSI `some` and `full` avg10, avg60 and avg300, the file read, and whether new runs wait for it: [orca.toml](orca-toml.md#memory-pressure)), `memory_pressure` in the JSON, null without a reading in the last minute; whether [alerts](alerts.md) are on and the last ones; the [watchdog](watchdog.md)'s banner |
 | Ops › Fleet (`/ops/fleet`, `/api/fleet`) | the EC2 instances orca launches for runs: hosts up and their cost an hour, runs and errors per hour, live hosts, charts. On the local runner its Cost tile says "fixed price" and shows `ORCA_FIXED_COST` |
-| Ops › Workers (`/ops/workers`, `/api/workers`) | each [worker token](workers.md#tokens): pool, label, worker, image, last heartbeat, runs, CPUs and memory |
+| Ops › Workers (`/ops/workers`, `/api/workers`) | each [worker token](workers.md#tokens): pool, label, worker, image, last heartbeat, runs, CPUs, memory and its host's memory pressure (`memory_pressure`, as Control's) |
 
 Each section's heading links to it, so a link can open at one chart:
 

@@ -587,6 +587,25 @@ def _migrations() -> List[List[String]]:
         # `?to=`, `?since=`): one range of this index, for its page and its
         # counts, where without it each is a scan of every run.
         ["CREATE INDEX runs_created ON orca.runs (created)"],
+        # Each host's newest memory pressure reading (orca.admission, #202):
+        # the scheduler's own and each worker's, with whether it holds new
+        # runs and since when.
+        [
+            """CREATE TABLE orca.pressure (
+            host text PRIMARY KEY,
+            kind text NOT NULL,
+            path text NOT NULL,
+            some_avg10 double precision,
+            some_avg60 double precision,
+            some_avg300 double precision,
+            full_avg10 double precision,
+            full_avg60 double precision,
+            full_avg300 double precision,
+            limit_pct double precision NOT NULL,
+            held text,
+            held_since timestamptz,
+            updated timestamptz NOT NULL DEFAULT now())""",
+        ],
     ]
 
 
