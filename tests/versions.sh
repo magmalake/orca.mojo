@@ -92,8 +92,11 @@ code_link() { # url, commit
 }
 code_at() { printf '<span class="src__at">%s</span><span class="src__out" aria-hidden="true">↗</span></a>' "$1"; }
 page=$(html "/runs/$r1")
-echo "$page" | grep -qF "<td>days $(code_link "$repo/blob/$c1/examples/toy.mojo#L$line" $c1)" \
+echo "$page" | grep -qF "tabindex=\"0\">days</span> $(code_link "$repo/blob/$c1/examples/toy.mojo#L$line" $c1)" \
     || fail "run $r1's page links its steps' code"
+# The step's card (orca.step_cards) has its code at the run's commit too.
+got=$(echo "$page" | sed -n 's/.*<script type="application\/json" class="step-cards">\([^<]*\)<\/script>.*/\1/p' | jq -r '.steps.days | [.src, .at, .commit] | join(" ")')
+[ "$got" = "$repo/blob/$c1/examples/toy.mojo#L$line examples/toy.mojo:$line 1a1a1a1" ] || fail "days' card's code: $got"
 echo "$page" | grep -qF "$(code_at "examples/toy.mojo:$line")" || fail "the code link doesn't show the file and line"
 echo "$page" | grep -qF '<a class="src" href="/' && fail "an internal link took the code link's look"
 echo "$page" | grep -o '<a class="src"[^>]*>' | grep -vq 'target="_blank" rel="noopener" title="View source' \

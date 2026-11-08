@@ -17,7 +17,7 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 | `/home/pipelines` | the home page's table of pipelines, as the fragment it refreshes from (5 s while a run is queued or running, else 30 s) |
 | `/runs/<id>` | a run's cards (Status, Partitions & trigger, Code, Resources, Settings), its steps (`?steps=table` (default), `timeline` or `graph`: the Steps tab shown without scripts), its machines, and the snapshots each step read and wrote |
 | `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error; its facts refresh from `/runs/<id>/attempts/<attempt>/facts` while it runs |
-| `/code` | `?u=` a link to a file at a commit on GitHub: its lines and each coloured as HTML (`orca.highlight`), as JSON, for the code shown on hover; the UI fetches the file, so a browser needn't reach GitHub |
+| `/code` | `?u=` a link to a file at a commit on GitHub: its lines and each coloured as HTML (`orca.highlight`), as JSON, for the code shown on hover; the UI fetches the file, so a browser needn't reach GitHub. With `&at=` a line, only that `def`'s signature, coloured, and its docstring's first paragraph, for a step's card (`orca.step_cards`) |
 | `/runs/<id>/timeline.json` | the run's Dista timeline, which its page draws (`orca.ui_viz`) and Perfetto opens |
 | `/api/gantt` | the pipelines in dataset order with their runs over `?window=1h`, `6h`, `24h` (default) or `7d`, and the runs each started: the home page's Timeline tab (`orca.ui_viz`) |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
@@ -132,6 +132,14 @@ from orca.cron import CronExpr
 from orca.control import CONTROL
 from orca.dag import DagStep, aggregate, dag_svg
 from orca.highlight import highlight
+from orca.step_cards import (
+    STEP_CARDS_JS,
+    AttemptCard,
+    StepCard,
+    cards_script,
+    def_json,
+    duration_text,
+)
 from orca.terms import header_help, key_help, value_help
 from orca.graph import Edge, Node, graph_svg
 from orca.system import (
@@ -407,6 +415,10 @@ struct StepDef(Copyable, Movable):
     var after: String
     var reads: List[String]
     var writes: List[String]
+    var function: String
+    """Its function's linkage name, as `describe` records it."""
+    var input: String
+    var output: String
 
 
 @fieldwise_init
@@ -966,11 +978,22 @@ def _code_html(mut h: Html, name: String, links: CodeLinks):
     h.raw("</dd>")
 
 
-def _step_cell(mut h: Html, name: String, links: CodeLinks):
-    """A step's name, then a link to its function where the code is known."""
+def _step_cell(mut h: Html, name: String, links: CodeLinks, attempt: Int = -1):
+    """A step's name, then a link to its function where the code is known.
+    With `attempt` (0 for none yet), the name shows the step's card
+    (`orca.step_cards`), and that attempt's on a run's page."""
     var at = links.step(name)
     h.raw("<td>")
-    h.text(name)
+    if attempt >= 0:
+        h.raw('<span class="step-ref" data-step="')
+        h.text(name)
+        if attempt > 0:
+            h.raw('" data-attempt="', String(attempt))
+        h.raw('" tabindex="0">')
+        h.text(name)
+        h.raw("</span>")
+    else:
+        h.text(name)
     if at:
         h.raw(" ")
         _code(h, at)
@@ -1166,10 +1189,11 @@ def _step_spans(mut db: State, run: Int) raises -> List[StepSpan]:
     var out = List[StepSpan]()
     for r in db.conn.query(
         (
-            "SELECT s.step, s.partition, a.status, extract(epoch FROM"
-            " a.started)::float8 AS t0, extract(epoch FROM coalesce(a.ended,"
-            " now()))::float8 AS t1 FROM orca.attempts a JOIN orca.steps s ON"
-            " s.id = a.step WHERE s.run = $1 ORDER BY s.ord, a.started"
+            "SELECT s.step, s.partition, a.status, a.id::text AS id,"
+            " extract(epoch FROM a.started)::float8 AS t0, extract(epoch FROM"
+            " coalesce(a.ended, now()))::float8 AS t1 FROM orca.attempts a JOIN"
+            " orca.steps s ON s.id = a.step WHERE s.run = $1 ORDER BY s.ord,"
+            " a.started"
         ),
         Params().int64(Int64(run)),
     ):
@@ -1180,6 +1204,7 @@ def _step_spans(mut db: State, run: Int) raises -> List[StepSpan]:
                 r.text("status"),
                 r.float64("t0"),
                 r.float64("t1"),
+                _int(r.text("id")),
             )
         )
     return out^
@@ -1350,7 +1375,9 @@ def _step_defs(mut db: State, name: String) raises -> List[StepDef]:
             " string_agg(v, ',') FROM jsonb_array_elements_text(coalesce(s->"
             "'reads', '[]')) AS v), '') AS reads, coalesce((SELECT"
             " string_agg(v, ',') FROM jsonb_array_elements_text(coalesce(s->"
-            "'writes', '[]')) AS v), '') AS writes FROM orca.pipelines p,"
+            "'writes', '[]')) AS v), '') AS writes, coalesce(s->>'function',"
+            " '') AS function, coalesce(s->>'input', '') AS input,"
+            " coalesce(s->>'output', '') AS output FROM orca.pipelines p,"
             " jsonb_array_elements(p.describe->'steps') WITH ORDINALITY AS x(s,"
             " n) WHERE p.name = $1 ORDER BY n"
         ),
@@ -1365,6 +1392,138 @@ def _step_defs(mut db: State, name: String) raises -> List[StepDef]:
                 r.text("after"),
                 _list(r.text("reads")),
                 _list(r.text("writes")),
+                r.text("function"),
+                r.text("input"),
+                r.text("output"),
+            )
+        )
+    return out^
+
+
+comptime STEP_RUNS = 20
+"""How many of a pipeline's latest runs a step's card summarizes."""
+
+
+def _step_cards(
+    mut db: State,
+    pipeline: String,
+    defs: List[StepDef],
+    links: CodeLinks,
+    recent: Bool,
+) raises -> List[StepCard]:
+    """Each step's card (`orca.step_cards`); with `recent`, what its
+    attempts in the pipeline's latest `STEP_RUNS` runs did: how many failed,
+    the p50 and most its succeeded ones took, and its peak memory's."""
+    var got = Dict[String, StepCard]()
+    var out = List[StepCard]()
+    for d in defs:
+        var at = links.step(d.name)
+        out.append(
+            StepCard(
+                d.name,
+                d.kind,
+                String(value_help("kind", d.kind)),
+                d.after,
+                d.function,
+                d.input,
+                d.output,
+                d.reads.copy(),
+                d.writes.copy(),
+                at.url,
+                at.at,
+                at.commit,
+                0,
+                0,
+                0,
+                "",
+                "",
+            )
+        )
+    if not recent:
+        return out^
+    var rows = db.conn.query(
+        (
+            "SELECT s.step, count(DISTINCT s.run) AS runs, count(*) AS"
+            " attempts, count(*) FILTER (WHERE a.status = 'failed') AS failed,"
+            " coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY"
+            " extract(epoch FROM a.ended - a.started)::float8) FILTER (WHERE"
+            " a.status = 'succeeded' AND a.ended IS NOT NULL), -1) AS"
+            " took_p50, coalesce(max(extract(epoch FROM a.ended -"
+            " a.started)::float8) FILTER (WHERE a.status = 'succeeded'), -1)"
+            " AS took_max, coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER"
+            " BY a.peak_rss_bytes), -1) AS peak_p50,"
+            " coalesce(max(a.peak_rss_bytes), -1)::float8 AS peak_max FROM"
+            " orca.steps s JOIN orca.attempts a ON a.step = s.id WHERE s.run"
+            " IN (SELECT id FROM orca.runs WHERE pipeline = $1 ORDER BY id"
+            " DESC LIMIT $2) GROUP BY s.step"
+        ),
+        Params().text(pipeline).int64(Int64(STEP_RUNS)),
+    )
+    for r in rows:
+        var name = r.text("step")
+        for ref c in out:
+            if c.name != name:
+                continue
+            c.recent_runs = Int(r.int64("runs"))
+            c.recent_attempts = Int(r.int64("attempts"))
+            c.recent_failed = Int(r.int64("failed"))
+            var t50 = r.float64("took_p50")
+            var tmax = r.float64("took_max")
+            if tmax >= 0:
+                c.took = String(
+                    "p50 ", duration_text(t50), " · max ", duration_text(tmax)
+                )
+            var p50 = r.float64("peak_p50")
+            var pmax = r.float64("peak_max")
+            if pmax >= 0:
+                c.peak = String(
+                    "p50 ",
+                    bytes_text(Int(p50)),
+                    " · max ",
+                    bytes_text(Int(pmax)),
+                )
+    return out^
+
+
+def _attempt_cards(mut db: State, run: Int) raises -> List[AttemptCard]:
+    """What each of a run's attempts adds to its step's card."""
+    var rows = db.conn.query(
+        String(
+            "SELECT a.id::text AS id, s.step, s.partition, a.attempt::text AS",
+            " attempt, a.status, ",
+            _ts("a.started"),
+            " AS started, ",
+            _ts("a.ended"),
+            " AS ended, coalesce(extract(epoch FROM coalesce(a.ended, now())",
+            " - a.started)::float8, -1) AS took, coalesce(a.error, '') AS",
+            " error, coalesce(a.peak_rss_bytes, -1) AS peak,",
+            " coalesce(a.cpu_seconds, -1) AS cpu, coalesce(a.peak_cpus, -1)",
+            " AS cpus FROM orca.attempts a JOIN orca.steps s ON s.id = a.step",
+            " WHERE s.run = $1 ORDER BY s.ord, a.started",
+        ),
+        Params().int64(Int64(run)),
+    )
+    var out = List[AttemptCard]()
+    for r in rows:
+        var u = _usage_of(r)
+        var id = _int(r.text("id"))
+        var status = r.text("status")
+        out.append(
+            AttemptCard(
+                id,
+                r.text("step"),
+                r.text("partition"),
+                _int(r.text("attempt")),
+                status,
+                String(value_help("status", status)),
+                r.text("started"),
+                r.text("ended"),
+                duration_text(r.float64("took")),
+                bytes_text(u.peak_rss_bytes) if u.peak_rss_bytes >= 0 else "",
+                cpu_text(u.cpu_seconds) if u.cpu_seconds >= 0 else "",
+                fixed1(u.peak_cpus) if u.peak_cpus >= 0 else "",
+                r.text("error"),
+                String("/runs/", run, "/attempts/", id),
             )
         )
     return out^
@@ -1971,12 +2130,23 @@ def raw_code_url(href: String) -> String:
     )
 
 
-def code_page(href: String) -> Page:
+def code_page(href: String, at: String = "") -> Page:
     """`/code?u=<a GitHub link to a file at a commit>`: the file's lines and
     each coloured as HTML (`orca.highlight`), as JSON, for the code shown on
     hover. 400 for any other URL, 502 when GitHub doesn't give it (a
-    private repository), 413 past `_CODE_MAX`."""
+    private repository), 413 past `_CODE_MAX`. With `at`, a line, only
+    the signature of the `def` there and its docstring's first paragraph
+    (`orca.step_cards.def_json`), for a step's card; 400 for an `at` that
+    isn't a line number."""
     var raw = raw_code_url(href)
+    var line = 0
+    if at:
+        try:
+            line = Int(at)
+        except:
+            line = 0
+        if line < 1:
+            raw = ""
     if not raw:
         return Page(
             400,
@@ -2006,6 +2176,9 @@ def code_page(href: String) -> Page:
         var e = String('{"error": "the file is too large"}')
         return Page(413, e.copy(), e^, "application/json")
     var text = String(from_utf8_lossy=Span(body))
+    if line > 0:
+        var d = def_json(text, line)
+        return Page(200, d.copy(), d^, "application/json")
     var out = String('{"lines": [')
     var first = True
     for line in text.split("\n"):
@@ -2166,6 +2339,8 @@ def _page(title: String, active: StaticString, body: Html) -> String:
         _TIPS,
         "</script><script>",
         _PEEK,
+        "</script><script>",
+        STEP_CARDS_JS,
         "</script></body></html>",
     )
     return h^.finish()
@@ -4185,16 +4360,18 @@ def _steps_html(
     steps: List[StepDef],
     links: CodeLinks,
     view: String,
+    cards: String,
 ):
     """The Steps card: Graph and Table tabs, links that work without
     scripts (`?steps=`); with them, the choice is kept in `localStorage`.
     Without one, a pipeline of one step shows its table and others their
-    graph."""
+    graph. `cards` is its steps' cards' `<script>` (`orca.step_cards`)."""
     var graph = view == "graph" or (view != "table" and len(steps) > 1)
     var base = String("/pipelines/", url_encode(name))
     h.raw(
         '<section class="card steps" id="steps" data-tabs="orca.steps.view"',
-        ' data-tabs-param="steps"><div class="steps__head"><h2>Steps',
+        ' data-tabs-param="steps" data-step-cards><div class="steps__head">',
+        "<h2>Steps",
         _docs("steps"),
         '</h2><div class="vtabs"><div role="tablist"',
         ' aria-label="How to show the steps">',
@@ -4228,7 +4405,7 @@ def _steps_html(
     )
     for s in steps:
         h.raw("<tr>")
-        _step_cell(h, s.name, links)
+        _step_cell(h, s.name, links, 0)
         h.raw("<td>")
         h.term("kind", s.kind)
         h.raw("</td>")
@@ -4238,7 +4415,7 @@ def _steps_html(
         h.raw("</td><td>")
         _dataset_links(h, s.writes)
         h.raw("</td></tr>")
-    h.raw("</tbody></table></div></section>")
+    h.raw("</tbody></table></div>", cards, "</section>")
 
 
 def _tabs_html(mut h: Html, base: String, tab: String):
@@ -4624,7 +4801,17 @@ def pipeline(
     _tabs_html(h, base, tab)
     _cards_html(h, p, tab, fill, fires, steps, links, usage)
     if tab == "overview":
-        _steps_html(h, p.name, steps, links, steps_view)
+        _steps_html(
+            h,
+            p.name,
+            steps,
+            links,
+            steps_view,
+            cards_script(
+                _step_cards(db, p.name, steps, links, True),
+                List[AttemptCard](),
+            ),
+        )
         if keys:
             _keys_html(h, p.name, keys.value())
         if len(unrun) > 0:
@@ -6149,7 +6336,8 @@ def _run_live(
         )
     h.raw(
         '<section class="card steps" id="steps" data-tabs="orca.run.steps"',
-        ' data-tabs-param="steps"><div class="steps__head"><h2>Steps',
+        ' data-tabs-param="steps" data-step-cards><div class="steps__head">',
+        "<h2>Steps",
     )
     _help(
         h,
@@ -6196,7 +6384,7 @@ def _run_live(
     )
     for s in steps:
         h.raw("<tr>")
-        _step_cell(h, s.step, links)
+        _step_cell(h, s.step, links, s.attempt_id)
         h.mono(s.partition)
         h.raw("<td>")
         h.status(s.status)
@@ -6245,7 +6433,12 @@ def _run_live(
         "" if shown == "graph" else " hidden",
         ">",
         dag_svg(dag),
-        "</div></section>",
+        "</div>",
+        cards_script(
+            _step_cards(db, r.pipeline, defs, links, False),
+            _attempt_cards(db, r.id),
+        ),
+        "</section>",
     )
 
 
@@ -8451,7 +8644,7 @@ struct Ui(Copyable, Handler):
         if path == "/home/pipelines":
             return home_pipelines(db)
         if path == "/code":
-            return code_page(_query(url, "u"))
+            return code_page(_query(url, "u"), _query(url, "at"))
         if path.startswith("/runs/"):
             var parts = path[byte=6:].split("/")
             var id: Int
