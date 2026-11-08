@@ -89,21 +89,6 @@ def code_link(mut h: Html, at: CodeRef):
     h.code(at.url, at.at, at.commit)
 
 
-def _code_html(mut h: Html, name: String, links: CodeLinks):
-    """`Code`: the pipeline, then its dista tasks, each linked to its line."""
-    if not links.pipeline and len(links.tasks) == 0:
-        return
-    h.raw("<dt>Code</dt><dd>")
-    if links.pipeline:
-        h.text("pipeline ", name, " ")
-        code_link(h, links.pipeline)
-    for i in range(len(links.tasks)):
-        h.raw(" · " if i or links.pipeline else "")
-        h.text("task ", links.tasks[i][0], " ")
-        code_link(h, links.tasks[i][1])
-    h.raw("</dd>")
-
-
 def step_cell(mut h: Html, name: String, links: CodeLinks, attempt: Int = -1):
     """A step's name, then a link to its function where the code is known.
     With `attempt` (0 for none yet), the name shows the step's card

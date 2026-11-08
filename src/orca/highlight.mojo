@@ -1,7 +1,7 @@
-"""Mojo source coloured for the UI's code-on-hover (`orca.ui`'s `_PEEK`),
-on the server, with no library: `tokens` splits source into runs of one
-kind, and `highlight` turns those into HTML lines with a `<span>` per
-coloured run.
+"""Mojo source coloured for the UI's code-on-hover (`_PEEK` in
+`orca.ui.layout`), on the server, with no library: `tokens` splits source
+into runs of one kind, and `highlight` turns those into HTML lines with a
+`<span>` per coloured run.
 
 ```
 var lines = highlight(src)      # one HTML string per source line

@@ -12,6 +12,12 @@ choice changes, Start runs updates its preview and command lines as you
 type, and Cancel, rerun and rebuild ask before posting. Every form works
 without them.
 
+The run page and the pipeline page are a view (`orca.views.runs.RunView`,
+`orca.views.pipelines.PipelineView`) drawn twice, as HTML here and as
+JSON in `orca.api`, which `orca.web.routes` puts together. The other
+pages still build their HTML and their JSON in one function, over the
+rows of `orca.views`; they can be split the same way as they change.
+
 | Module | |
 |---|---|
 | `orca.ui.home` | `/`: pipelines, recent runs, the timeline |

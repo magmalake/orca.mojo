@@ -30,7 +30,7 @@ Its commands:
 
 Needs `ORCA_DATABASE_URL`, but for the commands `--remote` (or
 `ORCA_REMOTE`) sends to a deployed `orca ui` instead (`orca.remote`). See
-`orca.scheduler` for what a tick does, and `orca.ui` for the pages,
+`orca.scheduler` for what a tick does, and `orca.web` for the pages,
 `orca.lineage` for what `lineage` prints, and `orca.sensors` for what
 `rebuild` plans.
 Exit codes: 0, 2 for a usage error, 3 for any other error.
