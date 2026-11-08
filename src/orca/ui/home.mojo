@@ -1,5 +1,6 @@
-"""`/`, the home page: the pipelines, with their schedules, next and
-last runs, the recent runs, and the Timeline tab (`orca.ui.viz`);
+"""`/`, the home page: the pipelines, with their coverage
+(`orca.coverage`), schedules, next and last runs, the recent runs, and
+the Timeline tab (`orca.ui.viz`);
 `/home/pipelines` is its table of pipelines, as the fragment it refreshes
 from.
 """
@@ -9,16 +10,18 @@ from postgres import Params
 from orca.api.pipelines import json_pipeline
 from orca.api.runs import json_runs
 from orca.chart import DayRuns, runs_chart
+from orca.coverage import Coverage
 from orca.fleet import fleet_summary, summary_html, summary_json
 from orca.html import Html, url_encode
 from orca.json import quote
 from orca.state import State
 from orca.system import alert_html, system_now, warnings, warnings_json
+from orca.ui.coverage import coverage_href
 from orca.ui.layout import IDLE_EVERY, LIVE_EVERY, page_html
 from orca.ui.parts import pause_button
 from orca.ui.runs import runs_list
 from orca.ui.viz import gantt_panel, gantt_tabs
-from orca.views.pipelines import PipelineRow, pipeline_rows
+from orca.views.pipelines import PipelineRow, pipeline_coverage, pipeline_rows
 from orca.views.runs import HOME_RUNS, RunsQuery, runs_page
 from orca.watchdog import active_trips, banner_html, trips_json
 from orca.web.page import Page
@@ -60,15 +63,49 @@ def _pipelines_live(ps: List[PipelineRow]) -> Bool:
     return False
 
 
-def _home_pipelines(mut h: Html, ps: List[PipelineRow]):
-    """The home page's table of pipelines: schedules, next and last runs."""
+def _coverages(
+    mut db: State, ps: List[PipelineRow]
+) -> List[Optional[Coverage]]:
+    """Each pipeline's coverage (`orca.coverage`): a query each."""
+    var out = List[Optional[Coverage]]()
+    for p in ps:
+        out.append(pipeline_coverage(db, p))
+    return out^
+
+
+def _coverage_cell(mut h: Html, p: PipelineRow, c: Optional[Coverage]):
+    """A Coverage cell: the percent with a bar, the counts on hover, linking
+    to the year calendar (a keyed pipeline's Keys); "—" for none."""
+    if not c:
+        h.raw('<td class="num muted">—</td>')
+        return
+    ref v = c.value()
+    h.raw('<td class="num"><a class="covpct" href="')
+    h.text(coverage_href(p.name, p.kind))
+    h.raw('" title="')
+    h.text(v.text())
+    h.raw('">')
+    h.text(v.pct(), "%")
+    h.raw('<span class="covpct__bar" aria-hidden="true"><span style="width:')
+    h.raw(String(v.pct()), '%"></span></span><span class="sr">')
+    h.text(", ", v.done, " of ", v.total, " ", v.units(), " done")
+    h.raw("</span></a></td>")
+
+
+def _home_pipelines(
+    mut h: Html, ps: List[PipelineRow], covs: List[Optional[Coverage]]
+):
+    """The home page's table of pipelines: partitions and coverage,
+    schedules, next and last runs."""
     h.raw(
         '<section class="card"><div class="scroll"><table><thead><tr>',
-        "<th>Pipeline</th><th>Partitions</th><th>Schedule</th>",
+        "<th>Pipeline</th><th>Partitions</th>",
+        '<th class="num">Coverage</th><th>Schedule</th>',
         "<th>Next run</th><th>Running</th><th>Queued</th><th>Last run</th>",
         "</tr></thead><tbody>",
     )
-    for p in ps:
+    for i in range(len(ps)):
+        ref p = ps[i]
         h.raw("<tr><td>")
         h.link(String("/pipelines/", url_encode(p.name)), p.name)
         if p.paused:
@@ -77,6 +114,7 @@ def _home_pipelines(mut h: Html, ps: List[PipelineRow]):
         pause_button(h, p.name, p.paused)
         h.raw("</td>")
         h.cell(p.kind, " from ", p.start if p.start else String("the start"))
+        _coverage_cell(h, p, covs[i])
         if p.cron:
             h.raw("<td><code>")
             h.text(p.cron)
@@ -117,7 +155,7 @@ def home_pipelines(mut db: State) raises -> Page:
     run is queued or running, else `IDLE_EVERY`."""
     var ps = pipeline_rows(db)
     var h = Html()
-    _home_pipelines(h, ps)
+    _home_pipelines(h, ps, _coverages(db, ps))
     return Page(
         200,
         String(),
@@ -129,6 +167,7 @@ def home_pipelines(mut db: State) raises -> Page:
 
 def home(mut db: State) raises -> Page:
     var ps = pipeline_rows(db)
+    var covs = _coverages(db, ps)
     var recent = runs_page(db, RunsQuery.newest("home", HOME_RUNS))
     var per_day = _runs_per_day(db, 30)
     var fleet = fleet_summary(db)
@@ -144,7 +183,7 @@ def home(mut db: State) raises -> Page:
     for i in range(len(ps)):
         if i:
             j.write(", ")
-        json_pipeline(j, ps[i])
+        json_pipeline(j, ps[i], covs[i])
     j.write('], "runs": ')
     json_runs(j, recent.rows)
     j.write(', "runs_per_day": [')
@@ -184,7 +223,7 @@ def home(mut db: State) raises -> Page:
             LIVE_EVERY if live else IDLE_EVERY,
             '">',
         )
-        _home_pipelines(h, ps)
+        _home_pipelines(h, ps, covs)
         h.raw("</div>")
         gantt_panel(h)
     h.raw(

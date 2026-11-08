@@ -17,7 +17,8 @@ pixi run playground          # or the playground: example pipelines and runs, de
 ## Home: List and Timeline
 
 `/` has two tabs, remembered in the browser. **List** (the default, no
-JavaScript needed) is the pipelines with their schedules and last runs.
+JavaScript needed) is the pipelines with their partitions, their
+[coverage](#coverage-in-one-number), schedules and last runs.
 **Timeline** draws each pipeline's runs over 1 h, 6 h, 24 h or 7 d, a row
 per pipeline in dataset order, indented by depth, coloured by status, fill
 runs thinner, with a line from a run to the sensor or keyed runs its
@@ -151,7 +152,10 @@ The header is four cards, side by side on a wide screen:
 
 - **Progress**: runs going, the [fill](orca-toml.md#fills) (done of total,
   rate, ETA, today's spend against its budget, why it's idle), a failing
-  sensor, the next run. It refreshes itself every 5 s.
+  sensor, the next run, and the pipeline's
+  [coverage](#coverage-in-one-number) (`1141 / 1407 days done (81%)`),
+  linking to the year calendar, or to Keys for a keyed pipeline. It
+  refreshes itself every 5 s.
 - **Config**: partitions, schedule, run retries,
   [placement](placement.md), binary.
 - **Code**: the pipeline, its steps and dista tasks, each linked to its
@@ -182,6 +186,42 @@ the keys and the calendar's three for their states.
 While its oldest queued run waits for room on its host, the Progress card
 says why under **Waiting** (`waiting: needs 2 GB, 1.3 GB free of grants`),
 and the JSON has it as `waiting` (null otherwise).
+
+### Coverage in one number
+
+Each pipeline has one coverage number, the same on the home page's
+**Coverage** column, its Progress card, and in the JSON (`coverage` on
+each pipeline of `/` and on `/api/pipelines/<name>`'s `pipeline`, as
+`{"done": 1141, "total": 1407, "pct": 81.0, "unit": "day"}`, `pct`
+rounded down to a tenth; the page shows it rounded down to a whole
+percent, so 100% means all of them). `src/orca/coverage.mojo` defines it:
+
+- **Daily or monthly**: partitions done of those in the range so far,
+  from the first partition through the last one that has ended on the
+  schedule's clock (UTC without a schedule): yesterday for a daily
+  pipeline, last month for a monthly one. That's the range a fill works
+  through; today's day, still going, is in neither number.
+- **Keyed**: keys done of the keys orca knows, those `<binary> keys` last
+  printed (`orca.keys`, which the sensor and the pipeline's page keep
+  fresh; the home page never runs the binary).
+- **Done** is what the calendar and a backfill count as done: every
+  mapped step succeeded for the key in a run of the pipeline's current
+  code (with no mapped step, a run of it over the key succeeded). A step
+  skipped because one before it failed isn't done, and neither are
+  failed, queued, running or never-run keys, nor a key only older code
+  did; the Fill line counts any code's, so it can be higher.
+- **None** (`null`, "—"): a pipeline without a first partition, one whose
+  first hasn't ended yet, and a keyed one whose keys haven't been read.
+
+It costs one query a pipeline, the calendar's and backfill's own: which
+of the range's keys are done, each looked up by the `steps_partition`
+index, so it grows with the range rather than with the runs. For 1,492
+days over 30,000 runs and 60,000 steps that's 7 ms (10 ms for a pipeline
+without a mapped step, whose half of the query now reads its runs' keys
+once instead of once a key, 1.2 s before), and the home page's table
+answers in 9 ms. The table asks it for every pipeline each time it
+refreshes (every 5 s while a run is going); there's no cache, so the UI
+stays stateless.
 
 ### Coverage
 

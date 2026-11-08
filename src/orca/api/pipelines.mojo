@@ -9,6 +9,7 @@ from orca.api.runs import (
     runs_filters_json,
 )
 from orca.calendar import calendar, calendar_json
+from orca.coverage import Coverage, coverage_json
 from orca.fill import status_json
 from orca.follow import follow_json
 from orca.json import quote
@@ -33,7 +34,10 @@ def json_strings(mut out: String, names: List[String]):
     out.write("]")
 
 
-def json_pipeline(mut out: String, p: PipelineRow):
+def json_pipeline(
+    mut out: String, p: PipelineRow, cov: Optional[Coverage] = None
+):
+    """`p` as JSON, with its coverage (`orca.coverage`; null for none)."""
     out.write(
         '{"name": ',
         quote(p.name),
@@ -45,7 +49,9 @@ def json_pipeline(mut out: String, p: PipelineRow):
         quote(p.kind),
         ', "start": ',
         quote(p.start),
-        '}, "schedule": ',
+        '}, "coverage": ',
+        coverage_json(cov),
+        ', "schedule": ',
     )
     if p.cron:
         out.write(
@@ -204,13 +210,13 @@ def calendar_page(mut db: State, name: String, month: String) raises -> Page:
 
 def pipeline_json(v: PipelineView, ask: PipelineAsk) -> String:
     """`/pipelines/<name>` (and `/api/pipelines/<name>`) as JSON: the
-    registration, its fill, steps, next fires, code versions, config, a
-    page of its runs, what its runs used, a keyed one's counts, the
-    snapshots its sensor couldn't run, and Start runs' preview if asked
-    for."""
+    registration with its coverage, its fill, steps, next fires, code
+    versions, config, a page of its runs, what its runs used, a keyed one's
+    counts, the snapshots its sensor couldn't run, and Start runs' preview
+    if asked for."""
     ref p = v.pipeline
     var j = String('{"pipeline": ')
-    json_pipeline(j, p)
+    json_pipeline(j, p, v.coverage)
     j.write(', "fill": ', status_json(v.fill.value()) if v.fill else "null")
     j.write(
         ', "follow": ',

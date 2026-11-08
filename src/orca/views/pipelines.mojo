@@ -10,6 +10,7 @@ from postgres import Params
 
 from orca.civil import Civil, now
 from orca.config import Shown, shown
+from orca.coverage import Coverage, coverage
 from orca.cron import CronExpr
 from orca.fill import FillStatus, fill_status
 from orca.follow import Follow, follow
@@ -336,6 +337,15 @@ def key_counts(mut db: State, name: String) raises -> KeyCounts:
     )
 
 
+def pipeline_coverage(mut db: State, p: PipelineRow) -> Optional[Coverage]:
+    """`p`'s coverage (`orca.coverage`), None if it has none or it can't
+    be read: a list of pipelines still shows the rest."""
+    try:
+        return coverage(db, p.name, p.kind, p.start, p.tz)
+    except:
+        return None
+
+
 def fill_of(mut db: State, name: String) raises -> Optional[FillStatus]:
     """`name`'s fill (`orca.fill`), if it fills its range or has fill runs
     from when it did."""
@@ -491,6 +501,8 @@ struct PipelineView(Movable):
     """What `orca config show <name>` prints (`orca.config`)."""
     var keys: Optional[KeyCounts]
     """A keyed pipeline's counts."""
+    var coverage: Optional[Coverage]
+    """Its partitions or keys done of those it has (`orca.coverage`)."""
     var not_run: List[NotRun]
     """The snapshots its sensor saw and couldn't run, latest first."""
     var start: Optional[StartPreview]
@@ -512,6 +524,7 @@ struct PipelineView(Movable):
         self.versions = List[VersionRow]()
         self.configs = List[Shown]()
         self.keys = None
+        self.coverage = None
         self.not_run = List[NotRun]()
         self.start = None
 
@@ -546,6 +559,8 @@ def pipeline_view(
     v.configs = shown(db, name)
     if p.kind == "keyed":
         v.keys = key_counts(db, name)
+    # After the keys: their read keeps them in orca.keys, which this counts.
+    v.coverage = pipeline_coverage(db, p)
     for x in db.conn.query(
         String(
             "SELECT dataset, snapshot_id, error, ",
