@@ -14,6 +14,7 @@
 # server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
@@ -60,7 +61,7 @@ tick
 [ "$(q "SELECT sense_error LIKE 'sense exited 1: can''t reach the warehouse%' AND sense_error_at IS NOT NULL FROM orca.pipelines WHERE name = 'fake_sensor'")" = t ] \
     || fail "sense_error: $(q "SELECT sense_error FROM orca.pipelines")"
 
-port=$((26000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 ui=$!

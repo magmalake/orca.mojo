@@ -7,6 +7,7 @@
 # server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/daily.mojo -o build/daily
@@ -47,7 +48,7 @@ q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, 
 q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
     SELECT 'toy', registry_hash, '2024-02', 'manual', 'failed' FROM orca.pipelines WHERE name = 'toy'" > /dev/null
 
-port=$((22000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 ui=$!

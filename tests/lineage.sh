@@ -19,6 +19,7 @@
 # server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # The pipelines and orca compile at once (scripts/mojo-build.sh).
 pids=
@@ -96,7 +97,7 @@ out=$(./build/orca lineage lake.raw "$S1") || fail "orca lineage of the first ra
 echo "$out" | sed -n '/made from it:/,$p' | grep -qx "  nothing" || fail "something was made from the first raw snapshot"
 
 # The UI: the same walks as JSON, and their pages.
-port=$((22000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 ui=$!

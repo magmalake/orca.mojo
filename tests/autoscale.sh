@@ -11,6 +11,7 @@
 # server), python3 and curl.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
@@ -21,7 +22,7 @@ log=build/autoscale.log
 dir=$PWD/build/fake-ec2-autoscale
 rm -rf "$dir" build/autoscale-logs
 mkdir -p "$dir"
-port=$((34000 + $$ % 2000))
+free_port port
 fake=
 sched=
 stop() {

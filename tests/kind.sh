@@ -19,6 +19,7 @@
 # Needs docker, kind, kubectl, curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 cluster=${KIND_CLUSTER:-orca}
 export KUBECONFIG="$PWD/build/kind-$cluster.yaml"
@@ -79,7 +80,7 @@ kubectl -n orca rollout status deployment/orca-scheduler --timeout=180s || fail 
 orca_cli env ORCA_NOW=2024-02-01T00:00Z orca register --image orca:dev /opt/orca/pipelines/toy \
     || fail "register the toy"
 
-port=$((26000 + $$ % 2000))
+free_port port
 kubectl -n orca port-forward svc/orca-ui "$port:8270" > build/kind-forward.log 2>&1 &
 fwd=$!
 base="http://127.0.0.1:$port"

@@ -14,6 +14,7 @@
 # throwaway server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -69,7 +70,7 @@ kill "$sched"
 sched=
 
 # The UI's keyed page: keys read once, then kept.
-port=$((30000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_SENSE_SECONDS=2 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 ui=$!

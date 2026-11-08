@@ -27,6 +27,7 @@
 # curl, jq and python3.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/daily.mojo -o build/daily
@@ -91,17 +92,15 @@ settle() {
     done
 }
 
-# The UI on the last tick's clock: started again, on the next port, when
+# The UI on the last tick's clock: started again, on a new port, when
 # that moves. Called in this shell, never in a $(...) subshell, so $ui is
 # always the one running.
 ui_now=
-uis=0
 base=
 ui_at() {
     [ "$ui_now" != "$now" ] || return 0
     [ -z "$ui" ] || { kill "$ui" 2> /dev/null || true; wait "$ui" 2> /dev/null || true; }
-    port=$((44000 + ($$ + uis) % 1000))
-    uis=$((uis + 1))
+    free_port port
     base="http://127.0.0.1:$port"
     ORCA_NOW="$now" ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
     ui=$!
@@ -242,7 +241,7 @@ grep -q '^fill_budget_per_day = 0.05$' build/fill.out && grep -q '^fill_window =
 echo "ok   fills refused with no first partition; config show and export"
 
 # --- The ec2 runner: the budget fails closed ---
-ecport=$((45000 + $$ % 1000))
+free_port ecport
 export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$ecport"
 export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
 export ORCA_EC2_POOL_SECONDS=0 ORCA_LOGS=$PWD/build/fill-logs ORCA_START_SECONDS=60

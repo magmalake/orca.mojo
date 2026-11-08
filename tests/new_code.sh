@@ -8,6 +8,7 @@
 # test-new-code starts a throwaway server).
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -71,7 +72,7 @@ q "SELECT error FROM orca.runs WHERE id = $old" | grep -q "its code is 0xold, an
 ./build/toy status "$old" | grep -q "^error: not started: its code is 0xold" \
     || fail "status doesn't show the run's error"
 # So do the run's page and its JSON.
-port=$((22000 + $$ % 2000))
+free_port port
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 pid=$!
 i=0

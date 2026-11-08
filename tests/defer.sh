@@ -14,6 +14,7 @@
 # curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC tests/defer_pipeline.mojo -o build/defer
@@ -88,7 +89,7 @@ settle "$run"
 [ "$(ORCA_NOW=2024-04-01T00:10Z ./build/orca backfill deferring 2024-03 2>> "$log")" = "queued 0 runs" ] \
     || fail "a backfill queued the deferred run's key again"
 
-port=$((28000 + $$ % 2000))
+free_port port
 base="http://127.0.0.1:$port"
 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
 ui=$!

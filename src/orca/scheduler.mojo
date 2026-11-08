@@ -2647,13 +2647,18 @@ struct Scheduler(Movable):
             for i in range(len(ids)):
                 var id = ids[i]
                 var grant = grants[i] if admitted else Grant.none()
+                # `started` is the clock's now, not now(): that is when this
+                # transaction began, before it waited on the locks above and
+                # counted the slots and the budget, so a run that waited for
+                # another to end could be recorded as started before it did.
                 starts.append(
                     Int(
                         tx.query(
                             (
                                 "UPDATE orca.runs SET status = 'running', owner"
                                 " = 'scheduler', heartbeat = NULL, started ="
-                                " now(), ended = NULL, starts = starts + 1,"
+                                " clock_timestamp(), ended = NULL, starts ="
+                                " starts + 1,"
                                 " retry_at = NULL, error = NULL, waiting_since"
                                 " = NULL, cpu_millis = $2, placement = $3, held"
                                 " = NULL, request_cpus = nullif($4, ''),"
