@@ -454,7 +454,7 @@ def timeline_section(mut h: Html, run: Int):
 
 
 comptime VIZ_STYLE = """
-/* The views drawn in the browser (orca.ui_viz). */
+/* The views drawn in the browser (orca.ui.viz). */
 .vtabs { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center;
   justify-content: space-between; margin: 1.25rem 0 -0.5rem; }
 .vtabs [role=tablist], .vtabs__win { display: inline-flex; border: 1px solid var(--border);
@@ -512,7 +512,7 @@ a:hover .gantt__name { fill: var(--lake); text-decoration: underline; }
 .tlv__tip dt { color: var(--faint); }
 .tlv__tip dd { margin: 0; font-family: var(--mono); word-break: break-all; }
 """
-"""The views' rules, served after `orca.ui_style.STYLE` in `/static/orca.css`."""
+"""The views' rules, served after `orca.ui.style.STYLE` in `/static/orca.css`."""
 
 
 comptime _GANTT_JS = """

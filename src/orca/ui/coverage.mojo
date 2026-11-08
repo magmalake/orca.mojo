@@ -25,7 +25,7 @@ from orca.calendar import (
     year_of,
 )
 from orca.civil import Civil, now
-from orca.follow import LISTED, Follow
+from orca.follow import Follow, LISTED
 from orca.html import Html, url_encode
 from orca.month import days_in
 from orca.state import State
@@ -491,4 +491,4 @@ comptime COVERAGE_STYLE = """
   .cov__body { padding: 0.6rem 0.75rem 0.75rem; }
 }
 """
-"""The Coverage card's rules, served after `orca.ui_style.STYLE`."""
+"""The Coverage card's rules, served after `orca.ui.style.STYLE`."""

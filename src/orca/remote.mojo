@@ -51,9 +51,10 @@ from orca.json import quote
 from orca.lineage import SnapshotRef
 from orca.scheduler import file_names
 from orca.state import State
-from orca.ui import _took, act, read_page
+from orca.ui.parts import took_text
 from orca.usage import usage_of, usage_text
 from orca.watchdog import status_lines
+from orca.web.server import act, read_page
 
 
 def is_remote_command(cmd: String) -> Bool:
@@ -611,7 +612,7 @@ def _run_took(r: Value) raises -> String:
     var end = now()
     if ended.is_string() and ended.string_value():
         end = parse_time(ended.string_value())
-    return _took(Int(end - parse_time(started.string_value())))
+    return took_text(Int(end - parse_time(started.string_value())))
 
 
 def _text(v: Value, key: String) raises -> String:

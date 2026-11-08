@@ -211,7 +211,7 @@ page=$(html "/runs/$bad_run")
 echo "$page" | grep -q 'dag__box dag__box--failed" data-step="measure"[^>]*><title>measure' || fail "measure isn't failed in the DAG"
 echo "$page" | grep -q 'dag__box dag__box--skipped" data-step="total"[^>]*><title>total' || fail "total isn't skipped in the DAG"
 echo "$page" | grep -q 'data-poll="' && fail "an ended run's page still polls"
-# Step cards (orca.step_cards): what each step's card shows is in the page,
+# Step cards (orca.ui.step_cards): what each step's card shows is in the page,
 # one JSON per Steps card, so a hover asks nothing; each step in the table,
 # graph and timeline shows it, on a run's page with that attempt's.
 cards() { sed -n 's/.*<script type="application\/json" class="step-cards">\([^<]*\)<\/script>.*/\1/p'; }
@@ -399,7 +399,7 @@ grep -q 'status--succeeded">succeeded</span></h2>' "$log.frag" || fail "the frag
 fan=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
 html "/runs/$fan" | grep -q "/runs/$fan/timeline.json" || fail "the run doesn't link its timeline"
 curl -fsS "$base/runs/$fan/timeline.json" | grep -q '"ph":"X"' || fail "the timeline isn't a Chrome trace"
-# Its page draws it in the browser (orca.ui_viz): a section that fetches
+# Its page draws it in the browser (orca.ui.viz): a section that fetches
 # timeline.json once it's in view, so the page holds none of the trace.
 page=$(html "/runs/$fan")
 echo "$page" | grep -qF "<section class=\"card tlv\" id=\"timeline\" data-src=\"/runs/$fan/timeline.json\">" \
@@ -553,7 +553,7 @@ page=$(html "/runs?pipeline=toy&status=failed")
 echo "$page" | grep -qF "<th class=\"num\"><abbr title=\"Times the run's process was started: 1 is normal; more means retries, a lost instance or a resume.\"" \
     || fail "the Tries header"
 echo "$page" | grep -q '>Starts<' && fail "a runs table still says Starts"
-# Help on every table (orca.terms): a "?" on each header it knows, and on
+# Help on every table (orca.ui.terms): a "?" on each header it knows, and on
 # a value from a fixed set (a status, a trigger, a step's kind) its meaning
 # on hover or focus, without a "?" in every cell.
 for p in /runs /pipelines/toy "/runs/$bad_run" "/pipelines/toy?tab=runs"; do
@@ -621,7 +621,7 @@ q "UPDATE orca.pipelines SET paused = false WHERE name = 'toy'" > /dev/null
 q "DELETE FROM orca.runs WHERE id = $qd" > /dev/null
 echo "ok   /runs: dropdown filters, pages and tries"
 
-# The home page's Timeline tab (orca.ui_viz): List stays the default and
+# The home page's Timeline tab (orca.ui.viz): List stays the default and
 # works without scripts; /api/gantt has the pipelines in dataset order
 # (gantt_raw writes raw.a, which fake_sensor reads to write lake.ab, which
 # gantt_report reads), their runs in the window, the edges between them,
@@ -723,6 +723,28 @@ html /watchdog | grep -qF '<div data-poll="/watchdog/live" data-poll-every="30">
     || fail "the watchdog page doesn't refresh"
 curl -fsS "$base/watchdog/live" | grep -qF '<h1>Watchdog</h1>' || fail "the watchdog fragment"
 echo "ok   live pages: Workers, Control, the watchdog"
+
+# The worker API on a listener of its own (ORCA_WORKER_ADDR, orca.api.worker):
+# a worker's calls there, and nothing else; the UI's port keeps answering
+# them too.
+wtok=$(./build/orca worker-token create --pool uitest --label ui 2>> "$log") || fail "worker-token create"
+wport=$((port + 3)); uport=$((port + 4))
+ORCA_UI_ADDR="127.0.0.1:$uport" ORCA_WORKER_ADDR="127.0.0.1:$wport" ./build/orca ui >> "$log" 2>&1 &
+wpid=$!
+i=0
+until curl -fs "http://127.0.0.1:$uport/" > /dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui with ORCA_WORKER_ADDR didn't start"; sleep 0.1
+done
+beat() { curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $2" -d '{"name": "w-ui", "slots": 0}' "$1/api/worker/claim"; }
+[ "$(beat "http://127.0.0.1:$wport" "$wtok")" = 200 ] || fail "a heartbeat on the worker listener"
+[ "$(beat "http://127.0.0.1:$wport" orca_nope)" = 401 ] || fail "a bad token on the worker listener"
+[ "$(beat "http://127.0.0.1:$uport" "$wtok")" = 200 ] || fail "a heartbeat on the UI's port, beside a worker listener"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$wport/")" = 404 ] || fail "the worker listener answers a page"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$wport/api/pipelines/toy")" = 404 ] \
+    || fail "the worker listener answers the API"
+[ "$(q "SELECT name FROM orca.workers WHERE label = 'ui'")" = w-ui ] || fail "the heartbeat wasn't recorded"
+kill "$wpid"
+echo "ok   the worker API on ORCA_WORKER_ADDR"
 
 kill "$pid"
 echo "ok   ui"

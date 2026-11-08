@@ -4,9 +4,10 @@
 `127.0.0.1:8270` (`ORCA_UI_ADDR`). Every page is also JSON, to
 `Accept: application/json` or `?format=json`. Reading needs no login; the
 actions need one once a user exists (`orca user add <name>`). The full list
-of paths and actions is the docstring of `src/orca/ui.mojo`; the site's
-[UI page](https://mlake.dev/s/orca/docs/ui) has the older pages. This page is
-the parts that changed most recently.
+of paths is the docstring of `src/orca/web/routes.mojo`, and of the actions
+`src/orca/api/actions.mojo`'s (DESIGN.md's "Web layer" maps the modules);
+the site's [UI page](https://mlake.dev/s/orca/docs/ui) has the older pages.
+This page is the parts that changed most recently.
 
 ```sh
 ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui
@@ -261,7 +262,7 @@ it, on hover, keyboard focus or a tap. A value from a fixed set (a status
 such as `deferred`, a step's kind `mapped`, a trigger, a placement, where
 a setting came from) is dotted underlined instead, and says what it means
 the same ways, so a table doesn't get a "?" in every cell. The texts are
-in one place, `src/orca/terms.mojo`: a header's by its label (or its
+in one place, `src/orca/ui/terms.mojo`: a header's by its label (or its
 table's, for a word that means different things, as From does in the
 Configuration and Actions tables), a value's by its kind and value, and a
 setting's by its key. The UI adds a header's "?" to every `<th>` it has a

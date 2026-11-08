@@ -20,6 +20,7 @@ Its commands:
     ./build/orca tick
     ./build/orca scheduler
     ./build/orca ui                 # http://127.0.0.1:8270, or ORCA_UI_ADDR
+                                    # (the worker API on ORCA_WORKER_ADDR too)
     ./build/orca sample --out m.jsonl --pid 1234   # machine metrics
     ./build/orca lineage lake.report [<snapshot>]
     ./build/orca rebuild raw.events 2024-03
@@ -29,7 +30,7 @@ Its commands:
 
 Needs `ORCA_DATABASE_URL`, but for the commands `--remote` (or
 `ORCA_REMOTE`) sends to a deployed `orca ui` instead (`orca.remote`). See
-`orca.scheduler` for what a tick does, and `orca.ui` for the pages,
+`orca.scheduler` for what a tick does, and `orca.web` for the pages,
 `orca.lineage` for what `lineage` prints, and `orca.sensors` for what
 `rebuild` plans.
 Exit codes: 0, 2 for a usage error, 3 for any other error.
@@ -86,7 +87,7 @@ from orca.state import State
 from orca.watchdog import acknowledge, snooze as snooze_rule
 from orca.auth import audit
 from orca.tokens import revoke_user_tokens, user_tokens
-from orca.ui import DEFAULT_ADDR, serve_ui
+from orca.web.server import DEFAULT_ADDR, serve_ui
 from orca.worker import worker_command
 from orca.workers import (
     create_worker_token,
@@ -579,7 +580,11 @@ def _command(args: List[String], target: String) raises -> Int:
     if cmd == "ui" and len(args) == 2:
         var db = State(url)
         db.migrate()
-        serve_ui(url, getenv("ORCA_UI_ADDR", DEFAULT_ADDR))
+        serve_ui(
+            url,
+            getenv("ORCA_UI_ADDR", DEFAULT_ADDR),
+            getenv("ORCA_WORKER_ADDR"),
+        )
         return 0
     _usage()
     return 2

@@ -285,7 +285,7 @@ Gate: a failed step is found, its logs read and the run resumed, without a termi
 ### How it fits together
 
 - **`orca ui`** is a command of the `orca` binary, not a new binary: it needs `ORCA_DATABASE_URL` like the others, reads the tables the scheduler and the runs write, and binds `127.0.0.1:8270` unless `ORCA_UI_ADDR` says otherwise. `ORCA_UI_LINKS` adds a deployment's own links to the nav after Docs, as comma-separated `label=url` entries (`Census ↗=https://census.mlake.dev`); labels and urls are escaped and only http(s) urls are kept. `ORCA_POSTHOG_KEY`, a PostHog project key (`phc_...`, public), adds the magmalake.org website's PostHog snippet to every page's head, with `site: "orca"` registered on each event; it loads `/ph/static/array.js` and sends to `/ph` on the UI's own origin, which a first-party proxy in front of the UI has to serve (orca.mojourney.dev: the `mojourney-ph` Worker in magmalake/magmalake.org), and keeps nothing in cookies or `localStorage`. Unset, or anything not a `phc_` key, adds nothing. It holds no state of its own, so it can run beside the scheduler, or several of it at once.
-- **flare serves it**: its `Router` for paths, one reactor thread (`num_workers=1`) to start with. A request runs a few short queries against indexed columns, so it doesn't hold the loop for long; idle and write timeouts are set for the work rather than left at flare's web defaults (see flare's silent-reap history). Postgres is reached through one connection per request at first, measured, and pooled only if that shows.
+- **flare serves it**: one handler (`orca.web.server`) that looks each request up in a route table (`orca.web.routes`; see [Web layer](#web-layer)), one reactor thread (`num_workers=1`) to start with. A request runs a few short queries against indexed columns, so it doesn't hold the loop for long; idle and write timeouts are set for the work rather than left at flare's web defaults (see flare's silent-reap history). Postgres is reached through one connection per request at first, measured, and pooled only if that shows.
 - **HTML is written in Mojo**, through a small `orca.html` writer that escapes every value it's given and only writes raw markup it's told is markup. flare's template engine was looked at and isn't used: its context is strings and lists of strings, and a run page is a table of records.
 - **The page skeleton**: one layout with a header (pipelines, runs) and one stylesheet with magmalake.dev's colours and type, light and dark. Nothing is fetched from elsewhere, so the UI works without the internet.
 - **Live parts are polled fragments**: a running run's DAG and steps, and a running attempt's log, sit in an element with `data-poll` naming a fragment path that returns only that piece of HTML. Twelve lines of script in the layout replace it every two seconds until the fragment answers 286 (htmx's "stop polling"), which it does once what it shows has ended. htmx was the plan; for this one pattern it would have been 50 KB to embed in the binary. Forms are plain HTML forms, so the actions need no script either. Server-sent events are left for later; flare has them, but polling a few fragments is simpler and plenty for one team.
@@ -301,6 +301,47 @@ Gate: a failed step is found, its logs read and the run resumed, without a termi
   - **Pause**: `orca pause <pipeline>` (or the page's button) sets `pipelines.paused` (migration 16), and the scheduler starts none of the pipeline's runs: fires, sensors, retries and backfills still queue theirs, which wait, and runs already going go on. `orca unpause` lets the scheduler start them on its next tick. A paused pipeline says so on `/` and its page, and in their JSON (`paused`).
 - **An action answers `303 See Other`** to the page of the run it made or acted on (or, to `Accept: application/json`, that run's ID). One that can't be done (a run still going, a range with a bad key) answers 409 with the reason, on a page with a way back; a resume onto new code answers 409 with the form that confirms it.
 - **No authentication in phase 3** (one team, a trusted network). Because the UI is on localhost and its actions change state, every `POST` checks that `Origin` (or, without it, `Referer`) is the UI's own, so a page on another site can't make the browser post to it. The UI's own origin is `Host` with the scheme the browser used: `X-Forwarded-Proto` behind a proxy that terminates TLS (`ORCA_UI_TRUST_PROXY=1`, as `orca aws up` deploys Caddy), else `https` with `ORCA_UI_SECURE_COOKIES=1`, else `http`; scheme and host compare in any case, and a default port is left out. Nothing changes state on a `GET`.
+
+### Web layer
+
+The UI's code is four packages, each a module per page or per area, so a
+page's HTML, its JSON and its reads can be found by name:
+
+```
+orca/web/     the server: one router, who a request is from, the listeners
+orca/api/     JSON: what orca --remote, orca worker and HttpStore talk to
+orca/ui/      HTML: a module per page, and what pages draw with
+orca/views/   typed read models: the queries both api/ and ui/ draw from
+```
+
+| Module | |
+|---|---|
+| `web/server` | `orca ui`'s handler: the stylesheet and the worker API first, then the route, the same-origin check, the database, who it's from, and the route's kind |
+| `web/router` | how a path finds its route (`GET`/`POST`, `{name}`, `{id:int}`), and `Call`, what a handler gets |
+| `web/routes` | the route table: every path, and the few lines that hand its parameters to the page or action |
+| `web/auth` | sessions, API tokens, same-origin posts; `/login`, `/logout`, `/api/login`, `/api/logout` |
+| `web/page` | `Page`, what a handler answers, and `respond`, which sends HTML or JSON |
+| `api/actions` | the `POST`s that change something |
+| `api/worker` | the worker API (`/api/worker/...`), with its own token, route table and, with `ORCA_WORKER_ADDR`, its own listener |
+| `api/pipelines`, `api/runs`, `api/datasets`, `api/ops` | the JSON writers, and the endpoints that are JSON only |
+| `ui/home`, `ui/pipeline`, `ui/start`, `ui/coverage`, `ui/runs`, `ui/run`, `ui/attempt`, `ui/machines`, `ui/datasets`, `ui/ops`, `ui/code`, `ui/login` | a page each (or a part of one) |
+| `ui/layout`, `ui/parts` | every page's frame and its scripts; pieces several pages draw |
+| `ui/step_cards`, `ui/terms`, `ui/style`, `ui/viz` | step cards, the help texts, the stylesheet, the views drawn in the browser |
+| `views/pipelines`, `views/runs`, `views/datasets`, `views/code`, `views/steps`, `views/start`, `views/commands` | the rows the pages read, and the queries that read them |
+
+A request's way through: `web/server` finds its route, checks the origin
+and who it's from, and calls the route's handler with a `Call`. For the
+run page and the pipeline page the handler reads the view once
+(`run_view`, `pipeline_view`), and the page is that view twice: its JSON
+(`api/runs.run_json`, `api/pipelines.pipeline_json`) and its HTML
+(`ui/run.run_html`, `ui/pipeline.pipeline_html`). The other pages still
+build both in one function in `ui/`, over the rows of `views/`; they can
+be split the same way as they change.
+
+The worker API is apart from the rest: a worker's token gets nothing
+elsewhere and a user's nothing there, and `ORCA_WORKER_ADDR` serves it on
+an address of its own, from a thread of its own, so a slow page can't hold
+up claims, heartbeats and store calls (docs/workers.md).
 
 ### Pages
 

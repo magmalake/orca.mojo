@@ -205,3 +205,22 @@ name, and the token's id and label.
 Outbound HTTPS only, through the server's existing Cloudflare Tunnel. No
 firewall change is needed, and Postgres stays reachable only on the
 server.
+
+### A listener of its own
+
+By default `orca ui` answers the worker API (`/api/worker/...`) on the same
+port as its pages, so a page that is slow to render (a large pipeline's
+Overview, Control's charts) can hold up a worker's claims and heartbeats,
+and its runs' store calls, behind it. Set `ORCA_WORKER_ADDR` (`host:port`)
+and `orca ui` also serves the worker API on that address, from a thread of
+its own:
+
+```sh
+ORCA_UI_ADDR=127.0.0.1:8270 ORCA_WORKER_ADDR=127.0.0.1:8271 orca ui
+```
+
+Point `orca worker --remote` at it (through the tunnel, a hostname of its
+own for that port); the runs it starts record themselves there too. That
+address answers only the worker API: anything else is 404. The UI's own
+port keeps answering the worker API as well, so workers can move over one
+at a time. Unset, nothing changes.

@@ -9,10 +9,10 @@ header_help("From", "config")     # a column whose meaning depends on its table
 value_help("status", "deferred")  # what a status chip says on hover
 ```
 
-The UI (`orca.ui`) adds a header's help to every `<th>` it finds one for
-(a `data-help` attribute names a table-specific one), and `Html.status` and
-`Html.term` put a value's on its chip or word. Texts are HTML, written
-here as `if` chains (`_header`, `_context_header`, `_value`, `_key`), so
+The UI (`orca.web.page.respond`) adds a header's help to every `<th>` it
+finds one for (a `data-help` attribute names a table-specific one), and
+`Html.status` and `Html.term` put a value's on its chip or word. Texts are
+HTML, written here as `if` chains (`_header`, `_context_header`, `_value`, `_key`), so
 they may hold entities; none holds data from a request or a double quote,
 as a value's goes in an attribute. An empty text means no help.
 """
