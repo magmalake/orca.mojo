@@ -1,20 +1,83 @@
-"""The Ops pages' JSON endpoints: `/api/fleet`, `/api/system`,
-`/api/gantt` and `/api/watchdog`, each its page's JSON (`/api/workers` is
-the Workers page's, `orca.ui.ops`).
+"""The Ops pages' JSON endpoints: `/api/fleet`, `/api/workers`,
+`/api/system`, `/api/gantt` and `/api/watchdog` (`/api/pools` is the Pools
+page's, `orca.ui.pools`). `/api/fleet` and `/api/workers` are what the
+Fleet and Workers pages were, before Pools replaced them.
 """
 
+from orca.fleet import (
+    charts_json,
+    fleet_charts,
+    fleet_hosts,
+    fleet_summary,
+    hosts_json,
+    sort_hosts,
+    summary_json,
+)
 from orca.state import State
-from orca.ui.ops import fleet_page, system_page
+from orca.ui.ops import system_page
 from orca.ui.viz import gantt_json
-from orca.watchdog import config as watchdog_config, watchdog_json
+from orca.watchdog import (
+    active_trips,
+    config as watchdog_config,
+    trips_json,
+    watchdog_json,
+)
 from orca.web.page import Page
+from orca.workers import worker_rows, workers_json
+
+
+def _fleet_sort(sort: String) -> String:
+    """`sort` if it names a column Fleet's hosts sorted by, else the
+    default."""
+    for c in [
+        "role",
+        "type",
+        "run",
+        "uptime",
+        "cpu",
+        "busiest",
+        "mem",
+        "net",
+        "disk",
+        "state",
+    ]:
+        if sort == c:
+            return sort
+    return String()
+
+
+def fleet_json(
+    mut db: State, sort: String, dir: String, range: String
+) raises -> String:
+    """The machines orca is paying for, and what they have been doing: the
+    watchdog's trips, the summary, the hosts (`?sort=` a column,
+    `&dir=desc`) and the charts over `?range=24h` or `7d`."""
+    var hosts = fleet_hosts(db)
+    sort_hosts(hosts, _fleet_sort(sort), dir == "desc")
+    return String(
+        '{"watchdog": ',
+        trips_json(active_trips(db)),
+        ', "summary": ',
+        summary_json(fleet_summary(db)),
+        ', "hosts": ',
+        hosts_json(hosts),
+        ', "charts": ',
+        charts_json(fleet_charts(db, 168 if range == "7d" else 24)),
+        "}",
+    )
 
 
 def fleet_api(mut db: State, range: String) raises -> Page:
-    """`/api/fleet`: the fleet page's numbers as JSON, whatever is asked
-    for."""
-    var page = fleet_page(db, "", "", range)
-    return Page(200, String(), page.json.copy(), "application/json")
+    """`/api/fleet`: the fleet's numbers as JSON, whatever is asked for."""
+    var j = fleet_json(db, "", "", range)
+    return Page(200, j.copy(), j^, "application/json")
+
+
+def workers_api(mut db: State) raises -> Page:
+    """`/api/workers`: each worker token's pool, label, worker, image, last
+    heartbeat, runs, CPUs and memory."""
+    var j = workers_json(worker_rows(db))
+    return Page(200, j.copy(), j^, "application/json")
 
 
 def system_api(mut db: State, range: String) raises -> Page:

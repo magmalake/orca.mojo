@@ -142,8 +142,8 @@ before that, name the binaries:
 `docker exec scheduler sh -c 'cd /opt/orca/pipelines && orca register gharchive gharchive_index mojo_repos mojo_history mojo_activity mojo_stats mojo_versions'`.
 
 `orca config show` says what was registered. A pipeline with `placement`
-left out runs on the scheduler's runner, here the local one. The Fleet page
-(Ops > Fleet) says the runner launches no instances, its Cost tile shows
+left out runs on the scheduler's runner, here the local one. Ops > Pools
+says the runner launches no instances, its Cost tile shows
 `ORCA_FIXED_COST` (`FIXED_COST` in `hetzner.env`, free text such as
 `€8.49/month`; "Fixed" if unset), and the watchdog's cost
 rule reads "fixed price" and never trips; its launch, idle, failing, stuck

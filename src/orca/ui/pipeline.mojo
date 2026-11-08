@@ -473,7 +473,9 @@ def _config_html(mut h: Html, p: PipelineRow):
         h.term("placement", p.placement)
         h.raw(' <span class="muted">(its runs wait for a worker of pool ')
         h.text(p.placement.removeprefix("worker:"))
-        h.raw(', <a href="/ops/workers">Workers</a>)</span>')
+        h.raw(', <a href="/ops/pools?pool=')
+        h.text(url_encode(p.placement))
+        h.raw('">Pools</a>)</span>')
     elif p.placement:
         h.term("placement", p.placement)
     else:

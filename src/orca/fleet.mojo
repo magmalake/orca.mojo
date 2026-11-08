@@ -1,4 +1,6 @@
-"""The fleet: every machine orca is paying for, on one page (`/ops/fleet`).
+"""The fleet: every machine orca is paying for, as Ops' Pools shows the
+EC2 ones (`/ops/pools?kind=ec2`, `orca.ui.pools`) and `/api/fleet` has them
+as JSON.
 
 What the page shows comes from three places, none of which reads the
 samplers' files when a page is viewed:
@@ -1003,7 +1005,10 @@ def summary_html(mut h: Html, s: Summary, compact: Bool):
     """The summary cards; each links to where its detail is."""
     h.raw('<div class="stats', " stats--compact" if compact else "", '">')
     # Hosts.
-    h.raw('<a class="stat" href="/ops/fleet#hosts"><span class="stat__k">Hosts')
+    h.raw(
+        '<a class="stat" href="/ops/pools?kind=ec2#machines"><span'
+        ' class="stat__k">Hosts'
+    )
     h.raw('</span><span class="stat__v">', s.hosts(), "</span>")
     h.raw('<span class="stat__s">')
     h.text(
@@ -1024,7 +1029,8 @@ def summary_html(mut h: Html, s: Summary, compact: Bool):
     if getenv("ORCA_RUNNER") == "local":
         # The local runner launches no instances: the server's price is fixed.
         h.raw(
-            '<a class="stat" href="/ops/fleet#hosts"><span class="stat__k">Cost'
+            '<a class="stat" href="/ops/pools?kind=ec2#machines"><span'
+            ' class="stat__k">Cost'
         )
         h.raw('</span><span class="stat__v">')
         h.text(getenv("ORCA_FIXED_COST", "Fixed"))
@@ -1032,7 +1038,7 @@ def summary_html(mut h: Html, s: Summary, compact: Bool):
         h.raw(" launches no instances</span></a>")
     else:
         h.raw(
-            '<a class="stat" href="/ops/fleet#hosts"><span'
+            '<a class="stat" href="/ops/pools?kind=ec2#machines"><span'
             ' class="stat__k">Cost now'
         )
         h.raw('</span><span class="stat__v">~$', _fixed(s.cost, 2), "/h</span>")
@@ -1046,7 +1052,9 @@ def summary_html(mut h: Html, s: Summary, compact: Bool):
     h.raw(s.running, " <small>running</small></span>")
     h.raw('<span class="stat__s">', s.queued, " queued</span></a>")
     # Runs and errors per hour.
-    h.raw('<a class="stat" href="/ops/fleet#runs"><span class="stat__k">')
+    h.raw(
+        '<a class="stat" href="/ops/pools?kind=ec2#runs"><span class="stat__k">'
+    )
     h.raw('Runs per hour</span><span class="stat__v">', s.runs_hour, "</span>")
     h.raw(
         '<span class="stat__s">',
@@ -1127,117 +1135,16 @@ def sort_hosts(mut hosts: List[Host], sort: String, desc: Bool):
             j -= 1
 
 
-def _th(
-    mut h: Html,
-    label: String,
-    col: String,
-    sort: String,
-    desc: Bool,
-    range: String,
-    num: Bool = False,
-):
-    var here = sort == col
-    h.raw("<th", ' class="num"' if num else "")
-    if here:
-        h.raw(' aria-sort="', "descending" if desc else "ascending", '"')
-    h.raw('><a class="sortby" href="/ops/fleet?sort=', col)
-    h.raw("&amp;dir=", "asc" if here and desc else "desc" if here else "asc")
-    h.raw("&amp;range=", url_encode(range), '#hosts">')
-    h.text(label)
-    if here:
-        h.raw(" ", "▼" if desc else "▲")
-    h.raw("</a></th>")
-
-
-def hosts_html(
-    mut h: Html, hosts: List[Host], sort: String, desc: Bool, range: String
-):
-    """The table of live hosts."""
-    if len(hosts) == 0:
-        h.raw('<p class="empty">No hosts are running.</p>')
-        return
-    h.raw('<div class="scroll"><table class="hosts"><thead><tr>')
-    _th(h, "Host", "role", sort, desc, range)
-    _th(h, "Type", "type", sort, desc, range)
-    _th(h, "Run", "run", sort, desc, range)
-    _th(h, "Uptime", "uptime", sort, desc, range, True)
-    _th(h, "CPU", "cpu", sort, desc, range, True)
-    h.raw("<th>10 min</th>")
-    _th(h, "Busiest core", "busiest", sort, desc, range, True)
-    _th(h, "Memory", "mem", sort, desc, range, True)
-    _th(h, "Net in / out MB/s", "net", sort, desc, range, True)
-    _th(h, "Disk", "disk", sort, desc, range, True)
-    _th(h, "State", "state", sort, desc, range)
-    h.raw("</tr></thead><tbody>")
-    for x in hosts:
-        h.raw("<tr><td><code>")
-        h.text(x.role if x.role == _CONTROL else String(x.role, "-", x.id))
-        h.raw("</code></td>")
-        h.mono(x.instance_type)
-        h.raw("<td>")
-        var first = True
-        for r in x.runs:
-            if r > 0:
-                if not first:
-                    h.raw(" ")
-                h.chip(String("/runs/", r), String(r))
-                first = False
-        h.raw("</td>")
-        h.num(_age(x.uptime) if x.role != _CONTROL else String("—"))
-        if x.sampled:
-            h.num(_fixed(x.cpu, 0), "%")
-            h.raw("<td>")
-            h.raw(
-                sparkline(
-                    x.spark_x, x.spark_y, 100.0, "CPU over the last 10 minutes"
-                )
-            )
-            h.raw("</td>")
-            h.num(_fixed(x.busiest, 0), "%")
-            h.num(_fixed(x.mem, 0), "%")
-            h.num(_fixed(x.net_in / 1e6, 2), " / ", _fixed(x.net_out / 1e6, 2))
-            h.num(_fixed(x.disk, 0), "%")
-        else:
-            h.raw('<td class="muted" colspan="6">no samples yet</td>')
-        h.raw("<td>")
-        h.status(x.state)
-        if x.idle > 0:
-            h.raw(' <span class="muted" title="Idle in the pool for">')
-            h.text(_age(x.idle))
-            h.raw("</span>")
-        if x.sampled and x.age > 180:
-            h.raw(' <span class="muted" title="No sample for this long">')
-            h.text(_age(x.age), " ago")
-            h.raw("</span>")
-        h.raw("</td></tr>")
-    h.raw("</tbody></table></div>")
-
-
-def hosts_fragment(
-    mut db: State, sort: String, desc: Bool, range: String
-) raises -> String:
-    """What the page refreshes: the summary cards and the hosts table."""
-    var h = Html()
-    summary_html(h, fleet_summary(db), False)
-    h.raw(
-        '<section class="card" id="hosts"><h2><a class="anchor"'
-        ' href="#hosts">Hosts</a></h2>'
-    )
-    var hosts = fleet_hosts(db)
-    sort_hosts(hosts, sort, desc)
-    hosts_html(h, hosts, sort, desc, range)
-    h.raw("</section>")
-    return h^.finish()
-
-
-def charts_html(mut h: Html, c: Charts, range: String):
-    """The cards of charts, and the choice of range."""
+def charts_html(mut h: Html, c: Charts, range: String, base: String):
+    """The cards of charts, and the choice of range, links to `base` (a
+    path and maybe a query) with `range=` added."""
+    var sep = "&amp;" if "?" in base else "?"
     h.raw('<p class="range">Range: ')
     for r in ["24h", "7d"]:
         if r == range:
             h.raw("<strong>", r, "</strong> ")
         else:
-            h.raw('<a href="/ops/fleet?range=', r, '">', r, "</a> ")
+            h.raw('<a href="', escape(base), sep, "range=", r, '">', r, "</a> ")
     h.raw("(UTC, by the hour)</p>")
     h.raw(
         '<section class="card" id="hours"><h2><a class="anchor"'

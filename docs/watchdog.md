@@ -44,7 +44,7 @@ control instance's own price when `ORCA_CONTROL_TYPE` names its type.
 [Hetzner server](hetzner.md)) nothing is launched, so there is nothing to
 price: the `cost` rule reads "fixed price" and never trips. The other rules
 still apply. `ORCA_FIXED_COST` (free text, such as `€8.49/month`) is what
-Ops › Fleet's Cost tile shows there.
+Ops › Pools' Cost tile (with EC2 in view) shows there.
 
 ## What a trip does
 
@@ -55,7 +55,7 @@ A rule past a limit, and not snoozed, trips:
   `watchdog`, the rule's numbers);
 - it records a trip in `orca.watchdog_trips`, with every check's value and
   limit and which one tripped;
-- it shows a red banner on `/`, Ops › Control and Ops › Fleet;
+- it shows a red banner on `/`, Ops › Control and Ops › Pools;
 - it sends a high-priority alert if [alerts](alerts.md) are set up.
 
 Pipelines that were already paused are left alone, and a trip that pauses
@@ -97,6 +97,6 @@ Each command also works from a laptop with `orca --remote <url> watchdog ...`
 | `/watchdog` | the same, with a Checks column, what each trip tripped on, and the snooze form |
 | `/api/watchdog` | the rules and trips as JSON, each with `checks` and `tripped_on` (and `value`, `threshold`) |
 | `/metrics` | `orca_watchdog_tripped{rule}`, `orca_watchdog_value{rule}`, `orca_watchdog_threshold{rule}` |
-| the banner | on `/`, `/ops/control` and `/ops/fleet` while a trip isn't cleared or acknowledged |
+| the banner | on `/`, `/ops/control` and `/ops/pools` while a trip isn't cleared or acknowledged |
 
 Trips older than 30 days are deleted.

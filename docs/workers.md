@@ -138,7 +138,7 @@ docker run -d --name orca-worker --restart always --env-file worker.env \
   with `--image`, and then the same value: [Versions](#failures).
 - The worker needs only outbound HTTPS, to the UI and to the bucket.
 - `docker logs orca-worker` shows each run it starts and how it exited;
-  Ops > Workers shows its heartbeat.
+  Ops > Pools shows its heartbeat.
 
 **Deploying.** The worker runs the code of its own image, so keep it on
 the server's tag: deploy the server first (`deploy.sh <tag>`), then
@@ -195,10 +195,15 @@ that can't be made within half the stale limit refuses the commit.
 
 ## In the UI
 
-Ops > Workers (`/ops/workers`, and `/api/workers` as JSON) lists each
-worker token with its pool, label, worker name, image, last heartbeat,
-current runs, CPUs and memory. A run's page says where it ran: the worker's
-name, and the token's id and label.
+Ops > Pools (`/ops/pools?kind=self-hosted`, and `/api/pools` as JSON; see
+[ui.md](ui.md#pools)) has a row per worker token, the machine its worker
+runs on, in pool `worker:<pool>`: its name, state (`live`, or `gone` when
+the token is revoked or expired or the worker hasn't been heard from for
+`ORCA_STALE_SECONDS`), image, CPUs, memory, current runs and last
+heartbeat, and the worker's token and label. Its page lists the runs it
+claimed. `/api/workers` is still each token as JSON, and `/ops/workers`
+redirects to Pools. A run's page says where it ran: the worker's name, and
+the token's id and label.
 
 ## Network
 

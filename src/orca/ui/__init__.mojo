@@ -29,7 +29,8 @@ rows of `orca.views`; they can be split the same way as they change.
 | `orca.ui.attempt` | an attempt's log and facts |
 | `orca.ui.machines` | a run's machines and their metrics |
 | `orca.ui.datasets` | datasets, a dataset, a snapshot's lineage, a rebuild |
-| `orca.ui.ops` | Control, Fleet, Workers, the watchdog, `/metrics` |
+| `orca.ui.ops` | Control, the watchdog, `/metrics`, and Fleet and Workers' redirects |
+| `orca.ui.pools` | Ops' Pools: every pool's machines, a machine's page |
 | `orca.ui.code` | `/code`: a file at a commit, coloured, for code on hover |
 | `orca.ui.login` | the login page |
 | `orca.ui.layout` | every page's frame and what pages draw with |

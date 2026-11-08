@@ -291,7 +291,7 @@ ci/orca.toml:9: [pipelines.mojo_repos] secrets: GITHUB_TOKEN: can't read secret 
 orca: ci/orca.toml has 1 problem(s)
 ```
 
-It checks a file for a project's CI and needs no database. It refuses what `orca register` would refuse, with the same `file:line: [table] key: why`. It also checks that orca can size each `head_type` and `worker_type` (the vCPUs `worker_procs = "auto"` and the fleet use; `ORCA_EC2_VCPUS` adds types), and warns about a type that isn't in orca's price table, which Ops > Fleet and the watchdog's cost rule count as $0 an hour. `--secrets` also reads each secret the way the scheduler does (`ORCA_SECRET_FETCH`, else Secrets Manager with the `AWS_*` credentials or the instance role) and never prints a value. It exits 1 if anything is wrong.
+It checks a file for a project's CI and needs no database. It refuses what `orca register` would refuse, with the same `file:line: [table] key: why`. It also checks that orca can size each `head_type` and `worker_type` (the vCPUs `worker_procs = "auto"` and the fleet use; `ORCA_EC2_VCPUS` adds types), and warns about a type that isn't in orca's price table, which Ops > Pools' cost tile and the watchdog's cost rule count as $0 an hour. `--secrets` also reads each secret the way the scheduler does (`ORCA_SECRET_FETCH`, else Secrets Manager with the `AWS_*` credentials or the instance role) and never prints a value. It exits 1 if anything is wrong.
 
 ## orca config export
 
