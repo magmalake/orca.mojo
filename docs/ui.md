@@ -569,3 +569,15 @@ used.
 `/watchdog` lists each rule with each of its thresholds, the last value and
 whether it is past it, the snooze form, and the trips with what each
 tripped on. See [watchdog.md](watchdog.md).
+
+## Stopping
+
+SIGTERM (what `docker stop` sends) or SIGINT (Ctrl-C) drains `orca ui`
+instead of cutting it off: it closes its listening socket, so new
+connections are refused, lets the requests already in flight finish, and
+exits 0 once none has been for 200 ms. `ORCA_UI_DRAIN_SECONDS` (default 8,
+under `docker stop`'s 10 s grace) bounds the wait; when it's up the server
+stops and closes its kept-alive connections, and a request still running
+half a second later is given up, with exit code 1. A second signal stops
+it at once. The worker API on `ORCA_WORKER_ADDR`, if any, ends with the
+process. `src/orca/web/drain.mojo` has the details.

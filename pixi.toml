@@ -93,6 +93,8 @@ test-actions = { cmd = "scripts/with-postgres.sh tests/actions.sh" }
 test-fleet = { cmd = "scripts/with-postgres.sh tests/fleet.sh" }
 test-system = { cmd = "scripts/with-postgres.sh tests/system.sh" }
 test-ui-login = { cmd = "scripts/with-postgres.sh tests/ui_login.sh" }
+# Stopping orca ui (orca.web.drain): SIGTERM finishes what's in flight.
+test-ui-drain = { cmd = "scripts/with-postgres.sh tests/ui_drain.sh" }
 # `orca login` and `--remote` (orca.remote, orca.tokens): tokens, URLs and
 # the credentials file, then the command against orca ui over HTTP.
 test-remote = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_remote.mojo -o build/test-remote && ./build/test-remote && scripts/with-postgres.sh tests/remote.sh" }
@@ -171,7 +173,7 @@ build-shared = { cmd = "scripts/build-shared.sh" }
 # The executor, stores, workers, clouds and the data a run makes:
 test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-hetzner", "test-compile-fail", "test-store", "test-state", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-worker-procs", "test-no-workers", "test-pool", "test-secrets", "test-placement", "test-usage", "test-resources", "test-grants", "test-pressure", "test-cgroups", "test-aws", "test-source", "test-highlight", "test-step-cards", "test-graph", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
 # The scheduler, the UI, and what a registration and its code control:
-test-scheduler-ui = { depends-on = ["build-shared", "test-toml", "test-config", "test-fill", "test-pool-fills", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-system", "test-actions", "test-calendar", "test-ui-login", "test-remote", "test-worker-api", "test-pause", "test-older-binary", "test-watchdog", "test-notify", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
+test-scheduler-ui = { depends-on = ["build-shared", "test-toml", "test-config", "test-fill", "test-pool-fills", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-system", "test-actions", "test-calendar", "test-ui-login", "test-ui-drain", "test-remote", "test-worker-api", "test-pause", "test-older-binary", "test-watchdog", "test-notify", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-one-run-per-key", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
 test = { depends-on = ["test-executor", "test-scheduler-ui"] }
 toy = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout" }

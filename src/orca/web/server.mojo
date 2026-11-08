@@ -26,7 +26,9 @@ The UI holds no state: its actions are rows the scheduler acts on, and it
 can run beside the scheduler or anywhere else that reaches the database.
 `ORCA_UI_ADDR` (`host:port`) moves it; it binds to localhost unless told
 otherwise. `ORCA_WORKER_ADDR` serves the worker API on a listener of its
-own as well (`orca.api.worker`).
+own as well (`orca.api.worker`). SIGTERM or SIGINT drains it: no new
+connections, the requests in flight answered, then exit 0 within
+`ORCA_UI_DRAIN_SECONDS` (8; `orca.web.drain`).
 """
 
 from flare.http import Handler, HttpServer, Request, Response, ServerConfig
@@ -61,6 +63,7 @@ from orca.web.auth import (
     sign_in,
     token_refused,
 )
+from orca.web.drain import Drain
 from orca.web.page import Page, respond
 from orca.web.router import ACTION, AUTH, Call, PAGE, Route, answer, find
 from orca.web.routes import routes
@@ -267,8 +270,9 @@ def act(mut db: State, path: String, form: String) raises -> Optional[Page]:
 
 
 def serve_ui(url: String, addr: String, worker_addr: String = "") raises:
-    """Serves the pages on `addr` until the process is stopped, and the
-    worker API on `worker_addr` too, if one is given (`orca.api.worker`)."""
+    """Serves the pages on `addr` until SIGTERM or SIGINT drains them
+    (`orca.web.drain`), and the worker API on `worker_addr` too, if one is
+    given (`orca.api.worker`), until the process ends."""
     var cfg = ServerConfig()
     cfg.idle_timeout_ms = 30_000
     cfg.write_timeout_ms = 30_000
@@ -276,5 +280,8 @@ def serve_ui(url: String, addr: String, worker_addr: String = "") raises:
     if worker_addr:
         worker_api.listen(url, worker_addr)
         print("orca ui: the worker API on http://", worker_addr, sep="")
+    var drain = Drain(server)
     print("orca ui on http://", addr, sep="")
-    server.serve(Ui(url))
+    server.serve(drain.counting(Ui(url)))
+    _ = drain^
+    print("orca ui: stopped")
