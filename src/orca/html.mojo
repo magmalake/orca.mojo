@@ -13,6 +13,10 @@ page is tables of records, and writing it in Mojo keeps each value's type
 until the moment it's escaped.
 """
 
+from std.os import getenv
+
+from orca.terms import value_help
+
 
 def escape(s: StringSlice) -> String:
     """`s` with `&`, `<`, `>`, `"` and `'` as character references, safe in
@@ -204,15 +208,72 @@ struct Html(Movable, Writable):
 
     def status(mut self, s: StringSlice):
         """A status as a badge, its class named after it (a space in the
-        status is a hyphen in the class)."""
+        status is a hyphen in the class), with what it means on hover or
+        keyboard focus (`orca.terms`)."""
         var e = escape(s)
+        self.out.write("<span")
+        self._tip(value_help("status", s))
         self.out.write(
-            '<span class="status status--',
+            ' class="status status--',
             e.replace(" ", "-"),
             '">',
             e,
             "</span>",
         )
+
+    def help(
+        mut self,
+        id: String,
+        key: String,
+        text: StaticString,
+        docs: StaticString = "",
+    ):
+        """A "?" after a fact's or a column's name that shows `text`, then a
+        link to the docs (`docs`: a section of the docs page, or a URL) if
+        there is one. CSS shows it on hover and keyboard focus, so it needs
+        no script; to a screen reader the text is the button's description.
+        `id` is unique in the page."""
+        self.raw(
+            '<span class="help"><button type="button" class="help__btn"',
+            ' aria-label="About ',
+            key,
+            '" aria-describedby="help-',
+            id,
+            '">?</button><span class="help__tip" role="tooltip" id="help-',
+            id,
+            '">',
+            text,
+        )
+        if docs:
+            var href = String(docs) if docs.startswith("http") else String(
+                getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"),
+                "#",
+                docs,
+            )
+            self.raw(
+                ' <a href="',
+                escape(href),
+                '" target="_blank" rel="noopener">Docs ↗</a>',
+            )
+        self.raw("</span></span>")
+
+    def term(mut self, kind: StringSlice, value: StringSlice):
+        """`value`, one of a fixed set (`kind` in `orca.terms`): dotted
+        underlined, with what it means on hover, keyboard focus or a tap;
+        plain text if the set doesn't know it."""
+        var tip = value_help(kind, value)
+        if not tip:
+            self.out.write(escape(value))
+            return
+        self.out.write('<span class="term"')
+        self._tip(tip)
+        self.out.write(">", escape(value), "</span>")
+
+    def _tip(mut self, tip: StaticString):
+        """` data-tip` (the stylesheet shows it) and a tab stop, if there's
+        a tip: attributes, each after a space."""
+        if tip:
+            self.out.write(' data-tip="', tip, '" tabindex="0"')
 
     def finish(deinit self) -> String:
         """The page written."""

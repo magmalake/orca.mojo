@@ -211,6 +211,33 @@ page=$(html "/runs/$bad_run")
 echo "$page" | grep -q 'dag__box dag__box--failed"><title>measure' || fail "measure isn't failed in the DAG"
 echo "$page" | grep -q 'dag__box dag__box--skipped"><title>total' || fail "total isn't skipped in the DAG"
 echo "$page" | grep -q 'data-poll="' && fail "an ended run's page still polls"
+# The run page's cards, each fact with its help; Steps with Table,
+# Timeline and Graph tabs, the table first, ?steps= for the others; the
+# page's script follows a refresh (tests/lineage.sh has its Snapshots).
+for id in status trigger code resources settings; do
+    echo "$page" | grep -q "<section class=\"card card--facts\" id=\"$id\"><h2>" || fail "the run page has no $id card"
+done
+for key in Duration Created Started Ended Tries Partitions Trigger "Peak memory" "CPU used"; do
+    echo "$page" | grep -qF "<dt>$key<span class=\"help\"><button type=\"button\" class=\"help__btn\" aria-label=\"About $key\" aria-describedby=\"help-" \
+        || fail "the run's $key has no help"
+done
+[ "$(echo "$page" | grep -o 'role="tooltip" id="help-' | wc -l)" -eq "$(echo "$page" | grep -o 'aria-describedby="help-' | wc -l)" ] \
+    || fail "a run page help button without its text"
+[ "$(echo "$page" | grep -o ' id="help-[^"]*"' | sort | uniq -d | wc -l)" -eq 0 ] || fail "two helps with one id"
+echo "$page" | grep -qF '<p class="hash">Code hash <code>' || fail "the run's code hash"
+echo "$page" | grep -qF '<section class="card steps" id="steps" data-tabs="orca.run.steps" data-tabs-param="steps">' \
+    || fail "the run's Steps card"
+echo "$page" | grep -qF '<div id="steps-table" role="tabpanel" class="scroll">' || fail "the run's table isn't shown first"
+echo "$page" | grep -qF '<div id="steps-timeline" role="tabpanel" class="scroll steps__graph" hidden><svg' || fail "the run's timeline tab"
+echo "$page" | grep -qF '<div id="steps-graph" role="tabpanel" class="scroll steps__graph" hidden><svg class="dag"' || fail "the run's graph tab"
+echo "$page" | grep -q 'aria-label="The run&#39;s attempts over time"' || fail "the timeline doesn't draw the attempts"
+[ "$(echo "$page" | grep -o '<h2>Steps' | wc -l)" -eq 1 ] || fail "the run's steps are shown twice"
+html "/runs/$bad_run?steps=timeline" | grep -qF '<div id="steps-timeline" role="tabpanel" class="scroll steps__graph"><svg' \
+    || fail "?steps=timeline doesn't show the timeline"
+html "/runs/$bad_run?steps=graph" | grep -qF '<div id="steps-table" role="tabpanel" class="scroll" hidden>' \
+    || fail "?steps=graph still shows the table"
+echo "$page" | grep -qF 'el.dispatchEvent(new Event("orca:swap"' || fail "a refresh doesn't tell the tabs"
+echo "$page" | grep -qF 'document.addEventListener("orca:swap"' || fail "the tabs don't follow a refresh"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$bad_run/live")
 [ "$code" = 286 ] || fail "an ended run's fragment answered $code, not 286"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/999999/live")
@@ -223,12 +250,12 @@ q "UPDATE orca.pipelines SET env = '{\"REG_FLAG\": \"reg-on\"}', max_runs = 3,
 q "UPDATE orca.runs SET spec = '{\"env\": {\"SPEC_FLAG\": \"spec-on\"},
     \"secrets\": {\"API_TOKEN\": \"arn:sm:spec-secret-id\"}, \"workers\": 2}' WHERE id = $bad_run" > /dev/null
 page=$(html "/runs/$ok_run")
-echo "$page" | grep -q '<h2>Settings</h2>' || fail "no settings on the run page"
-echo "$page" | grep -q 'REG_FLAG</code></td><td><code>reg-on' || fail "the registered environment isn't shown"
+echo "$page" | grep -q '<section class="card card--facts" id="settings">' || fail "no settings on the run page"
+echo "$page" | grep -q 'REG_FLAG</code>=<code class="env">reg-on' || fail "the registered environment isn't shown"
 echo "$page" | grep -q '<code>DB_PASSWORD</code>' || fail "the secret's name isn't shown"
 echo "$page" | grep -q 'reg-secret-id' && fail "a secret's value is on the page"
 page=$(html "/runs/$bad_run")
-echo "$page" | grep -q 'SPEC_FLAG</code></td><td><code>spec-on' || fail "the run's recorded environment isn't shown"
+echo "$page" | grep -q 'SPEC_FLAG</code>=<code class="env">spec-on' || fail "the run's recorded environment isn't shown"
 echo "$page" | grep -q 'REG_FLAG' && fail "the registered environment shows over the run's own"
 echo "$page" | grep -q '<code>API_TOKEN</code>' || fail "the recorded secret's name isn't shown"
 echo "$page" | grep -q 'spec-secret-id' && fail "a recorded secret's value is on the page"
@@ -238,7 +265,7 @@ q "UPDATE orca.pipelines SET env = NULL, max_runs = NULL, secrets = NULL WHERE n
 # Machine metrics: none recorded, the page is as it was; then a worker's
 # (tests/fixtures/metrics-worker.jsonl: memory over 90% for 30 s, steal
 # over 20% for 10 s) and this machine's, from the sampler itself.
-html "/runs/$ok_run" | grep -q 'Machines' && fail "a run without samples shows machines"
+html "/runs/$ok_run" | grep -q 'id="machines"' && fail "a run without samples shows machines"
 [ "$(json "/runs/$ok_run" | jq '.instances | length')" -eq 0 ] || fail "a run without samples has instances"
 m=$ORCA_LOGS/toy/$ok_run/metrics
 mkdir -p "$m"
@@ -251,6 +278,18 @@ echo "$page" | grep -q 'aria-label="The run&#39;s machines over time"\|aria-labe
 echo "$page" | grep -q 'class="mx__cpu" d="M' || fail "no CPU in the charts"
 echo "$page" | grep -q 'class="mx__mem" d="M' || fail "no memory in the charts"
 echo "$page" | grep -q '>days</text>' || fail "the charts have no steps lane"
+echo "$page" | grep -qF '<section class="card" id="machines"><h2>Machines<span class="help">' || fail "the Machines card has no help"
+echo "$page" | grep -qF '<p class="card__sub">The whole machine, while this run ran: the scheduler' \
+    || fail "the Machines card doesn't say it's the whole machine"
+# A run that ran beside another on the scheduler's machine says it shared it.
+echo "$page" | grep -q 'card__warn' && fail "a run alone on its machine says it shared it"
+was=$(q "SELECT coalesce(placement, 'NULL') || '|' || started || '|' || ended FROM orca.runs WHERE id = $bad_run")
+q "UPDATE orca.runs b SET placement = 'local', started = o.started, ended = o.ended + interval '1 hour'
+   FROM orca.runs o WHERE o.id = $ok_run AND b.id = $bad_run" > /dev/null
+html "/runs/$ok_run" | grep -qF '<p class="card__warn">A shared machine: 1 other run ran on it at the same time' \
+    || fail "a run beside another doesn't say it shared the machine"
+q "UPDATE orca.runs SET placement = nullif(split_part('$was', '|', 1), 'NULL'),
+   started = split_part('$was', '|', 2)::timestamptz, ended = split_part('$was', '|', 3)::timestamptz WHERE id = $bad_run" > /dev/null
 [ "$(echo "$page" | grep -o 'class="mx__warn"' | wc -l | tr -d ' ')" -eq 2 ] || fail "not 2 warnings on the charts"
 echo "$page" | grep -q 'memory over 90%, up to 95%' || fail "the peaks table's warning"
 echo "$page" | grep -q '<td><code>worker-i-0001</code></td><td class="num">40</td>' || fail "the peaks table"
@@ -279,13 +318,13 @@ html "/runs/$live" | grep -q "data-poll=\"/runs/$live/live\" data-poll-every=\"5
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/live")
 [ "$code" = 200 ] || fail "a running run's fragment answered $code"
 [ "$(html "/runs/$live" | grep -c 'data-poll="')" -eq 1 ] || fail "a running run's page has more than one poller"
-html "/runs/$live" | grep -q '<dt>Duration</dt><dd title="started .*; still going">[0-9]* s</dd>' || fail "a running run has no elapsed duration"
-html "/runs/$ok_run" | grep -q '<dt>Duration</dt><dd title="started [^"]*; ended [^"]*">[0-9 a-z]*</dd>' || fail "a finished run has no total duration"
+html "/runs/$live" | grep -q '<dt>Duration<span class="help">.*</dt><dd title="started [^"]*; still going">[0-9]* s</dd>' || fail "a running run has no elapsed duration"
+html "/runs/$ok_run" | grep -q '<dt>Duration<span class="help">.*</dt><dd title="started [^"]*; ended [^"]*">[0-9 a-z]*</dd>' || fail "a finished run has no total duration"
 html "/runs/$live" | grep -q "rel=\"prev\" href=\"/runs/$((live - 1))\"" || fail "no link to the previous run"
 html "/runs/$live" | grep -q 'rel="next" href=' && fail "the newest run links a next one"
 html "/runs/$ok_run" | grep -q 'rel="prev" href=' && fail "the first run links a previous one"
 html "/runs/$ok_run" | grep -q "rel=\"next\" href=\"/runs/$((ok_run + 1))\"" || fail "no link to the next run"
-html "/runs/$live" | grep -q '<h2>Settings</h2>' || fail "a running run's page has no settings"
+html "/runs/$live" | grep -q 'id="settings"' || fail "a running run's page has no settings"
 # Its machines too: the fragment draws samples as they come.
 mkdir -p "$ORCA_LOGS/toy/$live/metrics"
 ./build/orca sample --out "$ORCA_LOGS/toy/$live/metrics/local.jsonl" --count 1 --seconds 0.1 || fail "the live sampler"
@@ -459,13 +498,13 @@ json "/api/pipelines/toy?tab=runs&before=$pb" | jq -e --argjson b "$pb" '.runs[0
 html "/pipelines/toy?tab=runs&before=$pb" | grep -qF '<a rel="prev" href="/pipelines/toy?tab=runs">← Newer</a>' \
     || fail "the Runs tab's Newer link"
 [ "$(frag "/runs/table?view=pipeline&pipeline=toy&limit=20")" = 200 ] || fail "the Runs tab's fragment"
-grep -q '<th>Pipeline</th>' "$log.frag" && fail "the Runs tab's fragment has a Pipeline column"
+grep -q '<th>Pipeline' "$log.frag" && fail "the Runs tab's fragment has a Pipeline column"
 html / | grep -qF '<div data-poll="/runs/table?view=home&amp;limit=10" data-poll-every="' || fail "the home page's recent runs don't refresh"
 [ "$(frag "/runs/table?view=home&limit=10")" = 200 ] || fail "the home page's recent runs' fragment"
 grep -q 'pager' "$log.frag" && fail "the home page's recent runs have a pager"
 [ "$(grep -o '<tr><td><a class="chip"' "$log.frag" | wc -l)" -eq 10 ] || fail "the home page's fragment hasn't 10 runs"
 [ "$(frag /home/pipelines)" = 200 ] || fail "the home page's pipelines fragment"
-grep -qF '<th>Pipeline</th><th>Partitions</th><th>Schedule</th>' "$log.frag" || fail "the pipelines fragment isn't the table"
+grep -qF '<section class="card"><div class="scroll"><table><thead><tr><th>Pipeline' "$log.frag" || fail "the pipelines fragment isn't the table"
 grep -qiE '^X-Poll-Every: (5|30)' "$log.h" || fail "the pipelines fragment doesn't say when to ask again"
 # Tries: the header says what it counts, and a cell has a number only when
 # the run was started more than once; the JSON keeps `starts`.
@@ -474,8 +513,31 @@ page=$(html "/runs?pipeline=toy&status=failed")
 echo "$page" | grep -qF "<th class=\"num\"><abbr title=\"Times the run's process was started: 1 is normal; more means retries, a lost instance or a resume.\"" \
     || fail "the Tries header"
 echo "$page" | grep -q '>Starts<' && fail "a runs table still says Starts"
+# Help on every table (orca.terms): a "?" on each header it knows, and on
+# a value from a fixed set (a status, a trigger, a step's kind) its meaning
+# on hover or focus, without a "?" in every cell.
+for p in /runs /pipelines/toy "/runs/$bad_run" "/pipelines/toy?tab=runs"; do
+    pg=$(html "$p")
+    [ "$(echo "$pg" | grep -o '<th[ >]' | wc -l)" -gt 0 ] || continue
+    echo "$pg" | grep -q '<th>Status<span class="help"><button type="button" class="help__btn" aria-label="About Status"' \
+        || echo "$pg" | grep -q '<th>Step<span class="help">' || fail "$p's headers have no help"
+    [ "$(echo "$pg" | grep -o ' id="help-[^"]*"' | sort | uniq -d | wc -l)" -eq 0 ] || fail "$p has two helps with one id"
+done
+echo "$page" | grep -qF '<span data-tip="Something failed after its last retry. Resume runs what hadn&#39;t succeeded." tabindex="0" class="status status--failed">failed</span>' \
+    || echo "$page" | grep -q '<span data-tip="Something failed after its last retry[^"]*" tabindex="0" class="status status--failed">failed</span>' \
+    || fail "a status has no meaning"
+echo "$page" | grep -q '<span class="term" data-tip="[^"]*" tabindex="0">manual</span>' || fail "a trigger has no meaning"
+html /pipelines/toy | grep -q '<td><span class="term" data-tip="Runs once per partition, each on its own." tabindex="0">mapped</span></td>' \
+    || fail "a step's kind has no meaning"
+curl -fsS "$base/static/orca.css" | grep -qF '.help__tip.tip' || fail "the stylesheet doesn't place a value's meaning"
+curl -fsS "$base/static/orca.css" | grep -qF '.hl--kw' || fail "the stylesheet doesn't colour code"
+# /code fetches only a GitHub file at a commit, for the code shown on hover.
+for u in https://evil.example/x "https://github.com/a/b/blob/main/x.mojo" "https://github.com/a/b/blob/abcdef1/../x" "https://github.com/a/b/tree/abcdef1/x"; do
+    [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/code?u=$(printf %s "$u" | jq -sRr @uri)")" = 400 ] || fail "/code took $u"
+done
+html / | grep -qF 'fetch("/code?u=" + encodeURIComponent(url))' || fail "the hover doesn't ask /code"
 echo "$page" | grep -qF '<td class="num">3</td>' || fail "a run started 3 times doesn't say 3"
-echo "$page" | grep -qF '<th>Created</th><th class="num">Took</th><th>Partitions</th>' \
+echo "$page" | grep -q '<th>Created<span class="help">[^h]*help__btn.*</span></span></th><th class="num">Took<span class="help">.*</th><th>Partitions<span class="help">' \
     || fail "Created and Took don't lead the runs table"
 echo "$page" | grep -qE '<td class="mono"><time class="rel" datetime="[0-9-]+T[0-9:]+Z">' \
     || fail "a run's created time isn't a <time> the script shows as relative"
