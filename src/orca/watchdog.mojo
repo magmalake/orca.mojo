@@ -19,7 +19,7 @@ A tripped rule **pauses** its scope through `orca.pause.set_paused`
 (what the UI's Pause button does; pipelines already paused are left
 alone), writes an `orca.audit` row per pipeline (user `watchdog`, the
 rule's numbers), and a row of `orca.watchdog_trips`, which the banner on
-`/`, `/ops/fleet` and `/ops/control`, `/watchdog` and `/metrics` show for as long as any of its
+`/`, `/ops/pools` and `/ops/control`, `/watchdog` and `/metrics` show for as long as any of its
 pipelines is paused. It never resumes anything. A rule that is still over
 its limit when a pipeline is unpaused trips again on the next pass, so
 snooze it (`orca watchdog snooze <rule> 2h`, or on `/watchdog`) first;
@@ -1212,7 +1212,7 @@ def _ago(seconds: Float64) -> String:
 
 def _rule_link(t: Trip) -> String:
     if t.rule == "launches" or t.rule == "cost" or t.rule == "idle":
-        return "/ops/fleet"
+        return "/ops/pools?kind=ec2"
     if t.rule == "control":
         return "/ops/control"
     var status = "failed" if t.rule == "failing" else "running"

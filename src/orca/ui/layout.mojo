@@ -457,17 +457,17 @@ def page_html(title: String, active: StaticString, body: Html) -> String:
         if item[0] == active:
             h.raw(' aria-current="page"')
         h.raw(">", item[1], "</a>")
-    # Ops: a link to Control, with Control and Fleet under it. The menu is
-    # plain links, shown by CSS (hover, keyboard focus) and, on a phone,
-    # always, so it needs no JavaScript.
+    # Ops: a link to Control, with Control, Pools and Watchdog under it. The
+    # menu is plain links, shown by CSS (hover, keyboard focus) and, on a
+    # phone, always, so it needs no JavaScript.
     h.raw('<div class="menu"><a href="/ops"')
-    if active.startswith("/ops/"):
+    if active.startswith("/ops/") or active == "/watchdog":
         h.raw(' aria-current="page"')
     h.raw(' aria-haspopup="true">Ops</a><div class="menu__sub">')
     for item in [
         ("/ops/control", "Control"),
-        ("/ops/fleet", "Fleet"),
-        ("/ops/workers", "Workers"),
+        ("/ops/pools", "Pools"),
+        ("/watchdog", "Watchdog"),
     ]:
         h.raw('<a href="', item[0], '"')
         if item[0] == active:

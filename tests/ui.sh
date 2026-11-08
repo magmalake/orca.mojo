@@ -68,11 +68,11 @@ echo "$nav" | grep -qF '<a href="https://census.example/?a=b" target="_blank" re
     || fail "ORCA_UI_LINKS' link isn't in the nav"
 echo "$nav" | grep -qF '>&lt;b&gt;x&lt;/b&gt;</a>' || fail "an ORCA_UI_LINKS label isn't escaped"
 echo "$nav" | grep -q 'javascript:' && fail "a javascript: link from ORCA_UI_LINKS is in the nav"
-# Ops: one top-level link with Control, Fleet and Workers under it, as plain links;
-# the old System and Fleet items are gone.
-echo "$nav" | grep -qF '<div class="menu"><a href="/ops" aria-haspopup="true">Ops</a><div class="menu__sub"><a href="/ops/control">Control</a><a href="/ops/fleet">Fleet</a><a href="/ops/workers">Workers</a></div></div>' \
+# Ops: one top-level link with Control, Pools and Watchdog under it, as plain
+# links; the old System, Fleet and Workers items are gone.
+echo "$nav" | grep -qF '<div class="menu"><a href="/ops" aria-haspopup="true">Ops</a><div class="menu__sub"><a href="/ops/control">Control</a><a href="/ops/pools">Pools</a><a href="/watchdog">Watchdog</a></div></div>' \
     || fail "the Ops menu isn't in the nav"
-echo "$nav" | grep -qE '<a href="/(system|fleet)"' && fail "the old System or Fleet nav item is still there"
+echo "$nav" | grep -qE '<a href="/(system|fleet|ops/fleet|ops/workers)"' && fail "the old System, Fleet or Workers nav item is still there"
 curl -fsS "$base/static/orca.css" | grep -qF '.menu:focus-within .menu__sub' || fail "the Ops menu doesn't open on keyboard focus"
 # PostHog: no snippet without ORCA_POSTHOG_KEY; with a phc_ key, every page's
 # head has it, with the key and site "orca"; a key that isn't one adds nothing.
@@ -714,16 +714,18 @@ html "/datasets/raw.a?before=$dc" | grep -qF '<a href="/datasets/raw.a">« Newes
 echo "ok   a dataset's snapshots, in pages"
 
 # The Ops pages and the watchdog refresh at their own pace, from fragments.
-html /ops/workers | grep -qF '<div data-poll="/ops/workers/live" data-poll-every="10"><h1>Workers</h1>' \
-    || fail "Workers doesn't refresh"
-curl -fsS "$base/ops/workers/live" | grep -qF '<h1>Workers</h1>' || fail "the Workers fragment"
+html '/ops/pools?kind=self-hosted' | grep -qF '<div data-poll="/ops/pools/live?kind=self-hosted" data-poll-every="10">' \
+    || fail "Pools doesn't refresh"
+curl -fsS "$base/ops/pools/live?kind=self-hosted" | grep -qF '<section class="card" id="machines">' || fail "the Pools fragment"
 html '/ops/control?range=7d' | grep -qF '<div data-poll="/ops/control/live?range=7d" data-poll-every="30">' \
     || fail "Control doesn't refresh"
 curl -fsS "$base/ops/control/live?range=7d" > /dev/null || fail "the Control fragment"
 html /watchdog | grep -qF '<div data-poll="/watchdog/live" data-poll-every="30"><h1>Watchdog</h1>' \
     || fail "the watchdog page doesn't refresh"
+html /watchdog | grep -qF '<a href="/ops" aria-current="page" aria-haspopup="true">Ops</a>' || fail "the watchdog isn't under Ops"
+html /watchdog | grep -qF '<a href="/watchdog" aria-current="page">Watchdog</a>' || fail "Watchdog isn't current in the Ops menu"
 curl -fsS "$base/watchdog/live" | grep -qF '<h1>Watchdog</h1>' || fail "the watchdog fragment"
-echo "ok   live pages: Workers, Control, the watchdog"
+echo "ok   live pages: Pools, Control, the watchdog"
 
 # The worker API on a listener of its own (ORCA_WORKER_ADDR, orca.api.worker):
 # a worker's calls there, and nothing else; the UI's port keeps answering

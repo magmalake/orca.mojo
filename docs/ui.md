@@ -70,8 +70,7 @@ the row at the top of the window, even when new rows arrive above it.
 | `/runs/<id>` | its facts, steps, DAG and machines (`/runs/<id>/live`) | 5 s, until the run ends |
 | `/runs/<id>/attempts/<a>` | its facts (`.../facts`) and its log (`.../log`) | 5 s and 2 s, until the attempt ends |
 | Ops: Control | its charts, containers and alerts (`/ops/control/live`) | 30 s |
-| Ops: Fleet | its hosts (`/ops/fleet/hosts`) | 10 s |
-| Ops: Workers | the workers (`/ops/workers/live`) | 10 s |
+| Ops: Pools | its machines, filters and, with EC2 in view, Fleet's cards (`/ops/pools/live`, with the page's filters) | 10 s |
 | `/watchdog` | the rules and trips (`/watchdog/live`) | 30 s |
 
 A fragment answers 286 once it has nothing more to show, and the page
@@ -317,17 +316,59 @@ each bar and box keeps its title.
 
 | Page | What it shows |
 |---|---|
-| Ops › Control (`/ops/control`, `/api/system`) | the one machine running the scheduler, the UI, Postgres and control-placed runs: CPU, memory, disk, network and each container's memory over `?range=24h`, `7d` or `14d`; whether [alerts](alerts.md) are on and the last ones; the [watchdog](watchdog.md)'s banner |
-| Ops › Fleet (`/ops/fleet`, `/api/fleet`) | the EC2 instances orca launches for runs: hosts up and their cost an hour, runs and errors per hour, live hosts, charts. On the local runner its Cost tile says "fixed price" and shows `ORCA_FIXED_COST` |
-| Ops › Workers (`/ops/workers`, `/api/workers`) | each [worker token](workers.md#tokens): pool, label, worker, image, last heartbeat, runs, CPUs and memory |
+| Ops › Control (`/ops/control`, `/api/system`) | the one machine running the scheduler, the UI, Postgres and local and control-placed runs: CPU, memory, disk, network and each container's memory over `?range=24h`, `7d` or `14d`; whether [alerts](alerts.md) are on and the last ones; the [watchdog](watchdog.md)'s banner |
+| Ops › Pools (`/ops/pools`, `/api/pools`) | every machine runs are placed on, a row each, by pool: the EC2 instances orca launches, a Kubernetes run's pods, the machines running [`orca worker`](workers.md). See [Pools](#pools) |
+| Ops › Watchdog (`/watchdog`, `/api/watchdog`) | the rules that pause pipelines, and their trips. See [the watchdog page](#the-watchdog-page) |
 
 Each section's heading links to it, so a link can open at one chart:
 
 - Control: `#cpu`, `#memory`, `#disk`, `#network`, `#containers`,
   `#container-memory`
-- Fleet: `#hosts`, `#hours`, `#runs`, `#fleet-cpu`, `#fleet-network`
+- Pools: `#machines`, and with EC2 in view `#hours`, `#runs`, `#fleet-cpu`,
+  `#fleet-network`
 
-`/system`, `/fleet` and `/fleet/hosts` redirect to the new paths.
+`/system` redirects to Control. Fleet and Workers are Pools now:
+`/ops/fleet` and `/fleet` redirect to `/ops/pools?kind=ec2` (Fleet's
+`?range=` kept), `/ops/workers` to `/ops/pools?kind=self-hosted`, and their
+fragments to `/ops/pools/live` with the same filter. A script that asks
+them for JSON (`Accept: application/json`, `?format=json`) gets Fleet's and
+Workers' JSON as before, with no redirect; `/api/fleet` and `/api/workers`
+are unchanged.
+
+### Pools
+
+Every placement target is a pool, and a machine is in one:
+
+| Pool | Kind | A row is |
+|---|---|---|
+| `ec2` | `ec2` | an instance orca launched for a run, while it's up and for an hour after it ended |
+| `kubernetes` | `k8s` | a live run's pods (`orca-<run>-<start>`), on the Kubernetes runner. The runner records no pods or nodes of its own, so the run is the machine |
+| `worker:<pool>` | `self-hosted` | the machine a [worker token](workers.md#tokens)'s `orca worker` runs on |
+
+The scheduler's own machine isn't a pool: it runs the local runner's runs
+and control-placed ones, and it is Control.
+
+Each row has the machine (linked to its page), its pool and kind, its
+state (`live`, `draining` or `gone`, with what it's doing beside it:
+`starting`, `running`, `idle (pooled)`, `ended`, `idle`, `revoked`,
+`expired`, `not seen`), the image tag its runs need, its CPUs and memory,
+the runs on it, its last heartbeat, its CPU now and over ten minutes (EC2
+instances only, which are sampled), and the worker: a run's head or dista
+worker on EC2, or `orca worker` with its token and label. Every column's
+"?" says what it is.
+
+The kind tabs (All, EC2, Kubernetes, Self-hosted) and the pool links
+filter it with `?kind=` and `?pool=`, plain links that keep each other.
+With EC2 in view the page also has Fleet's cards (hosts, cost, runs and
+errors per hour) and charts over `?range=24h` or `7d`, and on the local
+runner it says that no instances are launched and the Cost tile shows
+`ORCA_FIXED_COST`.
+
+A machine's page (`/ops/pools/<kind>/<id>`, from its row) has its facts
+and, for an EC2 instance, its samples over its run, as the run page's
+Machines card draws them; for a worker, the runs it claimed. A worker
+samples only its runs' processes, so their Resources cards have what they
+used.
 
 ## The watchdog page
 

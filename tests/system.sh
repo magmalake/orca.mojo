@@ -129,7 +129,7 @@ echo "ok   /api/system"
 page=$(html /ops/control)
 echo "$page" | grep -qF '<a href="/ops/control" aria-current="page">Control</a>' || fail "Control isn't in the Ops menu, current"
 echo "$page" | grep -q 'The one machine running the scheduler, this UI, Postgres and control-placed runs' || fail "the Control intro"
-echo "$page" | grep -qF '<a href="/ops/fleet">Fleet</a>' || fail "the intro doesn't link Fleet"
+echo "$page" | grep -qF '<a href="/ops/pools">Pools</a>' || fail "the intro doesn't link Pools"
 echo "$page" | grep -qF '<a href="/watchdog">Watchdog</a>' || fail "Control doesn't link /watchdog"
 echo "$page" | grep -qF '<h1>System</h1>' && fail "the page is still called System"
 echo "$page" | grep -qF '<span class="stat__k">CPU</span><span class="stat__v">30%</span>' || fail "the CPU card"
