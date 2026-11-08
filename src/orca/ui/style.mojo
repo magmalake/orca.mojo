@@ -287,6 +287,10 @@ th .help { margin-left: 0.25rem; vertical-align: 0; }
 .peek__line--at { background: color-mix(in srgb, var(--lake) 12%, transparent); }
 .peek__ln { display: inline-block; width: 3.4em; padding-right: 0.9em; text-align: right;
   color: var(--faint); user-select: none; }
+.peek__lead { margin: 0; padding: 0.55rem 0.75rem 0; font: 500 0.875rem/1.45 var(--sans); color: var(--text); }
+.peek__more { margin: 0; padding: 0.2rem 0.75rem 0; font-size: 0.8125rem; line-height: 1.45; color: var(--muted);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+.peek__lead + pre, .peek__more + pre { margin-top: 0.35rem; border-top: 1px solid var(--border); }
 .peek__msg { margin: 0; padding: 0.6rem 0.75rem; color: var(--muted); font-size: 0.8125rem; }
 /* A step's card (orca.ui.step_cards), on hovering, focusing or tapping a step
    in the steps views: its signature, kind, types, datasets and recent
@@ -300,7 +304,9 @@ th .help { margin-left: 0.25rem; vertical-align: 0; }
 .scard__head { padding: 0.45rem 0.75rem; background: var(--surface-2); border-bottom: 1px solid var(--border); }
 .scard__sig { margin: 0; padding: 0.5rem 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere;
   font-size: 0.75rem; line-height: 1.5; border-bottom: 1px solid var(--border); }
-.scard__doc { margin: 0; padding: 0.45rem 0.75rem 0; }
+.scard__doc { margin: 0; padding: 0.45rem 0.75rem 0; color: var(--muted); font-size: 0.8125rem;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden; }
+.scard__lead { margin: 0; padding: 0.5rem 0.75rem 0.4rem; font-weight: 500; }
 .scard__src { margin: 0; padding: 0.3rem 0.75rem 0; font: 0.75rem var(--mono); }
 .scard__facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 0.75rem;
   margin: 0; padding: 0.5rem 0.75rem 0.6rem; }
@@ -372,6 +378,23 @@ h1 .act__btn { font-size: 0.8125rem; padding: 0.15rem 0.6rem; }
 .act__login { display: none; margin-left: 0.4rem; font-size: 0.75rem; font-weight: 400; }
 body.anon form.act, body.anon .act__need { display: none; }
 body.anon .act__login { display: inline; }
+/* The dialog an action asks with (`_ASK`): a card over the page. */
+dialog.ask { width: min(28rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); margin: auto; padding: 0;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow), 0 24px 48px -20px rgb(0 0 0 / 0.35); font: inherit; }
+dialog.ask::backdrop { background: rgb(14 13 17 / 0.45); }
+dialog.ask[open] { animation: ask-in 0.12s ease-out; }
+@keyframes ask-in { from { opacity: 0; transform: translateY(0.4rem); } }
+@media (prefers-reduced-motion: reduce) { dialog.ask[open] { animation: none; } }
+.ask__form { display: grid; gap: 0.5rem; margin: 0; padding: 1.15rem 1.25rem 1.1rem; }
+.ask__title { margin: 0; font-size: 1.05rem; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.ask__body { margin: 0; color: var(--muted); font-size: 0.875rem; overflow-wrap: anywhere; }
+.ask__body:empty { display: none; }
+.ask__btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; margin-top: 0.6rem; }
+dialog.ask .ask__yes { background: var(--lake); border-color: var(--lake); color: var(--bg); font-weight: 600; }
+dialog.ask .ask__yes.danger { background: var(--bad); border-color: var(--bad); color: var(--bg); }
+dialog.ask .ask__yes:hover { filter: brightness(1.08); color: var(--bg); }
+@media (max-width: 30rem) { .ask__btns > button { flex: 1 1 auto; padding: 0.5rem 0.75rem; } }
 .chain { margin: 0.4rem 0 0.8rem; padding-left: 1.4rem; }
 .chain__level { margin: 0.2rem 0; }
 .chain__level + .chain__level::marker { content: "→ "; }

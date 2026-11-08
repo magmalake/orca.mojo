@@ -41,6 +41,7 @@ from orca.html import Html, url_encode
 from orca.json import quote
 from orca.lineage import flows
 from orca.state import State
+from orca.views.code import pipeline_srcs
 
 comptime MAX_RUNS = 20_000
 """Runs `/api/gantt` answers at most: the newest of the window."""
@@ -238,12 +239,18 @@ def gantt_json(mut db: State, window: String) raises -> String:
         now,
         ', "rows": [',
     )
+    var names = List[String]()
+    for p in pipes:
+        names.append(p.name)
+    var srcs = pipeline_srcs(db, names)
     for k in range(len(order)):
         ref p = pipes[order[k]]
         out.write(
             ", " if k else "",
             '{"pipeline": ',
             quote(p.name),
+            ', "src": ',
+            quote(srcs.get(p.name, String())),
             ', "depth": ',
             p.depth,
             ', "paused": ',
@@ -561,7 +568,7 @@ comptime _GANTT_JS = """
     });
     d.rows.forEach((r, i) => {
       const x = 14 + r.depth * 14, y = TOP + i * ROW;
-      o.push('<a href="/pipelines/' + encodeURIComponent(r.pipeline) + '"><text class="gantt__name" x="' + x + '" y="' + (y + 14) + '">' + esc(r.pipeline) + "</text></a>");
+      o.push('<a href="/pipelines/' + encodeURIComponent(r.pipeline) + '"' + (r.src ? ' data-src="' + esc(r.src) + '"' : "") + '><text class="gantt__name" x="' + x + '" y="' + (y + 14) + '">' + esc(r.pipeline) + "</text></a>");
       const sub = (r.reads.length ? "← " + r.reads.join(", ") + " · " : "") + r.how;
       o.push('<text class="gantt__sub" x="' + x + '" y="' + (y + 26) + '"><title>' + esc(sub) + "</title>" + esc(sub.length > 30 - r.depth * 2 ? sub.slice(0, 29 - r.depth * 2) + "…" : sub) + "</text>");
       if (r.paused) o.push('<rect class="gantt__chip" x="' + (LABEL - 48) + '" y="' + (y + 5) + '" width="42" height="13" rx="6"/><text class="gantt__chiptext" x="' + (LABEL - 42) + '" y="' + (y + 15) + '">paused</text>');

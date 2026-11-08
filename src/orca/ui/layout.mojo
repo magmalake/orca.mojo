@@ -9,7 +9,7 @@ from std.os import getenv
 
 from orca.html import Html, escape
 from orca.json import quote
-from orca.ui.step_cards import STEP_CARDS_JS
+from orca.ui.step_cards import LEAD_JS, STEP_CARDS_JS
 from orca.ui.terms import header_help
 from orca.views.pipelines import comma_list
 from orca.web.page import Page
@@ -47,11 +47,6 @@ function times(root) {
 }
 times(document);
 setInterval(() => times(document), 30000);
-document.addEventListener("submit", (e) => {
-  const m = e.target.dataset && e.target.dataset.confirm;
-  const get = e.submitter && e.submitter.formMethod === "get";
-  if (m && !get && !confirm(m)) e.preventDefault();
-});
 document.addEventListener("change", (e) => {
   const t = e.target;
   if (!t.matches || !t.matches("input.pick__all")) return;
@@ -60,7 +55,7 @@ document.addEventListener("change", (e) => {
 document.addEventListener("keydown", (e) => {
   const t = e.target;
   if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-  if (t.closest && t.closest("input, textarea, select, [contenteditable]")) return;
+  if (t.closest && t.closest("input, textarea, select, [contenteditable], dialog")) return;
   const a = document.querySelector(e.key === "ArrowLeft" ? 'a[rel="prev"]' : e.key === "ArrowRight" ? 'a[rel="next"]' : "x-none");
   if (a) a.click();
 });
@@ -135,6 +130,134 @@ and tells the page
 (an `orca:swap` event, so `_TABS` shows the tab chosen again). Each
 `<time class="rel">` reads as how long ago it was, in the viewer's locale,
 with the full local time in its tooltip; without scripts it stays UTC."""
+
+
+comptime _ASK = """
+(() => {
+  const ask = document.getElementById("ask");
+  if (!ask || typeof ask.showModal !== "function") return;
+  const title = document.getElementById("ask-title"), body = document.getElementById("ask-body");
+  const yes = ask.querySelector(".ask__yes"), no = ask.querySelector(".ask__no");
+  let sure = null, open = null;
+  const picked = (f) => {
+    const all = f.elements.namedItem("all"), expect = f.elements.namedItem("expect");
+    if (all && all.checked && expect) return { n: Number(expect.value), all: true };
+    return { n: [...f.elements].filter((x) => x.name === "pick" && x.checked).length, all: false };
+  };
+  const runs = (p) => (p.all ? "all " + p.n.toLocaleString() + " runs that match" : p.n === 1 ? "1 run" : p.n + " runs");
+  // The question with its {runs} and {<field>}s, or null while one is empty.
+  const fill = (s, f) => {
+    let empty = false;
+    const out = s.replace(/[{](\\w+)[}]/g, (m, k) => {
+      if (k === "runs") { const p = picked(f); if (!p.n) empty = true; return runs(p); }
+      const el = f.elements.namedItem(k), v = el && el.value ? el.value.trim() : "";
+      if (!v) empty = true;
+      return v === "@all" ? "all partitions" : v;
+    });
+    return empty ? null : out;
+  };
+  // The same form (and button) after a live refresh replaced it.
+  const twin = (f, b) => {
+    const g = f.isConnected ? f : [...document.forms].find((x) => x.action === f.action && x.id === f.id && x.dataset.confirm === f.dataset.confirm);
+    if (!g || !b || g.contains(b) || b.form === g) return [g, b];
+    return [g, [...g.elements].find((x) => x.type === "submit" && x.name === b.name && x.value === b.value && x.textContent === b.textContent)];
+  };
+  document.addEventListener("submit", (e) => {
+    const f = e.target, b = e.submitter;
+    if (sure === f) return;
+    if (!f.dataset || (b && b.formMethod === "get")) return;
+    const src = b && b.dataset.confirm ? b : f.dataset.confirm ? f : null;
+    if (!src) return;
+    const d = src.dataset, q = fill(d.confirm, f);
+    if (q === null) return;
+    e.preventDefault();
+    title.textContent = q;
+    body.textContent = (d.confirmBody && fill(d.confirmBody, f)) || "";
+    yes.textContent = d.confirmYes || (b && b.textContent.trim()) || "OK";
+    no.textContent = d.confirmNo || "Go back";
+    yes.classList.toggle("danger", "confirmDanger" in d);
+    open = { f, b, back: b || document.activeElement };
+    ask.returnValue = "";
+    ask.showModal();
+    no.focus();
+  });
+  ask.addEventListener("click", (e) => { if (e.target === ask) ask.close(""); });
+  ask.addEventListener("close", () => {
+    const o = open;
+    open = null;
+    if (!o) return;
+    const [f, b] = twin(o.f, o.b);
+    const back = o.back && o.back.isConnected ? o.back : b;
+    if (back && back.focus) back.focus();
+    if (ask.returnValue !== "yes" || !f) return;
+    sure = f;
+    try {
+      if (f.requestSubmit) f.requestSubmit(b && b.form === f ? b : undefined);
+      else {
+        if (b && b.name) { const i = document.createElement("input"); i.type = "hidden"; i.name = b.name; i.value = b.value; f.append(i); }
+        f.submit();
+      }
+    } finally { sure = null; }
+  });
+})();
+"""
+"""Asking before an action (`ask_attrs`): a form, or its submit button,
+with `data-confirm` posts only once the page's one `<dialog id="ask">`
+(`ASK_DIALOG`) is answered yes. The dialog shows the question, what will
+happen (`data-confirm-body`) and the buttons' words (`data-confirm-yes`,
+`data-confirm-no`), the yes one red for `data-confirm-danger`; `{runs}` is
+how many runs the form has ticked, `{<field>}` that field's value (`@all`
+reads "all partitions"); with none ticked or the field empty it doesn't
+ask, and the action says what's missing. The safe button has the focus;
+Escape or a click outside is no; the focus goes back to the button that
+asked. Yes submits the form again with the same button, so its fields
+(and the button's name and value) are posted as without scripts, which is
+all a form does where scripts or `<dialog>` are missing. A GET submit
+(Preview) never asks."""
+
+
+comptime ASK_DIALOG = (
+    '<dialog id="ask" class="ask" role="alertdialog"'
+    ' aria-labelledby="ask-title" aria-describedby="ask-body">'
+    '<form method="dialog" class="ask__form">'
+    '<h2 id="ask-title" class="ask__title"></h2>'
+    '<p id="ask-body" class="ask__body"></p>'
+    '<div class="ask__btns"><button type="submit" value="no" class="ask__no"'
+    ' autofocus>Go back</button><button type="submit" value="yes"'
+    ' class="ask__yes">OK</button></div></form></dialog>'
+)
+"""The dialog `_ASK` fills in and shows, once per page."""
+
+
+def ask_attrs(
+    mut h: Html,
+    question: String,
+    body: String = "",
+    yes: String = "",
+    no: String = "",
+    danger: Bool = True,
+):
+    """The attributes that make a form, or a submit button, ask
+    `question` first (`_ASK`): `body` says what will happen, `yes` and
+    `no` are the buttons' words (the submit button's and "Go back" if
+    empty), and `danger` makes yes red."""
+    h.raw(' data-confirm="')
+    h.text(question)
+    h.raw('"')
+    if body:
+        h.raw(' data-confirm-body="')
+        h.text(body)
+        h.raw('"')
+    if yes:
+        h.raw(' data-confirm-yes="')
+        h.text(yes)
+        h.raw('"')
+    if no:
+        h.raw(' data-confirm-no="')
+        h.text(no)
+        h.raw('"')
+    if danger:
+        h.raw(" data-confirm-danger")
 
 
 comptime _TABS = """
@@ -237,7 +360,7 @@ comptime _PEEK = """
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const lead = (l) => l.length - l.trimStart().length;
   const Q3 = '"'.repeat(3);
-  let box = null, cur = null, showT = 0, hideT = 0;
+  let box = null, cur = null, showT = 0, hideT = 0, shows = 0;
   // The file, coloured by orca (/code): its lines and their HTML.
   const load = (url) => {
     if (!files.has(url)) files.set(url, fetch("/code?u=" + encodeURIComponent(url)).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }));
@@ -263,16 +386,58 @@ comptime _PEEK = """
     while (out.length && !out[out.length - 1][1].trim()) out.pop();
     return { out, more: i < lines.length && out.length >= MAX };
   }
+  // The docstring that starts at line i (0-based), or null.
+  const docFrom = (lines, i) => {
+    if (i >= lines.length) return null;
+    let t = lines[i].trimStart();
+    if (t.startsWith("r" + Q3)) t = t.slice(1);
+    if (!t.startsWith(Q3)) return null;
+    let rest = t.slice(3), j = i;
+    const parts = [];
+    for (;;) {
+      const c = rest.indexOf(Q3);
+      parts.push(c >= 0 ? rest.slice(0, c) : rest);
+      if (c >= 0 || ++j >= lines.length) break;
+      rest = lines[j];
+    }
+    // Prose only: lines indented past the docstring's own (an example's
+    // commands or code) are left out.
+    const ind = parts.slice(1).filter((l) => l.trim()).map(lead);
+    const base = ind.length ? Math.min(...ind) : 0;
+    const text = parts.map((l, k) => (k && l.trim() && lead(l) >= base + 4 ? "" : l.trim())).join("\\n").trim();
+    return text ? { text, from: i + 1, to: j + 1 } : null;
+  };
+  // The docstring after the statement at line `at` (a def's signature, or
+  // the pipeline's declaration), and the module's at the top of the file.
+  const docAt = (lines, at) => {
+    let depth = 0, i = at - 1;
+    for (; i < lines.length && i < at + 11; i++) {
+      for (const ch of lines[i].replace(/\\s#.*$/, "")) depth += "([{".includes(ch) ? 1 : ")]}".includes(ch) ? -1 : 0;
+      if (depth <= 0) break;
+    }
+    for (i++; i < lines.length && !lines[i].trim(); i++);
+    return docFrom(lines, i);
+  };
+  const moduleDoc = (lines) => {
+    let i = 0;
+    while (i < lines.length && (!lines[i].trim() || lines[i].trimStart().startsWith("#"))) i++;
+    return docFrom(lines, i);
+  };
   function place(a) {
     const r = a.getBoundingClientRect(), h = box.offsetHeight, w = box.offsetWidth;
     const below = r.bottom + 6 + h <= innerHeight || r.top < h + 6;
     box.style.top = (scrollY + (below ? r.bottom + 6 : r.top - h - 6)) + "px";
     box.style.left = (scrollX + Math.max(8, Math.min(r.left, innerWidth - w - 8))) + "px";
   }
+  // A code link's line, or what a link elsewhere (a runs table's pipeline)
+  // shows the code of (data-src).
+  const srcOf = (a) => a.dataset.src || a.href;
   async function show(a) {
-    const m = GH.exec(a.href);
+    clearTimeout(showT);
+    const m = GH.exec(srcOf(a));
     if (!m) return;
     cur = a;
+    const mine = ++shows;
     if (!box) {
       box = document.createElement("div");
       box.className = "peek";
@@ -284,7 +449,7 @@ comptime _PEEK = """
     }
     const [, owner, repo, sha, path, line] = m;
     const at = Number(line);
-    box.innerHTML = '<div class="peek__head">' + esc(path + ":" + at) + ' <span>at ' + esc(sha.slice(0, 7)) + "</span></div>" + '<p class="peek__msg">Loading…</p>';
+    box.innerHTML = '<div class="peek__head">' + esc(path + ":" + at) + ' <span>at ' + esc(sha.slice(0, 7)) + "</span></div>" + '<div class="peek__body"><p class="peek__msg">Loading…</p></div>';
     box.hidden = false;
     a.setAttribute("aria-describedby", "peek");
     place(a);
@@ -292,12 +457,21 @@ comptime _PEEK = """
     try {
       const src = await load("https://github.com/" + owner + "/" + repo + "/blob/" + sha + "/" + path);
       const s = snippet(src.lines, at);
-      body = "<pre>" + s.out.map(([n, l]) => '<span class="peek__line' + (n === at ? " peek__line--at" : "") + '"><span class="peek__ln">' + n + "</span>" + (src.html[n - 1] ?? esc(l)) + "</span>").join("") + (s.more ? '<span class="peek__line"><span class="peek__ln"></span>…</span>' : "") + "</pre>";
+      // It opens with the docstring's first sentence, the rest under it,
+      // the code without it; the pipeline's declaration, without one, with
+      // its module's.
+      const own = docAt(src.lines, at);
+      const isDef = /^\\s*(def|fn)\\s/.test(src.lines[at - 1] || "");
+      const doc = own || (isDef ? null : moduleDoc(src.lines));
+      const [first, rest] = orcaLead(doc && doc.text);
+      const out = own ? s.out.filter(([n]) => n < own.from || n > own.to) : s.out;
+      body = (first ? '<p class="peek__lead">' + esc(first) + "</p>" : "") + (rest ? '<p class="peek__more">' + esc(rest) + "</p>" : "") +
+        "<pre>" + out.map(([n, l]) => '<span class="peek__line' + (n === at ? " peek__line--at" : "") + '"><span class="peek__ln">' + n + "</span>" + (src.html[n - 1] ?? esc(l)) + "</span>").join("") + (s.more ? '<span class="peek__line"><span class="peek__ln"></span>…</span>' : "") + "</pre>";
     } catch (e) {
       body = '<p class="peek__msg">Can&#39;t load the source here (a private repository, or offline). The link opens it.</p>';
     }
-    if (cur !== a) return;
-    box.lastElementChild.outerHTML = body;
+    if (cur !== a || mine !== shows) return;
+    box.querySelector(".peek__body").innerHTML = body;
     place(a);
   }
   function hide(after) {
@@ -309,7 +483,26 @@ comptime _PEEK = """
       cur = null;
     }, after);
   }
-  const link = (t) => { const a = t.closest && t.closest("a.src"); return a && GH.test(a.href) ? a : null; };
+  const link = (t) => { const a = t.closest && t.closest("a.src, a[data-src]"); return a && GH.test(srcOf(a)) ? a : null; };
+  // A tap shows the code first, and a second tap follows the link. (The
+  // tap's focus shows it before the click, so what counts is whether it
+  // was shown when the finger came down.)
+  let touch = false, shown = false;
+  document.addEventListener("pointerdown", (e) => {
+    touch = e.pointerType === "touch";
+    const a = link(e.target);
+    shown = !!(a && a === cur && box && !box.hidden);
+    if (touch && cur && !a && !(box && box.contains(e.target))) hide(0);
+  }, true);
+  document.addEventListener("click", (e) => {
+    const a = link(e.target);
+    if (!a || !touch || shown) return;
+    e.preventDefault();
+    clearTimeout(hideT);
+    if (a !== cur || !box || box.hidden) show(a);
+  });
+  // A live refresh that replaced the link shown: the box goes with it.
+  document.addEventListener("orca:swap", () => { if (cur && !cur.isConnected) hide(0); });
   document.addEventListener("mouseover", (e) => {
     const a = link(e.target);
     if (!a) return;
@@ -341,8 +534,10 @@ comptime _PEEK = """
   });
 })();
 """
-"""Code on hover: a link to a line on GitHub (`a.src`) shows, after a
-moment or on keyboard focus, that function's source, from its def through
+"""Code on hover: a link to a line on GitHub (`a.src`), or a link with
+one in its `data-src` (a runs table's pipeline), shows, after a moment, on
+keyboard focus or on a first tap (a second follows the link), that
+function's source, from its def through
 its docstring, coloured, from `/code` (which fetches the file from
 raw.githubusercontent.com and colours it, `orca.highlight`) once per file; the
 link itself is unchanged, so without scripts (or for a private repository)
@@ -489,8 +684,14 @@ def page_html(title: String, active: StaticString, body: Html) -> String:
     h.raw("</nav>", USER_SLOT, "</header><main>")
     h.raw(body.out)
     h.raw(
-        "</main><script>",
+        "</main>",
+        ASK_DIALOG,
+        "<script>",
         _POLL,
+        "</script><script>",
+        _ASK,
+        "</script><script>",
+        LEAD_JS,
         "</script><script>",
         _TABS,
         "</script><script>",
@@ -523,18 +724,24 @@ def act_button(
     cli: String,
     danger: Bool = False,
     step: String = "",
+    ask: String = "",
+    tell: String = "",
+    yes: String = "",
+    no: String = "",
+    harm: Bool = True,
 ):
     """A small form posting to `action`, beside the status it changes: a
     button labelled `label` whose title is the command line that does the
     same, with "Log in to `verb`" in its place while login is needed. A
-    `danger` one asks first, where there's JavaScript."""
+    `danger` one (red), or one with a question `ask`, asks first where
+    there's JavaScript (`ask_attrs`): `ask`, or "`label`?", with `tell`
+    saying what will happen and `yes`/`no` on the buttons; yes is red
+    unless `harm` is false."""
     h.raw('<form class="act" method="post" action="')
     h.text(action)
     h.raw('"')
-    if danger:
-        h.raw(' data-confirm="')
-        h.text(label, "?")
-        h.raw('"')
+    if danger or ask:
+        ask_attrs(h, ask if ask else String(label, "?"), tell, yes, no, harm)
     h.raw(">")
     if step:
         h.raw('<input type="hidden" name="step" value="')

@@ -147,5 +147,37 @@ html /datasets/lake.c | grep -qF "<dt>Read by</dt><dd><a href=\"/pipelines/first
     || fail "the dataset's page doesn't link its reader's code at the registered commit"
 json /datasets/lake.a | jq -e '.writers == ["first"] and .snapshots[0].snapshot == 7' > /dev/null \
     || fail "the dataset's JSON changed: $(json /datasets/lake.a | jq -c .)"
+# Hover cards on the lists (the page's _PEEK): a runs table's pipeline
+# shows its declaration at the commit the run ran, a failed run names the
+# step that failed with its function's link; the home page's pipelines
+# (list and timeline) theirs at the code registered now. Nothing is
+# fetched until a hover; every card opens with its docstring's lead.
+pl=$(json "/runs/$r1" | jq -r '.version.locations.pipeline')
+[ -n "$pl" ] && [ "$pl" != null ] || fail "run $r1 has no pipeline location"
+html /runs | grep -qF "<td><a href=\"/pipelines/toy\" data-src=\"$repo/blob/$c1/$pl\">toy</a></td>" \
+    || fail "the runs list's pipeline doesn't show run $r1's code"
+html /runs | grep -qF '<td><a href="/pipelines/toy">toy</a></td>' || fail "a run without locations has a code hover"
+mline=$(grep -n '^def measure(' examples/toy.mojo | cut -d: -f1)
+q "UPDATE orca.runs SET status = 'failed' WHERE id = $r1" > /dev/null
+q "UPDATE orca.steps SET status = 'failed' WHERE run = $r1 AND step = 'measure'" > /dev/null
+for path in /runs "/pipelines/toy?tab=runs" "/runs/table?view=pipeline&pipeline=toy" "/runs/table?view=home"; do
+    html "$path" | grep -qF "status--failed\">failed</span> <span class=\"muted\">in</span> <a class=\"src\" href=\"$repo/blob/$c1/examples/toy.mojo#L$mline\"" \
+        || fail "$path doesn't name run $r1's failed step with its code"
+done
+q "UPDATE orca.steps SET status = 'succeeded' WHERE run = $r1 AND step = 'measure'" > /dev/null
+q "UPDATE orca.runs SET status = 'succeeded' WHERE id = $r1" > /dev/null
+dline=$(grep -n '^comptime P = Pipeline\[' tests/datasets/first.mojo | cut -d: -f1)
+for path in / /home/pipelines; do
+    html "$path" | grep -qF "<tr><td><a href=\"/pipelines/first\" data-src=\"$repo/blob/$c2/tests/datasets/first.mojo#L$dline\">first</a>" \
+        || fail "$path's pipeline doesn't show its registered code"
+done
+[ "$(json /api/gantt | jq -r '.rows[] | select(.pipeline == "first") | .src')" = "$repo/blob/$c2/tests/datasets/first.mojo#L$dline" ] \
+    || fail "the timeline's row has no code: $(json /api/gantt | jq -c '.rows')"
+page=$(html /runs)
+echo "$page" | grep -qF 't.closest("a.src, a[data-src]")' || fail "the peek doesn't take data-src links"
+echo "$page" | grep -qF 'document.addEventListener("orca:swap", () => { if (cur && !cur.isConnected) hide(0); });' \
+    || fail "the peek doesn't follow a refresh"
+echo "$page" | grep -qF 'function orcaLead(doc)' || fail "the cards have no lead sentence"
+echo "$page" | grep -qF 'const doc = own || (isDef ? null : moduleDoc(src.lines));' || fail "a pipeline's card doesn't fall back to its module's docstring"
 kill "$pid"
 echo "ok   versions: a run links the commit it ran, the pipeline lists its versions"

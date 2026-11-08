@@ -368,6 +368,22 @@ def def_json(text: StringSlice, line: Int) -> String:
     return out^
 
 
+comptime LEAD_JS = """
+function orcaLead(doc) {
+  const t = String(doc || "").trim();
+  if (!t) return ["", ""];
+  const para = t.split(/\\n\\s*\\n/)[0], m = /[.](\\s|$)/.exec(para);
+  const end = m ? m.index + 1 : para.length;
+  let first = para.slice(0, end).replace(/\\s+/g, " ").trim();
+  if (first.length > 160) first = first.slice(0, 159).trimEnd() + "…";
+  return [first, t.slice(end).replace(/\\s+/g, " ").trim()];
+}
+"""
+"""A docstring's lead (`orcaLead`), which every code hover card opens
+with: its first sentence (to the first ". " or blank line), on one line,
+at most 160 characters with an ellipsis; and the rest, on one line too."""
+
+
 comptime STEP_CARDS_JS = """
 (() => {
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -396,8 +412,9 @@ comptime STEP_CARDS_JS = """
     let h = '<div class="scard__head"><strong>' + esc(el.dataset.step) + "</strong> " +
       (s.kind_help ? '<span class="term" data-tip="' + esc(s.kind_help) + '">' + esc(s.kind) + "</span>" : esc(s.kind)) +
       (s.after ? ' <span class="muted">after</span> <code>' + esc(s.after) + "</code>" : "") + "</div>";
+    if (s.src) h += '<p class="scard__lead muted">Loading its docstring…</p>';
     h += '<pre class="scard__sig"><code>' + s.sig + "</code></pre>";
-    if (s.src) h += '<p class="scard__doc muted">Loading its docstring…</p><p class="scard__src"><a href="' + esc(s.src) + '" target="_blank" rel="noopener" title="View source on GitHub at ' + esc(s.commit) + '">' + esc(s.at) + " at " + esc(s.commit) + " ↗</a></p>";
+    if (s.src) h += '<p class="scard__doc muted"></p><p class="scard__src"><a href="' + esc(s.src) + '" target="_blank" rel="noopener" title="View source on GitHub at ' + esc(s.commit) + '">' + esc(s.at) + " at " + esc(s.commit) + " ↗</a></p>";
     h += '<dl class="scard__facts">' + fact("In", "<code>" + esc(s.input) + "</code>") + fact("Out", "<code>" + esc(s.output) + "</code>") +
       fact("Reads", datasets(s.reads)) + fact("Writes", datasets(s.writes));
     if (a) {
@@ -457,8 +474,10 @@ comptime STEP_CARDS_JS = """
     } catch (e) {}
     if (cur !== el) return;
     if (sig) box.querySelector(".scard__sig code").innerHTML = sig;
-    const p = box.querySelector(".scard__doc");
-    if (p) { if (doc) { p.textContent = doc; p.classList.remove("muted"); } else p.remove(); }
+    const [first, rest] = orcaLead(doc);
+    const l = box.querySelector(".scard__lead"), p = box.querySelector(".scard__doc");
+    if (l) { if (first) { l.textContent = first; l.classList.remove("muted"); } else l.remove(); }
+    if (p) { if (rest) p.textContent = rest; else p.remove(); }
     place(el);
   }
   function hide(after) {

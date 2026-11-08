@@ -605,16 +605,31 @@ html "/runs?pipeline=toy&status=failed" | grep -qF "action=\"/runs/$bad_run/resu
     || fail "no Retry for the failed run"
 html "/runs/$bad_run" | grep -qF '>Retry</button>' || fail "no Retry in the failed run's header"
 page=$(html "/runs/$ok_run")
-echo "$page" | grep -qF "<form class=\"act\" method=\"post\" action=\"/runs/$ok_run/rerun\" data-confirm=\"Rerun?\"><input type=\"hidden\" name=\"step\" value=\"days\">" \
+echo "$page" | grep -qF "<form class=\"act\" method=\"post\" action=\"/runs/$ok_run/rerun\" data-confirm=\"Rerun every step of run $ok_run?\" data-confirm-body=\"A new run of toy over the same partitions starts from its first step; run $ok_run is kept as it is.\"><input type=\"hidden\" name=\"step\" value=\"days\">" \
     || fail "no Rerun in the succeeded run's header"
+# Every page has the one dialog actions ask with (orca.ui.layout._ASK), and
+# no native confirm(), alert() or prompt().
+echo "$page" | grep -qF '<dialog id="ask" class="ask" role="alertdialog" aria-labelledby="ask-title" aria-describedby="ask-body"><form method="dialog" class="ask__form"><h2 id="ask-title" class="ask__title"></h2><p id="ask-body" class="ask__body"></p><div class="ask__btns"><button type="submit" value="no" class="ask__no" autofocus>Go back</button><button type="submit" value="yes" class="ask__yes">OK</button></div></form></dialog>' \
+    || fail "the run page has no ask dialog"
+echo "$page" | grep -qF 'ask.showModal();' || fail "the dialog isn't shown modal"
+echo "$page" | grep -qF 'f.requestSubmit(b && b.form === f ? b : undefined)' || fail "yes doesn't submit the form again"
+for path in / /runs "/runs/$ok_run" "/runs/$bad_run" /pipelines/toy "/pipelines/toy?tab=runs" /datasets /ops/control /watchdog; do
+    # (alert( after ; or > is the escaped <script>alert(1) a step's error has.)
+    html "$path" | grep -qE '(^|[ (!=;])(confirm|prompt)\(|(^|[ (!=])alert\(' && fail "$path calls a native dialog"
+done
+curl -fsS "$base/static/orca.css" | grep -qF 'dialog.ask::backdrop {' || fail "the stylesheet has no ask dialog"
 html "/runs/$bad_run/attempts/$failed" | grep -qF '<input type="hidden" name="step" value="measure"><button type="submit" class="act__btn danger" title="no orca command for this yet: a new run from measure on, the steps before it copied">Rerun from here</button>' \
     || fail "no Rerun from here on the attempt"
 q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
    SELECT 'toy', registry_hash, '2023-02,2023-03', 'manual', 'queued' FROM orca.runs WHERE id = $ok_run" > /dev/null
 qd=$(q "SELECT max(id) FROM orca.runs")
-html "/runs?status=queued" | grep -qF "action=\"/runs/$qd/cancel\" data-confirm=\"Cancel?\"><button type=\"submit\" class=\"act__btn danger\" title=\"orca cancel toy 2023-02,2023-03" \
+html "/runs?status=queued" | grep -qF "action=\"/runs/$qd/cancel\" data-confirm=\"Cancel run $qd?\" data-confirm-body=\"It leaves the queue and won&#39;t start.\" data-confirm-yes=\"Cancel run\" data-confirm-no=\"Keep it\" data-confirm-danger><button type=\"submit\" class=\"act__btn danger\" title=\"orca cancel toy 2023-02,2023-03" \
     || fail "no Cancel for the queued run"
 html "/runs/$qd" | grep -qF '>Cancel</button>' || fail "no Cancel in the queued run's header"
+html "/runs/$qd" | grep -qF "<form class=\"action\" method=\"post\" action=\"/runs/$qd/cancel\" data-confirm=\"Cancel run $qd?\" data-confirm-body=\"It leaves the queue and won&#39;t start.\" data-confirm-yes=\"Cancel run\" data-confirm-no=\"Keep it\" data-confirm-danger><button type=\"submit\" class=\"danger\">Cancel</button></form>" \
+    || fail "the Status card's Cancel doesn't ask"
+html "/runs/$bad_run/attempts/$failed" | grep -qF "action=\"/runs/$bad_run/rerun\" data-confirm=\"Rerun run $bad_run from measure?\" data-confirm-body=\"A new run over the same partitions starts at measure; the steps before it are copied from run $bad_run, which is kept as it is.\">" \
+    || fail "Rerun from here doesn't say what it does"
 html /runs | grep -q 'class="anon"' && fail "a page with login off is anon"
 q "UPDATE orca.pipelines SET paused = true WHERE name = 'toy'" > /dev/null
 html /pipelines/toy | grep -qF 'action="/pipelines/toy/unpause"><button type="submit" class="act__btn" title="orca unpause toy">Resume</button>' \
@@ -740,7 +755,9 @@ echo "$page" | grep -qF '<form id="bulk-runs" class="bulk act__need" method="pos
     || fail "the bulk form doesn't carry the filters"
 echo "$page" | grep -qF ' value="1"> or all 30 that match</label><input type="hidden" name="expect" value="30">' \
     || fail "all that match doesn't say how many"
-echo "$page" | grep -q '<form id="bulk-runs"[^>]*data-confirm' && fail "the bulk form asks with confirm()"
+echo "$page" | grep -q '<form id="bulk-runs"[^>]*data-confirm' && fail "the bulk form asks for Retry and Backfill too"
+echo "$page" | grep -qF '<button type="submit" name="do" value="cancel" class="danger" data-confirm="Cancel {runs}?" data-confirm-body="Queued and deferred ones won&#39;t start, and running ones stop before their next step. Runs that already finished are left as they are." data-confirm-yes="Cancel runs" data-confirm-no="Keep them" data-confirm-danger>Cancel</button><button type="submit" name="do" value="retry">Retry failed</button>' \
+    || fail "the bulk Cancel doesn't ask"
 bpost() { curl -s -o "$log.bulk" -w '%{http_code} %{redirect_url}' -H "Origin: $base" -d "$1" "$base/runs/bulk"; }
 qr=$(q "SELECT min(id) FROM orca.runs WHERE id > $mark AND status = 'queued'")
 sr=$(q "SELECT min(id) FROM orca.runs WHERE id > $mark AND status = 'succeeded'")

@@ -27,6 +27,7 @@ from orca.sensors import Link, Rebuild, downstream, rebuilds
 from orca.state import State
 from orca.ui.layout import (
     HERE_SLOT,
+    ask_attrs,
     card_open,
     docs_link,
     help_tip,
@@ -204,7 +205,18 @@ def _rebuild_html(
     h.raw("</li></ol>")
     var href = dataset_href(dataset)
     h.raw('<form class="start" id="rebuild" method="post" action="', href)
-    h.raw('/rebuild" data-confirm="Rebuild?"><label class="start__range">')
+    h.raw('/rebuild"')
+    ask_attrs(
+        h,
+        String("Rebuild what reads ", dataset, " over {partitions}?"),
+        (
+            "This plans a run of each pipeline above over those partitions;"
+            " each level is queued once the one before it has succeeded."
+        ),
+        "Rebuild downstream",
+        danger=False,
+    )
+    h.raw('><label class="start__range">')
     h.raw('Partitions <input name="partitions" required')
     h.raw(' placeholder="2024-01..2024-03" value="')
     h.text(keys)
