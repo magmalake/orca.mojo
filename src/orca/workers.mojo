@@ -35,7 +35,8 @@ heartbeat and its claims; `/api/worker/release`, a run it won't start;
 A claim takes, under its pipeline's lock, a queued run whose pipeline isn't
 paused and has fewer than `max_runs` live runs (a fill run: fewer than
 `fill_max_runs` running fill runs, inside its `fill_window`, with fills on),
-its other runs before its fill runs, and starts it as the
+its other runs before its fill runs (the oldest of each pipeline's, so one
+pipeline's queue at its cap never holds up another's), and starts it as the
 scheduler starts a run: `running`, owner `worker`, no heartbeat yet (the
 run's process claims it, within the start grace), one more start. Each
 claim is a row of `orca.audit` (user `worker:<label>`, source `worker`).
@@ -421,14 +422,20 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     var stale = stale_limit()
     var dead = dead_sql("$2", start_grace(stale))
     var refused = String()
+    # The oldest queued run of each of the pool's pipelines, and of its fill
+    # runs: the others of a pipeline would be refused for the same reasons
+    # (its cap, image or request), and a long queue of one pipeline at its
+    # max_runs mustn't hide the runs of the others behind it. The other
+    # runs first, then the fill runs, each oldest first.
     var candidates = db.conn.query(
         (
-            "SELECT r.id, r.pipeline, r.trigger FROM orca.runs r JOIN"
-            " orca.pipelines p ON"
-            " p.name = r.pipeline WHERE r.status = 'queued' AND p.placement ="
-            " $1 AND NOT p.paused AND p.binary_path IS NOT NULL AND"
-            " (r.trigger <> 'fill' OR p.fills = 'all') ORDER BY r.trigger ="
-            " 'fill', r.id LIMIT 50"
+            "SELECT id, pipeline, trigger FROM (SELECT DISTINCT ON"
+            " (r.pipeline, r.trigger = 'fill') r.id, r.pipeline, r.trigger"
+            " FROM orca.runs r JOIN orca.pipelines p ON p.name = r.pipeline"
+            " WHERE r.status = 'queued' AND p.placement = $1 AND NOT p.paused"
+            " AND p.binary_path IS NOT NULL AND (r.trigger <> 'fill' OR"
+            " p.fills = 'all') ORDER BY r.pipeline, r.trigger = 'fill', r.id)"
+            " AS c ORDER BY trigger = 'fill', id"
         ),
         Params().text(w.placement()),
     )

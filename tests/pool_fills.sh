@@ -16,7 +16,9 @@
 # - a UI run on a worker that restarts (killed, and started again with its
 #   token) is queued again rather than failed "interrupted", and succeeds;
 # - a run a worker claimed and never started (a claim made with curl, by a
-#   token whose worker is gone) is queued again with its start given back.
+#   token whose worker is gone) is queued again with its start given back;
+# - a pipeline at its max_runs with 60 queued runs doesn't hide another
+#   pipeline's queued run of the pool from a worker with room.
 #
 # Needs ORCA_DATABASE_URL (pixi run test-pool-fills starts a throwaway
 # server), curl, jq and python3.
@@ -29,8 +31,12 @@ b1=$!
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
 b2=$!
+# shellcheck disable=SC2086
+scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy &
+b3=$!
 wait "$b1"
 wait "$b2"
+wait "$b3"
 log=build/pool-fills.log
 : > "$log"
 proj=$PWD/build/pool-fills-project
@@ -115,12 +121,12 @@ peak=build/pool-fills-peak.out
 watch=$!
 pids="$pids $watch"
 
-# worker OUT TOKEN NAME: a worker of pool t with no database, one run at
-# once, in the background; its pid in $w.
+# worker OUT TOKEN NAME [MAX_RUNS]: a worker of pool t with no database,
+# one run at once unless MAX_RUNS, in the background; its pid in $w.
 worker() {
     env -u ORCA_DATABASE_URL -u ORCA_PGDATA ORCA_WORKER_TOKEN="$2" FILLWK_HOLD="$hold" \
         ./build/orca worker --pool t --remote "$base" --poll-seconds 0.3 \
-        --dir "$PWD/build/pool-fills-stage" --max-runs 1 --name "$3" > "build/pool-fills-$1.out" 2>&1 &
+        --dir "$PWD/build/pool-fills-stage" --max-runs "${4:-1}" --name "$3" > "build/pool-fills-$1.out" 2>&1 &
     w=$!
     pids="$pids $w"
 }
@@ -203,8 +209,32 @@ until_ 30 "the unstarted run $rc wasn't queued again: $(q "SELECT id, status, st
 is "SELECT count(*) FROM orca.audit WHERE run = $rc AND action = '/api/worker/requeue' AND detail LIKE '%before starting it'" 1 \
     || fail "the audit: $(q "SELECT detail FROM orca.audit WHERE run = $rc")"
 worker w4 "$hetzner" hetzner
+w4=$w
 until_ 30 "run $rc didn't succeed: $(q "SELECT id, status, starts, error FROM orca.runs WHERE id = $rc")" \
     is "SELECT status || ' ' || starts FROM orca.runs WHERE id = $rc" "succeeded 1"
 is "SELECT count(*) FROM orca.runs WHERE status <> 'succeeded'" 0 || fail "runs: $(q "SELECT id, status, error FROM orca.runs")"
+echo "ok   a claim never started is queued again, its start given back"
+
+# --- One pipeline's long queue at its max_runs hides no other's run ---
+# (Production, 2026-11-08: 62 queued runs of a max_runs = 1 pipeline filled
+# the claim's 50-run window, and the pool's other pipelines waited.)
+kill "$w4"
+touch "$hold"
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status) SELECT name, registry_hash, '2024-05', 'ui', 'queued' FROM orca.pipelines, generate_series(1, 60) WHERE name = 'fillwk'" > /dev/null
+./build/orca register --placement worker:t ./build/toy >> "$log" 2>&1 || fail "register toy"
+./build/orca backfill toy 2024-01 >> "$log" 2>&1 || fail "backfill toy"
+rt=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
+worker w5 "$bgent" bgent 3
+w5=$w
+until_ 20 "toy's run $rt wasn't claimed behind fillwk's queue: $(q "SELECT pipeline, status, count(*) FROM orca.runs WHERE status IN ('queued', 'running') GROUP BY 1, 2")" \
+    is "SELECT starts FROM orca.runs WHERE id = $rt" 1
+is "SELECT count(*) FROM orca.runs WHERE pipeline = 'fillwk' AND status = 'running'" 1 \
+    || fail "fillwk over its max_runs: $(q "SELECT id, status FROM orca.runs WHERE pipeline = 'fillwk' AND status = 'running'")"
+q "UPDATE orca.runs SET status = 'cancelled' WHERE pipeline = 'fillwk' AND status = 'queued'" > /dev/null
+rm -f "$hold"
+until_ 60 "toy's run $rt didn't succeed: $(q "SELECT status, error FROM orca.runs WHERE id = $rt")" \
+    is "SELECT status FROM orca.runs WHERE id = $rt" succeeded
+kill "$w5"
+echo "ok   a pipeline at its max_runs with 60 queued runs doesn't hold up another's"
 grep -q "$hetzner" "$log" build/pool-fills-*.out && fail "a token is in a log"
 echo "pool fills: ok"
