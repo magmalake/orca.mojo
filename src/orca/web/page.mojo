@@ -82,16 +82,21 @@ def respond(page: Page, json: Bool) -> Response:
     ):
         # A fragment's ids apart from its page's.
         body = with_header_help(body, String("thf") if raw else String("th"))
-    var status = (
-        200 if page.location and json and page.status == 303 else (page.status)
+    # An action's 303, and a moved page that kept its JSON (`orca.ui.ops.
+    # to_pools`), answer a script its JSON there, with no redirect.
+    var here = (
+        Bool(page.location)
+        and json
+        and (page.status == 303 or (page.status == 301 and page.json != ""))
     )
+    var status = 200 if here else page.status
     var resp = Response(
         status=status,
         reason=_reason(status),
         body=List[UInt8](body.as_bytes()),
     )
     try:
-        if page.location and (not json or page.status != 303):
+        if page.location and not here:
             resp.headers.set("Location", page.location)
         resp.headers.set(
             "Content-Type",

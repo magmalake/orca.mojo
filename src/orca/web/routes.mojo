@@ -26,12 +26,13 @@ stylesheet is served before any route is looked up.
 | `/api/gantt` | the pipelines in dataset order with their runs over `?window=1h`, `6h`, `24h` (default) or `7d`, and the runs each started: the home page's Timeline tab (`orca.ui.viz`) |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
 | `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
-| `/ops` | redirects to `/ops/control`; "Ops" in the nav has Control, Fleet and Workers under it |
-| `/ops/control` | Control, the one machine running the scheduler, this UI, Postgres and control-placed runs: its own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`), and the watchdog's banner, refreshed every 30 s from `/ops/control/live`; `/api/system` is the same as JSON; `/system` redirects here (301) |
+| `/ops` | redirects to `/ops/control`; "Ops" in the nav has Control, Pools and Watchdog under it |
+| `/ops/control` | Control, the one machine running the scheduler, this UI, Postgres and local and control-placed runs (so not a pool on Pools): its own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`), and the watchdog's banner, refreshed every 30 s from `/ops/control/live`; `/api/system` is the same as JSON; `/system` redirects here (301) |
 | `/metrics` | Prometheus gauges: the control instance's CPU, memory, disk, network and containers' memory, runs running and queued, hosts, and errors in the last hour; open like the other pages (reads need no login) |
-| `/ops/fleet` | Fleet, the EC2 instances orca launches for runs, the machines it is paying for: hosts running and what they cost an hour, runs and errors per hour, a table of live hosts (`?sort=` a column, `&dir=desc`) and charts over `?range=24h` or `7d` (`orca.fleet`); `/ops/fleet/hosts` is the live part of it, and `/api/fleet` the same as JSON; `/fleet` and `/fleet/hosts` redirect here (301) |
-| `/ops/workers` | Workers, the machines running pipelines placed `worker:<pool>` (`orca.workers`): each worker token's pool, label, worker, image, last heartbeat, runs, CPUs and memory; `/api/workers` the same as JSON; refreshed every 10 s from `/ops/workers/live`. A worker's own requests go to `/api/worker/...` with its token |
-| `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`orca.watchdog`); also the red banner on `/`, `/ops/fleet` and `/ops/control`; the page refreshes every 30 s from `/watchdog/live` |
+| `/ops/pools` | Pools, every machine runs are placed on (`orca.ui.pools`, `orca.views.pools`): a row per EC2 instance orca launched (live, and gone for an hour after it ended), per live Kubernetes run's pods (on the Kubernetes runner) and per worker token's machine (`orca.workers`), with its pool, kind, state, image, CPUs, memory, runs, last heartbeat, CPU and worker; `?pool=` (`ec2`, `kubernetes`, `worker:<pool>`) and `?kind=` (`ec2`, `k8s`, `self-hosted`) filter it; with EC2 in view, Fleet's cards (`orca.fleet`) and its charts over `?range=24h` or `7d`; refreshed every 10 s from `/ops/pools/live`; `/api/pools` the same as JSON |
+| `/ops/pools/<kind>/<id>` | a machine: its facts, and an EC2 instance's samples over its run (the run page's Machines charts) or the runs a worker claimed |
+| `/ops/fleet`, `/ops/workers` | moved to `/ops/pools?kind=ec2` (Fleet's `?range=` kept) and `?kind=self-hosted` (301), as are `/ops/fleet/hosts`, `/ops/workers/live`, `/fleet` and `/fleet/hosts` (to `/ops/pools/live` for the fragments); asked for JSON, they answer Fleet's and Workers' JSON as before, as `/api/fleet` (the summary, hosts and charts of `orca.fleet`) and `/api/workers` (each worker token's pool, label, worker, image, last heartbeat, runs, CPUs and memory) do. A worker's own requests go to `/api/worker/...` with its token |
+| `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`orca.watchdog`); also the red banner on `/`, `/ops/pools` and `/ops/control`; the page refreshes every 30 s from `/watchdog/live` |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), what a rebuild of it runs, and its snapshots; `?preview=1&partitions=`: a rebuild's runs by level, queueing nothing |
 | `/datasets/<name>?before=<cursor>` | its snapshots 50 to a page, newest first; `?after=` for the newer page, the cursor `<attempt>.<snapshot>` (`snapshots_page` in the JSON) |
@@ -43,7 +44,14 @@ The actions, each a `POST`, are `orca.api.actions`'; `/login`, `/logout`,
 """
 
 from orca.api import actions
-from orca.api.ops import fleet_api, gantt_api, system_api, watchdog_api
+from orca.api.ops import (
+    fleet_api,
+    fleet_json,
+    gantt_api,
+    system_api,
+    watchdog_api,
+    workers_api,
+)
 from orca.api.pipelines import calendar_page, pipeline_json
 from orca.api.runs import run_json
 from orca.state import State
@@ -59,16 +67,21 @@ from orca.ui.home import home, home_pipelines
 from orca.ui.layout import not_found
 from orca.ui.ops import (
     control_live,
-    fleet_hosts_page,
-    fleet_page,
     metrics_page,
     moved,
     ops_home,
     system_page,
+    to_pools,
     watchdog_live,
     watchdog_page,
-    workers_live,
-    workers_page,
+)
+from orca.ui.pools import (
+    PoolsAsk,
+    machine_page,
+    pools_api,
+    pools_ask,
+    pools_live,
+    pools_page,
 )
 from orca.ui.pipeline import key_page, pipeline_html, pipeline_progress
 from orca.ui.run import (
@@ -137,21 +150,26 @@ def routes() -> List[Route]:
         page("/datasets/{name}", _dataset),
         page("/datasets/{name}/snapshots/{id:int}", _snapshot, "snapshot"),
         page("/rebuilds/{id:int}", _rebuild, "rebuild"),
-        # Ops: Control, Fleet, Workers, the watchdog.
+        # Ops: Control, Pools, the watchdog; Fleet and Workers moved to
+        # Pools, their JSON paths kept.
         page("/ops", _ops),
         page("/system", _moved),
-        page("/fleet", _moved),
-        page("/fleet/hosts", _moved),
+        page("/fleet", _fleet),
+        page("/fleet/hosts", _fleet),
         page("/ops/control", _control),
         page("/ops/control/live", _control_live),
         page("/api/system", _system_api),
         page("/metrics", _metrics),
+        page("/ops/pools", _pools),
+        page("/ops/pools/live", _pools_live),
+        page("/ops/pools/{kind}/{id}", _machine),
+        page("/api/pools", _pools_api),
         page("/ops/fleet", _fleet),
-        page("/ops/fleet/hosts", _fleet_hosts),
+        page("/ops/fleet/hosts", _fleet),
         page("/api/fleet", _fleet_api),
         page("/ops/workers", _workers),
-        page("/ops/workers/live", _workers_live),
-        page("/api/workers", _workers),
+        page("/ops/workers/live", _workers),
+        page("/api/workers", _workers_api),
         page("/watchdog", _watchdog),
         page("/watchdog/live", _watchdog_live),
         page("/api/watchdog", _watchdog_api),
@@ -350,15 +368,36 @@ def _metrics(mut db: State, call: Call) raises -> Page:
     return metrics_page(db)
 
 
-def _fleet(mut db: State, call: Call) raises -> Page:
-    return fleet_page(
-        db, call.query("sort"), call.query("dir"), call.query("range")
+def _ask(call: Call) -> PoolsAsk:
+    return pools_ask(
+        call.query("pool"), call.query("kind"), call.query("range")
     )
 
 
-def _fleet_hosts(mut db: State, call: Call) raises -> Page:
-    return fleet_hosts_page(
-        db, call.query("sort"), call.query("dir"), call.query("range")
+def _pools(mut db: State, call: Call) raises -> Page:
+    return pools_page(db, _ask(call))
+
+
+def _pools_live(mut db: State, call: Call) raises -> Page:
+    return pools_live(db, _ask(call))
+
+
+def _pools_api(mut db: State, call: Call) raises -> Page:
+    return pools_api(db, _ask(call))
+
+
+def _machine(mut db: State, call: Call) raises -> Page:
+    return machine_page(db, call.param("kind"), call.param("id"))
+
+
+def _fleet(mut db: State, call: Call) raises -> Page:
+    """Fleet's old paths: to Pools, or Fleet's JSON as it was."""
+    return to_pools(
+        call.path,
+        call.query("range"),
+        fleet_json(
+            db, call.query("sort"), call.query("dir"), call.query("range")
+        ),
     )
 
 
@@ -367,11 +406,12 @@ def _fleet_api(mut db: State, call: Call) raises -> Page:
 
 
 def _workers(mut db: State, call: Call) raises -> Page:
-    return workers_page(db)
+    """Workers' old paths: to Pools, or Workers' JSON as it was."""
+    return to_pools(call.path, "", workers_api(db).json.copy())
 
 
-def _workers_live(mut db: State, call: Call) raises -> Page:
-    return workers_live(db)
+def _workers_api(mut db: State, call: Call) raises -> Page:
+    return workers_api(db)
 
 
 def _watchdog(mut db: State, call: Call) raises -> Page:

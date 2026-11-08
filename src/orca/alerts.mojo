@@ -341,7 +341,7 @@ def lost_workers(mut db: State) raises -> Int:
                 runs,
                 "); they are requeued when their heartbeats go stale.",
             ),
-            ui_link("/ops/workers"),
+            ui_link(String("/ops/pools/self-hosted/", r.int64("id"))),
         ):
             n += 1
     return n

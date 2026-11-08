@@ -139,10 +139,12 @@ moved() { [ "$(q "SELECT heartbeat FROM orca.runs WHERE id = $r1")" != "$hb" ]; 
 until_ 5 "the heartbeat doesn't move" moved
 log1=$(q "SELECT a.log FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r1")
 grep -q "database: none, state: $base" "$log1" || fail "the step's process had a database: $(cat "$log1")"
-curl -fs -H 'Accept: application/json' "$base/ops/workers" > build/worker-ops.out || fail "GET /ops/workers"
+curl -fs "$base/api/workers" > build/worker-ops.out || fail "GET /api/workers"
 jq -e --arg r "$r1,$r2" '.workers[] | select(.label == "laptop") | select(.pool == "t" and .name == "w-one" and .image == "orca:test-1" and (.running | split(",") | sort | join(",")) == $r and .cpus > 0)' \
     build/worker-ops.out > /dev/null || fail "Ops' workers: $(cat build/worker-ops.out)"
-curl -fs "$base/ops/workers" | grep -q '<h1>Workers</h1>' || fail "the Workers page"
+curl -fs "$base/api/pools?kind=self-hosted" | jq -e --arg r "$r1,$r2" '.machines[] | select(.label == "laptop") | .name == "w-one" and .state == "live" and .pool == "worker:t" and (.runs | map(tostring) | sort | join(",")) == $r' > /dev/null \
+    || fail "Pools' worker machine: $(curl -fs "$base/api/pools?kind=self-hosted")"
+curl -fs "$base/ops/pools?pool=worker:t" | grep -qF '<code>w-one</code>' || fail "the Pools page"
 curl -fs "$base/runs/$r1" | grep -q 'Ran on<span class="help">.*</dt><dd>w-one (token' || fail "the run's page doesn't say where it ran"
 
 # Another pool's token can't make the runs' store calls, nor claim them.

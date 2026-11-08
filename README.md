@@ -52,7 +52,7 @@ mojo build bin/scheduler.mojo -o build/orca
 | [docs/workers.md](docs/workers.md) | remote workers: `orca worker`, worker tokens, a worker on another machine, the run's state over the API |
 | [docs/watchdog.md](docs/watchdog.md) | the watchdog's rules and thresholds, what a trip pauses, `orca watchdog status`, `ack` and `snooze` |
 | [docs/alerts.md](docs/alerts.md) | alerts to your phone through ntfy: what is sent, `ORCA_NOTIFY_*`, `orca notify` |
-| [docs/ui.md](docs/ui.md) | the UI's newer parts: the pipeline page's tabs and cards, a run's timeline, Ops › Control, Fleet and Workers |
+| [docs/ui.md](docs/ui.md) | the UI's newer parts: the pipeline page's tabs and cards, a run's timeline, Ops › Control, Pools and Watchdog |
 | [docs/hetzner.md](docs/hetzner.md) | the runbook for one Hetzner server: setup, deploying, rescaling, backups, alerts |
 | [docs/replace-control.md](docs/replace-control.md) | the runbook for replacing the AWS control instance |
 | [docs/future-directions.md](docs/future-directions.md) | where orca's seams are, and which are worth cutting |
@@ -96,8 +96,8 @@ pixi run orca && ./build/orca register ./build/toy && ./build/orca scheduler   #
                                # orca watchdog snooze launches 2h silences a rule, orca watchdog ack keeps a trip's pipelines paused
 ./build/orca notify test        # a push to your phone through ntfy (ORCA_NOTIFY_URL): watchdog trips, failed runs, stalled fills, disk, lost workers (docs/alerts.md)
 ./build/orca ui                # http://127.0.0.1:8270: pipelines, runs and datasets, also as JSON; start, resume, rerun, backfill, cancel, pause;
-                               # Ops > Control is the machine running the scheduler and UI, Ops > Fleet the EC2 instances launched for runs,
-                               # Ops > Workers the remote workers
+                               # Ops > Control is the machine running the scheduler and UI, Ops > Pools every machine runs are placed on
+                               # (EC2 instances, Kubernetes pods, remote workers), Ops > Watchdog the rules that pause pipelines
                                # Pipelines > Timeline: each pipeline's runs over 1 h to 7 d, in dataset order, with what started what;
                                # a run's page draws its Dista timeline (zoom, hover) without leaving for Perfetto
 ./build/orca user add alice    # a login for the UI's actions; the password from stdin
@@ -190,7 +190,7 @@ Postgres. Nothing on the worker holds database credentials. Its token,
 from `orca worker-token create --pool <pool>`, is scoped to the pool and
 revocable. A worker that dies has its runs requeued once their heartbeats
 are stale, and a worker of another image than the pipeline's is given
-nothing. Ops > Workers lists the workers. See
+nothing. Ops > Pools lists the workers' machines. See
 [docs/workers.md](docs/workers.md).
 
 ## Alerts
@@ -220,7 +220,7 @@ thresholds and variables: [docs/watchdog.md](docs/watchdog.md).
 Hetzner Cloud ARM server, the `local` runner, S3-compatible Object Storage
 (`AWS_ENDPOINT_URL_S3`), secrets from files (`ORCA_SECRET_FETCH`), and
 Cloudflare Tunnel, with scripts in `deploy/hetzner/`. On the `local` runner
-the watchdog's cost rule reads "fixed price" and Ops > Fleet says no
+the watchdog's cost rule reads "fixed price" and Ops > Pools says no
 instances are launched.
 
 ## Releasing and operations
