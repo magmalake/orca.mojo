@@ -260,6 +260,45 @@ def ask_attrs(
         h.raw(" data-confirm-danger")
 
 
+comptime _CMD = """
+for (const c of document.querySelectorAll("code[data-cmd]"))
+  c.textContent = c.textContent.replaceAll("<url>", location.origin);
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest && e.target.closest("button[data-copy]");
+  if (!b) return;
+  const code = b.parentElement.querySelector("code");
+  try {
+    await navigator.clipboard.writeText(code.textContent);
+  } catch (err) {
+    const r = document.createRange();
+    r.selectNodeContents(code);
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+    b.textContent = "Press \u2318C";
+    return;
+  }
+  b.textContent = "Copied";
+  setTimeout(() => (b.textContent = "Copy"), 1500);
+});
+"""
+"""Command boxes (`cmd_box`): `<url>` becomes the address the page was
+loaded from, and Copy puts the command on the clipboard (where the
+clipboard isn't allowed, it selects the text instead)."""
+
+
+def cmd_box(mut h: Html, kind: String, cmd: String):
+    """A shell command in a box with a Copy button; `kind` names it
+    (`data-cmd`) for a script that rewrites it as a form changes."""
+    h.raw('<div class="cmdbox"><pre class="cmd"><code data-cmd="')
+    h.text(kind)
+    h.raw('">')
+    h.text(cmd)
+    h.raw(
+        '</code></pre><button type="button" class="copy"'
+        " data-copy>Copy</button></div>"
+    )
+
+
 comptime _TABS = """
 (() => {
   const get = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
@@ -690,6 +729,8 @@ def page_html(title: String, active: StaticString, body: Html) -> String:
         _POLL,
         "</script><script>",
         _ASK,
+        "</script><script>",
+        _CMD,
         "</script><script>",
         LEAD_JS,
         "</script><script>",

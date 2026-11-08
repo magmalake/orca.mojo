@@ -4,8 +4,8 @@
 """
 
 from orca.html import Html, url_encode
-from orca.ui.layout import docs_link
-from orca.views.commands import backfill_cmd, run_cmd, shell_quote
+from orca.ui.layout import cmd_box, docs_link
+from orca.views.commands import backfill_cmd, remote_cmd, shell_quote
 from orca.views.pipelines import PipelineRow
 from orca.views.start import StartPreview, one_run_line, preview_line, unit_word
 
@@ -186,9 +186,9 @@ comptime _START_SCRIPT = """
     const keys = f.elements.partitions.value.trim();
     const rerun = f.elements.rerun.checked;
     const k = keys ? sh(keys) : "<range>";
-    f.querySelector("[data-cmd=backfill]").textContent =
-      "orca backfill " + (rerun ? "--rerun " : "") + f.dataset.pipeline + " " + k;
-    f.querySelector("[data-cmd=run]").textContent = f.dataset.binary + " run --partitions " + k;
+    const u = location.origin;
+    f.querySelector("[data-cmd=backfill]").textContent = "orca login " + u + " && orca --remote " + u +
+      " backfill " + (rerun ? "--rerun " : "") + f.dataset.pipeline + " " + k;
     clearTimeout(timer);
     if (!keys) return;
     timer = setTimeout(async () => {
@@ -207,7 +207,7 @@ comptime _START_SCRIPT = """
   f.addEventListener("change", update);
 })();
 """
-"""Updates the Start runs form's command lines as you type, and its
+"""Updates the Start runs form's command line as you type, and its
 preview a moment after; without it, the Preview button does the same."""
 
 
@@ -298,18 +298,9 @@ def start_html(
             h.raw('</p><p class="muted" data-preview="run">')
             h.text(one_run_line(p, v))
             h.raw("</p>")
-    h.raw('</div><p class="muted start__cli">Same from the command line (on')
-    h.raw(" the control instance today, remotely once #111 lands):</p>")
-    h.raw('<pre class="cmd"><code data-cmd="backfill">')
-    h.text(backfill_cmd(p.name, keys, rerun))
-    h.raw('</code>\n<code data-cmd="run">')
-    h.text(run_cmd(p.binary, keys))
-    h.raw('</code></pre><p class="muted more">The second runs in that')
-    h.raw(" shell's process rather than queuing it; orca has no command that")
-    h.raw(" queues one run. The scheduler (<code>orca scheduler</code>) starts")
-    h.raw(" queued runs, up to ")
-    h.text(p.max_runs)
-    h.raw(" at once.</p></form><script>", _START_SCRIPT)
+    h.raw('</div><p class="muted start__cli">From the command line:</p>')
+    cmd_box(h, "backfill", remote_cmd(backfill_cmd(p.name, keys, rerun)))
+    h.raw("</form><script>", _START_SCRIPT)
     if p.kind == "daily" or p.kind == "monthly":
         h.raw(_CAL_SCRIPT)
     h.raw("</script>")

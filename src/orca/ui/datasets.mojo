@@ -29,6 +29,7 @@ from orca.ui.layout import (
     HERE_SLOT,
     ask_attrs,
     card_open,
+    cmd_box,
     docs_link,
     help_tip,
     not_found,
@@ -37,7 +38,7 @@ from orca.ui.layout import (
 from orca.ui.parts import code_link
 from orca.ui.runs import pager_link
 from orca.views.code import CodeLinks, code_of
-from orca.views.commands import rebuild_cmd
+from orca.views.commands import rebuild_cmd, remote_cmd
 from orca.views.datasets import (
     RebuildPreview,
     SNAPSHOTS_PAGE,
@@ -267,11 +268,9 @@ def _rebuild_html(
                     h.text(v.levels[l][k][0], " over ", v.levels[l][k][1])
                 h.raw("</li>")
             h.raw("</ol>")
-    h.raw('</div><p class="muted start__cli">Same from the command line (on')
-    h.raw(" the control instance today, remotely once #111 lands):</p>")
-    h.raw('<pre class="cmd"><code data-cmd="rebuild">')
-    h.text(rebuild_cmd(dataset, keys))
-    h.raw("</code></pre></form>")
+    h.raw('</div><p class="muted start__cli">From the command line:</p>')
+    cmd_box(h, "rebuild", remote_cmd(rebuild_cmd(dataset, keys)))
+    h.raw("</form>")
 
 
 def dataset_page(

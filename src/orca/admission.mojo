@@ -406,6 +406,13 @@ def pressure_html(mut h: Html, row: Optional[PressureRow]):
             "% avg300",
         ),
         r.held.byte_length() > 0,
+        (
+            "The share of the last 10 seconds in which at least one task on"
+            " this host waited for memory: reclaiming, or reading back what was"
+            ' swapped or dropped (Linux\'s pressure stall information, "some").'
+            " Near 0% is healthy. This is the number admission compares with"
+            " its limit; avg60 and avg300 are the same over 1 and 5 minutes."
+        ),
     )
     _stat(
         h,
@@ -418,6 +425,12 @@ def pressure_html(mut h: Html, row: Optional[PressureRow]):
             pct_text(r.full300),
             "% avg300",
         ),
+        False,
+        (
+            "The share of time in which every task on this host was waiting for"
+            ' memory at once, so no work got done at all (PSI "full"). Any'
+            " sustained value means the host is thrashing."
+        ),
     )
     _stat(
         h,
@@ -428,6 +441,13 @@ def pressure_html(mut h: Html, row: Optional[PressureRow]):
         ),
         state_text(r),
         r.held.byte_length() > 0,
+        (
+            "Whether the scheduler starts new runs on this host. While Stalled"
+            " (some) avg10 is over the limit (ORCA_ADMIT_MEMORY_PRESSURE, 10%"
+            " by default) it holds them, and runs already going go on; it"
+            " starts them again under half the limit, or after 30 s at or"
+            " under it."
+        ),
     )
     h.raw('</div><p class="muted">The share of time tasks waited for memory,')
     h.raw(" from <code>")
@@ -454,11 +474,25 @@ def _kind_text(kind: String) -> String:
 
 
 def _stat(
-    mut h: Html, key: String, value: String, sub: String, bad: Bool = False
+    mut h: Html,
+    key: String,
+    value: String,
+    sub: String,
+    bad: Bool = False,
+    help: StaticString = "",
 ):
     h.raw('<div class="stat', " stat--errors" if bad else "", '">')
     h.raw('<span class="stat__k">')
     h.text(key)
+    if help:
+        h.help(
+            String(
+                "pressure-",
+                key.lower().replace(" ", "-").replace("(", "").replace(")", ""),
+            ),
+            key,
+            help,
+        )
     h.raw('</span><span class="stat__v">')
     h.text(value)
     h.raw('</span><span class="stat__s">')

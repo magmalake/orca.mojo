@@ -211,7 +211,7 @@ echo "ok   calendar: coverage in one number"
 # A range as the picker writes it: the preview, then the backfill, queue
 # the days that aren't done or live, and no others.
 r='2024-03-02..2024-03-07'
-get "/pipelines/daily?preview=1&partitions=$r" | grep -qF 'data-cmd="backfill">orca backfill daily 2024-03-02..2024-03-07<' \
+get "/pipelines/daily?preview=1&partitions=$r" | grep -qF 'data-cmd="backfill">orca login &lt;url&gt; &amp;&amp; orca --remote &lt;url&gt; backfill daily 2024-03-02..2024-03-07<' \
     || fail "the command for the range"
 p=$(curl -fsS -H 'Accept: application/json' "$base/pipelines/daily?preview=1&partitions=$r")
 echo "$p" | jq -e '.preview.keys == ["2024-03-05", "2024-03-06", "2024-03-07"] and .preview.done == ["2024-03-02", "2024-03-03", "2024-03-04"]' > /dev/null \

@@ -289,7 +289,7 @@ recorded them, and its subtitle says whose:
 | control placement | `control`: the whole control host, with Postgres, the scheduler and the UI on it; shared the same way |
 | EC2 | `head-<id>` and `worker-<id>`: each of the run's own instances, a whole machine |
 | Kubernetes | each pod's samples: CPU, memory and disk io are the node's, which other pods share; network is the pod's own |
-| remote worker | nothing: a worker measures only the run's processes, which are in Resources |
+| remote worker | `worker-<name>`: the whole machine the worker runs on, sampled by the `<binary> sample` it starts beside each run (since 0.15.0, [workers](workers.md)); other runs it claimed at the same time count too |
 
 So Machines is never the run's own use; Resources is. Below it come
 Instances (`#instances`, EC2), the Dista timeline (`#timeline`), Actions

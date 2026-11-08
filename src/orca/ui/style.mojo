@@ -325,6 +325,13 @@ th .help { margin-left: 0.25rem; vertical-align: 0; }
 .filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: end; margin-bottom: 1rem; }
 .filters label { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
 .filters input[type=search] { min-width: 0; }
+/* One height for every control in a filter row: selects, date and text
+   inputs, the status picker and the button differ by browser otherwise. */
+.filters select, .filters input:not([type=checkbox]), .filters .pick__value,
+.filters button { box-sizing: border-box; height: 2.25rem; padding-top: 0; padding-bottom: 0;
+  line-height: calc(2.25rem - 2px); font: inherit; font-size: 0.875rem; }
+.filters select { padding-left: 0.5rem; padding-right: 1.6rem; border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }
 .filters__quick { display: flex; flex-wrap: wrap; gap: 0.2rem 0.7rem; align-self: center; font-size: 0.8125rem; }
 .filters__quick a[aria-current] { font-weight: 600; text-decoration: none; color: var(--text); }
 .filters__clear { align-self: center; font-size: 0.8125rem; }
@@ -412,6 +419,9 @@ button.primary:hover { filter: brightness(1.08); color: #fff; }
 .start__cli { margin: 0; font-size: 0.8125rem; }
 pre.cmd { margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 0.5rem 0.8rem; font-size: 0.8125rem; overflow-x: auto; user-select: all; }
+.cmdbox { display: flex; gap: 0.5rem; align-items: stretch; }
+.cmdbox pre.cmd { flex: 1; min-width: 0; }
+.cmdbox .copy { flex: none; font-size: 0.8125rem; }
 .auth { max-width: 22rem; margin: 3rem auto; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.6rem 1.75rem 1.5rem; }
 .auth h1 { font-size: 1.35rem; margin: 0 0 1rem; }

@@ -145,7 +145,8 @@ echo "$page" | grep -qF '<button type="submit" class="primary">Backfill: one run
 echo "$page" | grep -qF 'formaction="/pipelines/toy/runs">Start one run over the whole range</button>' \
     || fail "the one-run button"
 echo "$page" | grep -qF ' Include months that already succeeded (rerun them)</label>' || fail "the rerun label"
-echo "$page" | grep -qF '<code data-cmd="backfill">orca backfill toy &lt;range&gt;</code>' || fail "the empty form's command"
+echo "$page" | grep -qF '<code data-cmd="backfill">orca login &lt;url&gt; &amp;&amp; orca --remote &lt;url&gt; backfill toy &lt;range&gt;</code>' || fail "the empty form's command"
+echo "$page" | grep -qF '</code></pre><button type="button" class="copy" data-copy>Copy</button></div>' || fail "the command's Copy button"
 before=$(psql "$ORCA_DATABASE_URL" -Atc "SELECT count(*), max(id) FROM orca.runs")
 p=$(json '/pipelines/toy?preview=1&partitions=2024-05..2024-08')
 echo "$p" | jq -e '.preview | .runs == 2 and .keys == ["2024-07", "2024-08"] and .done == ["2024-05", "2024-06"]
@@ -161,7 +162,7 @@ echo "$page" | grep -qF '<p data-preview="backfill">This queues 2 runs: 2024-07 
 echo "$page" | grep -qF 'One run over the whole range runs all 4 months, done or not.' || fail "the one-run line"
 echo "$page" | grep -qF 'name="partitions" required placeholder="2024-01..2024-01" value="2024-05..2024-08">' \
     || fail "the preview doesn't keep the range"
-echo "$page" | grep -qF '<code data-cmd="backfill">orca backfill toy 2024-05..2024-08</code>' || fail "the preview's command"
+echo "$page" | grep -qF '<code data-cmd="backfill">orca login &lt;url&gt; &amp;&amp; orca --remote &lt;url&gt; backfill toy 2024-05..2024-08</code>' || fail "the preview's command"
 curl -fsS "$base/pipelines/toy?preview=1&partitions=2024-05&rerun=1" | grep -qF 'name="rerun" value="1" checked>' \
     || fail "the preview doesn't keep rerun"
 curl -fsS "$base/pipelines/toy?preview=1&partitions=2023-13" | grep -q '<p class="refused">' || fail "a bad range's preview"
