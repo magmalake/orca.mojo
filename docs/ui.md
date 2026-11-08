@@ -402,6 +402,50 @@ colours it (`orca.highlight`, a small tokenizer, no library), so the
 browser needn't reach GitHub; a private repository's file it can't fetch
 says so, and the link still opens it.
 
+The same card shows on the lists: a runs table's pipeline (on Runs, a
+pipeline's Runs tab and the home page's recent runs) shows the pipeline's
+`Pipeline[...]` declaration at the commit that run ran, and a failed run
+names the step that failed ("failed in measure"), linked to its function
+at that commit. The home page's pipelines, in the List and the Timeline,
+show theirs at the code registered now. The link keeps going where it did,
+and its code is in a `data-src` attribute. A card shows on hover, on
+keyboard focus, or on a first tap, and a second tap follows the link. A
+list's live refresh doesn't break it. Nothing is fetched until a hover,
+and then once per file per page.
+
+Every card leads with a one-sentence summary: its docstring's first
+sentence (up to the first ". " or blank line, at most 160 characters),
+then the rest of the docstring in muted text, three lines at most, without
+its indented examples, then the code without the docstring. A pipeline's
+declaration with no docstring of its own uses its module's (the file's
+opening docstring). So a docstring's first sentence should say what the
+function or pipeline is for, on its own.
+
+## Asking first
+
+An action that's hard to undo asks first, in a dialog in the page's
+colours: what will happen, and two buttons, the safe one focused. Enter
+presses the focused button, Escape or a click outside is no, and the focus
+goes back to the button that asked.
+
+| Action | Asks |
+|---|---|
+| Cancel (a runs row, a run's header or Status card) | "Cancel run 4418?": a queued run leaves the queue and won't start; a running one stops before its next step, and the step running has `ORCA_CANCEL_KILL_SECONDS` to finish; a failed one isn't retried |
+| Cancel on a runs list (bulk) | "Cancel 3 runs?" (or "all 120 runs that match"); nothing ticked, it doesn't ask |
+| Cancel queued runs (a pipeline's Operate) | "Cancel the runs of toy over 2024-01..2024-03?" |
+| Rerun (a succeeded run's header) | "Rerun every step of run 4418?", a new run over the same partitions |
+| Rerun from here (an attempt's page) | "Rerun run 4418 from measure?", the steps before it copied |
+| Rebuild downstream (a dataset's page) | "Rebuild what reads lake.a over 2024-01?" |
+
+A form asks with `data-confirm` (on the form, or on one of its submit
+buttons), `data-confirm-body`, `data-confirm-yes`, `data-confirm-no` and
+`data-confirm-danger` (`ask_attrs` in `orca.ui.layout`). It's one
+`<dialog>` per page, and yes submits the form again with the same button,
+so what's posted, the login cookie and the Origin check are as before.
+Without scripts, or in a browser without `<dialog>`, the form posts
+without asking. Previews (GET) never ask, and nothing in the UI uses the
+browser's `confirm()`, `alert()` or `prompt()`.
+
 ## Step cards
 
 Each step in the steps views (a pipeline's Steps card, Graph and Table,
@@ -413,7 +457,7 @@ the code.
 
 | Part | From |
 |---|---|
-| The signature, coloured, and its docstring's first paragraph, with a link to the line | the source at the commit the run ran or the pipeline is registered with: `/code?u=<file>&at=<line>` answers only the `def`'s lines and docstring, fetched once per step per page. Until it answers (or for a private repository, or code `orca locate` didn't map) the card shows the signature `describe` records, `def measure(mut ctx: Ctx, input: Measured) raises -> Measured`, its argument names orca's |
+| Its docstring's first sentence over the signature, coloured, and the rest of its first paragraph under it, with a link to the line | the source at the commit the run ran or the pipeline is registered with: `/code?u=<file>&at=<line>` answers only the `def`'s lines and docstring, fetched once per step per page. Until it answers (or for a private repository, or code `orca locate` didn't map) the card shows the signature `describe` records, `def measure(mut ctx: Ctx, input: Measured) raises -> Measured`, its argument names orca's |
 | Kind (with what it means), `after=`, input and output types | the registration's `describe` |
 | Reads and Writes, linked to the datasets' pages | the step's `reads=` and `writes=` |
 | Pipeline page: its last runs' attempts, how many failed, the p50 and most its succeeded attempts took, and their peak memory's p50 and most | the attempts of the pipeline's latest 20 runs, with what each used where it was measured |

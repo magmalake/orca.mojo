@@ -3,6 +3,7 @@ table's cells, a runs table with each row's actions, links to code, and a
 run's grant and usage as facts.
 """
 
+from orca.actions import cancel_kill_seconds
 from orca.html import Html, url_encode
 from orca.resources import gb_text
 from orca.sample import fixed1
@@ -10,7 +11,7 @@ from orca.source import commit_url, web_url
 from orca.store import Usage
 from orca.ui.layout import act_button, fact_item
 from orca.usage import bytes_text, cpu_text, usage_text
-from orca.views.code import CodeLinks, CodeRef
+from orca.views.code import CodeLinks, CodeRef, RunCode
 from orca.views.commands import cancel_cli, retry_cli, shell_quote
 from orca.views.runs import RunResources, RunRow, VersionRow
 
@@ -158,6 +159,22 @@ def pause_button(mut h: Html, name: String, paused: Bool):
         )
 
 
+def cancel_tell(r: RunRow) -> String:
+    """What cancelling `r` does, as its Cancel's dialog says it
+    (`orca.actions.cancel_run`)."""
+    if r.status == "running":
+        return String(
+            "It stops before its next step; the step running now has ",
+            Int(cancel_kill_seconds()),
+            " s to finish before it's stopped. Steps that finished are kept.",
+        )
+    if r.status == "failed":
+        return "It won't be retried; the steps that succeeded are kept."
+    if r.status == "deferred":
+        return "It won't be started again when its wait ends."
+    return "It leaves the queue and won't start."
+
+
 def row_actions(mut h: Html, r: RunRow):
     """A runs table row's Cancel (queued or running) or Retry (failed)."""
     if (r.status == "queued" or r.status == "running") and not (
@@ -170,6 +187,10 @@ def row_actions(mut h: Html, r: RunRow):
             "cancel",
             cancel_cli(r),
             danger=True,
+            ask=String("Cancel run ", r.id, "?"),
+            tell=cancel_tell(r),
+            yes="Cancel run",
+            no="Keep it",
         )
     elif r.status == "failed" or r.stalled:
         act_button(
@@ -189,11 +210,18 @@ comptime TRIES = (
 
 
 def runs_table_html(
-    mut h: Html, runs: List[RunRow], show_pipeline: Bool, pick: Bool = False
+    mut h: Html,
+    runs: List[RunRow],
+    show_pipeline: Bool,
+    pick: Bool = False,
+    code: Dict[Int, RunCode] = Dict[Int, RunCode](),
 ):
     """A table of runs; with `pick`, a checkbox before each, for the list's
     bulk actions (`form="bulk-runs"`, `orca.ui.runs.runs_bulk_html`), and
-    one in the header that ticks the page's (with JavaScript)."""
+    one in the header that ticks the page's (with JavaScript). With a run's
+    `code`, its pipeline's name shows the pipeline's declaration on hover
+    (`data-src`, the page's `_PEEK`) and a failed run names the step that
+    failed, linked to its function, at the commit the run ran."""
     if len(runs) == 0:
         h.raw('<p class="empty">No runs.</p>')
         return
@@ -234,10 +262,18 @@ def runs_table_html(
         h.raw("<td>")
         h.chip(String("/runs/", r.id), String(r.id))
         h.raw("</td>")
+        var rc = code.get(r.id)
         if show_pipeline:
-            h.raw("<td>")
-            h.link(String("/pipelines/", url_encode(r.pipeline)), r.pipeline)
-            h.raw("</td>")
+            h.raw('<td><a href="')
+            h.text(String("/pipelines/", url_encode(r.pipeline)))
+            h.raw('"')
+            if rc and rc.value().pipeline:
+                h.raw(' data-src="')
+                h.text(rc.value().pipeline.url)
+                h.raw('"')
+            h.raw(">")
+            h.text(r.pipeline)
+            h.raw("</a></td>")
         _when_cell(h, r.created)
         h.num(took_text(r.seconds))
         _partitions_cell(h, r.partitions)
@@ -250,6 +286,14 @@ def runs_table_html(
             h.raw(' <span class="muted">until ')
             h.text(r.waiting_until)
             h.raw("</span>")
+        if rc and rc.value().failed and r.status == "failed":
+            h.raw(' <span class="muted">in</span> ')
+            if rc.value().step:
+                named_code_link(h, rc.value().failed, rc.value().step)
+            else:
+                h.raw('<span class="mono">')
+                h.text(rc.value().failed)
+                h.raw("</span>")
         row_actions(h, r)
         h.raw("</td>")
         # Empty for 0 and 1, so a run that took more draws the eye.

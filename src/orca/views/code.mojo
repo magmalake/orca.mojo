@@ -9,7 +9,7 @@ from postgres import Params
 from orca.locate import function_key
 from orca.source import is_hex, web_url
 from orca.state import State
-from orca.views.runs import VersionRow, version_rows
+from orca.views.runs import RunRow, VersionRow, version_rows
 
 
 def _code_url(v: VersionRow, location: String) -> String:
@@ -148,3 +148,73 @@ def code_of(
         return cache[key].copy()
     except:
         return CodeLinks()
+
+
+@fieldwise_init
+struct RunCode(Copyable, Movable):
+    """What a runs table shows of a run's code, at the commit the run ran:
+    its pipeline's declaration, and its failed step and that step's
+    function."""
+
+    var pipeline: CodeRef
+    var failed: String
+    """The first step that failed, or empty."""
+    var step: CodeRef
+    """`failed`'s function, or an empty one."""
+
+
+def runs_code(mut db: State, runs: List[RunRow]) -> Dict[Int, RunCode]:
+    """Each run's `RunCode`, by id: one query for the runs' versions and
+    failed steps, then each version's code (`code_links`) once."""
+    var out = Dict[Int, RunCode]()
+    if len(runs) == 0:
+        return out^
+    var ids = String()
+    for r in runs:
+        ids.write("," if ids else "", r.id)
+    try:
+        var rows = db.conn.query(
+            (
+                "SELECT r.id, r.pipeline, coalesce(r.version, p.version, 0) AS"
+                " v, coalesce((SELECT s.step FROM orca.steps s WHERE s.run ="
+                " r.id AND s.status = 'failed' ORDER BY s.id LIMIT 1), '') AS"
+                " failed FROM orca.runs r LEFT JOIN orca.pipelines p ON p.name"
+                " = r.pipeline WHERE r.id = ANY(string_to_array($1,"
+                " ',')::bigint[])"
+            ),
+            Params().text(ids),
+        )
+        var cache = Dict[String, CodeLinks]()
+        for row in rows:
+            var v = Int(row.int64("v"))
+            if not v:
+                continue
+            var name = row.text("pipeline")
+            var key = String(name, "\0", v)
+            if key not in cache:
+                var vs = version_rows(db, id=v)
+                cache[key] = code_links(
+                    db,
+                    name,
+                    vs[0].copy() if len(vs) > 0 else Optional[VersionRow](None),
+                )
+            ref links = cache[key]
+            var failed = row.text("failed")
+            out[Int(row.int64("id"))] = RunCode(
+                links.pipeline.copy(), failed, links.step(failed)
+            )
+    except:
+        pass
+    return out^
+
+
+def pipeline_srcs(mut db: State, names: List[String]) -> Dict[String, String]:
+    """Each pipeline's declaration at the version it's registered with, as
+    the URL of its line (`CodeLinks.pipeline`), for those that have one."""
+    var out = Dict[String, String]()
+    var cache = Dict[String, CodeLinks]()
+    for name in names:
+        var at = code_of(db, cache, name).pipeline.copy()
+        if at:
+            out[name] = at.url
+    return out^

@@ -21,7 +21,14 @@ from orca.source import web_url
 from orca.state import State
 from orca.ui.coverage import coverage_href, coverage_html, follow_html
 from orca.ui.datasets import dataset_href, snapshot_href
-from orca.ui.layout import docs_link, fact_item, help_tip, not_found, page_html
+from orca.ui.layout import (
+    ask_attrs,
+    docs_link,
+    fact_item,
+    help_tip,
+    not_found,
+    page_html,
+)
 from orca.ui.parts import (
     CPU_HELP,
     PEAK_HELP,
@@ -123,7 +130,19 @@ def _control_html(mut h: Html, p: PipelineRow):
         '<div class="actions"><form class="action" method="post" action="',
     )
     h.text(base, "/cancel")
-    h.raw('"><label>Of <input name="partitions" placeholder="')
+    h.raw('"')
+    ask_attrs(
+        h,
+        String("Cancel the runs of ", p.name, " over {partitions}?"),
+        (
+            "Runs that are queued or waiting to be retried are cancelled, and"
+            " running ones are asked to stop before their next step. Finished"
+            " runs are left as they are."
+        ),
+        "Cancel runs",
+        "Keep them",
+    )
+    h.raw('><label>Of <input name="partitions" placeholder="')
     h.text("@all, or names" if p.kind == "keyed" else "@all, or a range")
     h.raw(
         '"></label><button type="submit">Cancel queued runs</button></form>',
@@ -780,7 +799,7 @@ def pipeline_html(
         runs_filters_html(h, db, v.runs)
         runs_done_html(h, ask.url)
         runs_bulk_html(h, v.runs)
-        runs_list(h, v.runs)
+        runs_list(h, db, v.runs)
         h.raw('<p class="more"><a href="/runs?pipeline=')
         h.text(url_encode(p.name))
         h.raw('">All its runs</a></p>')

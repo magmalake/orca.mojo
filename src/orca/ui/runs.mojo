@@ -12,8 +12,15 @@ from orca.html import Html, query_param, url_encode
 from orca.json import quote
 from orca.state import State
 from orca.system import alert_html
-from orca.ui.layout import HERE_SLOT, IDLE_EVERY, LIVE_EVERY, page_html
+from orca.ui.layout import (
+    HERE_SLOT,
+    IDLE_EVERY,
+    LIVE_EVERY,
+    ask_attrs,
+    page_html,
+)
 from orca.ui.parts import runs_table_html
+from orca.views.code import runs_code
 from orca.views.runs import (
     RUNS_PAGE,
     RunsPage,
@@ -117,14 +124,21 @@ def _runs_pager(mut h: Html, p: RunsPage):
     h.raw("</nav>")
 
 
-def _runs_list_html(mut h: Html, p: RunsPage):
-    """A runs table and its pager: what `/runs/table` answers."""
-    runs_table_html(h, p.rows, p.q.view == "list", pick=p.q.view != "home")
+def _runs_list_html(mut h: Html, mut db: State, p: RunsPage):
+    """A runs table and its pager: what `/runs/table` answers. Each row's
+    pipeline and failed step show their code on hover (`runs_code`)."""
+    runs_table_html(
+        h,
+        p.rows,
+        p.q.view == "list",
+        pick=p.q.view != "home",
+        code=runs_code(db, p.rows),
+    )
     if p.q.view != "home":
         _runs_pager(h, p)
 
 
-def runs_list(mut h: Html, p: RunsPage):
+def runs_list(mut h: Html, mut db: State, p: RunsPage):
     """A runs table and its pager, refreshed from `/runs/table` while a run
     on it is queued or running, and slowly while it's the newest page, so
     new runs join it; an older page with nothing going on stays as it is."""
@@ -139,7 +153,7 @@ def runs_list(mut h: Html, p: RunsPage):
         )
     else:
         h.raw("<div>")
-    _runs_list_html(h, p)
+    _runs_list_html(h, db, p)
     h.raw("</div>")
 
 
@@ -157,7 +171,7 @@ def runs_table(mut db: State, url: String) raises -> Page:
     the newest page says `IDLE_EVERY`, and an older one answers 286."""
     var p = runs_page(db, runs_fragment_query(url))
     var h = Html()
-    _runs_list_html(h, p)
+    _runs_list_html(h, db, p)
     var live = p.live()
     return Page(
         200 if live or p.q.first() else 286,
@@ -421,9 +435,19 @@ def runs_bulk_html(mut h: Html, p: RunsPage):
     else:
         h.raw("</span>")
         h.raw('<input type="hidden" name="expect" value="', p.total, '">')
+    h.raw('<button type="submit" name="do" value="cancel" class="danger"')
+    ask_attrs(
+        h,
+        "Cancel {runs}?",
+        (
+            "Queued and deferred ones won't start, and running ones stop before"
+            " their next step. Runs that already finished are left as they are."
+        ),
+        "Cancel runs",
+        "Keep them",
+    )
     h.raw(
-        '<button type="submit" name="do" value="cancel" class="danger">',
-        "Cancel</button>",
+        ">Cancel</button>",
         '<button type="submit" name="do" value="retry">Retry failed</button>',
         '<button type="submit" name="do" value="backfill">Backfill again',
         "</button></form>",
@@ -461,7 +485,7 @@ def runs(mut db: State, var q: RunsQuery, url: String = "") raises -> Page:
     runs_filters_html(h, db, p, pipelines)
     runs_done_html(h, url)
     runs_bulk_html(h, p)
-    runs_list(h, p)
+    runs_list(h, db, p)
     if jumped(p):
         return Page(
             303,

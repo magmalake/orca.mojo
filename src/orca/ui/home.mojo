@@ -22,6 +22,7 @@ from orca.ui.layout import IDLE_EVERY, LIVE_EVERY, page_html
 from orca.ui.parts import pause_button
 from orca.ui.runs import runs_list
 from orca.ui.viz import gantt_panel, gantt_tabs
+from orca.views.code import pipeline_srcs
 from orca.views.pipelines import PipelineRow, pipeline_coverage, pipeline_rows
 from orca.views.runs import HOME_RUNS, RunsQuery, runs_page
 from orca.watchdog import active_trips, banner_html, trips_json
@@ -93,11 +94,22 @@ def _coverage_cell(mut h: Html, p: PipelineRow, c: Optional[Coverage]):
     h.raw("</span></a></td>")
 
 
+def _srcs(mut db: State, ps: List[PipelineRow]) -> Dict[String, String]:
+    var names = List[String]()
+    for p in ps:
+        names.append(p.name)
+    return pipeline_srcs(db, names)
+
+
 def _home_pipelines(
-    mut h: Html, ps: List[PipelineRow], covs: List[Optional[Coverage]]
+    mut h: Html,
+    ps: List[PipelineRow],
+    covs: List[Optional[Coverage]],
+    srcs: Dict[String, String],
 ):
     """The home page's table of pipelines: partitions and coverage,
-    schedules, next and last runs."""
+    schedules, next and last runs. A pipeline's name shows its declaration
+    on hover (`data-src`, the page's `_PEEK`), at the registered code."""
     h.raw(
         '<section class="card"><div class="scroll"><table><thead><tr>',
         "<th>Pipeline</th><th>Partitions</th>",
@@ -107,8 +119,17 @@ def _home_pipelines(
     )
     for i in range(len(ps)):
         ref p = ps[i]
-        h.raw("<tr><td>")
-        h.link(String("/pipelines/", url_encode(p.name)), p.name)
+        h.raw('<tr><td><a href="')
+        h.text(String("/pipelines/", url_encode(p.name)))
+        h.raw('"')
+        var src = srcs.get(p.name)
+        if src:
+            h.raw(' data-src="')
+            h.text(src.value())
+            h.raw('"')
+        h.raw(">")
+        h.text(p.name)
+        h.raw("</a>")
         if p.paused:
             h.raw(" ")
             h.status("paused")
@@ -156,7 +177,7 @@ def home_pipelines(mut db: State) raises -> Page:
     run is queued or running, else `IDLE_EVERY`."""
     var ps = pipeline_rows(db)
     var h = Html()
-    _home_pipelines(h, ps, _coverages(db, ps))
+    _home_pipelines(h, ps, _coverages(db, ps), _srcs(db, ps))
     return Page(
         200,
         String(),
@@ -230,7 +251,7 @@ def home(mut db: State) raises -> Page:
             LIVE_EVERY if live else IDLE_EVERY,
             '">',
         )
-        _home_pipelines(h, ps, covs)
+        _home_pipelines(h, ps, covs, _srcs(db, ps))
         h.raw("</div>")
         gantt_panel(h)
     h.raw(
@@ -242,6 +263,6 @@ def home(mut db: State) raises -> Page:
         "</div></section>",
     )
     h.raw('<section class="card"><h2>Recent runs</h2>')
-    runs_list(h, recent)
+    runs_list(h, db, recent)
     h.raw('<p class="more"><a href="/runs">All runs</a></p></section>')
     return Page(200, j^, page_html("Pipelines", "/", h))

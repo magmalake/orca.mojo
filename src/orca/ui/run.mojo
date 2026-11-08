@@ -17,6 +17,7 @@ from orca.ui.attempt import read_log
 from orca.ui.datasets import snapshot_href
 from orca.ui.layout import (
     act_button,
+    ask_attrs,
     card_open,
     fact_item,
     fact_term,
@@ -27,6 +28,7 @@ from orca.ui.layout import (
 from orca.ui.machines import instances_html, machines_html
 from orca.ui.parts import (
     TRIES,
+    cancel_tell,
     grant_facts,
     named_code_link,
     row_actions,
@@ -94,6 +96,18 @@ def run_html(mut db: State, v: RunView, view: String = "") raises -> String:
                 "no orca command for this yet: a new run of every step",
                 danger=True,
                 step=defs[0].name,
+                ask=String("Rerun every step of run ", r.id, "?"),
+                tell=String(
+                    "A new run of ",
+                    r.pipeline,
+                    (
+                        " over the same partitions starts from its first step;"
+                        " run "
+                    ),
+                    r.id,
+                    " is kept as it is.",
+                ),
+                harm=False,
             )
     else:
         row_actions(h, r)
@@ -228,8 +242,17 @@ def _run_actions(mut h: Html, r: RunRow, steps: List[StepDef]):
             h.raw("</option>")
         h.raw('</select></label><button type="submit">Rerun</button></form>')
     if cancellable:
-        _action(h, r.id, "cancel")
-        h.raw('<button type="submit" class="danger">Cancel</button></form>')
+        h.raw('<form class="action" method="post" action="/runs/')
+        h.text(r.id)
+        h.raw('/cancel"')
+        ask_attrs(
+            h,
+            String("Cancel run ", r.id, "?"),
+            cancel_tell(r),
+            "Cancel run",
+            "Keep it",
+        )
+        h.raw('><button type="submit" class="danger">Cancel</button></form>')
     h.raw("</div>")
 
 

@@ -203,6 +203,15 @@ def attempt(mut db: State, run: Int, id: Int) raises -> Page:
             ),
             danger=True,
             step=a.step,
+            ask=String("Rerun run ", run, " from ", a.step, "?"),
+            tell=String(
+                "A new run over the same partitions starts at ",
+                a.step,
+                "; the steps before it are copied from run ",
+                run,
+                ", which is kept as it is.",
+            ),
+            harm=False,
         )
     h.raw("</h1>")
     # What changes while it runs, refreshed until it ends.
