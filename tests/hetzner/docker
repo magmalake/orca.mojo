@@ -15,6 +15,13 @@
 # PATH) answers 200, or what $FAKE/health/<name without -next> says; a
 # container started while $FAKE/exits/<name without -next> exists exits at
 # once.
+#
+# Overlapping schedulers: `run --rm ... scheduler can-overlap` prints
+# $FAKE/can-overlap (exit 0 if it says yes; "no: ..." without the file);
+# `orca scheduler wait-lead` fails while $FAKE/no-lead exists; a
+# container's hostname is h-<the name it was started with>; the instances
+# of a hostname are $FAKE/instances; `orca scheduler drain` makes
+# scheduler-old exit unless $FAKE/old-stays exists.
 echo "docker $*" >> "$FAKE/docker.log"
 echo "docker $*" >> "$FAKE/docker.all"
 touch "$FAKE/paused"
@@ -66,6 +73,25 @@ case "$all" in
                 ;;
             rm) rm -f "$(path "$3")" ;;
         esac
+        ;;
+    *"FROM orca.schedulers WHERE ended IS NULL"*) cat "$FAKE/instances" 2> /dev/null || true ;;
+    "run --rm "*" scheduler can-overlap")
+        if [ -f "$FAKE/can-overlap" ]; then cat "$FAKE/can-overlap"; else echo "no: no live scheduler instance leads"; fi
+        grep -q '^yes' "$FAKE/can-overlap" 2> /dev/null || exit 1
+        ;;
+    "exec scheduler orca scheduler wait-lead "*) [ ! -f "$FAKE/no-lead" ] || exit 1 ;;
+    "exec scheduler orca scheduler drain "*)
+        [ -f "$FAKE/old-stays" ] || [ ! -d "$C/scheduler-old" ] || echo exited > "$C/scheduler-old/status"
+        ;;
+    "exec scheduler orca scheduler status") echo "9 h:1 leading image= migrations=42 runs=0 seen=0s ago" ;;
+    "inspect -f {{.Config.Hostname}} "*)
+        d=$C/${all##* }
+        [ -d "$d" ] || exit 1
+        cat "$d/hostname"
+        ;;
+    "update --restart "*)
+        [ -d "$C/${all##* }" ] || exit 1
+        echo "$3" > "$C/${all##* }/restart"
         ;;
     *"exec scheduler orca register"*)
         [ ! -f "$FAKE/register-fails" ] || { echo "orca: no orca.toml" >&2; exit 1; }
@@ -123,6 +149,7 @@ case "$all" in
         if [ -f "$FAKE/exits/${name%-next}" ]; then echo exited; else echo running; fi > "$C/$name/status"
         printf '%s' "$labels" > "$C/$name/labels"
         echo "$aliases" > "$C/$name/aliases"
+        echo "h-$name" > "$C/$name/hostname"
         echo "fake-id-$name"
         ;;
     "start "*)

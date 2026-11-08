@@ -34,7 +34,14 @@
 #   stopped, removed and the new one renamed; a new one that isn't healthy (or exits) is removed and the
 #   old one kept, apply goes on with the others and exits non-zero, and an
 #   apply again replaces only it; deploy.sh still registers a scheduler it
-#   replaced when the UI's replacement fails.
+#   replaced when the UI's replacement fails;
+# - with OVERLAP=1 and can-overlap saying yes, a deploy that replaces the
+#   scheduler pauses nothing: the new scheduler starts beside the old one,
+#   the old one is set not to restart and renamed scheduler-old, the new one
+#   leads and registers, then the old one is asked to drain, waited for
+#   (stopped after --timeout) and removed; can-overlap says no with OVERLAP
+#   off, or with a scheduler-old still draining, and the deploy that turns
+#   OVERLAP on pauses and waits as before.
 set -eu
 cd "$(dirname "$0")/.."
 FAKE=$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner.XXXXXX")
@@ -353,6 +360,65 @@ grep -qx toy "$FAKE/paused" || fail "toy unpaused after a failed UI"
 stack apply > "$FAKE/out" 2>&1 || fail "the UI's retry"
 has "ui: replaced (image kkk1111 -> ooo5555), without downtime"
 has "scheduler: unchanged"
+stack resume > /dev/null
+
+# Overlapping schedulers (OVERLAP=1, docs/overlap.md). Off: orca.env has
+# no ORCA_OVERLAP and can-overlap says no without asking the image.
+grep -q ORCA_OVERLAP "$ORCA_CONF/orca.env" && fail "ORCA_OVERLAP with OVERLAP unset"
+stack can-overlap > "$FAKE/out" 2>&1 && fail "can-overlap with OVERLAP off"
+has "no: OVERLAP isn't 1 in stack.conf"
+# Turning it on changes the scheduler's env file: that deploy can't overlap
+# (the running one has it off), so it pauses and waits as before.
+stack configure OVERLAP=1
+: > "$FAKE/docker.log"
+deploy ppp6666 || fail "the deploy that turns OVERLAP on"
+grep -q '^ORCA_OVERLAP=on$' "$ORCA_CONF/orca.env" || fail "no ORCA_OVERLAP=on in orca.env"
+has "not overlapping the schedulers: no live scheduler instance leads"
+has "pausing the pipelines"
+grep -q 'run -d --name scheduler-next' "$FAKE/docker.log" && fail "overlapped when can-overlap said no"
+# can-overlap yes: the new scheduler beside the old one, nothing paused, the
+# old one told not to restart, renamed, asked to drain, and removed once it
+# has exited; registered from the new one, after it leads.
+echo yes > "$FAKE/can-overlap"
+echo 4 > "$FAKE/running"
+echo 7 > "$FAKE/instances"
+: > "$FAKE/docker.log"
+deploy qqq7777 || fail "an overlapping deploy"
+has "the new scheduler starts beside the old one, which drains its runs: not pausing anything"
+has "scheduler: replaced (image ppp6666 -> qqq7777), overlapping: scheduler-old drains its runs"
+has "asked scheduler instance 7 (scheduler-old) to drain"
+has "scheduler-old drained and removed"
+grep -q 'exec scheduler orca pause' "$FAKE/docker.log" && fail "an overlapping deploy paused a pipeline"
+order=$(grep -oE 'run -d --name scheduler-next|update --restart no scheduler$|rename scheduler scheduler-old|rename scheduler-next scheduler|orca scheduler wait-lead|exec scheduler orca register|orca scheduler drain 7|rm -f scheduler-old' "$FAKE/docker.log" | tr '\n' ,)
+[ "$order" = "run -d --name scheduler-next,update --restart no scheduler,rename scheduler scheduler-old,rename scheduler-next scheduler,orca scheduler wait-lead,exec scheduler orca register,orca scheduler drain 7,rm -f scheduler-old," ] \
+    || fail "the overlap's order: $order"
+grep -q 'stop .*scheduler' "$FAKE/docker.log" && fail "the old scheduler was stopped"
+[ "$(cat "$FAKE/containers/scheduler/image")" = img:qqq7777 ] || fail "scheduler runs $(cat "$FAKE/containers/scheduler/image")"
+[ ! -d "$FAKE/containers/scheduler-old" ] || fail "scheduler-old is left"
+# A drain that runs out: the old one is stopped, then removed.
+touch "$FAKE/old-stays"
+: > "$FAKE/docker.log"
+deploy --timeout 0 rrr8888 || fail "an overlapping deploy whose drain runs out"
+has "scheduler-old still runs after 0s: stopping it"
+grep -q 'stop -t 30 scheduler-old' "$FAKE/docker.log" || fail "scheduler-old wasn't stopped"
+[ ! -d "$FAKE/containers/scheduler-old" ] || fail "scheduler-old is left"
+rm "$FAKE/old-stays"
+# One still draining from before: no overlap.
+mkdir "$FAKE/containers/scheduler-old"
+echo running > "$FAKE/containers/scheduler-old/status"
+stack can-overlap > "$FAKE/out" 2>&1 && fail "can-overlap with scheduler-old still there"
+has "no: scheduler-old is still draining"
+rm -r "$FAKE/containers/scheduler-old"
+# A new scheduler that doesn't lead: apply fails, and deploy.sh says so.
+touch "$FAKE/no-lead"
+stack apply --tag sss9999 --overlap > "$FAKE/out" 2>&1 && fail "an overlap whose new scheduler doesn't lead"
+has "doesn't lead after"
+rm "$FAKE/no-lead"
+stack drain-old > /dev/null 2>&1 || fail "drain-old after the failed lead"
+stack configure OVERLAP=0
+rm "$FAKE/can-overlap" "$FAKE/instances"
+echo 0 > "$FAKE/running"
+stack apply > /dev/null 2>&1 || fail "back to OVERLAP=0"
 stack resume > /dev/null
 
 # Postgres: started once, by the first apply, and never stopped or removed.

@@ -21,6 +21,15 @@
 #   paused. On a timeout, a failed deploy or a failed registration the
 #   pipelines stay paused, and the message says how to undo it. --force
 #   skips the pause and kills the running runs.
+# - The scheduler is replaced and the stack overlaps schedulers (OVERLAP=1
+#   in stack.conf, docs/overlap.md), and orca-stack can-overlap says the new
+#   image's scheduler may start beside the old one (no migration of it
+#   raises the floor past the old binary): nothing is paused and runs go
+#   on. The apply starts the new scheduler beside the old one and waits
+#   until it leads; it registers the pipelines from the new image, then
+#   waits (up to --timeout) for the old scheduler to drain its runs and
+#   exit, and removes it (orca-stack drain-old). A rollback, --force and a
+#   dry run don't overlap.
 # - The scheduler keeps running (an app's tag only, say the census
 #   console's): nothing is paused and runs go on; it backs up and applies,
 #   and nothing needs registering (the pipelines are in the scheduler's
@@ -135,8 +144,18 @@ scheduler=0
 ! echo "$plan" | grep -q '^scheduler replace' || scheduler=1
 
 quiesced=0
+overlap=0
+if [ "$scheduler" = 1 ] && [ "$rollback" = 0 ] && [ -z "$force" ] && [ "$DRY_RUN" = 0 ]; then
+    if why=$(remote orca-stack can-overlap --tag "$tag"); then
+        overlap=1
+    else
+        log "not overlapping the schedulers: ${why#no: }"
+    fi
+fi
 if [ "$scheduler" = 0 ]; then
     log "the scheduler keeps running: not pausing anything, runs go on"
+elif [ "$overlap" = 1 ]; then
+    log "the new scheduler starts beside the old one, which drains its runs: not pausing anything"
 elif [ -n "$force" ]; then
     log "--force: not pausing; the scheduler is replaced, so running runs are killed"
 else
@@ -178,7 +197,10 @@ else
     # are applied: a scheduler it replaced is registered all the same.
     failed=0
     # shellcheck disable=SC2086
-    applied=$(remote orca-stack apply --tag "$tag" $args $all ${force:+"$force"} 2>&1) || failed=1
+    ov=
+    [ "$overlap" = 0 ] || ov=--overlap
+    # shellcheck disable=SC2086
+    applied=$(remote orca-stack apply --tag "$tag" $args $all ${force:+"$force"} $ov 2>&1) || failed=1
     echo "$applied"
     if [ "$failed" = 1 ] && ! echo "$applied" | grep -q '^scheduler: replaced'; then
         die "the deploy failed; $left"
@@ -196,6 +218,11 @@ else
         fi
     else
         log "the scheduler wasn't replaced: the pipelines stay registered as they are"
+    fi
+    if [ "$overlap" = 1 ] && echo "$applied" | grep -q '^scheduler: replaced'; then
+        log "waiting for the old scheduler to drain its runs (up to ${timeout}s)"
+        remote orca-stack drain-old --timeout "$timeout" \
+            || die "$tag is deployed and registered, but the old scheduler didn't go (ssh root@$IP orca-stack drain-old)"
     fi
     [ "$failed" = 0 ] || die "the deploy failed; $left"
 fi

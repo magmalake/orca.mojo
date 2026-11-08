@@ -300,6 +300,34 @@ pause. `--force` skips the pause and the wait and kills the running runs if
 the scheduler is replaced. `orca-stack status` shows the running runs and
 what quiesce paused.
 
+**Overlapping schedulers** (off by default; [docs/overlap.md](overlap.md)).
+With `orca-stack configure OVERLAP=1` the containers get `ORCA_OVERLAP=on`,
+and a deploy that replaces the scheduler doesn't have to pause. Step 2
+first asks `orca-stack can-overlap --tag <tag>`, which runs the new
+image's `orca scheduler can-overlap`. It says yes when the running
+scheduler leads with overlap on and the new binary's migrations don't
+raise the schema's floor past it. On yes, nothing is paused or killed:
+
+- the apply starts the new scheduler as `scheduler-next` beside the old
+  one, sets the old one's restart policy to `no` (once it has drained it
+  must not come back as the newest instance), renames it `scheduler-old`
+  and the new one `scheduler`, and waits until the new one leads (`orca
+  scheduler wait-lead`, `HEALTH_TIMEOUT`). The old one drains as soon as it
+  sees the new one: it starts nothing, and its runs go on, under its image;
+- the pipelines are registered from the new scheduler, which now alone
+  starts runs;
+- `orca-stack drain-old --timeout <--timeout>` asks the old one to drain,
+  waits for it to exit once its runs have ended, and removes it. After the
+  timeout it is stopped instead: its runs are killed, and the new
+  scheduler queues them again.
+
+On no (overlap off, a migration that raises the floor, no scheduler going,
+or a `scheduler-old` still draining from a deploy before), the deploy
+pauses and waits as above, and says why. So does the deploy that turns
+`OVERLAP` on: the scheduler it replaces has overlap off. A rollback,
+`--force` and a dry run don't overlap. `orca-stack status` lists the
+scheduler instances (`orca scheduler status`) when `OVERLAP=1`.
+
 ## Rolling back
 
 **What is kept.** Each apply that changes a tag records the tags it

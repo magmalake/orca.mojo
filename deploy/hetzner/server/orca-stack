@@ -17,6 +17,10 @@
 #   rollback [--force]                         apply the tags deployed before, and
 #                                              register the pipelines again
 #   register                                   docker exec scheduler orca register
+#   can-overlap [--tag T]                      exit 0 if the new image's scheduler may start
+#                                              beside the old one (OVERLAP=1, docs/overlap.md)
+#   drain-old [--timeout SECONDS]              ask scheduler-old to drain, wait for it to exit,
+#                                              remove it (stopped after the timeout)
 #   quiesce [--timeout SECONDS]                pause every pipeline, wait for runs to end
 #   resume                                     unpause what quiesce paused
 #   backup                                     pg_dump to s3://BUCKET/backups/pg/<time>.dump
@@ -50,8 +54,18 @@
 # 300; --health-timeout) is removed, the old one keeps serving, and apply
 # goes on with the others and then exits non-zero, saying why. The probe is
 # bash's /dev/tcp inside the container (the images are Debian, without
-# curl). The scheduler (single writer, its runs are its children) and the
-# sampler and cloudflared are replaced by stopping the old one first.
+# curl). The sampler and cloudflared are replaced by stopping the old one
+# first, and so is the scheduler, unless apply is given --overlap.
+#
+# Overlapping schedulers (OVERLAP=1 in stack.conf, ORCA_OVERLAP=on in
+# orca.env; docs/overlap.md). With --overlap (deploy.sh passes it when
+# can-overlap says yes) the new scheduler starts as scheduler-next beside
+# the old one; the old one is set not to restart and renamed scheduler-old,
+# the new one renamed scheduler, and apply waits until it leads (orca
+# scheduler wait-lead, HEALTH_TIMEOUT). The old one has seen it and drains:
+# it starts nothing and exits once its runs have ended. drain-old asks it
+# to drain, waits for that (bounded), and removes it. Runs aren't paused or
+# killed.
 #
 # Each apply that changes a tag keeps what was deployed before it:
 # $CONF/deployed has the tags the last apply started ("orca TAG", then "app
@@ -128,7 +142,7 @@ cmd_configure() {
         k=${kv%%=*}
         v=${kv#*=}
         case "$k" in
-            ORCA_IMAGE | ORCA_TAG | CLOUDFLARED_IMAGE | BUCKET | BACKUP_KEEP | GHCR_USER | CGROUPS | HEALTH_TIMEOUT) ;;
+            ORCA_IMAGE | ORCA_TAG | CLOUDFLARED_IMAGE | BUCKET | BACKUP_KEEP | GHCR_USER | CGROUPS | HEALTH_TIMEOUT | OVERLAP) ;;
             *) die "unknown setting $k" ;;
         esac
         safe "$v"
@@ -182,6 +196,8 @@ ORCA_UI_LOGIN=required
 ORCA_UI_SECURE_COOKIES=1
 ORCA_UI_TRUST_PROXY=1
 EOS
+        # Off unless OVERLAP=1: the old way, one scheduler at a time.
+        [ "$(conf_get OVERLAP)" != 1 ] || echo ORCA_OVERLAP=on
     } > "$1/orca.env"
     # An app reads the lake, not orca's database: no password. It gets the
     # UI's PostHog key as POSTHOG_KEY (the census console's analytics).
@@ -241,6 +257,7 @@ cmd_tags() {
 apply_args() {
     dbonly=0
     force=0
+    overlap=0
     all=0
     only=
     newtag=
@@ -250,6 +267,7 @@ apply_args() {
         case "$1" in
             --db-only) dbonly=1 ;;
             --force) force=1 ;;
+            --overlap) overlap=1 ;;
             --all) all=1 ;;
             --only | --tag | --app | --health-timeout)
                 [ $# -ge 2 ] || die "$1 needs a value"
@@ -456,6 +474,11 @@ EOF
             return 0
             ;;
     esac
+    if [ "$a_name" = scheduler ] && [ "$overlap" = 1 ] \
+        && [ "$(docker inspect -f '{{.State.Running}}' scheduler 2> /dev/null)" = true ]; then
+        overlap_scheduler "$a_spec" "$a_args" "$a_files" "$a_why" "$@"
+        return 0
+    fi
     if [ "$a_health" != - ] && [ "$(docker inspect -f '{{.State.Running}}' "$a_name" 2> /dev/null)" = true ]; then
         # Beside the old one, as NAME-next: Docker's DNS doesn't give it out
         # for NAME until it's healthy and has the alias (a client resolving
@@ -495,6 +518,34 @@ EOF
         --label "orca.stack.args=$a_args" --label "orca.stack.files=$a_files" "$@" > /dev/null
     echo "$a_name: replaced ($a_why)"
     replaced="$replaced $a_name"
+}
+
+# overlap_scheduler SPEC ARGS FILES WHY RUNARGS...: the new scheduler
+# beside the old one (docs/overlap.md). The old one must not come back
+# once it has drained and exited (a restart would be the newest instance,
+# and take the lead back), so its restart policy goes first.
+overlap_scheduler() {
+    o_spec=$1
+    o_args=$2
+    o_files=$3
+    o_why=$4
+    shift 4
+    docker inspect scheduler-old > /dev/null 2>&1 && die "scheduler-old is still draining from a deploy before (orca-stack drain-old)"
+    docker rm -f scheduler-next > /dev/null 2>&1 || true
+    docker run -d --name scheduler-next --restart always \
+        --label "orca.stack.spec=$o_spec" --label "orca.stack.args=$o_args" \
+        --label "orca.stack.files=$o_files" "$@" > /dev/null
+    docker update --restart no scheduler > /dev/null
+    docker rename scheduler scheduler-old
+    docker rename scheduler-next scheduler
+    if ! docker exec scheduler orca scheduler wait-lead --timeout "$htimeout" > /dev/null 2>&1; then
+        echo "scheduler: replaced ($o_why), overlapping, but the new one doesn't lead after ${htimeout}s; scheduler-old drains all the same (docker logs scheduler)" >&2
+        unhealthy="$unhealthy scheduler"
+        replaced="$replaced scheduler"
+        return 0
+    fi
+    echo "scheduler: replaced ($o_why), overlapping: scheduler-old drains its runs"
+    replaced="$replaced scheduler"
 }
 
 # probe CONTAINER PORT PATH: the HTTP status the container answers on its own
@@ -603,8 +654,8 @@ cmd_apply() {
         PLAN=$CONF/plan
         : > "$PLAN"
         containers plan_one
-        # Only the scheduler's restart kills runs.
-        if grep -q '^scheduler replace ' "$PLAN" && [ "$force" = 0 ] && [ "$(running_runs)" -gt 0 ]; then
+        # Only the scheduler's restart kills runs (not an overlap's).
+        if grep -q '^scheduler replace ' "$PLAN" && [ "$force" = 0 ] && [ "$overlap" = 0 ] && [ "$(running_runs)" -gt 0 ]; then
             why=$(plan_why scheduler)
             rm -f "$PLAN" "$APPS"
             die "$(running_runs) run(s) running; restarting the scheduler ($why) kills them (pause the pipelines and wait, or --force)"
@@ -696,9 +747,81 @@ cmd_rollback() {
     echo "orca-stack: rolled back to $(cmd_tags); orca-stack rollback again goes forward to $(cmd_tags --previous)"
 }
 
+# can-overlap [--tag T]: whether the image at T (the conf's tag without
+# it) may start its scheduler beside the running one: OVERLAP=1, the
+# scheduler running, none draining from a deploy before, and the new
+# binary's `orca scheduler can-overlap` (a migration that raises the floor
+# says no). Prints "yes" or "no: why"; exit 0 or 1.
+cmd_can_overlap() {
+    t=$(conf_get ORCA_TAG)
+    if [ "${1:-}" = --tag ]; then
+        [ $# -ge 2 ] || die "--tag needs a value"
+        t=$2
+    fi
+    safe "$t"
+    [ "$(conf_get OVERLAP)" = 1 ] || { echo "no: OVERLAP isn't 1 in stack.conf"; return 1; }
+    [ "$(docker inspect -f '{{.State.Running}}' scheduler 2> /dev/null)" = true ] \
+        || { echo "no: no scheduler is running"; return 1; }
+    ! docker inspect scheduler-old > /dev/null 2>&1 \
+        || { echo "no: scheduler-old is still draining (orca-stack drain-old)"; return 1; }
+    image=$(conf_get ORCA_IMAGE)
+    login
+    pull "$image:$t"
+    if out=$(docker run --rm --network orca --env-file "$CONF/orca.env" "$image:$t" scheduler can-overlap 2>&1); then
+        echo "$out"
+        return 0
+    fi
+    case "$out" in
+        no:*) echo "$out" ;;
+        *) echo "no: the new image's orca scheduler can-overlap failed: $(echo "$out" | tail -n 1)" ;;
+    esac
+    return 1
+}
+
+# drain-old [--timeout SECONDS]: asks scheduler-old's instances to drain
+# (they do once they see the new one; this says so in their rows too),
+# waits up to the timeout (3600) for the container to exit, then stops it if
+# it hasn't (its runs are killed, and the new scheduler queues them again)
+# and removes it.
+cmd_drain_old() {
+    timeout=3600
+    if [ "${1:-}" = --timeout ]; then
+        [ $# -ge 2 ] || die "--timeout needs a value"
+        timeout=$2
+    fi
+    case "$timeout" in "" | *[!0-9]*) die "the timeout is a number of seconds, not '$timeout'" ;; esac
+    docker inspect scheduler-old > /dev/null 2>&1 || { echo "orca-stack: no scheduler-old: nothing drains"; return 0; }
+    host=$(docker inspect -f '{{.Config.Hostname}}' scheduler-old 2> /dev/null) || host=
+    safe "$host"
+    for id in $(psql_q "SELECT id FROM orca.schedulers WHERE ended IS NULL AND host = '$host' ORDER BY id" 2> /dev/null); do
+        docker exec scheduler orca scheduler drain "$id" > /dev/null 2>&1 || true
+        echo "orca-stack: asked scheduler instance $id (scheduler-old) to drain"
+    done
+    t=0
+    while [ "$(docker inspect -f '{{.State.Running}}' scheduler-old 2> /dev/null)" = true ]; do
+        if [ "$t" -ge "$timeout" ]; then
+            echo "orca-stack: scheduler-old still runs after ${timeout}s: stopping it; the new scheduler queues its runs again"
+            docker stop -t 30 scheduler-old > /dev/null
+            break
+        fi
+        if [ $((t % 60)) -eq 0 ]; then
+            echo "orca-stack: waiting for scheduler-old's runs:"
+            psql_q "SELECT '  run ' || r.id || ' ' || r.pipeline || ' ' || r.partitions || ', running ' || date_trunc('second', now() - r.started) FROM orca.runs r JOIN orca.schedulers s ON s.id = r.instance WHERE r.status = 'running' AND s.host = '$host' ORDER BY r.id" 2> /dev/null || true
+        fi
+        sleep 5
+        t=$((t + 5))
+    done
+    docker rm -f scheduler-old > /dev/null
+    echo "orca-stack: scheduler-old drained and removed"
+}
+
 cmd_status() {
     docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
     echo "running runs: $(running_runs)"
+    if [ "$(conf_get OVERLAP)" = 1 ]; then
+        echo "scheduler instances:"
+        docker exec scheduler orca scheduler status 2> /dev/null | sed 's/^/  /' || true
+    fi
     echo "tag: $(conf_get ORCA_TAG)   applied: $(cat "$STATE/applied" 2> /dev/null || echo never)"
     echo "deployed: $(cmd_tags)   before: $(cmd_tags --previous)"
     [ ! -f "$STATE/paused-by-quiesce" ] || echo "paused by quiesce: $(tr '\n' ' ' < "$STATE/paused-by-quiesce")"
@@ -884,11 +1007,13 @@ case "$sub" in
     tags) cmd_tags "$@" ;;
     rollback) cmd_rollback "$@" ;;
     register) cmd_register ;;
+    can-overlap) cmd_can_overlap "$@" ;;
+    drain-old) cmd_drain_old "$@" ;;
     quiesce) cmd_quiesce "$@" ;;
     resume) cmd_resume ;;
     backup) cmd_backup ;;
     backup-now) cmd_backup_now ;;
     list-backups) cmd_list_backups ;;
     restore) cmd_restore "$@" ;;
-    *) die "usage: orca-stack configure|app|apply|plan|status|tags|rollback|register|quiesce|resume|backup|list-backups|restore" ;;
+    *) die "usage: orca-stack configure|app|apply|plan|status|tags|rollback|register|can-overlap|drain-old|quiesce|resume|backup|list-backups|restore" ;;
 esac
