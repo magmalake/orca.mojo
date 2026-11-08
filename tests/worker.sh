@@ -9,7 +9,8 @@
 #   heartbeats reach Postgres through the UI's API; Ops and the run's page
 #   say where they ran;
 # - killing the worker (its exact pid) stops its runs' processes, and the
-#   scheduler requeues the runs once their heartbeats are stale;
+#   scheduler requeues the runs once their heartbeats are stale, saying its
+#   worker stopped;
 # - a token for another pool can neither claim them nor make their store
 #   calls, a revoked token is refused, and a worker of another image is
 #   given nothing and the runs say why;
@@ -161,7 +162,11 @@ until_ 10 "run $r1's process outlived its worker" sh -c "! kill -0 $p1 2> /dev/n
 until_ 10 "run $r2's process outlived its worker" sh -c "! kill -0 $p2 2> /dev/null"
 until_ 30 "the runs weren't requeued: $(q "SELECT id, status, heartbeat, held FROM orca.runs")" \
     is "SELECT count(*) FROM orca.runs WHERE status = 'queued' AND starts = 1 AND held = 'held: waiting for a worker of pool t'" 2
-grep -q "requeued .* runs of wk for pool t" build/worker-sched.out || fail "the scheduler didn't say so"
+# Its worker is gone, so each is queued again whatever its trigger, audited.
+[ "$(grep -c "^requeued run [0-9]* of wk for pool t: worker laptop (token $wid) stopped" build/worker-sched.out)" = 2 ] \
+    || fail "the scheduler didn't say so: $(grep requeued build/worker-sched.out)"
+is "SELECT count(*) FROM orca.audit WHERE action = '/api/worker/requeue' AND run IN ($r1, $r2)" 2 \
+    || fail "the requeues' audit: $(q "SELECT * FROM orca.audit")"
 
 # Refused: another pool's token for pool t, a revoked token, and a worker
 # of another pool or image is given nothing.
