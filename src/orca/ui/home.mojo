@@ -6,6 +6,7 @@ from.
 
 from postgres import Params
 
+from orca.admission import held_warning, row_json, scheduler_pressure
 from orca.api.pipelines import json_pipeline
 from orca.api.runs import json_runs
 from orca.chart import DayRuns, runs_chart
@@ -133,10 +134,16 @@ def home(mut db: State) raises -> Page:
     var per_day = _runs_per_day(db, 30)
     var fleet = fleet_summary(db)
     var alerts = warnings(system_now(db))
+    var pressure = scheduler_pressure(db)
+    var held = held_warning(pressure)
+    if held:
+        alerts.append(held)
     var trips = active_trips(db)
     var j = String(
         '{"warnings": ',
         warnings_json(alerts),
+        ', "memory_pressure": ',
+        row_json(pressure),
         ', "watchdog": ',
         trips_json(trips),
         ', "pipelines": [',

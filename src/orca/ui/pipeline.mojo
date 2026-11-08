@@ -300,9 +300,11 @@ def _progress_html(
             "Waiting",
             "waiting",
             (
-                "Its next run waits for room on its host: what it asks for at"
-                " least (cpus, memory_gb in orca.toml) is more than the"
-                " running runs weren't granted, less the host's reserve."
+                "Its next run waits on its host: for room, when what it asks"
+                " for at least (cpus, memory_gb in orca.toml) is more than the"
+                " running runs weren't granted, less the host's reserve; or"
+                " for the host's memory pressure to ease"
+                " (ORCA_ADMIT_MEMORY_PRESSURE)."
             ),
             "runners",
         )

@@ -171,7 +171,7 @@ want '^orca_runs_started_last_hour 2$'
 want '^orca_errors_last_hour\{kind="runs"\} 1$'
 want '^orca_errors_last_hour\{kind="step_attempts"\} [1-9]'
 # Every sample line is `name{labels} value`, every name has its TYPE.
-echo "$metrics" | grep -v '^#' | grep -vE '^[a-z_]+(\{[a-z_]+="[^"]*"\})? -?[0-9.]+$' && fail "a malformed line in /metrics"
+echo "$metrics" | grep -v '^#' | grep -vE '^[a-z_][a-z0-9_]*(\{[a-z_]+="[^"]*"\})? -?[0-9.]+$' && fail "a malformed line in /metrics"
 for n in $(echo "$metrics" | grep -v '^#' | sed 's/[{ ].*//' | sort -u); do
     echo "$metrics" | grep -qxF "# TYPE $n gauge" || fail "no TYPE for $n"
 done

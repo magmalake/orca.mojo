@@ -48,15 +48,24 @@ from std.ffi import c_int, external_call
 from std.os import getenv, makedirs, remove
 from std.os.path import exists
 from std.sys.info import CompilationTarget, num_logical_cores
-from std.time import sleep
+from std.time import perf_counter_ns, sleep
 
 from json import Value
 
+from orca.admission import Report
 from orca.cgroup import Cgroups, Contained, MemoryKnobs, put as put_cgroup
 from orca.cgroup import start_limit_mb
 from orca.control import fetch_secret
 from orca.http_store import Body, StateApi
 from orca.logs import run_dir
+from orca.pressure import (
+    Admission,
+    Source,
+    find_source,
+    pct_text,
+    pressure_env,
+    read_psi,
+)
 from orca.proc import Reaped, reap, spawn
 from orca.resources import host_room, run_env as grant_env
 from orca.sample import _hostname, _sysctl_u64, parse_meminfo, tree_usage
@@ -130,6 +139,10 @@ struct Worker(Movable):
     var meters: Dict[Int, Meter]
     """The runs' processes' samples, by pid, sent when each ends
     (`orca.usage`)."""
+    var psi: Source
+    """Where this host's memory pressure is read from (`orca.pressure`)."""
+    var admission: Admission
+    """Whether this worker claims runs for its host's memory pressure."""
     var cgroups: Cgroups
     """Where the runs' cgroups go (`orca.cgroup`), or why they don't."""
     var contained: Dict[Int, Contained]
@@ -162,6 +175,8 @@ struct Worker(Movable):
         self.running = Dict[Int, _Running]()
         self.keeping = Dict[Int, String]()
         self.meters = Dict[Int, Meter]()
+        self.psi = find_source()
+        self.admission = Admission.from_env()
         self.cgroups = Cgroups.off("off: not serving")
         self.contained = Dict[Int, Contained]()
         self.unswept = List[String]()
@@ -192,7 +207,7 @@ struct Worker(Movable):
             )
             return
         # Its own variables and its grant of this host (orca.resources).
-        var env = grant_env(spec.env, spec.grant)
+        var env = grant_env(spec.env, spec.grant, pressure_env(self.psi))
         var names = String()
         for s in spec.secrets:
             env.append(String(s[0], "=", fetch_secret(s[1])))
@@ -373,6 +388,21 @@ struct Worker(Movable):
             "MB (ORCA_RESERVE_CPUS, ORCA_RESERVE_MEMORY_MB)",
             flush=True,
         )
+        if not self.psi:
+            print(
+                "orca worker: no memory pressure to read here (no PSI);",
+                " runs are claimed on --max-runs and grants alone",
+                sep="",
+                flush=True,
+            )
+        else:
+            print(
+                "orca worker: memory pressure from",
+                self.psi.describe(),
+                "- claims nothing while some avg10 is over",
+                String(pct_text(self.admission.limit), "%"),
+                flush=True,
+            )
         self.room_mb = room.memory_mb
         self.cgroups = Cgroups.setup(MemoryKnobs.from_env())
         print("orca worker: run cgroups", self.cgroups.why, flush=True)
@@ -392,6 +422,35 @@ struct Worker(Movable):
                 self.unswept = left^
             self._sample()
             var slots = self.max_runs - len(self.running)
+            # Memory pressure (orca.pressure): no claim while this host is
+            # over the limit, but one at a time once a hold has lasted its
+            # grace with none of its runs going.
+            var now = Float64(Int(perf_counter_ns())) / 1e9
+            var idle = len(self.running) == 0
+            var was = self.admission.held()
+            if self.psi:
+                self.admission.observe(read_psi(self.psi.path), now, idle)
+            var allowed = self.admission.allows(idle)
+            if allowed == 0:
+                slots = 0
+            elif allowed > 0:
+                slots = min(slots, allowed)
+            if self.admission.held() and not was:
+                print(
+                    "orca worker:",
+                    self.admission.hold,
+                    "- claiming no runs",
+                    flush=True,
+                )
+            elif was and not self.admission.held():
+                print("orca worker: memory pressure eased", flush=True)
+            if self.admission.stuck:
+                print(
+                    "orca worker: memory pressure held past",
+                    Int(self.admission.grace),
+                    "s with none of its runs going: one at a time",
+                    flush=True,
+                )
             var got: Value
             try:
                 got = self._post(
@@ -403,7 +462,11 @@ struct Worker(Movable):
                     .int("cpus", Int64(cpus))
                     .int("memory_mb", Int64(mem))
                     .int("room_cpus", Int64(room.cpus))
-                    .int("room_memory_mb", Int64(room.memory_mb)),
+                    .int("room_memory_mb", Int64(room.memory_mb))
+                    .raw(
+                        "pressure",
+                        Report.of(self.psi, self.admission, now).json(),
+                    ),
                 )
             except e:
                 var msg = String(e)

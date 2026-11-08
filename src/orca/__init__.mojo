@@ -44,6 +44,7 @@ from orca.pipeline import (
     RunResult,
     StepRun,
 )
+from orca.pressure import Psi, Stall, memory_pressure
 from orca.resources import Grant, auto_count
 from orca.schedule import (
     Cron,

@@ -479,6 +479,7 @@ def _command(args: List[String], target: String) raises -> Int:
         return 0
     if cmd == "scheduler" and len(args) == 2:
         var s = Scheduler(url)
+        s.say_pressure()
         s.contain()
         while True:
             # A tick that fails (the database is down) is tried again; the
