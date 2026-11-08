@@ -216,6 +216,43 @@ arguments says what an apply would do (`ui replace image ac0c766 ->
 b2b9558`) and changes nothing; `apply --all` replaces every container, as
 `apply` did before, and `apply --only console` that one alone.
 
+**The UI and the apps without downtime.** The tunnel reaches them by name
+on the `orca` network (`http://ui:8270`, `http://console:8080`), so
+`apply` replaces them side by side instead of stopping them first:
+
+1. it starts the new container as `ui-next` (or `console-next`) on the
+   `orca` network, where nothing resolves `ui` to it yet;
+2. waits until it's healthy: for the UI, 200 on `/healthz` (answered once
+   the database does, without a login) and, if `ORCA_WORKER_ADDR` is set in
+   `settings.env`, an answer on the worker API's port; for an app, 200 on
+   its check path, `/` unless `orca-stack app NAME PORT CHECK` says
+   otherwise (the census console answers 503 while it warms up, so 200 on
+   `/` means it has read the lake);
+3. gives it the alias `ui` (a reconnect to the network, as Docker only
+   gives aliases on connecting) and checks it again; Docker's DNS now
+   answers `ui` with both containers;
+4. stops the old one with `docker stop -t 10` (ten seconds for the requests
+   in flight), removes it, and renames `ui-next` to `ui`.
+
+cloudflared resolves the name for each new connection, so traffic moves
+over without it restarting, and the worker API's listener, in the same
+container, moves with the UI. The check is made inside the container with
+bash's `/dev/tcp` (the images are Debian without curl). A new container
+that isn't healthy within `HEALTH_TIMEOUT` seconds (`orca-stack configure
+HEALTH_TIMEOUT=600`; default 300; `apply --health-timeout` for one apply),
+or that exits, is removed and the old one keeps serving; `apply` goes on
+with the other containers, then exits non-zero saying which one and why,
+with the end of its log, and an `apply` again tries only that one. A
+container that isn't running is simply started. The scheduler is not
+replaced this way: it's the single writer of scheduling decisions and its
+runs are its children, so two at once would start runs twice ([#232](https://github.com/magmalake/orca.mojo/issues/232)). The
+sampler and cloudflared are stopped and started as before.
+
+Checked against real Docker (colima): with a loop of requests to `ui` and
+`console` from a container on the network, a new connection each 50 ms,
+an apply that replaced both (the console warming up for 8 s) and one whose
+new containers never became healthy saw no failed request.
+
 **The scheduler.** Restarting it kills running runs, so `apply` refuses,
 while runs are running, only when the scheduler is to be replaced (`--force`
 kills them). `deploy.sh` asks for the plan first, and does the safe
@@ -252,8 +289,11 @@ console=<sha>`) backs up and replaces the console, and nothing is paused,
 killed or registered. A deploy of what already runs does nothing: no
 backup, and every container is kept.
 
-On a timeout, a failed apply or a failed registration it stops, with the
-pipelines still paused if it paused them, and says so (after a failed
+If a new UI or app isn't healthy, the apply fails after the rest is
+applied: a scheduler it replaced is registered all the same, the pipelines
+stay paused, and `orca-stack apply` then `orca-stack resume` finish it once
+the cause is fixed. On a timeout, a failed apply or a failed registration
+it stops, with the pipelines still paused if it paused them, and says so (after a failed
 registration: fix it, then `orca-stack register` and `orca-stack resume`,
 or `./deploy.sh --rollback`); `ssh root@<ip> orca-stack resume` undoes the
 pause. `--force` skips the pause and the wait and kills the running runs if
@@ -301,8 +341,9 @@ registering, with runs running or not:
 ssh root@<ip> orca-stack apply --app console=<sha>
 ```
 
-`./deploy.sh <the orca tag that runs> console=<sha>` does the same with a
-backup first, and so does `./deploy.sh --rollback` when the deploy before
+The console is replaced without downtime (above), as on a deploy, so a
+rollback of it is invisible to readers too. `./deploy.sh <the orca tag that
+runs> console=<sha>` does the same with a backup first, and so does `./deploy.sh --rollback` when the deploy before
 changed only the console: its plan keeps the scheduler, so nothing is
 paused, and `orca-stack rollback` registers the pipelines only when it
 replaced the scheduler.

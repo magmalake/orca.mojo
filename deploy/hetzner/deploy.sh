@@ -27,6 +27,11 @@
 #   image, which didn't change).
 # - Nothing is replaced: no backup, and the apply keeps every container.
 #
+# The UI and the apps are replaced without downtime (orca-stack starts the
+# new one beside the old and waits until it's healthy). One that never is
+# fails the deploy after the rest is applied, the old one still serving; a
+# scheduler it replaced is registered first, and the pipelines stay paused.
+#
 # Before it applies anything that replaces a container it backs the
 # database up (orca-stack backup-now, to s3://BUCKET/backups/pg/<time>.dump,
 # with <time>.paused beside it: the pipelines paused by hand and the ones
@@ -169,12 +174,15 @@ if [ "$rollback" = 1 ]; then
         || die "the rollback failed; $left"
 else
     log "deploying $tag"
+    # A new UI or app that isn't healthy fails the apply after the others
+    # are applied: a scheduler it replaced is registered all the same.
+    failed=0
     # shellcheck disable=SC2086
-    applied=$(remote orca-stack apply --tag "$tag" $args $all ${force:+"$force"} 2>&1) || {
-        echo "$applied"
-        die "the deploy failed; $left"
-    }
+    applied=$(remote orca-stack apply --tag "$tag" $args $all ${force:+"$force"} 2>&1) || failed=1
     echo "$applied"
+    if [ "$failed" = 1 ] && ! echo "$applied" | grep -q '^scheduler: replaced'; then
+        die "the deploy failed; $left"
+    fi
     # The pipelines are in the scheduler's image: registered again when it
     # was replaced.
     if echo "$applied" | grep -q '^scheduler: replaced' || { [ "$DRY_RUN" = 1 ] && [ "$scheduler" = 1 ]; }; then
@@ -189,6 +197,7 @@ else
     else
         log "the scheduler wasn't replaced: the pipelines stay registered as they are"
     fi
+    [ "$failed" = 0 ] || die "the deploy failed; $left"
 fi
 if [ "$quiesced" = 1 ]; then
     log "unpausing the pipelines it paused"

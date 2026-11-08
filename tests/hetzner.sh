@@ -26,7 +26,15 @@
 # - deploy.sh pauses, waits and registers only when the plan replaces the
 #   scheduler: a console-only deploy backs up and replaces the console and
 #   nothing else, a deploy of what runs does nothing; an app-only rollback
-#   goes on over running runs and registers nothing.
+#   goes on over running runs and registers nothing;
+# - the UI and the apps are replaced without downtime: the new one starts as
+#   NAME-next, is probed until healthy (the UI's /healthz, its worker
+#   listener if ORCA_WORKER_ADDR is set, an app's check path), only then
+#   gets the alias NAME and is probed again, and only then is the old one
+#   stopped, removed and the new one renamed; a new one that isn't healthy (or exits) is removed and the
+#   old one kept, apply goes on with the others and exits non-zero, and an
+#   apply again replaces only it; deploy.sh still registers a scheduler it
+#   replaced when the UI's replacement fails.
 set -eu
 cd "$(dirname "$0")/.."
 FAKE=$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner.XXXXXX")
@@ -144,7 +152,7 @@ deploy --rollback || fail "deploy.sh --rollback"
 has "previous tag orca ccc3333, console ddd4444, new tag bbb2222; backup s3://bkt/backups/pg/"
 has "orca-stack: registered toy"
 [ "$(stack tags)" = bbb2222 ] || fail "tags after the rollback: $(stack tags)"
-grep -q '^console 8080 -$' "$ORCA_CONF/apps" || fail "the console doesn't follow the orca tag: $(cat "$ORCA_CONF/apps")"
+grep -q '^console 8080 - /$' "$ORCA_CONF/apps" || fail "the console doesn't follow the orca tag: $(cat "$ORCA_CONF/apps")"
 grep -q 'exec scheduler orca register' "$FAKE/docker.log" || fail "not registered"
 [ "$(grep -n 'exec scheduler orca register\|unpause toy' "$FAKE/docker.log" | head -1 | grep -c register)" = 1 ] \
     || fail "unpaused before registering"
@@ -263,6 +271,87 @@ has "the scheduler kept running, so the pipelines stay registered as they are"
 grep -q 'orca register\|orca pause\|run -d --name scheduler' "$FAKE/docker.log" && fail "an app-only rollback touched the scheduler"
 [ "$(stack tags)" = "orca eee5555, console hhh8888" ] || fail "tags after an app-only rollback: $(stack tags)"
 echo 0 > "$FAKE/running"
+
+# Without downtime: the UI's and the apps' new container starts beside the
+# old one, as NAME-next; once it's healthy it gets the alias NAME (a
+# reconnect) and is checked again, and only then is the old one stopped.
+: > "$FAKE/docker.log"
+deploy kkk1111 || fail "deploy.sh kkk1111"
+has "ui: replaced (image eee5555 -> kkk1111), without downtime"
+has "scheduler: replaced (image eee5555 -> kkk1111)"
+has "console: unchanged"
+order=$(grep -oE 'run -d --name ui-next|probe ui-next|network disconnect orca ui-next|network connect --alias ui orca ui-next|stop -t 10 ui$|rm -f ui$|rename ui-next ui$' "$FAKE/docker.log" | tr '\n' ,)
+[ "$order" = "run -d --name ui-next,probe ui-next,network disconnect orca ui-next,network connect --alias ui orca ui-next,probe ui-next,stop -t 10 ui,rm -f ui,rename ui-next ui," ] \
+    || fail "the UI's replacement order: $order"
+grep -q 'run -d --name ui-next.*--network-alias' "$FAKE/docker.log" && fail "ui-next had the alias ui before it was healthy"
+grep -q '^probe ui-next 8270 /healthz$' "$FAKE/docker.log" || fail "the UI's probe isn't /healthz on 8270"
+grep -q 'stop -t 10 scheduler\|run -d --name scheduler-next' "$FAKE/docker.log" && fail "the scheduler was replaced side by side"
+[ ! -d "$FAKE/containers/ui-next" ] || fail "ui-next is left"
+[ "$(cat "$FAKE/containers/ui/image")" = img:kkk1111 ] || fail "ui runs $(cat "$FAKE/containers/ui/image")"
+grep -qw ui "$FAKE/containers/ui/aliases" || fail "the new ui has no alias ui"
+# An app, by its check path.
+stack app console 8080 /ready
+: > "$FAKE/docker.log"
+stack apply --app console=lll2222 > "$FAKE/out" 2>&1 || fail "the console's apply"
+has "console: replaced (image hhh8888 -> lll2222), without downtime"
+grep -q '^probe console-next 8080 /ready$' "$FAKE/docker.log" || fail "the console's probe isn't /ready on 8080"
+[ "$(grep -n 'exec console-next bash\|stop -t 10 console$' "$FAKE/docker.log" | head -1 | grep -c exec)" = 1 ] \
+    || fail "the old console was stopped before the new one was healthy"
+
+# A new console that answers 503 (warming up, for good): removed, the old
+# one keeps serving, the others are applied, and apply fails saying why.
+mkdir -p "$FAKE/health" "$FAKE/exits"
+echo 503 > "$FAKE/health/console"
+echo ORCA_TEST_SETTING=2 >> "$ORCA_CONF/settings.env"
+: > "$FAKE/docker.log"
+stack apply --app console=mmm3333 --health-timeout 0 > "$FAKE/out" 2>&1 && fail "an apply whose console wasn't healthy"
+has "console: not replaced: the new container answered 503 on :8080/ready (wants 200) after 0s; the old one keeps serving"
+has "fake log of console-next"
+has "not replaced: console, whose new container wasn't healthy"
+has "ui: replaced (settings: its env file changed), without downtime"
+[ ! -d "$FAKE/containers/console-next" ] || fail "console-next is left"
+[ "$(cat "$FAKE/containers/console/image")" = img:lll2222 ] || fail "the old console was replaced: $(cat "$FAKE/containers/console/image")"
+[ "$(cat "$FAKE/containers/console/status")" = running ] || fail "the old console was stopped"
+grep -q 'stop -t 10 console$' "$FAKE/docker.log" && fail "the old console was stopped"
+# Healthy again: an apply again replaces only the console.
+rm "$FAKE/health/console"
+stack apply > "$FAKE/out" 2>&1 || fail "an apply again"
+has "console: replaced (image lll2222 -> mmm3333), without downtime"
+for c in scheduler ui sampler; do has "$c: unchanged"; done
+# One that exits at once fails without waiting out the timeout.
+touch "$FAKE/exits/console"
+stack apply --app console=nnn4444 > "$FAKE/out" 2>&1 && fail "an apply whose console exited"
+has "console: not replaced: the new container stopped (exited, exit code 1)"
+[ "$(cat "$FAKE/containers/console/image")" = img:mmm3333 ] || fail "the console was replaced by one that exited"
+rm "$FAKE/exits/console"
+stack apply --app console=mmm3333 > /dev/null 2>&1 || fail "back to mmm3333"
+
+# The worker API's listener (ORCA_WORKER_ADDR) moves with the UI and is
+# probed too.
+echo ORCA_WORKER_ADDR=0.0.0.0:8271 >> "$ORCA_CONF/settings.env"
+: > "$FAKE/docker.log"
+stack apply > "$FAKE/out" 2>&1 || fail "apply with ORCA_WORKER_ADDR"
+grep -q '^probe ui-next 8271 /$' "$FAKE/docker.log" || fail "the worker listener wasn't probed"
+has "ui: replaced (settings: its env file changed), without downtime"
+
+# deploy.sh: a UI that isn't healthy after the scheduler was replaced: the
+# pipelines are registered from the new image, stay paused, and it says so.
+echo 503 > "$FAKE/health/ui"
+stack configure HEALTH_TIMEOUT=0
+: > "$FAKE/docker.log"
+deploy ooo5555 && fail "a deploy whose UI wasn't healthy"
+rm "$FAKE/health/ui"
+stack configure HEALTH_TIMEOUT=300
+has "not replaced: ui"
+has "registering the pipelines from ooo5555"
+grep -q 'exec scheduler orca register' "$FAKE/docker.log" || fail "a replaced scheduler wasn't registered"
+has "the deploy failed; the pipelines stay paused"
+grep -qx toy "$FAKE/paused" || fail "toy unpaused after a failed UI"
+[ "$(cat "$FAKE/containers/ui/image")" = img:kkk1111 ] || fail "the old UI wasn't kept: $(cat "$FAKE/containers/ui/image")"
+stack apply > "$FAKE/out" 2>&1 || fail "the UI's retry"
+has "ui: replaced (image kkk1111 -> ooo5555), without downtime"
+has "scheduler: unchanged"
+stack resume > /dev/null
 
 # Postgres: started once, by the first apply, and never stopped or removed.
 [ "$(grep -c 'run -d --name postgres' "$FAKE/docker.all")" = 1 ] || fail "Postgres was started more than once"

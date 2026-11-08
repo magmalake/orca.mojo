@@ -3,8 +3,11 @@
 # as /usr/local/sbin/orca-stack; the other scripts call it over ssh).
 #
 #   configure [--keep-existing] KEY=VALUE...   stack settings (/etc/orca/stack.conf)
-#   app NAME PORT                              an app beside the UI (the census console)
+#   app NAME PORT [CHECK]                      an app beside the UI (the census console);
+#                                              CHECK: the path that answers 200 once it's
+#                                              ready (default /)
 #   apply [--db-only] [--force] [--all | --only NAME] [--tag T] [--app NAME=T]...
+#         [--health-timeout SECONDS]
 #                                              pull the images, start again the containers
 #                                              whose image or settings changed
 #   plan [--rollback | apply's arguments]      what apply would start again, and why;
@@ -33,6 +36,22 @@
 # scheduler is to be replaced (its restart kills them), unless --force.
 # --all starts every container again (Postgres excepted); --only NAME only
 # that one. Postgres is created once and never restarted by apply.
+#
+# The UI and the apps are replaced without downtime: the new one starts as
+# NAME-next on the orca network, apply waits until it's healthy (the UI:
+# 200 on /healthz, and its worker API listener answering if
+# ORCA_WORKER_ADDR is set; an app: 200 on its CHECK path, not the census
+# console's warming-up 503), gives it the alias NAME (Docker's DNS then
+# answers NAME with both) and checks it again, then stops the old one
+# (docker stop -t 10, for requests in flight), removes it and renames
+# NAME-next to NAME. cloudflared resolves NAME for each new
+# connection, so traffic moves over without it restarting. A new container
+# that isn't healthy within HEALTH_TIMEOUT seconds (stack.conf, default
+# 300; --health-timeout) is removed, the old one keeps serving, and apply
+# goes on with the others and then exits non-zero, saying why. The probe is
+# bash's /dev/tcp inside the container (the images are Debian, without
+# curl). The scheduler (single writer, its runs are its children) and the
+# sampler and cloudflared are replaced by stopping the old one first.
 #
 # Each apply that changes a tag keeps what was deployed before it:
 # $CONF/deployed has the tags the last apply started ("orca TAG", then "app
@@ -109,7 +128,7 @@ cmd_configure() {
         k=${kv%%=*}
         v=${kv#*=}
         case "$k" in
-            ORCA_IMAGE | ORCA_TAG | CLOUDFLARED_IMAGE | BUCKET | BACKUP_KEEP | GHCR_USER | CGROUPS) ;;
+            ORCA_IMAGE | ORCA_TAG | CLOUDFLARED_IMAGE | BUCKET | BACKUP_KEEP | GHCR_USER | CGROUPS | HEALTH_TIMEOUT) ;;
             *) die "unknown setting $k" ;;
         esac
         safe "$v"
@@ -120,13 +139,23 @@ cmd_configure() {
     done
 }
 
-# /etc/orca/apps: "name port tag"; a tag of - is the orca tag.
+# /etc/orca/apps: "name port tag check"; a tag of - is the orca tag, and
+# check the path that answers 200 once the app is ready (/ if there's
+# none: lines from before had three fields).
 cmd_app() {
-    [ $# -eq 2 ] || die "usage: app NAME PORT"
+    [ $# -eq 2 ] || [ $# -eq 3 ] || die "usage: app NAME PORT [CHECK]"
     safe "$1"
     safe "$2"
+    check=${3:-/}
+    safe "$check"
+    case "$check" in /*:* | [!/]*) die "app: CHECK is a path, like / or /healthz" ;; esac
     touch "$CONF/apps"
-    grep -q "^$1 " "$CONF/apps" || echo "$1 $2 -" >> "$CONF/apps"
+    if grep -q "^$1 " "$CONF/apps"; then
+        awk -v n="$1" -v c="$check" '$1 == n { $4 = c } { print }' "$CONF/apps" > "$CONF/apps.new"
+        mv "$CONF/apps.new" "$CONF/apps"
+    else
+        echo "$1 $2 - $check" >> "$CONF/apps"
+    fi
 }
 
 write_env() { # DIR: the containers' env files, pg.env, orca.env and app.env, in DIR
@@ -213,14 +242,16 @@ apply_args() {
     only=
     newtag=
     appsets=
+    htimeout=
     while [ $# -gt 0 ]; do
         case "$1" in
             --db-only) dbonly=1 ;;
             --force) force=1 ;;
             --all) all=1 ;;
-            --only | --tag | --app)
+            --only | --tag | --app | --health-timeout)
                 [ $# -ge 2 ] || die "$1 needs a value"
                 case "$1" in
+                    --health-timeout) htimeout=$2 ;;
                     --only) only=$2 ;;
                     --tag) newtag=$2 ;;
                     --app) appsets="$appsets $2" ;;
@@ -234,6 +265,9 @@ apply_args() {
     [ -z "$newtag" ] || safe "$newtag"
     [ -z "$only" ] || safe "$only"
     [ "$all" = 0 ] || [ -z "$only" ] || die "--all or --only, not both"
+    htimeout=${htimeout:-$(conf_get HEALTH_TIMEOUT)}
+    htimeout=${htimeout:-300}
+    case "$htimeout" in "" | *[!0-9]*) die "the health timeout is a number of seconds, not '$htimeout'" ;; esac
 }
 
 # What apply is to run, from the conf and the arguments, without changing
@@ -276,12 +310,19 @@ pull_all() {
 }
 
 # Each container but Postgres, in the order apply starts them: calls
-# CALLBACK NAME FILES IMAGE ARGS..., with FILES the files it's started with
-# (its env file and the like, read from ENVDIR; - for none), IMAGE what it
-# runs, and ARGS docker run's arguments after --name, --restart and the labels.
+# CALLBACK NAME FILES HEALTH IMAGE ARGS..., with FILES the files it's started
+# with (its env file and the like, read from ENVDIR; - for none), HEALTH the
+# checks a new one passes before the old one is stopped ("PORT:PATH:STATUS",
+# STATUS any for a listener that answers at all; - for a container stopped
+# first), IMAGE what it runs, and ARGS docker run's arguments after --name,
+# --restart and the labels.
 containers() {
     cb=$1
     files="$ENVDIR/orca.env $CONF/secret-fetch"
+    # The UI's port is write_env's ORCA_UI_ADDR; the worker API's, settings.env's.
+    uihealth=8270:/healthz:200
+    waddr=$(setting ORCA_WORKER_ADDR)
+    [ -z "$waddr" ] || uihealth="$uihealth ${waddr##*:}:/:any"
     # CGROUPS=1: a cgroup per run (docs/hetzner.md#a-cgroup-per-run).
     # The scheduler's cgroup namespace is its own, and its /sys/fs/cgroup,
     # which docker mounts read-only, is made writable before orca starts:
@@ -290,33 +331,33 @@ containers() {
     # it starts, gets it. Its own cgroup is the container's: it can't
     # touch any other container's or the host's.
     if [ "$(conf_get CGROUPS)" = 1 ]; then
-        $cb scheduler "$files" "$image:$tag" --network orca --env-file "$CONF/orca.env" \
+        $cb scheduler "$files" - "$image:$tag" --network orca --env-file "$CONF/orca.env" \
             -v "$STATE/stage:/var/lib/orca/stage" \
             -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
             --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
             --entrypoint /bin/sh "$image:$tag" -c \
             'mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/orca/bin/orca scheduler'
     else
-        $cb scheduler "$files" "$image:$tag" --network orca --env-file "$CONF/orca.env" \
+        $cb scheduler "$files" - "$image:$tag" --network orca --env-file "$CONF/orca.env" \
             -v "$STATE/stage:/var/lib/orca/stage" \
             -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
             "$image:$tag" scheduler
     fi
-    $cb ui "$files" "$image:$tag" --network orca --env-file "$CONF/orca.env" \
+    $cb ui "$files" "$uihealth" "$image:$tag" --network orca --env-file "$CONF/orca.env" \
         -v "$STATE/stage:/var/lib/orca/stage" \
         -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
         "$image:$tag" ui
     # This machine's own samples, for the Control page: the host's processes
     # and network, and each container's memory by name.
-    $cb sampler - "$image:$tag" --pid host --network host \
+    $cb sampler - - "$image:$tag" --pid host --network host \
         -v "$STATE/stage:/var/lib/orca/stage" \
         -v /sys/fs/cgroup:/host/cgroup:ro -v /var/lib/docker/containers:/host/containers:ro "$image:$tag" \
         sample --out /var/lib/orca/stage/control.jsonl --dirs /var/lib/orca/stage --keep 720 \
         --cgroup /host/cgroup --names /host/containers
-    while read -r name port atag _; do
+    while read -r name port atag check _; do
         [ -n "$name" ] || continue
         [ "$atag" != - ] || atag=$tag
-        $cb "$name" "$ENVDIR/app.env" "$image:$atag" --network orca --env-file "$CONF/app.env" -e "PORT=$port" \
+        $cb "$name" "$ENVDIR/app.env" "$port:${check:-/}:200" "$image:$atag" --network orca --env-file "$CONF/app.env" -e "PORT=$port" \
             --entrypoint "/opt/orca/bin/$name" "$image:$atag" < /dev/null
     done < "$APPS"
     # The tunnel: Cloudflare's routes point at http://ui:8270 and
@@ -327,7 +368,7 @@ containers() {
         proto="-e TUNNEL_TRANSPORT_PROTOCOL=http2"
         ! grep -q '^TUNNEL_TRANSPORT_PROTOCOL=' "$CONF/tunnel.env" || proto=
         # shellcheck disable=SC2086
-        $cb cloudflared "$CONF/tunnel.env" "$cf" --network orca --env-file "$CONF/tunnel.env" $proto "$cf" tunnel --no-autoupdate run
+        $cb cloudflared "$CONF/tunnel.env" - "$cf" --network orca --env-file "$CONF/tunnel.env" $proto "$cf" tunnel --no-autoupdate run
     fi
 }
 
@@ -346,13 +387,13 @@ ref_change() { # OLD NEW: "OLDTAG -> NEWTAG", or the whole references if the rep
 # parts as orca.stack.args and orca.stack.files) and starts one again only
 # when it differs.
 #
-# plan_one NAME FILES IMAGE ARGS... (a containers callback): appends "NAME
-# keep|replace|skip SPEC ARGS FILES WHY" to $PLAN.
+# plan_one NAME FILES HEALTH IMAGE ARGS... (a containers callback): appends
+# "NAME keep|replace|skip SPEC ARGS FILES WHY" to $PLAN.
 plan_one() {
     p_name=$1
     p_files=$2
-    p_image=$3
-    shift 3
+    p_image=$4
+    shift 4
     p_args=$(printf '%s\n' "$@" | digest)
     # shellcheck disable=SC2086
     p_fh=$(for f in $p_files; do [ "$f" = - ] || cat "$f" 2> /dev/null || true; done | digest)
@@ -392,11 +433,13 @@ EOF
     echo "$p_name $p_do $p_spec $p_args $p_fh $p_why" >> "$PLAN"
 }
 
-# act_one NAME FILES IMAGE ARGS... (a containers callback): does what $PLAN
-# says for NAME, and says so; appends the replaced ones to $replaced.
+# act_one NAME FILES HEALTH IMAGE ARGS... (a containers callback): does what
+# $PLAN says for NAME, and says so; appends the replaced ones to $replaced,
+# and the ones whose new container wasn't healthy to $unhealthy.
 act_one() {
     a_name=$1
-    shift 3
+    a_health=$3
+    shift 4
     read -r _ a_do a_spec a_args a_files a_why << EOF
 $(grep "^$a_name " "$PLAN")
 EOF
@@ -410,11 +453,86 @@ EOF
             return 0
             ;;
     esac
+    if [ "$a_health" != - ] && [ "$(docker inspect -f '{{.State.Running}}' "$a_name" 2> /dev/null)" = true ]; then
+        # Beside the old one, as NAME-next: Docker's DNS doesn't give it out
+        # for NAME until it's healthy and has the alias (a client resolving
+        # NAME during its warm-up would get its 503s).
+        docker rm -f "$a_name-next" > /dev/null 2>&1 || true
+        docker run -d --name "$a_name-next" --restart always \
+            --label "orca.stack.spec=$a_spec" --label "orca.stack.args=$a_args" \
+            --label "orca.stack.files=$a_files" "$@" > /dev/null
+        a_ok=0
+        if healthy "$a_name-next" "$a_health" "$htimeout"; then
+            # The alias: NAME is answered with both until the old one stops.
+            # An alias is only given on connecting, hence the reconnect, and
+            # then the checks again.
+            if docker network disconnect orca "$a_name-next" > /dev/null \
+                && docker network connect --alias "$a_name" orca "$a_name-next" > /dev/null; then
+                ! healthy "$a_name-next" "$a_health" 30 || a_ok=1
+            else
+                why="couldn't be given the alias $a_name on the orca network"
+            fi
+        fi
+        if [ "$a_ok" = 0 ]; then
+            echo "$a_name: not replaced: the new container $why; the old one keeps serving. Its log's end:" >&2
+            docker logs --tail 20 "$a_name-next" 2>&1 | sed 's/^/    /' >&2 || true
+            docker rm -f "$a_name-next" > /dev/null 2>&1 || true
+            unhealthy="$unhealthy $a_name"
+            return 0
+        fi
+        docker stop -t 10 "$a_name" > /dev/null
+        docker rm -f "$a_name" > /dev/null
+        docker rename "$a_name-next" "$a_name"
+        echo "$a_name: replaced ($a_why), without downtime"
+        replaced="$replaced $a_name"
+        return 0
+    fi
     docker rm -f "$a_name" > /dev/null 2>&1 || true
     docker run -d --name "$a_name" --restart always --label "orca.stack.spec=$a_spec" \
         --label "orca.stack.args=$a_args" --label "orca.stack.files=$a_files" "$@" > /dev/null
     echo "$a_name: replaced ($a_why)"
     replaced="$replaced $a_name"
+}
+
+# probe CONTAINER PORT PATH: the HTTP status the container answers on its own
+# PORT for GET PATH, or nothing. bash's /dev/tcp, since the images have no
+# curl.
+probe() {
+    # shellcheck disable=SC2016
+    docker exec "$1" bash -c 'exec 3<> "/dev/tcp/127.0.0.1/$0" || exit 1
+printf "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" "$1" >&3
+read -r -t 5 _ code _ <&3 && echo "$code" | tr -d "\r"' "$2" "$3" 2> /dev/null || true
+}
+
+# healthy CONTAINER CHECKS TIMEOUT: whether each of CHECKS ("PORT:PATH:STATUS")
+# passes within TIMEOUT seconds; if not, why says why.
+healthy() {
+    h_t=0
+    while :; do
+        h_state=$(docker inspect -f '{{.State.Status}}' "$1" 2> /dev/null) || h_state=gone
+        if [ "$h_state" != running ]; then
+            why="stopped ($h_state, exit code $(docker inspect -f '{{.State.ExitCode}}' "$1" 2> /dev/null || echo unknown))"
+            return 1
+        fi
+        h_ok=1
+        for h_check in $2; do
+            h_port=${h_check%%:*}
+            h_path=${h_check#*:}
+            h_want=${h_path##*:}
+            h_path=${h_path%:*}
+            h_code=$(probe "$1" "$h_port" "$h_path")
+            if [ "$h_want" = any ] && [ -n "$h_code" ] || [ "$h_code" = "$h_want" ]; then
+                continue
+            fi
+            h_ok=0
+            why="answered ${h_code:-nothing} on :$h_port$h_path (wants $h_want) after ${h_t}s"
+            break
+        done
+        [ "$h_ok" = 0 ] || return 0
+        [ "$h_t" -lt "$3" ] || return 1
+        sleep 2
+        h_t=$((h_t + 2))
+    done
 }
 
 plan_why() { # NAME: why $PLAN replaces it
@@ -503,6 +621,7 @@ cmd_apply() {
     }
 
     replaced=
+    unhealthy=
     containers act_one
     rm -f "$PLAN"
     [ -s "$CONF/tunnel.env" ] || echo "orca-stack: no $CONF/tunnel.env, so no tunnel"
@@ -514,6 +633,13 @@ cmd_apply() {
     fi
     mv "$CONF/deployed.new" "$CONF/deployed"
     echo "orca-stack: applied $image:$tag"
+}
+
+# After cmd_apply (and what has to follow it even so): fails if a new
+# container wasn't healthy. The others are applied, so an apply again
+# retries only those.
+apply_failed() {
+    [ -z "$unhealthy" ] || die "not replaced:$unhealthy, whose new container wasn't healthy (above); the old one still serves, and orca-stack apply tries again"
 }
 
 # The pipelines as the scheduler's image has them (its orca.toml). The
@@ -563,6 +689,7 @@ cmd_rollback() {
         *" scheduler "*) cmd_register ;;
         *) echo "orca-stack: the scheduler kept running, so the pipelines stay registered as they are" ;;
     esac
+    apply_failed
     echo "orca-stack: rolled back to $(cmd_tags); orca-stack rollback again goes forward to $(cmd_tags --previous)"
 }
 
@@ -745,7 +872,10 @@ sub=${1:-}
 case "$sub" in
     configure) cmd_configure "$@" ;;
     app) cmd_app "$@" ;;
-    apply) cmd_apply "$@" ;;
+    apply)
+        cmd_apply "$@"
+        apply_failed
+        ;;
     plan) cmd_plan "$@" ;;
     status) cmd_status ;;
     tags) cmd_tags "$@" ;;

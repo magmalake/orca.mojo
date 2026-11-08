@@ -8,9 +8,13 @@
 #
 # Containers are directories in $FAKE/containers/<name>: image (the
 # reference it was started with), id (that image's id), status, labels
-# (KEY=VALUE lines) and aliases. An image's id is a hash of its reference,
+# (KEY=VALUE lines) and aliases (on the orca network: --network-alias, or
+# network connect --alias after a disconnect). An image's id is a hash of its reference,
 # or $FAKE/images/<reference with / and : as _> if there is one (a tag
-# pushed again).
+# pushed again). orca-stack's health probe (exec NAME bash -c ... PORT
+# PATH) answers 200, or what $FAKE/health/<name without -next> says; a
+# container started while $FAKE/exits/<name without -next> exists exits at
+# once.
 echo "docker $*" >> "$FAKE/docker.log"
 echo "docker $*" >> "$FAKE/docker.all"
 touch "$FAKE/paused"
@@ -67,18 +71,32 @@ case "$all" in
         [ ! -f "$FAKE/register-fails" ] || { echo "orca: no orca.toml" >&2; exit 1; }
         echo "registered toy"
         ;;
+    "exec "*" bash -c "*)
+        n=$2
+        shift 5
+        echo "probe $n $1 $2" >> "$FAKE/docker.log"
+        [ -d "$C/$n" ] && [ "$(cat "$C/$n/status")" = running ] || exit 1
+        h=$FAKE/health/${n%-next}
+        if [ -f "$h" ]; then cat "$h"; else echo 200; fi
+        ;;
     "image inspect -f "*) image_id "${all##* }" ;;
     "image inspect "*) exit 0 ;;
-    "inspect -f {{.State.Running}} "*)
-        d=$C/${all##* }
-        [ -d "$d" ] || exit 1
-        if [ "$(cat "$d/status")" = running ]; then echo true; else echo false; fi
-        ;;
-    "inspect -f "*)
+    "inspect -f "*orca.stack.spec*)
         d=$C/${all##* }
         [ -d "$d" ] || { echo "Error: No such object: ${all##* }" >&2; exit 1; }
         label() { sed -n "s/^$1=//p" "$d/labels"; }
         echo "$(cat "$d/status") $(cat "$d/image") $(cat "$d/id") $(label orca.stack.spec) $(label orca.stack.args) $(label orca.stack.files)"
+        ;;
+    "inspect -f {{.State.Status}} "*)
+        d=$C/${all##* }
+        [ -d "$d" ] || exit 1
+        cat "$d/status"
+        ;;
+    "inspect -f {{.State.ExitCode}} "*) echo 1 ;;
+    "inspect -f {{.State.Running}} "*)
+        d=$C/${all##* }
+        [ -d "$d" ] || exit 1
+        if [ "$(cat "$d/status")" = running ]; then echo true; else echo false; fi
         ;;
     "inspect "*) [ -d "$C/${all##* }" ] || exit 1 ;;
     "run -d "*)
@@ -102,7 +120,7 @@ case "$all" in
         mkdir "$C/$name"
         echo "$1" > "$C/$name/image"
         image_id "$1" > "$C/$name/id"
-        echo running > "$C/$name/status"
+        if [ -f "$FAKE/exits/${name%-next}" ]; then echo exited; else echo running; fi > "$C/$name/status"
         printf '%s' "$labels" > "$C/$name/labels"
         echo "$aliases" > "$C/$name/aliases"
         echo "fake-id-$name"
@@ -131,6 +149,14 @@ case "$all" in
     "rename "*)
         [ -d "$C/$2" ] && [ ! -d "$C/$3" ] || exit 1
         mv "$C/$2" "$C/$3"
+        ;;
+    "network disconnect orca "*)
+        [ -d "$C/$4" ] || exit 1
+        : > "$C/$4/aliases"
+        ;;
+    "network connect --alias "*)
+        [ -d "$C/$6" ] || exit 1
+        echo " $4" >> "$C/$6/aliases"
         ;;
     "logs "*) echo "fake log of ${all##* }" ;;
     "ps "*) for d in "$C"/*; do [ ! -d "$d" ] || echo "${d##*/} $(cat "$d/status") $(cat "$d/image")"; done ;;

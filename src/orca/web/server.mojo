@@ -8,8 +8,10 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 
 A request goes through, in order:
 
-1. The stylesheet, and the worker API (`POST /api/worker/...`,
-   `orca.api.worker`, its own token), answered before anything else.
+1. The stylesheet, `/healthz` (200 once the database answers, without a
+   login: what a deploy waits for before it retires the old UI), and the
+   worker API (`POST /api/worker/...`, `orca.api.worker`, its own token),
+   answered before anything else.
 2. The route. A `POST` that's no action, or another method than `GET`,
    `HEAD` or `POST`, is 405.
 3. A `POST` whose `Origin` (or `Referer`) isn't the UI's own is refused
@@ -31,6 +33,7 @@ own as well (`orca.api.worker`).
 
 from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
+from postgres import Params
 
 from orca.api import worker as worker_api
 from orca.auth import audit, login_required
@@ -67,6 +70,7 @@ from orca.web.routes import routes
 
 comptime DEFAULT_ADDR = "127.0.0.1:8270"
 comptime STYLESHEET = "/static/orca.css"
+comptime HEALTHZ = "/healthz"
 
 
 def _path_of(url: String) -> String:
@@ -156,6 +160,32 @@ def _stylesheet() raises -> Response:
     return resp^
 
 
+def _healthz(url: String) -> Response:
+    """`/healthz`: 200 `ok` once the database answers a query, 503 if it
+    doesn't. No login, and nothing else in it: `orca-stack apply` waits for
+    it before it stops the old UI (docs/hetzner.md#deploying-code)."""
+    var status = 200
+    var reason = String("OK")
+    var body = String("ok\n")
+    try:
+        var db = State(url)
+        _ = db.conn.query("SELECT 1 AS ok", Params())
+    except e:
+        print("orca ui: /healthz: the database doesn't answer:", e)
+        status = 503
+        reason = String("Service Unavailable")
+        body = String("the database doesn't answer\n")
+    var resp = Response(
+        status=status, reason=reason, body=List[UInt8](body.as_bytes())
+    )
+    try:
+        resp.headers.set("Content-Type", "text/plain; charset=utf-8")
+        resp.headers.set("Cache-Control", "no-store")
+    except:
+        pass
+    return resp^
+
+
 struct Ui(Copyable, Handler):
     """The pages, the API and the actions, over the database at `url`."""
 
@@ -171,6 +201,8 @@ struct Ui(Copyable, Handler):
         var post = req.method == "POST"
         if path == STYLESHEET:
             return _stylesheet()
+        if path == HEALTHZ and (req.method == "GET" or req.method == "HEAD"):
+            return _healthz(self.url)
         if post and path.startswith("/api/worker/"):
             return worker_api.worker_response(self.url, req)
         var found = find(self.table, req.method, path)
