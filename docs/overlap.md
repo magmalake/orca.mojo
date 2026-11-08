@@ -174,6 +174,17 @@ binaries before it start runs without touching `instance`; a value left
 from an earlier start names an instance that doesn't list the run, so it
 holds nothing.
 
+### Two behaviours decided with the user
+
+- **A draining instance never takes the lead back**, even when the new one
+  dies before leading. Until a newer instance runs (the container's
+  restart, or a rollback), nothing starts. A lead that could move back
+  would let an old image start runs after the new one had registered.
+- **A gone instance's runs are queued again whatever their trigger**,
+  manual and UI runs too, rather than failing "interrupted: its process
+  stopped" as a lone scheduler's would. The deploy or a crash stopped them,
+  not their code, as for a dead worker's runs.
+
 ## What happens when
 
 - **A deploy, overlapping.** The new instance starts, migrates (additive),
