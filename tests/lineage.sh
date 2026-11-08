@@ -170,7 +170,7 @@ echo "$p" | jq -e '.preview | .refused == null and .command == "orca rebuild lak
 page=$(curl -fsS "$base/datasets/lake.raw?preview=1&partitions=2024-01..2024-02")
 echo "$page" | grep -qF '<p data-preview="rebuild">This queues 2 runs in 2 levels, over 2 partitions:</p><ol><li>1 run: clean over 2024-01,2024-02</li><li>1 run: report over 2024-01,2024-02</li></ol>' \
     || fail "the rebuild preview's lines"
-echo "$page" | grep -qF '<code data-cmd="rebuild">orca rebuild lake.raw 2024-01..2024-02</code>' || fail "the rebuild's command"
+echo "$page" | grep -qF '<code data-cmd="rebuild">orca login &lt;url&gt; &amp;&amp; orca --remote &lt;url&gt; rebuild lake.raw 2024-01..2024-02</code>' || fail "the rebuild's command"
 echo "$page" | grep -qF 'title="orca rebuild lake.raw 2024-01..2024-02">Rebuild downstream</button>' || fail "the rebuild button"
 json '/datasets/lake.raw?preview=1&partitions=2023-13' | jq -e '.preview.refused != null' > /dev/null \
     || fail "a bad range's rebuild preview wasn't refused"

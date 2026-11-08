@@ -412,6 +412,9 @@ button.primary:hover { filter: brightness(1.08); color: #fff; }
 .start__cli { margin: 0; font-size: 0.8125rem; }
 pre.cmd { margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 0.5rem 0.8rem; font-size: 0.8125rem; overflow-x: auto; user-select: all; }
+.cmdbox { display: flex; gap: 0.5rem; align-items: stretch; }
+.cmdbox pre.cmd { flex: 1; min-width: 0; }
+.cmdbox .copy { flex: none; font-size: 0.8125rem; }
 .auth { max-width: 22rem; margin: 3rem auto; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.6rem 1.75rem 1.5rem; }
 .auth h1 { font-size: 1.35rem; margin: 0 0 1rem; }

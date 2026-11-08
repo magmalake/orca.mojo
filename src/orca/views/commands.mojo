@@ -64,6 +64,15 @@ def backfill_cmd(name: String, keys: String, rerun: Bool) -> String:
     )
 
 
+def remote_cmd(cmd: String, url: String = "<url>") -> String:
+    """`cmd`, an `orca ...` line, against the UI at `url` from anywhere:
+    `orca login <url> && orca --remote <url> ...`. The pages show `<url>`,
+    which their script makes the address the page was loaded from."""
+    return String(
+        "orca login ", url, " && orca --remote ", url, String(cmd[byte=4:])
+    )
+
+
 def run_cmd(binary: String, keys: String) -> String:
     """The binary's `run --partitions <keys>`: one run, in that process."""
     return String(
