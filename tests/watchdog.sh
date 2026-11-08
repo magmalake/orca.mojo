@@ -180,12 +180,12 @@ curl -fsS "$base/" | grep -q 'alert--trip' && fail "the banner shows an acknowle
 [ "$(q "SELECT acknowledged_by FROM orca.watchdog_trips WHERE id = $trip")" = ui ] || fail "the trip isn't acknowledged"
 ./build/orca watchdog status | grep -q '^trip launches .*(acknowledged by ui)' || fail "status doesn't mark the acknowledged trip"
 ./build/orca watchdog status --json | jq -e '.trips | map(select(.id == '"$trip"' and .acknowledged_by == "ui")) | length == 1' > /dev/null || fail "status --json"
-fake=$(q "INSERT INTO orca.watchdog_trips (rule, value, threshold, detail, pipelines) VALUES ('launches', 3, 2, 'again', 'toy') RETURNING id" | head -1)
+again=$(q "INSERT INTO orca.watchdog_trips (rule, value, threshold, detail, pipelines) VALUES ('launches', 3, 2, 'again', 'toy') RETURNING id" | head -1)
 curl -fsS "$base/" | grep -q 'Keep paused' || fail "no Keep paused button on the banner"
 ./build/orca watchdog ack nonsense > /dev/null 2>&1 && fail "ack of nonsense"
-./build/orca watchdog ack "$fake" >> "$log" 2>&1 || fail "orca watchdog ack"
+./build/orca watchdog ack "$again" >> "$log" 2>&1 || fail "orca watchdog ack"
 curl -fsS "$base/" | grep -q 'alert--trip' && fail "the banner shows a trip acknowledged by the command"
-[ "$(q "SELECT count(*) FROM orca.audit WHERE action = '/watchdog/$fake/ack' AND source = 'local'")" -eq 1 ] || fail "the ack isn't audited"
+[ "$(q "SELECT count(*) FROM orca.audit WHERE action = '/watchdog/$again/ack' AND source = 'local'")" -eq 1 ] || fail "the ack isn't audited"
 [ "$(q "SELECT count(*) FROM orca.pipelines WHERE paused")" = "$paused_before" ] || fail "ack unpaused something"
 echo "ok   keep paused hides a trip's banner and leaves its pipelines paused"
 stop
