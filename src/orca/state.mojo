@@ -587,6 +587,18 @@ def _migrations() -> List[List[String]]:
         # `?to=`, `?since=`): one range of this index, for its page and its
         # counts, where without it each is a scan of every run.
         ["CREATE INDEX runs_created ON orca.runs (created)"],
+        # Containment (orca.cgroup): what out-of-memory kills raised a
+        # pipeline's memory to; on each run its latest start's cgroup limit
+        # (memory.high), its memory.max and its memory now; on each attempt
+        # the limit and memory grant of the start that made it.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN memory_raised_mb bigint",
+            "ALTER TABLE orca.runs ADD COLUMN memory_limit_mb bigint",
+            "ALTER TABLE orca.runs ADD COLUMN memory_max_mb bigint",
+            "ALTER TABLE orca.runs ADD COLUMN memory_bytes bigint",
+            "ALTER TABLE orca.attempts ADD COLUMN memory_limit_mb bigint",
+            "ALTER TABLE orca.attempts ADD COLUMN grant_memory_mb bigint",
+        ],
     ]
 
 

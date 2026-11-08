@@ -9,7 +9,7 @@ from orca.json import quote
 from orca.logs import read_location
 from orca.state import State
 from orca.ui.layout import LIVE_EVERY, act_button, not_found, page_html
-from orca.ui.parts import code_link, usage_facts
+from orca.ui.parts import code_link, limit_facts, usage_facts
 from orca.usage import bytes_text, usage_json
 from orca.views.code import CodeLinks, code_of
 from orca.views.runs import AttemptRow, attempt_rows, live_status
@@ -70,6 +70,7 @@ def _attempt_facts(
     h.text(a.ended)
     h.raw("</dd>")
     usage_facts(h, a.usage, live_status(a.status))
+    limit_facts(h, a.limit_mb, 0, a.grant_mb)
     h.raw("<dt>Log file</dt><dd><code>")
     h.text(a.log)
     h.raw("</code></dd>")
@@ -160,6 +161,10 @@ def attempt(mut db: State, run: Int, id: Int) raises -> Page:
         quote(a.log),
         ', "usage": ',
         usage_json(a.usage),
+        ', "memory_limit_mb": ',
+        String(a.limit_mb) if a.limit_mb > 0 else String("null"),
+        ', "grant_memory_mb": ',
+        String(a.grant_mb) if a.grant_mb > 0 else String("null"),
         '}, "text": ',
         quote(log[0]),
         ', "truncated": ',
