@@ -48,17 +48,6 @@ heartbeat thread exits its process once its parent isn't the worker
 queues it again, for this worker or another, whatever its trigger
 (`orca.scheduler`'s `_requeue_lost`); a run this worker claimed and never
 started has its start given back.
-
-**`orca runner`** (docs/runner.md) is this worker for the control host:
-pool `local`, its row made by name (`orca.workers.runner_auth`), with the
-worker API called on its own database connection
-(`orca.workers.runner_call`) rather than over HTTPS. It claims what the
-scheduler assigned it with `ORCA_LOCAL_RUNNER=runner`, starts a
-control-placed run as the scheduler did (`nice`, `oom_score_adj`,
-`ORCA_CONTROL_WORKERS`, its cgroup at most `ORCA_CONTROL_MEMORY_MB`, and
-uncontained, killed over it), gives runs its own environment (the
-database included) and no `ORCA_WORKER_PID`, so they outlive it, kills a
-run whose heartbeat went stale, and records its runs' memory every 5 s.
 """
 
 from std.ffi import c_int, external_call
@@ -67,13 +56,12 @@ from std.os.path import exists
 from std.sys.info import CompilationTarget, num_logical_cores
 from std.time import perf_counter_ns, sleep
 
-from json import Value, loads
-from postgres import Params
+from json import Value
 
 from orca.admission import Report
 from orca.cgroup import Cgroups, Contained, MemoryKnobs, put as put_cgroup
 from orca.cgroup import start_limit_mb
-from orca.control import CONTROL, ControlLimits, fetch_secret, run_env
+from orca.control import fetch_secret
 from orca.http_store import Body, StateApi
 from orca.logs import run_dir
 from orca.pressure import (
@@ -97,15 +85,9 @@ from orca.sample import (
 )
 from orca.store import FINAL
 from orca.usage import Meter, marks_json
-from orca.live import RUNNER_POOL, start_grace, stale_limit
-from orca.sample import tree_rss
-from orca.state import State
 from orca.workers import (
-    WorkerAuth,
     WorkerRun,
     pool_problem,
-    runner_auth,
-    runner_call,
     version_refusal,
     worker_run_of,
 )
@@ -122,11 +104,6 @@ struct _Running(Copyable, Movable):
     var spec: WorkerRun
     var stage: String
     var env: List[String]
-    var control: Bool
-    """A control-placed run of `orca runner`."""
-    var over: String
-    """Why the runner killed it, over the control placement's memory cap,
-    or empty."""
 
 
 def _memory_mb() -> Int:
@@ -189,19 +166,6 @@ struct Worker(Movable):
     var room_mb: Int
     """The memory this host can grant, the limit of a run without a
     grant."""
-    var db: Optional[State]
-    """`orca runner`'s own connection: the worker API is called on it
-    (`orca.workers.runner_call`) rather than over HTTPS, and its runs write
-    to Postgres themselves. None for a remote worker."""
-    var auth: WorkerAuth
-    """The runner's `orca.workers` row (pool `local`)."""
-    var limits: ControlLimits
-    """What a control-placed run of the runner may use (`orca.control`)."""
-    var stale: Float64
-    var grace: Float64
-    var _cgroups_next: Int
-    """When the runner next records its runs' memory, on the monotonic
-    clock."""
 
     def __init__(
         out self,
@@ -231,24 +195,6 @@ struct Worker(Movable):
         self.contained = Dict[Int, Contained]()
         self.unswept = List[String]()
         self.room_mb = 0
-        self.db = None
-        self.auth = WorkerAuth(0, pool, name)
-        self.limits = ControlLimits.from_env()
-        self.stale = stale_limit()
-        self.grace = start_grace(self.stale)
-        self._cgroups_next = 0
-
-    def runner(mut self, url: String) raises:
-        """Makes this `orca runner` (docs/runner.md): a worker of pool
-        `local` on its own database connection, its row made or found by
-        its name."""
-        var db = State(url)
-        db.migrate()
-        self.auth = runner_auth(db, self.name)
-        self.db = db^
-        # The scheduler held its starts for this host's memory pressure
-        # already: the runner claims every start it was assigned.
-        self.admission = Admission(0)
 
     def _running_ids(self) -> String:
         var ids = String()
@@ -256,28 +202,14 @@ struct Worker(Movable):
             ids.write("," if ids else "", e.value.spec.run)
         return ids^
 
-    def _post(mut self, path: String, var body: Body) raises -> Value:
-        var text = (
-            body^.text("pool", self.pool).text("name", self.name).finish()
+    def _post(self, path: String, var body: Body) raises -> Value:
+        return self.api.request_once(
+            path,
+            body^.text("pool", self.pool).text("name", self.name).finish(),
         )
-        if self.db:
-            return loads(
-                runner_call(self.db.value(), self.auth, path, loads(text))
-            )
-        return self.api.request_once(path, text^)
 
-    def _start(
-        mut self,
-        spec: WorkerRun,
-        placement: String = "",
-        request_max_mb: Int = 0,
-        raised_mb: Int = 0,
-    ) raises:
-        # The runner's runs are the control host's: the image is the
-        # scheduler's own, as for a run it forks.
-        var why = String() if self.db else version_refusal(
-            spec.image, self.image
-        )
+    def _start(mut self, spec: WorkerRun) raises:
+        var why = version_refusal(spec.image, self.image)
         if why:
             print("orca worker: refusing run", spec.run, ":", why)
             _ = self._post(
@@ -288,13 +220,8 @@ struct Worker(Movable):
                 .text("why", why),
             )
             return
-        var control = Bool(self.db) and placement == CONTROL
         # Its own variables and its grant of this host (orca.resources).
-        var extra = pressure_env(self.psi)
-        if control:
-            # Its local dista workers (orca.control).
-            extra.extend(run_env(self.limits, "", []))
-        var env = grant_env(spec.env, spec.grant, extra)
+        var env = grant_env(spec.env, spec.grant, pressure_env(self.psi))
         var names = String()
         for s in spec.secrets:
             env.append(String(s[0], "=", fetch_secret(s[1])))
@@ -303,14 +230,9 @@ struct Worker(Movable):
             env.append(String("ORCA_SECRETS=", names))
         if self.image:
             env.append(String("ORCA_IMAGE=", self.image))
-        if not self.db:
-            # The runner's runs write to Postgres themselves, and outlive
-            # it (docs/runner.md); a remote worker's go through the API.
-            env.append(String("ORCA_STATE_URL=", self.api.url))
-            env.append(String("ORCA_STATE_TOKEN=", self.token))
-            env.append(
-                String("ORCA_WORKER_PID=", external_call["getpid", c_int]())
-            )
+        env.append(String("ORCA_STATE_URL=", self.api.url))
+        env.append(String("ORCA_STATE_TOKEN=", self.token))
+        env.append(String("ORCA_WORKER_PID=", external_call["getpid", c_int]()))
         env.append(String("ORCA_RUN=", spec.run))
         makedirs(self.dir, exist_ok=True)
         var stage = String(
@@ -339,19 +261,13 @@ struct Worker(Movable):
             spec.grant.memory_mb,
         )
         if self.cgroups.on():
-            # The runner's as the scheduler's (orca.cgroup): at most the
-            # request's maximum, at least what an OOM raised it to, and on
-            # the control placement at most its cap.
-            var cap = self.limits.memory_mb if control else 0
             var default = self.cgroups.knobs.default_mb
-            if default <= 0:
-                default = cap if control else self.room_mb
             cg.limit_mb = start_limit_mb(
                 spec.grant.memory_mb,
-                request_max_mb,
-                default,
-                raised_mb,
-                cap,
+                0,
+                default if default > 0 else self.room_mb,
+                0,
+                0,
             )
             if cg.limit_mb > 0:
                 try:
@@ -360,30 +276,9 @@ struct Worker(Movable):
                     )
                     cg.path = made[0]
                     cg.kill_mb = made[1]
-                    if self.db:
-                        _ = self.db.value().conn.execute(
-                            (
-                                "UPDATE orca.runs SET memory_limit_mb = $3,"
-                                " memory_max_mb = $4, memory_bytes = NULL"
-                                " WHERE id = $1 AND starts = $2"
-                            ),
-                            Params()
-                            .int64(Int64(spec.run))
-                            .int64(Int64(spec.start))
-                            .int64(Int64(cg.limit_mb))
-                            .int64(Int64(cg.kill_mb)),
-                        )
                 except e:
                     print("orca worker: run", spec.run, "without a cgroup:", e)
-        var pid = spawn(
-            argv,
-            stage,
-            env=env,
-            nice=self.limits.nice if control else 0,
-            group=True,
-            first_to_go=control,
-            cgroup=cg.path,
-        )
+        var pid = spawn(argv, stage, env=env, group=True, cgroup=cg.path)
         if cg.path:
             self.contained[pid] = cg^
         self.meters[pid] = Meter()
@@ -398,15 +293,11 @@ struct Worker(Movable):
             pid,
             flush=True,
         )
-        self.running[pid] = _Running(spec.copy(), stage, env^, control, "")
+        self.running[pid] = _Running(spec.copy(), stage, env^)
         # The machine's metrics while the run's process lives, as the
         # scheduler's beside a local run (orca.sample): the Machines card.
         var metrics = metrics_location(
-            spec.pipeline,
-            spec.run,
-            (
-                String(CONTROL) if control else String("local")
-            ) if self.db else machine_name(self.name),
+            spec.pipeline, spec.run, machine_name(self.name)
         )
         if metrics and sample_seconds() > 0:
             try:
@@ -423,103 +314,16 @@ struct Worker(Movable):
             except e:
                 print("orca worker: no sampler for run", spec.run, ":", e)
 
-    def _sample(mut self) -> Dict[Int, Tuple[Int, Float64]]:
-        """Samples each run's process tree (none on macOS); the readings,
-        by pid."""
+    def _sample(mut self):
+        """Samples each run's process tree (none on macOS)."""
         var pids = List[Int]()
         for e in self.meters.items():
             pids.append(e.key)
-        var readings = tree_usage(pids)
-        for e in readings.items():
+        for e in tree_usage(pids).items():
             try:
                 self.meters[e.key].sample(e.value[0], e.value[1])
             except:
                 pass
-        return readings^
-
-    def _tend(mut self, readings: Dict[Int, Tuple[Int, Float64]]) raises:
-        """What the scheduler did for the processes it forked, which the
-        runner now does for its own (docs/runner.md): kills an uncontained
-        control-placed run over `ORCA_CONTROL_MEMORY_MB`, kills a run whose
-        heartbeat went stale (wedged, or cut off from the database: it
-        can't be left beside the start that replaces it), and every 5 s
-        records each contained run's memory."""
-        var cap = self.limits.memory_mb * 1024 * 1024
-        var over = List[Int]()
-        for e in self.running.items():
-            if (
-                e.value.control
-                and not e.value.over
-                and e.key not in self.contained
-            ):
-                var rss = readings[e.key][0] if e.key in readings else tree_rss(
-                    e.key
-                )
-                if rss > cap:
-                    over.append(e.key)
-                    print(
-                        "run",
-                        e.value.spec.run,
-                        "pid",
-                        e.key,
-                        "over the control cap:",
-                        rss // (1024 * 1024),
-                        "MB",
-                        flush=True,
-                    )
-        for pid in over:
-            var r = self.running.pop(pid)
-            r.over = String(
-                "killed: its processes held more than the control instance's",
-                " cap of ",
-                self.limits.memory_mb,
-                " MB a run (ORCA_CONTROL_MEMORY_MB)",
-            )
-            _ = external_call["kill", c_int](c_int(-pid), c_int(9))
-            self.running[pid] = r^
-        if len(self.running) == 0:
-            return
-        var ids = self._running_ids()
-        var stale = self.db.value().conn.query(
-            (
-                "SELECT id FROM orca.runs WHERE id = ANY"
-                " (string_to_array($1, ',')::bigint[]) AND status = 'running'"
-                " AND ((heartbeat IS NOT NULL AND heartbeat <= now() -"
-                " make_interval(secs => $2)) OR (heartbeat IS NULL AND"
-                " started <= now() - make_interval(secs => $3)))"
-            ),
-            Params().text(ids).float64(self.stale).float64(self.grace),
-        )
-        for row in stale:
-            var id = Int(row.int64("id"))
-            for e in self.running.items():
-                if e.value.spec.run == id:
-                    _ = external_call["kill", c_int](c_int(-e.key), c_int(9))
-                    print(
-                        "killed pid",
-                        e.key,
-                        "of run",
-                        id,
-                        "(its heartbeat went stale)",
-                        flush=True,
-                    )
-        var t = Int(perf_counter_ns())
-        if t < self._cgroups_next or len(self.contained) == 0:
-            return
-        self._cgroups_next = t + 5_000_000_000
-        for e in self.contained.items():
-            var b = Cgroups.current(e.value.path)
-            if b >= 0:
-                _ = self.db.value().conn.execute(
-                    (
-                        "UPDATE orca.runs SET memory_bytes = $3 WHERE id = $1"
-                        " AND starts = $2"
-                    ),
-                    Params()
-                    .int64(Int64(e.value.run))
-                    .int64(Int64(e.value.start))
-                    .int64(Int64(b)),
-                )
 
     def _ended(mut self, done: Reaped) raises:
         var pid = done.pid
@@ -550,8 +354,6 @@ struct Worker(Movable):
             .int("max_rss", Int64(m.max_rss))
             .raw("marks", marks_json(m.aged()))
         )
-        if r.over:
-            body = body^.text("over", r.over)
         if pid in self.contained:
             var cg = self.contained.pop(pid)
             var oom = code != 0 and Cgroups.oom_kills(cg.path) > 0
@@ -596,32 +398,21 @@ struct Worker(Movable):
             )
 
     def serve(mut self) raises -> Int:
-        if self.db:
-            print(
-                "orca runner",
-                self.name,
-                "(orca.workers row",
-                String(self.auth.id, ", pool local): starts what the"),
-                "scheduler assigns it, on its own database connection",
-                flush=True,
-            )
-        else:
-            print(
-                "orca worker",
-                self.name,
-                "pool",
-                self.pool,
-                "image",
-                self.image if self.image else String("(none)"),
-                "on",
-                self.api.url,
-                flush=True,
-            )
+        print(
+            "orca worker",
+            self.name,
+            "pool",
+            self.pool,
+            "image",
+            self.image if self.image else String("(none)"),
+            "on",
+            self.api.url,
+            flush=True,
+        )
         var cpus = num_logical_cores()
         var mem = _memory_mb()
         # What this host can grant the runs it takes (orca.resources).
-        # The runner's host is the scheduler's, with its reserve.
-        var room = host_room(worker=not self.db)
+        var room = host_room(worker=True)
         print(
             "orca worker: grants up to",
             room.cpus,
@@ -662,12 +453,7 @@ struct Worker(Movable):
                     if not Cgroups.remove(path):
                         left.append(path)
                 self.unswept = left^
-            var readings = self._sample()
-            if self.db:
-                try:
-                    self._tend(readings)
-                except e:
-                    print("orca runner:", e, flush=True)
+            self._sample()
             var slots = self.max_runs - len(self.running)
             # Memory pressure (orca.pressure): no claim while this host is
             # over the limit, but one at a time once a hold has lasted its
@@ -735,16 +521,8 @@ struct Worker(Movable):
                 print("orca worker: not given a run:", why, flush=True)
             if not got["run"].is_null():
                 var spec = worker_run_of(got["run"])
-                var placement = String()
-                var request_max_mb = 0
-                var raised_mb = 0
-                if String("local") in got:
-                    ref l = got["local"]
-                    placement = l["placement"].string_value()
-                    request_max_mb = Int(l["memory_max_mb"].int_value())
-                    raised_mb = Int(l["memory_raised_mb"].int_value())
                 try:
-                    self._start(spec, placement, request_max_mb, raised_mb)
+                    self._start(spec)
                 except e:
                     print("orca worker: can't start run", spec.run, ":", e)
                     try:
@@ -838,65 +616,4 @@ def worker_command(args: List[String], target: String) raises -> Int:
             "orca worker needs a token: ORCA_WORKER_TOKEN, or --token-file"
         )
     var w = Worker(url, token, pool, name, image, max_runs, poll, dir)
-    return w.serve()
-
-
-comptime RUNNER_USAGE = """usage:
-  orca runner [--name <name>] [--max-runs N] [--poll-seconds S] [--dir <dir>]
-              (needs ORCA_DATABASE_URL; the scheduler assigns it runs with
-              ORCA_LOCAL_RUNNER=runner: docs/runner.md)"""
-
-
-def runner_command(args: List[String], url: String) raises -> Int:
-    """`orca runner ...`: starts the local and control-placed runs the
-    scheduler assigns it, as a worker of pool `local` on the database at
-    `url` (docs/runner.md)."""
-    var name = String("runner")
-    var max_runs = 64
-    var poll = 1.0
-    var dir = String(getenv("TMPDIR", "/tmp").rstrip("/"), "/orca-runner")
-    var i = 2
-    while i < len(args):
-        var a = args[i]
-        if i + 1 >= len(args):
-            print(a, "needs a value")
-            print(RUNNER_USAGE)
-            return 2
-        var val = args[i + 1]
-        if a == "--name":
-            name = val
-        elif a == "--max-runs":
-            try:
-                max_runs = Int(val)
-            except:
-                max_runs = 0
-            if max_runs < 1:
-                print("--max-runs is a count from 1")
-                print(RUNNER_USAGE)
-                return 2
-        elif a == "--poll-seconds":
-            try:
-                poll = Float64(val)
-            except:
-                print("--poll-seconds is a number")
-                print(RUNNER_USAGE)
-                return 2
-        elif a == "--dir":
-            dir = val
-        else:
-            print("unknown argument:", a)
-            print(RUNNER_USAGE)
-            return 2
-        i += 2
-    var w = Worker(
-        "http://127.0.0.1:1",
-        "unused",
-        RUNNER_POOL,
-        name,
-        getenv("ORCA_IMAGE"),
-        max_runs,
-        poll,
-        dir,
-    )
-    w.runner(url)
     return w.serve()

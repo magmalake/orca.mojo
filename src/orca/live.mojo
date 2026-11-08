@@ -8,12 +8,14 @@ the scheduler started it longer ago than the start grace
 scheduler, sensors, rebuilds and the UI's start queue no second run over a
 key a live run has.
 
-**Held by its runner.** A local or control-placed run that `orca runner`
-claimed (its `worker` is a row of pool `local`, docs/runner.md) isn't dead
-while that runner has been seen within half the stale limit and lists it
-among its runs, whatever its heartbeat: the runner kills a process whose
-heartbeat went stale and reports it, and only then is the run dead. So a
-scheduler that restarts leaves the runner's runs alone, and counts them.
+**Held by its scheduler instance.** A local or control-placed run started
+by an `orca scheduler` with ORCA_OVERLAP=on records that instance
+(`runs.instance`, a row of `orca.schedulers`: docs/overlap.md). It isn't
+dead while that instance has been seen within the stale limit and lists
+it among its runs, whatever its heartbeat: the instance kills a
+process whose heartbeat went stale, reaps it, and only then is the run
+dead. So while two instances overlap in a deploy, the one that leads
+counts the draining one's runs and leaves them alone.
 """
 
 from std.os import getenv
@@ -42,72 +44,57 @@ def start_grace(stale: Float64) raises -> Float64:
     )
 
 
-comptime RUNNER_POOL = "local"
-"""The pool `orca runner` is a worker of (docs/runner.md): reserved, no
-remote worker's."""
-
-
-comptime RUNNER_OWNER = "runner"
-"""A local or control-placed run's owner once the scheduler assigned it to
-`orca runner`, until the runner claims it (owner `worker`)."""
-
-
-def runner_live(mut tx: Transaction, stale: Float64) raises -> Bool:
-    """Whether an `orca runner` has been seen within half of `stale`."""
-    return (
-        len(
-            tx.query(
-                (
-                    "SELECT 1 FROM orca.workers WHERE pool = $1 AND revoked IS"
-                    " NULL AND last_seen > now() - make_interval(secs => $2 /"
-                    " 2) LIMIT 1"
-                ),
-                Params().text(RUNNER_POOL).float64(stale),
-            )
-        )
-        == 1
-    )
-
-
 def held_sql(stale: String, t: String = "orca.runs") -> String:
     """SQL true for a run of table reference `t` (`orca.runs`, or its alias
-    in the query) that a live `orca runner` holds: a local or control-placed
-    run claimed by a worker of pool `local` that has been seen within half
-    of `stale` seconds and lists the run among those it's running."""
+    in the query) that a live scheduler instance holds: a local or
+    control-placed run whose `instance` has been seen within `stale`
+    seconds, hasn't ended, and lists the run among its running."""
     return String(
         "(",
         t,
-        ".worker IS NOT NULL AND ",
+        ".instance IS NOT NULL AND ",
         t,
         ".placement IN ('local', 'control') AND EXISTS (SELECT 1 FROM",
-        " orca.workers hw WHERE hw.id = ",
+        " orca.schedulers hs WHERE hs.id = ",
         t,
-        ".worker AND hw.pool = '",
-        RUNNER_POOL,
-        "' AND hw.last_seen > now() - make_interval(secs => ",
+        ".instance AND hs.ended IS NULL AND hs.last_seen > now() -",
+        " make_interval(secs => ",
         stale,
-        " / 2) AND ",
+        ") AND ",
         t,
-        ".id::text = ANY (string_to_array(coalesce(hw.running, ''), ','))))",
+        ".id::text = ANY (string_to_array(coalesce(hs.running, ''), ','))))",
+    )
+
+
+def stale_sql(stale: String, grace: Float64, t: String = "orca.runs") -> String:
+    """SQL true for a running run whose process looks stopped: its
+    heartbeat is older than `stale` (seconds, or a parameter such as `$2`),
+    or it has none and was started longer ago than `grace` seconds. `t` is
+    how the query names `orca.runs`: the table itself, or its alias."""
+    return String(
+        "((",
+        t,
+        ".heartbeat IS NOT NULL AND ",
+        t,
+        ".heartbeat <= now() - make_interval(secs => ",
+        stale,
+        ")) OR (",
+        t,
+        ".heartbeat IS NULL AND (",
+        t,
+        ".started IS NULL OR ",
+        t,
+        ".started <= now() - make_interval(secs => ",
+        grace,
+        "))))",
     )
 
 
 def dead_sql(stale: String, grace: Float64, t: String = "orca.runs") -> String:
-    """SQL true for a running run whose process died: its heartbeat is
-    older than `stale` (seconds, or a parameter such as `$2`), or it has
-    none and was started longer ago than `grace` seconds, and no live
-    runner holds it (`held_sql`). `t` is how the query names `orca.runs`:
-    the table itself, or its alias."""
+    """SQL true for a running run whose process died: it looks stopped
+    (`stale_sql`) and no live scheduler instance holds it (`held_sql`)."""
     return String(
-        "(((heartbeat IS NOT NULL AND heartbeat <= now() -",
-        " make_interval(secs => ",
-        stale,
-        ")) OR (heartbeat IS NULL AND (started IS NULL OR started <= now()",
-        " - make_interval(secs => ",
-        grace,
-        ")))) AND NOT ",
-        held_sql(stale, t),
-        ")",
+        "(", stale_sql(stale, grace, t), " AND NOT ", held_sql(stale, t), ")"
     )
 
 

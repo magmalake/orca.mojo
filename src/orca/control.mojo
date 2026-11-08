@@ -67,11 +67,6 @@ comptime MAX_POOL = 32
 def pool_problem(pool: String) -> String:
     """Why `pool` can't name a pool of workers, or empty: 1 to 32 of
     `a-z`, `0-9`, `-` and `_`."""
-    if pool == "local":
-        return String(
-            "the pool local is orca runner's (docs/runner.md), no remote"
-            " worker's"
-        )
     var b = pool.as_bytes()
     if len(b) == 0 or len(b) > MAX_POOL:
         return String("a pool's name is 1 to ", MAX_POOL, " characters")

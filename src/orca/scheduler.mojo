@@ -60,12 +60,16 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   scheduler queues its due retries and its dead runs again for one, its
   fill runs too (held for a worker, `fill_max_runs` across the pool), and
   a run whose worker is gone whatever its trigger.
-  With `ORCA_LOCAL_RUNNER=runner` the local and control-placed runs this
-  scheduler admits aren't forked here: each start is assigned (`owner =
-  'runner'`) to `orca runner` (docs/runner.md), which claims it, and while
-  no runner is seen they wait, held saying so. A runner's run is left
-  alone while its runner holds it (`orca.live.held_sql`), and queued again
-  by the dead-worker rule once it doesn't and its heartbeat is stale.
+- **Overlapping instances** (`orca.instances`, docs/overlap.md). With
+  `ORCA_OVERLAP=on` a deploy starts the new image's scheduler beside the
+  old one: the newest live instance leads and alone decides, and an older
+  one starts nothing more, supervises its runs until they end (or kills
+  them after `ORCA_DRAIN_SECONDS`) and exits. A local or control-placed
+  run records the instance that started it; while that instance lists it
+  the run is live (`orca.live.held_sql`), counted against `max_runs`, the
+  control slots and the grants, and left alone. Once the instance is gone
+  and the run's heartbeat stale, it's queued again whatever its trigger,
+  audited.
 - **Sensors and rebuilds** (`orca.sensors`). A sensor pipeline's pass
   looks for snapshots of the datasets it reads, in `orca.commits` on every
   tick and from `<binary> sense` every `ORCA_SENSE_SECONDS` (asked in a
@@ -198,14 +202,21 @@ from orca.system import (
     trim as trim_system,
 )
 from orca.kube import KubeRunner, RunSpec, cpu_millis
+from orca.instances import (
+    beat,
+    end as end_instance,
+    join as join_instance,
+    newer,
+    overlap_on,
+    step_down,
+    try_lead,
+)
 from orca.live import (
-    RUNNER_OWNER,
-    RUNNER_POOL,
-    runner_live,
     dead_sql,
     live_runs,
     live_sql,
     stale_limit,
+    stale_sql,
     start_grace,
 )
 from orca.logs import is_remote, publish, read_location, run_dir, stage_of
@@ -1212,13 +1223,25 @@ struct Scheduler(Movable):
     var _cgroups_next: Int
     """When the runs' cgroups' memory is next recorded, on the monotonic
     clock."""
-    var use_runner: Bool
-    """`ORCA_LOCAL_RUNNER=runner`: local and control-placed runs are
-    assigned to `orca runner` rather than forked here (docs/runner.md)."""
+    var instance: Int
+    """This scheduler's row of `orca.schedulers` (`orca.instances`), or 0
+    when it isn't an instance: `ORCA_OVERLAP` off, or `orca tick`."""
+    var leading: Bool
+    """Whether this instance holds the lead (always, for no instance)."""
+    var draining: Bool
+    """Whether this instance drains: it starts nothing, and exits once the
+    processes it started have ended."""
+    var drain_seconds: Float64
+    """`ORCA_DRAIN_SECONDS` (3600): how long a drain waits for its runs
+    before it kills what's left."""
+    var _drain_start: Int
+    """When the drain began, on the monotonic clock."""
+    var finished: Bool
+    """Whether a drained instance has ended: `orca scheduler` exits."""
     var _going: Int
-    """With `use_runner`, the local and control-placed runs going, as this
-    tick's start counted them: memory pressure's "none of orca's runs
-    going"."""
+    """For an instance, the local and control-placed runs going on this
+    host across every instance, as this tick counted them: memory
+    pressure's "none of orca's runs going"."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
@@ -1279,20 +1302,149 @@ struct Scheduler(Movable):
         self._unswept = List[String]()
         self._stalled = Dict[Int, Bool]()
         self._cgroups_next = 0
-        var local = getenv("ORCA_LOCAL_RUNNER", "process")
-        if local != "process" and local != "runner":
-            raise Error(
-                "orca: ORCA_LOCAL_RUNNER is process or runner, not ", local
-            )
-        self.use_runner = local == "runner"
+        self.instance = 0
+        self.leading = True
+        self.draining = False
+        self.drain_seconds = Float64(getenv("ORCA_DRAIN_SECONDS", "3600"))
+        self._drain_start = 0
+        self.finished = False
         self._going = 0
+
+    def join(mut self) raises:
+        """With `ORCA_OVERLAP=on`, makes this scheduler an instance
+        (`orca.instances`): it leads only once it holds the lead."""
+        if not overlap_on():
+            return
+        self.instance = join_instance(self.db)
+        self.leading = False
+        print("orca: scheduler instance", self.instance, "joined")
+
+    def reconnect(mut self, url: String) raises:
+        """A new connection after a tick failed, keeping what this instance
+        supervises; the lead, which was the old connection's, is taken
+        again on the next tick if no newer instance has it."""
+        self.db = State(url)
+        self.db.migrate()
+        self.leading = False
 
     def _idle(self) -> Bool:
         """Whether none of orca's runs is going on this host: none of its
-        own children, or with the runner none of the runner's."""
-        if self.use_runner:
+        own children, or for an instance none of any instance's."""
+        if self.instance > 0:
             return self._going == 0
         return len(self._spawned) == 0
+
+    def _lead(mut self) raises:
+        """An instance's turn at the lead: marks it seen with its runs,
+        drains once a newer instance is live or it's asked to, takes the
+        lead when free otherwise, and while draining ends once nothing it
+        started is left (killing what is, after `drain_seconds`)."""
+        var running = String()
+        for e in self._spawned.items():
+            if running:
+                running.write(",")
+            running.write(e.value[0])
+        var asked = beat(self.db, self.instance, running)
+        if not self.draining:
+            var n = newer(self.db, self.instance)
+            if asked or n > 0:
+                step_down(self.db, self.instance, self.leading)
+                self.leading = False
+                self.draining = True
+                self._drain_start = Int(perf_counter_ns())
+                var why = String("instance ", n, " is newer") if n > 0 else (
+                    String("asked to")
+                )
+                print(
+                    String("orca: scheduler instance ", self.instance),
+                    String(" drains (", why, "): "),
+                    len(self._spawned),
+                    " runs going",
+                    sep="",
+                )
+            elif not self.leading and try_lead(self.db, self.instance):
+                self.leading = True
+                print("orca: scheduler instance", self.instance, "leads")
+        if not self.draining:
+            return
+        if len(self._spawned) == 0 and len(self._keeping) == 0:
+            end_instance(self.db, self.instance)
+            self.finished = True
+            print("orca: scheduler instance", self.instance, "drained")
+            return
+        var waited = Float64(Int(perf_counter_ns()) - self._drain_start) / 1e9
+        if waited < self.drain_seconds:
+            return
+        for e in self._spawned.items():
+            if e.key in self._control:
+                _ = external_call["kill", c_int](c_int(-e.key), c_int(9))
+            _ = external_call["kill", c_int](c_int(e.key), c_int(9))
+            print(
+                "killed pid",
+                e.key,
+                "of run",
+                e.value[0],
+                "(the drain ran out after",
+                Int(self.drain_seconds),
+                "s)",
+            )
+        end_instance(self.db, self.instance)
+        self.finished = True
+        print(
+            "orca: scheduler instance",
+            self.instance,
+            "ended its drain; the leader queues its runs again",
+        )
+
+    def _kill_wedged(mut self) raises:
+        """Kills each process of ours whose run's heartbeat went stale: it's
+        wedged, or stopped, rather than gone (it would have been reaped),
+        and mustn't go on beside its run's next start. Once reaped, its run
+        is cancelled, failed or started again as a dead one."""
+        if len(self._spawned) == 0:
+            return
+        var ids = String()
+        for e in self._spawned.items():
+            if ids:
+                ids.write(",")
+            ids.write(e.value[0])
+        for r in self.db.conn.query(
+            String(
+                "SELECT id, pipeline FROM orca.runs WHERE status = 'running'",
+                " AND id::text = ANY (string_to_array($2, ',')) AND ",
+                stale_sql("$1", self.start_grace),
+            ),
+            Params().float64(self.stale).text(ids),
+        ):
+            var id = Int(r.int64("id"))
+            var pid = 0
+            for e in self._spawned.items():
+                if e.value[0] == id:
+                    pid = e.key
+            if pid <= 0:
+                continue
+            if pid in self._contained:
+                # Throttled at its limit (memory.high) rather than wedged:
+                # out of memory.
+                try:
+                    ref c = self._contained[pid]
+                    if at_limit(Cgroups.current(c.path), c.limit_mb):
+                        self._stalled[pid] = True
+                except:
+                    pass
+            if pid in self._control:
+                # Its own process group: its forked workers too.
+                _ = external_call["kill", c_int](c_int(-pid), c_int(9))
+            _ = external_call["kill", c_int](c_int(pid), c_int(9))
+            print(
+                "killed pid",
+                pid,
+                "of",
+                r.text("pipeline"),
+                "run",
+                id,
+                "(its heartbeat went stale)",
+            )
 
     def say_pressure(self):
         """Says once, for `orca scheduler`, where this host's memory
@@ -1799,7 +1951,20 @@ struct Scheduler(Movable):
                 except e:
                     print("orca: can't keep the driver log at", log, ":", e)
         var readings = self._sample()
-        if self.use_runner:
+        try:
+            self._kill_wedged()
+        except e:
+            print("orca: can't check its runs' heartbeats:", e)
+        if self.instance > 0:
+            self._lead()
+            if not self.leading:
+                # Supervising what it started, deciding nothing.
+                self._record_cgroups()
+                try:
+                    self._check_control_memory(readings)
+                except e:
+                    print("orca: can't check control-placed runs' memory:", e)
+                return
             try:
                 self._going = Int(
                     self.db.conn.query(
@@ -1815,7 +1980,7 @@ struct Scheduler(Movable):
                     .int64("n")
                 )
             except e:
-                print("orca: can't count the runner's runs:", e)
+                print("orca: can't count this host's runs:", e)
         try:
             self._pressure()
         except e:
@@ -2784,79 +2949,14 @@ struct Scheduler(Movable):
             "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
             Params().text(p.name),
         )
-        # A process of ours whose heartbeat went stale is wedged, or
-        # stopped, rather than gone (it would have been reaped): it's
-        # killed before its run is cancelled, failed or started again, so
-        # it can't go on beside a new one. (The pass for its other runs
-        # does this for its fill runs too.)
-        if len(self._spawned) > 0 and not fill:
-            for r in tx.query(
-                String(
-                    "SELECT id FROM orca.runs WHERE pipeline = $1 AND status =",
-                    " 'running' AND ",
-                    dead,
-                ),
-                Params().text(p.name).float64(self.stale),
-            ):
-                var id = Int(r.int64("id"))
-                var pid = 0
-                for e in self._spawned.items():
-                    if e.value[0] == id:
-                        pid = e.key
-                if pid > 0:
-                    if pid in self._contained:
-                        # Throttled at its limit (memory.high) rather than
-                        # wedged: out of memory.
-                        try:
-                            ref c = self._contained[pid]
-                            if at_limit(Cgroups.current(c.path), c.limit_mb):
-                                self._stalled[pid] = True
-                        except:
-                            pass
-                    if pid in self._control:
-                        # Its own process group: its forked workers too.
-                        _ = external_call["kill", c_int](c_int(-pid), c_int(9))
-                    _ = external_call["kill", c_int](c_int(pid), c_int(9))
-                    print(
-                        "killed pid",
-                        pid,
-                        "of",
-                        p.name,
-                        "run",
-                        id,
-                        "(its heartbeat went stale)",
-                    )
-        # A run of `orca runner` whose runner is gone (or no longer has it)
-        # and whose heartbeat is stale is queued again whatever its trigger,
-        # as a dead worker's is; one its live runner still holds isn't dead
+        # A run of a scheduler instance that's gone, whose heartbeat is
+        # stale, is queued again whatever its trigger, as a dead worker's
+        # is; one its live instance still holds isn't dead
         # (orca.live.held_sql), so nothing below ends or restarts it.
         var lost = List[Tuple[Int, String]]()
-        var assigned = self.use_runner and (control or placed == "local")
+        var local = control or placed == "local"
         if not fill:
-            # Assigned to the runner, and not claimed within the start
-            # grace: back in the queue, the start given back.
-            var back = tx.execute(
-                (
-                    "UPDATE orca.runs SET status = 'queued', owner = NULL,"
-                    " started = NULL, starts = starts - 1 WHERE pipeline = $1"
-                    " AND status = 'running' AND owner = $2 AND worker IS NULL"
-                    " AND started <= now() - make_interval(secs => $3)"
-                ),
-                Params()
-                .text(p.name)
-                .text(RUNNER_OWNER)
-                .float64(self.start_grace),
-            )
-            if back > 0:
-                print(
-                    "orca:",
-                    back,
-                    "runs of",
-                    p.name,
-                    "assigned to the runner weren't claimed in time: queued",
-                    " again",
-                )
-            lost = self._requeue_lost(tx, p, dead, "")
+            lost = self._requeue_orphans(tx, p)
             self._end_dead(tx, p, dead)
         var live = Int(
             tx.query(
@@ -2885,12 +2985,6 @@ struct Scheduler(Movable):
                 p.run_retries,
             )
             free = 0 if settling or hold else status.value().slots
-        if assigned and free > 0 and not hold:
-            if not runner_live(tx, self.stale):
-                hold = String(
-                    "held: waiting for the runner (ORCA_LOCAL_RUNNER=runner)"
-                )
-                free = 0
         var need = 0
         if control:
             need = 0  # no instance: nothing of the budget
@@ -3102,7 +3196,7 @@ struct Scheduler(Movable):
                         tx.query(
                             (
                                 "UPDATE orca.runs SET status = 'running', owner"
-                                " = $8, heartbeat = NULL, started ="
+                                " = 'scheduler', heartbeat = NULL, started ="
                                 " clock_timestamp(), ended = NULL, starts ="
                                 " starts + 1,"
                                 " retry_at = NULL, error = NULL, waiting_since"
@@ -3112,7 +3206,8 @@ struct Scheduler(Movable):
                                 " grant_cpus = nullif($6, 0), grant_memory_mb ="
                                 " nullif($7, 0), memory_limit_mb = NULL,"
                                 " memory_max_mb = NULL, memory_bytes = NULL,"
-                                " worker = NULL WHERE id = $1 RETURNING starts"
+                                " instance = nullif($8, 0) WHERE id = $1"
+                                " RETURNING starts"
                             ),
                             Params()
                             .int64(id)
@@ -3122,11 +3217,7 @@ struct Scheduler(Movable):
                             .text(p.memory_gb if admitted else String())
                             .int64(Int64(grant.cpus))
                             .int64(Int64(grant.memory_mb))
-                            .text(
-                                String(RUNNER_OWNER) if assigned else String(
-                                    "scheduler"
-                                )
-                            ),
+                            .int64(Int64(self.instance if local else 0)),
                         )
                         .row(0)
                         .int64("starts")
@@ -3154,10 +3245,6 @@ struct Scheduler(Movable):
                     grant.memory_mb,
                     "MB (0: not asked for)",
                 )
-            if assigned:
-                # The runner claims it and starts it (orca.workers).
-                print("assigned", p.name, "run", id, "to the runner")
-                continue
             if control:
                 self._start_control(p, Int(id), starts[i], new_code[i], grant)
                 continue
@@ -3376,15 +3463,8 @@ struct Scheduler(Movable):
         it, and once `starts - deferrals` is past `run_retries` it is left
         to `_end_dead`, so a run that kills its workers can't loop. Each is
         a row of `orca.audit` (user `scheduler`, action
-        `/api/worker/requeue`); returns each run with why.
-
-        The same for a local or control-placed run of `orca runner` (a
-        worker of pool `local`, docs/runner.md), queued again for the
-        scheduler to start (`waiting` empty): its runner gone, or seen
-        without it, and its heartbeat stale."""
+        `/api/worker/requeue`); returns each run with why."""
         var out = List[Tuple[Int, String]]()
-        # In this query orca.runs is `r`.
-        var gone = dead_sql("$2", self.start_grace, "r")
         var rows = tx.query(
             String(
                 "WITH lost AS (SELECT r.id, r.owner = '",
@@ -3397,10 +3477,7 @@ struct Scheduler(Movable):
                 " || w.label || ' (token ' || w.id || ') no longer runs it'",
                 " END AS why FROM orca.runs r JOIN orca.workers w ON w.id =",
                 " r.worker WHERE r.pipeline = $1 AND r.status = 'running' AND",
-                " (r.placement LIKE 'worker:%' OR (r.placement IN ('local',",
-                " 'control') AND w.pool = '",
-                RUNNER_POOL,
-                "')) AND NOT r.cancel_requested AND",
+                " r.placement LIKE 'worker:%' AND NOT r.cancel_requested AND",
                 " (r.owner = '",
                 _WORKER_OWNER,
                 "' OR r.starts - r.deferrals <= $3) AND (((w.last_seen IS NULL",
@@ -3408,13 +3485,13 @@ struct Scheduler(Movable):
                 " ((r.owner = '",
                 _WORKER_OWNER,
                 "' AND r.started <= now() - make_interval(secs => $2)) OR ",
-                gone,
+                dead,
                 ")) OR (",
-                gone,
+                dead,
                 " AND NOT (r.id::text = ANY (string_to_array(coalesce(",
                 "w.running, ''), ','))))) FOR UPDATE OF r) UPDATE orca.runs u",
                 " SET status = 'queued', owner = NULL, heartbeat = NULL,",
-                " retry_at = NULL, held = nullif($4, ''), starts = CASE WHEN",
+                " retry_at = NULL, held = $4, starts = CASE WHEN",
                 " lost.unstarted THEN u.starts - 1 ELSE u.starts END FROM lost",
                 " WHERE u.id = lost.id RETURNING u.id, lost.why,",
                 " lost.unstarted",
@@ -3435,6 +3512,63 @@ struct Scheduler(Movable):
                     "INSERT INTO orca.audit (username, action, run, detail,"
                     " source) VALUES ('scheduler', '/api/worker/requeue', $1,"
                     " $2, 'scheduler')"
+                ),
+                Params()
+                .int64(r.int64("id"))
+                .text(String("queued again: ", why)),
+            )
+        return out^
+
+    def _requeue_orphans(
+        mut self, mut tx: Transaction, p: Registered
+    ) raises -> List[Tuple[Int, String]]:
+        """Queues again `p`'s local and control-placed runs whose scheduler
+        instance (`runs.instance`, docs/overlap.md) is gone (ended, or not
+        seen for the stale limit) and whose heartbeat is stale,
+        whatever their trigger: the deploy, or a crash, stopped them, not
+        their own code. Nothing ran them past their last step, so the next
+        start resumes them. The start counts, and once `starts - deferrals`
+        is past `run_retries` a run is left to `_end_dead`, so a run that
+        kills its scheduler can't loop. Each is a row of `orca.audit` (user
+        `scheduler`, action `/api/scheduler/requeue`); returns each with
+        why."""
+        var out = List[Tuple[Int, String]]()
+        var rows = tx.query(
+            String(
+                "WITH lost AS (SELECT r.id, 'scheduler instance ' || s.id ||",
+                " ' on ' || s.host || CASE WHEN s.ended IS NOT NULL THEN",
+                " ' ended' ELSE ' stopped: not seen for ' || extract(epoch",
+                " FROM now() - s.last_seen)::bigint || ' s' END AS why FROM",
+                (
+                    " orca.runs r JOIN orca.schedulers s ON s.id = r.instance"
+                    " WHERE"
+                ),
+                " r.pipeline = $1 AND r.status = 'running' AND r.placement IN",
+                " ('local', 'control') AND NOT r.cancel_requested AND",
+                " r.starts - r.deferrals <= $3 AND (s.ended IS NOT NULL OR",
+                " s.last_seen <= now() - make_interval(secs => $2)) AND ",
+                stale_sql("$2", self.start_grace, "r"),
+                " FOR UPDATE OF r) UPDATE orca.runs u SET status = 'queued',",
+                (
+                    " owner = NULL, heartbeat = NULL, retry_at = NULL, held ="
+                    " NULL,"
+                ),
+                " instance = NULL FROM lost WHERE u.id = lost.id RETURNING",
+                " u.id, lost.why",
+            ),
+            Params()
+            .text(p.name)
+            .float64(self.stale)
+            .int64(Int64(p.run_retries)),
+        )
+        for r in rows:
+            var why = r.text("why")
+            out.append((Int(r.int64("id")), why))
+            _ = tx.execute(
+                (
+                    "INSERT INTO orca.audit (username, action, run, detail,"
+                    " source) VALUES ('scheduler', '/api/scheduler/requeue',"
+                    " $1, $2, 'scheduler')"
                 ),
                 Params()
                 .int64(r.int64("id"))
