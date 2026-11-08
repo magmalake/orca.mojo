@@ -208,6 +208,39 @@ def json_runs_page(mut j: String, p: RunsPage):
     )
 
 
+def runs_filters_json(mut j: String, p: RunsPage):
+    """`"filters": {...}, "counts": {...}`: what the list is filtered by,
+    and each status's runs under its other filters."""
+    j.write(
+        '"filters": {"pipeline": ',
+        quote(p.q.pipeline),
+        ', "status": ',
+        quote(p.q.status),
+        ', "statuses": [',
+    )
+    var ss = p.q.statuses()
+    for i in range(len(ss)):
+        j.write(", " if i else "", quote(ss[i]))
+    j.write(
+        '], "trigger": ',
+        quote(p.q.trigger),
+        ', "since": ',
+        quote(p.q.since) if p.q.since else String("null"),
+        ', "from": ',
+        quote(p.q.start) if p.q.start else String("null"),
+        ', "to": ',
+        quote(p.q.end) if p.q.end else String("null"),
+        ', "run": ',
+        String(p.q.run) if p.q.run > 0 else String("null"),
+        ', "key": ',
+        quote(p.q.key) if p.q.key else String("null"),
+        '}, "counts": {',
+    )
+    for i in range(len(p.counts)):
+        j.write(", " if i else "", quote(p.counts[i][0]), ": ", p.counts[i][1])
+    j.write("}")
+
+
 def run_json(v: RunView) -> String:
     """`/runs/<id>` (and `/api/...`) as JSON: the run, its code, its
     machines, what started it, its steps and the tables they touched."""

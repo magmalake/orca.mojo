@@ -417,14 +417,14 @@ curl -fsS -D - -o /dev/null "$base/runs/$fan/timeline.json" | grep -qi '^access-
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$ok_run/timeline.json")
 [ "$code" = 404 ] || fail "a run without tasks answered $code for its timeline"
 
-# /runs: the filters are dropdowns with the current choice selected, and an
-# unknown value is kept, escaped.
+# /runs: the filters are dropdowns (status: checkboxes) with the current
+# choice selected, and an unknown value is kept, escaped.
 page=$(html "/runs?pipeline=toy&status=failed")
 echo "$page" | grep -qF '<select name="pipeline"><option value="">any</option>' || fail "no pipeline dropdown"
 echo "$page" | grep -qF '<option value="toy" selected>toy</option>' || fail "toy isn't selected"
 echo "$page" | grep -qF '<option value="daily">daily</option>' || fail "daily isn't a pipeline option"
-echo "$page" | grep -qF '<option value="failed" selected>failed</option>' || fail "failed isn't selected"
-echo "$page" | grep -qF '<option value="cancelled">cancelled</option>' || fail "cancelled isn't a status option"
+echo "$page" | grep -qF '<input type="checkbox" name="status" value="failed" checked>' || fail "failed isn't ticked"
+echo "$page" | grep -qF '<input type="checkbox" name="status" value="cancelled">' || fail "cancelled isn't a status choice"
 echo "$page" | grep -qF '<select name="trigger"><option value="" selected>any</option><option value="schedule">schedule</option>' \
     || fail "the trigger dropdown"
 echo "$page" | grep -qF '<option value="rebuild">rebuild</option>' || fail "rebuild isn't a trigger option"
@@ -443,7 +443,8 @@ fa='pipeline=toy&amp;status=succeeded&amp;trigger=schedule&amp;limit=25'
 p1=$(json "/runs?$f")
 echo "$p1" | jq -e '(.runs | length) == 25 and .total == 60 and .newer == 0 and .older == 35
     and .before == null and .after == null and .n == 25 and .limit == 25
-    and .filters == {"pipeline": "toy", "status": "succeeded", "trigger": "schedule"}
+    and .filters.pipeline == "toy" and .filters.status == "succeeded" and .filters.trigger == "schedule"
+    and .filters.statuses == ["succeeded"] and .filters.since == null and .counts.succeeded == 60
     and .next_before == .runs[-1].id and .next == .runs[-1].id and .prev == null and .prev_url == null
     and .next_url == "/runs?pipeline=toy&status=succeeded&trigger=schedule&limit=25&before=\(.next)"
     and ([.runs[].trigger] | unique) == ["schedule"]' > /dev/null \
@@ -621,6 +622,170 @@ html /pipelines/toy | grep -qF 'action="/pipelines/toy/unpause"><button type="su
 q "UPDATE orca.pipelines SET paused = false WHERE name = 'toy'" > /dev/null
 q "DELETE FROM orca.runs WHERE id = $qd" > /dev/null
 echo "ok   /runs: dropdown filters, pages and tries"
+
+# Filters: status (any of several, with counts under the other filters),
+# when created (from, to, since), a run and its partitions (a glob or a part
+# of them); with the pager, in every link, the JSON and the fragment a page
+# refreshes from; then the bulk actions over what they pick.
+mark=$(q "SELECT max(id) FROM orca.runs")
+# 30 toy runs over 2031, an hour apart: 10 failed, 10 succeeded, 10 queued;
+# 5 more over 2032-01 three days ago; one over named partitions.
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, created, ended)
+   SELECT 'toy', r.registry_hash, '2031-' || lpad((1 + i % 12)::text, 2, '0'), 'schedule',
+          (ARRAY['failed', 'succeeded', 'queued'])[1 + i % 3], now() - make_interval(hours => i),
+          CASE WHEN i % 3 = 2 THEN NULL ELSE now() END
+   FROM orca.runs r, generate_series(0, 29) i WHERE r.id = $ok_run" > /dev/null
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, created, ended)
+   SELECT 'toy', registry_hash, '2032-01', 'fill', 'succeeded', now() - interval '3 days', now()
+   FROM orca.runs, generate_series(1, 5) WHERE id = $ok_run" > /dev/null
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, ended)
+   SELECT 'toy', registry_hash, 'modular/mojo,foo_bar/baz', 'manual', 'succeeded', now()
+   FROM orca.runs WHERE id = $ok_run" > /dev/null
+named=$(q "SELECT max(id) FROM orca.runs")
+k='key=2031-*'
+j=$(json "/runs?$k")
+echo "$j" | jq -e '.total == 30 and .counts == {"failed": 10, "succeeded": 10, "queued": 10}
+    and .filters.key == "2031-*" and ([.runs[].partitions | startswith("2031-")] | all)' > /dev/null \
+    || fail "a partitions glob: $(echo "$j" | jq -c 'del(.runs)')"
+for sf in 'status=failed&status=queued' 'status=failed,queued' 'status=queued%2Cfailed&status=failed'; do
+    j=$(json "/runs?$k&$sf")
+    echo "$j" | jq -e '.total == 20 and ([.runs[].status] | unique) == ["failed", "queued"]
+        and (.filters.statuses | sort) == ["failed", "queued"]
+        and .counts == {"failed": 10, "succeeded": 10, "queued": 10}' > /dev/null \
+        || fail "statuses $sf: $(echo "$j" | jq -c 'del(.runs)')"
+done
+# Paged 7 at a time, the filters in every link: three pages, 20 runs.
+url="/runs?$k&status=failed&status=queued&limit=7"
+seen=
+pages=0
+while [ -n "$url" ]; do
+    j=$(json "$url")
+    pages=$((pages + 1))
+    seen="$seen $(echo "$j" | jq -r '[.runs[] | select(.status == "failed" or .status == "queued") | .id] | join(" ")')"
+    echo "$j" | jq -e '.total == 20' > /dev/null || fail "page $pages's total: $(echo "$j" | jq -c 'del(.runs)')"
+    url=$(echo "$j" | jq -r '.next_url // empty')
+    [ -z "$url" ] || echo "$url" | grep -qF 'status=failed%2Cqueued' || fail "the next page lost its statuses: $url"
+    [ -z "$url" ] || echo "$url" | grep -qF 'key=2031-%2A' || fail "the next page lost its key: $url"
+done
+[ "$pages" -eq 3 ] || fail "20 runs, 7 to a page, came in $pages pages"
+[ "$(echo "$seen" | tr ' ' '\n' | grep -c .)" -eq 20 ] || fail "the pages had $(echo "$seen" | wc -w) runs"
+[ "$(echo "$seen" | tr ' ' '\n' | grep . | sort -u | wc -l)" -eq 20 ] || fail "the pages overlap"
+page=$(html "/runs?$k&status=failed&status=queued&limit=7")
+echo "$page" | grep -qF '<span class="pager__at">1–7 of 20</span>' || fail "the filtered pager's range"
+echo "$page" | grep -qF '<input type="checkbox" name="status" value="queued" checked> ' || fail "queued isn't ticked"
+echo "$page" | grep -qF '<span class="pick__value">failed, queued</span>' || fail "the status box doesn't say what's ticked"
+echo "$page" | grep -q 'value="succeeded"> <span[^>]*status--succeeded">succeeded</span> <span class="pick__n">10</span>' \
+    || fail "succeeded's count, under the other filters"
+echo "$page" | grep -qF '<input type="search" name="key" size="14" placeholder="2023-08-* or a name" value="2031-*">' \
+    || fail "the partitions field doesn't keep its value"
+echo "$page" | grep -qF '<a href="/runs?status=failed%2Cqueued&amp;since=1h&amp;key=2031-%2A&amp;limit=7">last hour</a>' \
+    || fail "the last-hour pick doesn't keep the other filters"
+echo "$page" | grep -qF '<a class="filters__clear" href="/runs?limit=7">Clear filters</a>' || fail "no Clear filters"
+# Live refresh keeps the filters: the newest page, with queued runs on it,
+# asks every 5 s for its fragment, which has only runs that match.
+echo "$page" | grep -qF '<div data-poll="/runs/table?view=list&amp;status=failed%2Cqueued&amp;key=2031-%2A&amp;limit=7" data-poll-every="5">' \
+    || fail "the filtered page doesn't refresh with its filters"
+[ "$(frag "/runs/table?view=list&status=failed%2Cqueued&key=2031-%2A&limit=7")" = 200 ] || fail "the filtered fragment"
+grep -qi '^X-Poll-Every: 5' "$log.h" || fail "the filtered fragment with queued runs doesn't say 5 s"
+grep -qF '<span class="pager__at">1–7 of 20</span>' "$log.frag" || fail "the fragment's pager isn't filtered"
+grep -q 'status--succeeded' "$log.frag" && fail "the fragment has a run the filters leave out"
+grep -qF '<input type="checkbox" name="pick" form="bulk-runs" value="' "$log.frag" || fail "the fragment's rows can't be ticked"
+# When: since, from and to (whole days, UTC), a bad one left out.
+[ "$(json "/runs?key=203*&since=24h" | jq .total)" -eq 24 ] || fail "since=24h"
+[ "$(json "/runs?key=203*&since=7d" | jq .total)" -eq 35 ] || fail "since=7d"
+[ "$(json "/runs?key=203*&since=1h" | jq .total)" -eq 1 ] || fail "since=1h"
+[ "$(json "/runs?key=203*&since=today" | jq '.total > 0 and .filters.since == "today"')" = true ] || fail "since=today"
+d3=$(q "SELECT to_char((now() - interval '3 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD')")
+d2=$(q "SELECT to_char((now() - interval '2 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD')")
+[ "$(json "/runs?key=2032-*&from=$d3&to=$d3" | jq .total)" -eq 5 ] || fail "from and to the same day"
+[ "$(json "/runs?key=2032-*&from=$d2" | jq .total)" -eq 0 ] || fail "from a day after"
+[ "$(json "/runs?key=2032-*&to=${d3}T00:00" | jq .total)" -eq 0 ] || fail "to a time before"
+json "/runs?from=nonsense&to=2024-13-01&since=forever" | jq -e '.filters.from == null and .filters.to == null
+    and .filters.since == null and .total > 35' > /dev/null || fail "bad times weren't left out"
+html "/runs?key=2032-*&from=$d3" | grep -qF "<input type=\"date\" name=\"from\" value=\"$d3\">" || fail "the from field"
+# A part of the partitions, or a glob; LIKE's own characters are themselves.
+[ "$(json '/runs?key=modular' | jq -c '[.runs[].id]')" = "[$named]" ] || fail "key=modular"
+[ "$(json '/runs?key=foo_bar/*' | jq .total)" -eq 1 ] || fail "a glob with _ in it"
+[ "$(json '/runs?key=foo%25bar' | jq .total)" -eq 0 ] || fail "key=foo%bar matched"
+[ "$(json '/runs?key=2031_0*' | jq .total)" -eq 0 ] || fail "_ in a glob matched any character"
+# A run: its page, from /runs and from the Runs tab; its JSON is the list of it.
+[ "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$base/runs?run=$named")" = "303 $base/runs/$named" ] \
+    || fail "run= didn't go to the run"
+[ "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$base/pipelines/toy?tab=runs&run=%23$named")" = "303 $base/runs/$named" ] \
+    || fail "the Runs tab's run= didn't go to the run"
+[ "$(json "/runs?run=$named" | jq -c '[.total, .runs[0].id]')" = "[1,$named]" ] || fail "run='s JSON"
+[ "$(json "/runs?run=$named&pipeline=daily" | jq .total)" -eq 0 ] || fail "run= with another pipeline"
+# The Runs tab: the same filters (trigger too), its JSON's runs_page.
+j=$(json "/api/pipelines/toy?tab=runs&status=failed&$k")
+echo "$j" | jq -e '.runs_page.total == 10 and .runs_page.filters.statuses == ["failed"]
+    and .runs_page.counts.queued == 10 and ([.runs[].status] | unique) == ["failed"]' > /dev/null \
+    || fail "the Runs tab's filtered JSON: $(echo "$j" | jq -c .runs_page)"
+[ "$(json "/api/pipelines/toy?trigger=fill" | jq .runs_page.total)" -eq 5 ] || fail "the Runs tab's trigger"
+page=$(html "/pipelines/toy?tab=runs&status=failed&$k")
+echo "$page" | grep -qF '<form class="filters" method="get" action="/pipelines/toy" aria-label="Filter runs"><input type="hidden" name="tab" value="runs">' \
+    || fail "the Runs tab's filter bar"
+echo "$page" | grep -q '<select name="pipeline">' && fail "the Runs tab offers other pipelines"
+echo "$page" | grep -qF '<div data-poll="/runs/table?view=pipeline&amp;pipeline=toy&amp;status=failed&amp;key=2031-%2A&amp;limit=20"' \
+    || fail "the Runs tab doesn't refresh with its filters"
+[ "$(frag "/runs/table?view=pipeline&pipeline=toy&status=failed&key=2031-%2A&limit=20")" = 200 ] || fail "the Runs tab's fragment"
+grep -qF '<span class="pager__at">' "$log.frag" && fail "10 runs on a page of 20 have a pager"
+[ "$(grep -o 'status--failed' "$log.frag" | wc -l)" -eq 10 ] || fail "the Runs tab's fragment isn't its 10 failed runs"
+html "/pipelines/toy?tab=runs&$k&limit=7" | grep -qF "<a rel=\"next\" href=\"/pipelines/toy?tab=runs&amp;key=2031-%2A&amp;limit=7&amp;before=" \
+    || fail "the Runs tab's Older link lost its filters"
+
+# Bulk actions (login is off here, so open; tests/ui_login.sh has them
+# refused without a session, and audited with one).
+page=$(html "/runs?$k&limit=7")
+echo "$page" | grep -qF '<form id="bulk-runs" class="bulk act__need" method="post" action="/runs/bulk" aria-label="Act on runs"><input type="hidden" name="view" value="list"><input type="hidden" name="pipeline" value=""><input type="hidden" name="key" value="2031-*">' \
+    || fail "the bulk form doesn't carry the filters"
+echo "$page" | grep -qF ' value="1"> or all 30 that match</label><input type="hidden" name="expect" value="30">' \
+    || fail "all that match doesn't say how many"
+echo "$page" | grep -q '<form id="bulk-runs"[^>]*data-confirm' && fail "the bulk form asks with confirm()"
+bpost() { curl -s -o "$log.bulk" -w '%{http_code} %{redirect_url}' -H "Origin: $base" -d "$1" "$base/runs/bulk"; }
+qr=$(q "SELECT min(id) FROM orca.runs WHERE id > $mark AND status = 'queued'")
+sr=$(q "SELECT min(id) FROM orca.runs WHERE id > $mark AND status = 'succeeded'")
+fr=$(q "SELECT min(id) FROM orca.runs WHERE id > $mark AND status = 'failed'")
+got=$(bpost "do=cancel&view=list&pipeline=&key=2031-*&pick=$qr&pick=$sr")
+[ "$got" = "303 $base/runs?key=2031-%2A&did=cancel&done=1&skipped=1&refused=0" ] || fail "a bulk cancel: $got"
+[ "$(q "SELECT status FROM orca.runs WHERE id = $qr")" = cancelled ] || fail "the ticked queued run wasn't cancelled"
+[ "$(q "SELECT status FROM orca.runs WHERE id = $sr")" = succeeded ] || fail "the ticked succeeded run changed"
+html "/runs?key=2031-%2A&did=cancel&done=1&skipped=1&refused=0" \
+    | grep -qF '<p class="notice" role="status">Cancelled 1 run, 1 already finished. Running ones stop before their next step.</p>' \
+    || fail "the list doesn't say what the cancel did"
+json_bulk=$(curl -fsS -H "Origin: $base" -H 'Accept: application/json' -d "do=cancel&pick=$qr&pick=$sr" "$base/runs/bulk")
+echo "$json_bulk" | jq -e --argjson q "$qr" --argjson s "$sr" '.do == "cancel" and .done == [] and (.skipped | sort) == ([$q, $s] | sort)' > /dev/null \
+    || fail "the bulk cancel's JSON: $json_bulk"
+# All that match, with the count the page said; a count that changed asks
+# again, with the new one.
+got=$(bpost "do=cancel&view=list&pipeline=&key=2031-*&status=queued&all=1&expect=10")
+[ "${got%% *}" = 409 ] || fail "all with a stale count: $got"
+grep -qF '9 runs match these filters now, not the 10 the page said' "$log.bulk" || fail "the stale count isn't said"
+grep -qF '<input type="hidden" name="expect" value="9"><button type="submit">Cancel all 9</button>' "$log.bulk" \
+    || fail "no way to confirm the new count"
+[ "$(q "SELECT count(*) FROM orca.runs WHERE id > $mark AND status = 'queued'")" -eq 9 ] || fail "a stale count cancelled runs"
+got=$(bpost "do=cancel&view=list&pipeline=&key=2031-*&status=queued&all=1&expect=9")
+[ "$got" = "303 $base/runs?status=queued&key=2031-%2A&did=cancel&done=9&skipped=0&refused=0" ] || fail "all that match: $got"
+[ "$(q "SELECT count(*) FROM orca.runs WHERE id > $mark AND status = 'queued'")" -eq 0 ] || fail "all that match weren't cancelled"
+[ "$(bpost "do=cancel&view=list&pick=")" = "409 " ] || fail "nothing picked wasn't refused"
+[ "$(bpost "do=explode&pick=$sr" | cut -d' ' -f1)" = 400 ] || fail "an unknown action wasn't refused"
+# Retry failed: a failed run is queued again, the rest left alone.
+got=$(bpost "do=retry&view=pipeline&pipeline=toy&status=failed&pick=$fr&pick=$sr")
+[ "$got" = "303 $base/pipelines/toy?tab=runs&status=failed&did=retry&done=1&skipped=1&refused=0" ] || fail "a bulk retry: $got"
+[ "$(q "SELECT status FROM orca.runs WHERE id = $fr")" = queued ] || fail "the failed run wasn't queued again"
+html "/pipelines/toy?tab=runs&status=failed&did=retry&done=1&skipped=1&refused=0" \
+    | grep -qF '<p class="notice" role="status">Queued 1 run again, 1 not failed.</p>' || fail "the Runs tab doesn't say what the retry did"
+# Backfill again: the partitions of the ticked runs, a run each, rerun.
+before_bf=$(q "SELECT count(*) FROM orca.runs WHERE trigger = 'backfill'")
+got=$(bpost "do=backfill&view=list&pick=$ok_run")
+if [ "${got%% *}" = 409 ]; then
+    grep -qF 'Backfill them, appending again' "$log.bulk" || fail "a refused backfill: $(cat "$log.bulk")"
+    got=$(bpost "do=backfill&view=list&pick=$ok_run&allow_append=1")
+fi
+[ "${got%% *}" = 303 ] || fail "a bulk backfill: $got $(cat "$log.bulk")"
+echo "$got" | grep -qF 'did=backfill&done=1&skipped=0&refused=0&queued=2' || fail "the backfill's counts: $got"
+[ "$(q "SELECT count(*) FROM orca.runs WHERE trigger = 'backfill'")" -eq $((before_bf + 2)) ] || fail "the backfill didn't queue 2 runs"
+q "DELETE FROM orca.runs WHERE id > $mark" > /dev/null
+echo "ok   /runs: filters, with pages, counts and refreshes; bulk actions"
 
 # The home page's Timeline tab (orca.ui.viz): List stays the default and
 # works without scripts; /api/gantt has the pipelines in dataset order

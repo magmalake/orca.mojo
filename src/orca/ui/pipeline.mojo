@@ -31,7 +31,12 @@ from orca.ui.parts import (
     source_html,
     step_cell,
 )
-from orca.ui.runs import runs_list
+from orca.ui.runs import (
+    runs_bulk_html,
+    runs_done_html,
+    runs_filters_html,
+    runs_list,
+)
 from orca.ui.start import start_html
 from orca.ui.step_cards import AttemptCard, cards_script
 from orca.usage import bytes_text, cpu_text
@@ -739,6 +744,9 @@ def pipeline_html(
         _control_html(h, p)
     else:
         h.raw("<h2>Runs</h2>")
+        runs_filters_html(h, db, v.runs)
+        runs_done_html(h, ask.url)
+        runs_bulk_html(h, v.runs)
         runs_list(h, v.runs)
         h.raw('<p class="more"><a href="/runs?pipeline=')
         h.text(url_encode(p.name))
