@@ -589,6 +589,10 @@ q "UPDATE orca.runs SET partitions = 'a,b,c,d,e' WHERE id = $bad_run" > /dev/nul
 html "/runs?pipeline=toy&status=failed" \
     | grep -qF '<td class="mono parts" title="a,b,c,d,e">a, b <span class="muted">+3 more</span></td>' \
     || fail "a long list of partitions isn't cut short"
+q "UPDATE orca.runs SET partitions = 'hrabanazviking/RuneForgeAI-Project-Aesir,b' WHERE id = $bad_run" > /dev/null
+html "/runs?pipeline=toy&status=failed" \
+    | grep -qF '<td class="mono parts" title="hrabanazviking/RuneForgeAI-Project-Aesir,b">hrabanazviking/RuneForge…, b</td>' \
+    || fail "a long partition key isn't cut to 24 characters"
 q "UPDATE orca.runs SET partitions = '$was' WHERE id = $bad_run" > /dev/null
 page=$(html "/runs?pipeline=toy&status=succeeded&trigger=manual")
 echo "$page" | grep -qF '<td class="num"></td>' || fail "a run started once isn't empty under Tries"

@@ -62,20 +62,42 @@ comptime _SHOWN_PARTITIONS = 2
 saying how many more there are."""
 
 
+comptime _KEY_CHARS = 24
+"""The most of one partition key a runs table shows; a longer key (a
+keyed pipeline's `owner/repository`, say) ends in an ellipsis, whole in
+the tooltip."""
+
+
+def _key_text(key: StringSlice) -> String:
+    """`key`, cut to `_KEY_CHARS` with an ellipsis if longer."""
+    if key.count_codepoints() <= _KEY_CHARS:
+        return String(key)
+    var out = String()
+    var k = 0
+    for cp in key.codepoint_slices():
+        if k == _KEY_CHARS - 1:
+            break
+        out.write(cp)
+        k += 1
+    out.write("…")
+    return out^
+
+
 def _partitions_cell(mut h: Html, partitions: String):
-    """A run's partitions as a table cell: the first few, then `+N more`, with
-    the whole list in the tooltip."""
+    """A run's partitions as a table cell: the first few, each cut to
+    `_KEY_CHARS`, then `+N more`, with the whole list in the tooltip."""
     var parts = partitions.split(",")
     h.raw('<td class="mono parts" title="')
     h.text(partitions)
     h.raw('">')
-    if len(parts) <= _SHOWN_PARTITIONS + 1:
-        h.text(partitions)
-    else:
-        for i in range(_SHOWN_PARTITIONS):
-            if i > 0:
-                h.raw(", ")
-            h.text(parts[i])
+    var shown = (
+        len(parts) if len(parts) <= _SHOWN_PARTITIONS + 1 else _SHOWN_PARTITIONS
+    )
+    for i in range(shown):
+        if i > 0:
+            h.raw(", ")
+        h.text(_key_text(parts[i]))
+    if shown < len(parts):
         h.raw(
             ' <span class="muted">+',
             len(parts) - _SHOWN_PARTITIONS,
