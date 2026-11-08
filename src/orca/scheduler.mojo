@@ -2854,7 +2854,7 @@ struct Scheduler(Movable):
                 Params()
                 .text(p.name)
                 .text(
-                    "held: fills are off (fills isn't \"all\"), so no worker"
+                    'held: fills are off (fills isn\'t "all"), so no worker'
                     " is given it"
                 ),
             )
@@ -2966,7 +2966,9 @@ struct Scheduler(Movable):
                     " source) VALUES ('scheduler', '/api/worker/requeue', $1,"
                     " $2, 'scheduler')"
                 ),
-                Params().int64(r.int64("id")).text(String("queued again: ", why)),
+                Params()
+                .int64(r.int64("id"))
+                .text(String("queued again: ", why)),
             )
         return out^
 
