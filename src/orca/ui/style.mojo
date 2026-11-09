@@ -201,13 +201,15 @@ h1 .status, h2 .status { vertical-align: middle; margin-left: 0.5rem; }
 .pcards--one { grid-template-columns: 1fr; }
 
 /* The pipeline page's tabs: Overview, Runs and Operate, each its own page. */
+/* overflow-y: hidden, since overflow-x: auto alone makes y auto too, and the
+   tabs' -1px margin over the border then overflowed: a vertical scrollbar. */
 .ptabs { display: flex; gap: 1.5rem; margin: 0 0 1rem; border-bottom: 1px solid var(--border);
-  overflow-x: auto; }
+  overflow-x: auto; overflow-y: hidden; }
 .ptabs__tab { padding: 0.4rem 0.1rem 0.55rem; margin-bottom: -1px; color: var(--muted);
   text-decoration: none; border-bottom: 2px solid transparent; white-space: nowrap; }
 .ptabs__tab:hover { color: var(--text); }
 .ptabs__tab[aria-current] { color: var(--text); font-weight: 600; border-bottom-color: var(--ember); }
-.ptabs__tab:focus-visible { outline: 2px solid var(--lake); outline-offset: 2px; border-radius: 2px; }
+.ptabs__tab:focus-visible { outline: 2px solid var(--lake); outline-offset: -2px; border-radius: 2px; }
 .card--facts { overflow: visible; }
 .card--facts > h2 { border-radius: var(--radius) var(--radius) 0 0; }
 .card > .facts, .card > div > .facts { padding: 0.8rem 1.1rem; margin: 0; gap: 0.45rem 1.1rem;
