@@ -1,4 +1,4 @@
-- **`deploy.sh` brings the server's settings in line with `hetzner.env`.**
+- **`deploy.sh` brings the server's settings in line with `hetzner.env` (#257).**
   A setting added to `hetzner.env` after `up.sh` made the server (say
   `POSTHOG_KEY`) never reached it: only `up.sh` wrote `settings.env`, the
   secret files and the stack settings. Both now run `lib.sh`'s
