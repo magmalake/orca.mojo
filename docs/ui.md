@@ -205,7 +205,9 @@ percent, so 100% means all of them). `src/orca/coverage.mojo` defines it:
   from the first partition through the last one that has ended on the
   schedule's clock (UTC without a schedule): yesterday for a daily
   pipeline, last month for a monthly one. That's the range a fill works
-  through; today's day, still going, is in neither number.
+  through; today's day, still going, is in neither number, nor is one
+  that ended less than the pipeline's
+  [`fill_lag`](orca-toml.md#the-lag) ago.
 - **Keyed**: keys done of the keys orca knows, those `<binary> keys` last
   printed (`orca.keys`, which the sensor and the pipeline's page keep
   fresh; the home page never runs the binary).

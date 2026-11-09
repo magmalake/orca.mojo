@@ -80,6 +80,8 @@ struct PipelineRow(Copyable, Movable):
     var waiting: String
     """Why its oldest queued run that waits for room on its host waits
     (`orca.resources`), or empty."""
+    var fill_lag: String
+    """`fill_lag` as registered (`orca.fill`), or empty."""
 
 
 @fieldwise_init
@@ -149,7 +151,8 @@ def pipeline_rows(mut db: State, name: String = "") raises -> List[PipelineRow]:
                 " coalesce(p.cpus, '') AS cpus, coalesce(p.memory_gb, '') AS"
                 " memory_gb, coalesce((SELECT r.held FROM orca.runs r WHERE"
                 " r.pipeline = p.name AND r.status = 'queued' AND r.held LIKE"
-                " 'waiting: %' ORDER BY r.id LIMIT 1), '') AS waiting, "
+                " 'waiting: %' ORDER BY r.id LIMIT 1), '') AS waiting,"
+                " coalesce(p.fill_lag, '') AS fill_lag, "
             ),
             utc_sql("p.sense_error_at"),
             (
@@ -189,6 +192,7 @@ def pipeline_rows(mut db: State, name: String = "") raises -> List[PipelineRow]:
             r.text("cpus"),
             r.text("memory_gb"),
             r.text("waiting"),
+            r.text("fill_lag"),
         )
         try:
             var f = next_fires(p, t, 1)
@@ -341,7 +345,7 @@ def pipeline_coverage(mut db: State, p: PipelineRow) -> Optional[Coverage]:
     """`p`'s coverage (`orca.coverage`), None if it has none or it can't
     be read: a list of pipelines still shows the rest."""
     try:
-        return coverage(db, p.name, p.kind, p.start, p.tz)
+        return coverage(db, p.name, p.kind, p.start, p.tz, p.fill_lag)
     except:
         return None
 

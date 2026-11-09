@@ -581,6 +581,8 @@ def _key(key: String) -> StaticString:
         return "The most the fill may spend a day, in dollars."
     if key == "fill_window":
         return "The hours of the day, UTC, in which fill runs start."
+    if key == "fill_lag":
+        return "How long after its end a partition is filled."
     if key == "image":
         return "The container image its runs use."
     if key == "spot":

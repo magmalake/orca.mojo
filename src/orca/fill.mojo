@@ -7,11 +7,22 @@ within limits, set in orca.toml (`orca.config`):
     fill_max_runs = 2            # fill runs at once, beside its other runs
     fill_budget_per_day = 5.0    # estimated US dollars a UTC day
     fill_window = "22..6"        # UTC hours fill runs may start in
+    fill_lag = "2h"              # how long after its end a partition fills
 
 With `fills = "all"` the scheduler queues, on each tick, runs (trigger
 `fill`) for the partitions of the pipeline's range that nothing has filled:
-from its first partition through the last one that has ended, in
-`fill_order`, as long as every limit allows (`fill_status`). The default,
+from its first partition through the last one that has ended at least
+`fill_lag` ago, in `fill_order`, as long as every limit allows
+(`fill_status`).
+
+**`fill_lag`** (`0`, the default, for none) is for sources that publish a
+partition's data some time after it ends: GH Archive puts each hour's file
+up minutes after the hour, so at 00:00 UTC the day that just ended isn't
+all there yet. A Daily day D fills from D+1 00:00 plus the lag (on the
+schedule's clock), a Monthly month from the 1st of the next plus the lag.
+Until then the partition is outside the range, for the fill and for the
+coverage alike (`range_keys`), so it isn't counted as missing; the
+pipeline page's Fill line says when it fills (`FillStatus.lag_key`). The default,
 `since_registration`, is what orca did before: a schedule fills from the
 pipeline's registration on, and `orca backfill` the rest by hand.
 
@@ -140,6 +151,55 @@ def parse_fill_window(v: String) raises -> Tuple[Int, Int]:
     )
 
 
+comptime MAX_LAG_SECONDS = 31 * 86400
+"""The longest `fill_lag`: a month and a day."""
+
+
+def parse_fill_lag(v: String) raises -> Int:
+    """A duration in seconds: `0`, or a whole number of seconds, minutes,
+    hours or days (`90s`, `90m`, `2h`, `1d`), up to `MAX_LAG_SECONDS`."""
+    var t = String(v.strip())
+    if t == "0":
+        return 0
+    var n = -1
+    var scale = 0
+    if t.byte_length() >= 2:
+        var unit = String(t[byte = t.byte_length() - 1 :])
+        if unit == "s":
+            scale = 1
+        elif unit == "m":
+            scale = 60
+        elif unit == "h":
+            scale = 3600
+        elif unit == "d":
+            scale = 86400
+        var digits = t[byte = : t.byte_length() - 1]
+        for c in digits.codepoint_slices():
+            if c < "0" or c > "9":
+                scale = 0
+        if scale > 0 and digits.byte_length() <= 9:
+            try:
+                n = Int(digits)
+            except:
+                n = -1
+    if n < 0 or scale == 0:
+        raise Error('is a duration like "2h", "90m" or "0", not ', v)
+    if n * scale > MAX_LAG_SECONDS:
+        raise Error("is at most 31d, not ", v)
+    return n * scale
+
+
+def lag_text(seconds: Int) -> String:
+    """`seconds` as `fill_lag` keeps it: `0`, `2h`, `90m` or `45s`."""
+    if seconds == 0:
+        return "0"
+    if seconds % 3600 == 0:
+        return String(seconds // 3600, "h")
+    if seconds % 60 == 0:
+        return String(seconds // 60, "m")
+    return String(seconds, "s")
+
+
 def money(x: Float64) -> String:
     """`x` dollars as `$1.23`."""
     var cents = Int(max(x, 0.0) * 100.0 + 0.5)
@@ -163,6 +223,8 @@ struct Fill(Copyable, Movable):
     """US dollars a UTC day; -1 for none."""
     var window_from: Int
     var window_to: Int
+    var lag: Int
+    """`fill_lag` in seconds: how long after its end a partition fills."""
 
     @staticmethod
     def of(
@@ -171,6 +233,7 @@ struct Fill(Copyable, Movable):
         max_runs: Int,
         budget: Float64,
         window: String,
+        lag: String = "",
     ) raises -> Fill:
         """From the registration's columns: empty or negative for what
         wasn't set."""
@@ -182,6 +245,7 @@ struct Fill(Copyable, Movable):
             budget,
             w[0],
             w[1],
+            parse_fill_lag(lag) if lag else 0,
         )
 
     def in_window(self, hour: Int) -> Bool:
@@ -223,24 +287,55 @@ def fill_refusal(
     return ""
 
 
-def last_ended(kind: String, tz: String, now: Int64) raises -> String:
-    """The latest partition that has ended by `now` on the schedule's wall
-    clock (UTC without one): the end of a fill's range. The partition still
-    going is the schedule's."""
-    var local = Civil.of(Zone.load(tz if tz else "UTC").to_local(now))
+def _last_ended(kind: String, zone: Zone, now: Int64) -> String:
+    var local = Civil.of(zone.to_local(now))
     if kind == "daily":
         return String(Day.containing(local.year, local.month, local.day).prev())
     return String(Month.containing(local.year, local.month, local.day).prev())
 
 
+def last_ended(
+    kind: String, tz: String, now: Int64, lag: Int = 0
+) raises -> String:
+    """The latest partition that had ended `lag` seconds before `now` on
+    the schedule's wall clock (UTC without one): the end of a fill's range.
+    The partition still going is the schedule's; one that ended less than
+    `lag` (`fill_lag`) ago waits."""
+    return _last_ended(kind, Zone.load(tz if tz else "UTC"), now - Int64(lag))
+
+
+def lag_wait(
+    kind: String, tz: String, now: Int64, lag: Int
+) raises -> Tuple[String, Int64]:
+    """The partition that has ended by `now` but less than `lag` seconds
+    ago, the oldest if several, and when it becomes fillable (its end plus
+    `lag`, UTC seconds); `("", 0)` if none waits."""
+    if lag <= 0 or (kind != "daily" and kind != "monthly"):
+        return (String(), Int64(0))
+    var zone = Zone.load(tz if tz else "UTC")
+    var fillable = _last_ended(kind, zone, now - Int64(lag))
+    if _last_ended(kind, zone, now) == fillable:
+        return (String(), Int64(0))
+    # The next one ended in (now - lag, now]: the first second it had.
+    var lo = now - Int64(lag)
+    var hi = now
+    while hi - lo > 1:
+        var mid = lo + (hi - lo) // 2
+        if _last_ended(kind, zone, mid) == fillable:
+            lo = mid
+        else:
+            hi = mid
+    return (_last_ended(kind, zone, hi), hi + Int64(lag))
+
+
 def range_keys(
-    kind: String, start: String, tz: String, now: Int64
+    kind: String, start: String, tz: String, now: Int64, lag: Int = 0
 ) raises -> List[String]:
     """Every partition from `start` through `last_ended`, oldest first."""
     var out = List[String]()
     if not start:
         return out^
-    var last = last_ended(kind, tz, now)
+    var last = last_ended(kind, tz, now, lag)
     if last < start:  # keys of one kind order as text
         return out^
     var r = String(start, "..", last)
@@ -363,6 +458,12 @@ struct FillStatus(Copyable, Movable):
     var next_keys: List[String]
     """The partitions the next fill runs take, in `fill_order`, at most
     `slots`."""
+    var lag_key: String
+    """The partition that has ended but waits for `fill_lag`, or empty."""
+    var lag_until: Int64
+    """When `lag_key` becomes fillable, UTC seconds; 0 for none."""
+    var lag: Int
+    """`fill_lag`, seconds."""
 
     def __init__(out self):
         self.on = False
@@ -384,6 +485,9 @@ struct FillStatus(Copyable, Movable):
         self.idle = String()
         self.slots = 0
         self.next_keys = List[String]()
+        self.lag_key = String()
+        self.lag_until = 0
+        self.lag = 0
 
 
 comptime _DONE_ANY_CODE = (
@@ -411,8 +515,14 @@ def fill_status(
     var s = FillStatus()
     s.on = p.fill.all
     s.budget = p.fill.budget
-    var keys = range_keys(p.kind, p.start, p.tz, now)
+    s.lag = p.fill.lag
+    var keys = range_keys(p.kind, p.start, p.tz, now, p.fill.lag)
     s.total = len(keys)
+    if p.start:
+        var w = lag_wait(p.kind, p.tz, now, p.fill.lag)
+        if w[0] >= p.start:
+            s.lag_key = w[0]
+            s.lag_until = w[1]
     var done = Dict[String, Bool]()
     for r in tx.query(_DONE_ANY_CODE, Params().text(p.name)):
         done[r.text("key")] = True
@@ -668,6 +778,34 @@ def fill_status(
     return s^
 
 
+def lag_note(s: FillStatus) -> String:
+    """`2026-11-08 fills from 2026-11-09 02:00 UTC (fill_lag 2h)`, or empty
+    when no partition waits for `fill_lag`."""
+    if not s.lag_key:
+        return String()
+    var c = Civil.of(s.lag_until)
+    return String(
+        s.lag_key,
+        " fills from ",
+        c.year,
+        "-",
+        "0" if c.month < 10 else "",
+        c.month,
+        "-",
+        "0" if c.day < 10 else "",
+        c.day,
+        " ",
+        "0" if c.hour < 10 else "",
+        c.hour,
+        ":",
+        "0" if c.minute < 10 else "",
+        c.minute,
+        " UTC (fill_lag ",
+        lag_text(s.lag),
+        ")",
+    )
+
+
 def eta_text(seconds: Int) -> String:
     if seconds < 0:
         return "unknown"
@@ -712,8 +850,19 @@ def status_json(s: FillStatus) -> String:
         >= 0 else String("null"),
         ', "expected_run_seconds": ',
         s.expected_seconds,
-        ', "cost_is_estimate": true, "idle": ',
+        ', "cost_is_estimate": true, "waits_for_lag": ',
     )
+    if s.lag_key:
+        out.write(
+            '{"partition": ',
+            quote(s.lag_key),
+            ', "fillable_at": ',
+            quote(String(Civil.of(s.lag_until), "Z")),
+            "}",
+        )
+    else:
+        out.write("null")
+    out.write(', "idle": ')
     if s.idle:
         out.write(quote(s.idle))
     else:

@@ -442,8 +442,9 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " '') AS fill_mode, coalesce(fill_order, '') AS fill_order,"
             " coalesce(fill_max_runs, 0) AS fill_max_runs,"
             " coalesce(fill_budget_per_day, -1) AS fill_budget,"
-            " coalesce(fill_window, '') AS fill_window, coalesce(cpus, '') AS"
-            " cpus, coalesce(memory_gb, '') AS memory_gb,"
+            " coalesce(fill_window, '') AS fill_window, coalesce(fill_lag, '')"
+            " AS fill_lag, coalesce(cpus, '') AS cpus, coalesce(memory_gb, '')"
+            " AS memory_gb,"
             " coalesce(memory_raised_mb, 0) AS memory_raised_mb FROM"
             " orca.pipelines"
             " WHERE binary_path IS NOT NULL AND ($1 = '' OR name = $1) ORDER BY"
@@ -488,6 +489,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                     Int(r.int64("fill_max_runs")),
                     r.float64("fill_budget"),
                     r.text("fill_window"),
+                    r.text("fill_lag"),
                 ),
                 r.text("cpus"),
                 r.text("memory_gb"),
@@ -1746,14 +1748,16 @@ struct Scheduler(Movable):
                 " worker_type, ec2_workers, spot, ec2_min_workers, secrets,"
                 " worker_procs, placement, max_runs, env, config, fills,"
                 " fill_order, fill_max_runs, fill_budget_per_day, fill_window,"
-                " cpus, memory_gb) SELECT d->>'pipeline', d->>'registry_hash',"
+                " cpus, memory_gb, fill_lag) SELECT d->>'pipeline',"
+                " d->>'registry_hash',"
                 " d, $2, $3, CASE WHEN $4 THEN now() END, nullif($5, ''),"
                 " nullif($6, ''), nullif($7, ''), nullif($8, 0), $9,"
                 " nullif($10, -1), nullif($11, '')::jsonb, nullif($12, -1),"
                 " nullif(nullif($13, ''), 'default'), nullif($15, -1),"
                 " nullif($16, '')::jsonb, $17::jsonb, nullif($18, ''),"
                 " nullif($19, ''), nullif($20, -1), nullif($21, -1::float8),"
-                " nullif($22, ''), nullif($23, ''), nullif($24, '') FROM"
+                " nullif($22, ''), nullif($23, ''), nullif($24, ''),"
+                " nullif($25, '') FROM"
                 " (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO UPDATE SET"
                 " registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
@@ -1792,7 +1796,9 @@ struct Scheduler(Movable):
                 " EXCLUDED.fill_budget_per_day ELSE"
                 " orca.pipelines.fill_budget_per_day END, fill_window = CASE"
                 " WHEN $14 THEN EXCLUDED.fill_window ELSE"
-                " orca.pipelines.fill_window END, cpus = CASE WHEN $14 OR $23"
+                " orca.pipelines.fill_window END, fill_lag = CASE WHEN $14 THEN"
+                " EXCLUDED.fill_lag ELSE orca.pipelines.fill_lag END, cpus ="
+                " CASE WHEN $14 OR $23"
                 " <> '' THEN EXCLUDED.cpus ELSE orca.pipelines.cpus END,"
                 " memory_gb = CASE WHEN $14 OR $24 <> '' THEN"
                 " EXCLUDED.memory_gb ELSE orca.pipelines.memory_gb END,"
@@ -1828,7 +1834,8 @@ struct Scheduler(Movable):
             .float64(fill_budget)
             .text(r.text("fill_window"))
             .text(r.text("cpus"))
-            .text(r.text("memory_gb")),
+            .text(r.text("memory_gb"))
+            .text(r.text("fill_lag")),
         )
         var name = res.row(0).text("name")
         var version = self.db.version(

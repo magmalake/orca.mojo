@@ -176,6 +176,10 @@ def test_values_are_checked() raises:
     _refused('[pipelines.a]\nfill_budget_per_day = "5"\n', "a number")
     _refused('[pipelines.a]\nfill_window = "6..6"\n', "UTC hours")
     _refused("[pipelines.a]\nfill_window = 6\n", "is a string")
+    _refused('[pipelines.a]\nfill_lag = "2"\n', "a duration")
+    _refused('[pipelines.a]\nfill_lag = "2w"\n', "a duration")
+    _refused('[pipelines.a]\nfill_lag = "40d"\n', "at most 31d")
+    _refused("[pipelines.a]\nfill_lag = 2\n", "a duration string")
     try:
         _ = ProjectConfig(
             '[pipelines.a]\nfills = "all"\n\nfill_window = "1..30"\n',
@@ -194,7 +198,9 @@ def test_fill_keys() raises:
             '[defaults]\nfills = "all"\nfill_budget_per_day = 5\n',
             '[pipelines.a]\nfill_order = "newest"\nfill_max_runs = 3\n',
             'fill_window = "22..6"\nfill_budget_per_day = 2.5\n',
-            "[pipelines.b]\n",
+            'fill_lag = "120m"\n',
+            "[pipelines.b]\nfill_lag = 0\n",
+            '[pipelines.c]\nfill_lag = "90m"\n',
         ),
         "orca.toml",
     )
@@ -204,9 +210,12 @@ def test_fill_keys() raises:
     assert_equal(a.text("fill_max_runs"), "3")
     assert_equal(a.text("fill_budget_per_day"), "2.5")
     assert_equal(a.text("fill_window"), "22..6")
+    assert_equal(a.text("fill_lag"), "2h")
+    assert_equal(resolve("c", RegisterFlags(), f).text("fill_lag"), "90m")
     var b = resolve("b", RegisterFlags(), f)
     assert_equal(b.text("fill_budget_per_day"), "5.0")
     assert_equal(b.text("fill_order"), "")
+    assert_equal(b.text("fill_lag"), "0")
     assert_equal(
         f.where("b", "fills", b.values["fills"].copy()),
         "orca.toml:2: [defaults]",
