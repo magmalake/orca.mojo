@@ -114,8 +114,12 @@ never written to a file on the laptop; the server still gets its plain
 
 ```sh
 brew install sops age
-age-keygen -o ~/.config/sops/age/keys.txt     # prints the public key, age1...; back the file up offline
+mkdir -p ~/Library/Application\ Support/sops/age    # macOS; ~/.config/sops/age on Linux
+age-keygen -o ~/Library/Application\ Support/sops/age/keys.txt   # prints the public key, age1...
 ```
+
+Back the key file up offline (more than one key can be in it, one per
+line). SOPS looks there by default; elsewhere, set `SOPS_AGE_KEY_FILE`.
 
 A private repository for the encrypted files, one directory per stack and
 a key each, so a laptop with only the dev key can't read production's:
@@ -138,6 +142,10 @@ sops -e --input-type binary --filename-override prod/github-token.sops \
     ~/.config/orca-hetzner/github_token > prod/github-token.sops
 sops edit prod/s3.sops.env                    # to change one later
 ```
+
+A file that isn't `KEY=value` lines (a bare token) must be encrypted with
+`--input-type binary`: as an env file SOPS rejects it, and its error message
+quotes the offending line, the secret itself.
 
 then in `hetzner.env` `S3_CREDENTIALS_FILE=$HOME/dev/ops-secrets/prod/s3.sops.env`
 and so on, and delete the plain files. SOPS reads the extension: `.env` is
