@@ -1,6 +1,8 @@
 #!/bin/sh
 # A fake docker for tests/hetzner.sh: logs each call to $FAKE/docker.log and
-# answers what orca-stack asks ($FAKE/docker.all keeps every call). $FAKE/running is the count of running runs,
+# answers what orca-stack asks ($FAKE/docker.all keeps every call). $FAKE/running is the count of running runs
+# the scheduler holds, $FAKE/worker-running of those on remote workers (each
+# listed as run 9N mojo_history on bgent),
 # $FAKE/backup-fails makes pg_dump fail, $FAKE/register-fails orca register.
 # The pipelines are toy and manual1; $FAKE/paused lists the paused ones,
 # which orca pause/unpause and an UPDATE of paused change. The aws-cli
@@ -14,7 +16,7 @@
 # pushed again). orca-stack's health probe (exec NAME bash -c ... PORT
 # PATH) answers 200, or what $FAKE/health/<name without -next> says; a
 # container started while $FAKE/exits/<name without -next> exists exits at
-# once.
+# once; `run -d --name NAME` fails while $FAKE/run-fails/NAME exists.
 #
 # Overlapping schedulers: `run --rm ... scheduler can-overlap` prints
 # $FAKE/can-overlap (exit 0 if it says yes; "no: ..." without the file);
@@ -35,6 +37,19 @@ C=$FAKE/containers
 all="$*"
 case "$all" in
     *"pg_isready"*) exit 0 ;;
+    *"count(*) FROM orca.runs WHERE status = 'running' AND coalesce(placement, '') NOT LIKE 'worker:%'"*)
+        cat "$FAKE/running" 2> /dev/null || echo 0
+        ;;
+    *"count(*) FROM orca.runs r WHERE r.status = 'running' AND r.placement LIKE 'worker:%'"*)
+        cat "$FAKE/worker-running" 2> /dev/null || echo 0
+        ;;
+    *"' on ' || coalesce(w.label"*"r.placement LIKE 'worker:%'"*)
+        i=0
+        while [ "$i" -lt "$(cat "$FAKE/worker-running" 2> /dev/null || echo 0)" ]; do
+            i=$((i + 1))
+            echo "  run 9$i mojo_history 2026-11-07 on bgent, running 00:10:00"
+        done
+        ;;
     *"status = 'running'"*) cat "$FAKE/running" 2> /dev/null || echo 0 ;;
     *"WHERE NOT paused"*) printf 'manual1\ntoy\n' | grep -vxF -f "$FAKE/paused" || true ;;
     *"WHERE paused ORDER BY name"*) sort "$FAKE/paused" ;;
@@ -142,6 +157,7 @@ case "$all" in
             esac
         done
         [ -n "$name" ] || { echo "fake docker: run without --name" >&2; exit 1; }
+        [ ! -f "$FAKE/run-fails/$name" ] || { echo "docker: Error response from daemon: fake failure starting $name" >&2; exit 125; }
         [ ! -d "$C/$name" ] || { echo "docker: Error response from daemon: Conflict. The container name \"/$name\" is already in use" >&2; exit 125; }
         mkdir "$C/$name"
         echo "$1" > "$C/$name/image"
