@@ -7,7 +7,8 @@
 # Volume is billed until deleted.
 #
 # --all also deletes the firewall, the ssh key and the Volume, and asks you
-# to type the Volume's name. The Object Storage bucket is never touched:
+# to type the Volume's name (the ssh key only if it's this stack's: one up.sh
+# found under another stack's name stays). The Object Storage bucket is never touched:
 # delete it in the Hetzner console if you want it gone.
 set -eu
 # shellcheck source=lib.sh

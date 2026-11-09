@@ -434,6 +434,14 @@ grep -q -- 'orca-stack quiesce --workers' deploy/hetzner/rescale.sh || fail "res
 stack resume > /dev/null
 rm "$FAKE/worker-running"
 
+# An image before orca 0.18 has no /healthz: its UI's 404 there counts as up.
+echo 404 > "$FAKE/health/ui"
+stack configure HEALTH_TIMEOUT=0
+stack apply --tag ppp6666 > "$FAKE/out" 2>&1 || { cat "$FAKE/out"; fail "a UI answering 404 on /healthz wasn't taken as up"; }
+rm "$FAKE/health/ui"
+stack configure HEALTH_TIMEOUT=300
+[ "$(cat "$FAKE/containers/ui/image")" = img:ppp6666 ] || fail "the older UI wasn't swapped in: $(cat "$FAKE/containers/ui/image")"
+
 # Overlapping schedulers (OVERLAP=1, docs/overlap.md). Off: orca.env has
 # no ORCA_OVERLAP and can-overlap says no without asking the image.
 grep -q ORCA_OVERLAP "$ORCA_CONF/orca.env" && fail "ORCA_OVERLAP with OVERLAP unset"

@@ -33,6 +33,11 @@ load_env() {
     APPS=${APPS:-console:8080}
     BACKUP_KEEP=${BACKUP_KEEP:-14}
     SERVER=$NAME
+    # The settings file may name the hcloud context (the Hetzner project) the
+    # stack is in; otherwise hcloud's active one.
+    [ -z "${HCLOUD_CONTEXT:-}" ] || export HCLOUD_CONTEXT
+    # Which stack, as there may be more than one (docs/hetzner.md, A dev stack).
+    echo "$(basename "$0"): stack $NAME${HCLOUD_CONTEXT:+ (hcloud context $HCLOUD_CONTEXT)}, settings $HETZNER_ENV" >&2
 }
 
 # need VAR...: each is set in the settings file.
@@ -91,6 +96,16 @@ confirm() { # QUESTION: yes with --yes or a typed "yes"
     printf '%s Type yes to go on: ' "$1" >&2
     read -r answer
     [ "$answer" = yes ] || die "not confirmed"
+}
+
+# same_ssh_key FILE: the name of the project's ssh key whose public key is
+# FILE's, if it has one. Hetzner refuses a second key with the same public
+# key, so a second stack in the project (NAME=orca-dev) uses the first's.
+same_ssh_key() {
+    fp=$(ssh-keygen -l -E md5 -f "$1" 2> /dev/null | awk '{print $2}')
+    fp=${fp#MD5:}
+    [ -n "$fp" ] || return 0
+    hcloud ssh-key list -o json | jq -r --arg fp "$fp" '[.[] | select(.fingerprint == $fp) | .name][0] // empty'
 }
 
 server_ip() {

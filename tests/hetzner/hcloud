@@ -1,3 +1,10 @@
 #!/bin/sh
-# A fake hcloud for tests/hetzner.sh.
-[ "$*" != "server ip orca" ] || echo 192.0.2.1
+# A fake hcloud for tests/hetzner.sh and tests/hetzner-stacks.sh: the
+# server orca is at 192.0.2.1, and `ssh-key list -o json` prints
+# $FAKE/ssh-keys.json ([] without it). Each call is logged to
+# $FAKE/hcloud.log, with the HCLOUD_CONTEXT it saw.
+echo "${HCLOUD_CONTEXT:-}: hcloud $*" >> "$FAKE/hcloud.log"
+case "$*" in
+    "server ip orca") echo 192.0.2.1 ;;
+    "ssh-key list -o json") cat "$FAKE/ssh-keys.json" 2> /dev/null || echo "[]" ;;
+esac

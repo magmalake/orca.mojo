@@ -705,6 +705,10 @@ def _migrations() -> List[List[String]]:
             running text)""",
             "ALTER TABLE orca.runs ADD COLUMN instance bigint",
         ],
+        # A fill's lag (orca.fill): how long after its end a partition of
+        # the pipeline fills, as orca.toml's `fill_lag` gives it (`2h`);
+        # null for none.
+        ["ALTER TABLE orca.pipelines ADD COLUMN fill_lag text"],
     ]
 
 

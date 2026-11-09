@@ -205,7 +205,9 @@ percent, so 100% means all of them). `src/orca/coverage.mojo` defines it:
   from the first partition through the last one that has ended on the
   schedule's clock (UTC without a schedule): yesterday for a daily
   pipeline, last month for a monthly one. That's the range a fill works
-  through; today's day, still going, is in neither number.
+  through; today's day, still going, is in neither number, nor is one
+  that ended less than the pipeline's
+  [`fill_lag`](orca-toml.md#the-lag) ago.
 - **Keyed**: keys done of the keys orca knows, those `<binary> keys` last
   printed (`orca.keys`, which the sensor and the pipeline's page keep
   fresh; the home page never runs the binary).
@@ -574,7 +576,9 @@ tripped on. See [watchdog.md](watchdog.md).
 
 SIGTERM (what `docker stop` sends) or SIGINT (Ctrl-C) drains `orca ui`
 instead of cutting it off: it closes its listening socket, so new
-connections are refused, lets the requests already in flight finish, and
+connections are refused, answers `/healthz` with 503 `draining` from then
+on, so a health checker or proxy asking over a kept-alive connection stops
+routing here, lets the requests already in flight finish, and
 exits 0 once none has been for 200 ms. `ORCA_UI_DRAIN_SECONDS` (default 8,
 under `docker stop`'s 10 s grace) bounds the wait; when it's up the server
 stops and closes its kept-alive connections, and a request still running

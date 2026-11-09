@@ -9,7 +9,8 @@ ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
 A request goes through, in order:
 
 1. The stylesheet, `/healthz` (200 once the database answers, without a
-   login: what a deploy waits for before it retires the old UI), and the
+   login: what a deploy waits for before it retires the old UI; 503
+   `draining` once a drain has started), and the
    worker API (`POST /api/worker/...`, `orca.api.worker`, its own token),
    answered before anything else.
 2. The route. A `POST` that's no action, or another method than `GET`,
@@ -29,13 +30,14 @@ can run beside the scheduler or anywhere else that reaches the database.
 `ORCA_UI_ADDR` (`host:port`) moves it; it binds to localhost unless told
 otherwise. `ORCA_WORKER_ADDR` serves the worker API on a listener of its
 own as well (`orca.api.worker`). SIGTERM or SIGINT drains it: no new
-connections, the requests in flight answered, then exit 0 within
+connections, `/healthz` 503, the requests in flight answered, then exit 0 within
 `ORCA_UI_DRAIN_SECONDS` (8; `orca.web.drain`).
 """
 
 from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
 from postgres import Params
+from threads import AtomicFlag
 
 from orca.api import worker as worker_api
 from orca.auth import audit, login_required
@@ -163,16 +165,24 @@ def _stylesheet() raises -> Response:
     return resp^
 
 
-def _healthz(url: String) -> Response:
+def _healthz(url: String, draining: Bool) -> Response:
     """`/healthz`: 200 `ok` once the database answers a query, 503 if it
-    doesn't. No login, and nothing else in it: `orca-stack apply` waits for
-    it before it stops the old UI (docs/hetzner.md#deploying-code)."""
+    doesn't, and 503 `draining` without asking it once SIGTERM or SIGINT
+    has started a drain (`orca.web.drain`), so a checker or proxy on a
+    kept-alive connection stops sending requests here. No login, and
+    nothing else in it: `orca-stack apply` waits for it before it stops the
+    old UI (docs/hetzner.md#deploying-code)."""
     var status = 200
     var reason = String("OK")
     var body = String("ok\n")
     try:
-        var db = State(url)
-        _ = db.conn.query("SELECT 1 AS ok", Params())
+        if draining:
+            status = 503
+            reason = String("Service Unavailable")
+            body = String("draining\n")
+        else:
+            var db = State(url)
+            _ = db.conn.query("SELECT 1 AS ok", Params())
     except e:
         print("orca ui: /healthz: the database doesn't answer:", e)
         status = 503
@@ -194,10 +204,13 @@ struct Ui(Copyable, Handler):
 
     var url: String
     var table: List[Route]
+    var draining: AtomicFlag
+    """Set once a drain has started (`orca.web.drain.Drain.draining`)."""
 
-    def __init__(out self, url: String):
+    def __init__(out self, url: String, draining: AtomicFlag):
         self.url = url
         self.table = routes()
+        self.draining = draining
 
     def serve(self, req: Request) raises -> Response:
         var path = _path_of(req.url)
@@ -205,7 +218,7 @@ struct Ui(Copyable, Handler):
         if path == STYLESHEET:
             return _stylesheet()
         if path == HEALTHZ and (req.method == "GET" or req.method == "HEAD"):
-            return _healthz(self.url)
+            return _healthz(self.url, self.draining.is_set())
         if post and path.startswith("/api/worker/"):
             return worker_api.worker_response(self.url, req)
         var found = find(self.table, req.method, path)
@@ -314,6 +327,6 @@ def serve_ui(url: String, addr: String, worker_addr: String = "") raises:
         print("orca ui: the worker API on http://", worker_addr, sep="")
     var drain = Drain(server)
     print("orca ui on http://", addr, sep="")
-    server.serve(drain.counting(Ui(url)))
+    server.serve(drain.counting(Ui(url, drain.draining())))
     _ = drain^
     print("orca ui: stopped")
