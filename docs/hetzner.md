@@ -620,6 +620,19 @@ image job in the project's Actions: its log ends with
 is the tag the first `up.sh` starts (`latest` will do; `deploy.sh <short-sha>`
 moves it afterwards).
 
+The tunnel runs `cloudflare/cloudflared` at a release tag
+(`CLOUDFLARED_IMAGE`, `2026.10.7` unless `hetzner.env` says otherwise), not
+`latest`: `orca-stack apply` pulls the image every time, so with `latest` an
+upstream release would change the tunnel's version, and restart it, on
+whichever deploy came next. To bump it, pick a release (`gh release list -R
+cloudflare/cloudflared`; the image has the same tag), set
+`CLOUDFLARED_IMAGE=cloudflare/cloudflared:<tag>` in `hetzner.env` and run
+`up.sh` again, or on the server run `orca-stack configure
+CLOUDFLARED_IMAGE=cloudflare/cloudflared:<tag>` and then `orca-stack apply`.
+The tunnel restarts once, which drops traffic for a few seconds. The
+defaults in `lib.sh` and `orca-stack` only apply when `hetzner.env` doesn't
+set it; bump them along with the example's.
+
 For example:
 
 ```yaml
@@ -684,6 +697,5 @@ checker, and the container set against MinIO on a workstation. First real
 run: do `up.sh --dry-run`, then `up.sh`, and read its output. Unverified
 against the real service: Object Storage's endpoint name and path-style
 addressing, the Volume's `/dev/disk/by-id/scsi-0HC_Volume_<id>` name in
-`cloud-init.yaml`, the `hcloud ... -o json` field names the scripts read with
-`jq` (`.id`, `.status`, `.server_type.name`, `.applied_to`), and
-`cloudflare/cloudflared:latest` (pin a tag in `hetzner.env`).
+`cloud-init.yaml`, and the `hcloud ... -o json` field names the scripts read
+with `jq` (`.id`, `.status`, `.server_type.name`, `.applied_to`).

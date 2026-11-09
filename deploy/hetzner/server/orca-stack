@@ -302,7 +302,7 @@ desired() {
     tag=${newtag:-$(conf_get ORCA_TAG)}
     [ -n "$image" ] && [ -n "$tag" ] || die "ORCA_IMAGE and ORCA_TAG aren't set"
     cf=$(conf_get CLOUDFLARED_IMAGE)
-    cf=${cf:-cloudflare/cloudflared:latest}
+    cf=${cf:-cloudflare/cloudflared:2026.10.7}
     if [ -n "$only" ] && [ -n "$newtag" ] && [ "$newtag" != "$(conf_get ORCA_TAG)" ]; then
         die "--only $only with a new --tag would leave the other containers on the old one"
     fi

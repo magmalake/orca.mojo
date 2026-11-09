@@ -29,7 +29,7 @@ load_env() {
     SERVER_IMAGE=${SERVER_IMAGE:-ubuntu-24.04}
     VOLUME_SIZE_GB=${VOLUME_SIZE_GB:-50}
     ORCA_IMAGE=${ORCA_IMAGE:-ghcr.io/magmalake/orca}
-    CLOUDFLARED_IMAGE=${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    CLOUDFLARED_IMAGE=${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.7}
     APPS=${APPS:-console:8080}
     BACKUP_KEEP=${BACKUP_KEEP:-14}
     SERVER=$NAME
