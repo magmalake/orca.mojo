@@ -159,3 +159,92 @@ parse_common() { # sets REST to the arguments not handled here
         esac
     done
 }
+
+# --- the server's settings, from hetzner.env (up.sh and deploy.sh) ---------
+
+# need_settings: what settings.env, the secret files and the stack settings
+# are made from is set.
+need_settings() {
+    need BUCKET S3_ENDPOINT S3_REGION
+    need_file S3_CREDENTIALS_FILE TUNNEL_TOKEN_FILE
+    [ -z "${GITHUB_TOKEN_FILE:-}" ] || need_file GITHUB_TOKEN_FILE
+    [ -z "${EXTRA_ENV_FILE:-}" ] || need_file EXTRA_ENV_FILE
+    [ -z "${NTFY_TOPIC_FILE:-}" ] || need_file NTFY_TOPIC_FILE
+    [ -z "${NTFY_TOKEN_FILE:-}" ] || need_file NTFY_TOKEN_FILE
+    [ -z "${GHCR_USER:-}" ] || need_file GHCR_TOKEN_FILE
+}
+
+# write_settings FILE: /etc/orca/settings.env as hetzner.env says. No
+# secret is in it: those are files of their own, and only their ids are here.
+# A setting hetzner.env leaves empty isn't written.
+write_settings() {
+    {
+        echo "AWS_REGION=$S3_REGION"
+        echo "AWS_ENDPOINT_URL_S3=$S3_ENDPOINT"
+        echo "ORCA_WAREHOUSE=s3://$BUCKET/warehouse"
+        echo "ORCA_PUBLIC_WAREHOUSE=s3://$BUCKET/warehouse"
+        echo "ORCA_LOGS=s3://$BUCKET/logs"
+        echo "ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE"
+        # Alerts (ntfy): the topic and token are secret files, only their ids are here.
+        if [ -n "${NTFY_TOPIC_FILE:-}" ]; then
+            echo "ORCA_NOTIFY_SECRET=orca/ntfy-topic"
+            [ -z "${NTFY_URL:-}" ] || echo "ORCA_NOTIFY_URL=$NTFY_URL"
+            [ -z "${NTFY_TOKEN_FILE:-}" ] || echo "ORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token"
+            [ -z "${UI_URL:-}" ] || echo "ORCA_UI_URL=$UI_URL"
+        fi
+        [ -z "${FIXED_COST:-}" ] || echo "ORCA_FIXED_COST=$FIXED_COST"
+        [ -z "${POSTHOG_KEY:-}" ] || echo "ORCA_POSTHOG_KEY=$POSTHOG_KEY"
+        if [ -n "${EXTRA_ENV_FILE:-}" ] && [ -r "$EXTRA_ENV_FILE" ]; then cat "$EXTRA_ENV_FILE"; fi
+    } > "$1"
+}
+
+# sync_file [--keys] NAME SRC: SRC becomes /etc/orca/NAME (mode 600) if it
+# differs, over ssh's standard input (orca-stack sync, which prints what
+# changed: with --keys the keys, never a value).
+sync_file() {
+    k=
+    if [ "$1" = --keys ]; then
+        k=--keys
+        shift
+    fi
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "+ ssh root@$IP orca-stack sync ${k:+$k }$1 < $2"
+    else
+        remote orca-stack sync ${k:+"$k"} "$1" < "$2"
+    fi
+}
+
+# sync_settings DIR: brings the server's settings in line with hetzner.env,
+# as up.sh made them: settings.env, the secret files, the stack settings
+# (orca-stack configure; not ORCA_TAG, which deploy.sh moves) and the apps.
+# Each prints what it changes, keys and file names only (a stack setting
+# old -> new: none is a secret). DIR is a local temporary directory. The
+# server's orca-stack must be this checkout's (it has sync). Returns
+# non-zero at the first step that fails.
+sync_settings() {
+    write_settings "$1/settings.env" || return 1
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "# settings.env from $HETZNER_ENV: $(sed -n 's/=.*//p' "$1/settings.env" | tr '\n' ' ')"
+    fi
+    sync_file --keys settings.env "$1/settings.env" || return 1
+    sync_file s3.env "$S3_CREDENTIALS_FILE" || return 1
+    sync_file tunnel.env "$TUNNEL_TOKEN_FILE" || return 1
+    if [ -n "${GITHUB_TOKEN_FILE:-}" ]; then
+        sync_file secrets/orca/github-token "$GITHUB_TOKEN_FILE" || return 1
+    fi
+    if [ -n "${NTFY_TOPIC_FILE:-}" ]; then
+        sync_file secrets/orca/ntfy-topic "$NTFY_TOPIC_FILE" || return 1
+    fi
+    if [ -n "${NTFY_TOKEN_FILE:-}" ]; then
+        sync_file secrets/orca/ntfy-token "$NTFY_TOKEN_FILE" || return 1
+    fi
+    if [ -n "${GHCR_USER:-}" ]; then
+        sync_file ghcr-token "$GHCR_TOKEN_FILE" || return 1
+    fi
+    # GHCR_USER= (none in hetzner.env) removes it from stack.conf.
+    remote orca-stack configure ORCA_IMAGE="$ORCA_IMAGE" CLOUDFLARED_IMAGE="$CLOUDFLARED_IMAGE" \
+        BUCKET="$BUCKET" BACKUP_KEEP="$BACKUP_KEEP" GHCR_USER="${GHCR_USER:-}" || return 1
+    for app in $APPS; do
+        remote orca-stack app "${app%%:*}" "${app#*:}" || return 1
+    done
+}

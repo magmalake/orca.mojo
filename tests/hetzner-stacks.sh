@@ -8,6 +8,8 @@
 # - the settings file's HCLOUD_CONTEXT reaches hcloud;
 # - same_ssh_key finds the other stack's key with the same public key
 #   (Hetzner takes a public key once per project), and nothing for another;
+# - up.sh writes the settings with lib.sh's sync_settings (deploy.sh's too),
+#   then ORCA_TAG only if the server has none;
 # - an ORCA_CONFIG in the settings (EXTRA_ENV_FILE's lines end up in
 #   settings.env) is in the scheduler's env file, which `orca register`
 #   runs with.
@@ -49,6 +51,13 @@ has "+ hcloud firewall create --name orca-dev "
 has "+ hcloud volume create --name orca-dev-data "
 has "+ hcloud server create --name orca-dev .* --ssh-key orca-dev --firewall orca-dev --volume orca-dev-data "
 grep '^+ hcloud' "$FAKE/out" | grep -E '(^| )orca( |$)|[ ]orca-data( |$)' && fail "up.sh names the production stack's resources"
+# Its settings, as deploy.sh writes them too (lib.sh's sync_settings), then
+# the tag only if the server has none.
+has "+ ssh root@<server-ip> orca-stack sync --keys settings.env < "
+has "+ ssh root@<server-ip> orca-stack sync tunnel.env < $FAKE/tunnel.env"
+has "+ ssh root@<server-ip> orca-stack configure ORCA_IMAGE=ghcr.io/magmalake/orca .*BUCKET=orca-dev-bkt BACKUP_KEEP=14 GHCR_USER=$"
+has "+ ssh root@<server-ip> orca-stack configure --keep-existing ORCA_TAG=latest"
+has "# settings.env from $FAKE/dev.env: AWS_REGION .* ORCA_CONFIG"
 # down.sh --all: the same.
 HETZNER_ENV="$FAKE/dev.env" sh deploy/hetzner/down.sh --dry-run --all > "$FAKE/out" 2>&1 || fail "down.sh --dry-run --all"
 has "+ hcloud server delete orca-dev$"
@@ -83,7 +92,7 @@ mkdir -p "$ORCA_CONF"
 } > "$ORCA_CONF/settings.env"
 printf 'AWS_ACCESS_KEY_ID=x\nAWS_SECRET_ACCESS_KEY=y\n' > "$ORCA_CONF/s3.env"
 stack() { sh deploy/hetzner/server/orca-stack "$@"; }
-stack configure ORCA_IMAGE=img ORCA_TAG=aaa1111 BUCKET=orca-dev-bkt
+stack configure ORCA_IMAGE=img ORCA_TAG=aaa1111 BUCKET=orca-dev-bkt > /dev/null
 stack apply > "$FAKE/out" 2>&1 || fail "orca-stack apply"
 grep -qx 'ORCA_CONFIG=/opt/orca/orca.dev.toml' "$ORCA_CONF/orca.env" || fail "no ORCA_CONFIG in orca.env"
 grep -q "run -d --name scheduler .*--env-file $ORCA_CONF/orca.env" "$FAKE/docker.log" || fail "the scheduler doesn't get orca.env"

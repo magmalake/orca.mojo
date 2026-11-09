@@ -2,7 +2,12 @@
 # orca-stack: what runs on the Hetzner server (installed by deploy/hetzner/up.sh
 # as /usr/local/sbin/orca-stack; the other scripts call it over ssh).
 #
-#   configure [--keep-existing] KEY=VALUE...   stack settings (/etc/orca/stack.conf)
+#   configure [--keep-existing] KEY=VALUE...   stack settings (/etc/orca/stack.conf);
+#                                              prints each one it changes, old -> new
+#   sync [--keys] NAME < FILE                  FILE becomes $CONF/NAME (settings.env or a
+#                                              secret file, mode 600) if it differs; says
+#                                              so, with --keys the keys added, removed or
+#                                              changed (names only, never values)
 #   app NAME PORT [CHECK]                      an app beside the UI (the census console);
 #                                              CHECK: the path that answers 200 once it's
 #                                              ready (default /)
@@ -157,6 +162,15 @@ s3() {
         -v "$STATE/backup:/b" amazon/aws-cli "$@"
 }
 
+conf_unset() { # KEY
+    [ -f "$CONF/stack.conf" ] || return 0
+    grep -v "^$1=" "$CONF/stack.conf" > "$CONF/stack.conf.new" || true
+    mv "$CONF/stack.conf.new" "$CONF/stack.conf"
+}
+
+# configure [--keep-existing] KEY=VALUE...: says what it changes, old ->
+# new (none of these is a secret). GHCR_USER= (empty) removes it: up.sh and
+# deploy.sh pass it so when hetzner.env has none.
 cmd_configure() {
     keep=0
     if [ "${1:-}" = --keep-existing ]; then
@@ -170,12 +184,78 @@ cmd_configure() {
             ORCA_IMAGE | ORCA_TAG | CLOUDFLARED_IMAGE | BUCKET | BACKUP_KEEP | GHCR_USER | CGROUPS | HEALTH_TIMEOUT | OVERLAP) ;;
             *) die "unknown setting $k" ;;
         esac
-        safe "$v"
-        if [ "$keep" = 1 ] && [ -n "$(conf_get "$k")" ]; then
+        [ "$k=" = "$kv" ] && [ "$k" = GHCR_USER ] || safe "$v"
+        old=$(conf_get "$k")
+        if [ "$keep" = 1 ] && [ -n "$old" ]; then
             continue
         fi
-        conf_set "$k" "$v"
+        [ "$old" != "$v" ] || continue
+        echo "orca-stack: $k ${old:-(unset)} -> ${v:-(unset)}"
+        if [ -z "$v" ]; then conf_unset "$k"; else conf_set "$k" "$v"; fi
     done
+}
+
+# The files sync may write (in $CONF): settings.env and the secret files
+# up.sh and deploy.sh send.
+SYNC_FILES="settings.env s3.env tunnel.env ghcr-token secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token"
+
+# key_changes OLD NEW: "added A, B; removed C; changed D" between two
+# KEY=VALUE files (the last line of a key counts, as docker's --env-file
+# reads them); the keys only, never a value. Empty if no key differs.
+key_changes() {
+    awk '
+        !/^[A-Za-z_][A-Za-z0-9_]*=/ { next }
+        {
+            k = substr($0, 1, index($0, "=") - 1)
+            v = substr($0, index($0, "=") + 1)
+        }
+        FILENAME == ARGV[1] { if (!(k in o)) ok[++no] = k; o[k] = v; next }
+        { if (!(k in n)) nk[++nn] = k; n[k] = v }
+        END {
+            for (i = 1; i <= nn; i++) { k = nk[i]; if (!(k in o)) a = a ", " k; else if (o[k] != n[k]) c = c ", " k }
+            for (i = 1; i <= no; i++) if (!(ok[i] in n)) r = r ", " ok[i]
+            if (a != "") out = "added " substr(a, 3)
+            if (r != "") out = out (out == "" ? "" : "; ") "removed " substr(r, 3)
+            if (c != "") out = out (out == "" ? "" : "; ") "changed " substr(c, 3)
+            print out
+        }' "$1" "$2"
+}
+
+# sync [--keys] NAME < FILE: FILE (standard input, so a secret is never an
+# argument) becomes $CONF/NAME, mode 600, if it differs from it; prints
+# "orca-stack: NAME: new", "NAME: changed" or, with --keys, the keys that
+# differ; nothing if it's the same. Its contents are never printed.
+cmd_sync() {
+    keys=0
+    if [ "${1:-}" = --keys ]; then
+        keys=1
+        shift
+    fi
+    [ $# -eq 1 ] || die "usage: sync [--keys] NAME < FILE"
+    case " $SYNC_FILES " in
+        *" $1 "*) ;;
+        *) die "sync: $1 isn't one of: $SYNC_FILES" ;;
+    esac
+    f=$CONF/$1
+    mkdir -p "$(dirname "$f")"
+    umask 077
+    cat > "$f.sync"
+    chmod 600 "$f.sync"
+    if [ -f "$f" ] && cmp -s "$f" "$f.sync"; then
+        rm -f "$f.sync"
+        chmod 600 "$f"
+        return 0
+    fi
+    if [ ! -f "$f" ]; then
+        what=new
+    elif [ "$keys" = 1 ]; then
+        what=$(key_changes "$f" "$f.sync")
+        what=${what:-"changed (no value of a key: the order, a comment or a repeated key)"}
+    else
+        what=changed
+    fi
+    mv "$f.sync" "$f"
+    echo "orca-stack: $1: $what"
 }
 
 # /etc/orca/apps: "name port tag check"; a tag of - is the orca tag, and
@@ -193,8 +273,11 @@ cmd_app() {
     touch "$CONF/apps"
     if ! grep -q "^$1 " "$CONF/apps"; then
         echo "$1 $2 - ${check:-/}" >> "$CONF/apps"
-    elif [ -n "$check" ]; then
-        # Set up already (up.sh runs this each time): only a CHECK given changes it.
+        echo "orca-stack: app $1 added (port $2)"
+    elif [ -n "$check" ] && [ "$(awk -v n="$1" '$1 == n { print $4 }' "$CONF/apps")" != "$check" ]; then
+        # Set up already (up.sh and deploy.sh run this each time): only a
+        # CHECK given changes it.
+        echo "orca-stack: app $1: check $(awk -v n="$1" '$1 == n { print $4 }' "$CONF/apps") -> $check"
         awk -v n="$1" -v c="$check" '$1 == n { $4 = c } { print }' "$CONF/apps" > "$CONF/apps.new"
         mv "$CONF/apps.new" "$CONF/apps"
     fi
@@ -1049,6 +1132,7 @@ sub=${1:-}
 [ $# -eq 0 ] || shift
 case "$sub" in
     configure) cmd_configure "$@" ;;
+    sync) cmd_sync "$@" ;;
     app) cmd_app "$@" ;;
     apply)
         cmd_apply "$@"
@@ -1067,5 +1151,5 @@ case "$sub" in
     backup-now) cmd_backup_now ;;
     list-backups) cmd_list_backups ;;
     restore) cmd_restore "$@" ;;
-    *) die "usage: orca-stack configure|app|apply|plan|status|tags|rollback|register|can-overlap|drain-old|quiesce|resume|backup|list-backups|restore" ;;
+    *) die "usage: orca-stack configure|sync|app|apply|plan|status|tags|rollback|register|can-overlap|drain-old|quiesce|resume|backup|list-backups|restore" ;;
 esac

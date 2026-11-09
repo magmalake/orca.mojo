@@ -23,6 +23,12 @@
 #   flags, CGROUPS) changed, and says why; it refuses over running runs
 #   only when the scheduler would be replaced; --only and --all; plan
 #   changes nothing; Postgres is started once and never again;
+# - deploy.sh (and --rollback) first brings the server's settings in line
+#   with hetzner.env: a key added there reaches settings.env, one emptied is
+#   removed, a secret file is rewritten (mode 600), a stack setting set,
+#   each named and never its value; the plan then replaces the containers
+#   whose env file changed and quiesces for the scheduler; the tags stay;
+#   a dry run writes nothing;
 # - deploy.sh pauses, waits and registers only when the plan replaces the
 #   scheduler: a console-only deploy backs up and replaces the console and
 #   nothing else, a deploy of what runs does nothing; an app-only rollback
@@ -55,9 +61,31 @@ trap 'rm -rf "$FAKE"' EXIT INT TERM
 export PATH="$PWD/tests/hetzner:$PATH"
 export ORCA_STACK_TEST=1 ORCA_STACK_REGISTER_TRIES=1 ORCA_CONF="$FAKE/conf" ORCA_DATA="$FAKE/data" ORCA_STATE="$FAKE/state"
 mkdir -p "$ORCA_CONF"
-printf 'AWS_REGION=fsn1\nAWS_ENDPOINT_URL_S3=https://example.invalid\n' > "$ORCA_CONF/settings.env"
-printf 'AWS_ACCESS_KEY_ID=x\nAWS_SECRET_ACCESS_KEY=y\n' > "$ORCA_CONF/s3.env"
-printf 'NAME=orca\nBUCKET=bkt\nSSH_PRIVATE_KEY_FILE=\n' > "$FAKE/hetzner.env"
+# The server's settings as up.sh writes them from hetzner.env (deploy.sh
+# brings them in line with it; no tunnel: an empty tunnel.env).
+cat > "$ORCA_CONF/settings.env" << 'EOS'
+AWS_REGION=fsn1
+AWS_ENDPOINT_URL_S3=https://example.invalid
+ORCA_WAREHOUSE=s3://bkt/warehouse
+ORCA_PUBLIC_WAREHOUSE=s3://bkt/warehouse
+ORCA_LOGS=s3://bkt/logs
+ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE
+EOS
+printf 'AWS_ACCESS_KEY_ID=x\nAWS_SECRET_ACCESS_KEY=y\n' > "$FAKE/s3.env"
+cp "$FAKE/s3.env" "$ORCA_CONF/s3.env"
+: > "$FAKE/tunnel.env"
+cat > "$FAKE/hetzner.env" << EOS
+NAME=orca
+BUCKET=bkt
+S3_ENDPOINT=https://example.invalid
+S3_REGION=fsn1
+S3_CREDENTIALS_FILE=$FAKE/s3.env
+TUNNEL_TOKEN_FILE=$FAKE/tunnel.env
+ORCA_IMAGE=img
+EXTRA_ENV_FILE=$FAKE/extra.env
+SSH_PRIVATE_KEY_FILE=
+EOS
+: > "$FAKE/extra.env"
 export HETZNER_ENV="$FAKE/hetzner.env"
 XDG_STATE_HOME="$FAKE/xdg"
 export XDG_STATE_HOME
@@ -70,6 +98,12 @@ fail() {
 stack() { sh deploy/hetzner/server/orca-stack "$@"; }
 deploy() { sh deploy/hetzner/deploy.sh "$@" > "$FAKE/out" 2>&1; }
 has() { grep -q -- "$1" "$FAKE/out" || fail "no '$1' in the output"; }
+# add_setting KEY=VALUE: a line of hetzner.env's EXTRA_ENV_FILE, and the
+# server's settings.env as a deploy would write it (for orca-stack apply).
+add_setting() {
+    echo "$1" >> "$FAKE/extra.env"
+    echo "$1" >> "$ORCA_CONF/settings.env"
+}
 
 # A stack that ran before tags were kept: its conf says what runs.
 stack configure ORCA_IMAGE=img ORCA_TAG=aaa1111 BUCKET=bkt
@@ -185,6 +219,7 @@ rm "$FAKE/register-fails"
 : > "$FAKE/docker.log"
 sh deploy/hetzner/deploy.sh --dry-run --rollback > "$FAKE/out" 2>&1 || fail "a dry run"
 has "+ ssh root@<server-ip> orca-stack rollback"
+has "+ ssh root@<server-ip> orca-stack sync --keys settings.env"
 [ ! -s "$FAKE/docker.log" ] || fail "a dry run ran docker"
 
 # Only what changed starts again: each container has its spec as a label,
@@ -241,9 +276,69 @@ deploy eee5555 console=hhh8888 || fail "a deploy of what runs"
 has "nothing to replace: not backing up"
 grep -q 'pg_dump\|run -d\|orca pause' "$FAKE/docker.log" && fail "a deploy of what runs did something"
 
+# deploy.sh brings the server's settings in line with hetzner.env before
+# it plans: a key added there (POSTHOG_KEY) reaches settings.env, by name
+# only in the output, the containers whose env file it changes are
+# replaced, and the scheduler's replacement quiesces.
+mode() { ls -l "$1" | cut -c1-10; }
+echo POSTHOG_KEY=phc_notavalue42 >> "$FAKE/hetzner.env"
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 || fail "a deploy that adds POSTHOG_KEY"
+has "  orca-stack: settings.env: added ORCA_POSTHOG_KEY$"
+grep -q phc_notavalue42 "$FAKE/out" && fail "a setting's value was printed"
+grep -qx 'ORCA_POSTHOG_KEY=phc_notavalue42' "$ORCA_CONF/settings.env" || fail "no ORCA_POSTHOG_KEY in settings.env"
+[ "$(mode "$ORCA_CONF/settings.env")" = -rw------- ] || fail "settings.env is $(mode "$ORCA_CONF/settings.env")"
+grep -qx 'POSTHOG_KEY=phc_notavalue42' "$ORCA_CONF/app.env" || fail "no POSTHOG_KEY in app.env"
+has "  scheduler replace settings: its env file changed"
+has "  ui replace settings: its env file changed"
+has "  console replace settings: its env file changed"
+has "  sampler keep unchanged"
+has "the scheduler is replaced: pausing the pipelines"
+grep -q 'exec scheduler orca pause' "$FAKE/docker.log" || fail "a settings change to the scheduler didn't quiesce"
+grep -q 'exec scheduler orca register' "$FAKE/docker.log" || fail "not registered after a settings change"
+grep -q 'unpause toy' "$FAKE/docker.log" || fail "not unpaused after a settings change"
+[ "$(stack tags)" = "orca eee5555, console hhh8888" ] || fail "a settings change moved the tags: $(stack tags)"
+# Nothing differs: nothing changes, nothing is replaced.
+deploy eee5555 console=hhh8888 || fail "a deploy with the settings in line"
+has "names only, never values):"
+has "^  unchanged$"
+has "nothing to replace: not backing up"
+# A dry run shows the sync and the keys, and writes nothing.
+sed -i.bak '/^POSTHOG_KEY=/d' "$FAKE/hetzner.env"
+printf 'POSTHOG_KEY=\nFIXED_COST=8/month\nBACKUP_KEEP=7\nS3_REGION=nbg1\n' >> "$FAKE/hetzner.env"
+printf 'AWS_ACCESS_KEY_ID=x2\nAWS_SECRET_ACCESS_KEY=notasecret99\n' > "$FAKE/s3.env"
+before=$(cat "$ORCA_CONF/settings.env" "$ORCA_CONF/s3.env" "$ORCA_CONF/stack.conf" | cksum)
+: > "$FAKE/docker.log"
+sh deploy/hetzner/deploy.sh --dry-run eee5555 > "$FAKE/out" 2>&1 || fail "a dry run with settings changed"
+has "+ ssh root@<server-ip> orca-stack sync --keys settings.env < "
+has "+ ssh root@<server-ip> orca-stack sync s3.env < $FAKE/s3.env"
+has "+ ssh root@<server-ip> orca-stack configure ORCA_IMAGE=img .*BACKUP_KEEP=7 GHCR_USER=$"
+has "# settings.env from $FAKE/hetzner.env: AWS_REGION .*ORCA_FIXED_COST"
+grep -q 'ORCA_POSTHOG_KEY\|notasecret99\|nbg1 ' "$FAKE/out" && fail "the dry run: $(grep 'POSTHOG\|notasecret99' "$FAKE/out")"
+[ "$(cat "$ORCA_CONF/settings.env" "$ORCA_CONF/s3.env" "$ORCA_CONF/stack.conf" | cksum)" = "$before" ] \
+    || fail "a dry run changed the server's settings"
+[ ! -s "$FAKE/docker.log" ] || fail "a dry run ran docker"
+# A key emptied in hetzner.env is removed; a changed one and a stack
+# setting are named; a secret file only said to have changed.
+deploy eee5555 console=hhh8888 || fail "a deploy that removes POSTHOG_KEY"
+has "  orca-stack: settings.env: added ORCA_FIXED_COST; removed ORCA_POSTHOG_KEY; changed AWS_REGION$"
+has "  orca-stack: s3.env: changed$"
+has "  orca-stack: BACKUP_KEEP 14 -> 7$"
+grep -q 'notasecret99\|8/month\|phc_' "$FAKE/out" && fail "a value was printed"
+grep -q ORCA_POSTHOG_KEY "$ORCA_CONF/settings.env" && fail "ORCA_POSTHOG_KEY wasn't removed"
+grep -q POSTHOG_KEY "$ORCA_CONF/app.env" && fail "POSTHOG_KEY is still in app.env"
+grep -qx 'AWS_REGION=nbg1' "$ORCA_CONF/settings.env" || fail "AWS_REGION wasn't changed"
+grep -qx 'AWS_SECRET_ACCESS_KEY=notasecret99' "$ORCA_CONF/s3.env" || fail "s3.env wasn't written"
+[ "$(mode "$ORCA_CONF/s3.env")" = -rw------- ] || fail "s3.env is $(mode "$ORCA_CONF/s3.env")"
+grep -qx 'BACKUP_KEEP=7' "$ORCA_CONF/stack.conf" || fail "BACKUP_KEEP wasn't configured"
+grep -qx 'ORCA_TAG=eee5555' "$ORCA_CONF/stack.conf" || fail "the sync touched ORCA_TAG"
+has "  scheduler replace settings: its env file changed"
+has "  console replace settings: its env file changed"
+stack resume > /dev/null
+
 # A setting only orca.env has: the scheduler and the UI; CGROUPS: the
 # scheduler only; a tag pushed again: what runs it.
-echo ORCA_TEST_SETTING=1 >> "$ORCA_CONF/settings.env"
+add_setting ORCA_TEST_SETTING=1
 stack apply > "$FAKE/out" 2>&1 || fail "apply after a setting"
 has "scheduler: replaced (settings: its env file changed)"
 has "ui: replaced (settings: its env file changed)"
@@ -316,7 +411,7 @@ grep -q '^probe console-next 8080 /ready$' "$FAKE/docker.log" || fail "the conso
 # one keeps serving, the others are applied, and apply fails saying why.
 mkdir -p "$FAKE/health" "$FAKE/exits"
 echo 503 > "$FAKE/health/console"
-echo ORCA_TEST_SETTING=2 >> "$ORCA_CONF/settings.env"
+add_setting ORCA_TEST_SETTING=2
 : > "$FAKE/docker.log"
 stack apply --app console=mmm3333 --health-timeout 0 > "$FAKE/out" 2>&1 && fail "an apply whose console wasn't healthy"
 has "console: not replaced: the new container answered 503 on :8080/ready (wants 200) after 0s; the old one keeps serving"
@@ -342,7 +437,7 @@ stack apply --app console=mmm3333 > /dev/null 2>&1 || fail "back to mmm3333"
 
 # The worker API's listener (ORCA_WORKER_ADDR) moves with the UI and is
 # probed too.
-echo ORCA_WORKER_ADDR=0.0.0.0:8271 >> "$ORCA_CONF/settings.env"
+add_setting ORCA_WORKER_ADDR=0.0.0.0:8271
 : > "$FAKE/docker.log"
 stack apply > "$FAKE/out" 2>&1 || fail "apply with ORCA_WORKER_ADDR"
 grep -q '^probe ui-next 8271 /$' "$FAKE/docker.log" || fail "the worker listener wasn't probed"

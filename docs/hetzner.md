@@ -78,10 +78,12 @@ the Volume (formatted once, delete-protected), and the server with
 Postgres can never start on the root disk). Then, over SSH, it puts the
 settings and secrets on the server (`/etc/orca`, mode 600, sent on standard
 input and never printed), installs `orca-stack` and the backup timer, and
-starts the containers. Run it again whenever `hetzner.env` changes: it
-fixes drift, starting again only the containers whose settings changed
-(see [Deploying code](#deploying-code)). It does not restart a scheduler
-that has runs running unless you add `--force` (a restart kills them).
+starts the containers. Run it again to fix drift in the Hetzner resources,
+starting again only the containers whose settings changed (see [Deploying
+code](#deploying-code)). It does not restart a scheduler that has runs
+running unless you add `--force` (a restart kills them). A setting changed
+in `hetzner.env` later doesn't need `up.sh`: every `deploy.sh` brings the
+server's settings in line with it first ([Settings](#settings-from-hetznerenv)).
 
 Then, once per new database:
 
@@ -191,6 +193,55 @@ once memory is nearly full, which pressure should keep from happening.
 The tag is the project's image tag: see [Images](#images). This replaces
 `orca aws app` and `orca aws up` for code changes, and needs `hcloud` with a
 context like `up.sh`.
+
+### Settings from `hetzner.env`
+
+Before it plans, `deploy.sh` (`--rollback` too) writes the server's
+settings as `up.sh` does, from `hetzner.env` as it is now (`sync_settings`
+in `lib.sh`, which both run):
+
+- `/etc/orca/settings.env` (`AWS_REGION`, `ORCA_WAREHOUSE` and the rest,
+  the ntfy ids, `ORCA_FIXED_COST`, `ORCA_POSTHOG_KEY`, then
+  `EXTRA_ENV_FILE`'s lines), and the secret files (`s3.env`, `tunnel.env`,
+  `ghcr-token`, `secrets/orca/*`): each only if it differs, mode 600, sent
+  on ssh's standard input (`orca-stack sync`);
+- the stack settings `ORCA_IMAGE`, `CLOUDFLARED_IMAGE`, `BUCKET`,
+  `BACKUP_KEEP` and `GHCR_USER` (`orca-stack configure`), and the apps
+  (`orca-stack app`). Not the tags: those are `deploy.sh`'s, and
+  `ORCA_TAG` in `hetzner.env` is only the first `up.sh`'s. `CGROUPS`,
+  `OVERLAP` and `HEALTH_TIMEOUT`, set on the server by hand, aren't in
+  `hetzner.env` and are left alone.
+
+It prints what changed, never a value: for `settings.env` the keys added,
+removed or changed, for a secret file only that it changed, for a stack
+setting old -> new (none is a secret):
+
+```
+deploy.sh 10:02:11: the server's settings from hetzner.env (names only, never values):
+  orca-stack: settings.env: added ORCA_POSTHOG_KEY
+  orca-stack: BACKUP_KEEP 14 -> 30
+deploy.sh 10:02:12: the plan:
+  scheduler replace settings: its env file changed
+  ui replace settings: its env file changed
+  sampler keep unchanged
+  console replace settings: its env file changed
+```
+
+The plan then replaces the containers whose env file changed, and a
+changed scheduler quiesces (or overlaps) as a new tag does. A setting
+emptied in `hetzner.env` (`POSTHOG_KEY=`, an `EXTRA_ENV_FILE` line taken
+out) is removed from `settings.env`, as `up.sh` writes it; `GHCR_USER=`
+removes it from `stack.conf`. So `hetzner.env` is where settings change:
+an edit made by hand to `/etc/orca/settings.env` is undone by the next
+deploy (put the line in `EXTRA_ENV_FILE`). A secret file `hetzner.env` no
+longer names (`NTFY_TOKEN_FILE=`) stays on the server, unused once its id
+is out of `settings.env`. `--dry-run` prints the `orca-stack sync`
+commands and the keys `settings.env` would have, and reads and writes
+nothing on the server.
+
+A rollback syncs too: it puts back the tags deployed before, not the
+settings, which the server keeps no history of. To undo a setting, change
+it back in `hetzner.env` and deploy (or roll back): the next one applies it.
 
 **Only what changed starts again.** `orca-stack apply` compares what each
 container would be started with against what it runs, and leaves it
@@ -534,7 +585,7 @@ CGROUPS=0` and `apply`.
 Where orca can't make cgroups (this option off, macOS, cgroup v1), the
 scheduler says why once (`orca: run cgroups off: ...`) and runs as before:
 `first_to_go`, and control-placed runs killed over `ORCA_CONTROL_MEMORY_MB`.
-`ORCA_CGROUPS=0` in `settings.env` turns it off from orca's side. Ops >
+`ORCA_CGROUPS=0` in `settings.env` (a line of `EXTRA_ENV_FILE`) turns it off from orca's side. Ops >
 Control lists each run going with its memory against its limit.
 
 ## Backups and restore
@@ -609,9 +660,9 @@ PostHog project can hold both. Once:
    `src/data/site.ts`) in `hetzner.env` as `POSTHOG_KEY`. `up.sh` writes it
    to `settings.env` as `ORCA_POSTHOG_KEY`, which the UI reads, and
    `orca-stack apply` passes it to the apps as `POSTHOG_KEY`, which the
-   census console reads. Without `up.sh`, add
-   `ORCA_POSTHOG_KEY=phc_...` to `/etc/orca/settings.env` on the server and
-   `orca-stack apply`.
+   census console reads. On a server set up before, the next `./deploy.sh`
+   (the tag that runs will do) writes it and replaces the UI and the
+   console ([Settings](#settings-from-hetznerenv)).
 3. Open https://orca.mojourney.dev and https://mojourney.dev: each page's
    head has `/ph/static/array.js`, and PostHog's Activity shows `$pageview`
    events with `site` set.
@@ -647,9 +698,10 @@ The tunnel runs `cloudflare/cloudflared` at a release tag
 upstream release would change the tunnel's version, and restart it, on
 whichever deploy came next. To bump it, pick a release (`gh release list -R
 cloudflare/cloudflared`; the image has the same tag), set
-`CLOUDFLARED_IMAGE=cloudflare/cloudflared:<tag>` in `hetzner.env` and run
-`up.sh` again, or on the server run `orca-stack configure
-CLOUDFLARED_IMAGE=cloudflare/cloudflared:<tag>` and then `orca-stack apply`.
+`CLOUDFLARED_IMAGE=cloudflare/cloudflared:<tag>` in `hetzner.env` and
+deploy (the next `deploy.sh` sets it on the server and replaces the
+tunnel). A `orca-stack configure CLOUDFLARED_IMAGE=...` on the server by
+hand lasts only until the next deploy, which sets `hetzner.env`'s again.
 The tunnel restarts once, which drops traffic for a few seconds. The
 defaults in `lib.sh` and `orca-stack` only apply when `hetzner.env` doesn't
 set it; bump them along with the example's.
