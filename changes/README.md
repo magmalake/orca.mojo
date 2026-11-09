@@ -7,10 +7,12 @@ CHANGELOG.md, so open PRs don't conflict there:
 shelf changes new <pr>-<slug> --bump minor   # writes changes/<pr>-<slug>.minor.md
 ```
 
-The file holds the entry as it will read in the changelog (a `- **Lead
-sentence.** …` bullet, more than one if the PR has several). The level comes
-from the file name (`.patch.md`, `.minor.md`, `.breaking.md`; none is a
-patch). `shelf release apply` writes the fragments under the new version in
-CHANGELOG.md and deletes them; this README stays, which is how it knows the
-repository keeps fragments. CI runs `shelf changes check`: a PR that changes
-code needs a fragment, unless it's labelled `no-changelog`.
+The file holds the entry as it will read in the changelog: one bullet, a bold
+title and at most one plain sentence on what changed for a user (say so if
+upgrading needs an action), then the PR number, `(#123)`, in one or two lines.
+Details belong in the PR. A PR with several changes may add a bullet for each.
+The level comes from the file name (`.patch.md`, `.minor.md`, `.breaking.md`;
+none is a patch). `shelf release apply` writes the fragments under the new
+version in CHANGELOG.md and deletes them; this README stays, which is how it
+knows the repository keeps fragments. CI runs `shelf changes check`: a PR that
+changes code needs a fragment, unless it's labelled `no-changelog`.

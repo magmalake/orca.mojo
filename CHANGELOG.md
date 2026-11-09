@@ -2,971 +2,209 @@
 
 ## 0.18.0 - 2026-11-09
 
-- **Deploys that don't stop runs: overlapping schedulers (#232).** With
-  `ORCA_OVERLAP=on` each `orca scheduler` is an instance with a row in the
-  new `orca.schedulers`, and the newest live one leads (a session advisory
-  lock) and alone decides. An older instance that sees a newer one, or is
-  asked to (`orca scheduler drain <id>`), starts nothing more, supervises
-  the runs it started until they end, then exits; after
-  `ORCA_DRAIN_SECONDS` (3600) it kills what's left. Each local and
-  control-placed run records its instance (`runs.instance`), and while
-  that instance lists it the run is live: counted against `max_runs`, the
-  control slots, the grants and memory pressure, and left alone. Once the
-  instance is gone and the run's heartbeat stale, the leader queues it
-  again whatever its trigger, audited. `orca scheduler status` lists the
-  instances, `orca scheduler can-overlap` tells a deploy whether the new
-  binary may start beside the old one (not when its migrations raise the
-  floor past it, which `migrate` then refuses), `orca scheduler wait-lead`
-  waits for the handover, and `orca register` waits for it too.
-  `ORCA_OVERLAP=off` stays the default. Migration 42, additive. Design:
-  docs/overlap.md.
-
-- **`orca-stack apply` starts again only the containers whose image or
-  settings changed.** Each container is labelled with a hash of what it's
-  started with (`orca.stack.spec`: the image's id, its env file, its flags,
-  mounts and `CGROUPS`), and apply keeps the ones that match, printing
-  `ui: replaced (image ac0c766 -> b2b9558)` or `console: unchanged` for
-  each. It refuses over running runs only when the scheduler would be
-  replaced. `orca-stack plan` says what an apply would do without doing it,
-  `apply --all` replaces everything as before, and `apply --only <name>`
-  one container. Postgres is still never restarted. The first apply with
-  this `orca-stack` replaces every container once (they have no label yet).
-- **`deploy.sh` pauses the pipelines only when the scheduler is replaced.**
-  It asks `orca-stack plan` first: a census-only deploy (`./deploy.sh <the
-  orca tag that runs> console=<sha>`) backs up and replaces the console,
-  with nothing paused, killed or registered; a deploy of what already runs
-  does nothing. A new orca tag still pauses, waits, backs up, applies,
-  registers and unpauses. `deploy.sh --all` replaces every container.
-
-- **`orca-stack apply` replaces the UI and the apps without downtime.** The
-  new container starts as `<name>-next` on the `orca` network, gets the
-  alias `<name>` only once it's healthy (the UI: 200 on `/healthz`, and its
-  worker API listener answering if `ORCA_WORKER_ADDR` is set; an app: 200
-  on its check path, `/` by default, which the census console answers
-  only once it has read the lake), is checked again, and only then is the
-  old one stopped (`docker stop -t 10`), removed and the new one renamed.
-  cloudflared resolves the name per connection, so readers and remote
-  workers see no gap. A new container that isn't healthy within
-  `HEALTH_TIMEOUT` (default 300 s; `--health-timeout`) is removed, the old
-  one keeps serving, and the apply exits non-zero saying why after
-  applying the rest; `deploy.sh` still registers a scheduler it replaced.
-  `orca-stack app NAME PORT CHECK` sets an app's check path. The
-  scheduler, sampler and tunnel are replaced as before.
-- **`orca ui` answers `/healthz`**: 200 `ok` once the database answers a
-  query, 503 if it doesn't, with no login needed.
-
-- **Hetzner deploys that don't pause: overlapping schedulers (#232).**
-  With `orca-stack configure OVERLAP=1` (off by default) the containers
-  get `ORCA_OVERLAP=on`, and `deploy.sh` asks `orca-stack can-overlap`,
-  the new image's `orca scheduler can-overlap`, before replacing the
-  scheduler. On yes it pauses nothing: `orca-stack apply --overlap` starts
-  the new scheduler beside the old one, keeps the old one from restarting,
-  renames it `scheduler-old` and waits for the new one to lead; the
-  pipelines are registered from the new one; and `orca-stack drain-old`
-  asks the old one to drain, waits for its runs (up to `--timeout`, then
-  stops it) and removes it. On no (a migration that raises the floor,
-  overlap off, or an old scheduler still draining) the deploy pauses and
-  waits as before. docs/hetzner.md, docs/overlap.md.
-
-- **`orca ui` drains on SIGTERM.** SIGTERM or SIGINT closes the listening
-  socket, lets the requests in flight finish and exits 0 once they have,
-  within `ORCA_UI_DRAIN_SECONDS` (default 8, under `docker stop`'s 10 s), so
-  a deploy that retires the old UI no longer cuts a page off mid-answer or
-  waits out the grace period for a kill (docs/ui.md#stopping).
-
-- **The Hetzner stack's tunnel runs a pinned cloudflared.** `CLOUDFLARED_IMAGE`
-  defaults to `cloudflare/cloudflared:2026.10.7` instead of `latest`, which
-  `orca-stack apply` pulled on every deploy, so an upstream release
-  restarted the tunnel on the next one. It's still overridable in
-  `hetzner.env`; docs/hetzner.md#images says how to bump it.
-
-- **orca-stack: deploying an image from before orca 0.18 swaps its UI in.**
-  The UI's health check wanted 200 on `/healthz`, which older UIs don't
-  have, so their `ui-next` never counted as healthy: the apply failed after
-  `HEALTH_TIMEOUT`, kept the old UI and left the pipelines paused. A 404
-  there now counts as up too; a check's status can be a list (`200,404`).
-
-- **Pipeline pages: no stray vertical scrollbar beside the tabs.** The tab
-  bar scrolls sideways on a narrow screen (`overflow-x: auto`), which made
-  its vertical overflow `auto` as well, and the tabs' underline overlapping
-  the border by 1px then showed a vertical scrollbar. It is now hidden; the
-  keyboard focus ring sits inside the tab so it isn't clipped.
-
-- **`/healthz` answers 503 `draining` once `orca ui` starts draining.**
-  From the moment SIGTERM or SIGINT starts a drain, `/healthz` says
-  `draining` with a 503 without asking the database, so a health checker
-  or proxy that asks over a connection it kept alive stops routing to the
-  UI that's going away (docs/ui.md#stopping).
-
-- **`fill_lag` holds a partition back after it ends.** A pipeline's
-  `fill_lag` in orca.toml (`"2h"`, `"90m"`; default `0`) fills a partition
-  only once its end is at least that far in the past: a Daily day D from
-  D+1 00:00 plus the lag. For sources that publish late, such as GH
-  Archive, whose last hour of a day isn't there at 00:00 UTC, so the fill's
-  attempts failed until it was and tripped the watchdog. Until then the
-  partition is outside the fill's range and the coverage, and the Fill line
-  and `/api/pipelines/<name>` (`waits_for_lag`) say when it fills. Shown and
-  exported by `orca config`; kept in a new nullable column
-  (`orca.pipelines.fill_lag`, an additive migration) (docs/orca-toml.md#the-lag).
-
-- **A dev stack on Hetzner (#250).** docs/hetzner.md's new "A dev stack"
-  section: a second settings file (`NAME=orca-dev`, its own bucket, tunnel
-  and hostnames, a CAX11, `ORCA_CONFIG=/opt/orca/orca.dev.toml` through
-  `EXTRA_ENV_FILE`), the commands, and a release check list to run on it
-  before production. The scripts now say which stack and settings file they
-  act on; a settings file may set `HCLOUD_CONTEXT` (the Hetzner project),
-  which reaches hcloud; and `up.sh` uses an existing ssh key with the same
-  public key (Hetzner takes one only once per project) instead of failing to
-  create a second. `tests/hetzner-stacks.sh` covers a second stack.
-
-- **A Hetzner deploy whose only failure is an unhealthy new UI or app no
-  longer leaves the pipelines paused.** `deploy.sh` (and `--rollback`)
-  registers a scheduler it replaced, unpauses what it paused, prints
-  `orca-stack status` and fails naming the containers that weren't replaced
-  (the old ones keep serving; `orca-stack apply` retries them). A scheduler
-  that didn't start, a failed registration or a failed backup still leave
-  them paused.
-- **`orca-stack quiesce` no longer waits for runs on remote workers.** It,
-  `apply`'s refusal and `status` count only the runs the scheduler's
-  processes hold (placement not `worker:<pool>`), which a scheduler restart
-  kills; the runs on workers go on through it and are listed as left
-  running on workers. `rescale.sh`, which takes the UI down with the
-  server, waits for them too (`quiesce --workers`).
-
-- **`deploy.sh` brings the server's settings in line with `hetzner.env` (#257).**
-  A setting added to `hetzner.env` after `up.sh` made the server (say
-  `POSTHOG_KEY`) never reached it: only `up.sh` wrote `settings.env`, the
-  secret files and the stack settings. Both now run `lib.sh`'s
-  `sync_settings` (`--rollback` too), before the plan: each file is written
-  only if it differs (mode 600, over ssh's standard input, `orca-stack
-  sync`), and the output names what changed, never a value: the
-  `settings.env` keys added, removed or changed, a secret file as changed,
-  a stack setting old -> new. A setting emptied in `hetzner.env` is removed.
-  The plan then replaces the containers whose env file changed, a changed
-  scheduler quiescing as for a new tag. The tags stay `deploy.sh`'s, and
-  `CGROUPS`, `OVERLAP` and `HEALTH_TIMEOUT` are left alone. An edit by hand
-  to `/etc/orca/settings.env` is now undone by the next deploy: put it in
-  `EXTRA_ENV_FILE`.
+- **Overlapping schedulers.** With `ORCA_OVERLAP=on` (off by default) a new
+  scheduler takes over while the old one finishes its runs (#232).
+- **`orca-stack apply` replaces only what changed.** `orca-stack plan`
+  previews it; the first apply replaces every container once (#243, #230).
+- **`deploy.sh` pauses the pipelines only when the scheduler is replaced**;
+  `--all` replaces every container (#243, #230).
+- **No downtime when the UI or an app is replaced.** The old container serves
+  until the new one is healthy (#244, #231).
+- **`orca ui` answers `/healthz`.** It returns 200 once the database answers
+  and 503 otherwise, with no login needed (#244, #231).
+- **Hetzner deploys that don't pause.** With `orca-stack configure OVERLAP=1`
+  (off by default), `deploy.sh` overlaps the schedulers when it can (#232).
+- **`orca ui` drains on SIGTERM**, finishing the requests in flight so a
+  deploy no longer cuts a page off (#248).
+- **The Hetzner tunnel runs a pinned cloudflared**, not `latest`; set
+  `CLOUDFLARED_IMAGE` in `hetzner.env` to change it (#249).
+- **orca-stack can deploy images from before 0.18**, whose UI has no
+  `/healthz`, without leaving the pipelines paused (#251).
+- **Pipeline pages: no stray vertical scrollbar beside the tabs** (#252).
+- **`/healthz` answers 503 `draining` once `orca ui` starts draining**, so
+  proxies stop routing to a UI that's going away (#253).
+- **`fill_lag`** in orca.toml (such as `"2h"`) waits that long after a
+  partition ends before filling it, for sources that publish late (#254).
+- **A dev stack on Hetzner**, described in docs/hetzner.md with a release
+  check list; the scripts say which stack they act on (#250).
+- **A deploy that fails only on an unhealthy UI or app unpauses the
+  pipelines** and names the containers it couldn't replace (#256).
+- **`orca-stack quiesce` no longer waits for runs on remote workers**, since a
+  scheduler restart doesn't stop them (#256).
+- **`deploy.sh` syncs `/etc/orca/settings.env` from `hetzner.env`.** A hand
+  edit there is now undone, so put it in `EXTRA_ENV_FILE` (#257).
 
 ## 0.17.0 - 2026-11-08
 
-The backfill and rebuild forms show one copyable line, `orca login <this UI> && orca --remote <this UI> backfill ...`, with a Copy button; Ops › Control's Memory pressure and Runs cards explain each value with a (?).
+The backfill and rebuild forms show one copyable `orca login ... && orca
+--remote ... backfill` line, and Ops › Control's Memory pressure and Runs
+cards explain each value (#236).
 
-- **`deploy.sh` registers the pipelines on every deploy, and a restore
-  puts back what the deploy paused.** After the apply and before it
-  unpauses anything, `deploy.sh` runs `orca-stack register` (a failure
-  leaves the pipelines paused and says how to go on). Each backup writes
-  `<time>.paused` beside its dump, the pipelines paused by hand and the ones
-  a deploy paused; `orca-stack restore` unpauses the latter after restoring,
-  leaving the hand-paused ones paused, and `list-backups` says which dumps
-  have one.
-- **The home page's pipelines table puts each pipeline's state first.**
-  Coverage, Running and Queued now come right after the name, and the
-  partitions, schedule, next run and last run after them.
-
-- **Alerts have their own page, Ops › Alerts.** What `orca notify` pushes
-  to the phone is now in the UI too, at `/ops/alerts`, the first entry of
-  the Ops menu (`/ops` opens it rather than Control). It lists every alert
-  newest first, 50 to a page: when, its kind (run failed, watchdog trip,
-  fill stalled, disk, worker lost, memory pressure, backup failed, and each
-  "resolved"), its title and message as sent, links to the run, pipelines,
-  watchdog rule, worker or Control, whether ntfy took it (sent, waiting,
-  failed and retrying with the error, or replaced before it went), and for
-  alerts that end whether each is still open, tinted red until it
-  resolves. `?kind=` and `?state=open|resolved` filter it, it pages like
-  the runs list, the newest page refreshes every 30 s, and every column
-  has a "?". `/api/alerts` is the same as JSON, and `orca alerts [--kind K]
-  [--open|--resolved] [--limit N] [--json]` prints it, also `--remote`.
-  Each alert sent or resolved is a row of the new `orca.alerts` (migration
-  41, additive, so an older binary still runs on the schema; seeded from
-  what `orca.notifications` held, kept 90 days); sending is unchanged.
+- **`deploy.sh` registers the pipelines on every deploy**, and `orca-stack
+  restore` unpauses what the deploy paused (#237).
+- **The home page's pipelines table puts each pipeline's state first**, with
+  Coverage, Running and Queued right after the name (#237).
+- **Ops › Alerts lists every alert sent**, delivered or not and resolved or
+  open; also `/api/alerts` and `orca alerts` (#238).
 
 ## 0.16.0 - 2026-11-08
 
-- **Each pipeline shows one coverage number before anyone clicks.** The
-  home page's table has a Coverage column (the percent over a thin bar,
-  the counts on hover, with a "?" like every column), and a pipeline's
-  Progress card a Coverage line (`1141 / 1407 days done (81%)`) linking to
-  its year calendar, or to Keys for a keyed pipeline. It's a daily or
-  monthly pipeline's partitions done of those in its range so far (its
-  first through the last that has ended), or a keyed pipeline's keys done
-  of the keys orca last read; done is what the calendar counts (every
-  mapped step succeeded in a run of the current code), and a pipeline with
-  nothing to count shows "—". The JSON has it as `coverage {done, total,
-  pct, unit}` on each pipeline of `/` and on `/api/pipelines/<name>`
-  (null for none). It's one query a pipeline, `orca.coverage`.
-- **Which keys are done is fast for a pipeline without a mapped step.**
-  The query the calendar, backfills and coverage share read every
-  succeeded run once per key for such a pipeline (1.2 s for 1,500 days
-  over 30,000 runs); it now reads their keys once (10 ms).
-
-- **Actions ask in a dialog in the UI's colours, not the browser's.**
-  Cancel, Rerun, Rerun from here, Rebuild downstream, a list's bulk Cancel
-  and a pipeline's Cancel queued runs ask in one `<dialog>`, light or dark,
-  saying what will happen ("Cancel run 4418?" / "It leaves the queue and
-  won't start."), with the safe button focused. Escape or a click outside
-  is no, and the focus goes back. Without scripts the forms post as before.
-  The run page's Status card Cancel and the bulk Cancel now ask too; Retry
-  and Backfill again don't.
-- **Code on hover on the lists.** A runs table's pipeline shows its
-  declaration at the commit the run ran, a failed run names its failed step
-  linked to its function, and the home page's pipelines (List and Timeline)
-  show theirs at the registered code. A card shows on hover, keyboard focus
-  or a first tap, survives a live refresh, and fetches nothing until a
-  hover.
-- **Every code card leads with its docstring's first sentence**, then the
-  rest in muted text. A pipeline without a docstring of its own uses its
-  module's.
-
-- **An older orca runs on a newer schema whose migrations since are
-  additive.** Each migration has a compatibility floor, the fewest
-  migrations a binary must know to keep working on its result, recorded in
-  `orca.schema_version.min_binary`. A binary behind the database now starts
-  when the recorded floor is within what it knows, logging `orca: the
-  database is at schema version 41, ahead of this binary's 40; its
-  migrations since are additive, so running on it`, and refuses only past a
-  floor-raising migration (so far 24, the warm pool's new key on
-  `orca.instances`). AGENTS.md has the rule for writing migrations that
-  keep rollbacks possible.
-- **`deploy.sh` backs up before it deploys, and `deploy.sh --rollback` goes
-  back.** Each deploy runs `orca-stack backup-now` after quiescing and
-  before applying (stopping if it fails, unless `--no-backup`) and prints
-  the previous tag, the new one and the dump's key. `orca-stack` keeps the
-  tags each apply replaced (`orca-stack tags --previous`, `ORCA_PREV_TAG`),
-  and `orca-stack rollback` applies them again and registers the pipelines.
-  docs/hetzner.md has a Rolling back runbook.
+- **Each pipeline shows one coverage number.** The home page and the pipeline
+  page show how many of its partitions or keys are done (#227).
+- **Finding which keys are done is fast for a pipeline without a mapped
+  step**, 10 ms instead of over a second on 30,000 runs (#227).
+- **Actions ask in a dialog in the UI's colours, not the browser's**, saying
+  what will happen; without scripts the forms post as before (#233).
+- **Code on hover on the lists.** Runs tables and the home page show a
+  pipeline's or failed step's code on hover (#233).
+- **Every code card leads with its docstring's first sentence** (#233).
+- **An older orca runs on a newer, additive schema**, so a rollback needs no
+  restore, except to a binary from before migration 24 (#234).
+- **`deploy.sh` backs up before it deploys, and `--rollback` goes back** to
+  the previous tags (docs/hetzner.md) (#234).
 
 ## 0.15.0 - 2026-11-08
 
-- **A log or samples file an EC2 instance keeps is never left empty.**
-  `put-log` and `keep-log` (and the Kubernetes runner's log copies) wrote a
-  local `ORCA_LOGS` file in place, truncating it first, so an instance
-  terminated mid-copy, or a page read at that moment, could find the file
-  empty or half written; it is now written beside it and renamed over it.
-  An instance's last upload also waits for one still going, which could
-  otherwise land after it with older lines.
-- **A run's `started` is when the scheduler started it.** It was the time the
-  tick's transaction began, before the start waited on locks and counted
-  slots and the vCPU budget, so a run that correctly waited for another to
-  end could look as if it had run beside it (the runs list, the timeline,
-  and `tests/kind.sh`'s budget check).
-
-- **The web layer in modules, behind one router.** `orca ui`'s 8,600-line
-  `orca.ui` is four packages: `orca.web` (the server, a route table with a
-  method-aware router in place of `serve()`'s chain of `if
-  path.startswith(...)`, sessions and API tokens as a wrapper around the
-  routes), `orca.api` (the actions, the worker API with its own route
-  table, and the JSON writers), `orca.ui` (a module per page) and
-  `orca.views` (the typed rows both draw from; the run and pipeline pages
-  read a `RunView` and a `PipelineView` once for their HTML and their
-  JSON). Pages, JSON and the worker API answer as before, byte for byte;
-  only a malformed path's 404 can say it differently (`/runs/x/bogus` is
-  "nothing at /runs/x/bogus", not "no run x"). The
-  `orca.ui_style`, `orca.ui_viz`, `orca.ui_coverage`, `orca.terms` and
-  `orca.step_cards` modules are `orca.ui.style`, `.viz`, `.coverage`,
-  `.terms` and `.step_cards`. DESIGN.md, "Web layer", has the module map.
-- **`ORCA_WORKER_ADDR`: the worker API on a listener of its own.** Set to a
-  `host:port`, `orca ui` also serves `/api/worker/...` there, from a thread
-  of its own, so a slow page can't hold up a worker's claims, heartbeats
-  and store calls; everything else there is 404, and the UI's port keeps
-  answering the worker API too. Unset, nothing changes.
-  `docs/workers.md#a-listener-of-its-own`, `tests/ui.sh`.
-
-- **Fills on worker pools.** A pipeline placed `worker:<pool>` with `fills = "all"` has its fill runs queued as a local one's are (same order, window and partitions), held for a worker of the pool to claim. `fill_max_runs` caps its fill runs across the whole pool, queued ones included; each worker's `--max-runs` and grants cap one machine. The pipeline page and `/api/pipelines/<name>` count the queued fill runs (`fill.queued`).
-- **A run whose worker is gone is queued again.** A run claimed by a worker that hasn't been seen for half the stale limit, or that restarted without it, is queued again for the pool whatever its trigger (a manual, UI or rerun run no longer fails `interrupted`), within `run_retries` starts; one claimed and never started gets its start back. Each is audited (`/api/worker/requeue`) and logged.
-- **Machine metrics on workers.** `orca worker` starts `<binary> sample` beside each run, writing `metrics/worker-<name>.jsonl` under `ORCA_LOGS`, so worker runs have the Machines card, and the worker's Pools machine page draws its latest run's samples.
-- **A worker's claim no longer stalls behind one pipeline's queue.** The claim looked at the pool's 50 oldest queued runs, so one pipeline at its `max_runs` with more queued runs than that hid every other pipeline's runs, and a worker with room ran one pipeline at a time. It now looks at the oldest queued run of each pipeline.
-
-- **Runs lists filter by status, date, partition and run, and act on many
-  runs at once.** `/runs` and a pipeline's Runs tab have a filter bar (a
-  plain `GET` form; JavaScript only submits it on change): any of several
-  statuses, each with its count under the other filters (`counts` in the
-  JSON), the trigger, created `from`/`to` a day or time and quick picks
-  (`since=1h`, `today`, `24h`, `7d`), a partition glob or part (`key=2023-08-*`,
-  `key=modular/`) and a run id (`run=`, which goes to it). The filters
-  combine with the keyset pager, are kept in every link, the live refresh
-  and the `1–50 of N` count, and are the same parameters on the JSON
-  (`filters` gains `statuses`, `since`, `from`, `to`, `key`, `run`; `status`
-  still reads as before). Logged in, rows can be ticked (the page's at once,
-  or all that match, their number on the box and checked again by the
-  action) and cancelled, retried if failed, or backfilled again over their
-  partitions: `POST /runs/bulk`, which says what it did ("Cancelled 12
-  runs, 3 already finished") and audits each run as its own action. An index
-  on `runs.created` (migration 38) keeps a date filter one index range on
-  200,000 runs. `<pipeline> status --status failed,queued` filters a store's
-  runs on the command line, on Postgres, SQLite and in memory.
-
-- **Ops › Pools: one page for every machine runs are placed on.** Fleet
-  and Workers are one page, `/ops/pools`: a row per machine of each pool,
-  the EC2 instances orca launches (`ec2`, live and for an hour after they
-  end), a Kubernetes run's pods (`kubernetes`, on that runner) and the
-  machines running `orca worker` (`worker:<pool>`), with its kind, state
-  (`live`, `draining`, `gone`), image, CPUs, memory, runs, last heartbeat,
-  CPU and the worker as columns of its row, each with its help. `?pool=`
-  and `?kind=` filter it with plain links; with EC2 in view it keeps
-  Fleet's cards and charts; it refreshes every 10 s from
-  `/ops/pools/live`, and `/api/pools` is its JSON. A machine's page
-  (`/ops/pools/<kind>/<id>`) has an instance's samples over its run, or
-  the runs a worker claimed. The Ops menu is Control, Pools and Watchdog.
-  `/ops/fleet`, `/ops/workers`, their fragments and `/fleet` redirect to
-  Pools with the kind they showed (301), and still answer their JSON to a
-  script that asks for JSON; `/api/fleet` and `/api/workers` are
-  unchanged. `docs/ui.md#pools`, `tests/fleet.sh`.
-
-- **Admission by memory pressure.** On the local runner, the control host
-  and each remote worker, no new run starts while Linux's pressure stall
-  information reads `some avg10` over `ORCA_ADMIT_MEMORY_PRESSURE` (10%; 0
-  turns it off); runs already going go on. A waiting run says why, as the
-  grants' reasons do: `waiting: memory pressure 23% (limit 10%)` on its
-  page, its pipeline's **Waiting**, the home and runs pages and the JSON
-  (`... on worker <name>` for a worker's pool). The hold ends under half
-  the limit, or after 30 s at most it. A hold that outlasts
-  `ORCA_ADMIT_PRESSURE_GRACE_SECONDS` (600) with none of orca's runs going
-  is logged, raises the new `memory-pressure` alert once, and lets runs
-  start one at a time. The file read is the nearest cgroup's
-  `memory.pressure` with a memory limit (a container run with `--memory`),
-  else the host's `/proc/pressure/memory`, or `ORCA_MEMORY_PRESSURE_FILE`;
-  without PSI (macOS, `psi=0`) nothing changes and the log says so once.
-  `orca.pressure`, `orca.admission`; migration 40. docs/orca-toml.md,
-  "Memory pressure"; `tests/pressure.sh`.
-- **The pressure, shown.** Ops › Control has a Memory pressure card
-  (`memory_pressure` in `/api/system`), `/api/workers`
-  each worker's, `/metrics` the gauges `orca_memory_pressure_some_avg10`
-  (and `_avg60`, `_avg300`, `full_*`) and
-  `orca_admission_memory_pressure_held` by `host`, and `orca status` a line.
-- **Runs get `ORCA_MEMORY_PRESSURE_FILE`**, the PSI file their host's
-  pressure is read from (now reserved in `env`), and `orca.memory_pressure()`
-  reads it, so a step can lower its own parallelism while it's high.
-
-- **Each local, control-placed and worker run gets a cgroup with a memory
-  limit, and an out-of-memory kill retries bigger** (#201). Where orca can
-  make cgroup v2 cgroups (`orca scheduler`, `orca worker`), each start gets
-  `orca-run-<run>-<start>-<pid>` beside the leaf `orca` the scheduler moves
-  itself into: `memory.high` at its grant, else its request's maximum, else
-  `ORCA_RUN_MEMORY_MB` (default what the host can grant; on the control
-  placement at most `ORCA_CONTROL_MEMORY_MB`), and `memory.max`
-  `ORCA_RUN_MEMORY_MARGIN` (25) percent above, with `memory.oom.group` on.
-  The process is placed in it between `fork` and `exec` (the child writes
-  `0` to a `cgroup.procs` descriptor the parent opened). At the reap,
-  `memory.events`' `oom_kill` (or a stale-heartbeat kill while held at the
-  limit) fails the attempts `out of memory at <limit>: ...` instead of
-  signal 9, and raises `orca.pipelines.memory_raised_mb` to
-  `ORCA_RUN_MEMORY_GROWTH` (1.5) times the limit, up to `memory_gb`'s
-  maximum: admission makes it the request's minimum for the retry and the
-  pipeline's later runs; registering a different `memory_gb` resets it.
-  Cgroups are emptied (`cgroup.kill`) and removed when runs end, and a
-  scheduler that starts removes those a dead one left. The run's page shows
-  Memory limit, the Steps table each attempt's limit beside its peak, the
-  attempt page its limit and grant, and Ops › Control a Runs card of the
-  runs going with their cgroup's memory against their limit (`runs` in
-  `/api/system`); the JSON has `memory_limit`, `memory_limit_mb` and
-  `grant_memory_mb`. Migration 39. Where cgroups aren't available (macOS,
-  cgroup v1, no delegation, `ORCA_CGROUPS=0`) the scheduler says why once
-  and runs as before. On the Hetzner server, `orca-stack configure
-  CGROUPS=1` gives the scheduler's container a private cgroup namespace and
-  a writable `/sys/fs/cgroup` (off by default; docs/hetzner.md).
+- **A log or samples file an EC2 instance keeps is never left empty** or half
+  written when the instance stops mid-copy (#218).
+- **A run's `started` is when the scheduler started it**, not when its tick
+  began, so runs that waited no longer look as if they overlapped (#218).
+- **The web layer in modules, behind one router.** The `orca.ui_*`,
+  `orca.terms` and `orca.step_cards` modules moved under `orca.ui` (#219).
+- **`ORCA_WORKER_ADDR`: the worker API on a listener of its own**, so a slow
+  page can't hold up remote workers (#219).
+- **Fills on worker pools.** A `worker:<pool>` pipeline can use `fills =
+  "all"`; `fill_max_runs` caps the whole pool (#221).
+- **A run whose worker is gone is queued again** for the pool, whatever its
+  trigger, within `run_retries` (#221).
+- **Machine metrics on workers.** Runs on `orca worker` now have the Machines
+  card (#221).
+- **A worker's claim no longer stalls behind one pipeline's queue**, since it
+  now looks at each pipeline's oldest queued run (#221).
+- **Runs lists filter by status, date, partition and run**, and cancel, retry
+  or backfill many runs at once (#223).
+- **Ops › Pools: one page for every machine runs are placed on.** It replaces
+  Fleet and Workers, whose old URLs redirect to it (#224).
+- **Admission by memory pressure.** No new run starts while memory pressure is
+  over `ORCA_ADMIT_MEMORY_PRESSURE` (10%) (#225, #202).
+- **The pressure, shown** on Ops › Control, `/api/workers`, `/metrics` and
+  `orca status` (#225, #202).
+- **Runs get `ORCA_MEMORY_PRESSURE_FILE`**, and `orca.memory_pressure()` reads
+  it, so a step can lower its parallelism while pressure is high (#225, #202).
+- **Runs get a cgroup memory limit, and an out-of-memory kill retries
+  bigger.** On Hetzner it needs `orca-stack configure CGROUPS=1` (#201).
 
 ## 0.14.0 - 2026-11-08
 
-- **Each run's peak memory and CPU** (#200). The scheduler samples each
-  local and control-placed run's process tree every tick (one pass over
-  `/proc` for all of them: resident bytes, and utime + stime with what the
-  tree waited for), and `orca worker` its runs' every poll; `reap` now
-  uses `wait4`, whose `ru_maxrss` and CPU time close each process's
-  samples. Each attempt the process made gets its share by time:
-  `peak_rss_bytes`, `cpu_seconds` and `peak_cpus` on `orca.attempts`
-  (migration 35; SQLite files get the columns too), null where nothing
-  measured it (EC2, Kubernetes, `<binary> run`, and macOS's peak cores).
-  A worker sends its samples with `/api/worker/exited` (`pid`, `max_rss`,
-  `marks`). The run's page has Peak memory and CPU used, the Steps table
-  and Runs tables a Peak column, an attempt's page its own; the pipeline's
-  Overview has a **Resources** card, the p50 and max of its last 20
-  measured runs (`usage` in its JSON), what #171's requests will be read
-  from. A run, step and attempt have `usage` in the JSON, `orca status
-  <pipeline>` prints each run's and `<binary> status <run>` each step's.
-  `orca.usage`, `docs/ui.md#what-a-run-uses`, `tests/usage.sh` (a step
-  holding 200 MiB beside a child holding 100, each burning a core, on the
-  local runner, the control host and a worker).
-
-- **`orca register` with no arguments works.** It printed the usage instead
-  of registering every `[pipelines.<name>]` of the file, as the docs say (and
-  `deploy/hetzner` runs it so): only a call with a flag or a path got through.
-  `tests/config.sh` now registers bare, from `./orca.toml` and from
-  `ORCA_CONFIG`.
-
-- **Runs on the local runner get their secrets.** A pipeline's
-  `secrets` (orca.toml, or `--secret`) were read for control-placed runs,
-  on EC2 and by `orca worker`, but the default local runner gave its runs
-  only `env`, so a `GITHUB_TOKEN` run called GitHub anonymously. The
-  scheduler now reads each secret as it starts a local run and gives the
-  values to that run alone, named in `ORCA_SECRETS` for masking; a secret
-  it can't read fails the run with `can't start: can't read secret <id>`,
-  retried as other start failures are. A local run with secrets stages its
-  output outside `ORCA_LOGS`, as a control-placed run does, and `keep-log`
-  appends it to `driver.log` masked once the run ends (so its driver.log
-  fills at the end rather than live). The Kubernetes runner still gives
-  its pods no secrets. `tests/secrets.sh` has a local-runner case.
-
-- **A run's page is cards, like a pipeline's.** The list of facts at the
-  top is now Status (with Resume, Rerun and Cancel), Partitions &
-  trigger, Code (the pipeline, steps and tasks on one line, source on
-  hover, the code hash in small print), Resources (the run's own peak
-  memory and CPU) and Settings, each fact with a "?" that explains it.
-  Steps is one card with Table, Timeline and Graph tabs (the table
-  first, the choice remembered in the browser, `?steps=` without
-  scripts), so they aren't drawn twice. Machines says what its numbers
-  are: the whole machine for the local runner and control placement,
-  saying so plainly when other runs shared it, the run's own instances on
-  EC2, the node on Kubernetes. Each section has an anchor (`#status`,
-  `#steps`, `#machines`, `#tables`, ...); the JSON is unchanged.
-
-- **Lineage reads Upstream and Downstream.** A snapshot's page calls
-  "Made from" and "Made from it" Upstream and Downstream, its tables'
-  columns Written by and Read, and the run page's Snapshots card says
-  read and wrote, as the dataset page's Written by and Read by do. The
-  diagram has a legend and a "?" that says how to read it, and a box's
-  second line is the pipeline and partition that wrote it, the snapshot,
-  run and step on hover, instead of a cut-off id.
-
-- **Graphs are drawn top to bottom.** `/datasets`' graph of pipelines and
-  datasets was 5,000 px wide; it and a snapshot's lineage are now laid out
-  downward, a row per level, at most two boxes to a row (about 400 px, a
-  phone's width), arrows pointing down. A cycle (a pipeline reading what
-  it writes) no longer pushes a box to the far end: its edge goes back up
-  round the side, and an edge that skips a level goes round the boxes
-  rather than through them.
-
-- **Runs sized to their share of the machine** (part of #171). A pipeline
-  can ask for `cpus = "1..16"` and `memory_gb = "2..24"` in orca.toml
-  (`[defaults]` or its own table; a single number is both ends) or with
-  `orca register --cpus` and `--memory-gb`; `orca config check` and
-  register refuse bad ranges, and `orca config show` gives each with its
-  source. On the local runner and for control-placed runs the scheduler
-  then starts a run only if its minimum fits what this host can grant (its
-  cgroup limits, else `/proc/meminfo` and its cores; `sysctl` on macOS;
-  `ORCA_HOST_CPUS`, `ORCA_HOST_MEMORY_MB` over them) less a reserve
-  (`ORCA_RESERVE_CPUS`, 1; `ORCA_RESERVE_MEMORY_MB`, 1536) less what the
-  running runs were granted; otherwise it waits, held saying why
-  (`waiting: needs 2 GB, 1.3 GB free of grants`) on its page, the
-  pipeline's Progress card and in their JSON (`held`, `waiting`). A run
-  that starts gets up to its maximum of what's left, fixed for that start,
-  in `ORCA_GRANT_CPUS` and `ORCA_GRANT_MEMORY_MB`, recorded on the run
-  (migration 36) and shown on its page beside its peak (`request`, `grant`
-  in its JSON). `orca worker` admits the runs it takes against its own host
-  the same way. `DISTA_WORKER_SLOTS = "auto"` becomes the granted CPUs over
-  the run's local workers; other `"auto"` values reach the run as they are,
-  for `orca.auto_count` to size from the grant. A pipeline without a
-  request runs exactly as before. `orca.resources`,
-  `docs/orca-toml.md#requests-and-grants`, `tests/grants.sh`. Also: `orca
-  worker` reported its memory in KB as MB on Linux.
-
-- **Help on every table, and on the values in it.** Every table's column
-  headers have a "?" (Steps, Next runs, Runs, Versions, Machines, Fleet,
-  Workers, the watchdog's, alerts' and the rest), added as each page is
-  answered from one dictionary, `orca.terms`. Values from a fixed set
-  (statuses, step kinds, triggers, placements, read and wrote, a
-  setting's source) are dotted underlined and say what they mean on
-  hover, keyboard focus or a tap, from the same dictionary, without a "?"
-  in every cell. A "?" in a table that scrolls sideways is no longer cut
-  off by it.
-
-- **The Configuration table explains itself and links its sources.** Each
-  key has a "?", a placement or fills value its meaning, and From links to
-  the orca.toml line at the registered commit (`orca register` now keeps
-  each file value's line and the file's path in its checkout) or, for a
-  default from the pipeline's code, to its `Pipeline[...]` line. A flag,
-  the environment and orca's own defaults have no line to link.
-
-- **Code on hover is coloured.** `/code?u=` fetches a GitHub file at a
-  commit for the UI and colours it with `orca.highlight`, a small Mojo
-  tokenizer (keywords, defined names, strings, comments, numbers,
-  decorators), in the theme's colours.
-
-- **A year of coverage.** A daily pipeline's Coverage card (Operate) has
-  **Month** and **Year** tabs, Year the default and the choice kept in
-  `localStorage` (`?cov=month|year` without scripts). Year is twelve small
-  months of days in the same colours and tooltips, each named with its
-  share done (`28/31 done, 1 failed`) and linking to its month, `‹ 2026 ›`
-  to move within the range, a legend with the year's counts, and a strip
-  of every month of the range (ten years at most) shaded by how much is
-  done, each linking to its year; at phone width the months wrap two to a
-  row. Both tabs come from one read of the year, the same three queries a
-  month took (the strip's days join the year's in the one `DONE_SQL`).
-  Monthly pipelines keep their year of months. `orca.ui_coverage`,
-  `docs/ui.md#coverage`, `tests/calendar.sh`.
-
-- **How far a sensor is behind what it follows.** A dated sensor that runs
-  when another pipeline's dataset gets a snapshot (the census's mojo_repos
-  and mojo_activity follow gharchive) has **Following** on its Progress
-  card: `toy (up.days): 3 of 9 days done; 6 behind: 3 running or queued, 1
-  failed and 2 not queued yet`, the first eight of each linked to their
-  month on Coverage. What it follows has is every partition of the
-  datasets it reads that orca knows of: the snapshots other pipelines'
-  succeeded attempts committed (`orca.commits`) and the runs its own
-  sensed snapshots started (`orca.sensed`), mapped to its kind and range.
-  Coverage marks those days it hasn't done, failed or started as
-  **behind** (amber, in the legend with a line saying what it means). The
-  page's JSON and `/api/pipelines/<name>` have `follow` (null for other
-  pipelines). One query for the keys, then the calendar's three.
-  `orca.follow`, `docs/ui.md`, `tests/calendar.sh`.
-
-- **Lists in pages, and pages that keep up by themselves.** `/runs`, a
-  pipeline's Runs tab and a dataset's snapshots page by id (keyset), not
-  by offset: `?before=<id>`, `?after=<id>` and `?limit=` (50 on `/runs`,
-  20 on the tab, at most 500; `?n=` still works), with « Newest, ← Newer
-  and Older → links that keep the filters, and `1–50 of 1,234` from an
-  indexed count. A page stays put while new runs arrive. The JSON keeps
-  its fields and first page, and adds `limit`, `after`, `older` and the
-  cursors `next`, `prev`, `next_url`, `prev_url` (`runs_page` on a
-  pipeline, `snapshots_page` on a dataset, which used to stop silently at
-  50). Migration 37 adds `runs_pipeline_id` on `orca.runs (pipeline, id
-  DESC)`; `RunStore.runs` takes a `before` cursor in every store, and
-  `<pipeline> status --before <run>` pages on the command line. Runs
-  tables refresh from `/runs/table` (every 5 s while one of their runs is
-  queued or running, the newest page every 30 s so new runs appear at its
-  top, older pages not once they're idle), as do the home page's
-  pipelines (`/home/pipelines`), an attempt's facts, Ops Control (30 s),
-  Workers (10 s) and the watchdog (30 s); a refresh keeps the row at the
-  top of the window in place when rows arrive above it, and leaves a field
-  being typed in alone. `docs/ui.md#lists-of-runs-in-pages`,
-  `docs/ui.md#live-pages`, `tests/ui.sh`, `tests/store_suite.mojo`.
-
-- **A card per step, on hover.** In a pipeline's Steps card (Graph and
-  Table) and a run's (Table, Timeline and Graph), hovering, focusing or
-  tapping a step shows its function's signature, coloured, and its
-  docstring's first paragraph, from the code at the commit (`/code?u=&at=`
-  answers just the `def` and its docstring), with a link to the line; its
-  kind with what it means, `after=`, input and output types; the datasets
-  it reads and writes, linked; and on a pipeline's page what its attempts
-  in the last 20 runs took (p50 and max), their peak memory and how many
-  failed, or on a run's page that attempt's start, end, duration, status,
-  peak memory, CPU and error. All but the docstring is in the page, so a
-  hover asks the server nothing.
+- **Each run's peak memory and CPU** are measured and shown on its page, its
+  steps and attempts, and a pipeline's Resources card (#200, #171).
+- **`orca register` with no arguments works**, registering every pipeline in
+  `orca.toml` as documented (#204).
+- **Runs on the local runner get their secrets.** A run with secrets writes
+  its `driver.log` at the end rather than live (#205).
+- **A run's page is cards, like a pipeline's**, with its steps as Table,
+  Timeline and Graph tabs (#207).
+- **Lineage reads Upstream and Downstream**, and its diagram has a legend
+  (#207).
+- **Graphs are drawn top to bottom**, so `/datasets` and a snapshot's lineage
+  fit a phone's width (#207).
+- **Runs sized to their share of the machine.** A pipeline can ask for `cpus`
+  and `memory_gb` ranges, and a run starts once its minimum fits (#171, #207).
+- **Help on every table, and on the values in it**, as a "?" on each column
+  and an explanation on hover for fixed values such as statuses (#207).
+- **The Configuration table explains itself and links each value to its line
+  in orca.toml** (#207).
+- **Code on hover is coloured** (#207).
+- **A year of coverage.** A daily pipeline's Coverage card has a Year tab with
+  twelve months and a strip for its whole range (#211).
+- **How far a sensor is behind what it follows** is shown on its Progress card
+  and as amber days on Coverage (#211).
+- **Lists in pages, and pages that keep up by themselves**: runs and snapshots
+  page by Newer and Older, and lists refresh live (#214).
+- **A card per step, on hover**, with its signature, docstring, datasets and
+  recent timings (#215).
 
 ## 0.13.0 - 2026-11-07
 
-- **orca.toml follow-ups: `orca config check`, the registration on the
-  pipeline page** (#181). `orca config check [<file>] [--secrets]` checks a
-  file for a project's CI with no database: what `orca register` refuses,
-  with its `file:line: [table] key: why`, plus that each `head_type` and
-  `worker_type` can be sized (a warning for one not in orca's price table,
-  which counts as $0 an hour), and with `--secrets` that each secret can be
-  read (`ORCA_SECRET_FETCH` or Secrets Manager; a value is never printed).
-  It exits 1 on a problem. The pipeline page has a Configuration section
-  (`#config`) with what `orca config show` prints: where it was registered
-  from, the flags over the file and each value's source; `/api/pipelines/<name>`
-  has it as `config`. A run's Settings link to it. `docs/orca-toml.md`,
-  `tests/config.sh`. Still to do: drift warnings, `[stack]` read by
-  `orca aws up`, and a register flag for per-pipeline env.
-
-- **The watchdog shows every threshold a rule checks, and which one
-  tripped** (#180). `control` printed one limit (85, disk's) while it
-  tripped on memory's 90. Each rule now keeps a check per threshold
-  (`orca.watchdog.limits`: `control` memory and disk, `cost` the sustained
-  rate and the day, `failing` the count and the share, `idle` the CPU and
-  the workers, `launches` and `stuck` one each) with its value, limit and
-  whether it is past it, on its reading and on each trip (a `checks` jsonb
-  column on `orca.watchdog_rules` and `orca.watchdog_trips`, migration 34).
-  `orca watchdog status` prints `control   memory 98.30 % (trips over
-  90.00, past), disk 10.60 % (trips over 85.00)  TRIPPED on memory`;
-  `/watchdog` has a Checks column and says what a trip tripped on;
-  `/api/watchdog` adds `checks` and `tripped_on` to rules and trips
-  (`value` and `threshold` stay). `tests/watchdog.sh` has a control trip.
-
-- **The pipeline page has three tabs**, each its own page (`?tab=`), so
-  links and the back button work without scripts: **Overview** (the
-  cards, Steps, keys, snapshots not run, Next runs), **Runs** (its runs
-  and Versions) and **Operate** (Coverage beside Start runs and Stop
-  runs, since the calendar is where days are picked). The name, Pause and
-  the live Progress card are on every tab. `?cal=` and `?preview=` open
-  Operate, a link to `#coverage`, `#start` or `#stop` is sent there, and
-  a refused start, backfill or cancel goes back to it.
-
-- **The pipeline page's header is three cards.** Progress (runs at once,
-  the fill, a failing sensor, the next run, a link to the coverage),
-  Config (partitions, schedule, run retries, placement, binary) and Code,
-  side by side on a wide screen and stacked on a phone. Progress refreshes
-  itself every 5 s from the new `/pipelines/<name>/progress` fragment.
-  Each fact's name has a "?" that explains it, on hover or keyboard
-  focus, with a link to the docs. The Code card names the pipeline, its
-  steps and its dista tasks, each linked to its line (file and line in
-  the title), with the code hash in small print under them; the two Code
-  lines are gone.
-- **Hovering a link to code shows the code.** On every page, a link to a
-  line on GitHub shows that function, from its def through its docstring
-  (up to 24 lines), fetched from raw.githubusercontent.com once per file;
-  for a private repository it says it can't, and the link still opens it.
-- **Steps: Graph and Table tabs.** The graph is shown first for a pipeline
-  of more than one step, the table for one step; the choice is remembered
-  in the browser, and `?steps=graph|table` links work without scripts.
-- **Relative times and live pages work again in browsers.** The page
-  script built an `Intl.DateTimeFormat` with `dateStyle` and
-  `timeZoneName` together, which browsers refuse; the error stopped the
-  script, so times stayed UTC and `data-poll` parts never refreshed.
-
-- **`deploy/hetzner/deploy.sh` pauses, waits and resumes by itself.** It
-  quiesces (pauses the pipelines that aren't paused, waits for running runs,
-  listing them each minute; `--timeout`), deploys, then unpauses what it
-  paused, logging each step. It refreshes the server's `orca-stack` first.
-  `--force` keeps the old behaviour.
-
-- **`orca status <pipeline>` shows how long each run ran** (`3m 21s`, up to now
-  while it runs; `-` before it starts) instead of when it was created.
-
-- **Ops sections can be linked to.** Each section on Ops › Control and Fleet
-  has an id and its heading links to it, so `/ops/control#cpu` opens at the
-  CPU chart.
-- **PostHog analytics in the UI, when asked for.** With `ORCA_POSTHOG_KEY`
-  set to a PostHog project key (`phc_...`), every page's head has the same
-  snippet as the magmalake.org website: `array.js` and events through `/ph`
-  on the UI's own origin (a first-party proxy, such as the `mojourney-ph`
-  Worker in magmalake/magmalake.org for orca.mojourney.dev), memory-only
-  persistence (no cookies, no `localStorage`), and `site: "orca"` on every
-  event. Unset or not a `phc_` key, nothing is added. `deploy/hetzner`
-  takes `POSTHOG_KEY` in `hetzner.env` and writes it as `ORCA_POSTHOG_KEY`;
-  `orca-stack` passes it to the apps as `POSTHOG_KEY` (the census console's
-  analytics). `docs/hetzner.md` has the setup.
+- **`orca config check`** validates orca.toml in CI with no database, and the
+  pipeline page shows where each setting came from (#181).
+- **The watchdog shows every threshold a rule checks, and which one tripped**,
+  in `orca watchdog status`, `/watchdog` and `/api/watchdog` (#180).
+- **The pipeline page has three tabs**, Overview, Runs and Operate, each its
+  own page (#194).
+- **The pipeline page's header is three cards**, Progress, Config and Code,
+  with a "?" on each fact (#194).
+- **Hovering a link to code shows the code** on every page (#194).
+- **Steps: Graph and Table tabs** (#194).
+- **Relative times and live pages work again in browsers** (#194).
+- **`deploy/hetzner/deploy.sh` pauses, waits and resumes by itself**;
+  `--force` keeps the old behaviour (#193).
+- **`orca status <pipeline>` shows how long each run ran** instead of when it
+  was created (#192).
+- **Ops sections can be linked to**, such as `/ops/control#cpu` (#189).
+- **PostHog analytics in the UI, when asked for**, with `ORCA_POSTHOG_KEY`
+  (`POSTHOG_KEY` on Hetzner); unset, nothing is added (#195).
 
 ## 0.12.0 - 2026-11-07
 
-- **Alerts to your phone through ntfy** (#184). With `ORCA_NOTIFY_URL` (a
-  topic URL; the topic itself can come from a secret,
-  `ORCA_NOTIFY_SECRET`, read with `ORCA_SECRET_FETCH` and never logged;
-  `ORCA_NOTIFY_TOKEN` / `_TOKEN_SECRET` for a protected topic) the scheduler
-  POSTs, with ntfy's `Title`, `Priority`, `Tags` and `Click` headers, a
-  watchdog trip (high; low when acknowledged or unpaused), a run that
-  failed after its last retry, a fill with no fill run finished in
-  `ORCA_NOTIFY_FILL_STALL_HOURS` (2), the control disk over
-  `ORCA_NOTIFY_DISK_PERCENT` (85), and a worker quiet for
-  `ORCA_NOTIFY_WORKER_SECONDS` (300) while it held runs. The same alert is
-  sent at most once per `ORCA_NOTIFY_MIN_SECONDS` (1800), kept in the new
-  `orca.notifications` table (migration 33) so a restart doesn't resend; a
-  send that fails (a 5 s timeout, `ORCA_NOTIFY_TIMEOUT_MS`) is logged
-  without the URL and retried on a later tick with a doubling wait, and
-  never blocks or fails the tick. `orca notify test` sends a test message;
-  `orca notify --kind K [--subject S] ... "message"` is the same for
-  scripts (the Hetzner `orca-stack backup` calls it on failure). Ops >
-  Control and `/api/system` (`notify`) say whether alerts are on and list
-  the last ones. `deploy/hetzner` takes `NTFY_TOPIC_FILE`, `NTFY_TOKEN_FILE`,
-  `NTFY_URL` and `UI_URL`; `docs/hetzner.md` has the phone setup.
-  `orca.notify`, `orca.alerts`, `tests/notify.sh` (`pixi run -e default
-  test-notify`) against `tests/fake_ntfy.py`.
-
-- **The default project image builds for Neoverse N1** (#178). `orca aws
-  push`'s image (`deploy/project.Dockerfile`) passes `--target-cpu
-  "$MOJO_TARGET_CPU"` (`ARG`, default `neoverse-n1`) in every `mojo build`:
-  binaries built on GitHub's arm64 runners (Neoverse N2, SVE2) died with
-  SIGILL (exit 132) on Hetzner CAX servers (N1), as mojo-census#35 found.
-  `docs/hetzner.md` tells projects with their own `Dockerfile.orca` to do
-  the same.
-
-- **`docs/hetzner.md` corrections from the first real setup** (#179).
-  Points at the census's `orca.toml` instead of quoting slot counts; image
-  tags are `<short-sha>`/`latest` and where to find the sha; `hcloud` with a
-  context and `hetzner.env` outside the repository (`HETZNER_ENV`); the
-  bucket in the server's location; GHCR's private route as the default;
-  Cloudflare's existing A records and DNS-only CNAMEs; the deploy sequence
-  with runs running (`orca-stack quiesce`, `deploy.sh`, `orca-stack
-  resume`). New `FIXED_COST` in `hetzner.env` becomes `ORCA_FIXED_COST` for
-  the Fleet page's Cost tile.
-
-- **The UI draws a run's timeline and the pipelines over time.** A run with
-  Dista tasks has a Timeline section that fetches `timeline.json` once it
-  scrolls into view and draws it on a canvas: a track per process (driver
-  or head, then each worker), a lane per slot, spans coloured by function,
-  input waits as thin bars, a time axis, a tooltip with the span's process,
-  slot, duration and arguments, wheel or drag to zoom and Reset zoom. Spans
-  under a pixel are drawn one pixel per lane, so a trace of ~300,000 spans
-  draws in a fraction of a second. Perfetto and the raw file stay linked,
-  and the page no longer parses the trace on the server. The home page has
-  List and Timeline tabs (remembered; the list is the default and needs no
-  JavaScript): a row per pipeline in dataset order, indented by depth, with
-  what it reads and what starts it, runs over 1 h, 6 h, 24 h or 7 d coloured
-  by status, fill runs thinner, a now line, connectors from a run to the
-  sensor or keyed runs its commits started (`orca.sensed` joined to
-  `orca.commits`), and dataset edges at the left. The data is
-  `GET /api/gantt?window=24h`. New module `orca.ui_viz`; `tests/ui.sh`.
-
-- **Remote workers over the API** (#173). `placement = "worker:<pool>"`
-  (orca.toml, `orca register --placement`) leaves a pipeline's runs to
-  `orca worker --pool <pool> --remote <url>`, which claims them from
-  `orca ui` (`POST /api/worker/claim`) and runs `<binary> resume <run>` on
-  its own machine. The run records itself over HTTPS: `HttpStore`
-  (`orca.http_store`, `ORCA_STATE_URL` and `ORCA_STATE_TOKEN`) is the
-  `RunStore` whose calls `orca ui` makes on `PgStore`
-  (`/api/worker/store/<call>`, `orca.workers`), so a worker holds no
-  database credentials and refuses to start with `ORCA_DATABASE_URL`.
-  The scheduler starts none of these runs; it keeps them queued, held
-  "waiting for a worker", and requeues due retries and dead runs, so a
-  killed worker's runs (their processes exit once the worker is gone) are
-  claimed again. Worker tokens (`orca worker-token create|list|revoke`,
-  `orca.workers` table, migration 32) are `orca login`'s kind of token,
-  scoped to one pool, revocable, and each claim is audited. A run needs its
-  pipeline's image to be the worker's (`ORCA_IMAGE`). Ops > Workers
-  (`/ops/workers`, `/api/workers`) lists them; a run's page says where it
-  ran. `orca.state.beat_run` is the heartbeat and watchdog both stores
-  share. `docs/workers.md`, `tests/worker.sh` (`pixi run -e data
-  test-worker`), `tests/test_worker.mojo`.
+- **Alerts to your phone through ntfy.** Set `ORCA_NOTIFY_URL` for failed
+  runs, watchdog trips and more; `orca notify test` checks it (#184).
+- **Images build for Neoverse N1**, as Hetzner CAX servers need; a project's
+  own `Dockerfile.orca` should pass `--target-cpu` too (#178, mojo-census#35).
+- **`docs/hetzner.md` corrections from the first real setup**, and
+  `FIXED_COST` in `hetzner.env` for the Fleet page's Cost tile (#179).
+- **The UI draws a run's timeline and the pipelines over time**, on the run
+  page and as a Timeline tab on the home page (#175).
+- **Remote workers over the API.** `placement = "worker:<pool>"` leaves a
+  pipeline's runs to `orca worker` machines (docs/workers.md) (#173).
 
 ## 0.11.0 - 2026-11-07
 
-- **A live run's page refreshes itself, and shows its settings.** While a
-  run is queued or running, `/runs/<id>` replaces its facts, steps, machines
-  and workers every 5 s from the fragment `/runs/<id>/live` (one poller
-  instead of two; `/steps` and `/metrics` still answer). The fragment answers
-  286 once the run has ended and the page stops asking; a finished run's page
-  doesn't poll at all, and without scripts the page is complete as loaded.
-  The poller (`data-poll`) now waits while the tab is hidden and asks at once
-  when it is shown, backs off when a request fails, and keeps selected text,
-  open `<details>` and scrolled boxes as they were. A new Settings section
-  shows the environment the run had (what its start recorded, else the
-  pipeline's registered one), max runs, placement and worker settings, with
-  secrets by name only. The facts start with the run's duration (elapsed
-  so far while it goes on, the total after; start and end in its tooltip),
-  and the crumb links the pipeline's previous and next run (`rel=prev/next`;
-  the left and right arrow keys follow them outside form fields).
-  `tests/ui.sh`.
-
-- **Watchdog: "Keep paused", the local runner's cost tile, orca's icon in
-  the header.** The trip banner has a Keep paused button, and
-  `orca watchdog ack [--all|<trip id>]` does the same: the trip is
-  acknowledged (migration 31, `acknowledged_at`/`acknowledged_by`, audited),
-  its pipelines stay paused, the banner stops showing it, and
-  `orca watchdog status` still lists it as acknowledged by the user. With
-  `ORCA_RUNNER=local` the Cost tile reads "Cost", the optional
-  `ORCA_FIXED_COST` (free text such as `€8.49/month`; "Fixed" if unset) and
-  "fixed price: the local runner launches no instances", with no
-  region; `/api/fleet` says `cost_is_estimate: false`. The header's logo is
-  the tab's icon (three connected nodes) in the theme's colours.
-  `tests/watchdog.sh`, `tests/fleet.sh`.
-
-- **`orca register` with no paths registers the whole `orca.toml`.** Each
-  `[pipelines.<name>]` is registered from `<dir>/<name>`, `<dir>` being
-  `ORCA_PIPELINES_DIR`, else `pipelines/` next to the file; a table with no
-  binary is an error naming it and nothing is registered. A file outside a
-  git checkout (the image) records `ORCA_COMMIT` and `ORCA_SOURCE` instead of
-  a commit, and git's `fatal: not a git repository` no longer reaches stderr.
-  `cloud-init.yaml` creates a 4 GB swapfile if there is none.
-  `orca-stack` starts cloudflared on HTTP/2 unless `tunnel.env` sets
-  `TUNNEL_TRANSPORT_PROTOCOL`.
-  `docs/hetzner.md`: the census's `orca.toml` lives in mojo-census.
+- **A live run's page refreshes itself, and shows its settings**, its duration
+  and links to the previous and next run (#172).
+- **Watchdog "Keep paused"** (`orca watchdog ack`), a fixed-cost tile for the
+  local runner, and orca's icon in the header (#172).
+- **`orca register` with no paths registers the whole `orca.toml`**, and
+  `orca-stack` starts cloudflared on HTTP/2 (#170).
 
 ## 0.10.0 - 2026-11-06
 
-- **One Hetzner server: scripts, runbook, and the local runner as a
-  production setup** (#166). `deploy/hetzner/` (`up.sh`, `deploy.sh`,
-  `rescale.sh up|down`, `backup.sh` with a systemd timer on the server,
-  `down.sh`, `cloud-init.yaml`, `hetzner.env.example`) runs orca and the
-  census on one `hcloud` ARM server with a Volume for Postgres, Object
-  Storage, and Cloudflare Tunnel; `--dry-run` prints the commands.
-  `docs/hetzner.md` is the runbook (setup, deploy, rescaling for an import,
-  backups and restore, teardown, costs, the census `orca.toml`), with
-  `AWS_ENDPOINT_URL_S3` for S3-compatible stores and `ORCA_SECRET_FETCH`
-  reading files. With `ORCA_RUNNER=local` the watchdog's cost rule reads
-  "fixed price" and never trips (the other rules stay), and Ops > Fleet says
-  the runner launches no instances. `tests/watchdog.sh`, `tests/fleet.sh`,
-  `tests/test_watchdog.mojo`.
-
-- **Fills: a pipeline fills its whole range by itself, within limits**
-  (#155, `orca.fill`, migration 30). In `orca.toml` (no register flags):
-  `fills = "all"` (the default `"since_registration"` is what orca did
-  before), `fill_order` (`"oldest"` or `"newest"`), `fill_max_runs` (fill
-  runs at once, on top of `max_runs`), `fill_budget_per_day` (estimated US
-  dollars a UTC day) and `fill_window` (UTC hours fill runs start in,
-  `"22..6"`). Bad values are refused with the file's line, and the keys
-  are shown by `orca config show` and written by `orca config export`.
-  Each tick, after the pipeline's other runs, the scheduler starts fill
-  runs (trigger `fill`, one partition each) over the partitions of its
-  range that no run took: from its first partition through the last that
-  has ended, never one done in any of its code, live, or filled before.
-  A fill waits while other runs of the pipeline are queued. It doesn't
-  start while the pipeline is paused (the watchdog's trips included) or
-  outside its window. Fill runs are retried like scheduled ones.
-  `orca register` refuses `fills = "all"` for keyed pipelines, sensors and
-  pipelines with no first partition.
-  - The cost estimate is the fill runs' instances today (`orca.instances`)
-    at orca.fleet's on-demand prices × 1.2, plus what the runs going and
-    one more may cost (the longest recent fill run, an hour before there's
-    one). It fails closed: no fill run starts on a budget with a price
-    unknown (a type not in the table, Kubernetes), nor on EC2 or
-    Kubernetes without a budget.
-  - The pipeline page gets a Fill line (done / total, rate, ETA, today's
-    spend against the budget, and why it's idle), and
-    `/api/pipelines/<name>` serves the pipeline page's JSON with a `fill`
-    object.
-  - The README and docs/orca-toml.md say that operations go through the
-    UI or the remote CLI, and that SSM `docker exec` is for debugging.
-  - `examples/daily.mojo` takes `ORCA_DAILY_SLEEP`. `tests/fill.sh`
-    (`pixi run test-fill`) covers it all on the local runner and against
-    the stand-in EC2.
-
-- **UI: an Ops menu with Control and Fleet.** "System" and "Fleet" read as
-  the same thing, so the nav has one "Ops" item with two pages under it:
-  `/ops/control` (was `/system`: the one machine running the scheduler, the
-  UI, Postgres and control-placed runs) and `/ops/fleet` (was `/fleet`: the
-  EC2 instances orca launches for runs). Each page's first line says what it
-  shows and links to the other; Control also shows the watchdog's banner
-  and links `/watchdog`. `/ops` redirects to Control. `/system`, `/fleet`
-  and `/fleet/hosts` redirect permanently (301, query kept); `/api/system`
-  and `/api/fleet` are unchanged. The menu is plain links (hover and
-  keyboard focus open it; on a phone it is always shown inline), so it
-  needs no JavaScript. `tests/ui.sh`, `tests/fleet.sh`, `tests/system.sh`.
+- **One Hetzner server.** `deploy/hetzner/` runs orca and the census on one
+  server with the local runner; docs/hetzner.md is the runbook (#166).
+- **Fills.** `fills = "all"` fills a pipeline's whole range within limits; on
+  EC2 or Kubernetes it needs `fill_budget_per_day` (#155).
+- **UI: an Ops menu with Control and Fleet.** `/system` and `/fleet` moved to
+  `/ops/control` and `/ops/fleet` and redirect there (#160).
 
 ## 0.9.0 - 2026-11-06
 
-- **`orca.toml`: one checked-in file for how each pipeline runs** (#145,
-  `orca.config`, `orca.toml`, migration 29). `[defaults]` and
-  `[pipelines.<name>]` take `placement`, `head_type`, `worker_type`,
-  `workers` (`N` or `"MIN..MAX"`), `worker_procs`, `max_runs` (over the
-  code's), `secrets` (`NAME = "orca/<id>"`, references only) and `env`.
-  `orca register` reads `./orca.toml` (or `--config F`, `ORCA_CONFIG`;
-  `--no-config` for none); `orca aws register` checks the project's file
-  and sends it whole, with its git commit, to the control instance's
-  `orca register`. A pipeline the file names is registered with exactly
-  `[defaults]`, its table and the flags (which win, recorded as
-  overrides): a key taken out of the file goes back to its default. One it
-  doesn't name keeps today's behaviour. Unknown keys and bad values are
-  refused with the file's line. A pipeline's `env` goes to its runs alone
-  (local, control, Kubernetes and EC2 runners), over the same names from
-  `ORCA_RUN_ENV`, which still applies to every run, and on EC2 it's part of
-  the warm pool's key (#134) and of a run's kept spec. `orca register
-  --max-runs N` is new. The registration keeps the file's SHA-256, commit
-  and whether it had uncommitted changes, with where each value came from
-  (`orca.pipelines.config`; also `env`, `max_runs`). `orca config show
-  [<pipeline>] [--json]` prints the effective configuration with each
-  value's source: code default, orca.toml, flag or environment. `orca
-  config export [--out F|-] [--force]` writes an `orca.toml` from what's
-  registered. orca has its own TOML subset parser (mojoshelf's `mojo-toml`
-  is built for Mojo before 1.0); `fuzz/fuzz_toml.mojo`. `tests/config.sh`.
-
-- **Placement: small pipelines on the control instance** (#144).
-  `orca register --placement control|ec2|default` (forwarded by
-  `orca aws register`; stored with the registration, migration 26):
-  `control` runs a pipeline's runs as children of the scheduler on its own
-  host, with no instance to boot, at most `ORCA_CONTROL_MAX_RUNS` (2) at
-  once, each at `nice` `ORCA_CONTROL_NICE` (10), killed over
-  `ORCA_CONTROL_MEMORY_MB` (1024) resident, with `ORCA_CONTROL_WORKERS` (1)
-  local dista workers, and none started while `/system`'s newest minute has
-  memory or a disk over 85% (the run is held, saying why). Secrets are read
-  by the scheduler (`ORCA_SECRET_FETCH`, else Secrets Manager's API) for that
-  run alone; the driver's output is kept with `keep-log`, masked. Shown on
-  the pipeline and run pages, `/fleet`'s control host and the JSON
-  (`placement`, `held`). `deploy/aws/orca.yaml` lets the control role read
-  `orca/*` secrets (stack update needed). `tests/placement.sh`.
-
-- **`orca aws replace-control`** (#154, `orca.aws_replace`): a blue/green
-  replacement of the control instance from a clean boot of the current
-  template. It refuses unless every pipeline is paused and no run is running
-  (`--wait` waits), stops the old scheduler and UI, backs up orca's database
-  (`pg_dump -Fc`, verified by a restore into a scratch database) with the
-  image tag, Caddy's data and the apps to `s3://<bucket>/backups/<stack>/`,
-  boots a new instance in the stack's other slot that restores it, checks it
-  (the restore, counts, schema version, the UI and apps, `/system` samples,
-  `orca status`, the old settings and hostnames, `--smoke P=KEY`), moves the
-  Elastic IP and keeps the old instance stopped for `--keep-old` (24h);
-  `--resume`, `--rollback` and `--plan`. `deploy/aws/orca.yaml` now has two
-  control slots (`BlueSlot`, `GreenSlot`, `ActiveControl`), each with its
-  AMI pinned (`BlueAmi`, `GreenAmi`), the boot script in a launch template
-  (`ControlBoot`) so a change to it stops no running instance, and
-  `ControlEnv` for `/etc/orca.env` settings (`orca aws up --env K=V`);
-  `orca-app` records the apps it starts. `orca aws up` on a stack from
-  before the slots needs `--yes` (its instance restarts once).
-  `docs/replace-control.md` is the runbook. `tests/replace_control.sh`.
-
-- **A watchdog** (#151, `orca.watchdog`, migration 26): every
-  `ORCA_WATCHDOG_SECONDS` (60; 0 turns it off) the scheduler checks, from
-  Postgres only, instance launches (more than 200 an hour), estimated cost
-  (over $3/h for 15 minutes, or $25 in 24 hours), idle workers (4 or more
-  averaging under 15% CPU for 10 minutes), failing attempts (more than 20
-  an hour, or over half of at least 10, per pipeline), stuck runs (nothing
-  moved for 30 minutes on sampled instances) and the control instance
-  (memory over 90%, disk over 85%), each overridable
-  (`ORCA_WATCHDOG_*`). A rule over its limit pauses its pipelines as the
-  Pause button does, audited as user `watchdog`, shows a red banner on `/`
-  and `/fleet`, `/watchdog`, `/api/watchdog` and
-  `orca_watchdog_{tripped,value,threshold}{rule}` on `/metrics`, and never
-  resumes anything. `orca watchdog status` and `orca watchdog snooze <rule>
-  <duration>` (also `--remote`, and the form on `/watchdog`) read and
-  silence it. Email through SES is not part of this change.
-
+- **`orca.toml` configures each pipeline.** `orca register` reads it; a key
+  removed from it goes back to its default (#145, #134).
+- **Small pipelines on the control instance** with `--placement control`; to
+  read secrets the AWS stack needs updating (#144).
+- **`orca aws replace-control`** swaps in a new control instance; on an older
+  stack `orca aws up` needs `--yes` and restarts it once (#154).
+- **A watchdog** pauses pipelines whose launches, cost, failures or stuck runs
+  go past their limits, and never resumes them itself (#151).
 - **A run whose tasks wait for workers that never come fails its attempt**
-  (#148): on the ec2 runner, a run whose head has had tasks waiting and no
-  worker for `ORCA_NO_WORKERS_SECONDS` (default 600; 0 turns it off) has its
-  running attempts fail with `no workers joined in 10 min (tasks waiting:
-  N)` and its instances terminated, and is started again as a run whose
-  process died is, while its retries last. The run's page shows "Waiting for
-  workers since ...". A live run's workers are now started from the
-  registration its start was given (kept in `orca.runs.spec`, migration 26),
-  not the pipeline's current one, so registering a pipeline again mid-run
-  no longer strands the run without workers. `tests/no_workers.sh`.
-
-- **Steps that replace their partitions** (#120): `Step[..., replaces=[...]]`
-  declares datasets whose partitions a new run replaces. `append` and
-  `append_files` to them, and the new `replace_partitions` /
-  `replace_partition_files` to any table, make a run's first commit to a
-  partition an `overwrite` removing the files earlier runs left there; later
-  commits of the run append, and retries still recognise their commits. Two
-  runs replacing one partition at once don't both keep rows: a commit that
-  finds another writer's files in the partition after its run's first
-  commit raises. Summaries carry `orca.replaced-files` and
-  `orca.replaced-records`; `describe` lists `replaces`.
-- `orca.tables.commit` refuses a removal of files that aren't all in the
-  current snapshot, on its first try and on retries (mojo-census GAPS #29),
-  instead of committing a partly stale overwrite.
-- `orca backfill --rerun` of done keys, and `orca rerun`, are refused for a
-  pipeline whose steps append to a dataset, naming the steps, unless
-  `--allow-append` (`allow_append=1` in the UI and API, with a confirm
-  button on the refusal).
+  after `ORCA_NO_WORKERS_SECONDS` (600) and is retried (#148).
+- **Steps that replace their partitions.** `Step[..., replaces=[...]]` makes a
+  rerun overwrite a partition instead of appending to it (#120).
+- **`orca.tables.commit` refuses to remove files not in the current snapshot**
+  (mojo-census GAPS #29) (#143).
+- **`orca backfill --rerun` and `orca rerun` are refused for steps that
+  append**, unless given `--allow-append` (#143).
 
 ## 0.8.0 - 2026-11-06
 
-- **Caddy compresses what it serves.** Every site block of the control
-  instance's Caddyfile in `deploy/aws/orca.yaml` (the UI's, the console's
-  and those `orca-app` adds) has `encode zstd gzip`. An existing stack's
-  Caddyfile is hand-edited on the instance; a template update doesn't change
-  it without replacing the control instance, so see the PR for the live
-  steps.
-
-- **The control instance's own health** (#96): a `/system` page (24 hours,
-  7 or 14 days of its CPU, memory, disk and network, and each container's
-  memory), Prometheus gauges on `/metrics`, and a warning on `/` when its
-  disk is over 85% or memory over 90%. The control sampler gets
-  `--cgroup` / `--names` to read containers' memory from the host's cgroup
-  files, read-only; the scheduler keeps a row a minute for 14 days
-  (migration 24) and a file a day under `<ORCA_LOGS>/control/`.
-  `deploy/aws/orca.yaml` mounts the cgroup files into the sampler and
-  expires `logs/control/` after 14 days (new stacks; the PR has the steps for
-  a running one). `tests/system.sh`.
-
-- **A warm pool for the ec2 runner**: consecutive runs of a pipeline reuse
-  its instances instead of booting new ones. An instance whose run ended
-  waits `ORCA_EC2_POOL_SECONDS` (default 150; 0 turns the pool off, as
-  before) for a run of the same pipeline started as the same instances
-  (type, market, registry hash, image, secrets, environment, worker
-  processes: its `pool_key`), which takes it, then launches the rest. Its
-  script loops over runs: a new dista head process per run, worker
-  processes killed when their run ends (`<binary> pool-wait`), secrets read
-  again, each run's logs and samples its own; it asks for its next run
-  over Postgres (`<binary> pool-next`). Hand-over locks rows `FOR UPDATE
-  SKIP LOCKED` and checks that the instance beat lately
-  (`ORCA_EC2_POOL_LIVE_SECONDS`, 5) and that EC2 says it runs; one that
-  doesn't take its run up in `ORCA_EC2_POOL_JOIN_SECONDS` (30) is replaced.
-  Idle instances count against `ORCA_VCPU_BUDGET` and show on `/fleet` as
-  `idle (pooled)`, with their idle time (`idle_seconds` in `/api/fleet`).
-  Migration 24 keys `orca.instances` by instance, run and start, and adds
-  `pool_key`, `cpu_millis`, `idle`, `polled`, `pooled` and `joined`.
-  `tests/pool.sh` (`test-pool`).
-
-- **A calendar for dated pipelines in the UI** (#112). A daily pipeline's page
-  has a month grid (a monthly one a year of months) on the Start runs form:
-  click a first and a last day to fill the range field, ctrl- or cmd-click to
-  add another range, arrow keys to move. Each day is coloured and marked by
-  its state, from Postgres only: done, failed, running or queued, not run, or
-  outside the pipeline's range. The same grid is the page's read-only
-  Coverage, which works without scripts (`?cal=2023-01`), and
-  `/pipelines/<name>/calendar?month=2023-01` serves it as JSON. Without
-  scripts the text field is the form as before; keyed pipelines keep it.
-  Hourly partitions don't exist yet, so there is no hourly grid.
+- **Caddy compresses what it serves.** An existing stack's Caddyfile has to be
+  edited by hand on the instance; the PR has the steps (#126).
+- **The control instance's own health** on a `/system` page, `/metrics` and a
+  warning on `/`; a running stack needs the PR's steps (#96).
+- **A warm pool for the ec2 runner**: a pipeline's next run reuses its
+  instances; `ORCA_EC2_POOL_SECONDS=0` turns it off (#134).
+- **A calendar for dated pipelines in the UI**, to pick days to run and see
+  which are done (#112).
 
 ## 0.7.0 - 2026-11-05
 
@@ -974,525 +212,147 @@ The backfill and rebuild forms show one copyable line, `orca login <this UI> && 
 
 ### Changed
 
-- Pins dista-mojo 0.3.0.
+- **Pins dista-mojo 0.3.0** (#133).
 
 ## 0.6.0 - 2026-11-05
 
-- **Several dista worker processes per EC2 worker instance** (#130):
-  `orca register --worker-procs N|auto` (`auto`: one per vCPU of the worker
-  type; default 1; `orca aws register` passes it on; EC2 only). Each
-  worker instance's script starts N supervised `DISTA_ROLE=worker`
-  processes against the run's head (each takes a port of its own and files
-  named by its process), notes one that exits, forwards SIGTERM to all, and
-  shuts the instance down when the last has gone. Scaling still counts
-  instances (`--workers MIN..MAX`, the budget, the cost): the policy runs
-  over processes, N per instance, and an instance is `drained` once all its
-  processes are. Migration 23 adds `pipelines.worker_procs` and
-  `instances.procs` / `procs_drained`; the run page and its JSON show the
-  processes of each instance. `tests/worker_procs.sh`.
-- **`orca login` and `--remote`** (#111): run orca's commands from a laptop
-  against the deployed `orca ui`, without SSM or the database.
-  `orca login https://<host>` (user and password, the password without
-  echo) stores an API token in `~/.config/orca/credentials` (mode 600,
-  `ORCA_CREDENTIALS`); `orca --remote <host>` (or `ORCA_REMOTE`) then sends
-  `backfill` (and `--preview`), `start`, `cancel`, `pause`, `unpause`,
-  `resume`, `rerun` and `rebuild` to the UI's actions, as that user, and
-  reads `status` and `lineage` from its JSON; `orca logout` revokes the
-  token. Plain http is refused but to localhost.
-  - The UI: `POST /api/login` (JSON; the same limit on failed logins) and
-    `/api/logout`, and `Authorization: Bearer <token>` on its actions,
-    which take JSON as well as forms. Tokens are 256 random bits kept as
-    their SHA-256 in `orca.api_tokens` (migration 22), expiring after
-    `ORCA_API_TOKEN_DAYS` (30). `orca.audit` gets a `source`, `ui` or
-    `cli`, shown on the run's page.
-  - `orca user tokens <name>` and `orca user revoke <name> <id>|@all`; a
-    new password or a removed user revokes the user's tokens too.
-  - New locally as well: `orca status [<pipeline>] [--json]`, `orca start`,
-    `orca resume [--allow-new-code] <run>`, `orca rerun <run> <step>`,
-    `orca cancel <run>` and `orca backfill --preview`.
+- **Several dista worker processes per EC2 worker instance**, with `orca
+  register --worker-procs N|auto` (#130).
+- **`orca login` and `--remote`** run orca's commands from a laptop against
+  the deployed UI, with no SSM or database access (#111).
 
 ## 0.5.0 - 2026-11-05
 
-- **A Fleet page** (`/fleet`, in the nav; `/api/fleet`; a compact strip on
-  `/`). Hosts running now (heads and workers by instance type, and the
-  control instance), an estimate of what they cost an hour, runs running and
-  queued, runs and errors per hour (failed step attempts and failed runs,
-  with 24-hour sparklines), a sortable table of live hosts (CPU with a
-  10-minute sparkline, busiest core, memory, network, disk, state) that
-  refreshes every 10 s, and charts over `?range=24h|7d`: hosts over time by
-  role, runs per hour with failures overlaid, fleet CPU and network.
-  The scheduler keeps each live instance's last 30 minutes of samples in
-  Postgres (`orca.fleet_samples`) and an hourly total for 8 days
-  (`orca.fleet_hourly`; migration 21), so a page reads no files. The control
-  instance is sampled too: `orca sample --keep N` keeps a file to its last
-  lines, and the stack's user data starts a `sampler` container (an existing
-  stack needs it started by hand, see the PR). `data-poll-every` sets a fragment's refresh seconds.
+- **A Fleet page** (`/fleet`) shows hosts, cost and runs per hour; an existing
+  stack needs its `sampler` started by hand (#127).
 
 ## 0.4.0 - 2026-11-05
 
-- **Bounded table history** (magmalake/mojo-census GAPS #27). Commits to
-  `gharchive.events` went from 486 ms to 1,207 ms as it reached ~889
-  snapshots and metadata files; now:
-  - `ensure_table(..., properties=)` takes Iceberg table properties, and
-    every table it creates, or finds without them, gets orca's defaults
-    (`orca.tables.table_defaults()`): old metadata files deleted after
-    each commit (`write.metadata.delete-after-commit.enabled`), a hundred
-    kept (`write.metadata.previous-versions-max`), and thirty days of
-    snapshots (`history.expire.max-snapshot-age-ms`).
-  - **`orca expire <dataset>|--all [--older-than 30d] [--keep N]
-    [--dry-run] [--report]`** expires snapshots through the project's
-    `orca_maintain` binary (`bin/orca_maintain.mojo` calling
-    `orca.maintain.maintain_main`; found as `$ORCA_MAINTAIN`, beside
-    `orca` or on `PATH`). It keeps, whatever the policy, the snapshots a
-    run that can still resume read or committed, and every snapshot of the
-    last run that committed to the dataset (`orca.expiry.retained`), so
-    retries, `resume` and `find_commit` keep working.
-  - The scheduler expires every dataset orca commits to by its own policy
-    every `ORCA_EXPIRE_HOURS` (24; 0 turns it off), the first time
-    `ORCA_EXPIRE_DELAY_SECONDS` (300) after it starts, one dataset at a
-    time in the background. A table without
-    `history.expire.max-snapshot-age-ms` (one orca didn't create) is left
-    alone.
-  - `orca aws push`'s default image builds `orca_maintain` for a project
-    whose pipelines use `orca.tables` and that has none of its own.
-  - Lineage (`orca lineage`, the UI's dataset pages) reads Postgres, so it
-    still shows an expired snapshot and what it was made from; the snapshot
-    can no longer be read from the table.
-  - Built against iceberg-mojo with linear expiry, bounded metadata logs,
-    commits that don't list the metadata directory, and merge-append.
-
-- **The lake's bucket is private unless asked** (`orca aws up`). A new stack
-  parameter, `PublicData` (default `false`), decides whether
-  `mlake-public-<account>` gets the bucket policy that lets anyone read it
-  unsigned, with Block Public Access on otherwise. Anyone could download
-  the whole lake before, billed to the project at S3's egress price. The
-  instances read and write it with their roles either way. Pass
-  `PublicData=true` to share it as before.
+- **Bounded table history.** Old snapshots and metadata expire by default, and
+  `orca expire` does it by hand (mojo-census GAPS #27) (#124).
+- **The lake's bucket is private unless asked.** Pass `PublicData=true` to
+  `orca aws up` to keep it public as before (#122).
 
 ## 0.3.5 (2026-11-05)
 
-- Built against iceberg-mojo 0.9.1 (with the DataFile wire codec, #70),
-  deflate-mojo 0.2.0, avro-mojo 0.4.5 and parquet-mojo 0.12.1.
-
-- **Data files written on workers, committed by the step** (#108).
-  `orca.tables.append_files(ctx, table, files)` commits data files already
-  written, here or in a dista task, as one `append` snapshot, with
-  `append`'s `writes=` check, summary and recognition: a retry that finds
-  its commit returns it and commits nothing. On the worker,
-  `write_files(load_dataset(name), batches)` (or a `FileWriter`, a batch at
-  a time) writes the files uncommitted and returns `DataFiles`, a dista
-  `Codec` over iceberg's `DataFile.encode`, so a task's result can carry
-  them, alone or in a struct beside plain fields. Needs iceberg-mojo with
-  magmalake/iceberg.mojo#70.
-- **A crash's stack dump is symbolized, and a crashed attempt says where**.
-  The project image (`deploy/project.Dockerfile`, which `orca aws push`
-  builds) and `deploy/Dockerfile` build every binary with line tables
-  (`mojo build -g1`, then compressed with `objcopy`: mojo-census's
-  gharchive goes from 4.2 MB to 6.5 MB, 25 MB uncompressed, and parses and
-  writes an hour of GH Archive as fast as before) and carry
-  the pixi environment's `llvm-symbolizer` at
-  `/opt/orca/libexec/llvm-symbolizer`, with `LLVM_SYMBOLIZER_PATH` set,
-  so a segfault's or `abort`'s dump in `driver.log` names each frame's
-  function, file and line. The runner that sees a crashed process end
-  (the scheduler reaping a local run, `<binary> keep-log` on an EC2 head,
-  given the run as `ORCA_RUN`, and the Kubernetes runner keeping the
-  driver pod's log) fails the attempts it left `running` with the dump's
-  summary, `crashed: <abort's message>; at <function> <file:line>, ...`
-  (`orca.crash`), instead of leaving them for `resume` to call
-  interrupted. A local run's `driver.log` marks each start with a
-  `--- start <n>` line, as the other runners' do. `Store.interrupt` takes
-  the error to record (`why`). `pixi run test-crash`.
-- **Errors say what orca was doing**. A table orca can't load, create,
-  reload, write data files for or commit to (`orca.tables`) names its
-  dataset and, for a commit, how many tries it made; a dataset whose
-  snapshot `sense` can't read is named; and an EC2 call that never got an
-  answer names its action.
+- **Built against iceberg-mojo 0.9.1** (iceberg.mojo#70), deflate-mojo 0.2.0,
+  avro-mojo 0.4.5 and parquet-mojo 0.12.1 (#118).
+- **Data files written on workers, committed by the step** with
+  `orca.tables.append_files` (#108).
+- **A crash's stack dump is symbolized, and a crashed attempt says where**,
+  naming the function, file and line (#117).
+- **Errors say what orca was doing**, naming the dataset or EC2 action that
+  failed (#117).
 
 ## 0.3.4 (2026-11-04)
 
-- Built against iceberg-mojo 0.9.0 (parquet-mojo 0.12.0): data files go
-  through the streaming Parquet writer.
-
-- **`/runs` filters are dropdowns, and the runs go back further than 100**
-  (#113). Pipeline, status and trigger are `<select>`s: the registered
-  pipelines; queued, running, deferred, succeeded, failed and cancelled;
-  and the triggers orca writes plus any others in `orca.runs`; the current
-  choice stays selected, and the page filters as a choice changes (the
-  Filter button does the same without JavaScript). The page shows 50 runs
-  (`?n=`, at most 500) and pages by id: `?before=<id>` is the runs older
-  than that one, and Newer and Older links keep the filters, beside
-  "51–100 of 1,234". The JSON has `next_before` (null on the last page),
-  `newer`, `total`, `n`, `before` and `filters`.
-- **The pipeline page's Start runs is one form with a preview** (#113).
-  One range, a primary "Backfill: one run per day" (month, key; "runs of
-  up to N" with `keys_per_run`) and "Start one run over the whole range",
-  each with a line on what it queues; "Include days that already
-  succeeded (rerun them)" is `rerun=1`, as `orca backfill --rerun`.
-  Preview (`?preview=1&partitions=...`, a GET) says what the backfill
-  would queue, "This queues 30 runs: 2025-01-02 … 2025-01-31. 1 already
-  done is skipped.", and whether one run would be refused, with the same
-  logic as the backfill in a transaction it rolls back; the pipeline's
-  JSON has it as `preview`. Below, the same as `orca backfill` and the
-  binary's `run --partitions`, quoted for a shell, and a line of script
-  updates both and the preview as you type.
-- **Actions sit beside the statuses they change** (#113). A Pause (or,
-  paused, Resume) button by each pipeline on the home page and in its
-  page's header; Cancel by a queued or running run and Retry by a failed
-  one, in every runs table and in the run's header, where a succeeded run
-  has Rerun; Rerun from here on an ended run's attempt. Each posts to the
-  existing action, with its Origin and login checks; its title is the
-  command line that does the same. Cancel and the reruns ask first where
-  there's JavaScript. Logged out with login on, each is a "Log in to
-  pause" (and so on) link that comes back to the page.
-- **A dataset's Rebuild section says what it does and what it runs**
-  (#113). A plain line on what a rebuild is for; the chain of pipelines
-  it runs, by level, each linked and with what it reads that the rebuild
-  changes ("nothing reads this dataset" when none does; the JSON's
-  `downstream`); a Preview (`?preview=1&partitions=...`) of the runs each
-  level would queue, from the rebuild's own plan (`plan_rebuild`), which
-  writes nothing; and `orca rebuild <dataset> <range>` beside the button,
-  which asks first and, logged out, is a link to log in.
-- **Runs tables say Tries, not Starts** (#113), with a tooltip saying what
-  it counts, and show it only when a run was started more than once. The
-  JSON's field is still `starts`.
-- Fixed: `/runs` sorted run ids as text, so past run 9 the newest weren't
-  first (run 9 came before run 64).
+- **Built against iceberg-mojo 0.9.0** (parquet-mojo 0.12.0), so data files go
+  through the streaming Parquet writer (#116).
+- **`/runs` filters are dropdowns, and the runs go back further than 100**,
+  paging 50 at a time (#113).
+- **The pipeline page's Start runs is one form with a preview** of what a
+  backfill would queue (#113).
+- **Actions sit beside the statuses they change**, such as Pause by each
+  pipeline and Cancel or Retry by each run (#113).
+- **A dataset's Rebuild section says what it does and what it runs**, with a
+  preview (#113).
+- **Runs tables say Tries, not Starts**; the JSON field is still `starts`
+  (#113).
+- **Fixed: `/runs` sorted run ids as text**, so the newest weren't first past
+  run 9 (#113).
 
 ## 0.3.3 (2026-11-04)
 
-- **A run's page charts its machines** (#95). Under the timeline, a
-  server-rendered SVG lines up each instance's CPU, memory, disk and
-  network samples (`orca sample`) with a lane of the run's steps, marks
-  where memory was over 90%, a disk over 90% full or CPU steal over 20%,
-  and a table gives each instance's peaks, which the run's JSON has as
-  `instances[].peaks`. A running run's charts follow it, polling
-  `/runs/<id>/metrics`. A run without samples renders as before.
-- **Each run records its machines' metrics** (#94). `orca sample` (and
-  `<binary> sample`) appends a JSON line every `ORCA_SAMPLE_SECONDS`
-  (default 5) with CPU (user, system, iowait, steal, busiest core), memory
-  (used, available, cache, swap, the run's resident set), disk (used and
-  free per file system the run writes to, read and write rates) and network
-  rates, read from `/proc` on Linux and from sysctls and Mach calls on
-  macOS. Every runner starts it beside a run's work: the local runner
-  beside each run's process, the ec2 runner from each instance's user data
-  next to dista, the kube runner in each pod. The lines go to
-  `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`, uploaded with an
-  instance's logs and at its end, so a short run keeps them; on Kubernetes
-  the scheduler moves them out of the pod's log. A sampler that can't write
-  never fails a run, and `ORCA_SAMPLE_SECONDS=0` turns it off. Its overhead
-  is well under 0.1% of one core. On EC2, a head whose run has ended is
-  left `ORCA_EC2_HEAD_GRACE` seconds (60) to keep its logs and samples and
-  shut itself down before the sweep terminates it.
-- **Runs in a SQLite file: `ORCA_DATABASE_URL=sqlite:<path>`** (#82).
-  `orca.sqlite_store.SqliteStore`, over sqlite-mojo 0.3.5, is a whole
-  `RunStore`. With it, `run`, `resume` and `status` record a pipeline's
-  runs in that file, resumable after a kill as on Postgres, with no server
-  to operate: for a laptop, one VM or CI. `sqlite:///abs/path` is an
-  absolute path. It is WAL mode with one writer at a time (`BEGIN
-  IMMEDIATE`, a one-second busy timeout, then retries on the file opened
-  again for `ORCA_DB_RETRY_SECONDS`), `synchronous = FULL`, and the file
-  must be on a local disk. The scheduler, the UI and orca's other
-  commands still need Postgres, and refuse a SQLite URL. `tests/chaos.sh`
-  runs over a file as well (`test-chaos-sqlite`), with another writer
-  holding the file's lock in place of Postgres restarts. orca-mojo now
-  depends on sqlite-mojo, at the revision mojoshelf published (the one
-  iceberg-mojo pins), and on libsqlite. `DbRetry`'s waits are
-  `orca.store.Backoff`, shared by both stores.
-- **`MemoryStore` is a whole `RunStore`** (#82). It keeps pipelines, runs,
-  steps, attempts, reads and commits in the process, with the rules
-  `PgStore` has (claims, stale heartbeats, losing a run, cancelling), so
-  a run in it can be interrupted and resumed within the process.
-  `<pipeline> run` without `ORCA_DATABASE_URL` now takes the same path
-  as a recorded run: it prints `run 0` first, and its steps as `status`
-  lists them (`after N attempts` included). In-memory runs are numbered
-  0, -1, -2 and so on, never positive, so their commits are never taken
-  for another run's. The executor's store tests (`tests/store_suite.mojo`)
-  are written once over the trait: `test-store` runs them with no server,
-  `test-state` on Postgres.
-- **A pipeline binary depends on the `RunStore` trait alone** (#82).
-  `orca.store.RunStore` extends `Store` with what `orca.cli` asked of
-  `State` directly: `migrate`, `register`, `scheduled_hash`, `version`,
-  `create_run`, `claim`, `ran_version`, `interrupt`, `prior`, `run_info`,
-  `runs`, `steps`, and for the run it owns `own`, `start_heartbeat`,
-  `stop_heartbeat`, `finish_run` and `cancel_requested`. `PgStore`
-  implements it over `State` (`PgStore(url)` opens one), and keeps the
-  heartbeat thread itself (`orca.heartbeat.Heartbeat[B]` over a `Beater`,
-  `PgBeat` for Postgres), so `orca.cli` imports neither `State` nor
-  postgres. `RunResult`, `StepRun`, the statuses, `RunInfo`, `StepInfo`
-  and `process_owner` move to `orca.store`; the old import paths still
-  work. The scheduler and the UI stay on `State`'s SQL.
-- **Links to code look like links to code.** A link to a pipeline's source
-  on its host (the pipeline's declaration, a step's function, a dista task,
-  the commit and the repository, on the pipeline, run and attempt pages)
-  was styled like a link inside orca. Every one is now drawn by one helper
-  (`Html.code`): a small `</>` icon, the place in monospace and muted
-  (`pipelines/gharchive.mojo:26`), then `↗`, opening in a new tab, titled
-  `View source on GitHub at <commit>`. A DAG box that links to code says
-  `↗` and `(view source)`. Links inside orca, and the JSON, are unchanged.
-- **A dataset's page links the steps that write and read it to their
-  code.** Under *Written by* and *Read by*, each pipeline lists its steps
-  that declare the dataset in `writes=` / `reads=` or committed to (read)
-  it, each linked to its line at the commit of the newest run that did, or
-  of the version registered now if none has; each snapshot's step is linked
-  at the commit of the run that committed it. A step without a recorded
-  source has no link. An attempt's page links its step's code too.
-
-- **A step's reads and commits are recorded through its run's `Store`**
-  (#82). `Recorder` used to open a Postgres connection of its own;
-  it now calls the store it came from (`Store.record`, which `PgStore`
-  retries as it does its other writes), so `orca.ctx` no longer imports
-  postgres and another store can keep lineage too. `TableSnapshot` and
-  `Recorder` live in `orca.store`, and `orca.ctx` still exports both.
-- **One live run per partition.** Only backfills checked for a queued or
-  running run of the same key; a fire, a time-partitioned sensor, a
-  rebuild's level and the UI's start each queued a run regardless, so two
-  runs over one day could run at once and both append. Each now checks, in
-  the transaction that would queue it and under a lock on the pipeline's
-  row: a fire records the live run as its own (`fired ... left to live run
-  N`), a sensor leaves those keys to it, a rebuild's level waits for it to
-  end, and the UI refuses the start, naming the run. `orca register` warns
-  of a schedule that fires more than once for one partition, since a fire
-  after the first run has ended runs it again. The liveness SQL moved to
-  `orca.live`. (#62)
-
-- **A manual, UI or rerun run whose process died no longer stays
-  `running`.** The scheduler retries only scheduled, backfilled and sensed
-  runs, and left the others `running` with a stale heartbeat for good;
-  since every queued or running run held its keys, `orca backfill` then
-  queued nothing for them and a keyed sensor never offered them again. A
-  tick now fails such a run with the error `interrupted: its process
-  stopped`, so it can be resumed or cancelled, and a running run whose
-  process died no longer holds its keys anywhere (`live_sql` replaces
-  `LIVE_SQL`). A run whose retries are spent says so too. `orca backfill`
-  prints on stderr which keys it left: those done, and those in a live
-  run, with the run. (#61)
-- **A process that may have lost its run no longer commits.** Liveness is
-  a heartbeat, so a run whose process stayed alive while its heartbeat went
-  stale (Postgres unreachable for longer than `ORCA_STALE_SECONDS`, a
-  paused VM) was started again, and both processes could append the same
-  step's rows. `append` and `commit` in `orca.tables` now check, right
-  before committing to Iceberg, that this process still owns the run and
-  that its heartbeat is younger than half the stale limit (`Ctx.fence`,
-  which asks the run's store: `Store.fence`; `MemoryStore` has nothing to
-  check); otherwise the attempt fails without committing, and a process that lost
-  its run stops at the attempt's end as before. (#60)
-- **Cancel stops a running step, and steps can time out** (#68). A
-  running run asked to cancel has `ORCA_CANCEL_KILL_SECONDS` (default 60)
-  to finish its step; past that its heartbeat thread fails the attempt,
-  ends the run `cancelled` and exits the process, so on EC2 and Kubernetes
-  the sweep removes its cluster instead of it billing until
-  `ORCA_RUN_DEADLINE`. `Step[..., timeout_seconds=N]` stops an attempt
-  older than N seconds the same way, failing the run (retried as any
-  failed run is) with the timeout as its error. Both write an `orca.audit`
-  row. The scheduler kills a local process of its own whose heartbeat
-  went stale before it acts on the run. `runs.cancel_at`, migration 19.
+- **A run's page charts its machines' CPU, memory, disk and network** beside
+  its steps (#95).
+- **Each run records its machines' metrics** with `orca sample`;
+  `ORCA_SAMPLE_SECONDS=0` turns it off (#94).
+- **Runs in a SQLite file: `ORCA_DATABASE_URL=sqlite:<path>`**, for a laptop,
+  one VM or CI; the scheduler and UI still need Postgres (#82).
+- **`MemoryStore` is a whole `RunStore`**, so `<pipeline> run` without a
+  database behaves like a recorded run (#82).
+- **A pipeline binary depends on the `RunStore` trait alone**; the old import
+  paths still work (#82).
+- **Links to code look like links to code** (#98).
+- **A dataset's page links the steps that write and read it to their code**
+  (#98).
+- **A step's reads and commits are recorded through its run's `Store`** (#82).
+- **One live run per partition.** Fires, sensors, rebuilds and the UI no
+  longer queue a second run over a partition that has one (#62).
+- **A manual, UI or rerun run whose process died no longer stays `running`**;
+  it fails as `interrupted` and can be resumed or cancelled (#61).
+- **A process that may have lost its run no longer commits** (#60).
+- **Cancel stops a running step, and steps can time out** with `Step[...,
+  timeout_seconds=N]` (#68).
 - **A pipeline binary that hangs no longer stalls the scheduler or the UI**
-  (#64). `capture` takes a timeout and kills the command's process group
-  past it. The scheduler runs `sense` and `keys` in children it checks on
-  each tick instead of waiting for them, killing one still going after
-  `ORCA_BINARY_SECONDS` (default 300) and keeping that as the sensor's
-  `sense_error`; `orca tick` still waits. `dista-status` and `dista-drain`
-  get 10 s. A keyed sensor's keys are read again only for a newer snapshot
-  of its keys dataset, and kept in `orca.keys` (migration 20), which the
-  UI's keyed page shows instead of running `keys` on every view.
-
-- **Behind an HTTPS proxy, the UI's forms work** (#57). The `Origin` check
-  compared the browser's `Origin` with `http://` + `Host`, so behind Caddy
-  terminating TLS (as `orca aws up` deploys it) every `POST`, `/login`
-  included, got 403. The UI's own origin now takes its scheme from
-  `X-Forwarded-Proto` when `ORCA_UI_TRUST_PROXY=1`, else `https` when
-  `ORCA_UI_SECURE_COOKIES=1`; scheme and host compare in any case, and a
-  default port is ignored. Another site's `Origin` is still refused, and
-  `X-Forwarded-Proto` is ignored without a trusted proxy.
-- **The UI refuses `partitions=@file:<path>`** (#58). The start and backfill
-  actions passed the field to the CLI's key parser, which read the file on
-  the UI's host and echoed its first line that wasn't a name in the 409, so
-  a logged-in user could read `/proc/self/environ` or a password file, or
-  hang the UI on `/dev/zero`. They now answer 400 without reading anything;
-  `@all` and lists of names work as before. On the command line, a line of
-  an `@file:` list that isn't a name is named by its number, not its text.
-- **Retries after `orca register` of a new build no longer loop.** A failed
-  run waiting for its retry kept the old registry hash, so the scheduler
-  started it, `resume` refused it (exit 3) before claiming it, and the run
-  was started again until its retries were spent, ending `failed` with no
-  error (on EC2, launching a head each time). Registration now also moves
-  failed runs waiting for a retry that have no step done to the new code.
-  One with steps done is failed at once instead of started, with an error
-  saying how to resume it with the new code. Runs have an `error` column
-  (migration 15), shown by `<binary> status <run>` and the run's page: also
-  set when a local run's process exits before claiming it (its exit code
-  and last line) and when a run's cluster or instances can't start. (#63)
-- **A Postgres blip no longer throws away a finished step** (#67). A run's
-  process retries each write to Postgres (an attempt's start and end, a
-  skip, a read or commit recorded, the run's end) on a new connection for
-  `ORCA_DB_RETRY_SECONDS`, by default the stale limit, with backoff from a
-  quarter second to 4 s. Losing the run to another process, or a cancel,
-  still stops it at once. Before, any error left the run `running` and
-  exited 3, and the step was redone on resume.
-- **Cancel runs in bulk, and pause a pipeline.** `orca cancel <pipeline>
-  KEYS|@all` cancels the pipeline's runs over those keys that are queued,
-  running (before their next step) or failed and due a retry, as cancelling
-  one run does; the pipeline page has the same form, empty for all. `orca
-  pause <pipeline>` and `orca unpause`, and the page's buttons, stop and
-  restart the scheduler starting its runs: fires, sensors, retries and
-  backfills still queue theirs while it's paused, and runs already going go
-  on. Migration 16 adds `pipelines.paused`; `/` and the pipeline page show
-  it, also in JSON.
-- **`<binary> run` no longer re-registers the pipeline.** With
-  `ORCA_DATABASE_URL` set, a run by hand of a pipeline `orca register` gave
-  a binary left its registry hash and `describe` changed to the binary's,
-  so a dev build run once made the scheduler queue fires and backfills with
-  code the registered binary refuses, and counted no key done. `run` now
-  leaves the registration alone, and refuses, with exit code 2, a binary
-  whose code isn't the registered one's unless it's given
-  `--allow-new-code`; that run is recorded as its own code's version. Only
-  `orca register` moves a pipeline's code. (#59)
-- **A snapshot a sensor can't run no longer wedges it** (#65). One whose
-  `orca.partitions` (or the keys an upstream run committed) aren't
-  partitions of the sensor's kind is recorded in `orca.sensed` with no run
-  and why (`sensed.error`), and the tick's other snapshots start their run;
-  before, the raise rolled the tick back, every tick, for good. A value of a
-  keys column that isn't a name is left out of `<binary> keys`, and counted
-  on stderr, instead of failing every keyed sensor pass, backfill and page.
-  A sensor pass that fails is kept as the pipeline's `sense_error` (printed
-  once, not every second) and shown on its page in `orca ui`, with the
-  snapshots it saw and didn't run. Migration 17.
-- **Retries that wait, and steps that say "not yet"** (#66).
-  `Step[..., retries=3, backoff_seconds=30]` waits 30 s before the first
-  retry, doubling. `Pipeline[..., retry_seconds=3600,
-  max_retry_seconds=3600]` sets a run's retry wait (else
-  `ORCA_RETRY_SECONDS`) and caps its doubling, so a run can be retried
-  hourly for days. A step raises `defer(seconds, why)` when it can't work
-  yet: the attempt ends `deferred` without spending a retry, the run ends
-  `deferred`, and the scheduler starts it again at that time without
-  counting it against `run_retries` (`runs.deferrals`, migration 18). The
-  UI shows "until ..." and can resume or cancel a deferred run. A backfill
-  doesn't queue a deferred run's keys again.
-
-- **Built against dista-mojo 0.2.2, iceberg-mojo 0.8.7 and
-  objectstore-mojo 0.4.2** (objectstore-shim 0.2.1, the S3 multipart fix).
-  The stable, nightly and data environments, the CI checkouts and
-  `deploy/Dockerfile` (`DISTA_REV`) pin the same revisions.
+  (#64).
+- **Behind an HTTPS proxy, the UI's forms work** when `ORCA_UI_TRUST_PROXY=1`
+  or `ORCA_UI_SECURE_COOKIES=1` is set (#57).
+- **The UI refuses `partitions=@file:<path>`**, which let a logged-in user
+  read files on the UI's host (#58).
+- **Retries after `orca register` of a new build no longer loop**, and runs
+  record an `error` (#63).
+- **A Postgres blip no longer throws away a finished step**; writes are
+  retried for `ORCA_DB_RETRY_SECONDS` (#67).
+- **Cancel runs in bulk, and pause a pipeline**, with `orca cancel <pipeline>
+  KEYS|@all`, `orca pause` and `orca unpause` (#73).
+- **`<binary> run` no longer re-registers the pipeline**, and refuses
+  unregistered code without `--allow-new-code` (#59).
+- **A snapshot a sensor can't run no longer wedges it** (#65).
+- **Retries that wait, and steps that say "not yet"**, with `backoff_seconds`
+  and `defer(seconds, why)` (#66).
+- **Built against dista-mojo 0.2.2, iceberg-mojo 0.8.7 and objectstore-mojo
+  0.4.2**, with the S3 multipart fix (#110).
 
 ## 0.3.2 (2026-11-03)
 
-- **Built against flare_mlake 0.13.2 and k8s-mojo 0.1.2.** flare now declares
-  `fcntl` variadic, as dista and orca do, so a Linux program that links
-  flare's client (or k8s) beside dista compiles. The CI checkouts and
-  `deploy/Dockerfile` pin the same revisions.
+- **Built against flare_mlake 0.13.2 and k8s-mojo 0.1.2**, so a Linux program
+  linking flare's client beside dista compiles (#56).
 
 ## 0.3.1 (2026-11-03)
 
-- **`ensure_table` adds the columns a table lacks.** Given a schema with
-  columns the existing table doesn't have, matched by name at any depth, it
-  adds them in one schema commit (iceberg-mojo's `UpdateSchema.union_by_name`)
-  instead of returning the table unchanged; old rows read them as null. A
-  column the schema marks optional becomes optional, and columns it leaves
-  out are kept. It refuses, naming the dataset, a type change, a new
-  required column, a required column left out, and a field id that isn't the
-  one the table gives that column (batches built from the schema carry its
-  ids). A concurrent commit is retried like a data commit. Needs
-  iceberg-mojo with `UpdateSchema` (magmalake/iceberg.mojo#64).
-
-- **A dated pipeline may write a keyed sensor's keys.** `orca register` no
-  longer refuses a keyed sensor whose keys dataset a daily or monthly
-  pipeline writes: a new snapshot of the keys dataset offers the keys it
-  holds, and the sensor queues those that aren't done, so no rule from dates
-  to names is needed. A keyed sensor reading any other dataset a
-  time-partitioned pipeline writes, or the other way round, is still
-  refused. `orca lineage` follows a step's declared read of the keys dataset
-  back to the pipeline that wrote it.
-
-- **Names can hold a `/`.** A keyed pipeline's keys may now be
-  `owner/name`, such as GitHub repositories: a `Name` is 1 to 128 bytes of
-  `A-Z a-z 0-9 . _ : - /`, still without `..` or a comma, and with a `/`
-  only between other bytes, one at a time. An attempt's log directory
-  writes the `/` as `%2F` (`orca.name.path_segment`), and the UI's key
-  pages are at `/pipelines/<pipeline>/keys/owner%2Fname`.
-
-- **`orca backfill --rerun`.** A backfill skips keys that are done, so
-  there was no way from the command line to run a finished day or month
-  again. `orca backfill --rerun <pipeline> KEYS` queues the done keys as
-  well; a key already in a queued or running run is still left to it. The
-  UI's backfill form has the same as a checkbox (`rerun=1`).
-
-- **Built against the shim-loading fix releases.** dista-mojo 0.2.1,
-  k8s-mojo 0.1.1, iceberg-mojo 0.8.6, postgres-mojo 0.3.3,
-  objectstore-mojo 0.4.1, flare_mlake 0.13.1 and json_mlake 0.4.3 (and, in
-  the data environment, zstd 0.1.5, lz4 0.1.4, brotli 0.1.4 and sqlite
-  0.3.5): every library they load is found without `CONDA_PREFIX`, next to
-  the executable, in its `../lib` or on the binary's rpath, so a pipeline
-  binary built under pixi runs from a plain shell, and a missing one is an
-  Error instead of an abort. The CI checkouts and `deploy/Dockerfile` pin
-  the same revisions.
+- **`ensure_table` adds the columns a table lacks**, and refuses incompatible
+  changes; it needs iceberg-mojo with `UpdateSchema` (iceberg.mojo#64) (#54).
+- **A dated pipeline may write a keyed sensor's keys** (#51).
+- **Names can hold a `/`**, so a keyed pipeline's keys can be `owner/name`
+  (#53).
+- **`orca backfill --rerun`** queues keys that are already done, too (#52).
+- **Built against the shim-loading fix releases**, so a pipeline binary built
+  under pixi runs from a plain shell (#55).
 
 ## 0.3.0 (2026-11-03)
 
 A project deploys itself to AWS.
 
-- **`orca aws`.** `up` creates or updates the stack from the template orca
-  carries, `push` builds a project's image (its `bin/` and `pipelines/`,
-  for linux-aarch64) and pushes it to the stack's repository, `register`
-  moves the control instance to it and registers pipelines with
-  `orca register`'s flags, `app` runs a project's `bin/<name>` beside the
-  UI on its own hostname, `status` prints the stack's outputs and `down
-  --yes` deletes it. They call the `aws` and `docker` commands, logged in
-  as their user. The control instance gains `orca-refresh` and `orca-app`,
-  and the stack's `ImageTag` defaults to `latest`.
-- **The stack's warehouse is public.** `ORCA_WAREHOUSE` is the public
-  bucket, so a project's tables can be read unsigned; logs and run state
-  stay in orca's own bucket. Apps get the region and the warehouse, not
-  orca's database. `orca aws up --zone` picks the Availability Zone.
-- **Scaling goes through the pipeline's binary** (`<binary> dista-status`,
-  `dista-drain`), since dista's sockets can't share orca's binary with
-  flare's on Linux; workers advertise their instance's private address.
+- **`orca aws`** creates the stack, pushes the image and registers pipelines;
+  the stack's `ImageTag` defaults to `latest` (#49).
+- **The stack's warehouse is public**, so a project's tables can be read
+  unsigned; logs and run state stay private (#50).
+- **Scaling goes through the pipeline's binary** (#50).
 
 ## 0.2.0 (2026-11-03)
 
 Workers sized to the work, secrets for runs, and the stack's public data.
 
-- **Secrets for runs.** `orca register --secret NAME=ID` (ID under `orca/`)
-  gives an EC2 run's instances the Secrets Manager secret as `NAME`, read at
-  start with the run role, which the stack lets read `orca/*` only. Every
-  log orca writes masks the values of the variables `ORCA_SECRETS` names;
-  Postgres keeps only the IDs.
-
-- **Autoscaling on EC2.** `orca register --workers MIN..MAX` (MIN may be 0)
-  starts a run with MIN workers; each tick the scheduler reads the run's
-  head demand and applies `dista.scale.decide`, starting workers up to MAX
-  and draining idle ones. `orca.instances` records each instance's address
-  and when it was drained (`drained: idle`). `ORCA_SCALE_UP_AFTER`,
-  `ORCA_SCALE_IDLE` and `ORCA_SCALE_STEP` tune it. The stack lets the
-  control instance reach run heads on port 6390. Needs dista-mojo 0.2.0.
-- **The stack's public data.** `mlake-public-<account>`, which anyone may
-  read unsigned, for a lake's public tables; runs get its warehouse as
-  `ORCA_PUBLIC_WAREHOUSE`. The console's hostname (`ConsoleHostname`,
-  default `libs.mlake.dev`) is served by the control instance's Caddy.
+- **Secrets for runs.** `orca register --secret NAME=ID` gives a run a Secrets
+  Manager secret, masked in every log (#46).
+- **Autoscaling on EC2.** `orca register --workers MIN..MAX` starts and drains
+  workers as the run needs; it needs dista-mojo 0.2.0 (#44).
+- **The stack's public data** bucket, which anyone may read, for a lake's
+  public tables (#47).
 
 ## 0.1.0 (2026-11-03)
 
 orca's first release, as mojoshelf tin `orca-mojo`: phases 1 to 5 of
 DESIGN.md, keyed partitions, and the first of phase 6.
 
-- **Pipelines in Mojo.** `Step` and `Pipeline` types whose edges the
-  compiler checks; mapped and gather steps; monthly, daily and keyed
-  partitions (`Keyed[dataset, column]`, `keys_per_run`); cron schedules in
-  any time zone; retries; dista tasks inside steps. Every pipeline binary
-  gets orca's command line (`run`, `resume`, `status`, `describe`, `keys`,
-  `sense`, `fires`).
-- **Runs in Postgres,** resumable after any crash, one writer per run by
-  heartbeat; attempts' logs, the run's driver log and its dista timeline,
-  on disk or in S3.
-- **The scheduler** (`orca`): registration, schedules, backfills, retries,
-  `max_runs`, a vCPU budget, sensors on datasets' snapshots, lineage and
-  rebuilds over Iceberg tables.
-- **Runners:** local processes; a dista cluster per run on Kubernetes
-  (through k8s-mojo); or instances per run on EC2, a head and workers of the
-  types registered (`--head-type`, `--worker-type`, `--workers`, `--spot`).
-- **The UI** (`orca ui`): pipelines, runs, steps, attempts, datasets,
-  snapshots and lineage, as HTML and JSON; actions behind a login; runs per
-  day; a run's instances and their logs, its timeline drawn in the page and
-  in Perfetto; the commit each run ran and its steps' and tasks' code
-  linked (`-D ORCA_SOURCE`, `-D ORCA_COMMIT`, `orca locate`).
-- **Tables:** pinned Iceberg reads and recognisable commits from steps
-  (`orca.tables`, over iceberg-mojo).
+- **Pipelines in Mojo**, with compiler-checked steps, monthly, daily and keyed
+  partitions, cron schedules and retries (#42).
+- **Runs in Postgres**, resumable after any crash (#42).
+- **The scheduler** (`orca`): schedules, backfills, retries, sensors, lineage
+  and rebuilds (#42).
+- **Runners:** local processes, a dista cluster per run on Kubernetes, or
+  instances per run on EC2 (#42).
+- **The UI** (`orca ui`): pipelines, runs, datasets and lineage, as HTML and
+  JSON (#42).
+- **Tables:** pinned Iceberg reads and recognisable commits from steps (#42).
