@@ -57,7 +57,9 @@ from postgres import Params, Row
 from orca.control import parse_placement
 from orca.fill import (
     SINCE_REGISTRATION,
+    lag_text,
     parse_fill_budget,
+    parse_fill_lag,
     parse_fill_max_runs,
     parse_fill_order,
     parse_fill_window,
@@ -103,6 +105,7 @@ comptime SCALAR_KEYS = [
     "fill_max_runs",
     "fill_budget_per_day",
     "fill_window",
+    "fill_lag",
 ]
 """The keys of `[defaults]` and `[pipelines.<name>]` with one value. The
 `fill*` keys (`orca.fill`) are the file's only: no flag sets them."""
@@ -220,6 +223,8 @@ def _canonical(key: String, text: String) raises -> String:
     if key == "fill_window":
         var w = parse_fill_window(text)
         return String(w[0], "..", w[1])
+    if key == "fill_lag":
+        return lag_text(parse_fill_lag(text))
     raise Error("unknown key ", key)
 
 
@@ -249,6 +254,11 @@ def _canonical_toml(key: String, v: TomlValue) raises -> String:
     if key == "fills" or key == "fill_order" or key == "fill_window":
         if v.kind != STRING:
             raise Error("is a string, not ", v.kind)
+        return _canonical(key, v.text)
+    if key == "fill_lag":
+        # `0` may be a number; any other lag needs its unit.
+        if v.kind != STRING and not (v.kind == INTEGER and v.text == "0"):
+            raise Error('is a duration string like "2h", or 0, not ', v.kind)
         return _canonical(key, v.text)
     var numeric = key == "workers" or key == "worker_procs" or key == "max_runs"
     if v.kind == INTEGER and numeric:
@@ -1086,7 +1096,8 @@ comptime _SHOWN_SQL = (
     " coalesce(spot, false) AS spot, coalesce(fills, '') AS fills,"
     " coalesce(fill_order, '') AS fill_order, coalesce(fill_max_runs, 0) AS"
     " fill_max_runs, coalesce(fill_budget_per_day, -1) AS fill_budget,"
-    " coalesce(fill_window, '') AS fill_window, coalesce(cpus, '') AS cpus,"
+    " coalesce(fill_window, '') AS fill_window, coalesce(fill_lag, '') AS"
+    " fill_lag, coalesce(cpus, '') AS cpus,"
     " coalesce(memory_gb, '') AS memory_gb FROM orca.pipelines WHERE"
     " binary_path IS"
     " NOT NULL AND ($1 = '' OR name = $1) ORDER BY name"
@@ -1277,6 +1288,7 @@ def _show_fills(mut s: Shown, r: Row, sources: Optional[Value]) raises:
         or r.int64("fill_max_runs") > 0
         or r.float64("fill_budget") >= 0
         or r.text("fill_window") != ""
+        or r.text("fill_lag") != ""
     )
     if not any:
         return
@@ -1307,6 +1319,11 @@ def _show_fills(mut s: Shown, r: Row, sources: Optional[Value]) raises:
         s.add("fill_window", r.text("fill_window"), w[0], w[1])
     else:
         s.add("fill_window", "0..24", CODE_DEFAULT, "all day")
+    if r.text("fill_lag"):
+        var w = _source(sources, "fill_lag")
+        s.add("fill_lag", r.text("fill_lag"), w[0], w[1])
+    else:
+        s.add("fill_lag", "0", CODE_DEFAULT, "a partition fills once it ends")
 
 
 def show_json(items: List[Shown], one: Bool) -> String:
@@ -1388,6 +1405,8 @@ def export_toml(mut db: State) raises -> String:
             out.write(
                 "fill_window = ", toml_string(r.text("fill_window")), "\n"
             )
+        if r.text("fill_lag"):
+            out.write("fill_lag = ", toml_string(r.text("fill_lag")), "\n")
         var env = parse_env(r.text("env"))
         if len(env) > 0:
             out.write("env = ", _inline(env), "\n")

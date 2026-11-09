@@ -7,10 +7,15 @@ from orca.civil import parse_time
 from orca.fill import (
     Fill,
     eta_text,
+    FillStatus,
     fill_refusal,
+    lag_note,
+    lag_text,
+    lag_wait,
     last_ended,
     money,
     parse_fill_budget,
+    parse_fill_lag,
     parse_fill_max_runs,
     parse_fill_order,
     parse_fill_window,
@@ -90,6 +95,103 @@ def test_range() raises:
     # Nothing has ended yet.
     assert_equal(len(range_keys("monthly", "2024-07", "UTC", t)), 0)
     assert_equal(len(range_keys("daily", "", "UTC", t)), 0)
+
+
+def test_lag_values() raises:
+    assert_equal(parse_fill_lag("0"), 0)
+    assert_equal(parse_fill_lag("2h"), 7200)
+    assert_equal(parse_fill_lag("90m"), 5400)
+    assert_equal(parse_fill_lag("45s"), 45)
+    assert_equal(parse_fill_lag("1d"), 86400)
+    assert_equal(parse_fill_lag("31d"), 31 * 86400)
+    for bad in ["", "2", "h", "2w", "-1h", "1.5h", "32d", "2 h"]:
+        try:
+            _ = parse_fill_lag(bad)
+            raise Error("accepted the lag ", bad)
+        except e:
+            assert_true(
+                "duration" in String(e) or "at most" in String(e), String(e)
+            )
+    assert_equal(lag_text(0), "0")
+    assert_equal(lag_text(7200), "2h")
+    assert_equal(lag_text(5400), "90m")
+    assert_equal(lag_text(45), "45s")
+    assert_equal(Fill.of("all", "", 0, -1.0, "").lag, 0)
+    assert_equal(Fill.of("all", "", 0, -1.0, "", "2h").lag, 7200)
+
+
+def test_lag_daily() raises:
+    """Day D fills from D+1 00:00 plus the lag: not a second before."""
+    var lag = 7200
+    var just_before = parse_time("2026-11-10T01:59:59Z")
+    var at = parse_time("2026-11-10T02:00:00Z")
+    assert_equal(last_ended("daily", "UTC", just_before, lag), "2026-11-08")
+    assert_equal(last_ended("daily", "UTC", at, lag), "2026-11-09")
+    var before = range_keys("daily", "2026-11-01", "UTC", just_before, lag)
+    assert_equal(len(before), 8)
+    assert_equal(before[7], "2026-11-08")
+    var after = range_keys("daily", "2026-11-01", "UTC", at, lag)
+    assert_equal(len(after), 9)
+    assert_equal(after[8], "2026-11-09")
+    # No lag: what it was, the day fills at 00:00.
+    assert_equal(
+        last_ended("daily", "UTC", parse_time("2026-11-10T00:00:00Z")),
+        "2026-11-09",
+    )
+    # Which day waits, and until when.
+    var w = lag_wait("daily", "UTC", just_before, lag)
+    assert_equal(w[0], "2026-11-09")
+    assert_equal(w[1], at)
+    w = lag_wait("daily", "UTC", parse_time("2026-11-10T00:00:00Z"), lag)
+    assert_equal(w[0], "2026-11-09")
+    assert_equal(w[1], at)
+    assert_equal(lag_wait("daily", "UTC", at, lag)[0], "")
+    assert_equal(lag_wait("daily", "UTC", just_before, 0)[0], "")
+    # On the schedule's clock: New York's midnight is 05:00Z in winter.
+    var ny = "America/New_York"
+    assert_equal(
+        last_ended("daily", ny, parse_time("2026-11-10T06:59:59Z"), lag),
+        "2026-11-08",
+    )
+    assert_equal(
+        last_ended("daily", ny, parse_time("2026-11-10T07:00:00Z"), lag),
+        "2026-11-09",
+    )
+    w = lag_wait("daily", ny, parse_time("2026-11-10T05:30:00Z"), lag)
+    assert_equal(w[0], "2026-11-09")
+    assert_equal(w[1], parse_time("2026-11-10T07:00:00Z"))
+    # A lag longer than a day: the oldest that waits.
+    w = lag_wait("daily", "UTC", parse_time("2026-11-10T12:00:00Z"), 2 * 86400)
+    assert_equal(w[0], "2026-11-08")
+    assert_equal(w[1], parse_time("2026-11-11T00:00:00Z"))
+
+
+def test_lag_monthly() raises:
+    var lag = 5400
+    var just_before = parse_time("2026-12-01T01:29:59Z")
+    var at = parse_time("2026-12-01T01:30:00Z")
+    assert_equal(last_ended("monthly", "UTC", just_before, lag), "2026-10")
+    assert_equal(last_ended("monthly", "UTC", at, lag), "2026-11")
+    assert_equal(
+        len(range_keys("monthly", "2026-01", "UTC", just_before, lag)), 10
+    )
+    assert_equal(len(range_keys("monthly", "2026-01", "UTC", at, lag)), 11)
+    var w = lag_wait("monthly", "UTC", just_before, lag)
+    assert_equal(w[0], "2026-11")
+    assert_equal(w[1], at)
+    # Keyed pipelines have no calendar: nothing waits.
+    assert_equal(lag_wait("keyed", "UTC", at, lag)[0], "")
+
+
+def test_lag_note() raises:
+    var s = FillStatus()
+    assert_equal(lag_note(s), "")
+    s.lag_key = "2026-11-09"
+    s.lag_until = parse_time("2026-11-10T02:00:00Z")
+    s.lag = 7200
+    assert_equal(
+        lag_note(s), "2026-11-09 fills from 2026-11-10 02:00 UTC (fill_lag 2h)"
+    )
 
 
 def test_prices() raises:

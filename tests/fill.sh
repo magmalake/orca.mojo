@@ -15,7 +15,9 @@
 # - fills = "all" is refused for a pipeline with no first partition, with
 #   the file and line;
 # - `orca config show` and `config export` have the keys, and
-#   `/api/pipelines/<name>` the fill's numbers and why it's idle.
+#   `/api/pipelines/<name>` the fill's numbers and why it's idle;
+# - with fill_lag a day ended less than the lag ago neither fills nor
+#   counts, and the page says when it fills.
 #
 # Then over examples/toy.mojo on the ec2 runner against the stand-in EC2
 # (tests/fake_ec2.py): an instance type with no price, or no budget at
@@ -239,6 +241,41 @@ grep -Eq "^  fill_order +oldest +code default" build/fill.out || fail "show's fi
 grep -q '^fill_budget_per_day = 0.05$' build/fill.out && grep -q '^fill_window = "22..6"$' build/fill.out \
     || fail "export: $(cat build/fill.out)"
 echo "ok   fills refused with no first partition; config show and export"
+
+# --- The lag: a day fills fill_lag after it ends ---
+toml << 'EOF'
+[pipelines.daily]
+fills = "all"
+fill_max_runs = 3
+fill_lag = "120m"
+EOF
+# New York's 2024-01-22 00:00 is 05:00Z: 2024-01-21 ended then, and fills
+# from 07:00Z.
+reg 2024-01-22T06:59:59Z ./build/daily
+tick 2024-01-22T06:59:59Z
+settle
+tick 2024-01-22T06:59:59Z
+case ",$(fills daily)," in *,2024-01-21,*) fail "2024-01-21 filled inside its lag" ;; esac
+[ "$(fill daily total)" -eq 20 ] || fail "the range in the lag: $(fill daily total) days"
+[ "$(fill daily waits_for_lag.partition)" = 2024-01-21 ] || fail "waits_for_lag: $(fill daily waits_for_lag)"
+[ "$(fill daily waits_for_lag.fillable_at)" = 2024-01-22T07:00:00Z ] || fail "fillable_at: $(fill daily waits_for_lag)"
+curl -fsS "$base/pipelines/daily" | grep -q 'Next: 2024-01-21 fills from 2024-01-22 07:00 UTC (fill_lag 2h)' \
+    || fail "the page's Next line"
+[ "$(curl -fsS "$base/api/pipelines/daily" | jq -r .pipeline.coverage.total)" -eq 20 ] || fail "coverage counts the lagged day"
+i=0
+until case ",$(fills daily)," in *,2024-01-21,*) true ;; *) false ;; esac; do
+    i=$((i + 1)); [ "$i" -lt 10 ] || fail "2024-01-21 didn't fill after its lag: $(fills daily)"
+    settle
+    tick "2024-01-22T07:0${i}:00Z"
+done
+[ "$(fill daily waits_for_lag)" = null ] || fail "still waits: $(fill daily waits_for_lag)"
+[ "$(fill daily total)" -eq 21 ] || fail "the range after the lag: $(fill daily total) days"
+settle
+./build/orca config show daily > build/fill.out 2>> "$log" || fail "config show"
+grep -Eq "^  fill_lag +2h +orca.toml \[pipelines.daily\]$" build/fill.out || fail "show's fill_lag: $(cat build/fill.out)"
+./build/orca config export --out - > build/fill.out 2>> "$log" || fail "config export"
+grep -q '^fill_lag = "2h"$' build/fill.out || fail "export's fill_lag: $(cat build/fill.out)"
+echo "ok   fill_lag: a day fills two hours after it ends, not before; show and export"
 
 # --- The ec2 runner: the budget fails closed ---
 free_port ecport

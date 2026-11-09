@@ -11,7 +11,7 @@ from orca.civil import now
 from orca.config import config_html
 from orca.coverage import Coverage
 from orca.dag import DagStep, dag_svg
-from orca.fill import FillStatus, eta_text, money
+from orca.fill import FillStatus, eta_text, lag_note, money
 from orca.follow import Follow, follow
 from orca.html import Html, url_encode
 from orca.json import quote
@@ -285,6 +285,10 @@ def _fill_html(mut h: Html, s: FillStatus):
     if s.idle:
         h.raw('<br><span class="muted">Idle: ')
         h.text(s.idle)
+        h.raw("</span>")
+    if s.lag_key:
+        h.raw('<br><span class="muted">Next: ')
+        h.text(lag_note(s))
         h.raw("</span>")
 
 

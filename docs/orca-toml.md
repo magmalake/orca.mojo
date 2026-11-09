@@ -22,6 +22,7 @@ fill_order = "oldest"
 fill_max_runs = 2
 fill_budget_per_day = 5.0    # estimated US dollars a UTC day
 fill_window = "22..6"        # UTC hours fill runs start in
+fill_lag = "2h"              # a day fills 2 hours after it ends
 
 [pipelines.mojo_repos]
 placement = "control"
@@ -64,6 +65,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 | `fill_max_runs` | integer from 1 to 10000 | 1 | none | Fill runs at once, on top of `max_runs`. |
 | `fill_budget_per_day` | number from 0 to 100000, US dollars | none | none | Estimated spend of fill runs a UTC day. Fill runs on EC2 or Kubernetes don't start without it. |
 | `fill_window` | string `"A..B"`, UTC hours: A from 0 to 23, B from 1 to 24 | `"0..24"`, all day | none | Fill runs start from hour A up to hour B. `"22..6"` wraps past midnight. |
+| `fill_lag` | string, a duration: a whole number of `s`, `m`, `h` or `d`, up to `31d`; or `0` | `0`, none | none | How long after its end a partition is filled. See [The lag](#the-lag). |
 
 `image` (`--image`) and `--spot` stay flags only. The `fill*` keys are
 the file's only: no flag sets them.
@@ -76,6 +78,7 @@ the file's only: no flag sets them.
 - A `cpus` or `memory_gb` range like `"4..2"`, `cpus = 0`, `cpus = 1.5` or `memory_gb = 0`.
 - A secret ID outside `orca/`.
 - A `fill_window` like `"6..6"` or `"1..30"`, a negative `fill_budget_per_day`, or `fill_max_runs = 0`.
+- A `fill_lag` without a unit (`"2"`, `2`), with one orca doesn't know (`"2w"`), or over `31d`.
 - `fills = "all"` for a keyed pipeline, a sensor, or one with no first partition. `orca register` refuses it with the file and line, because it has to see the pipeline first; see [Fills](#fills).
 - An `env` name that isn't a valid variable name.
 - An `env` name that looks like a secret (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*DATABASE_URL*`). Put those in `secrets` instead.
@@ -84,7 +87,7 @@ the file's only: no flag sets them.
 Each refusal names the file and line, and nothing is registered:
 
 ```text
-orca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, cpus, memory_gb, fills, fill_order, fill_max_runs, fill_budget_per_day, fill_window, secrets and env)
+orca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, cpus, memory_gb, fills, fill_order, fill_max_runs, fill_budget_per_day, fill_window, fill_lag, secrets and env)
 orca.toml:3: [pipelines.toy] workers: not a count or a range MIN..MAX: 4..2
 ```
 
@@ -382,12 +385,20 @@ The default, `fills = "since_registration"`, is what orca did before. A schedule
 
 On every tick, after a pipeline's other runs have started, the scheduler queues and starts fill runs for it:
 
-- **The range** is the pipeline's first partition through the last one that has ended on its schedule's wall clock (UTC without a schedule): yesterday for a daily pipeline, last month for a monthly one. The partition still going is the schedule's.
+- **The range** is the pipeline's first partition through the last one that has ended on its schedule's wall clock (UTC without a schedule), at least `fill_lag` ago: yesterday for a daily pipeline, last month for a monthly one. The partition still going is the schedule's. See [The lag](#the-lag).
 - **One partition per fill run**, in `fill_order`. The run's trigger is `fill` (`orca.runs.trigger`), so the runs page can filter for them.
 - **A partition is taken** when it's done in a run of any of the pipeline's code, when a live run has it, or when a fill run of it was ever queued. A fill never runs a partition twice. A fill run that fails is retried like a scheduled run, up to `run_retries`. A partition whose fill run failed past its retries, or was cancelled, is left to a person: `orca backfill`, or resume in the UI. Running done partitions again stays `orca backfill --rerun`.
 - **Fill runs don't count against `max_runs`.** At most `fill_max_runs` fill runs are going, beside up to `max_runs` other runs.
 - **On a worker pool** (`placement = "worker:<pool>"`) the scheduler queues the fill runs the same way and leaves them for a worker of the pool to claim. `fill_max_runs` caps the fill runs going across the whole pool, the queued ones included; each worker's `--max-runs` caps what one machine takes. See [Fills on a pool](workers.md#fills-on-a-pool).
 - **Fill runs never starve scheduled runs.** While any of the pipeline's scheduled, backfill or other runs are queued, no fill run starts. Fill runs still take room in the stack-wide limits (`ORCA_VCPU_BUDGET`, the control instance's slots) once they're going.
+
+### The lag
+
+`fill_lag` (default `0`) holds a partition back for a while after it ends, for a source that publishes its data late. A partition is filled once its end is at least `fill_lag` in the past: a daily day D from D+1 00:00 plus the lag, a monthly month from the 1st of the next month plus the lag, both on the schedule's wall clock (UTC without a schedule).
+
+GH Archive puts each hour's file up some minutes after the hour. With no lag, the fill starts the day that just ended at 00:00 UTC, before its last hour is there. Its attempts fail until the file appears, and enough failures in an hour trip the [watchdog](watchdog.md), which pauses the pipeline. With `fill_lag = "2h"` the day is filled from 02:00 UTC.
+
+Until then the partition is outside the range: the fill doesn't count it in its total, nor does the pipeline's [coverage](ui.md#coverage-in-one-number), so it never shows as missing. The Fill line says when it fills (`Next: 2026-11-09 fills from 2026-11-10 02:00 UTC (fill_lag 2h)`), and the API gives it as `waits_for_lag` (below). The lag holds back fill runs only: a schedule fires when its cron says, and `orca backfill` runs what it's given.
 
 ### What stops a fill
 
@@ -418,13 +429,15 @@ The budget is per pipeline, so a `fill_budget_per_day` in `[defaults]` gives eac
 
 ### Progress
 
-The pipeline page has a **Fill** line: partitions done of the range's total, fill runs going, partitions in live runs, waiting for a retry and failed. It also gives the rate (partitions an hour over the fill runs that ended in the last six hours), the ETA at that rate, and today's estimated spend against the budget. When the fill is idle, the line says why. `/api/pipelines/<name>` is the page's JSON, with a `fill` object:
+The pipeline page has a **Fill** line: partitions done of the range's total, fill runs going, partitions in live runs, waiting for a retry and failed. It also gives the rate (partitions an hour over the fill runs that ended in the last six hours), the ETA at that rate, and today's estimated spend against the budget. When the fill is idle, the line says why, and a partition that waits for `fill_lag` is on a line of its own. `/api/pipelines/<name>` is the page's JSON, with a `fill` object:
 
 ```json
 {"on": true, "total": 1405, "done": 380, "live": 2, "failed": 0, "retrying": 0, "left": 1023,
  "running": 2, "rate_per_hour": 41.5, "eta_seconds": 88770, "spent_today": 1.734,
  "budget_per_day": 5.0, "price_per_hour": 0.6134, "expected_run_seconds": 210,
- "cost_is_estimate": true, "idle": null}
+ "cost_is_estimate": true,
+ "waits_for_lag": {"partition": "2026-11-09", "fillable_at": "2026-11-10T02:00:00Z"},
+ "idle": null}
 ```
 
 `orca config show` lists the `fill*` keys, with their defaults, for a pipeline that fills, and `cpus` and `memory_gb` for one with a request.
