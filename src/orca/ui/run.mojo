@@ -31,6 +31,7 @@ from orca.ui.parts import (
     cancel_tell,
     grant_facts,
     named_code_link,
+    partitions_fact,
     row_actions,
     source_html,
     step_cell,
@@ -421,7 +422,7 @@ def _trigger_card(mut h: Html, mut db: State, r: RunRow) raises:
         ),
         "partitions",
     )
-    h.text(r.partitions)
+    partitions_fact(h, r.partitions)
     h.raw("</dd>")
     fact_item(
         h,

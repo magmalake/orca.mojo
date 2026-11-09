@@ -106,6 +106,32 @@ def _partitions_cell(mut h: Html, partitions: String):
     h.raw("</td>")
 
 
+comptime _LISTED_PARTITIONS = 12
+"""How many partitions a run's page lists in full; a longer list shows its
+first and last and the count, the whole list folded under them."""
+
+
+def partitions_fact(mut h: Html, partitions: String):
+    """A run's partitions on its page: all of them if few, else
+    `first … last (N partitions)` with the whole list in a fold."""
+    var parts = partitions.split(",")
+    if len(parts) <= _LISTED_PARTITIONS:
+        h.text(partitions)
+        return
+    h.raw('<span class="mono">')
+    h.text(parts[0])
+    h.raw(" … ")
+    h.text(parts[len(parts) - 1])
+    h.raw('</span> <span class="muted">(', len(parts), " partitions)</span>")
+    h.raw('<details class="all-parts"><summary>all ', len(parts), "</summary>")
+    h.raw('<div class="mono">')
+    for i in range(len(parts)):
+        if i > 0:
+            h.raw(", ")
+        h.text(parts[i])
+    h.raw("</div></details>")
+
+
 def code_link(mut h: Html, at: CodeRef):
     """A link to a line of code: every one orca shows is drawn by this,
     so they all look alike and unlike orca's own links."""
