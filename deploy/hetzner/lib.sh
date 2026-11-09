@@ -1,4 +1,6 @@
-# shellcheck shell=sh
+# shellcheck shell=sh disable=SC2218
+# (SC2218, "defined later", is wrong here: this file only defines functions,
+# all called once it has been sourced.)
 # Shared by the scripts in this directory (sourced, not run). POSIX sh.
 #
 # - the settings: $HETZNER_ENV, else hetzner.env next to the scripts
@@ -167,15 +169,27 @@ parse_common() { # sets REST to the arguments not handled here
 # --- the server's settings, from hetzner.env (up.sh and deploy.sh) ---------
 
 # need_settings: what settings.env, the secret files and the stack settings
-# are made from is set.
+# are made from is set. With SECRETS_FILE, decrypts it (load_secrets), so a
+# decrypt failure stops before anything is changed on the server.
 need_settings() {
     need BUCKET S3_ENDPOINT S3_REGION
-    need_file S3_CREDENTIALS_FILE TUNNEL_TOKEN_FILE
-    [ -z "${GITHUB_TOKEN_FILE:-}" ] || need_file GITHUB_TOKEN_FILE
     [ -z "${EXTRA_ENV_FILE:-}" ] || need_file EXTRA_ENV_FILE
-    [ -z "${NTFY_TOPIC_FILE:-}" ] || need_file NTFY_TOPIC_FILE
-    [ -z "${NTFY_TOKEN_FILE:-}" ] || need_file NTFY_TOKEN_FILE
-    [ -z "${GHCR_USER:-}" ] || need_file GHCR_TOKEN_FILE
+    load_secrets
+    for name in $SECRET_NAMES; do
+        v=$(secret_var "$name")
+        eval "val=\${$v:-}"
+        if in_secrets "$name"; then
+            [ -z "$val" ] || die "$v and SECRETS_FILE both give $name: set only one (remove $v, or the key $name from $SECRETS_FILE)"
+        elif [ -n "$val" ]; then
+            need_file "$v"
+        else
+            case $name in
+                s3.env | tunnel.env) die "$v isn't set in $HETZNER_ENV${SECRETS_FILE:+, and SECRETS_FILE has no $name}" ;;
+            esac
+        fi
+    done
+    [ -z "${GHCR_USER:-}" ] || has_secret ghcr-token \
+        || die "GHCR_USER needs GHCR_TOKEN_FILE or a ghcr-token key in SECRETS_FILE"
     for v in S3_CREDENTIALS_FILE TUNNEL_TOKEN_FILE GITHUB_TOKEN_FILE NTFY_TOPIC_FILE NTFY_TOKEN_FILE GHCR_TOKEN_FILE; do
         eval "val=\${$v:-}"
         if is_sops "$val"; then
@@ -183,6 +197,100 @@ need_settings() {
             break
         fi
     done
+}
+
+# --- SECRETS_FILE: every secret in one SOPS file, one `sops -d` ----------------
+# Its top-level keys are these, the files' names under /etc/orca, and each
+# value is the file's content (a string). One decrypt per run: a Secure
+# Enclave age key (age-plugin-se) asks for Touch ID once, not per file.
+SECRET_NAMES="s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token"
+SECRETS_JSON=
+SECRETS_KEYS=
+SECRETS_LOADED=0
+
+# secret_var NAME: the per-secret *_FILE setting for NAME.
+secret_var() {
+    case $1 in
+        s3.env) echo S3_CREDENTIALS_FILE ;;
+        tunnel.env) echo TUNNEL_TOKEN_FILE ;;
+        secrets/orca/github-token) echo GITHUB_TOKEN_FILE ;;
+        secrets/orca/ntfy-topic) echo NTFY_TOPIC_FILE ;;
+        secrets/orca/ntfy-token) echo NTFY_TOKEN_FILE ;;
+        ghcr-token) echo GHCR_TOKEN_FILE ;;
+    esac
+}
+
+# in_secrets NAME: SECRETS_FILE has the key NAME.
+in_secrets() {
+    case " $SECRETS_KEYS " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+
+# has_secret NAME: the secret NAME is given, by SECRETS_FILE or its *_FILE.
+has_secret() {
+    in_secrets "$1" && return 0
+    eval "val=\${$(secret_var "$1"):-}"
+    [ -n "$val" ]
+}
+
+clear_secrets() {
+    SECRETS_JSON=
+}
+
+# load_secrets: decrypts SECRETS_FILE, if set, once, into SECRETS_JSON (a
+# shell variable, never a file) and checks its keys. A dry run doesn't
+# decrypt: it assumes the file has every secret no *_FILE setting gives.
+load_secrets() {
+    [ -n "${SECRETS_FILE:-}" ] && [ "$SECRETS_LOADED" = 0 ] || return 0
+    need_file SECRETS_FILE
+    need_tool sops jq
+    SECRETS_LOADED=1
+    if [ "$DRY_RUN" = 1 ]; then
+        for name in $SECRET_NAMES; do
+            eval "val=\${$(secret_var "$name"):-}"
+            [ -n "$val" ] || SECRETS_KEYS="$SECRETS_KEYS $name"
+        done
+        echo "# a dry run doesn't decrypt $SECRETS_FILE: it assumes it has${SECRETS_KEYS:- nothing}" >&2
+        return 0
+    fi
+    SECRETS_JSON=$(sops -d --output-type json "$SECRETS_FILE") || {
+        SECRETS_JSON=
+        die "sops couldn't decrypt $SECRETS_FILE; nothing was changed on the server"
+    }
+    # Key names aren't secret; a value never leaves jq here.
+    bad=$(printf '%s' "$SECRETS_JSON" | jq -r --arg known "$SECRET_NAMES" '
+        if type != "object" then "it is not a mapping of file names to their contents"
+        else ($known | split(" ")) as $k | to_entries[]
+            | if (.key | startswith("/") or contains("..")) then "\(.key | @json): a name has no leading / and no .."
+              elif (.key | IN($k[]) | not) then "\(.key | @json) is not one of: \($known)"
+              elif (.value | type) != "string" then "\(.key | @json): the value is a \(.value | type), not a string (quote it, or use |)"
+              else empty end
+        end') || {
+        SECRETS_JSON=
+        die "$SECRETS_FILE didn't decrypt to JSON"
+    }
+    if [ -n "$bad" ]; then
+        clear_secrets
+        die "$SECRETS_FILE: $bad"
+    fi
+    SECRETS_KEYS=$(printf '%s' "$SECRETS_JSON" | jq -r 'keys_unsorted[]' | tr '\n' ' ')
+}
+
+# sync_secret NAME: SECRETS_FILE's value of NAME becomes /etc/orca/NAME, as
+# sync_file sends a *.sops file: without trailing newlines, then one.
+sync_secret() {
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "| ssh root@$IP orca-stack sync $1"
+        return 0
+    fi
+    plain=$(printf '%s' "$SECRETS_JSON" | jq -j --arg k "$1" '.[$k]') || {
+        plain=
+        return 1
+    }
+    printf '%s\n' "$plain" | remote orca-stack sync "$1"
+    st=$?
+    plain=
+    return "$st"
 }
 
 # is_sops FILE: FILE is encrypted with SOPS (named *.sops or *.sops.<ext>,
@@ -204,10 +312,10 @@ write_settings() {
         echo "ORCA_LOGS=s3://$BUCKET/logs"
         echo "ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE"
         # Alerts (ntfy): the topic and token are secret files, only their ids are here.
-        if [ -n "${NTFY_TOPIC_FILE:-}" ]; then
+        if has_secret secrets/orca/ntfy-topic; then
             echo "ORCA_NOTIFY_SECRET=orca/ntfy-topic"
             [ -z "${NTFY_URL:-}" ] || echo "ORCA_NOTIFY_URL=$NTFY_URL"
-            [ -z "${NTFY_TOKEN_FILE:-}" ] || echo "ORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token"
+            ! has_secret secrets/orca/ntfy-token || echo "ORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token"
             [ -z "${UI_URL:-}" ] || echo "ORCA_UI_URL=$UI_URL"
         fi
         [ -z "${FIXED_COST:-}" ] || echo "ORCA_FIXED_COST=$FIXED_COST"
@@ -251,27 +359,34 @@ sync_file() {
 # Each prints what it changes, keys and file names only (a stack setting
 # old -> new: none is a secret). DIR is a local temporary directory. The
 # server's orca-stack must be this checkout's (it has sync). Returns
-# non-zero at the first step that fails.
+# non-zero at the first step that fails. SECRETS_JSON is cleared after it.
 sync_settings() {
+    sync_settings_ "$@"
+    st=$?
+    clear_secrets
+    return "$st"
+}
+
+sync_settings_() {
+    load_secrets
     write_settings "$1/settings.env" || return 1
     if [ "$DRY_RUN" = 1 ]; then
         echo "# settings.env from $HETZNER_ENV: $(sed -n 's/=.*//p' "$1/settings.env" | tr '\n' ' ')"
     fi
     sync_file --keys settings.env "$1/settings.env" || return 1
-    sync_file s3.env "$S3_CREDENTIALS_FILE" || return 1
-    sync_file tunnel.env "$TUNNEL_TOKEN_FILE" || return 1
-    if [ -n "${GITHUB_TOKEN_FILE:-}" ]; then
-        sync_file secrets/orca/github-token "$GITHUB_TOKEN_FILE" || return 1
-    fi
-    if [ -n "${NTFY_TOPIC_FILE:-}" ]; then
-        sync_file secrets/orca/ntfy-topic "$NTFY_TOPIC_FILE" || return 1
-    fi
-    if [ -n "${NTFY_TOKEN_FILE:-}" ]; then
-        sync_file secrets/orca/ntfy-token "$NTFY_TOKEN_FILE" || return 1
-    fi
-    if [ -n "${GHCR_USER:-}" ]; then
-        sync_file ghcr-token "$GHCR_TOKEN_FILE" || return 1
-    fi
+    [ "$DRY_RUN" = 0 ] || [ -z "$SECRETS_KEYS" ] || echo "+ sops -d $SECRETS_FILE (once)"
+    for name in $SECRET_NAMES; do
+        if in_secrets "$name"; then
+            sync_secret "$name" || return 1
+            continue
+        fi
+        v=$(secret_var "$name")
+        eval "val=\${$v:-}"
+        [ -n "$val" ] || continue
+        # A ghcr-token file is only sent with GHCR_USER, as before.
+        [ "$name" != ghcr-token ] || [ -n "${GHCR_USER:-}" ] || continue
+        sync_file "$name" "$val" || return 1
+    done
     # GHCR_USER= (none in hetzner.env) removes it from stack.conf.
     remote orca-stack configure ORCA_IMAGE="$ORCA_IMAGE" CLOUDFLARED_IMAGE="$CLOUDFLARED_IMAGE" \
         BUCKET="$BUCKET" BACKUP_KEEP="$BACKUP_KEEP" GHCR_USER="${GHCR_USER:-}" || return 1

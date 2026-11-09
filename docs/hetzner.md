@@ -165,6 +165,50 @@ extension is binary (the whole file). Losing the age key loses the files,
 so keep its backup off the laptop; if it leaks, change the secrets
 themselves, not only the key, since git keeps every old encrypted version.
 
+#### One file for every secret (recommended)
+
+Each `*.sops*` file is its own `sops -d`, so a key that asks before each
+use (an [age-plugin-se](https://github.com/remko/age-plugin-se) Secure
+Enclave key: Touch ID) asks once per file. `SECRETS_FILE` in `hetzner.env`
+names one SOPS YAML file with every secret instead, decrypted once per
+`up.sh` or `deploy.sh` (one Touch ID) into a shell variable, never a file.
+Its keys are the server's file names under `/etc/orca`, each value that
+file's content; a key it has replaces the `*_FILE` setting (setting both is
+an error), and an unknown key is refused:
+
+```yaml
+s3.env: |
+  AWS_ACCESS_KEY_ID=...
+  AWS_SECRET_ACCESS_KEY=...
+tunnel.env: TUNNEL_TOKEN=...
+secrets/orca/github-token: ...   # GITHUB_TOKEN_FILE's
+secrets/orca/ntfy-topic: ...     # NTFY_TOPIC_FILE's
+secrets/orca/ntfy-token: ...     # NTFY_TOKEN_FILE's
+ghcr-token: ...                  # GHCR_TOKEN_FILE's
+```
+
+Write it with `sops edit prod/secrets.sops.yaml`, or, from the repository's
+top as above, from the plain files through a pipe (never a plain temporary
+file):
+
+```sh
+p=~/.config/orca-hetzner
+{ echo 's3.env: |'; sed 's/^/  /' $p/s3.env
+  echo 'tunnel.env: |'; sed 's/^/  /' $p/tunnel.env
+  echo 'secrets/orca/github-token: |'; sed 's/^/  /' $p/github_token
+} | sops -e --filename-override prod/secrets.sops.yaml /dev/stdin > prod/secrets.sops.yaml
+```
+
+Each value reaches the server with one trailing newline, as a `*.sops*`
+file's does. A Secure Enclave key: `age-plugin-se keygen -o se-key.txt`
+(Touch ID or the login password; `--access-control any-biometry` for Touch
+ID only), then `age-plugin-se recipients -i se-key.txt` prints its public
+key, `age1se1...`, for `.sops.yaml`; add the identity's line to `keys.txt`
+or point `SOPS_AGE_KEY_FILE` at `se-key.txt`.
+`--dry-run` doesn't decrypt: it prints `+ sops -d <file> (once)` and a
+`| ssh ... orca-stack sync <name>` line for each secret no `*_FILE` setting
+gives, assuming the file has them.
+
 ## The census: `orca.toml`
 
 The census's `orca.toml` lives in the mojo-census repository, next to the

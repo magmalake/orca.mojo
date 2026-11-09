@@ -357,6 +357,91 @@ sed -i.bak "s|^S3_CREDENTIALS_FILE=.*|S3_CREDENTIALS_FILE=$FAKE/s3.env|" "$FAKE/
 deploy eee5555 console=hhh8888 || fail "a deploy back on the plain s3.env"
 stack resume > /dev/null
 
+# SECRETS_FILE: every secret in one SOPS file (here JSON lines behind ENC:),
+# decrypted once per deploy (tests/hetzner/sops counts its calls), each value
+# sent as a *.sops file is: one trailing newline. No value is printed.
+secrets_file() { # JSON: SECRETS_FILE's content
+    printf '%s\n' "$1" | sed 's/^/ENC:/' > "$FAKE/secrets.sops.yaml"
+}
+all_secrets='{"s3.env": "AWS_ACCESS_KEY_ID=x4\nAWS_SECRET_ACCESS_KEY=onefile55\n",
+ "tunnel.env": "TUNNEL_TOKEN=tunnel66",
+ "secrets/orca/github-token": "ghp_gh77\n\n",
+ "secrets/orca/ntfy-topic": "topic88",
+ "secrets/orca/ntfy-token": "tk_ntfy99",
+ "ghcr-token": "ghcr11"}'
+secrets_file "$all_secrets"
+sed -i.bak '/^S3_CREDENTIALS_FILE=/d; /^TUNNEL_TOKEN_FILE=/d' "$FAKE/hetzner.env"
+echo "SECRETS_FILE=$FAKE/secrets.sops.yaml" >> "$FAKE/hetzner.env"
+secret_files() { cat "$ORCA_CONF/settings.env" "$ORCA_CONF/s3.env" "$ORCA_CONF/tunnel.env" 2> /dev/null | cksum; }
+values='onefile55\|tunnel66\|ghp_gh77\|topic88\|tk_ntfy99\|ghcr11'
+: > "$FAKE/sops.calls"
+before=$(secret_files)
+sh deploy/hetzner/deploy.sh --dry-run eee5555 > "$FAKE/out" 2>&1 || fail "a dry run with SECRETS_FILE"
+has "# a dry run doesn't decrypt $FAKE/secrets.sops.yaml: it assumes it has s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token$"
+has "^  + sops -d $FAKE/secrets.sops.yaml (once)$"
+for n in s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token; do
+    has "^  | ssh root@<server-ip> orca-stack sync $n$"
+done
+has "# settings.env from .*ORCA_NOTIFY_SECRET ORCA_NOTIFY_TOKEN_SECRET"
+[ ! -s "$FAKE/sops.calls" ] || fail "a dry run ran sops: $(cat "$FAKE/sops.calls")"
+[ "$(secret_files)" = "$before" ] || fail "a dry run with SECRETS_FILE changed the server's files"
+deploy eee5555 console=hhh8888 || fail "a deploy with SECRETS_FILE"
+[ "$(cat "$FAKE/sops.calls")" = "-d --output-type json $FAKE/secrets.sops.yaml" ] \
+    || fail "not one decrypt per deploy: $(cat "$FAKE/sops.calls")"
+grep -q "$values" "$FAKE/out" && fail "a SECRETS_FILE value was printed"
+has "  orca-stack: s3.env: changed$"
+has "  orca-stack: secrets/orca/ntfy-topic: new$"
+has "  orca-stack: ghcr-token: new$"
+same() { # NAME CONTENT
+    printf '%s\n' "$2" | cmp -s - "$ORCA_CONF/$1" || fail "/etc/orca/$1 isn't SECRETS_FILE's value"
+    [ "$(mode "$ORCA_CONF/$1")" = -rw------- ] || fail "$1 is $(mode "$ORCA_CONF/$1")"
+}
+same s3.env "$(printf 'AWS_ACCESS_KEY_ID=x4\nAWS_SECRET_ACCESS_KEY=onefile55')"
+same tunnel.env TUNNEL_TOKEN=tunnel66
+same secrets/orca/github-token ghp_gh77
+same secrets/orca/ntfy-topic topic88
+same secrets/orca/ntfy-token tk_ntfy99
+same ghcr-token ghcr11
+grep -qx 'ORCA_NOTIFY_SECRET=orca/ntfy-topic' "$ORCA_CONF/settings.env" || fail "no ORCA_NOTIFY_SECRET from SECRETS_FILE"
+grep -qx 'ORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token' "$ORCA_CONF/settings.env" || fail "no ORCA_NOTIFY_TOKEN_SECRET from SECRETS_FILE"
+stack resume > /dev/null
+# Again: unchanged, still one decrypt.
+: > "$FAKE/sops.calls"
+deploy eee5555 console=hhh8888 || fail "a deploy with SECRETS_FILE in line"
+has "^  unchanged$"
+[ "$(wc -l < "$FAKE/sops.calls")" -eq 1 ] || fail "$(wc -l < "$FAKE/sops.calls") decrypts in a deploy"
+# What's refused, before anything is changed on the server.
+refused() { # WHY MESSAGE
+    before=$(secret_files)
+    deploy eee5555 console=hhh8888 && fail "a deploy with $1"
+    has "$2"
+    grep -q "$values" "$FAKE/out" && fail "a value was printed ($1)"
+    grep -q 'orca-stack' "$FAKE/out" && fail "the server was changed ($1)"
+    [ "$(secret_files)" = "$before" ] || fail "$1 changed the server's files"
+}
+secrets_file '{"s3.env": "AWS_SECRET_ACCESS_KEY=onefile55", "../s3.env": "x", "notes.txt": "x", "/etc/passwd": "x", "ghcr-token": 11}'
+refused "bad keys" '"\.\./s3\.env": a name has no leading / and no \.\.'
+has '"notes.txt" is not one of: s3.env tunnel.env'
+has '"/etc/passwd": a name has no leading / and no \.\.'
+has '"ghcr-token": the value is a number, not a string'
+secrets_file "$all_secrets"
+echo "S3_CREDENTIALS_FILE=$FAKE/s3.env" >> "$FAKE/hetzner.env"
+refused "SECRETS_FILE and S3_CREDENTIALS_FILE" "S3_CREDENTIALS_FILE and SECRETS_FILE both give s3.env: set only one"
+sed -i.bak '/^S3_CREDENTIALS_FILE=/d' "$FAKE/hetzner.env"
+secrets_file '{"s3.env": "a=b", "tunnel.env": ""}'
+echo GHCR_USER=me >> "$FAKE/hetzner.env"
+refused "GHCR_USER and no ghcr-token" "GHCR_USER needs GHCR_TOKEN_FILE or a ghcr-token key in SECRETS_FILE"
+sed -i.bak '/^GHCR_USER=/d' "$FAKE/hetzner.env"
+printf 'garbage\n' > "$FAKE/secrets.sops.yaml"
+refused "a SECRETS_FILE that doesn't decrypt" "sops couldn't decrypt $FAKE/secrets.sops.yaml; nothing was changed on the server"
+# Back on the plain files.
+sed -i.bak '/^SECRETS_FILE=/d' "$FAKE/hetzner.env"
+printf 'S3_CREDENTIALS_FILE=%s\nTUNNEL_TOKEN_FILE=%s\n' "$FAKE/s3.env" "$FAKE/tunnel.env" >> "$FAKE/hetzner.env"
+rm -f "$ORCA_CONF/secrets/orca/ntfy-topic" "$ORCA_CONF/secrets/orca/ntfy-token"
+deploy eee5555 console=hhh8888 || fail "a deploy back on the plain files"
+grep -q ORCA_NOTIFY "$ORCA_CONF/settings.env" && fail "ORCA_NOTIFY_SECRET without SECRETS_FILE"
+stack resume > /dev/null
+
 # A setting only orca.env has: the scheduler and the UI; CGROUPS: the
 # scheduler only; a tag pushed again: what runs it.
 add_setting ORCA_TEST_SETTING=1

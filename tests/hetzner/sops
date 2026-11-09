@@ -1,6 +1,14 @@
 #!/bin/sh
-# A fake sops for tests/hetzner.sh: `sops -d FILE` prints FILE's lines that
-# start with ENC:, without it, and fails on a file with any other line.
+# A fake sops for tests/hetzner.sh: `sops -d FILE` and `sops -d --output-type
+# json FILE` print FILE's lines that start with ENC:, without it (for the
+# latter, FILE's lines are a JSON document's), and fail on a file with any
+# other line. Each call is a line of $FAKE/sops.calls.
+echo "$*" >> "$FAKE/sops.calls"
 [ "$1" = -d ] || exit 2
-grep -qv '^ENC:' "$2" && exit 1
-sed 's/^ENC://' "$2"
+shift
+if [ "$1" = --output-type ]; then
+    [ "$2" = json ] || exit 2
+    shift 2
+fi
+grep -qv '^ENC:' "$1" && exit 1
+sed 's/^ENC://' "$1"
