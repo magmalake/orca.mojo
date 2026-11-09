@@ -38,8 +38,16 @@
 #
 # The UI and the apps are replaced without downtime (orca-stack starts the
 # new one beside the old and waits until it's healthy). One that never is
-# fails the deploy after the rest is applied, the old one still serving; a
-# scheduler it replaced is registered first, and the pipelines stay paused.
+# fails the deploy after the rest is applied, the old one still serving: a
+# scheduler it replaced is registered first, the pipelines it paused are
+# unpaused (the scheduler is deployed: nothing waits on the UI), and it
+# exits non-zero naming what wasn't replaced; orca-stack apply on the
+# server tries those again. The pipelines stay paused only when the
+# scheduler itself, the registration or the backup failed.
+#
+# The quiesce waits only for the runs the scheduler's own processes hold: a
+# run on a remote worker (placement worker:<pool>) goes on through the
+# scheduler's restart, and is listed as left running on the workers.
 #
 # Before it applies anything that replaces a container it backs the
 # database up (orca-stack backup-now, to s3://BUCKET/backups/pg/<time>.dump,
@@ -171,6 +179,31 @@ else
     left="nothing was paused"
 fi
 
+# unhealthy_of OUTPUT: the containers apply's (or rollback's) closing
+# "orca-stack: not replaced: NAME..." line names, the ones whose new
+# container wasn't healthy, the old ones still serving; empty if none.
+unhealthy_of() {
+    echo "$1" | sed -n 's/^orca-stack: not replaced: *\(.*\), whose new container.*/\1/p' | tail -n 1
+}
+
+# finish_failed OUTPUT WHAT: the end of a failed apply or rollback, after the
+# registration. Only a UI or an app not replaced: what this deploy paused
+# runs again (the scheduler is deployed and registered), and it fails
+# naming them. Anything else (the scheduler too): stays as it is.
+finish_failed() {
+    bad=$(unhealthy_of "$1")
+    case " $bad " in
+        "  " | *" scheduler "*) die "$2; $left" ;;
+    esac
+    if [ "$quiesced" = 1 ]; then
+        log "only $bad wasn't replaced and the scheduler is deployed: unpausing the pipelines it paused"
+        remote orca-stack resume \
+            || die "not replaced: $bad; and unpausing failed, so some pipelines stay paused (ssh root@$IP orca-stack resume)"
+    fi
+    remote orca-stack status || true
+    die "not replaced: $bad, whose new container wasn't healthy (above): the old one keeps serving, and the rest of $to is deployed${dump:+ (backup before it: $dump)}$([ "$quiesced" = 0 ] || echo ', the pipelines it paused running again'). Fix it, then ssh root@$IP orca-stack apply, which replaces only those"
+}
+
 if [ "$replaces" = 0 ]; then
     log "nothing to replace: not backing up"
 elif [ "$backup" = 1 ]; then
@@ -189,12 +222,16 @@ fi
 
 if [ "$rollback" = 1 ]; then
     log "rolling back to $to"
-    remote orca-stack rollback ${force:+"$force"} \
-        || die "the rollback failed; $left"
+    # A UI or app that isn't healthy fails it after the registration.
+    failed=0
+    rolled=$(remote orca-stack rollback ${force:+"$force"} 2>&1) || failed=1
+    echo "$rolled"
+    [ "$failed" = 0 ] || finish_failed "$rolled" "the rollback failed"
 else
     log "deploying $tag"
     # A new UI or app that isn't healthy fails the apply after the others
-    # are applied: a scheduler it replaced is registered all the same.
+    # are applied: a scheduler it replaced is registered all the same, and
+    # then finish_failed unpauses.
     failed=0
     # shellcheck disable=SC2086
     ov=
@@ -203,7 +240,7 @@ else
     applied=$(remote orca-stack apply --tag "$tag" $args $all ${force:+"$force"} $ov 2>&1) || failed=1
     echo "$applied"
     if [ "$failed" = 1 ] && ! echo "$applied" | grep -q '^scheduler: replaced'; then
-        die "the deploy failed; $left"
+        finish_failed "$applied" "the deploy failed"
     fi
     # The pipelines are in the scheduler's image: registered again when it
     # was replaced.
@@ -224,7 +261,7 @@ else
         remote orca-stack drain-old --timeout "$timeout" \
             || die "$tag is deployed and registered, but the old scheduler didn't go (ssh root@$IP orca-stack drain-old)"
     fi
-    [ "$failed" = 0 ] || die "the deploy failed; $left"
+    [ "$failed" = 0 ] || finish_failed "$applied" "the deploy failed"
 fi
 if [ "$quiesced" = 1 ]; then
     log "unpausing the pipelines it paused"

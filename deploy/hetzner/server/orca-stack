@@ -21,7 +21,9 @@
 #                                              beside the old one (OVERLAP=1, docs/overlap.md)
 #   drain-old [--timeout SECONDS]              ask scheduler-old to drain, wait for it to exit,
 #                                              remove it (stopped after the timeout)
-#   quiesce [--timeout SECONDS]                pause every pipeline, wait for runs to end
+#   quiesce [--timeout SECONDS] [--workers]    pause every pipeline, wait for the scheduler's
+#                                              runs to end (those on remote workers too
+#                                              with --workers: rescale.sh's)
 #   resume                                     unpause what quiesce paused
 #   backup                                     pg_dump to s3://BUCKET/backups/pg/<time>.dump
 #                                              (a failure is pushed: orca notify --kind backup-failed)
@@ -37,7 +39,8 @@
 # others keep running. Each container is labelled with a hash of that
 # (orca.stack.spec); apply prints "NAME: unchanged" or "NAME: replaced
 # (why)" for each. It refuses while runs are running only when the
-# scheduler is to be replaced (its restart kills them), unless --force.
+# scheduler is to be replaced (its restart kills them), unless --force;
+# runs on remote workers don't count (running_runs).
 # --all starts every container again (Postgres excepted); --only NAME only
 # that one. Postgres is created once and never restarted by apply.
 #
@@ -117,8 +120,30 @@ psql_q() {
     docker exec postgres psql -U orca -d orca -Atc "$1"
 }
 
+# The running runs a restart of the scheduler kills: those its own
+# processes hold (placement local or control, null on a run from before
+# placements, ec2 for the instances it drives). A run placed on a remote
+# worker (worker:<pool>) is the worker's process, which talks to the UI's
+# API, not to the scheduler: it runs on through a restart, so quiesce and
+# apply don't wait on it. (runs.worker isn't the test: a start here doesn't
+# clear the worker an earlier start was claimed by.)
+HERE_RUNS="status = 'running' AND coalesce(placement, '') NOT LIKE 'worker:%'"
+WORKER_RUNS="r.status = 'running' AND r.placement LIKE 'worker:%'"
+
 running_runs() {
-    psql_q "SELECT count(*) FROM orca.runs WHERE status = 'running'" 2> /dev/null || echo 0
+    psql_q "SELECT count(*) FROM orca.runs WHERE $HERE_RUNS" 2> /dev/null || echo 0
+}
+
+worker_runs() {
+    psql_q "SELECT count(*) FROM orca.runs r WHERE $WORKER_RUNS" 2> /dev/null || echo 0
+}
+
+# The runs on remote workers, a line each, under a heading; nothing if none.
+list_worker_runs() {
+    n=$(worker_runs)
+    [ "$n" -gt 0 ] || return 0
+    echo "orca-stack: $n run(s) left running on workers (a scheduler restart doesn't stop them):"
+    psql_q "SELECT '  run ' || r.id || ' ' || r.pipeline || ' ' || r.partitions || ' on ' || coalesce(w.label, 'worker ' || r.worker::text, r.placement) || ', running ' || date_trunc('second', now() - r.started) FROM orca.runs r LEFT JOIN orca.workers w ON w.id = r.worker WHERE $WORKER_RUNS ORDER BY r.id" 2> /dev/null || true
 }
 
 # The AWS CLI as a container, for Object Storage; the checksum settings are
@@ -658,7 +683,7 @@ cmd_apply() {
         if grep -q '^scheduler replace ' "$PLAN" && [ "$force" = 0 ] && [ "$overlap" = 0 ] && [ "$(running_runs)" -gt 0 ]; then
             why=$(plan_why scheduler)
             rm -f "$PLAN" "$APPS"
-            die "$(running_runs) run(s) running; restarting the scheduler ($why) kills them (pause the pipelines and wait, or --force)"
+            die "$(running_runs) run(s) running; restarting the scheduler ($why) kills them (pause the pipelines and wait, or --force; runs on remote workers don't count)"
         fi
     fi
     [ -z "$newtag" ] || conf_set ORCA_TAG "$newtag"
@@ -817,7 +842,7 @@ cmd_drain_old() {
 
 cmd_status() {
     docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
-    echo "running runs: $(running_runs)"
+    echo "running runs: $(running_runs) here, $(worker_runs) on remote workers"
     if [ "$(conf_get OVERLAP)" = 1 ]; then
         echo "scheduler instances:"
         docker exec scheduler orca scheduler status 2> /dev/null | sed 's/^/  /' || true
@@ -829,9 +854,19 @@ cmd_status() {
 
 cmd_quiesce() {
     timeout=3600
-    if [ "${1:-}" = --timeout ]; then
-        timeout=$2
-    fi
+    workers=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --timeout)
+                [ $# -ge 2 ] || die "--timeout needs a value"
+                timeout=$2
+                shift
+                ;;
+            --workers) workers=1 ;;
+            *) die "usage: orca-stack quiesce [--timeout SECONDS] [--workers]" ;;
+        esac
+        shift
+    done
     touch "$STATE/paused-by-quiesce"
     for p in $(psql_q "SELECT name FROM orca.pipelines WHERE NOT paused ORDER BY name"); do
         docker exec scheduler orca pause "$p" > /dev/null
@@ -840,16 +875,29 @@ cmd_quiesce() {
     done
     sort -u "$STATE/paused-by-quiesce" > "$STATE/paused-by-quiesce.new"
     mv "$STATE/paused-by-quiesce.new" "$STATE/paused-by-quiesce"
+    # The runs waited for: the scheduler's own, and with --workers (the
+    # whole server goes down, the UI the workers talk to with it) those on
+    # remote workers too.
+    waiting() {
+        if [ "$workers" = 1 ]; then echo $(($(running_runs) + $(worker_runs))); else running_runs; fi
+    }
     t=0
-    while [ "$(running_runs)" -gt 0 ]; do
-        [ "$t" -lt "$timeout" ] || die "$(running_runs) run(s) still running after ${timeout}s; the pipelines stay paused (orca-stack resume undoes it)"
+    while [ "$(waiting)" -gt 0 ]; do
         if [ $((t % 60)) -eq 0 ]; then
             echo "orca-stack: waiting for $(running_runs) running run(s):"
-            psql_q "SELECT '  run ' || id || ' ' || pipeline || ' ' || partitions || ', running ' || date_trunc('second', now() - started) FROM orca.runs WHERE status = 'running' ORDER BY id" 2> /dev/null || true
+            psql_q "SELECT '  run ' || id || ' ' || pipeline || ' ' || partitions || ', running ' || date_trunc('second', now() - started) FROM orca.runs WHERE $HERE_RUNS ORDER BY id" 2> /dev/null || true
+            if [ "$workers" = 1 ] && [ "$(worker_runs)" -gt 0 ]; then
+                echo "orca-stack: and for $(worker_runs) on remote workers (--workers):"
+                list_worker_runs | sed 1d
+            else
+                list_worker_runs
+            fi
         fi
+        [ "$t" -lt "$timeout" ] || die "$(waiting) run(s) still running after ${timeout}s; the pipelines stay paused (orca-stack resume undoes it)"
         sleep 10
         t=$((t + 10))
     done
+    [ "$t" -gt 0 ] || list_worker_runs
     echo "orca-stack: quiet; paused: $(tr '\n' ' ' < "$STATE/paused-by-quiesce")"
 }
 

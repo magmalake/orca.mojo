@@ -6,9 +6,10 @@
 # type's size and the server can come back. The Volume and Postgres are not
 # touched. In order:
 #
-#   1. pause every pipeline and wait for the running runs to end
-#      (orca-stack quiesce; --timeout, default 3600 s; on a timeout the
-#      pipelines stay paused and nothing else was done);
+#   1. pause every pipeline and wait for the running runs to end, those
+#      on remote workers too, since the UI they talk to goes down with the
+#      server (orca-stack quiesce --workers; --timeout, default 3600 s; on
+#      a timeout the pipelines stay paused and nothing else was done);
 #   2. a last backup;
 #   3. shut the server down, wait until it is off (power it off after 2 minutes);
 #   4. change-type --keep-disk;
@@ -58,7 +59,7 @@ if [ "$DRY_RUN" = 0 ]; then
 fi
 confirm "This pauses the pipelines, stops the server for a few minutes and changes its type to $target."
 
-remote orca-stack quiesce --timeout "$timeout"
+remote orca-stack quiesce --workers --timeout "$timeout"
 remote orca-stack backup
 hc server shutdown "$SERVER"
 if [ "$DRY_RUN" = 0 ]; then

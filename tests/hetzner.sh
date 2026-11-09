@@ -34,7 +34,12 @@
 #   stopped, removed and the new one renamed; a new one that isn't healthy (or exits) is removed and the
 #   old one kept, apply goes on with the others and exits non-zero, and an
 #   apply again replaces only it; deploy.sh still registers a scheduler it
-#   replaced when the UI's replacement fails;
+#   replaced when the UI's replacement fails, then unpauses what it paused
+#   and fails naming the UI (a rollback too); a scheduler that fails to
+#   start leaves the pipelines paused;
+# - quiesce, apply's refusal and status count only the runs the scheduler
+#   holds: runs on remote workers aren't waited for, and are listed as left
+#   running on the workers (quiesce --workers, rescale.sh's, waits for them);
 # - with OVERLAP=1 and can-overlap saying yes, a deploy that replaces the
 #   scheduler pauses nothing: the new scheduler starts beside the old one,
 #   the old one is set not to restart and renamed scheduler-old, the new one
@@ -344,23 +349,90 @@ grep -q '^probe ui-next 8271 /$' "$FAKE/docker.log" || fail "the worker listener
 has "ui: replaced (settings: its env file changed), without downtime"
 
 # deploy.sh: a UI that isn't healthy after the scheduler was replaced: the
-# pipelines are registered from the new image, stay paused, and it says so.
+# pipelines are registered from the new image, then unpaused (the
+# scheduler is deployed), the status shown, and it fails naming the UI and
+# how to retry.
 echo 503 > "$FAKE/health/ui"
 stack configure HEALTH_TIMEOUT=0
 : > "$FAKE/docker.log"
 deploy ooo5555 && fail "a deploy whose UI wasn't healthy"
 rm "$FAKE/health/ui"
 stack configure HEALTH_TIMEOUT=300
-has "not replaced: ui"
 has "registering the pipelines from ooo5555"
 grep -q 'exec scheduler orca register' "$FAKE/docker.log" || fail "a replaced scheduler wasn't registered"
-has "the deploy failed; the pipelines stay paused"
-grep -qx toy "$FAKE/paused" || fail "toy unpaused after a failed UI"
+has "unpausing the pipelines it paused"
+grep -qx toy "$FAKE/paused" && fail "toy left paused after only the UI failed"
+grep -qx manual1 "$FAKE/paused" || fail "unpaused manual1, paused by hand"
+order=$(grep -o 'exec scheduler orca register\|orca unpause toy' "$FAKE/docker.log" | tr '\n' ,)
+[ "$order" = "exec scheduler orca register,orca unpause toy," ] || fail "not register, then unpause: $order"
+has "running runs: "
+has "not replaced: ui, whose new container wasn't healthy (above): the old one keeps serving"
+has "ssh root@192.0.2.1 orca-stack apply"
+grep -q 'stay paused' "$FAKE/out" && fail "said the pipelines stay paused"
 [ "$(cat "$FAKE/containers/ui/image")" = img:kkk1111 ] || fail "the old UI wasn't kept: $(cat "$FAKE/containers/ui/image")"
+[ "$(cat "$FAKE/containers/scheduler/image")" = img:ooo5555 ] || fail "the scheduler wasn't replaced"
 stack apply > "$FAKE/out" 2>&1 || fail "the UI's retry"
 has "ui: replaced (image kkk1111 -> ooo5555), without downtime"
 has "scheduler: unchanged"
+[ ! -f "$ORCA_STATE/paused-by-quiesce" ] || fail "quiesce's list is left"
+
+# The same through a rollback: registered, unpaused, failing on the UI.
+echo 503 > "$FAKE/health/ui"
+stack configure HEALTH_TIMEOUT=0
+deploy --rollback && fail "a rollback whose UI wasn't healthy"
+rm "$FAKE/health/ui"
+stack configure HEALTH_TIMEOUT=300
+has "orca-stack: registered toy"
+has "not replaced: ui, whose new container wasn't healthy"
+grep -qx toy "$FAKE/paused" && fail "toy left paused after only the UI failed a rollback"
+stack apply > /dev/null 2>&1 || fail "the UI's retry after the rollback"
+deploy ooo5555 console=mmm3333 > /dev/null 2>&1 || fail "back to ooo5555"
+
+# A scheduler that fails to start stops the deploy with the pipelines
+# paused, as a failed registration does; the UI isn't let off either.
+mkdir -p "$FAKE/run-fails"
+touch "$FAKE/run-fails/scheduler"
+: > "$FAKE/docker.log"
+deploy ooo6666 && fail "a deploy whose scheduler didn't start"
+rm "$FAKE/run-fails/scheduler"
+has "the deploy failed; the pipelines stay paused"
+grep -q 'orca register' "$FAKE/docker.log" && fail "registered a scheduler that didn't start"
+grep -q 'unpause' "$FAKE/docker.log" && fail "unpaused after the scheduler failed"
+grep -qx toy "$FAKE/paused" || fail "toy unpaused after the scheduler failed"
+stack apply > /dev/null 2>&1 || fail "the scheduler's retry"
 stack resume > /dev/null
+
+# The quiesce waits only for the scheduler's own runs: runs on remote
+# workers go on through its restart, and are listed as left running there.
+# (--timeout 0: a wait for them would fail the deploy.)
+echo 2 > "$FAKE/worker-running"
+: > "$FAKE/docker.log"
+deploy --timeout 0 ooo7777 || fail "a deploy with runs only on workers"
+has "pausing the pipelines"
+has "2 run(s) left running on workers"
+has "  run 91 mojo_history 2026-11-07 on bgent"
+has "orca-stack: quiet; paused: toy"
+grep -q 'unpause toy' "$FAKE/docker.log" || fail "not unpaused after a deploy over worker runs"
+has "running runs: 0 here, 2 on remote workers"
+# Runs of its own are waited for, and the worker runs listed beside them.
+echo 1 > "$FAKE/running"
+deploy --timeout 0 ooo8888 && fail "a deploy over a run of the scheduler's own"
+has "waiting for 1 running run(s)"
+has "2 run(s) left running on workers"
+has "1 run(s) still running after 0s"
+echo 0 > "$FAKE/running"
+stack resume > /dev/null
+# apply's refusal doesn't count them either.
+stack apply --tag ooo8888 > "$FAKE/out" 2>&1 || fail "apply refused over runs on workers"
+has "scheduler: replaced (image ooo7777 -> ooo8888)"
+# rescale.sh's quiesce --workers (the UI goes down too) waits for them.
+stack quiesce --workers --timeout 0 > "$FAKE/out" 2>&1 && fail "quiesce --workers over runs on workers"
+has "and for 2 on remote workers (--workers)"
+has "  run 92 mojo_history"
+has "2 run(s) still running after 0s"
+grep -q -- 'orca-stack quiesce --workers' deploy/hetzner/rescale.sh || fail "rescale.sh doesn't wait for the workers' runs"
+stack resume > /dev/null
+rm "$FAKE/worker-running"
 
 # Overlapping schedulers (OVERLAP=1, docs/overlap.md). Off: orca.env has
 # no ORCA_OVERLAP and can-overlap says no without asking the image.

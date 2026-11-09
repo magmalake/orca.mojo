@@ -253,17 +253,32 @@ Checked against real Docker (colima): with a loop of requests to `ui` and
 an apply that replaced both (the console warming up for 8 s) and one whose
 new containers never became healthy saw no failed request.
 
-**The scheduler.** Restarting it kills running runs, so `apply` refuses,
-while runs are running, only when the scheduler is to be replaced (`--force`
-kills them). `deploy.sh` asks for the plan first, and does the safe
+Runs on remote workers ([docs/workers.md](workers.md)) talk only to the
+UI's API, through the tunnel, so the UI's swap is what they see of a
+deploy: its polls and its runs' store calls and heartbeats go on to the
+old UI, then to the new one. A request cut as the old one stops (after
+its 10 s for requests in flight) is retried: the worker polls again, and a
+run's store calls retry for `ORCA_DB_RETRY_SECONDS`. What would hurt is
+the UI unreachable for longer than half the stale limit (15 s by
+default): the scheduler then takes the worker for lost and queues its
+runs again. A UI that's down for minutes does that, which is why
+`rescale.sh` waits for the workers' runs too (below).
+
+**The scheduler.** Restarting it kills the runs its processes hold, so
+`apply` refuses, while any of those is running, only when the scheduler is
+to be replaced (`--force` kills them). Runs on remote workers (placement
+`worker:<pool>`) don't count: they're the worker's processes, which talk to
+the UI and run on through the scheduler's restart. `deploy.sh` asks for the plan first, and does the safe
 sequence itself, logging each step:
 
 1. copies this checkout's `orca-stack` to the server, and prints `orca-stack
    plan`'s lines;
 2. if the plan replaces the scheduler, `orca-stack quiesce`: pauses every
-   pipeline that isn't paused, then waits for the running runs to end,
-   listing them each minute (`--timeout SECONDS`, default 3600). If it
-   doesn't, nothing is paused and running runs go on;
+   pipeline that isn't paused, then waits for the scheduler's running runs
+   to end, listing them each minute (`--timeout SECONDS`, default 3600). It
+   doesn't wait for runs on remote workers: it lists those as `left running
+   on workers`, so you know they go on. If the plan doesn't replace the
+   scheduler, nothing is paused and running runs go on;
 3. if the plan replaces anything, `orca-stack backup-now`: a `pg_dump` to
    the bucket, as the nightly one (below), and says where: `previous tag
    ac0c766, new tag b2b9558; backup
@@ -289,16 +304,19 @@ console=<sha>`) backs up and replaces the console, and nothing is paused,
 killed or registered. A deploy of what already runs does nothing: no
 backup, and every container is kept.
 
-If a new UI or app isn't healthy, the apply fails after the rest is
-applied: a scheduler it replaced is registered all the same, the pipelines
-stay paused, and `orca-stack apply` then `orca-stack resume` finish it once
-the cause is fixed. On a timeout, a failed apply or a failed registration
-it stops, with the pipelines still paused if it paused them, and says so (after a failed
-registration: fix it, then `orca-stack register` and `orca-stack resume`,
-or `./deploy.sh --rollback`); `ssh root@<ip> orca-stack resume` undoes the
-pause. `--force` skips the pause and the wait and kills the running runs if
-the scheduler is replaced. `orca-stack status` shows the running runs and
-what quiesce paused.
+If only a new UI or app isn't healthy, the apply fails after the rest is
+applied, and the deploy finishes all the same: a scheduler it replaced is
+registered, the pipelines it paused are unpaused, and it prints `orca-stack
+status`, then exits non-zero naming the containers that weren't replaced
+(the old ones keep serving). Once the cause is fixed, `ssh root@<ip>
+orca-stack apply` replaces only those. A rollback does the same. On a
+timeout, a scheduler that didn't start, a failed registration or a failed
+apply otherwise, it stops with the pipelines still paused if it paused
+them, and says so (after a failed registration: fix it, then `orca-stack
+register` and `orca-stack resume`, or `./deploy.sh --rollback`); `ssh
+root@<ip> orca-stack resume` undoes the pause. `--force` skips the pause and the wait and kills the running runs if
+the scheduler is replaced. `orca-stack status` shows the running runs (the
+scheduler's and those on remote workers) and what quiesce paused.
 
 **Overlapping schedulers** (off by default; [docs/overlap.md](overlap.md)).
 With `orca-stack configure OVERLAP=1` the containers get `ORCA_OVERLAP=on`,
@@ -378,8 +396,8 @@ replaced the scheduler.
 
 **Running runs.** As on a deploy: when the scheduler is replaced, without
 `--force` it pauses the pipelines and waits up to `--timeout` for the
-running runs to end, and `orca-stack rollback` itself refuses while any run
-is running. With `--force` the
+scheduler's running runs to end, and `orca-stack rollback` itself refuses
+while any of those is running (runs on remote workers go on). With `--force` the
 scheduler's restart kills them. The registration then does what it does
 after any new build: queued runs, and failed ones waiting for a retry with
 no step done, move to the rolled-back code and start once the pipelines are
@@ -448,8 +466,9 @@ digest: sha256:...`), and the package's page on GitHub lists them.
 ./rescale.sh down                      # CAX41 -> CAX21
 ```
 
-Each does: pause every pipeline and wait for the running runs to end
-(`--timeout SECONDS`, default 3600; on a timeout it stops and leaves them
+Each does: pause every pipeline and wait for the running runs to end,
+those on remote workers too, since the UI they talk to goes down with the
+server (`orca-stack quiesce --workers`; `--timeout SECONDS`, default 3600; on a timeout it stops and leaves them
 paused: `ssh root@<ip> orca-stack resume` undoes it), a backup, shut the
 server down, `hcloud server change-type --keep-disk`, power on, wait for the
 scheduler, and unpause what it paused (not pipelines the watchdog paused). It
