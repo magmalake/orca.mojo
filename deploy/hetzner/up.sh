@@ -6,8 +6,9 @@
 # exists is left alone:
 #
 #   ssh key, firewall (ssh from ADMIN_IP only), Volume (delete-protected),
-#   server (cloud-init: Docker and the Volume mount), then over ssh: the
-#   settings and secrets, orca-stack, the backup timer, and `orca-stack
+#   server (cloud-init: Docker and the Volume mount), then over ssh:
+#   orca-stack, the settings and secrets (lib.sh's sync_settings, which
+#   deploy.sh runs too), the backup timer, and `orca-stack
 #   apply` (postgres, scheduler, ui, apps, sampler, cloudflared).
 #
 # --restore restores Postgres from Object Storage before the scheduler
@@ -37,13 +38,9 @@ while [ $# -gt 0 ]; do
 done
 
 load_env
-need NAME LOCATION BUCKET S3_ENDPOINT S3_REGION ADMIN_IP
-need_file SSH_PUBLIC_KEY_FILE S3_CREDENTIALS_FILE TUNNEL_TOKEN_FILE
-[ -z "${GITHUB_TOKEN_FILE:-}" ] || need_file GITHUB_TOKEN_FILE
-[ -z "${EXTRA_ENV_FILE:-}" ] || need_file EXTRA_ENV_FILE
-[ -z "${NTFY_TOPIC_FILE:-}" ] || need_file NTFY_TOPIC_FILE
-[ -z "${NTFY_TOKEN_FILE:-}" ] || need_file NTFY_TOKEN_FILE
-[ -z "${GHCR_USER:-}" ] || need_file GHCR_TOKEN_FILE
+need NAME LOCATION ADMIN_IP
+need_file SSH_PUBLIC_KEY_FILE
+need_settings
 need_tool hcloud ssh jq
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner.XXXXXX")
@@ -109,52 +106,17 @@ wait_for_ssh
 remote cloud-init status --wait
 remote mountpoint -q /mnt/orca-data
 
-# --- settings and secrets (stdin only) --------------------------------------
-{
-    echo "AWS_REGION=$S3_REGION"
-    echo "AWS_ENDPOINT_URL_S3=$S3_ENDPOINT"
-    echo "ORCA_WAREHOUSE=s3://$BUCKET/warehouse"
-    echo "ORCA_PUBLIC_WAREHOUSE=s3://$BUCKET/warehouse"
-    echo "ORCA_LOGS=s3://$BUCKET/logs"
-    echo "ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE"
-    # Alerts (ntfy): the topic and token are secret files, only their ids are here.
-    if [ -n "${NTFY_TOPIC_FILE:-}" ]; then
-        echo "ORCA_NOTIFY_SECRET=orca/ntfy-topic"
-        [ -z "${NTFY_URL:-}" ] || echo "ORCA_NOTIFY_URL=$NTFY_URL"
-        [ -z "${NTFY_TOKEN_FILE:-}" ] || echo "ORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token"
-        [ -z "${UI_URL:-}" ] || echo "ORCA_UI_URL=$UI_URL"
-    fi
-    [ -z "${FIXED_COST:-}" ] || echo "ORCA_FIXED_COST=$FIXED_COST"
-    [ -z "${POSTHOG_KEY:-}" ] || echo "ORCA_POSTHOG_KEY=$POSTHOG_KEY"
-    if [ -n "${EXTRA_ENV_FILE:-}" ] && [ -r "$EXTRA_ENV_FILE" ]; then cat "$EXTRA_ENV_FILE"; fi
-} > "$tmp/settings.env"
-put 600 /etc/orca/settings.env "$tmp/settings.env"
-put 600 /etc/orca/s3.env "$S3_CREDENTIALS_FILE"
-put 600 /etc/orca/tunnel.env "$TUNNEL_TOKEN_FILE"
-if [ -n "${GITHUB_TOKEN_FILE:-}" ]; then
-    put 600 /etc/orca/secrets/orca/github-token "$GITHUB_TOKEN_FILE"
-fi
-if [ -n "${NTFY_TOPIC_FILE:-}" ]; then
-    put 600 /etc/orca/secrets/orca/ntfy-topic "$NTFY_TOPIC_FILE"
-fi
-if [ -n "${NTFY_TOKEN_FILE:-}" ]; then
-    put 600 /etc/orca/secrets/orca/ntfy-token "$NTFY_TOKEN_FILE"
-fi
-if [ -n "${GHCR_USER:-}" ]; then
-    put 600 /etc/orca/ghcr-token "$GHCR_TOKEN_FILE"
-fi
-put 755 /etc/orca/secret-fetch "$HERE/server/secret-fetch"
+# --- settings and secrets (stdin only), stack settings, apps -----------------
+# orca-stack first: it writes them (sync_settings in lib.sh, which
+# deploy.sh runs too, so a setting changed in hetzner.env later applies on
+# the next deploy).
 put 755 /usr/local/sbin/orca-stack "$HERE/server/orca-stack"
+put 755 /etc/orca/secret-fetch "$HERE/server/secret-fetch"
 put 644 /etc/systemd/system/orca-backup.service "$HERE/server/orca-backup.service"
 put 644 /etc/systemd/system/orca-backup.timer "$HERE/server/orca-backup.timer"
-
-# --- stack settings; the tag is only set by the first up (deploy.sh moves it) --
-remote orca-stack configure ORCA_IMAGE="$ORCA_IMAGE" CLOUDFLARED_IMAGE="$CLOUDFLARED_IMAGE" \
-    BUCKET="$BUCKET" BACKUP_KEEP="$BACKUP_KEEP" ${GHCR_USER:+GHCR_USER="$GHCR_USER"}
+sync_settings "$tmp" || die "setting the server's settings from $HETZNER_ENV failed"
+# The tag is only set by the first up (deploy.sh moves it).
 remote orca-stack configure --keep-existing ORCA_TAG="${ORCA_TAG:-latest}"
-for app in $APPS; do
-    remote orca-stack app "${app%%:*}" "${app#*:}"
-done
 remote systemctl daemon-reload
 remote systemctl enable --now orca-backup.timer
 

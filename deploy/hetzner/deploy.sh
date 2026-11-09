@@ -9,6 +9,16 @@
 # <app>=<tag> argument gives one app another. Postgres is not restarted.
 # --all starts every container again, changed or not.
 #
+# First it brings the server's settings in line with hetzner.env, as up.sh
+# writes them (sync_settings in lib.sh): settings.env, the secret files,
+# the stack settings and the apps; not the tags, which are this script's.
+# It prints what changed, settings.env's keys by name (added, removed,
+# changed), never a value; a stack setting old -> new. A container whose
+# env file this changes is then replaced ("replace settings: ..." in the
+# plan), the scheduler's included, which quiesces as below. --rollback
+# does it too: it rolls the tags back, not the settings, which are
+# hetzner.env's (to undo a setting, change it there).
+#
 # It first asks the server what the apply would replace (orca-stack plan,
 # one line per container) and goes on from that:
 #
@@ -96,8 +106,11 @@ else
 fi
 
 load_env
+need_settings
 need_tool hcloud ssh
 IP=$(server_ip)
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
 log() { echo "deploy.sh $(date -u +%H:%M:%S): $*"; }
 
 # remote_out PLACEHOLDER ARGS...: the remote command's output, or in a dry run
@@ -115,6 +128,13 @@ remote_out() {
 
 # The server's orca-stack from this checkout, so quiesce and resume match it.
 put 755 /usr/local/sbin/orca-stack "$HERE/server/orca-stack"
+
+# The server's settings as hetzner.env says, before the plan (which then
+# replaces what they change).
+log "the server's settings from $HETZNER_ENV (names only, never values):"
+if sync_settings "$tmp" > "$tmp/synced" 2>&1; then synced=1; else synced=0; fi
+if [ -s "$tmp/synced" ]; then sed 's/^/  /' "$tmp/synced"; else echo "  unchanged"; fi
+[ "$synced" = 1 ] || die "setting the server's settings failed (above); nothing was deployed"
 was=$(remote_out "<deployed>" orca-stack tags)
 was=${was:-unknown}
 if [ "$rollback" = 1 ]; then
