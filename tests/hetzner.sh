@@ -23,6 +23,12 @@
 #   flags, CGROUPS) changed, and says why; it refuses over running runs
 #   only when the scheduler would be replaced; --only and --all; plan
 #   changes nothing; Postgres is started once and never again;
+# - deploy.sh (and --rollback) first brings the server's settings in line
+#   with hetzner.env: a key added there reaches settings.env, one emptied is
+#   removed, a secret file is rewritten (mode 600), a stack setting set,
+#   each named and never its value; the plan then replaces the containers
+#   whose env file changed and quiesces for the scheduler; the tags stay;
+#   a dry run writes nothing;
 # - deploy.sh pauses, waits and registers only when the plan replaces the
 #   scheduler: a console-only deploy backs up and replaces the console and
 #   nothing else, a deploy of what runs does nothing; an app-only rollback
@@ -35,12 +41,6 @@
 #   old one kept, apply goes on with the others and exits non-zero, and an
 #   apply again replaces only it; deploy.sh still registers a scheduler it
 #   replaced when the UI's replacement fails;
-# - deploy.sh (and --rollback) first brings the server's settings in line
-#   with hetzner.env: a key added there reaches settings.env, one emptied is
-#   removed, a secret file is rewritten (mode 600), a stack setting set,
-#   each named and never its value; the plan then replaces the containers
-#   whose env file changed and quiesces for the scheduler; the tags stay;
-#   a dry run writes nothing;
 # - with OVERLAP=1 and can-overlap saying yes, a deploy that replaces the
 #   scheduler pauses nothing: the new scheduler starts beside the old one,
 #   the old one is set not to restart and renamed scheduler-old, the new one
