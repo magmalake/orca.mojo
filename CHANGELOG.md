@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.0 - 2026-11-09
+
+- **Hetzner: every secret in one SOPS file.** `SECRETS_FILE` in `hetzner.env`
+  is decrypted once per deploy, so an age-plugin-se key asks for Touch ID once
+  (#265).
+
+- **A request learned from the measured peaks, shown**: the pipeline's Resources card, `orca config show` and their JSON (`learned`) show the memory and CPUs its last 20 successful runs suggest (p95 of peak memory plus 15%, p90 of peak cores, at least the out-of-memory bump, within the declared range), applied nowhere yet (#PR).
+
 ## 0.19.0 - 2026-11-09
 
 - **Hetzner: images come from the census's `dev` branch.** The first `up.sh`
