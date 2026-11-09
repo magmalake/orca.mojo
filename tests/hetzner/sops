@@ -1,0 +1,6 @@
+#!/bin/sh
+# A fake sops for tests/hetzner.sh: `sops -d FILE` prints FILE's lines that
+# start with ENC:, without it, and fails on a file with any other line.
+[ "$1" = -d ] || exit 2
+grep -qv '^ENC:' "$2" && exit 1
+sed 's/^ENC://' "$2"
