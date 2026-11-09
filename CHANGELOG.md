@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.19.0 - 2026-11-09
+
+- **Hetzner: images come from the census's `dev` branch.** The first `up.sh`
+  now starts on `ORCA_TAG=dev`, since the census no longer builds `latest`
+  (mojo-census#90) (#259).
+
+- **The Hetzner deploy tooling is a release asset.** Each GitHub release
+  attaches `orca-hetzner-<version>.tar.gz`, so deploying needs no checkout of
+  orca.mojo (#260, #247).
+
+- **Hetzner: secret files encrypted with SOPS.** A `*_FILE` in `hetzner.env`
+  named `*.sops` is decrypted on its way to the server, never to a file on
+  the laptop (docs/hetzner.md#secrets-on-your-laptop-sops) (#261).
+
 ## 0.18.0 - 2026-11-09
 
 - **Overlapping schedulers.** With `ORCA_OVERLAP=on` (off by default) a new
