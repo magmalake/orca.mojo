@@ -505,10 +505,11 @@ and the runs that made them are gone from orca's history, so a rebuild or
 backfill of those keys runs them again.
 
 **Finding a sha.** Images are tagged by the project's short commit sha on
-GHCR (and `latest`), never by version: `orca-stack tags --previous` has the
-one before, the project's `git log --oneline` the others (an image exists
-for each commit main's image job pushed; its log ends with `<short-sha>:
-digest: sha256:...`), and the package's page on GitHub lists them.
+GHCR, never by version: `orca-stack tags --previous` has the one before,
+the project's `git log --oneline` the others (an image exists for each
+commit its image job pushed, from the census's `dev` branch; the log ends
+with `<short-sha>: digest: sha256:...`), and the package's page on GitHub
+lists them.
 
 ## Rescaling for an import
 
@@ -685,12 +686,14 @@ The scripts pull `ghcr.io/magmalake/orca:<tag>` (`ORCA_IMAGE` in
 `hetzner.env`). The orca repository's CI doesn't push images anywhere (ECR
 is only pushed by `orca aws push`, from a project's own build), so there is
 nothing to add behind a CI build here. A project publishes to GHCR from its
-own CI, tagged `<short-sha>` of the commit and `latest`; there are no orca
-version tags (`ORCA_TAG=0.10.0` does not exist). To find a sha, read main's
-image job in the project's Actions: its log ends with
-`<short-sha>: digest: sha256:...` for the push. `ORCA_TAG` in `hetzner.env`
-is the tag the first `up.sh` starts (`latest` will do; `deploy.sh <short-sha>`
-moves it afterwards).
+own CI, tagged `<short-sha>` of the commit; there are no orca version tags
+(`ORCA_TAG=0.10.0` does not exist). The census builds and pushes only from
+its `dev` branch (also tagged `dev`; main builds no image, and `latest` is
+no longer moved), so a release reaches `dev` first, then the dev stack, then
+production. To find a sha, read the `dev` branch's image job in the
+project's Actions: its log ends with `<short-sha>: digest: sha256:...` for
+the push. `ORCA_TAG` in `hetzner.env` is the tag the first `up.sh` starts
+(`dev` will do; `deploy.sh <short-sha>` moves it afterwards).
 
 The tunnel runs `cloudflare/cloudflared` at a release tag
 (`CLOUDFLARED_IMAGE`, `2026.10.7` unless `hetzner.env` says otherwise), not
@@ -830,8 +833,8 @@ Universal SSL certificate covers `mojourney.dev` and `*.mojourney.dev` only:
 `orca.dev.mojourney.dev` would need an Advanced Certificate.
 
 **Images.** The census's CI pushes `ghcr.io/magmalake/orca:<short sha>` from
-main (and `latest`) and from its `dev` branch (and `dev`, never `latest`). To
-try an orca.mojo main commit, pin it on the census's `dev` branch
+its `dev` branch (and `dev`); main builds none, so both stacks deploy dev's
+images. To try an orca.mojo main commit, pin it on the census's `dev` branch
 (`orca-mojo = { git = ..., rev = "<sha>" }` in `pixi.toml`, then `pixi lock`),
 push, and deploy the short sha of that census commit.
 
