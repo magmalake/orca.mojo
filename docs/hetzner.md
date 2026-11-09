@@ -100,6 +100,52 @@ pipeline's `secrets = { GITHUB_TOKEN = "orca/github-token" }` reads
 `/etc/orca/secrets/orca/github-token`, which `up.sh` writes from
 `GITHUB_TOKEN_FILE`. More secrets: put the file there and use its id.
 
+### Secrets on your laptop: SOPS
+
+The secret files `hetzner.env` names (`S3_CREDENTIALS_FILE`,
+`TUNNEL_TOKEN_FILE`, `GITHUB_TOKEN_FILE`, `NTFY_TOPIC_FILE`,
+`NTFY_TOKEN_FILE`, `GHCR_TOKEN_FILE`) can be encrypted with
+[SOPS](https://github.com/getsops/sops) and [age](https://age-encryption.org),
+so the laptop keeps one private key instead of plain tokens. A file named
+`*.sops` or `*.sops.<ext>` (`s3.sops.env`, `github-token.sops`) is sent as
+`sops -d` decrypts it, through a shell variable and ssh's standard input,
+never written to a file on the laptop; the server still gets its plain
+`/etc/orca` files, mode 600. `--dry-run` prints `+ sops -d <file> | ssh ...`.
+
+```sh
+brew install sops age
+age-keygen -o ~/.config/sops/age/keys.txt     # prints the public key, age1...; back the file up offline
+```
+
+A private repository for the encrypted files, one directory per stack and
+a key each, so a laptop with only the dev key can't read production's:
+
+```yaml
+# .sops.yaml
+creation_rules:
+  - path_regex: ^prod/
+    age: age1<production's public key>
+  - path_regex: ^dev/
+    age: age1<dev's public key>
+```
+
+From the repository's top (`.sops.yaml` picks the key by the name given in
+`--filename-override`, not the plain file's path):
+
+```sh
+sops -e --filename-override prod/s3.sops.env ~/.config/orca-hetzner/s3.env > prod/s3.sops.env
+sops -e --input-type binary --filename-override prod/github-token.sops \
+    ~/.config/orca-hetzner/github_token > prod/github-token.sops
+sops edit prod/s3.sops.env                    # to change one later
+```
+
+then in `hetzner.env` `S3_CREDENTIALS_FILE=$HOME/dev/ops-secrets/prod/s3.sops.env`
+and so on, and delete the plain files. SOPS reads the extension: `.env` is
+an env file (the keys stay readable, the values are encrypted), no known
+extension is binary (the whole file). Losing the age key loses the files,
+so keep its backup off the laptop; if it leaks, change the secrets
+themselves, not only the key, since git keeps every old encrypted version.
+
 ## The census: `orca.toml`
 
 The census's `orca.toml` lives in the mojo-census repository, next to the

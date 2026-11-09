@@ -335,6 +335,23 @@ grep -qx 'ORCA_TAG=eee5555' "$ORCA_CONF/stack.conf" || fail "the sync touched OR
 has "  scheduler replace settings: its env file changed"
 has "  console replace settings: its env file changed"
 stack resume > /dev/null
+# A SOPS-encrypted secret file (tests/hetzner/sops: "decrypts" by dropping
+# ENC: from each line): sent decrypted, said to need sops in a dry run.
+printf 'ENC:AWS_ACCESS_KEY_ID=x3\nENC:AWS_SECRET_ACCESS_KEY=sopssecret77\n' > "$FAKE/s3.sops.env"
+sed -i.bak "s|^S3_CREDENTIALS_FILE=.*|S3_CREDENTIALS_FILE=$FAKE/s3.sops.env|" "$FAKE/hetzner.env"
+sh deploy/hetzner/deploy.sh --dry-run eee5555 > "$FAKE/out" 2>&1 || fail "a dry run with a SOPS file"
+has "+ sops -d $FAKE/s3.sops.env | ssh root@<server-ip> orca-stack sync s3.env$"
+deploy eee5555 console=hhh8888 || fail "a deploy with a SOPS file"
+has "  orca-stack: s3.env: changed$"
+grep -q 'sopssecret77' "$FAKE/out" && fail "a SOPS value was printed"
+grep -qx 'AWS_SECRET_ACCESS_KEY=sopssecret77' "$ORCA_CONF/s3.env" || fail "s3.env wasn't decrypted: $(sed 's/=.*//' "$ORCA_CONF/s3.env")"
+printf 'garbage\n' > "$FAKE/s3.sops.env"
+deploy eee5555 console=hhh8888 && fail "a deploy with a SOPS file that doesn't decrypt"
+has "sops couldn't decrypt $FAKE/s3.sops.env"
+grep -qx 'AWS_SECRET_ACCESS_KEY=sopssecret77' "$ORCA_CONF/s3.env" || fail "a failed decrypt changed s3.env"
+sed -i.bak "s|^S3_CREDENTIALS_FILE=.*|S3_CREDENTIALS_FILE=$FAKE/s3.env|" "$FAKE/hetzner.env"
+deploy eee5555 console=hhh8888 || fail "a deploy back on the plain s3.env"
+stack resume > /dev/null
 
 # A setting only orca.env has: the scheduler and the UI; CGROUPS: the
 # scheduler only; a tag pushed again: what runs it.

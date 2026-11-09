@@ -172,6 +172,20 @@ need_settings() {
     [ -z "${NTFY_TOPIC_FILE:-}" ] || need_file NTFY_TOPIC_FILE
     [ -z "${NTFY_TOKEN_FILE:-}" ] || need_file NTFY_TOKEN_FILE
     [ -z "${GHCR_USER:-}" ] || need_file GHCR_TOKEN_FILE
+    for v in S3_CREDENTIALS_FILE TUNNEL_TOKEN_FILE GITHUB_TOKEN_FILE NTFY_TOPIC_FILE NTFY_TOKEN_FILE GHCR_TOKEN_FILE; do
+        eval "val=\${$v:-}"
+        if is_sops "$val"; then
+            need_tool sops
+            break
+        fi
+    done
+}
+
+# is_sops FILE: FILE is encrypted with SOPS (named *.sops or *.sops.<ext>,
+# e.g. s3.sops.env), so sync_file sends what `sops -d` makes of it.
+is_sops() {
+    case "$1" in */*.sops | */*.sops.* | *.sops | *.sops.*) return 0 ;; esac
+    return 1
 }
 
 # write_settings FILE: /etc/orca/settings.env as hetzner.env says. No
@@ -200,15 +214,28 @@ write_settings() {
 
 # sync_file [--keys] NAME SRC: SRC becomes /etc/orca/NAME (mode 600) if it
 # differs, over ssh's standard input (orca-stack sync, which prints what
-# changed: with --keys the keys, never a value).
+# changed: with --keys the keys, never a value). A SOPS file (is_sops) is
+# decrypted into a variable and piped, never written to a file here.
 sync_file() {
     k=
     if [ "$1" = --keys ]; then
         k=--keys
         shift
     fi
-    if [ "$DRY_RUN" = 1 ]; then
+    if [ "$DRY_RUN" = 1 ] && is_sops "$2"; then
+        echo "+ sops -d $2 | ssh root@$IP orca-stack sync ${k:+$k }$1"
+    elif [ "$DRY_RUN" = 1 ]; then
         echo "+ ssh root@$IP orca-stack sync ${k:+$k }$1 < $2"
+    elif is_sops "$2"; then
+        plain=$(sops -d "$2") || {
+            plain=
+            echo "sops couldn't decrypt $2" >&2
+            return 1
+        }
+        printf '%s\n' "$plain" | remote orca-stack sync ${k:+"$k"} "$1"
+        st=$?
+        plain=
+        return "$st"
     else
         remote orca-stack sync ${k:+"$k"} "$1" < "$2"
     fi
