@@ -232,7 +232,9 @@ on the `orca` network (`http://ui:8270`, `http://console:8080`), so
    gives aliases on connecting) and checks it again; Docker's DNS now
    answers `ui` with both containers;
 4. stops the old one with `docker stop -t 10` (ten seconds for the requests
-   in flight), removes it, and renames `ui-next` to `ui`.
+   in flight; the UI's `/healthz` answers 503 `draining` from the
+   moment it gets the signal, docs/ui.md#stopping), removes it, and renames
+   `ui-next` to `ui`.
 
 cloudflared resolves the name for each new connection, so traffic moves
 over without it restarting, and the worker API's listener, in the same

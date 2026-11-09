@@ -574,7 +574,9 @@ tripped on. See [watchdog.md](watchdog.md).
 
 SIGTERM (what `docker stop` sends) or SIGINT (Ctrl-C) drains `orca ui`
 instead of cutting it off: it closes its listening socket, so new
-connections are refused, lets the requests already in flight finish, and
+connections are refused, answers `/healthz` with 503 `draining` from then
+on, so a health checker or proxy asking over a kept-alive connection stops
+routing here, lets the requests already in flight finish, and
 exits 0 once none has been for 200 ms. `ORCA_UI_DRAIN_SECONDS` (default 8,
 under `docker stop`'s 10 s grace) bounds the wait; when it's up the server
 stops and closes its kept-alive connections, and a request still running
