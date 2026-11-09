@@ -1,5 +1,153 @@
 # Changelog
 
+## 0.18.0 - 2026-11-09
+
+- **Deploys that don't stop runs: overlapping schedulers (#232).** With
+  `ORCA_OVERLAP=on` each `orca scheduler` is an instance with a row in the
+  new `orca.schedulers`, and the newest live one leads (a session advisory
+  lock) and alone decides. An older instance that sees a newer one, or is
+  asked to (`orca scheduler drain <id>`), starts nothing more, supervises
+  the runs it started until they end, then exits; after
+  `ORCA_DRAIN_SECONDS` (3600) it kills what's left. Each local and
+  control-placed run records its instance (`runs.instance`), and while
+  that instance lists it the run is live: counted against `max_runs`, the
+  control slots, the grants and memory pressure, and left alone. Once the
+  instance is gone and the run's heartbeat stale, the leader queues it
+  again whatever its trigger, audited. `orca scheduler status` lists the
+  instances, `orca scheduler can-overlap` tells a deploy whether the new
+  binary may start beside the old one (not when its migrations raise the
+  floor past it, which `migrate` then refuses), `orca scheduler wait-lead`
+  waits for the handover, and `orca register` waits for it too.
+  `ORCA_OVERLAP=off` stays the default. Migration 42, additive. Design:
+  docs/overlap.md.
+
+- **`orca-stack apply` starts again only the containers whose image or
+  settings changed.** Each container is labelled with a hash of what it's
+  started with (`orca.stack.spec`: the image's id, its env file, its flags,
+  mounts and `CGROUPS`), and apply keeps the ones that match, printing
+  `ui: replaced (image ac0c766 -> b2b9558)` or `console: unchanged` for
+  each. It refuses over running runs only when the scheduler would be
+  replaced. `orca-stack plan` says what an apply would do without doing it,
+  `apply --all` replaces everything as before, and `apply --only <name>`
+  one container. Postgres is still never restarted. The first apply with
+  this `orca-stack` replaces every container once (they have no label yet).
+- **`deploy.sh` pauses the pipelines only when the scheduler is replaced.**
+  It asks `orca-stack plan` first: a census-only deploy (`./deploy.sh <the
+  orca tag that runs> console=<sha>`) backs up and replaces the console,
+  with nothing paused, killed or registered; a deploy of what already runs
+  does nothing. A new orca tag still pauses, waits, backs up, applies,
+  registers and unpauses. `deploy.sh --all` replaces every container.
+
+- **`orca-stack apply` replaces the UI and the apps without downtime.** The
+  new container starts as `<name>-next` on the `orca` network, gets the
+  alias `<name>` only once it's healthy (the UI: 200 on `/healthz`, and its
+  worker API listener answering if `ORCA_WORKER_ADDR` is set; an app: 200
+  on its check path, `/` by default, which the census console answers
+  only once it has read the lake), is checked again, and only then is the
+  old one stopped (`docker stop -t 10`), removed and the new one renamed.
+  cloudflared resolves the name per connection, so readers and remote
+  workers see no gap. A new container that isn't healthy within
+  `HEALTH_TIMEOUT` (default 300 s; `--health-timeout`) is removed, the old
+  one keeps serving, and the apply exits non-zero saying why after
+  applying the rest; `deploy.sh` still registers a scheduler it replaced.
+  `orca-stack app NAME PORT CHECK` sets an app's check path. The
+  scheduler, sampler and tunnel are replaced as before.
+- **`orca ui` answers `/healthz`**: 200 `ok` once the database answers a
+  query, 503 if it doesn't, with no login needed.
+
+- **Hetzner deploys that don't pause: overlapping schedulers (#232).**
+  With `orca-stack configure OVERLAP=1` (off by default) the containers
+  get `ORCA_OVERLAP=on`, and `deploy.sh` asks `orca-stack can-overlap`,
+  the new image's `orca scheduler can-overlap`, before replacing the
+  scheduler. On yes it pauses nothing: `orca-stack apply --overlap` starts
+  the new scheduler beside the old one, keeps the old one from restarting,
+  renames it `scheduler-old` and waits for the new one to lead; the
+  pipelines are registered from the new one; and `orca-stack drain-old`
+  asks the old one to drain, waits for its runs (up to `--timeout`, then
+  stops it) and removes it. On no (a migration that raises the floor,
+  overlap off, or an old scheduler still draining) the deploy pauses and
+  waits as before. docs/hetzner.md, docs/overlap.md.
+
+- **`orca ui` drains on SIGTERM.** SIGTERM or SIGINT closes the listening
+  socket, lets the requests in flight finish and exits 0 once they have,
+  within `ORCA_UI_DRAIN_SECONDS` (default 8, under `docker stop`'s 10 s), so
+  a deploy that retires the old UI no longer cuts a page off mid-answer or
+  waits out the grace period for a kill (docs/ui.md#stopping).
+
+- **The Hetzner stack's tunnel runs a pinned cloudflared.** `CLOUDFLARED_IMAGE`
+  defaults to `cloudflare/cloudflared:2026.10.7` instead of `latest`, which
+  `orca-stack apply` pulled on every deploy, so an upstream release
+  restarted the tunnel on the next one. It's still overridable in
+  `hetzner.env`; docs/hetzner.md#images says how to bump it.
+
+- **orca-stack: deploying an image from before orca 0.18 swaps its UI in.**
+  The UI's health check wanted 200 on `/healthz`, which older UIs don't
+  have, so their `ui-next` never counted as healthy: the apply failed after
+  `HEALTH_TIMEOUT`, kept the old UI and left the pipelines paused. A 404
+  there now counts as up too; a check's status can be a list (`200,404`).
+
+- **Pipeline pages: no stray vertical scrollbar beside the tabs.** The tab
+  bar scrolls sideways on a narrow screen (`overflow-x: auto`), which made
+  its vertical overflow `auto` as well, and the tabs' underline overlapping
+  the border by 1px then showed a vertical scrollbar. It is now hidden; the
+  keyboard focus ring sits inside the tab so it isn't clipped.
+
+- **`/healthz` answers 503 `draining` once `orca ui` starts draining.**
+  From the moment SIGTERM or SIGINT starts a drain, `/healthz` says
+  `draining` with a 503 without asking the database, so a health checker
+  or proxy that asks over a connection it kept alive stops routing to the
+  UI that's going away (docs/ui.md#stopping).
+
+- **`fill_lag` holds a partition back after it ends.** A pipeline's
+  `fill_lag` in orca.toml (`"2h"`, `"90m"`; default `0`) fills a partition
+  only once its end is at least that far in the past: a Daily day D from
+  D+1 00:00 plus the lag. For sources that publish late, such as GH
+  Archive, whose last hour of a day isn't there at 00:00 UTC, so the fill's
+  attempts failed until it was and tripped the watchdog. Until then the
+  partition is outside the fill's range and the coverage, and the Fill line
+  and `/api/pipelines/<name>` (`waits_for_lag`) say when it fills. Shown and
+  exported by `orca config`; kept in a new nullable column
+  (`orca.pipelines.fill_lag`, an additive migration) (docs/orca-toml.md#the-lag).
+
+- **A dev stack on Hetzner (#250).** docs/hetzner.md's new "A dev stack"
+  section: a second settings file (`NAME=orca-dev`, its own bucket, tunnel
+  and hostnames, a CAX11, `ORCA_CONFIG=/opt/orca/orca.dev.toml` through
+  `EXTRA_ENV_FILE`), the commands, and a release check list to run on it
+  before production. The scripts now say which stack and settings file they
+  act on; a settings file may set `HCLOUD_CONTEXT` (the Hetzner project),
+  which reaches hcloud; and `up.sh` uses an existing ssh key with the same
+  public key (Hetzner takes one only once per project) instead of failing to
+  create a second. `tests/hetzner-stacks.sh` covers a second stack.
+
+- **A Hetzner deploy whose only failure is an unhealthy new UI or app no
+  longer leaves the pipelines paused.** `deploy.sh` (and `--rollback`)
+  registers a scheduler it replaced, unpauses what it paused, prints
+  `orca-stack status` and fails naming the containers that weren't replaced
+  (the old ones keep serving; `orca-stack apply` retries them). A scheduler
+  that didn't start, a failed registration or a failed backup still leave
+  them paused.
+- **`orca-stack quiesce` no longer waits for runs on remote workers.** It,
+  `apply`'s refusal and `status` count only the runs the scheduler's
+  processes hold (placement not `worker:<pool>`), which a scheduler restart
+  kills; the runs on workers go on through it and are listed as left
+  running on workers. `rescale.sh`, which takes the UI down with the
+  server, waits for them too (`quiesce --workers`).
+
+- **`deploy.sh` brings the server's settings in line with `hetzner.env` (#257).**
+  A setting added to `hetzner.env` after `up.sh` made the server (say
+  `POSTHOG_KEY`) never reached it: only `up.sh` wrote `settings.env`, the
+  secret files and the stack settings. Both now run `lib.sh`'s
+  `sync_settings` (`--rollback` too), before the plan: each file is written
+  only if it differs (mode 600, over ssh's standard input, `orca-stack
+  sync`), and the output names what changed, never a value: the
+  `settings.env` keys added, removed or changed, a secret file as changed,
+  a stack setting old -> new. A setting emptied in `hetzner.env` is removed.
+  The plan then replaces the containers whose env file changed, a changed
+  scheduler quiescing as for a new tag. The tags stay `deploy.sh`'s, and
+  `CGROUPS`, `OVERLAP` and `HEALTH_TIMEOUT` are left alone. An edit by hand
+  to `/etc/orca/settings.env` is now undone by the next deploy: put it in
+  `EXTRA_ENV_FILE`.
+
 ## 0.17.0 - 2026-11-08
 
 The backfill and rebuild forms show one copyable line, `orca login <this UI> && orca --remote <this UI> backfill ...`, with a Copy button; Ops › Control's Memory pressure and Runs cards explain each value with a (?).
