@@ -341,7 +341,9 @@ containers() {
     cb=$1
     files="$ENVDIR/orca.env $CONF/secret-fetch"
     # The UI's port is write_env's ORCA_UI_ADDR; the worker API's, settings.env's.
-    uihealth=8270:/healthz:200
+    # An image before orca 0.18 has no /healthz: its UI answers 404 there,
+    # which says it is up as well.
+    uihealth=8270:/healthz:200,404
     waddr=$(setting ORCA_WORKER_ADDR)
     [ -z "$waddr" ] || uihealth="$uihealth ${waddr##*:}:/:any"
     # CGROUPS=1: a cgroup per run (docs/hetzner.md#a-cgroup-per-run).
@@ -558,7 +560,8 @@ printf "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" "$1" >&
 read -r -t 5 _ code _ <&3 && echo "$code" | tr -d "\r"' "$2" "$3" 2> /dev/null || true
 }
 
-# healthy CONTAINER CHECKS TIMEOUT: whether each of CHECKS ("PORT:PATH:STATUS")
+# healthy CONTAINER CHECKS TIMEOUT: whether each of CHECKS ("PORT:PATH:STATUS",
+# STATUS a comma-separated list of codes, or any)
 # passes within TIMEOUT seconds; if not, why says why.
 healthy() {
     h_t=0
@@ -575,9 +578,10 @@ healthy() {
             h_want=${h_path##*:}
             h_path=${h_path%:*}
             h_code=$(probe "$1" "$h_port" "$h_path")
-            if [ "$h_want" = any ] && [ -n "$h_code" ] || [ "$h_code" = "$h_want" ]; then
+            if [ "$h_want" = any ] && [ -n "$h_code" ]; then
                 continue
             fi
+            case ",$h_want," in *",$h_code,"*) [ -z "$h_code" ] || continue ;; esac
             h_ok=0
             why="answered ${h_code:-nothing} on :$h_port$h_path (wants $h_want) after ${h_t}s"
             break
