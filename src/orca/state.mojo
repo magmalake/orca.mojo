@@ -745,6 +745,10 @@ def _floor_raisers() -> List[Int]:
     the binaries before it don't write instance rows, and start runs with
     `instance` left as it was, which no live instance lists, so it holds
     nothing.
+
+    44 (learned requests, `orca.recommend`) is additive: new nullable
+    columns the binaries before it neither read nor write. A start they make
+    leaves `request_source` and `request_runs` as an earlier start set them.
     """
     return [1, 24]
 
