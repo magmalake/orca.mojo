@@ -16,6 +16,7 @@ from orca.fill import FillStatus, fill_status
 from orca.follow import Follow, follow
 from orca.lineage import SnapshotRef
 from orca.live import live_sql
+from orca.recommend import Recommendation
 from orca.schedule import Schedule
 from orca.scheduler import (
     current_keys,
@@ -499,6 +500,9 @@ struct PipelineView(Movable):
     var following: Optional[Follow]
     """How far a sensor is behind what it follows (`orca.follow`)."""
     var usage: UsageSummary
+    var learned: Optional[Recommendation]
+    """The request its runs' peaks suggest (`orca.recommend`), from its
+    `orca config show`: shown, not applied."""
     var versions: List[VersionRow]
     """The code it's run, newest first."""
     var configs: List[Shown]
@@ -525,6 +529,7 @@ struct PipelineView(Movable):
         self.fill = None
         self.following = None
         self.usage = usage^
+        self.learned = None
         self.versions = List[VersionRow]()
         self.configs = List[Shown]()
         self.keys = None
@@ -561,6 +566,8 @@ def pipeline_view(
     v.following = follow(db, name, p.kind, p.start)
     v.versions = version_rows(db, pipeline=name)
     v.configs = shown(db, name)
+    if len(v.configs) > 0:
+        v.learned = v.configs[0].learned.copy()
     if p.kind == "keyed":
         v.keys = key_counts(db, name)
     # After the keys: their read keeps them in orca.keys, which this counts.

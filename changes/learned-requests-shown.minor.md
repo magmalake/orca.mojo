@@ -1,0 +1,1 @@
+- **A request learned from the measured peaks, shown**: the pipeline's Resources card, `orca config show` and their JSON (`learned`) show the memory and CPUs its last 20 successful runs suggest (p95 of peak memory plus 15%, p90 of peak cores, at least the out-of-memory bump, within the declared range), applied nowhere yet (#PR).

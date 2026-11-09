@@ -15,6 +15,7 @@ from orca.fill import FillStatus, eta_text, lag_note, money
 from orca.follow import Follow, follow
 from orca.html import Html, url_encode
 from orca.json import quote
+from orca.recommend import Recommendation
 from orca.sample import fixed1
 from orca.scheduler import done_keys, registered
 from orca.source import web_url
@@ -721,6 +722,7 @@ def pipeline_html(
         v.steps,
         links,
         v.usage,
+        v.learned,
         v.following,
     )
     if tab == "overview":
@@ -875,6 +877,7 @@ def _cards_html(
     steps: List[StepDef],
     links: CodeLinks,
     usage: UsageSummary,
+    learned: Optional[Recommendation],
     f: Optional[Follow] = None,
 ):
     """The pipeline page's cards: what's going on (refreshed while the page
@@ -925,8 +928,11 @@ def _cards_html(
     )
     h.raw("</h2>")
     _usage_card(h, usage)
-    if p.cpus or p.memory_gb:
+    # What its runs suggest, once any is measured.
+    var learn = Bool(learned) and usage.runs > 0
+    if p.cpus or p.memory_gb or learn:
         h.raw('<dl class="facts">')
+    if p.cpus or p.memory_gb:
         fact_item(
             h,
             "Requested",
@@ -939,7 +945,34 @@ def _cards_html(
             "runners",
         )
         h.text(request_text(p.cpus, p.memory_gb))
-        h.raw("</dd></dl>")
+        h.raw("</dd>")
+    if learn:
+        ref l = learned.value()
+        fact_item(
+            h,
+            "Learned",
+            "usage-learned",
+            (
+                "The request its latest successful runs' peaks suggest: the"
+                " 95th percentile of their peak memory plus 15%, at least what"
+                " an out-of-memory raised it to, and the 90th percentile of"
+                " their peak cores, within its request's range. Shown only:"
+                " nothing uses it yet (#269)."
+            ),
+            "runners",
+        )
+        if l.any():
+            h.text(l.text())
+            h.raw(' <span class="muted">')
+            h.text("· not applied")
+            h.raw("</span>")
+        else:
+            h.raw('<span class="muted">')
+            h.text(l.text())
+            h.raw("</span>")
+        h.raw("</dd>")
+    if p.cpus or p.memory_gb or learn:
+        h.raw("</dl>")
     h.raw("</section></div>")
 
 
