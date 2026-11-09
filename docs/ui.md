@@ -171,7 +171,8 @@ The header is four cards, side by side on a wide screen:
   has it here too, as **Requested**, and `request` in the JSON.
   **Learned** is the request its runs suggest
   ([Learned requests](orca-toml.md#learned-requests)), `learned` in the
-  JSON: `learned from 20 runs: 3.25 GB, 2 CPUs`. Nothing applies it yet.
+  JSON: `learned from 20 runs: 3.25 GB, 2 CPUs`, **applied** when its
+  `cpus` or `memory_gb` is `auto` and it learns, else **not applied**.
 
 A sensor that runs when another pipeline's dataset gets a snapshot (the
 census's mojo_repos and mojo_activity follow gharchive) has **Following**
@@ -346,6 +347,10 @@ latest start asked for) and **Granted** (what it was given of its host, in
 well under the grant means the request can come down, one at the grant
 that it may need more. The run's JSON has `request` (`cpus`, `memory_gb`)
 and `grant` (`cpus`, `memory_mb`), both null for a pipeline without one.
+For an `auto` request ([Learned requests](orca-toml.md#learned-requests)),
+**Requested** says `· learned from 20 runs`, and `request_source` in the
+JSON is `{"source": "learned", "runs": 20, ...}` (`declared` or `default`
+otherwise; null before orca kept it).
 A queued run held for room or by memory pressure shows why under
 **Held**, and `held` in the JSON. While the scheduler's host holds new runs
 for its memory pressure, the home page and Runs say so at the top (and

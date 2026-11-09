@@ -14,7 +14,11 @@
 #   hog` and `hog status <run>` print them;
 # - from the three, the request they suggest (orca.recommend): the largest
 #   peak plus 15% in quarter GBs, on the card, in the JSON and in `orca
-#   config show`, and applied nowhere.
+#   config show`, not applied;
+# - registered with `memory_gb = "auto"`, a run on the local runner is
+#   granted it, recording that it's learned from 3 runs, and the card and
+#   `orca config show` say it's applied; with `learn = false`, the next run
+#   has no request, recording `default`.
 #
 # Needs ORCA_DATABASE_URL (pixi run test-usage starts a throwaway server),
 # curl and jq.
@@ -174,8 +178,54 @@ grep -qE "^  $r1 succeeded backfill 2024-01 .* peak [0-9]+ MB, CPU [0-9.]+ s" bu
 grep -qE "^hog 2024-02 succeeded \(peak [0-9]+ MB, CPU [0-9.]+ s" build/usage-binary.out \
     || fail "hog status: $(cat build/usage-binary.out)"
 ./build/orca config show hog > build/usage-config.out 2>&1 || fail "orca config show hog"
-grep -qE "^  learned from 3 runs: [0-9.]+ GB.*not applied \(#269\)$" build/usage-config.out \
+grep -qE "^  learned from 3 runs: [0-9.]+ GB.*; shown, not applied: its request isn't auto$" build/usage-config.out \
     || fail "config show: $(cat build/usage-config.out)"
 [ "$(./build/orca config show hog --json | jq -r .learned.memory_mb)" = "$(jq -r .learned.memory_mb build/usage-pipeline.json)" ] \
     || fail "config show --json: $(./build/orca config show hog --json)"
+
+# "auto" (orca.recommend): the next run on the local runner is granted the
+# learned memory, and records where it came from.
+mb=$(jq -r .learned.memory_mb build/usage-pipeline.json)
+./build/orca register --placement default --memory-gb auto ./build/hog >> "$log" 2>&1 \
+    || fail "register --memory-gb auto"
+./build/orca backfill hog 2024-04 >> "$log" 2>&1 || fail "backfill 2024-04"
+r4=$(q "SELECT max(id) FROM orca.runs")
+check "$r4" auto
+is "SELECT placement || ' ' || request_source || ' ' || request_runs || ' ' || grant_memory_mb FROM orca.runs WHERE id = $r4" \
+    "local learned 3 $mb" \
+    || fail "run $r4's learned request: $(q "SELECT placement, request_cpus, request_memory_gb, request_source, request_runs, grant_memory_mb FROM orca.runs WHERE id = $r4")"
+# Cached on the pipeline, learned again once r4's peaks were recorded.
+is "SELECT (learned->>'runs') || ' ' || (learned->>'key') FROM orca.pipelines WHERE name = 'hog'" "4 ${r4}m/0//auto" \
+    || fail "the cached learned request: $(q "SELECT learned FROM orca.pipelines WHERE name = 'hog'")"
+grep -q "granted hog run $r4 .* learned from 3 runs" build/usage-sched.out \
+    || fail "the scheduler's log: $(grep granted build/usage-sched.out)"
+curl -fs -H 'Accept: application/json' "$base/runs/$r4" > build/usage-run.json || fail "GET /runs/$r4 JSON"
+jq -e --argjson mb "$mb" '.run.request_source == {"source": "learned", "runs": 3, "text": "learned from 3 runs"}
+    and .run.grant.memory_mb == $mb and (.run.request.memory_gb | test("^[0-9.]+$"))' \
+    build/usage-run.json > /dev/null || fail "run $r4's JSON: $(jq -c .run build/usage-run.json)"
+curl -fs "$base/runs/$r4" | grep -qE 'Requested<span class="help">.*[0-9.]+ GB <span class="muted">· learned from 3 runs' \
+    || fail "run $r4's page: $(curl -fs "$base/runs/$r4" | grep -o 'Requested<span.\{0,600\}')"
+curl -fs -H 'Accept: application/json' "$base/pipelines/hog" | jq -e '.learned.applied == true' > /dev/null \
+    || fail "the pipeline's learned isn't applied: $(curl -fs -H 'Accept: application/json' "$base/pipelines/hog" | jq -c .learned)"
+curl -fs "$base/pipelines/hog" | grep -q '· applied' || fail "the Resources card doesn't say applied"
+./build/orca config show hog | grep -qE '^  learned from 4 runs: .*; applied: its request is auto$' \
+    || fail "config show auto: $(./build/orca config show hog)"
+
+# learn = false: auto falls back to no request, recorded as the default.
+printf '[pipelines.hog]\nmemory_gb = "auto"\nlearn = false\n' > build/usage-orca.toml
+[ "$(env -u ORCA_DATABASE_URL ./build/orca config check build/usage-orca.toml 2>&1)" = "build/usage-orca.toml: ok, 1 pipeline" ] \
+    || fail "config check: $(env -u ORCA_DATABASE_URL ./build/orca config check build/usage-orca.toml 2>&1)"
+./build/orca register --config build/usage-orca.toml ./build/hog >> "$log" 2>&1 || fail "register learn = false"
+./build/orca backfill hog 2024-05 >> "$log" 2>&1 || fail "backfill 2024-05"
+r5=$(q "SELECT max(id) FROM orca.runs")
+check "$r5" "learn = false"
+is "SELECT request_source || ' ' || coalesce(request_runs, 0) || ' ' || coalesce(grant_memory_mb, 0) FROM orca.runs WHERE id = $r5" "default 0 0" \
+    || fail "run $r5's request: $(q "SELECT request_memory_gb, request_source, request_runs, grant_memory_mb FROM orca.runs WHERE id = $r5")"
+curl -fs -H 'Accept: application/json' "$base/runs/$r5" | jq -e '.run.request == null and .run.request_source.source == "default"' > /dev/null \
+    || fail "run $r5's JSON: $(curl -fs -H 'Accept: application/json' "$base/runs/$r5" | jq -c .run)"
+./build/orca config show hog > build/usage-config.out 2>&1 || fail "config show learn = false"
+grep -qE '^  learn +false +orca.toml \[pipelines.hog\]$' build/usage-config.out \
+    && grep -qE '^  learned from 5 runs: .*; not applied: learn = false$' build/usage-config.out \
+    || fail "config show learn = false: $(cat build/usage-config.out)"
+curl -fs "$base/pipelines/hog" | grep -q '· not applied' || fail "the Resources card doesn't say not applied"
 echo "usage: ok"

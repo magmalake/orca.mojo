@@ -56,8 +56,9 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 | `workers` | integer `N` (at least 1), or string `"MIN..MAX"` | the code's `workers`, else 2; 0 for a pipeline without tasks | `--workers` | With `MIN..MAX`, the run scales between the two. |
 | `worker_procs` | integer from 1 to 256, or `"auto"` | 1 | `--worker-procs` | `auto` means one dista process per vCPU. |
 | `max_runs` | integer from 1 to 10000 | the code's `Pipeline[..., max_runs=]`, else 1 | `--max-runs` (new) | Overrides the code's value. |
-| `cpus` | integer `N` from 1 to 1024, or string `"MIN..MAX"` | none: no request | `--cpus` | Whole CPUs the run asks for. See [Requests and grants](#requests-and-grants). |
-| `memory_gb` | number `N` (decimals allowed), or string `"MIN..MAX"`, over 0 and up to 65536 | none: no request | `--memory-gb` | GB of memory the run asks for. |
+| `cpus` | integer `N` from 1 to 1024, or string `"MIN..MAX"`, `"auto"` or `"auto..MAX"` | none: no request | `--cpus` | Whole CPUs the run asks for. See [Requests and grants](#requests-and-grants); `auto`: [Learned requests](#learned-requests). |
+| `memory_gb` | number `N` (decimals allowed), or string `"MIN..MAX"`, `"auto"` or `"auto..MAX"`, over 0 and up to 65536 | none: no request | `--memory-gb` | GB of memory the run asks for. |
+| `learn` | boolean | `true` | none | `false`: `auto` asks for nothing instead of what its runs suggest. See [Learned requests](#learned-requests). |
 | `secrets` | table of `NAME = "orca/<id>"` | none | `--secret NAME=ID` | Secrets Manager IDs only, never values. A `--secret` flag replaces the whole set. |
 | `env` | table of `NAME = "value"` (numbers and booleans become text) | none | none (it replaces `ORCA_RUN_ENV` for pipeline settings) | See [env](#env-orca_run_env-and-the-warm-pool) below. |
 | `fills` | string: `"all"` or `"since_registration"` | `since_registration` | none | `all`: the scheduler fills the pipeline's whole range by itself. See [Fills](#fills). |
@@ -67,15 +68,15 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 | `fill_window` | string `"A..B"`, UTC hours: A from 0 to 23, B from 1 to 24 | `"0..24"`, all day | none | Fill runs start from hour A up to hour B. `"22..6"` wraps past midnight. |
 | `fill_lag` | string, a duration: a whole number of `s`, `m`, `h` or `d`, up to `31d`; or `0` | `0`, none | none | How long after its end a partition is filled. See [The lag](#the-lag). |
 
-`image` (`--image`) and `--spot` stay flags only. The `fill*` keys are
-the file's only: no flag sets them.
+`image` (`--image`) and `--spot` stay flags only. The `fill*` keys and
+`learn` are the file's only: no flag sets them.
 
 ### What is refused
 
 - Unknown keys, such as `workrs`.
 - A value of the wrong type.
 - A `workers` range like `4..2`.
-- A `cpus` or `memory_gb` range like `"4..2"`, `cpus = 0`, `cpus = 1.5` or `memory_gb = 0`.
+- A `cpus` or `memory_gb` range like `"4..2"`, `cpus = 0`, `cpus = 1.5` or `memory_gb = 0`; `auto` anywhere but alone or as a range's lower end (`"2..auto"`), or `"auto.."` without its maximum.
 - A secret ID outside `orca/`.
 - A `fill_window` like `"6..6"` or `"1..30"`, a negative `fill_budget_per_day`, or `fill_max_runs = 0`.
 - A `fill_lag` without a unit (`"2"`, `2`), with one orca doesn't know (`"2w"`), or over `31d`.
@@ -87,7 +88,7 @@ the file's only: no flag sets them.
 Each refusal names the file and line, and nothing is registered:
 
 ```text
-orca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, cpus, memory_gb, fills, fill_order, fill_max_runs, fill_budget_per_day, fill_window, fill_lag, secrets and env)
+orca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, cpus, memory_gb, learn, fills, fill_order, fill_max_runs, fill_budget_per_day, fill_window, fill_lag, secrets and env)
 orca.toml:3: [pipelines.toy] workers: not a count or a range MIN..MAX: 4..2
 ```
 
@@ -233,9 +234,37 @@ measure peak cores). Both are clamped to the declared `cpus` and
 `memory_gb`, saying so, and with fewer than 3 such runs there's none. The
 pipeline's Resources card shows it beside **Requested**, `orca config show`
 prints it after the settings (`learned from 20 runs: 3.25 GB, 2 CPUs`), and
-both JSONs have `learned`. It is shown only: admission, grants and cgroup
-limits still use the declared request. `"auto"` requests that use it are
-next.
+both JSONs have `learned`.
+
+**Turning it on.** `memory_gb = "auto"` or `cpus = "auto"` asks for it:
+it is then the request's minimum and maximum. `auto` as a range's lower
+end, `memory_gb = "auto..24"`, asks for it at most 24 GB, granted up to 24.
+`orca register --memory-gb auto` does the same. Each start of a run on the
+local runner, the control host or a remote worker is admitted and granted
+from it (cgroup limit, kill and out-of-memory retry as above), resolved
+when that start is admitted and fixed for its life. The scheduler keeps it
+on the pipeline (`orca.pipelines.learned`) and works it out again only
+after a new successful run's peaks are recorded, an out-of-memory raises
+the pipeline, or its request is registered differently. The card and
+`orca config show` then say **applied** (`"applied": true`).
+
+**Fallback.** With no recommendation yet (fewer than 3 measured runs, or
+CPUs on macOS) that resource has no request, as without `cpus` or
+`memory_gb`: no admission check, no grant, the default cgroup limit. Give
+a new pipeline its first runs that way, or start with a declared range and
+switch to `auto` once it has some.
+
+**Off switch.** `learn = false` in the pipeline's table (or `[defaults]`)
+keeps `auto` at that fallback; the card and `orca config show` still show
+the recommendation, **not applied**.
+
+**What's recorded.** Each run keeps its latest start's request
+(`request_cpus`, `request_memory_gb`: the learned values, such as `3.25`)
+and where it came from (`request_source`: `declared`, `learned` or
+`default`; `request_runs`: how many runs a learned one is from; migration
+44). Its page shows it beside the grant (**Requested** `3.25 GB · learned
+from 20 runs`), and its JSON has `request_source`. Before rolling orca back
+past this, register without `auto`: an older orca refuses it.
 
 ### Memory pressure
 

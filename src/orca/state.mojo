@@ -709,6 +709,18 @@ def _migrations() -> List[List[String]]:
         # the pipeline fills, as orca.toml's `fill_lag` gives it (`2h`);
         # null for none.
         ["ALTER TABLE orca.pipelines ADD COLUMN fill_lag text"],
+        # Learned requests (orca.recommend, #269): a pipeline's `learn`
+        # (orca.toml; null is on), and the request its runs suggest, cached
+        # with what it was learned from (`learned`: key, runs, memory_mb,
+        # cpus); on each run where its latest start's request came from
+        # (`declared`, `learned` or `default`) and how many runs a learned
+        # one is from. Additive: nothing before reads them.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN learn boolean",
+            "ALTER TABLE orca.pipelines ADD COLUMN learned jsonb",
+            "ALTER TABLE orca.runs ADD COLUMN request_source text",
+            "ALTER TABLE orca.runs ADD COLUMN request_runs int",
+        ],
     ]
 
 
@@ -733,6 +745,10 @@ def _floor_raisers() -> List[Int]:
     the binaries before it don't write instance rows, and start runs with
     `instance` left as it was, which no live instance lists, so it holds
     nothing.
+
+    44 (learned requests, `orca.recommend`) is additive: new nullable
+    columns the binaries before it neither read nor write. A start they make
+    leaves `request_source` and `request_runs` as an earlier start set them.
     """
     return [1, 24]
 
