@@ -4,6 +4,7 @@ machine.
     [pipelines.gharchive]
     cpus = "1..16"           # or a count, 4: MIN = MAX
     memory_gb = "2..24"      # GB, decimals allowed: "0.5..2"
+    # or "auto", "auto..24": learned from its runs (orca.recommend)
 
 **Requests.** A pipeline asks for a range of CPUs and memory in orca.toml
 (`[defaults]` or its own table) or with `orca register --cpus` and
@@ -29,8 +30,15 @@ fixed for that start's life, in `ORCA_GRANT_CPUS` and
 worker`) admits the runs it takes the same way against its own host, with
 the same variables (its reserve defaults to 0 CPUs and 512 MB).
 
-**`"auto"`.** An `env` value `"auto"` is passed to the run as it is, for the
-pipeline to size itself from the grant (`auto_count`), except
+**Learned requests.** `cpus` and `memory_gb` may be `auto`, or have `auto`
+as a range's lower end (`"auto..24"`): what the pipeline's runs suggest
+(`orca.recommend`), at most the range's maximum, resolved each time a run
+starts (`resolve_request`); without one, no request of that resource.
+`Request.of` reads `auto` as `cpus_auto` or `memory_auto` with a minimum of
+0 and the maximum given (0 for none).
+
+**`"auto"` in `env`.** An `env` value `"auto"` is passed to the run as it
+is, for the pipeline to size itself from the grant (`auto_count`), except
 `DISTA_WORKER_SLOTS`, which dista reads as a number: orca gives it the
 grant's CPUs over the run's local dista workers (`ORCA_WORKERS`), at least
 1, or 0 (dista's one per core) for a run without a CPU grant.
@@ -51,8 +59,36 @@ comptime GRANT_MEMORY_MB = "ORCA_GRANT_MEMORY_MB"
 comptime AUTO = "auto"
 
 
+def _auto_max(v: String) -> Tuple[Bool, String]:
+    """Whether `v` is `auto` or `auto..MAX`, and its `MAX` (empty for
+    none)."""
+    if v == AUTO:
+        return (True, String())
+    if v.startswith("auto.."):
+        var hi = String(v[byte = String("auto..").byte_length() :])
+        return (True, hi if hi else String("none"))
+    return (False, v)
+
+
 def parse_cpus(v: String) raises -> Tuple[Int, Int]:
-    """`cpus`' value, `N` or `MIN..MAX`: whole CPUs from 1 to 1024."""
+    """`cpus`' value, `N` or `MIN..MAX`: whole CPUs from 1 to 1024. `auto`
+    is (0, 0) and `auto..MAX` (0, MAX), learned (`orca.recommend`)."""
+    var a = _auto_max(v)
+    if a[0]:
+        if not a[1]:
+            return (0, 0)
+        var hi = 0
+        try:
+            hi = Int(a[1])
+        except:
+            pass
+        if hi < 1 or hi > MAX_CPUS:
+            raise Error(
+                "is CPUs, auto..MAX with MAX from 1 to ", MAX_CPUS, ", not ", v
+            )
+        return (0, hi)
+    if v.endswith("..auto"):
+        raise Error("is CPUs with auto as a range's lower end only, not ", v)
     var lo: Int
     var hi: Int
     try:
@@ -64,7 +100,7 @@ def parse_cpus(v: String) raises -> Tuple[Int, Int]:
             lo = Int(v)
             hi = lo
     except:
-        raise Error("is CPUs, N or MIN..MAX, not ", v)
+        raise Error("is CPUs, N, MIN..MAX, auto or auto..MAX, not ", v)
     if lo < 1 or hi > MAX_CPUS or hi < lo:
         raise Error(
             "is CPUs from 1 to ",
@@ -81,7 +117,24 @@ def _mb_of_gb(gb: Float64) -> Int:
 
 def parse_memory_gb(v: String) raises -> Tuple[Int, Int]:
     """`memory_gb`'s value, `N` or `MIN..MAX` in GB (decimals allowed), as
-    MB: more than 0 and at most 65536 GB."""
+    MB: more than 0 and at most 65536 GB. `auto` is (0, 0) and `auto..MAX`
+    (0, MAX), learned (`orca.recommend`)."""
+    var a = _auto_max(v)
+    if a[0]:
+        if not a[1]:
+            return (0, 0)
+        var hi = 0.0
+        try:
+            hi = Float64(a[1])
+        except:
+            pass
+        if not (hi > 0.0 and hi <= MAX_MEMORY_GB) or _mb_of_gb(hi) < 1:
+            raise Error(
+                "is GB, auto..MAX with MAX over 0 and up to 65536, not ", v
+            )
+        return (0, _mb_of_gb(hi))
+    if v.endswith("..auto"):
+        raise Error("is GB with auto as a range's lower end only, not ", v)
     var lo: Float64
     var hi: Float64
     try:
@@ -93,7 +146,7 @@ def parse_memory_gb(v: String) raises -> Tuple[Int, Int]:
             lo = Float64(v)
             hi = lo
     except:
-        raise Error("is GB, N or MIN..MAX, not ", v)
+        raise Error("is GB, N, MIN..MAX, auto or auto..MAX, not ", v)
     if not (lo > 0.0 and hi <= MAX_MEMORY_GB and hi >= lo) or _mb_of_gb(lo) < 1:
         raise Error(
             "is GB over 0 and up to 65536, MIN..MAX with MIN <= MAX, not ", v
@@ -110,13 +163,19 @@ def _num_text(x: Float64) -> String:
 
 def canonical_cpus(v: String) raises -> String:
     var r = parse_cpus(v)
+    if r[0] == 0:
+        return String(AUTO) if r[1] == 0 else String("auto..", r[1])
     if r[0] == r[1]:
         return String(r[0])
     return String(r[0], "..", r[1])
 
 
 def canonical_memory_gb(v: String) raises -> String:
-    _ = parse_memory_gb(v)
+    var r = parse_memory_gb(v)
+    if r[0] == 0:
+        if r[1] == 0:
+            return String(AUTO)
+        return String("auto..", _num_text(Float64(_auto_max(v)[1])))
     var dots = v.find("..")
     if dots < 0:
         return _num_text(Float64(v))
@@ -135,15 +194,34 @@ def gb_text(mb: Int) -> String:
     return String(tenths // 10, ".", tenths % 10)
 
 
-@fieldwise_init
 struct Request(ImplicitlyCopyable, Movable):
     """A pipeline's range of CPUs and memory; 0s for a resource it doesn't
-    ask for."""
+    ask for. `cpus_auto` and `memory_auto` mark a learned one (`auto`, or
+    `auto..MAX` with its maximum), which `orca.recommend.resolve_request`
+    makes a range before admission."""
 
     var cpus_min: Int
     var cpus_max: Int
     var memory_min_mb: Int
     var memory_max_mb: Int
+    var cpus_auto: Bool
+    var memory_auto: Bool
+
+    def __init__(
+        out self,
+        cpus_min: Int,
+        cpus_max: Int,
+        memory_min_mb: Int,
+        memory_max_mb: Int,
+        cpus_auto: Bool = False,
+        memory_auto: Bool = False,
+    ):
+        self.cpus_min = cpus_min
+        self.cpus_max = cpus_max
+        self.memory_min_mb = memory_min_mb
+        self.memory_max_mb = memory_max_mb
+        self.cpus_auto = cpus_auto
+        self.memory_auto = memory_auto
 
     @staticmethod
     def of(cpus: String, memory_gb: String) raises -> Request:
@@ -153,14 +231,68 @@ struct Request(ImplicitlyCopyable, Movable):
             var c = parse_cpus(cpus)
             r.cpus_min = c[0]
             r.cpus_max = c[1]
+            r.cpus_auto = c[0] == 0
         if memory_gb:
             var m = parse_memory_gb(memory_gb)
             r.memory_min_mb = m[0]
             r.memory_max_mb = m[1]
+            r.memory_auto = m[0] == 0
         return r
 
     def any(self) -> Bool:
-        return self.cpus_min > 0 or self.memory_min_mb > 0
+        return (
+            self.cpus_min > 0
+            or self.memory_min_mb > 0
+            or self.cpus_auto
+            or self.memory_auto
+        )
+
+    def auto(self) -> Bool:
+        """Whether either resource is learned."""
+        return self.cpus_auto or self.memory_auto
+
+    def cpus_text(self) -> String:
+        """Its CPUs as `cpus` says them: `2`, `1..16`, `auto..16`; empty
+        for none."""
+        if self.cpus_auto:
+            return String(AUTO) if self.cpus_max == 0 else String(
+                "auto..", self.cpus_max
+            )
+        if self.cpus_min == 0:
+            return String()
+        if self.cpus_min == self.cpus_max:
+            return String(self.cpus_min)
+        return String(self.cpus_min, "..", self.cpus_max)
+
+    def memory_gb_text(self) -> String:
+        """Its memory as `memory_gb` says it, to the hundredth of a GB:
+        `3.25`, `2..24`, `auto..24`; empty for none."""
+        if self.memory_auto:
+            return String(AUTO) if self.memory_max_mb == 0 else String(
+                "auto..", gb_hundredths(self.memory_max_mb)
+            )
+        if self.memory_min_mb == 0:
+            return String()
+        if self.memory_min_mb == self.memory_max_mb:
+            return gb_hundredths(self.memory_min_mb)
+        return String(
+            gb_hundredths(self.memory_min_mb),
+            "..",
+            gb_hundredths(self.memory_max_mb),
+        )
+
+
+def gb_hundredths(mb: Int) -> String:
+    """`mb` as GB to the hundredth, as `memory_gb` takes it: `3.25`, `3.5`,
+    `4`."""
+    var hundredths = (max(mb, 0) * 100 + 512) // 1024
+    var out = String(hundredths // 100)
+    var frac = hundredths % 100
+    if frac:
+        out.write(".", frac // 10)
+        if frac % 10:
+            out.write(frac % 10)
+    return out^
 
 
 @fieldwise_init

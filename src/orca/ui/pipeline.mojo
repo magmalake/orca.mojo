@@ -956,15 +956,15 @@ def _cards_html(
                 "The request its latest successful runs' peaks suggest: the"
                 " 95th percentile of their peak memory plus 15%, at least what"
                 " an out-of-memory raised it to, and the 90th percentile of"
-                " their peak cores, within its request's range. Shown only:"
-                " nothing uses it yet (#269)."
+                " their peak cores, within its request's range. Applied where"
+                " cpus or memory_gb is auto, unless learn = false."
             ),
             "runners",
         )
         if l.any():
             h.text(l.text())
             h.raw(' <span class="muted">')
-            h.text("· not applied")
+            h.text("· applied" if l.applied else "· not applied")
             h.raw("</span>")
         else:
             h.raw('<span class="muted">')

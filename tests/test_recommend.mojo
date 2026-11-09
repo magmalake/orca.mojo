@@ -5,11 +5,16 @@ out-of-memory raised, and the clamp to the declared range."""
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
 from orca.recommend import (
+    DECLARED,
+    DEFAULT,
+    LEARNED,
     MIN_RUNS,
+    Recommendation,
     RunPeaks,
     memory_gb_text,
     percentile,
     recommend,
+    resolve_request,
 )
 from orca.resources import Request
 
@@ -135,6 +140,110 @@ def test_clamped_to_the_declared_range() raises:
     assert_equal(recommend(_runs([2000, 2000, 2000]), 0, req).clamped, "")
     # The OOM bump is clamped too.
     assert_equal(recommend(_runs([100, 100, 100]), 9999, req).memory_mb, 3072)
+
+
+def test_auto_is_learned() raises:
+    var auto = Request.of("auto", "auto")
+    var rec = recommend(_runs([1000, 2000, 1500], 2.3), 0, auto)
+    var r = resolve_request(auto, rec, True)
+    assert_equal(r.source, LEARNED)
+    assert_equal(r.runs, 3)
+    assert_false(r.request.auto())
+    # 2000 MB × 1.15 in quarter GBs, and p90 of 2.3 cores: its min and max.
+    assert_equal(r.request.memory_min_mb, 2304)
+    assert_equal(r.request.memory_max_mb, 2304)
+    assert_equal(r.request.cpus_min, 3)
+    assert_equal(r.request.cpus_max, 3)
+    assert_equal(r.memory_gb_text(), "2.25")
+    assert_equal(r.text(), "learned from 3 runs")
+    # Above an out-of-memory bump, at least the bump.
+    var bumped = recommend(_runs([1000, 1000, 1000]), 4096, auto)
+    assert_equal(
+        resolve_request(auto, bumped, True).request.memory_min_mb, 4096
+    )
+
+
+def test_auto_range_is_clamped() raises:
+    # `auto..2`: learned, at most 2 GB; granted up to the maximum.
+    var req = Request.of("auto..2", "auto..2")
+    var rec = recommend(_runs([4000, 4000, 4000], 6.0), 0, req)
+    var r = resolve_request(req, rec, True)
+    assert_equal(r.source, LEARNED)
+    assert_equal(r.request.memory_min_mb, 2048)
+    assert_equal(r.request.memory_max_mb, 2048)
+    assert_equal(r.request.cpus_min, 2)
+    assert_equal(rec.clamped, "memory_gb's maximum and cpus' maximum")
+    # Below it, the learned minimum and the declared maximum.
+    var small = recommend(_runs([500, 500, 500], 1.0), 0, req)
+    var s = resolve_request(req, small, True)
+    assert_equal(s.request.memory_min_mb, 768)
+    assert_equal(s.request.memory_max_mb, 2048)
+    assert_equal(s.request.cpus_min, 1)
+    assert_equal(s.request.cpus_max, 2)
+    assert_equal(s.memory_gb_text(), "0.75..2")
+
+
+def test_auto_falls_back() raises:
+    var auto = Request.of("", "auto")
+    # Too few runs: no request, as without memory_gb.
+    var few = recommend(_runs([1000, 1000]), 0, auto)
+    var r = resolve_request(auto, few, True)
+    assert_equal(r.source, DEFAULT)
+    assert_false(r.request.any())
+    assert_equal(r.runs, 0)
+    assert_true("2 of the 3" in r.why)
+    # Learning off: the same, though there's a recommendation.
+    var rec = recommend(_runs([1000, 1000, 1000]), 0, auto)
+    var off = resolve_request(auto, rec, False)
+    assert_equal(off.source, DEFAULT)
+    assert_false(off.request.any())
+    assert_true("learn = false" in off.text())
+    # CPUs with no peak cores (macOS): no CPU request; memory learned.
+    var both = Request.of("auto", "auto")
+    var mac = resolve_request(
+        both, recommend(_runs([1000, 1000, 1000], -1), 0, both), True
+    )
+    assert_equal(mac.source, LEARNED)
+    assert_equal(mac.request.cpus_min, 0)
+    assert_equal(mac.request.memory_min_mb, 1280)
+    var cpus = Request.of("auto", "")
+    var none = resolve_request(
+        cpus, recommend(_runs([1000, 1000, 1000], -1), 0, cpus), True
+    )
+    assert_equal(none.source, DEFAULT)
+    assert_true("peak cores" in none.why)
+    # The cache's recommendation (runs, memory, CPUs) resolves the same.
+    var cached = Recommendation(3, 0, 1280, 0, "", "", False)
+    assert_equal(
+        resolve_request(auto, cached, True).request.memory_min_mb, 1280
+    )
+    assert_true(
+        "2 of the 3"
+        in resolve_request(
+            auto, Recommendation(2, 0, 0, 0, "", "", False), True
+        ).why
+    )
+
+
+def test_declared_is_as_it_is() raises:
+    var req = Request.of("1..4", "2..8")
+    var r = resolve_request(
+        req, Recommendation(20, 20, 1024, 1, "", "", False), True
+    )
+    assert_equal(r.source, DECLARED)
+    assert_equal(r.request.memory_min_mb, 2048)
+    assert_equal(r.request.cpus_max, 4)
+    assert_equal(r.text(), "")
+    assert_equal(
+        resolve_request(_none(), Recommendation.none(), True).source, ""
+    )
+
+
+def test_applied_json() raises:
+    var r = recommend(_runs([1000, 1000, 1000]), 0, _none())
+    assert_true('"applied": false' in r.json())
+    r.applied = True
+    assert_true('"applied": true' in r.json())
 
 
 def main() raises:

@@ -257,6 +257,13 @@ from orca.pressure import (
     pressure_env,
     read_psi,
 )
+from orca.recommend import (
+    DEFAULT,
+    Recommendation,
+    RunRequest,
+    learned,
+    resolve_request,
+)
 from orca.state import State
 from orca.watchdog import check as check_watchdog, config as watchdog_config
 from orca.tz import Zone
@@ -342,9 +349,61 @@ struct Registered(Copyable, Movable):
     var memory_raised_mb: Int
     """What an out-of-memory kill raised its memory to (`orca.cgroup`),
     which its runs ask for at least; 0 for none."""
+    var learn: Bool
+    """Whether `auto` uses what its runs suggest (`learn` in orca.toml)."""
+    var learn_key: String
+    """For a pipeline asking for `auto`, what a learned request now would be
+    learned from: its latest successful run (and whether that's measured
+    yet), its out-of-memory bump and its declared request; else empty."""
+    var learned: Recommendation
+    """The learned request cached in `orca.pipelines.learned` (its runs,
+    memory and CPUs), learned from `learned_key`."""
+    var learned_key: String
 
     def request(self) raises -> Request:
+        """As declared: `auto` not resolved (`run_request` does)."""
         return Request.of(self.cpus, self.memory_gb)
+
+
+def recorded_cpus(p: Registered, sized: RunRequest) -> String:
+    """The CPUs a run records it asked for (`orca.runs.request_cpus`): as
+    registered, or what `auto` resolved to."""
+    return sized.cpus_text() if p.cpus.startswith("auto") else p.cpus
+
+
+def recorded_memory_gb(p: Registered, sized: RunRequest) -> String:
+    """The memory a run records it asked for, as `recorded_cpus`."""
+    return sized.memory_gb_text() if p.memory_gb.startswith(
+        "auto"
+    ) else p.memory_gb
+
+
+def run_request(mut db: State, p: Registered) raises -> RunRequest:
+    """The request a start of `p` gets now (`orca.recommend`'s
+    `resolve_request`): as declared, or for `auto` what its runs suggest. That is cached on the
+    pipeline (`orca.pipelines.learned`) and learned again only when what it
+    was learned from (`learn_key`) has changed, so a start doesn't query
+    its runs' peaks each tick."""
+    var declared = p.request()
+    if not declared.auto() or not p.learn:
+        return resolve_request(declared, Recommendation.none(), p.learn)
+    if p.learned_key == p.learn_key:
+        return resolve_request(declared, p.learned, True)
+    var rec = learned(db, p.name, p.cpus, p.memory_gb)
+    _ = db.conn.execute(
+        (
+            "UPDATE orca.pipelines SET learned = jsonb_build_object('key',"
+            " $2::text, 'runs', $3::bigint, 'memory_mb', $4::bigint, 'cpus',"
+            " $5::bigint) WHERE name = $1"
+        ),
+        Params()
+        .text(p.name)
+        .text(p.learn_key)
+        .int64(Int64(rec.runs))
+        .int64(Int64(rec.memory_mb))
+        .int64(Int64(rec.cpus)),
+    )
+    return resolve_request(declared, rec, True)
 
 
 def _ec2_spec(p: Registered, run: Int, start: Int, new_code: Bool) -> Ec2Spec:
@@ -445,8 +504,21 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " coalesce(fill_window, '') AS fill_window, coalesce(fill_lag, '')"
             " AS fill_lag, coalesce(cpus, '') AS cpus, coalesce(memory_gb, '')"
             " AS memory_gb,"
-            " coalesce(memory_raised_mb, 0) AS memory_raised_mb FROM"
-            " orca.pipelines"
+            " coalesce(memory_raised_mb, 0) AS memory_raised_mb,"
+            " coalesce(learn, true) AS learn, CASE WHEN cpus LIKE 'auto%' OR"
+            " memory_gb LIKE 'auto%' THEN concat_ws('/', coalesce((SELECT"
+            " r.id::text || CASE WHEN EXISTS (SELECT 1 FROM orca.steps s JOIN"
+            " orca.attempts a ON a.step = s.id WHERE s.run = r.id AND"
+            " a.peak_rss_bytes IS NOT NULL) THEN 'm' ELSE '' END FROM"
+            " orca.runs r WHERE r.pipeline = orca.pipelines.name AND r.status"
+            " = 'succeeded' ORDER BY r.id DESC LIMIT 1), ''),"
+            " coalesce(memory_raised_mb, 0), coalesce(cpus, ''),"
+            " coalesce(memory_gb, '')) ELSE '' END AS learn_key,"
+            " coalesce(learned->>'key', '') AS learned_key,"
+            " coalesce((learned->>'runs')::bigint, 0) AS learned_runs,"
+            " coalesce((learned->>'memory_mb')::bigint, 0) AS"
+            " learned_memory_mb, coalesce((learned->>'cpus')::bigint, 0) AS"
+            " learned_cpus FROM orca.pipelines"
             " WHERE binary_path IS NOT NULL AND ($1 = '' OR name = $1) ORDER BY"
             " name"
         ),
@@ -494,6 +566,18 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 r.text("cpus"),
                 r.text("memory_gb"),
                 Int(r.int64("memory_raised_mb")),
+                r.bool("learn"),
+                r.text("learn_key"),
+                Recommendation(
+                    Int(r.int64("learned_runs")),
+                    0,
+                    Int(r.int64("learned_memory_mb")),
+                    Int(r.int64("learned_cpus")),
+                    "",
+                    "",
+                    False,
+                ),
+                r.text("learned_key"),
             )
         )
     # A fixed count, or no tasks: no scaling.
@@ -1748,7 +1832,7 @@ struct Scheduler(Movable):
                 " worker_type, ec2_workers, spot, ec2_min_workers, secrets,"
                 " worker_procs, placement, max_runs, env, config, fills,"
                 " fill_order, fill_max_runs, fill_budget_per_day, fill_window,"
-                " cpus, memory_gb, fill_lag) SELECT d->>'pipeline',"
+                " cpus, memory_gb, fill_lag, learn) SELECT d->>'pipeline',"
                 " d->>'registry_hash',"
                 " d, $2, $3, CASE WHEN $4 THEN now() END, nullif($5, ''),"
                 " nullif($6, ''), nullif($7, ''), nullif($8, 0), $9,"
@@ -1757,7 +1841,7 @@ struct Scheduler(Movable):
                 " nullif($16, '')::jsonb, $17::jsonb, nullif($18, ''),"
                 " nullif($19, ''), nullif($20, -1), nullif($21, -1::float8),"
                 " nullif($22, ''), nullif($23, ''), nullif($24, ''),"
-                " nullif($25, '') FROM"
+                " nullif($25, ''), nullif($26, '')::boolean FROM"
                 " (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO UPDATE SET"
                 " registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
@@ -1797,7 +1881,9 @@ struct Scheduler(Movable):
                 " orca.pipelines.fill_budget_per_day END, fill_window = CASE"
                 " WHEN $14 THEN EXCLUDED.fill_window ELSE"
                 " orca.pipelines.fill_window END, fill_lag = CASE WHEN $14 THEN"
-                " EXCLUDED.fill_lag ELSE orca.pipelines.fill_lag END, cpus ="
+                " EXCLUDED.fill_lag ELSE orca.pipelines.fill_lag END, learn ="
+                " CASE WHEN $14 THEN EXCLUDED.learn ELSE orca.pipelines.learn"
+                " END, cpus ="
                 " CASE WHEN $14 OR $23"
                 " <> '' THEN EXCLUDED.cpus ELSE orca.pipelines.cpus END,"
                 " memory_gb = CASE WHEN $14 OR $24 <> '' THEN"
@@ -1835,7 +1921,8 @@ struct Scheduler(Movable):
             .text(r.text("fill_window"))
             .text(r.text("cpus"))
             .text(r.text("memory_gb"))
-            .text(r.text("fill_lag")),
+            .text(r.text("fill_lag"))
+            .text(r.text("learn")),
         )
         var name = res.row(0).text("name")
         var version = self.db.version(
@@ -2951,6 +3038,12 @@ struct Scheduler(Movable):
         if self.ec2 and not control:
             keys = self.ec2.value().pool_keys(_ec2_spec(p, 0, 0, False))
             settling = self.ec2.value().settling(self.db, keys)
+        # Its request on this host (orca.resources), `auto` learned from its
+        # runs (orca.recommend): resolved here, once for the starts this
+        # pass makes, each granted from it for its life.
+        var sized = RunRequest(Request(0, 0, 0, 0), "", 0, "")
+        if control or placed == "local":
+            sized = run_request(self.db, p)
         var tx = self.db.conn.begin()
         _ = tx.query(
             "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
@@ -3041,7 +3134,7 @@ struct Scheduler(Movable):
         # A request (orca.resources): on this host, a start only if its
         # minimum fits what the running runs weren't granted, each with its
         # grant. A pipeline without one is started as ever.
-        var request = p.request()
+        var request = sized.request
         if request.memory_min_mb > 0:
             # At least what an out-of-memory kill raised it to.
             request.memory_min_mb = raised_request(
@@ -3213,18 +3306,29 @@ struct Scheduler(Movable):
                                 " grant_cpus = nullif($6, 0), grant_memory_mb ="
                                 " nullif($7, 0), memory_limit_mb = NULL,"
                                 " memory_max_mb = NULL, memory_bytes = NULL,"
-                                " instance = nullif($8, 0) WHERE id = $1"
-                                " RETURNING starts"
+                                " instance = nullif($8, 0), request_source ="
+                                " nullif($9, ''), request_runs = nullif($10,"
+                                " 0) WHERE id = $1 RETURNING starts"
                             ),
                             Params()
                             .int64(id)
                             .int64(Int64(need))
                             .text(placed)
-                            .text(p.cpus if admitted else String())
-                            .text(p.memory_gb if admitted else String())
+                            .text(
+                                recorded_cpus(
+                                    p, sized
+                                ) if admitted else String()
+                            )
+                            .text(
+                                recorded_memory_gb(
+                                    p, sized
+                                ) if admitted else String()
+                            )
                             .int64(Int64(grant.cpus))
                             .int64(Int64(grant.memory_mb))
-                            .int64(Int64(self.instance if local else 0)),
+                            .int64(Int64(self.instance if local else 0))
+                            .text(sized.source)
+                            .int64(Int64(sized.runs)),
                         )
                         .row(0)
                         .int64("starts")
@@ -3251,7 +3355,10 @@ struct Scheduler(Movable):
                     "CPUs and",
                     grant.memory_mb,
                     "MB (0: not asked for)",
+                    sized.text(),
                 )
+            elif sized.source == DEFAULT:
+                print("run", id, "of", p.name, "requests", sized.text())
             if control:
                 self._start_control(p, Int(id), starts[i], new_code[i], grant)
                 continue

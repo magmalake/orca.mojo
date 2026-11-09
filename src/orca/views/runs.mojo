@@ -43,9 +43,28 @@ struct RunResources(Copyable, Movable):
     """Its `memory.max`, past which the kernel kills its processes."""
     var memory_bytes: Int
     """Its cgroup's memory a few seconds ago while it runs; -1 else."""
+    var source: String
+    """Where its request came from (`orca.recommend`): `declared`,
+    `learned` or `default`; empty for none, or a start before orca kept
+    it."""
+    var runs: Int
+    """Learned, how many runs it's from; else 0."""
 
     def any(self) -> Bool:
         return self.cpus != "" or self.memory_gb != ""
+
+    def source_text(self) -> String:
+        """`learned from 20 runs`, `default: auto, nothing learned`, or
+        empty."""
+        if self.source == "learned":
+            return String(
+                "learned from ",
+                self.runs,
+                " run" if self.runs == 1 else " runs",
+            )
+        if self.source == "default":
+            return "default: auto, with nothing learned or learning off"
+        return String()
 
     def limit_json(self) -> String:
         """`"memory_limit": {...}|null` for a run's JSON."""
@@ -62,16 +81,35 @@ struct RunResources(Copyable, Movable):
             "}",
         )
 
+    def source_json(self) -> String:
+        """`"request_source": {"source": .., "runs": ..}|null`."""
+        if not self.source:
+            return String('"request_source": null')
+        return String(
+            '"request_source": {"source": ',
+            quote(self.source),
+            ', "runs": ',
+            String(self.runs) if self.runs > 0 else String("null"),
+            ', "text": ',
+            quote(self.source_text()),
+            "}",
+        )
+
     def json(self) -> String:
-        """`"request": {...}|null, "grant": {...}|null` for a run's JSON."""
+        """`"request": {...}|null, "grant": {...}|null, "request_source":
+        ...` for a run's JSON."""
         if not self.any():
-            return String('"request": null, "grant": null')
+            return String(
+                '"request": null, "grant": null, ', self.source_json()
+            )
         return String(
             '"request": {"cpus": ',
             quote(self.cpus) if self.cpus else String("null"),
             ', "memory_gb": ',
             quote(self.memory_gb) if self.memory_gb else String("null"),
-            '}, "grant": {"cpus": ',
+            "}, ",
+            self.source_json(),
+            ', "grant": {"cpus": ',
             String(self.grant.cpus) if self.grant.cpus else String("null"),
             ', "memory_mb": ',
             String(self.grant.memory_mb) if self.grant.memory_mb else String(
@@ -225,9 +263,11 @@ comptime _GRANT_COLUMNS = (
     " coalesce(memory_limit_mb, 0)::bigint AS memory_limit_mb,"
     " coalesce(memory_max_mb, 0)::bigint AS memory_max_mb, CASE WHEN status"
     " = 'running' THEN coalesce(memory_bytes, -1) ELSE -1 END::bigint AS"
-    " memory_bytes,"
+    " memory_bytes, coalesce(request_source, '') AS request_source,"
+    " coalesce(request_runs, 0)::bigint AS request_runs,"
 )
-"""SQL for a run's request and grant (`orca.resources`)."""
+"""SQL for a run's request and grant (`orca.resources`), and where the
+request came from (`orca.recommend`)."""
 
 
 def _resources_of(r: Row) raises -> RunResources:
@@ -239,6 +279,8 @@ def _resources_of(r: Row) raises -> RunResources:
         Int(r.int64("memory_limit_mb")),
         Int(r.int64("memory_max_mb")),
         Int(r.int64("memory_bytes")),
+        r.text("request_source"),
+        Int(r.int64("request_runs")),
     )
 
 

@@ -54,6 +54,51 @@ def test_parse_memory_gb() raises:
             _ = parse_memory_gb(bad)
 
 
+def test_parse_auto() raises:
+    # `auto`: learned (orca.recommend), (0, 0); `auto..MAX`: up to MAX.
+    assert_equal(parse_cpus("auto")[0], 0)
+    assert_equal(parse_cpus("auto")[1], 0)
+    assert_equal(parse_cpus("auto..16")[0], 0)
+    assert_equal(parse_cpus("auto..16")[1], 16)
+    assert_equal(parse_memory_gb("auto")[1], 0)
+    assert_equal(parse_memory_gb("auto..24")[0], 0)
+    assert_equal(parse_memory_gb("auto..24")[1], 24 * 1024)
+    assert_equal(parse_memory_gb("auto..0.5")[1], 512)
+    assert_equal(canonical_cpus("auto"), "auto")
+    assert_equal(canonical_cpus("auto..16"), "auto..16")
+    assert_equal(canonical_memory_gb("auto"), "auto")
+    assert_equal(canonical_memory_gb("auto..24.0"), "auto..24")
+    for bad in ["auto..", "auto..0", "auto..x", "auto..2000", "1..auto"]:
+        with assert_raises(contains="CPUs"):
+            _ = parse_cpus(bad)
+    with assert_raises(contains="lower end"):
+        _ = parse_cpus("1..auto")
+    for bad in [
+        "auto..",
+        "auto..0",
+        "auto..x",
+        "2..auto",
+        "Auto",
+        "auto..auto",
+    ]:
+        with assert_raises(contains="GB"):
+            _ = parse_memory_gb(bad)
+    var r = Request.of("auto", "auto..24")
+    assert_true(r.any())
+    assert_true(r.auto())
+    assert_true(r.cpus_auto and r.memory_auto)
+    assert_equal(r.cpus_max, 0)
+    assert_equal(r.memory_min_mb, 0)
+    assert_equal(r.memory_max_mb, 24 * 1024)
+    assert_equal(r.cpus_text(), "auto")
+    assert_equal(r.memory_gb_text(), "auto..24")
+    assert_false(Request.of("2", "1..4").auto())
+    assert_equal(Request(0, 0, 3328, 3328).memory_gb_text(), "3.25")
+    assert_equal(Request(1, 4, 3328, 24576).cpus_text(), "1..4")
+    assert_equal(Request(1, 4, 3328, 24576).memory_gb_text(), "3.25..24")
+    assert_equal(Request(0, 0, 0, 0).memory_gb_text(), "")
+
+
 def test_gb_text() raises:
     assert_equal(gb_text(2048), "2")
     assert_equal(gb_text(1331), "1.3")

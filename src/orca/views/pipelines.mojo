@@ -502,7 +502,7 @@ struct PipelineView(Movable):
     var usage: UsageSummary
     var learned: Optional[Recommendation]
     """The request its runs' peaks suggest (`orca.recommend`), from its
-    `orca config show`: shown, not applied."""
+    `orca config show`, applied where it asks for `auto`."""
     var versions: List[VersionRow]
     """The code it's run, newest first."""
     var configs: List[Shown]

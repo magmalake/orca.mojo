@@ -75,8 +75,14 @@ from orca.civil import now
 from orca.json import quote
 from orca.live import dead_sql, stale_limit, start_grace
 from orca.cgroup import growth_pct_of, oom_text, raised_mb, raised_request
+from orca.recommend import RunRequest
 from orca.resources import Grant, Request, Room, admit
-from orca.scheduler import registered
+from orca.scheduler import (
+    recorded_cpus,
+    recorded_memory_gb,
+    registered,
+    run_request,
+)
 from orca.state import PgStore, State, beat_run
 from orca.store import FINAL, TableSnapshot
 from orca.tokens import (
@@ -524,6 +530,11 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
                 .bool(fill),
             )
             continue
+        # Its request (orca.resources), `auto` learned from its runs
+        # (orca.recommend), from a worker that says what it can grant.
+        var sized = RunRequest(Request(0, 0, 0, 0), "", 0, "")
+        if room_cpus >= 0:
+            sized = run_request(db, p)
         var tx = db.conn.begin()
         _ = tx.query(
             "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
@@ -551,7 +562,7 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
         if live >= (p.fill.max_runs if fill else p.max_runs):
             tx.rollback()
             continue
-        var request = p.request()
+        var request = sized.request
         if request.memory_min_mb > 0:
             # At least what an out-of-memory kill raised it to.
             request.memory_min_mb = raised_request(
@@ -600,18 +611,21 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
                 " cpu_millis = 0, placement = $3, held = NULL, worker = $4,"
                 " request_cpus = nullif($5, ''), request_memory_gb ="
                 " nullif($6, ''), grant_cpus = nullif($7, 0), grant_memory_mb"
-                " = nullif($8, 0) WHERE id = $1 AND status = 'queued'"
-                " RETURNING starts, allow_new_code, partitions"
+                " = nullif($8, 0), request_source = nullif($9, ''),"
+                " request_runs = nullif($10, 0) WHERE id = $1 AND status ="
+                " 'queued' RETURNING starts, allow_new_code, partitions"
             ),
             Params()
             .int64(id)
             .text(WORKER_OWNER)
             .text(w.placement())
             .int64(Int64(w.id))
-            .text(p.cpus if admitted else String())
-            .text(p.memory_gb if admitted else String())
+            .text(recorded_cpus(p, sized) if admitted else String())
+            .text(recorded_memory_gb(p, sized) if admitted else String())
             .int64(Int64(grant.cpus))
-            .int64(Int64(grant.memory_mb)),
+            .int64(Int64(grant.memory_mb))
+            .text(sized.source)
+            .int64(Int64(sized.runs)),
         )
         if len(got) != 1:
             tx.rollback()

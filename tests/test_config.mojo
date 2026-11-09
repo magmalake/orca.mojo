@@ -222,6 +222,33 @@ def test_fill_keys() raises:
     )
 
 
+def test_learned_requests() raises:
+    # `auto` and `auto..MAX` (orca.recommend), and `learn`.
+    var f = ProjectConfig(
+        String(
+            '[defaults]\nmemory_gb = "auto"\n',
+            '[pipelines.a]\ncpus = "auto..8"\n',
+            '[pipelines.b]\nmemory_gb = "auto..24.0"\nlearn = false\n',
+        ),
+        "orca.toml",
+    )
+    var a = resolve("a", RegisterFlags(), f)
+    assert_equal(a.text("memory_gb"), "auto")
+    assert_equal(a.text("cpus"), "auto..8")
+    assert_equal(a.text("learn"), "")
+    var b = resolve("b", RegisterFlags(), f)
+    assert_equal(b.text("memory_gb"), "auto..24")
+    assert_equal(b.text("learn"), "false")
+    assert_equal(canonical_flag("cpus", "auto"), "auto")
+    assert_equal(canonical_flag("memory_gb", "auto..2"), "auto..2")
+    _refused('[pipelines.a]\nmemory_gb = "2..auto"\n', "lower end")
+    _refused('[pipelines.a]\nmemory_gb = "auto.."\n', "auto..MAX")
+    _refused('[pipelines.a]\ncpus = "auto..0"\n', "auto..MAX")
+    _refused('[pipelines.a]\ncpus = "automatic"\n', "auto")
+    _refused('[pipelines.a]\nlearn = "no"\n', "true or false")
+    _refused("[pipelines.a]\nlearn = 0\n", "true or false")
+
+
 def test_keys_and_tables_are_checked() raises:
     _refused("[pipelines.a]\nworkrs = 4\n", "has no key workrs")
     _refused('[defaults]\nfils = "all"\n', "has no key fils")

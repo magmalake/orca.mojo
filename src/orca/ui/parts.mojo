@@ -378,7 +378,8 @@ comptime CPU_HELP = (
 
 
 comptime _GRANT_HELP = (
-    "What its pipeline asks for (cpus and memory_gb in orca.toml), and what"
+    "What its pipeline asks for (cpus and memory_gb in orca.toml; for auto,"
+    " what its runs suggest), and what"
     " its latest start was given of its host's CPUs and memory, fixed for"
     " that start, in ORCA_GRANT_CPUS and ORCA_GRANT_MEMORY_MB. Compare it"
     " with the peak below."
@@ -386,14 +387,21 @@ comptime _GRANT_HELP = (
 
 
 def request_text(cpus: String, memory_gb: String) -> String:
-    """`1..16 CPUs, 2..24 GB`."""
+    """`1..16 CPUs, 2..24 GB`; `auto` as `CPUs auto`, `memory auto..24 GB`."""
     var text = String()
-    if cpus:
+    if cpus.startswith("auto"):
+        text.write("CPUs ", cpus)
+    elif cpus:
         text.write(cpus, " CPU" if cpus == "1" else " CPUs")
     if memory_gb:
         if text:
             text.write(", ")
-        text.write(memory_gb, " GB")
+        if memory_gb == "auto":
+            text.write("memory auto")
+        elif memory_gb.startswith("auto"):
+            text.write("memory ", memory_gb, " GB")
+        else:
+            text.write(memory_gb, " GB")
     return text^
 
 
@@ -424,10 +432,20 @@ def grant_facts(mut h: Html, r: RunResources):
     pipeline asked for any, and its memory limit (`orca.cgroup`) when it
     had one."""
     if not r.any():
+        if r.source:
+            # `auto` with nothing learned: no request, as without one.
+            fact_item(h, "Requested", "request", _GRANT_HELP, "runners")
+            h.raw('<span class="muted">')
+            h.text("none: ", r.source_text())
+            h.raw("</span></dd>")
         limit_facts(h, r.limit_mb, r.max_mb)
         return
     fact_item(h, "Requested", "request", _GRANT_HELP, "runners")
     h.text(request_text(r.cpus, r.memory_gb))
+    if r.source == "learned":
+        h.raw(' <span class="muted">')
+        h.text("· ", r.source_text())
+        h.raw("</span>")
     h.raw("</dd>")
     fact_item(h, "Granted", "grant", _GRANT_HELP, "runners")
     var g = String()

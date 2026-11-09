@@ -11,7 +11,8 @@ runs (#145), read by `orca register` and `orca aws register`.
     worker_procs = 1             # or "auto", one per vCPU
     max_runs = 2                 # over the code's Pipeline max_runs
     cpus = "1..16"               # a request: MIN..MAX (orca.resources)
-    memory_gb = "2..24"
+    memory_gb = "2..24"          # or "auto", "auto..24" (orca.recommend)
+    learn = false                # don't: "auto" is then no request
     env = { DISTA_WORKER_SLOTS = "4", GHARCHIVE_PARALLEL = "16" }
     secrets = { GITHUB_TOKEN = "orca/github-token" }   # Secrets Manager IDs
     fills = "all"                # fill the range by itself (orca.fill)
@@ -69,7 +70,7 @@ from orca.html import Html
 from orca.json import quote
 from orca.proc import absolute, capture
 from orca.recommend import Recommendation, learned
-from orca.resources import canonical_cpus, canonical_memory_gb
+from orca.resources import Request, canonical_cpus, canonical_memory_gb
 from orca.secrets import parse_secrets, secret_problem
 from orca.source import is_hex, web_url
 from orca.state import State
@@ -101,6 +102,7 @@ comptime SCALAR_KEYS = [
     "max_runs",
     "cpus",
     "memory_gb",
+    "learn",
     "fills",
     "fill_order",
     "fill_max_runs",
@@ -213,6 +215,10 @@ def _canonical(key: String, text: String) raises -> String:
         return canonical_cpus(text)
     if key == "memory_gb":
         return canonical_memory_gb(text)
+    if key == "learn":
+        if text != "true" and text != "false":
+            raise Error("is true or false, not ", text)
+        return text
     if key == "fills":
         return parse_fills(text)
     if key == "fill_order":
@@ -243,6 +249,10 @@ def _canonical_toml(key: String, v: TomlValue) raises -> String:
     if key == "memory_gb":
         if v.kind != INTEGER and v.kind != FLOAT and v.kind != STRING:
             raise Error('is GB, a number or a string "MIN..MAX", not ', v.kind)
+        return _canonical(key, v.text)
+    if key == "learn":
+        if v.kind != BOOLEAN:
+            raise Error("is true or false, not ", v.kind)
         return _canonical(key, v.text)
     if key == "fill_max_runs":
         if v.kind != INTEGER:
@@ -882,8 +892,12 @@ struct Shown(Movable):
     var overrides: List[Tuple[String, String]]
     var rows: List[_Row]
     var learned: Optional[Recommendation]
-    """The request its runs' peaks suggest (`orca.recommend`): shown, not
-    applied."""
+    """The request its runs' peaks suggest (`orca.recommend`), applied when
+    it asks for `auto` and learns."""
+    var auto: Bool
+    """Whether its `cpus` or `memory_gb` is `auto`."""
+    var learn: Bool
+    """Whether it learns (`learn`, true unless set false)."""
 
     def __init__(out self, name: String):
         self.name = name
@@ -896,11 +910,21 @@ struct Shown(Movable):
         self.overrides = List[Tuple[String, String]]()
         self.rows = List[_Row]()
         self.learned = None
+        self.auto = False
+        self.learn = True
 
     def add(
         mut self, key: String, value: String, source: String, detail: String
     ):
         self.rows.append(_Row(key, Setting(value, source, detail)))
+
+    def applied_text(self) -> String:
+        """Whether its runs start with what it learned, and why not."""
+        if self.learned and self.learned.value().applied:
+            return "applied: its request is auto"
+        if self.auto and not self.learn:
+            return "not applied: learn = false"
+        return "shown, not applied: its request isn't auto"
 
     def json(self) -> String:
         var out = String('{"pipeline": ', quote(self.name))
@@ -999,7 +1023,7 @@ struct Shown(Movable):
             ref l = self.learned.value()
             out.write("  ", l.text())
             if l.any():
-                out.write(" (", l.source, "); shown, not applied (#269)")
+                out.write(" (", l.source, "); ", self.applied_text())
             out.write("\n")
         return out^
 
@@ -1114,7 +1138,7 @@ comptime _SHOWN_SQL = (
     " fill_max_runs, coalesce(fill_budget_per_day, -1) AS fill_budget,"
     " coalesce(fill_window, '') AS fill_window, coalesce(fill_lag, '') AS"
     " fill_lag, coalesce(cpus, '') AS cpus,"
-    " coalesce(memory_gb, '') AS memory_gb FROM orca.pipelines WHERE"
+    " coalesce(memory_gb, '') AS memory_gb, learn FROM orca.pipelines WHERE"
     " binary_path IS"
     " NOT NULL AND ($1 = '' OR name = $1) ORDER BY name"
 )
@@ -1261,6 +1285,10 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
             if r.text(key):
                 var w = _source(sources, key)
                 s.add(key, r.text(key), w[0], w[1])
+        var learn = r.is_null("learn") or r.bool("learn")
+        if not learn:
+            var w = _source(sources, "learn")
+            s.add("learn", "false", w[0], w[1])
         _show_fills(s, r, sources)
         if r.text("image"):
             s.add("image", r.text("image"), FROM_FLAG, "--image")
@@ -1285,7 +1313,11 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
         for ref row in s.rows:
             if row.setting.source == FROM_FILE:
                 row.setting.line = _line_of(sources, row.key)
-        s.learned = learned(db, s.name, r.text("cpus"), r.text("memory_gb"))
+        var l = learned(db, s.name, r.text("cpus"), r.text("memory_gb"))
+        s.auto = Request.of(r.text("cpus"), r.text("memory_gb")).auto()
+        s.learn = learn
+        l.applied = s.auto and learn and l.any()
+        s.learned = l^
         out.append(s^)
     return out^
 
@@ -1408,6 +1440,8 @@ def export_toml(mut db: State) raises -> String:
         for key in ["cpus", "memory_gb"]:
             if r.text(key):
                 out.write(key, " = ", toml_string(r.text(key)), "\n")
+        if not r.is_null("learn") and not r.bool("learn"):
+            out.write("learn = false\n")
         if r.text("fills"):
             out.write("fills = ", toml_string(r.text("fills")), "\n")
         if r.text("fill_order"):
