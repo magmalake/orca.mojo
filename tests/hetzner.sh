@@ -101,8 +101,8 @@ add_setting() {
 }
 
 # A stack that ran before tags were kept: its conf says what runs.
-stack configure ORCA_IMAGE=img ORCA_TAG=aaa1111 BUCKET=bkt > /dev/null
-stack app console 8080 > /dev/null
+stack configure ORCA_IMAGE=img ORCA_TAG=aaa1111 BUCKET=bkt
+stack app console 8080
 stack apply > /dev/null
 rm "$ORCA_CONF/deployed"
 [ "$(stack tags)" = aaa1111 ] || fail "tags from the conf: $(stack tags)"
@@ -339,7 +339,7 @@ has "scheduler: replaced (settings: its env file changed)"
 has "ui: replaced (settings: its env file changed)"
 has "console: unchanged"
 has "sampler: unchanged"
-stack configure CGROUPS=1 > /dev/null
+stack configure CGROUPS=1
 stack apply > "$FAKE/out" 2>&1 || fail "apply with CGROUPS=1"
 has "scheduler: replaced (options: its flags, mounts or CGROUPS changed)"
 has "ui: unchanged"
@@ -392,8 +392,8 @@ grep -q 'stop -t 10 scheduler\|run -d --name scheduler-next' "$FAKE/docker.log" 
 [ "$(cat "$FAKE/containers/ui/image")" = img:kkk1111 ] || fail "ui runs $(cat "$FAKE/containers/ui/image")"
 grep -qw ui "$FAKE/containers/ui/aliases" || fail "the new ui has no alias ui"
 # An app, by its check path.
-stack app console 8080 /ready > /dev/null
-stack app console 8080 > /dev/null
+stack app console 8080 /ready
+stack app console 8080
 grep -q '^console 8080 [^ ]* /ready$' "$ORCA_CONF/apps" || fail "app without a CHECK reset it: $(cat "$ORCA_CONF/apps")"
 : > "$FAKE/docker.log"
 stack apply --app console=lll2222 > "$FAKE/out" 2>&1 || fail "the console's apply"
@@ -441,11 +441,11 @@ has "ui: replaced (settings: its env file changed), without downtime"
 # deploy.sh: a UI that isn't healthy after the scheduler was replaced: the
 # pipelines are registered from the new image, stay paused, and it says so.
 echo 503 > "$FAKE/health/ui"
-stack configure HEALTH_TIMEOUT=0 > /dev/null
+stack configure HEALTH_TIMEOUT=0
 : > "$FAKE/docker.log"
 deploy ooo5555 && fail "a deploy whose UI wasn't healthy"
 rm "$FAKE/health/ui"
-stack configure HEALTH_TIMEOUT=300 > /dev/null
+stack configure HEALTH_TIMEOUT=300
 has "not replaced: ui"
 has "registering the pipelines from ooo5555"
 grep -q 'exec scheduler orca register' "$FAKE/docker.log" || fail "a replaced scheduler wasn't registered"
@@ -459,10 +459,10 @@ stack resume > /dev/null
 
 # An image before orca 0.18 has no /healthz: its UI's 404 there counts as up.
 echo 404 > "$FAKE/health/ui"
-stack configure HEALTH_TIMEOUT=0 > /dev/null
+stack configure HEALTH_TIMEOUT=0
 stack apply --tag ppp6666 > "$FAKE/out" 2>&1 || { cat "$FAKE/out"; fail "a UI answering 404 on /healthz wasn't taken as up"; }
 rm "$FAKE/health/ui"
-stack configure HEALTH_TIMEOUT=300 > /dev/null
+stack configure HEALTH_TIMEOUT=300
 [ "$(cat "$FAKE/containers/ui/image")" = img:ppp6666 ] || fail "the older UI wasn't swapped in: $(cat "$FAKE/containers/ui/image")"
 
 # Overlapping schedulers (OVERLAP=1, docs/overlap.md). Off: orca.env has
@@ -472,7 +472,7 @@ stack can-overlap > "$FAKE/out" 2>&1 && fail "can-overlap with OVERLAP off"
 has "no: OVERLAP isn't 1 in stack.conf"
 # Turning it on changes the scheduler's env file: that deploy can't overlap
 # (the running one has it off), so it pauses and waits as before.
-stack configure OVERLAP=1 > /dev/null
+stack configure OVERLAP=1
 : > "$FAKE/docker.log"
 deploy ppp6666 || fail "the deploy that turns OVERLAP on"
 grep -q '^ORCA_OVERLAP=on$' "$ORCA_CONF/orca.env" || fail "no ORCA_OVERLAP=on in orca.env"
@@ -518,7 +518,7 @@ stack apply --tag sss9999 --overlap > "$FAKE/out" 2>&1 && fail "an overlap whose
 has "doesn't lead after"
 rm "$FAKE/no-lead"
 stack drain-old > /dev/null 2>&1 || fail "drain-old after the failed lead"
-stack configure OVERLAP=0 > /dev/null
+stack configure OVERLAP=0
 rm "$FAKE/can-overlap" "$FAKE/instances"
 echo 0 > "$FAKE/running"
 stack apply > /dev/null 2>&1 || fail "back to OVERLAP=0"
