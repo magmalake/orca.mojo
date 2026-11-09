@@ -52,7 +52,11 @@
 #   leads and registers, then the old one is asked to drain, waited for
 #   (stopped after --timeout) and removed; can-overlap says no with OVERLAP
 #   off, or with a scheduler-old still draining, and the deploy that turns
-#   OVERLAP on pauses and waits as before.
+#   OVERLAP on pauses and waits as before;
+# - package.sh's release tarball unpacks to orca-hetzner-<version>/ with
+#   every script, server/ and the example settings, and its up.sh and
+#   deploy.sh run from there (hetzner.env next to them), printing the
+#   version and sending the tarball's own server files.
 set -eu
 cd "$(dirname "$0")/.."
 FAKE=$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner.XXXXXX")
@@ -616,5 +620,33 @@ stack resume > /dev/null
 # Postgres: started once, by the first apply, and never stopped or removed.
 [ "$(grep -c 'run -d --name postgres' "$FAKE/docker.all")" = 1 ] || fail "Postgres was started more than once"
 grep -q '\(stop\|rm\).* postgres$' "$FAKE/docker.all" && fail "Postgres was stopped or removed"
+
+# The release tarball (deploy/hetzner/package.sh), run from where it's unpacked.
+sh deploy/hetzner/package.sh 9.8.7 "$FAKE/pkg" > "$FAKE/out" 2>&1 || fail "package.sh"
+cmp -s "$FAKE/pkg/orca-hetzner-9.8.7.tar.gz" "$FAKE/pkg/orca-hetzner.tar.gz" || fail "the two tarballs differ"
+mkdir "$FAKE/unpacked"
+(cd "$FAKE/unpacked" && gzip -dc "$FAKE/pkg/orca-hetzner.tar.gz" | tar -xf -) || fail "unpacking"
+pkg=$FAKE/unpacked/orca-hetzner-9.8.7
+for f in up.sh deploy.sh down.sh rescale.sh backup.sh lib.sh cloud-init.yaml hetzner.env.example \
+    README.md VERSION server/orca-stack server/secret-fetch server/orca-backup.service server/orca-backup.timer; do
+    [ -f "$pkg/$f" ] || fail "no $f in the tarball"
+done
+[ "$(ls "$FAKE/unpacked")" = orca-hetzner-9.8.7 ] || fail "the tarball unpacks to $(ls "$FAKE/unpacked")"
+[ "$(cat "$pkg/VERSION")" = 9.8.7 ] || fail "VERSION is $(cat "$pkg/VERSION")"
+[ -x "$pkg/up.sh" ] && [ -x "$pkg/server/orca-stack" ] || fail "the scripts aren't executable"
+{
+    cat "$FAKE/hetzner.env"
+    echo ADMIN_IP=203.0.113.7/32
+    echo "SSH_PUBLIC_KEY_FILE=$FAKE/k.pub"
+} > "$pkg/hetzner.env"
+: > "$FAKE/k.pub"
+(cd "$pkg" && unset HETZNER_ENV && ./up.sh --dry-run) > "$FAKE/out" 2>&1 || fail "the tarball's up.sh --dry-run"
+has "up.sh: stack orca, settings $pkg/hetzner.env, scripts 9.8.7"
+has "install -D -m 755 /dev/stdin /usr/local/sbin/orca-stack < $pkg/server/orca-stack"
+has "install -D -m 644 /dev/stdin /etc/systemd/system/orca-backup.timer < $pkg/server/orca-backup.timer"
+has "hcloud server create"
+(cd "$pkg" && unset HETZNER_ENV && ./deploy.sh --dry-run ttt0000) > "$FAKE/out" 2>&1 || fail "the tarball's deploy.sh --dry-run"
+has "deploy.sh: stack orca, settings $pkg/hetzner.env, scripts 9.8.7"
+has "/usr/local/sbin/orca-stack < $pkg/server/orca-stack"
 
 echo "ok   hetzner"

@@ -9,6 +9,10 @@
 #   the server on ssh's standard input.
 
 HERE=$(cd "$(dirname "$0")" && pwd)
+# The release these scripts are from, when they're a release's tarball
+# (package.sh writes VERSION); none in a checkout.
+SCRIPTS_VERSION=
+[ ! -r "$HERE/VERSION" ] || SCRIPTS_VERSION=$(cat "$HERE/VERSION")
 DRY_RUN=0
 YES=0
 
@@ -37,7 +41,7 @@ load_env() {
     # stack is in; otherwise hcloud's active one.
     [ -z "${HCLOUD_CONTEXT:-}" ] || export HCLOUD_CONTEXT
     # Which stack, as there may be more than one (docs/hetzner.md, A dev stack).
-    echo "$(basename "$0"): stack $NAME${HCLOUD_CONTEXT:+ (hcloud context $HCLOUD_CONTEXT)}, settings $HETZNER_ENV" >&2
+    echo "$(basename "$0"): stack $NAME${HCLOUD_CONTEXT:+ (hcloud context $HCLOUD_CONTEXT)}, settings $HETZNER_ENV${SCRIPTS_VERSION:+, scripts $SCRIPTS_VERSION}" >&2
 }
 
 # need VAR...: each is set in the settings file.

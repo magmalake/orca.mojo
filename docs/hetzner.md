@@ -56,7 +56,8 @@ Cloudflare ---- tunnel ------>| cloudflared -> ui:8270, console:8080            
    (`hcloud context create orca`, step 1; `up.sh` and `deploy.sh` both call
    it), `ssh`, `jq`, POSIX `sh`. Keep `hetzner.env` outside the repository,
    where no commit can pick it up, and point the scripts at it:
-   `mkdir -p ~/.config/orca-hetzner && cp deploy/hetzner/hetzner.env.example ~/.config/orca-hetzner/hetzner.env`
+   `mkdir -p ~/.config/orca-hetzner && cp hetzner.env.example ~/.config/orca-hetzner/hetzner.env`
+   (from the scripts' directory, [below](#first-setup))
    and `export HETZNER_ENV=~/.config/orca-hetzner/hetzner.env` (or put the
    export in your shell's profile).
 7. **Images**: the scheduler's image is the project's (for the census,
@@ -65,8 +66,18 @@ Cloudflare ---- tunnel ------>| cloudflared -> ui:8270, console:8080            
 
 ## First setup
 
+The scripts don't need a checkout of orca.mojo: each release has them as
+`orca-hetzner-<version>.tar.gz`, which unpacks to `orca-hetzner-<version>/`
+(its `VERSION` file says which, and the scripts print it). The newest:
+
 ```sh
-cd deploy/hetzner
+curl -fsSL https://github.com/magmalake/orca.mojo/releases/latest/download/orca-hetzner.tar.gz | tar -xz
+```
+
+Then, in that directory (or `deploy/hetzner` of a checkout):
+
+```sh
+cd orca-hetzner-<version>
 cp hetzner.env.example hetzner.env     # fill in every line: the file says what each is
 ./up.sh --dry-run                      # prints every hcloud and ssh command; runs none
 ./up.sh

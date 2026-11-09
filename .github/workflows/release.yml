@@ -1,0 +1,93 @@
+# A GitHub release for each orca version, with the Hetzner deploy tooling
+# (deploy/hetzner/package.sh) as its assets, so deploying needs no checkout
+# of orca.mojo (#247). `shelf release` merges a PR from
+# release/orca-mojo-<version>: its merge commit is tagged v<version> and
+# released. By hand (Actions > release > Run workflow, or `gh workflow run
+# release.yml -f version=0.18.0 -f ref=<sha>`) for a version released
+# before this workflow, at the commit given.
+name: release
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version, as in shelf.toml (0.18.0)"
+        required: true
+      ref:
+        description: "The commit to tag v<version> and package"
+        required: true
+
+# One release of a version at a time.
+concurrency:
+  group: release-${{ inputs.version || github.head_ref }}
+
+jobs:
+  release:
+    # Release PRs are branches of this repository: a fork's PR gets a
+    # read-only token, and isn't a release.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true && startsWith(github.head_ref, 'release/orca-mojo-'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      WANT_VERSION: ${{ inputs.version }}
+      HEAD_REF: ${{ github.head_ref }}
+      REF: ${{ inputs.ref || github.event.pull_request.merge_commit_sha }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REF }}
+          # The tags, to check v<version>, and the default branch, for
+          # package.sh at a commit from before it.
+          fetch-depth: 0
+
+      - name: The version and commit
+        run: |
+          version=${WANT_VERSION:-${HEAD_REF#release/orca-mojo-}}
+          version=${version#v}
+          sha=$(git rev-parse HEAD)
+          # The commit must be that version's: shelf.toml says which it is.
+          have=$(sed -n 's/^version = "\(.*\)"$/\1/p' shelf.toml)
+          [ "$have" = "$version" ] || { echo "::error::shelf.toml at $sha says $have, not $version"; exit 1; }
+          if tagged=$(git rev-parse -q --verify "refs/tags/v$version^{commit}"); then
+            [ "$tagged" = "$sha" ] || { echo "::error::v$version is $tagged already, not $sha"; exit 1; }
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "SHA=$sha" >> "$GITHUB_ENV"
+
+      - name: The deploy tooling's tarball
+        run: |
+          # A commit from before package.sh: the default branch's packages it.
+          [ -f deploy/hetzner/package.sh ] || git show "origin/$DEFAULT_BRANCH:deploy/hetzner/package.sh" > deploy/hetzner/package.sh
+          sh deploy/hetzner/package.sh "$VERSION" "$RUNNER_TEMP/assets"
+          tar -tzvf "$RUNNER_TEMP/assets/orca-hetzner-$VERSION.tar.gz"
+
+      # The notes: the version's section of CHANGELOG.md, and how to get the
+      # scripts.
+      - name: The release
+        run: |
+          notes=$RUNNER_TEMP/notes.md
+          awk -v head="## $VERSION " 'index($0, head) == 1 { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > "$notes"
+          [ -s "$notes" ] || echo "See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/v$VERSION/CHANGELOG.md)." > "$notes"
+          cat >> "$notes" << EOF
+
+          **Deploying on Hetzner** ([docs/hetzner.md](https://github.com/$GITHUB_REPOSITORY/blob/v$VERSION/docs/hetzner.md)), with no checkout of orca.mojo:
+
+          \`\`\`sh
+          curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/orca-hetzner-$VERSION.tar.gz | tar -xz
+          \`\`\`
+          EOF
+          set -- "$RUNNER_TEMP/assets/orca-hetzner-$VERSION.tar.gz" "$RUNNER_TEMP/assets/orca-hetzner.tar.gz"
+          # Run again (an upload that failed), the release gets the assets anew.
+          # Otherwise gh makes the tag v<version> at the commit, and the release.
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            gh release upload "v$VERSION" "$@" --clobber
+          else
+            gh release create "v$VERSION" "$@" --target "$SHA" --title "orca-mojo $VERSION" --notes-file "$notes"
+          fi
