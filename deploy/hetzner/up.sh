@@ -49,9 +49,13 @@ need_tool hcloud ssh jq
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
-# --- ssh key ---------------------------------------------------------------
+# --- ssh key (another stack's, if it has the same public key) ---------------
+ssh_key=$NAME
 if exists ssh-key "$NAME"; then
     echo "ssh key $NAME exists"
+elif [ "$DRY_RUN" = 0 ] && other=$(same_ssh_key "$SSH_PUBLIC_KEY_FILE") && [ -n "$other" ]; then
+    echo "ssh key $other has the same public key; using it (Hetzner takes a public key once per project)"
+    ssh_key=$other
 else
     hc ssh-key create --name "$NAME" --public-key-from-file "$SSH_PUBLIC_KEY_FILE"
 fi
@@ -87,7 +91,7 @@ if exists server "$SERVER"; then
 else
     sed -e "s|@@HOSTNAME@@|$NAME|" -e "s|@@VOLUME_ID@@|$volume_id|" "$HERE/cloud-init.yaml" > "$tmp/cloud-init.yaml"
     hc server create --name "$SERVER" --type "$SERVER_TYPE_SMALL" --image "$SERVER_IMAGE" \
-        --location "$LOCATION" --ssh-key "$NAME" --firewall "$NAME" --volume "$NAME-data" \
+        --location "$LOCATION" --ssh-key "$ssh_key" --firewall "$NAME" --volume "$NAME-data" \
         --user-data-from-file "$tmp/cloud-init.yaml" --label orca=true
 fi
 if [ "$DRY_RUN" = 0 ]; then

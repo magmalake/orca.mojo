@@ -691,6 +691,119 @@ that). Cloudflare Tunnel is free. A stopped server is still billed; delete it
 (`down.sh`) to stop the charge. Nothing here launches instances, so the bill
 cannot grow by itself except for storage and traffic.
 
+## A dev stack
+
+A second, smaller stack to try a release, a deploy or a deploy-script change
+before production sees it (#250). It is a second settings file: `NAME`
+prefixes every Hetzner resource (server, firewall, Volume `NAME-data`, ssh
+key) and the scripts look them up by that name, so `NAME=orca-dev` never
+touches `orca`'s. Everything else is on the server itself (`/etc/orca`,
+Postgres on its own Volume) or names its own bucket and tunnel. Every script
+starts by saying which stack it acts on (`deploy.sh: stack orca-dev,
+settings ...`). The two stacks share `known_hosts`
+(`~/.local/state/orca-hetzner/known_hosts`), which is keyed by address.
+
+It can be in the production project or a Hetzner project of its own. Its
+own project keeps its API token and Object Storage keys apart from
+production's (Object Storage keys reach every bucket of their project); set
+`HCLOUD_CONTEXT` in its settings file to that project's hcloud context. In
+the same project, Hetzner takes a public key only once, so `up.sh` uses the
+existing key with the same public key (production's `orca`) instead of
+making `orca-dev`; `down.sh --all` then leaves that key alone.
+
+**Settings**, e.g. `~/.config/orca-hetzner/dev.env` (from
+`hetzner.env.example`; what's not listed is as there or empty):
+
+```sh
+NAME=orca-dev
+#HCLOUD_CONTEXT=orca-dev                # if it's in a project of its own
+LOCATION=fsn1
+SERVER_TYPE_SMALL=cax11                 # 2 vCPU, 4 GB: enough without the backfill
+VOLUME_SIZE_GB=10                       # the smallest
+SSH_PUBLIC_KEY_FILE=$HOME/.ssh/id_ed25519.pub
+ADMIN_IP=203.0.113.7/32
+BUCKET=orca-dev-warehouse               # its own bucket
+S3_ENDPOINT=https://fsn1.your-objectstorage.com
+S3_REGION=fsn1
+S3_CREDENTIALS_FILE=$HOME/.config/orca-hetzner/dev-s3.env
+TUNNEL_TOKEN_FILE=$HOME/.config/orca-hetzner/dev-tunnel.env   # its own tunnel
+ORCA_TAG=<short sha>                    # the tag the first up.sh starts
+GHCR_USER=...                           # as production's, for the private package
+GHCR_TOKEN_FILE=...
+GITHUB_TOKEN_FILE=$HOME/.config/orca-hetzner/github-token     # or mojo_repos's and mojo_stats's runs fail
+EXTRA_ENV_FILE=$HOME/.config/orca-hetzner/dev-extra.env
+# No NTFY_TOPIC_FILE: no alerts. Or a topic of its own, never production's.
+# No POSTHOG_KEY: the dev pages stay out of the analytics.
+```
+
+with `dev-extra.env` holding
+
+```sh
+ORCA_CONFIG=/opt/orca/orca.dev.toml
+```
+
+The scheduler and the UI get it (`settings.env`, then `orca.env`, ahead of
+the image's own `ORCA_CONFIG`), so `orca register` there reads the census's
+`orca.dev.toml`: the same pipelines as `orca.toml`, without fills and
+without a worker pool's placement, so a dev stack never backfills from
+2023. orca has no "fill the last N days" setting. For some history, backfill
+a recent range by hand once, e.g. `docker exec scheduler orca backfill
+gharchive 2026-10-09..2026-11-07`. Only census images built with
+`orca.dev.toml` have the file (mojo-census#87 on): `orca register` fails on an
+older one, so don't roll the dev stack back past it.
+
+The tunnel's public hostnames, Proxied as for production:
+`orca-dev.mojourney.dev` to `http://ui:8270` and `dev.mojourney.dev` to
+`http://console:8080`. One level below the zone, because Cloudflare's free
+Universal SSL certificate covers `mojourney.dev` and `*.mojourney.dev` only:
+`orca.dev.mojourney.dev` would need an Advanced Certificate.
+
+**Images.** The census's CI pushes `ghcr.io/magmalake/orca:<short sha>` from
+main (and `latest`) and from its `dev` branch (and `dev`, never `latest`). To
+try an orca.mojo main commit, pin it on the census's `dev` branch
+(`orca-mojo = { git = ..., rev = "<sha>" }` in `pixi.toml`, then `pixi lock`),
+push, and deploy the short sha of that census commit.
+
+**Making it and deploying**, from `deploy/hetzner`:
+
+```sh
+export HETZNER_ENV=~/.config/orca-hetzner/dev.env   # in this shell only
+./up.sh --dry-run                       # every command names orca-dev
+./up.sh
+ssh root@<ip> docker exec -it scheduler orca user add <you>
+ssh root@<ip> orca-stack register       # orca.dev.toml's pipelines
+./deploy.sh <tag>                       # later deploys
+./down.sh                               # when it's not needed: the Volume stays, up.sh brings it back
+```
+
+**Release check list on dev**, before the same tag goes to production:
+
+1. `./deploy.sh <tag>`: it ends with `done`, and says what it replaced.
+2. `ssh root@<ip> orca-stack status`: every container up, `deployed: <tag>`
+   and `before:` the tag before.
+3. The pipelines registered: `docker exec scheduler orca status` lists
+   each of `orca.dev.toml`'s, from `<tag>`, and the ones paused before are
+   still paused.
+4. `curl -s -o /dev/null -w '%{http_code}\n' https://orca-dev.mojourney.dev/healthz`
+   says 200, and the console answers.
+5. One manual run per pipeline (`orca start <pipeline> <partition>`, or the
+   UI's run button), each succeeding.
+6. A deploy with a run in flight: start a long run, `./deploy.sh <tag>
+   --all`, and see it pause, wait and resume. Then with overlapping
+   schedulers: `ssh root@<ip> orca-stack configure OVERLAP=1`, deploy once
+   to turn it on, start a run, deploy again: nothing paused, the run ends
+   under `scheduler-old`, which is then removed.
+7. `./deploy.sh --rollback` (back to the tag before, registered again), then
+   `./deploy.sh --rollback` again to go forward; `orca-stack status` shows
+   `<tag>` deployed.
+
+Then `./deploy.sh <tag>` with production's settings.
+
+**Cost**: a CAX11, its IPv4 address, a 10 GB Volume and its bucket's
+storage: a few euros a month (see [Costs](#costs)). In a project of its own,
+Object Storage's base monthly price is charged again. `down.sh` stops the
+server's charge between releases.
+
 ## Not verified
 
 This was written without a Hetzner account: no server was created, and the
