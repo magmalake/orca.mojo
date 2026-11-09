@@ -918,7 +918,8 @@ cmd_drain_old() {
         fi
         if [ $((t % 60)) -eq 0 ]; then
             echo "orca-stack: waiting for scheduler-old's runs:"
-            psql_q "SELECT '  run ' || r.id || ' ' || r.pipeline || ' ' || r.partitions || ', running ' || date_trunc('second', now() - r.started) FROM orca.runs r JOIN orca.schedulers s ON s.id = r.instance WHERE r.status = 'running' AND s.host = '$host' ORDER BY r.id" 2> /dev/null || true
+            # a run over more than 3 partitions shows its first and last
+            psql_q "SELECT '  run ' || r.id || ' ' || r.pipeline || ' ' || CASE WHEN cardinality(p.a) > 3 THEN p.a[1] || ' ... ' || p.a[cardinality(p.a)] || ' (' || cardinality(p.a) || ' partitions)' ELSE r.partitions END || ', running ' || date_trunc('second', now() - r.started) FROM orca.runs r JOIN orca.schedulers s ON s.id = r.instance CROSS JOIN LATERAL (SELECT string_to_array(r.partitions, ',') AS a) p WHERE r.status = 'running' AND s.host = '$host' ORDER BY r.id" 2> /dev/null || true
         fi
         sleep 5
         t=$((t + 5))

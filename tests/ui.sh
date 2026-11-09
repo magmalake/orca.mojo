@@ -597,6 +597,10 @@ q "UPDATE orca.runs SET partitions = 'a,b,c,d,e' WHERE id = $bad_run" > /dev/nul
 html "/runs?pipeline=toy&status=failed" \
     | grep -qF '<td class="mono parts" title="a,b,c,d,e">a, b <span class="muted">+3 more</span></td>' \
     || fail "a long list of partitions isn't cut short"
+q "UPDATE orca.runs SET partitions = 'p01,p02,p03,p04,p05,p06,p07,p08,p09,p10,p11,p12,p13' WHERE id = $bad_run" > /dev/null
+html "/runs/$bad_run" \
+    | grep -qF '<span class="mono">p01 … p13</span> <span class="muted">(13 partitions)</span><details class="all-parts"><summary>all 13</summary><div class="mono">p01, p02,' \
+    || fail "a run's page doesn't fold a long list of partitions"
 q "UPDATE orca.runs SET partitions = 'hrabanazviking/RuneForgeAI-Project-Aesir,b' WHERE id = $bad_run" > /dev/null
 html "/runs?pipeline=toy&status=failed" \
     | grep -qF '<td class="mono parts" title="hrabanazviking/RuneForgeAI-Project-Aesir,b">hrabanazviking/RuneForg…, b</td>' \
