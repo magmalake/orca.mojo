@@ -2,8 +2,10 @@
 SIGTERM and waits 10 s before it kills; Ctrl-C sends SIGINT. Either one
 starts a drain:
 
-1. The listening socket closes, so a new connection is refused at once
-   (one waiting in its backlog is reset).
+1. `/healthz` answers 503 `draining` (the flag `Drain.draining` returns),
+   so a health checker or proxy that asks over a kept-alive connection
+   stops routing here; and the listening socket closes, so a new
+   connection is refused at once (one waiting in its backlog is reset).
 2. The requests already in the handler finish and their answers go out;
    so does one a kept-alive connection sends meanwhile.
 3. Once no request has been in the handler for 200 ms, or after
@@ -131,14 +133,21 @@ struct _Stopping(Movable):
     var server: Int
     """The `HttpServer`'s address; its loop runs on the main thread."""
     var busy: AtomicCounter
+    var draining: AtomicFlag
     var wake: c_int
     var drain_ms: Int
 
     def __init__(
-        out self, server: Int, busy: AtomicCounter, wake: c_int, drain_ms: Int
+        out self,
+        server: Int,
+        busy: AtomicCounter,
+        draining: AtomicFlag,
+        wake: c_int,
+        drain_ms: Int,
     ):
         self.server = server
         self.busy = busy
+        self.draining = draining
         self.wake = wake
         self.drain_ms = drain_ms
 
@@ -147,6 +156,7 @@ def _drain(s: _Stopping, stop: AtomicFlag):
     ref server = Pointer[HttpServer, MutAnyOrigin](
         unsafe_from_address=s.server
     )[]
+    s.draining.set()
     print(
         "orca ui: stopping: no new connections; waiting up to ",
         s.drain_ms // 1000,
@@ -233,6 +243,7 @@ struct Drain(Movable):
     `counting` returns, so it knows what's in flight."""
 
     var _busy: AtomicCounter
+    var _draining: AtomicFlag
     var _state: List[_Stopping]
     """One element, which the thread holds by address: a list's elements
     stay where they are when the list is moved."""
@@ -240,6 +251,7 @@ struct Drain(Movable):
 
     def __init__(out self, mut server: HttpServer) raises:
         self._busy = AtomicCounter.alloc()
+        self._draining = AtomicFlag.alloc()
         self._state = List[_Stopping]()
         self._pool = None
         var wake = _wake_fd()
@@ -254,6 +266,7 @@ struct Drain(Movable):
             _Stopping(
                 Int(Pointer(to=server)),
                 self._busy,
+                self._draining,
                 wake,
                 drain_seconds() * 1000,
             )
@@ -266,7 +279,12 @@ struct Drain(Movable):
         """`handler`, counting its requests for the drain."""
         return Counting(handler^, self._busy)
 
+    def draining(self) -> AtomicFlag:
+        """Set from the moment a drain starts; valid while this lives."""
+        return self._draining
+
     def __deinit__(deinit self):
-        # Join the thread before freeing the count it reads.
+        # Join the thread before freeing the cells it uses.
         _ = self._pool^
         self._busy.unsafe_free()
+        self._draining.unsafe_free()

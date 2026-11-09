@@ -3,15 +3,16 @@
 # retires the old UI:
 #
 # - SIGTERM with a slow request in flight (its query waits on a lock this
-#   test holds): new connections are refused at once, the slow request
-#   still gets its 200, and orca ui exits 0 soon after, well within
+#   test holds): new connections are refused at once, /healthz on a
+#   connection kept alive from before answers 503 `draining`, the slow
+#   request still gets its 200, and orca ui exits 0 soon after, well within
 #   ORCA_UI_DRAIN_SECONDS;
 # - SIGTERM with nothing in flight: it exits 0 at once;
 # - SIGINT with a request that outlasts ORCA_UI_DRAIN_SECONDS: it exits
 #   (1, the request cut) within the bound plus half a second.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-ui-drain starts a throwaway server)
-# and curl.
+# Needs ORCA_DATABASE_URL (pixi run test-ui-drain starts a throwaway server),
+# curl, and bash (its /dev/tcp holds the kept-alive connection).
 set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
@@ -24,11 +25,13 @@ log=build/ui-drain.log
 : > "$log"
 ui=
 locker=
+keep=
 fail() {
     echo "FAIL: $*"
     tail -20 "$log"
     [ -z "$ui" ] || kill -9 "$ui" 2> /dev/null || true
     [ -z "$locker" ] || kill "$locker" 2> /dev/null || true
+    [ -z "$keep" ] || kill "$keep" 2> /dev/null || true
     exit 1
 }
 q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
@@ -66,6 +69,31 @@ slow() {
         i=$((i + 1)); [ "$i" -lt 100 ] || fail "the slow request never waited"; sleep 0.05
     done
 }
+# keepalive: opens a connection to orca ui and sends GET /healthz on it,
+# then again on the same connection once build/ui-drain-again exists;
+# what comes back, until orca ui closes it, is in build/ui-drain-keep.txt.
+# Returns once the first answer is in.
+keepalive() {
+    rm -f build/ui-drain-again build/ui-drain-keep.txt
+    : > build/ui-drain-keep.txt
+    bash -c '
+        exec 3<> "/dev/tcp/127.0.0.1/$1" || exit 1
+        cat <&3 > build/ui-drain-keep.txt &
+        req="GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+        printf "$req" >&3
+        i=0
+        until [ -e build/ui-drain-again ]; do
+            i=$((i + 1)); [ "$i" -lt 300 ] || exit 1; sleep 0.1
+        done
+        printf "$req" >&3
+        wait
+    ' keepalive "$port" &
+    keep=$!
+    i=0
+    until grep -q "^ok" build/ui-drain-keep.txt; do
+        i=$((i + 1)); [ "$i" -lt 100 ] || fail "no answer on the kept-alive connection"; sleep 0.05
+    done
+}
 # stopped TENTHS: waits up to that many tenths of a second for orca ui to
 # exit; sets $took (tenths) and $code.
 stopped() {
@@ -80,16 +108,26 @@ stopped() {
     ui=
 }
 
-# A slow request in flight.
+# A slow request in flight, and a connection kept alive from before.
 start 5
+keepalive
+grep -q "^HTTP/1.1 200" build/ui-drain-keep.txt || fail "/healthz before the drain: $(head -1 build/ui-drain-keep.txt)"
 lock 2
 slow
 kill -TERM "$ui"
 sleep 0.3
 new=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$base/" 2> /dev/null || true)
 [ "$new" = 000 ] || fail "a new connection after SIGTERM got $new"
+# Read once the slow request is done, as the handler runs on the loop's
+# thread; answered before the drain settles.
+touch build/ui-drain-again
 stopped 45
 [ "$code" = 0 ] || fail "exited $code after draining"
+wait "$keep" || true
+keep=
+statuses=$(grep "^HTTP/1.1 " build/ui-drain-keep.txt | cut -d' ' -f2 | tr -d '\r' | tr '\n' ' ')
+[ "$statuses" = "200 503 " ] || fail "/healthz on the kept-alive connection got $statuses"
+grep -q "^draining" build/ui-drain-keep.txt || fail "no draining body: $(cat build/ui-drain-keep.txt)"
 wait "$slow_curl" || true
 [ "$(cat build/ui-drain-slow.txt)" = 200 ] || fail "the request in flight got $(cat build/ui-drain-slow.txt)"
 wait "$locker" || true
