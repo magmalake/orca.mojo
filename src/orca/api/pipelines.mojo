@@ -267,7 +267,8 @@ def pipeline_json(v: PipelineView, ask: PipelineAsk) -> String:
     json_runs_page(j, v.runs)
     j.write(", ")
     runs_filters_json(j, v.runs)
-    j.write('}, "usage": ', v.usage.json())
+    j.write('}, "usage": ', v.usage.json(), ', "learned": ')
+    j.write(v.learned.value().json() if v.learned else String("null"))
     if v.keys:
         j.write(', "keys": ')
         json_keys(j, v.keys.value())

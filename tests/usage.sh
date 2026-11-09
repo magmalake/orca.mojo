@@ -11,7 +11,10 @@
 #   on Linux the most cores they kept busy;
 # - the run's page, the attempt's and the pipeline's (its Resources card:
 #   p50 and max of each) show them, and their JSON has them; `orca status
-#   hog` and `hog status <run>` print them.
+#   hog` and `hog status <run>` print them;
+# - from the three, the request they suggest (orca.recommend): the largest
+#   peak plus 15% in quarter GBs, on the card, in the JSON and in `orca
+#   config show`, and applied nowhere.
 #
 # Needs ORCA_DATABASE_URL (pixi run test-usage starts a throwaway server),
 # curl and jq.
@@ -149,6 +152,19 @@ if $linux; then
     jq -e '.usage.peak_cpus.max > 1' build/usage-pipeline.json > /dev/null \
         || fail "the pipeline's peak cores: $(jq .usage build/usage-pipeline.json)"
 fi
+# The request learned from them: of three runs, p95 is the largest.
+grep -qE 'Learned<span class="help">.*learned from 3 runs: [0-9.]+ GB' build/usage-pipeline.out \
+    || fail "the Resources card's Learned: $(grep -o 'id="resources".*' build/usage-pipeline.out | head -c 3000)"
+jq -e '.learned.runs == 3 and .learned.applied == false and .learned.clamped == null
+    and .learned.memory_mb == ((.usage.peak_rss_bytes.max / 1048576 * 1.15 / 256 | ceil) * 256)' \
+    build/usage-pipeline.json > /dev/null || fail "the pipeline's learned: $(jq '{usage, learned}' build/usage-pipeline.json)"
+if $linux; then
+    jq -e '.learned.cpus >= 1 and .learned.cpus <= 3' build/usage-pipeline.json > /dev/null \
+        || fail "the learned CPUs: $(jq .learned build/usage-pipeline.json)"
+else
+    jq -e '.learned.cpus == null' build/usage-pipeline.json > /dev/null \
+        || fail "macOS learned CPUs: $(jq .learned build/usage-pipeline.json)"
+fi
 
 # What the commands print.
 ./build/orca status hog > build/usage-status.out 2>&1 || fail "orca status hog"
@@ -157,4 +173,9 @@ grep -qE "^  $r1 succeeded backfill 2024-01 .* peak [0-9]+ MB, CPU [0-9.]+ s" bu
 ./build/hog status "$r2" > build/usage-binary.out 2>&1 || fail "hog status"
 grep -qE "^hog 2024-02 succeeded \(peak [0-9]+ MB, CPU [0-9.]+ s" build/usage-binary.out \
     || fail "hog status: $(cat build/usage-binary.out)"
+./build/orca config show hog > build/usage-config.out 2>&1 || fail "orca config show hog"
+grep -qE "^  learned from 3 runs: [0-9.]+ GB.*not applied \(#269\)$" build/usage-config.out \
+    || fail "config show: $(cat build/usage-config.out)"
+[ "$(./build/orca config show hog --json | jq -r .learned.memory_mb)" = "$(jq -r .learned.memory_mb build/usage-pipeline.json)" ] \
+    || fail "config show --json: $(./build/orca config show hog --json)"
 echo "usage: ok"

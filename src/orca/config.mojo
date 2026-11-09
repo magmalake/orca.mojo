@@ -68,6 +68,7 @@ from orca.fill import (
 from orca.html import Html
 from orca.json import quote
 from orca.proc import absolute, capture
+from orca.recommend import Recommendation, learned
 from orca.resources import canonical_cpus, canonical_memory_gb
 from orca.secrets import parse_secrets, secret_problem
 from orca.source import is_hex, web_url
@@ -880,6 +881,9 @@ struct Shown(Movable):
     """The file's path in its checkout, for links to its lines."""
     var overrides: List[Tuple[String, String]]
     var rows: List[_Row]
+    var learned: Optional[Recommendation]
+    """The request its runs' peaks suggest (`orca.recommend`): shown, not
+    applied."""
 
     def __init__(out self, name: String):
         self.name = name
@@ -891,6 +895,7 @@ struct Shown(Movable):
         self.repo_path = String()
         self.overrides = List[Tuple[String, String]]()
         self.rows = List[_Row]()
+        self.learned = None
 
     def add(
         mut self, key: String, value: String, source: String, detail: String
@@ -935,7 +940,12 @@ struct Shown(Movable):
                 quote(r.setting.detail),
                 "}",
             )
-        out.write("]}")
+        out.write('], "learned": ')
+        if self.learned:
+            out.write(self.learned.value().json())
+        else:
+            out.write("null")
+        out.write("}")
         return out^
 
     def text(self) -> String:
@@ -984,6 +994,12 @@ struct Shown(Movable):
             out.write(r.setting.source)
             if r.setting.detail:
                 out.write(" ", r.setting.detail)
+            out.write("\n")
+        if self.learned and self.learned.value().runs > 0:
+            ref l = self.learned.value()
+            out.write("  ", l.text())
+            if l.any():
+                out.write(" (", l.source, "); shown, not applied (#269)")
             out.write("\n")
         return out^
 
@@ -1269,6 +1285,7 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
         for ref row in s.rows:
             if row.setting.source == FROM_FILE:
                 row.setting.line = _line_of(sources, row.key)
+        s.learned = learned(db, s.name, r.text("cpus"), r.text("memory_gb"))
         out.append(s^)
     return out^
 

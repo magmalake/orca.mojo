@@ -221,6 +221,22 @@ env = { DISTA_WORKER_SLOTS = "auto", GHARCHIVE_PARALLEL = "auto" }
   grant). Set the scheduler's and the worker's environment; the UI reads
   `ORCA_RUN_MEMORY_GROWTH` for workers' runs.
 
+### Learned requests
+
+From the peaks of a pipeline's last 20 successful measured runs ([What a
+run uses](ui.md#what-a-run-uses)), orca works out the request they suggest
+(#269, `src/orca/recommend.mojo`): memory is the 95th percentile of their
+peak memory plus 15%, rounded up to a quarter GB and never below what an
+out-of-memory kill raised the pipeline to; CPUs are the 90th percentile of
+their peak cores, rounded up, at least 1 (none on macOS, which doesn't
+measure peak cores). Both are clamped to the declared `cpus` and
+`memory_gb`, saying so, and with fewer than 3 such runs there's none. The
+pipeline's Resources card shows it beside **Requested**, `orca config show`
+prints it after the settings (`learned from 20 runs: 3.25 GB, 2 CPUs`), and
+both JSONs have `learned`. It is shown only: admission, grants and cgroup
+limits still use the declared request. `"auto"` requests that use it are
+next.
+
 ### Memory pressure
 
 Requests are estimates, and a host can be short of memory while its grants

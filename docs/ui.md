@@ -169,6 +169,9 @@ The header is four cards, side by side on a wide screen:
   [What a run uses](#what-a-run-uses). A pipeline with a request
   (`cpus`, `memory_gb` in [orca.toml](orca-toml.md#requests-and-grants))
   has it here too, as **Requested**, and `request` in the JSON.
+  **Learned** is the request its runs suggest
+  ([Learned requests](orca-toml.md#learned-requests)), `learned` in the
+  JSON: `learned from 20 runs: 3.25 GB, 2 CPUs`. Nothing applies it yet.
 
 A sensor that runs when another pipeline's dataset gets a snapshot (the
 census's mojo_repos and mojo_activity follow gharchive) has **Following**
