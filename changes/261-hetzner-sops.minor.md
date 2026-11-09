@@ -1,5 +1,3 @@
-- **Hetzner: secret files encrypted with SOPS.** A secret `*_FILE` in
-  `hetzner.env` named `*.sops` or `*.sops.<ext>` is decrypted with `sops -d`
-  and piped to the server, never written to a file on the laptop, so the
-  tokens can live in a private repository encrypted with age
-  (docs/hetzner.md#secrets-on-your-laptop-sops).
+- **Hetzner: secret files encrypted with SOPS.** A `*_FILE` in `hetzner.env`
+  named `*.sops` is decrypted on its way to the server, never to a file on
+  the laptop (docs/hetzner.md#secrets-on-your-laptop-sops) (#261).

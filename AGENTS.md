@@ -5,7 +5,10 @@
 Don't edit CHANGELOG.md: add `changes/<pr>-<slug>.<patch|minor>.md` with the
 entry (`shelf changes new <pr>-<slug> --bump minor`; changes/README.md).
 `shelf release apply` moves fragments into CHANGELOG.md. If the PR number
-isn't known yet, use a slug and rename the file once the PR exists.
+isn't known yet, use a slug and rename the file once the PR exists. Keep
+the entry to one bullet: a bold title and one sentence on what changed for a
+user (and anything they must do when upgrading), then `(#<pr>)`; the details
+go in the PR.
 
 ## Migrations
 
