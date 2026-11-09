@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.21.0 - 2026-11-09
+
+- **`"auto"` requests**: `memory_gb = "auto"`, `cpus = "auto"` or `"auto..MAX"` in orca.toml admit and grant a pipeline's runs what its last 20 runs suggest, recorded on each run (`learned from 20 runs`), with no request until it has 3 and `learn = false` to turn it off (#275).
+
 ## 0.20.0 - 2026-11-09
 
 - **Hetzner: every secret in one SOPS file.** `SECRETS_FILE` in `hetzner.env`
