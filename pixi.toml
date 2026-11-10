@@ -283,6 +283,9 @@ test-append-files = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_ap
 # retries, runs racing over one partition, and stale removals.
 test-replace = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_replace.mojo -o build/test-replace && scripts/with-postgres.sh ./build/test-replace" }
 test-replace-concurrent = { cmd = "tests/replace_concurrent.sh" }
+# The Lean model of a retried step (formal/) against orca.tables.append, on
+# the event sequences in formal/difftest/retry.cases.
+test-formal-retry = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_formal_retry.mojo -o build/test-formal-retry && ./build/test-formal-retry" }
 test-chaos-tables = { cmd = "CHAOS_SRC=tests/chaos_tables.mojo CHAOS_CHECK=1 scripts/with-postgres.sh tests/chaos.sh" }
 test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh" }
 test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh" }
@@ -303,7 +306,7 @@ test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh" }
 # `orca worker` with no database, committing to a local warehouse.
 test-worker = { cmd = "scripts/with-postgres.sh tests/worker.sh" }
 # CI runs these three groups on runners of their own; test-data is all three.
-test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-replace", "test-replace-concurrent", "test-chaos-tables", "test-lineage", "test-commits", "test-expire", "test-taxi"] }
+test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-replace", "test-replace-concurrent", "test-formal-retry", "test-chaos-tables", "test-lineage", "test-commits", "test-expire", "test-taxi"] }
 test-data-sensors = { depends-on = ["build-shared", "test-sensors", "test-lineage-s3", "test-sensors-s3", "test-sample-s3", "test-worker"] }
 test-data-keyed = { depends-on = ["build-shared", "test-keyed", "test-keyed-backfills", "test-keyed-sensor", "test-keyed-names"] }
 test-data = { depends-on = ["test-data-tables", "test-data-sensors", "test-data-keyed"] }
