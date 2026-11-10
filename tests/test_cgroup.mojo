@@ -17,6 +17,7 @@ from orca.cgroup import (
     full_avg10,
     growth_pct_of,
     has_word,
+    stall_total_us,
     held,
     max_mb,
     oom_text,
@@ -126,6 +127,17 @@ def test_pressure() raises:
     assert_equal(full_avg10(text), 91.25)
     assert_equal(full_avg10("some avg10=1.00 avg60=0 avg300=0 total=1\n"), -1.0)
     assert_equal(full_avg10(""), -1.0)
+
+
+def test_stall_totals() raises:
+    var text = (
+        "some avg10=0.00 avg60=0.00 avg300=0.00 total=3235372442\n"
+        "full avg10=0.00 avg60=0.00 avg300=0.00 total=3233770492\n"
+    )
+    assert_equal(stall_total_us(text, "some"), 3235372442)
+    assert_equal(stall_total_us(text, "full"), 3233770492)
+    assert_equal(stall_total_us("", "some"), -1)
+    assert_equal(stall_total_us("some avg10=0.00\n", "some"), -1)
 
 
 def test_held() raises:

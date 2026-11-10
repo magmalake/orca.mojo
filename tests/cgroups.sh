@@ -204,6 +204,9 @@ if [ -f "$cgbase/memory.pressure" ]; then
         *) fail "run $r4's first attempt isn't a kill for being held at 200 MB: $held" ;;
     esac
     said "of grower run $r4 (held at its memory limit (200 MB) for 3 s)" || fail "the held kill wasn't said"
+    # It waited on memory for most of those seconds, and its attempt says so.
+    stalled=$(q "SELECT coalesce(a.memory_stall_full_ms, -1) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r4 AND a.attempt = 1")
+    [ "$stalled" -ge 1000 ] || fail "run $r4's held attempt's memory stall: $stalled ms"
     export ORCA_RUN_MEMORY_MARGIN=0
     unset ORCA_RUN_MEMORY_HELD_SECONDS
 else

@@ -1708,19 +1708,23 @@ struct Scheduler(Movable):
                 )
             except e:
                 print("orca: can't raise", c.pipeline, "memory:", e)
+        var stall = Cgroups.stall_ms(c.path)
         try:
             _ = self.db.conn.execute(
                 (
                     "UPDATE orca.attempts a SET memory_limit_mb = $3,"
-                    " grant_memory_mb = nullif($4, 0) FROM orca.steps st WHERE"
-                    " st.id = a.step AND st.run = $1 AND a.host LIKE '%:' ||"
-                    " $2 AND a.memory_limit_mb IS NULL"
+                    " grant_memory_mb = nullif($4, 0), memory_stall_ms ="
+                    " nullif($5, -1), memory_stall_full_ms = nullif($6, -1)"
+                    " FROM orca.steps st WHERE st.id = a.step AND st.run = $1"
+                    " AND a.host LIKE '%:' || $2 AND a.memory_limit_mb IS NULL"
                 ),
                 Params()
                 .int64(Int64(c.run))
                 .text(String(pid))
                 .int64(Int64(c.limit_mb))
-                .int64(Int64(c.grant_mb)),
+                .int64(Int64(c.grant_mb))
+                .int64(Int64(stall[0]))
+                .int64(Int64(stall[1])),
             )
             _ = self.db.conn.execute(
                 (

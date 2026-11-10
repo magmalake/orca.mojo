@@ -714,18 +714,29 @@ def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
     if len(rows) != 1:
         return
     var r = rows.row(0)
+    # Stall times from a worker that measures them (an older one doesn't).
+    var stall = (
+        _num(v, "memory_stall_ms") if String("memory_stall_ms") in v else -1
+    )
+    var stall_full = (
+        _num(v, "memory_stall_full_ms") if String("memory_stall_full_ms")
+        in v else -1
+    )
     _ = db.conn.execute(
         (
             "UPDATE orca.attempts a SET memory_limit_mb = $3, grant_memory_mb"
-            " = nullif($4, 0) FROM orca.steps st WHERE st.id = a.step AND"
-            " st.run = $1 AND a.host LIKE '%:' || $2 AND a.memory_limit_mb IS"
-            " NULL"
+            " = nullif($4, 0), memory_stall_ms = nullif($5, -1),"
+            " memory_stall_full_ms = nullif($6, -1) FROM orca.steps st WHERE"
+            " st.id = a.step AND st.run = $1 AND a.host LIKE '%:' || $2 AND"
+            " a.memory_limit_mb IS NULL"
         ),
         Params()
         .int64(run)
         .text(String(_num(v, "pid")))
         .int64(Int64(limit))
-        .int64(r.int64("grant_mb")),
+        .int64(r.int64("grant_mb"))
+        .int64(stall)
+        .int64(stall_full),
     )
     if _num(v, "oom") != 1 or not r.bool("running"):
         return
