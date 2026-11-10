@@ -2993,7 +2993,10 @@ struct Scheduler(Movable):
         process died is cancelled; one of code that isn't the pipeline's
         any more fails, saying how to resume it; one whose process died
         with no retries left, or that the scheduler doesn't retry, fails
-        (and so does a fill run's while fills are off)."""
+        (and so does a fill run's while fills are off); and while `p` is
+        paused, one with retries left is queued again, as nothing restarts
+        it until then and it would look running (a deploy's drain waits
+        for it)."""
         _ = tx.execute(
             String(
                 "UPDATE orca.runs SET status = 'cancelled', ended = now(),",
@@ -3054,6 +3057,25 @@ struct Scheduler(Movable):
             .int64(Int64(p.run_retries))
             .bool(p.fill.all),
         )
+        if p.paused:
+            var n = tx.execute(
+                String(
+                    "UPDATE orca.runs SET status = 'queued', owner = NULL,",
+                    " heartbeat = NULL, retry_at = NULL, held = NULL, instance",
+                    " = NULL WHERE pipeline = $1 AND status = 'running' AND",
+                    " NOT cancel_requested AND ",
+                    dead,
+                ),
+                Params().text(p.name).float64(self.stale),
+            )
+            if n > 0:
+                print(
+                    "orca: paused",
+                    p.name,
+                    "has",
+                    n,
+                    "run(s) whose process stopped: queued again",
+                )
 
     def _start(mut self, p: Registered, now: Int64, fill: Bool = False) raises:
         """Starts queued runs, retries that are due and runs whose process

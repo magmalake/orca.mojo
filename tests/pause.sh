@@ -10,7 +10,8 @@
 #   or due a retry end cancelled, the others stay; `@all` takes the rest, and
 #   a running run is asked to stop before its next step; a failed run that
 #   won't be retried, and a succeeded one, are left alone;
-# - the pipeline page's cancel form, empty for all of them.
+# - the pipeline page's cancel form, empty for all of them;
+# - paused, a run whose process stopped is queued again.
 #
 # Needs ORCA_DATABASE_URL (pixi run test-pause starts a throwaway server),
 # curl and jq.
@@ -142,6 +143,18 @@ until [ "$(status_of 2024-03)" = succeeded ]; do
 done
 kill "$sched"; wait "$sched" 2> /dev/null || true; sched=
 [ "$(orca pause toy)" = "paused toy" ] && [ "$(orca unpause toy)" = "unpaused toy" ] || fail "pause, unpause"
+
+# Paused, a run whose process stopped with retries left is queued again,
+# not left looking running (nothing restarts it while paused, and a
+# deploy's drain would wait for it).
+orca pause toy > /dev/null || fail "pause again"
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, starts, started, heartbeat, placement)
+   SELECT 'toy', registry_hash, '2023-12', 'backfill', 'running', 1, now() - interval '1 hour',
+          now() - interval '1 hour', 'local' FROM orca.pipelines WHERE name = 'toy'" > /dev/null
+tick 2024-02-02T03:10Z
+[ "$(status_of 2023-12)" = queued ] || fail "a paused pipeline's dead run is $(status_of 2023-12), not queued"
+[ "$(q "SELECT starts FROM orca.runs WHERE partitions = '2023-12'")" = 1 ] || fail "the requeue reset its starts"
+orca cancel toy @all > /dev/null && orca unpause toy > /dev/null || fail "cancel, unpause"
 
 stop
 echo "ok   pause"
