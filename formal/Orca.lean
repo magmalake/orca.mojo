@@ -1,5 +1,7 @@
 import Orca.Core.Types
 import Orca.Core.Assumptions
+import Orca.Migrate.Model
+import Orca.Migrate.Floor
 import Orca.Pins.Model
 import Orca.Pins.SameSnapshot
 import Orca.Retry.Model

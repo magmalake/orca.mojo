@@ -18,10 +18,18 @@ an attempt reads a table, `Ctx.pin` takes the snapshot an earlier attempt
 read, or else the current one, and records it before answering; a new
 attempt starts from the store's `pinned_reads`.
 
+**A binary runs only on a schema it can run on** (`Orca/Migrate`). Each
+migration applied records the fewest migrations a binary must know to run on
+the schema it left (`min_binary`, from `migration_floor`); a binary older
+than the database runs on it only if it knows that many (`schema_ahead`),
+which is what lets a deploy be rolled back past additive migrations.
+
 | Theorem | Says |
 |---|---|
 | `no_double_commit` | In every reachable state, at most one snapshot in the table is the step's commit number `n`. |
 | `retry_records_its_own_commit` | Every commit on record in Postgres names a snapshot in the table that is the step's commit of that number. |
+| `Migrate.runs_only_knowing_the_floor` | A binary that `migrate` lets go on knows every floor-raising migration up to the version of the database it leaves. |
+| `Migrate.runs_when_only_additive_since` | A binary that knows every floor-raising migration the database has had is let go on, if every row it doesn't know states its floor. |
 | `Pins.retry_reads_same_snapshot` | Any two answers `Ctx.pin` ever gave for one table, in any attempts of the step, are the same snapshot. |
 
 Each holds for every environment that meets its assumptions, whatever the
@@ -43,7 +51,9 @@ need it.
 reads the table only); it takes it because one invariant carries both
 `Retry` theorems. `Orca/Witness.lean` gives an environment that meets all
 three. In `Pins` a crash is a step of the model itself: the next attempt
-keeps nothing but the ledger.
+keeps nothing but the ledger. `Migrate` takes no hypothesis: its model is
+`State.migrate` as a function of the rows of `orca.schema_version`, run in
+one transaction.
 
 ## What the models leave out
 
@@ -62,6 +72,13 @@ keeps nothing but the ledger.
   step does between reads: `Pipeline.execute` also carries an attempt's
   reads to the next attempt of the same process, which the model covers by
   reading them from the ledger.
+- **Migrate: whether a migration is additive.** The theorems are about the
+  bookkeeping of floors written by binaries of different ages. That a
+  migration left out of `_floor_raisers` leaves older binaries working is a
+  reviewer's call (AGENTS.md, "Migrations"), which the model takes as given;
+  so is that binaries agree on the floor-raisers they both know. The check
+  for live older schedulers (`_refuse_overlap`) and the SQLite store, which
+  refuses any newer file, aren't modelled.
 - **The attempt's own code is deterministic**: its `n`-th commit is the same
   commit in every attempt. The model says nothing of what a commit holds,
   nor of `replaces=`.
@@ -74,6 +91,8 @@ keeps nothing but the ledger.
 | `Orca/Core/Assumptions.lean` | the three environment assumptions |
 | `Orca/Retry/Model.lean` | `made`, `findCommit`, the step relation, reachable states |
 | `Orca/Retry/NoDoubleCommit.lean` | the invariant and the two theorems |
+| `Orca/Migrate/Model.lean` | `floorOf`, `schemaAhead`, `migrate` over the rows of `orca.schema_version` |
+| `Orca/Migrate/Floor.lean` | the invariant and the two theorems |
 | `Orca/Pins/Model.lean` | `lookup`, `pinsOf`, the step relation for reads |
 | `Orca/Pins/SameSnapshot.lean` | the invariant and the theorem |
 | `Orca/Witness.lean` | an environment that meets the assumptions |
@@ -81,6 +100,7 @@ keeps nothing but the ledger.
 | `Oracle/` | `orca-oracle <model>`: each model's own functions run over event sequences |
 | `difftest/retry.cases` | `orca-oracle retry`: 363 sequences of up to five events, and the table each leaves |
 | `difftest/pins.cases` | `orca-oracle pins`: 3905 sequences of up to five events, and the answers `Ctx.pin` gives |
+| `difftest/migrate.cases` | `orca-oracle migrate`: `migration_floor`, 810 `schema_ahead` verdicts, and 155 sequences of binaries migrating |
 | `scripts/check.sh` | the gate CI runs |
 
 ## Build and check
@@ -95,6 +115,7 @@ scripts/check.sh                              # no sorry or axiom; retry.cases i
 lake exe orca-oracle retry > difftest/retry.cases   # after changing an oracle
 pixi run -e data test-formal-retry            # from the root: retry.cases through orca.tables.append
 pixi run test-formal-pins                     # pins.cases through Ctx.pin and the stores
+pixi run test-formal-migrate                  # migrate.cases through orca.state, on a throwaway Postgres
 ```
 
 ## The differential tests
@@ -114,6 +135,14 @@ oracle's line.
   the answers. Events are `a`, `b` (the attempt reads the table), `A`, `B`
   (another writer commits to it) and `x`. `PgStore`'s `pinned_reads`, a
   different query, isn't replayed.
+
+- `tests/test_formal_migrate.mojo`: `migration_floor` and `schema_ahead`
+  line by line, and `State.migrate` on an empty Postgres database per
+  sequence, by binaries that know 23, 24, 40 and 46 migrations
+  (`ORCA_TEST_MIGRATIONS`), with `n` clearing every `min_binary`; compared
+  are which binaries refused, and the version and floor left. The oracle's
+  `raisers` must be `_floor_raisers`: adding a floor-raiser fails this test
+  until the oracle has it too.
 
 The oracles share their models' functions (`findCommit` and `made`;
 `lookup`, `pinsOf` and `afterRecord`), but take whole calls as one event.

@@ -1,0 +1,1 @@
+- **A Lean model of the schema floor**: `formal/` gains a model of `migration_floor`, `schema_ahead` and `State.migrate` with proofs that a binary goes on only if it knows every floor-raising migration the database has had, and is never refused otherwise; nothing changes for a deploy. (#PR)
