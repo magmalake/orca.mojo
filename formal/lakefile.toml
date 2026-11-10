@@ -1,0 +1,16 @@
+name = "orca-formal"
+version = "0.1.0"
+defaultTargets = ["Orca", "orca-oracle"]
+
+[leanOptions]
+autoImplicit = false
+relaxedAutoImplicit = false
+
+[[lean_lib]]
+name = "Orca"
+
+# The model as a program: prints what the model says each event sequence
+# leaves in the table, for tests/test_formal_retry.mojo (difftest/).
+[[lean_exe]]
+name = "orca-oracle"
+root = "Oracle.Main"
