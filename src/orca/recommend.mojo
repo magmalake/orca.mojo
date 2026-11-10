@@ -321,13 +321,15 @@ struct RunRequest(Copyable, Movable):
 
 
 def resolve_request(
-    declared: Request, rec: Recommendation, learn: Bool
+    declared: Request, rec: Recommendation, learn: Bool, most_cpus: Int = 0
 ) -> RunRequest:
     """The request a start of a pipeline asking for `declared` gets, given
     what its runs suggest (`rec`) and whether it learns: `declared` as it
     is if nothing in it is `auto`; else each `auto` resource is `rec`'s (up
     to `auto..MAX`'s maximum, which `rec` is already within), or with none
-    or learning off, not asked for."""
+    or learning off, not asked for. Learned CPUs are at most `most_cpus`
+    (what the host grants a run, 0 for no limit): a run asking for more
+    would wait forever, and fewer cores only make it slower."""
     var out = RunRequest(
         Request(
             declared.cpus_min,
@@ -354,8 +356,11 @@ def resolve_request(
             out.request.memory_max_mb = 0
     if declared.cpus_auto:
         if learn and rec.cpus > 0:
-            out.request.cpus_min = rec.cpus
-            out.request.cpus_max = max(declared.cpus_max, rec.cpus)
+            var cpus = min(rec.cpus, most_cpus) if most_cpus > 0 else rec.cpus
+            out.request.cpus_min = cpus
+            out.request.cpus_max = max(declared.cpus_max, cpus)
+            if most_cpus > 0:
+                out.request.cpus_max = min(out.request.cpus_max, most_cpus)
             any = True
         else:
             out.request.cpus_min = 0

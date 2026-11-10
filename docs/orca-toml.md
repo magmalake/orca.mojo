@@ -243,6 +243,8 @@ both JSONs have `learned`.
 **Turning it on.** `memory_gb = "auto"` or `cpus = "auto"` asks for it:
 it is then the request's minimum and maximum. `auto` as a range's lower
 end, `memory_gb = "auto..24"`, asks for it at most 24 GB, granted up to 24.
+Learned CPUs are also at most what the host grants a run, so a run whose
+peaks reach more cores than that runs on fewer rather than waiting.
 `orca register --memory-gb auto` does the same. Each start of a run on the
 local runner, the control host or a remote worker is admitted and granted
 from it (cgroup limit, kill and out-of-memory retry as above), resolved

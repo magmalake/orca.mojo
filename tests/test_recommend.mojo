@@ -183,6 +183,22 @@ def test_auto_range_is_clamped() raises:
     assert_equal(s.memory_gb_text(), "0.75..2")
 
 
+def test_learned_cpus_fit_the_host() raises:
+    # Learned 3 CPUs on a host that grants a run at most 1: 1, not a wait.
+    var auto = Request.of("auto", "auto")
+    var rec = recommend(_runs([1000, 1000, 1000], 2.3), 0, auto)
+    var r = resolve_request(auto, rec, True, 1)
+    assert_equal(r.request.cpus_min, 1)
+    assert_equal(r.request.cpus_max, 1)
+    assert_equal(r.source, LEARNED)
+    # Within it, as learned; memory isn't capped.
+    assert_equal(resolve_request(auto, rec, True, 4).request.cpus_min, 3)
+    assert_equal(r.request.memory_min_mb, 1280)
+    # A declared range isn't capped: that's the pipeline's ask.
+    var declared = Request.of("2..4", "")
+    assert_equal(resolve_request(declared, rec, True, 1).request.cpus_min, 2)
+
+
 def test_auto_falls_back() raises:
     var auto = Request.of("", "auto")
     # Too few runs: no request, as without memory_gb.

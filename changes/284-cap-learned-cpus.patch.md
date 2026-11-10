@@ -1,0 +1,1 @@
+- **Learned CPUs fit the host**: a `cpus = "auto"` request is at most what the host grants a run, so a pipeline whose runs peaked on more cores runs on fewer instead of waiting forever. (#284)
