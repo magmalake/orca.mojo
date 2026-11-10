@@ -369,7 +369,7 @@ def _progress_html(
             ),
             "sensors",
         )
-        follow_html(h, p.name, f.value())
+        follow_html(h, p.name, f.value(), p.max_runs)
         h.raw("</dd>")
     if p.sense_error:
         fact_item(

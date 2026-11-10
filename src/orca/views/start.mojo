@@ -2,6 +2,7 @@
 the command that queues it, for a pipeline's Operate tab and its JSON.
 """
 
+from orca.estimate import Pace, estimate_text, pace
 from orca.scheduler import preview_backfill, registered
 from orca.state import State
 from orca.views.pipelines import PipelineRow
@@ -22,6 +23,8 @@ struct StartPreview(Copyable, Movable):
     var done: List[String]
     var live: List[String]
     var live_runs: List[Int]
+    var pace: Pace
+    """How long its recent runs took, for the estimates."""
 
 
 def start_preview(
@@ -51,6 +54,7 @@ def start_preview(
             q.done.copy(),
             q.live.copy(),
             q.live_runs.copy(),
+            pace(db, name),
         )
     except e:
         return StartPreview(
@@ -61,6 +65,7 @@ def start_preview(
             List[String](),
             List[String](),
             List[Int](),
+            Pace(-1.0, 0),
         )
 
 
@@ -108,6 +113,16 @@ def preview_line(p: PipelineRow, v: StartPreview) -> String:
             v.live_runs[0],
             ").",
         )
+    if v.runs > 0:
+        out.write(
+            " ",
+            estimate_text(
+                v.pace,
+                v.pace.backfill(n, v.runs, p.max_runs),
+                unit_word(p.kind, 1),
+                min(p.max_runs, v.runs),
+            ),
+        )
     return out^
 
 
@@ -127,5 +142,6 @@ def one_run_line(p: PipelineRow, v: StartPreview) -> String:
         n,
         " ",
         unit_word(p.kind, n),
-        ", done or not.",
+        ", done or not. ",
+        estimate_text(v.pace, v.pace.one_run(n), unit_word(p.kind, 1), 0),
     )

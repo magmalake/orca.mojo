@@ -158,6 +158,14 @@ def json_keys(mut out: String, k: KeyCounts):
     )
 
 
+def _or_null(seconds: Int) -> String:
+    return String(seconds) if seconds >= 0 else String("null")
+
+
+def _seconds(x: Float64) -> String:
+    return String(Float64(Int(x * 10.0 + 0.5)) / 10.0)
+
+
 def json_start_preview(
     mut out: String,
     p: PipelineRow,
@@ -186,6 +194,15 @@ def json_start_preview(
         len(v.keys) + len(v.done) + len(v.live),
         ', "summary": ',
         quote(preview_line(p, v)) if not v.refused else String("null"),
+        ', "estimate": {"per_key_seconds": ',
+        _seconds(v.pace.per_key) if v.pace.known() else String("null"),
+        ', "sample_runs": ',
+        v.pace.runs,
+        ', "backfill_seconds": ',
+        _or_null(v.pace.backfill(len(v.keys), v.runs, p.max_runs)),
+        ', "one_run_seconds": ',
+        _or_null(v.pace.one_run(len(v.keys) + len(v.done) + len(v.live))),
+        "}",
         ', "commands": {"backfill": ',
         quote(backfill_cmd(p.name, keys, rerun)),
         ', "run": ',
