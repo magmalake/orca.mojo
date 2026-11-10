@@ -940,11 +940,12 @@ gharchive 2026-10-09..2026-11-07`. Only census images built with
 `orca.dev.toml` have the file (mojo-census#87 on): `orca register` fails on an
 older one, so don't roll the dev stack back past it.
 
-The tunnel's public hostnames, Proxied as for production:
-`orca-dev.mojourney.dev` to `http://ui:8270` and `dev.mojourney.dev` to
-`http://console:8080`. One level below the zone, because Cloudflare's free
-Universal SSL certificate covers `mojourney.dev` and `*.mojourney.dev` only:
-`orca.dev.mojourney.dev` would need an Advanced Certificate.
+The tunnel's public hostnames, Proxied as for production: the census's dev
+stack has `orca-beta.mojourney.dev` to `http://ui:8270` and
+`beta.mojourney.dev` to `http://console:8080`, with `UI_URL` set to the
+first. One level below the zone, because Cloudflare's free Universal SSL
+certificate covers `mojourney.dev` and `*.mojourney.dev` only:
+`orca.beta.mojourney.dev` would need an Advanced Certificate.
 
 **Images.** The census's CI pushes `ghcr.io/magmalake/orca:<short sha>` from
 its `dev` branch (and `dev`); main builds none, so both stacks deploy dev's
@@ -972,8 +973,8 @@ ssh root@<ip> orca-stack register       # orca.dev.toml's pipelines
 3. The pipelines registered: `docker exec scheduler orca status` lists
    each of `orca.dev.toml`'s, from `<tag>`, and the ones paused before are
    still paused.
-4. `curl -s -o /dev/null -w '%{http_code}\n' https://orca-dev.mojourney.dev/healthz`
-   says 200, and the console answers.
+4. `curl -s -o /dev/null -w '%{http_code}\n' https://orca-beta.mojourney.dev/healthz`
+   says 200, and the console (`https://beta.mojourney.dev`) answers.
 5. One manual run per pipeline (`orca start <pipeline> <partition>`, or the
    UI's run button), each succeeding.
 6. A deploy with a run in flight: start a long run, `./deploy.sh <tag>
