@@ -1,0 +1,1 @@
+- **Runs held at their memory limit are killed**: a run throttled at its cgroup's `memory.high` that can't reach `memory.max` used to hang for hours; after two minutes held there (`ORCA_RUN_MEMORY_HELD_SECONDS`) it now fails out of memory and retries bigger. (#279)
