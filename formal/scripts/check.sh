@@ -30,7 +30,7 @@ n_thm=$(grep -c '^#print axioms' Orca/Audit.lean)
 n_out=$(echo "$out" | grep -c -e 'depends on axioms' -e 'does not depend on any axioms')
 if [ "$n_thm" != "$n_out" ]; then echo "FAIL: $n_thm theorems audited, $n_out reported"; fail=1; fi
 
-for model in retry pins; do
+for model in retry pins migrate; do
   if ! lake exe orca-oracle "$model" | diff -u "difftest/$model.cases" - > /dev/null; then
     lake exe orca-oracle "$model" | diff -u "difftest/$model.cases" - | head -40
     echo "FAIL: difftest/$model.cases isn't the oracle's output;"

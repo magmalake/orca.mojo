@@ -1,3 +1,4 @@
+import Oracle.Migrate
 import Oracle.Pins
 import Oracle.Retry
 
@@ -18,6 +19,7 @@ def main (args : List String) : IO UInt32 :=
   match args with
   | ["retry"] => printAll Orca.Oracle.Retry.lines
   | ["pins"] => printAll Orca.Oracle.Pins.lines
+  | ["migrate"] => printAll Orca.Oracle.Migrate.lines
   | _ => do
-    IO.eprintln "usage: orca-oracle retry|pins"
+    IO.eprintln "usage: orca-oracle retry|pins|migrate"
     return 1
