@@ -1,0 +1,1 @@
+- **Hosts over time counts self-hosted workers**: Ops › Pools' chart shows them beside EC2 and the control host. (#PR)
