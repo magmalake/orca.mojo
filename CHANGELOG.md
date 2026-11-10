@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.22.0 - 2026-11-10
+
+- **A Lean model of retries**: `formal/` holds a Lean 4 model of a step's attempts and commits with a proof that a retried step never commits twice, checked in CI and against `orca.tables.append`; nothing changes for a pipeline. (#286)
+
+- **Out of memory at the maximum fails at once**: a run killed for its memory at `memory_gb`'s maximum fails with that as its error, instead of retrying at the same limit and ending "interrupted: its process stopped, and its retries are spent". (#287)
+
+- **A Lean model of pinned reads**: `formal/` gains a model of `Ctx.pin` with a proof that every attempt of a step reads the snapshot its first attempt read, checked in CI and against the memory and SQLite stores; nothing changes for a pipeline. (#288)
+
+- **A Lean model of the schema floor**: `formal/` gains a model of `migration_floor`, `schema_ahead` and `State.migrate` with proofs that a binary goes on only if it knows every floor-raising migration the database has had, and is never refused otherwise; nothing changes for a deploy. (#289)
+
+- **A Lean model of fencing**: `formal/` gains a model of a run's owner and heartbeat with a proof that a commit which lands within half the stale limit of its fence check lands while its process still owns the run, checked in CI and against `PgStore`; nothing changes for a pipeline. (#290)
+
+- **A paused pipeline's stopped runs are queued again**: a run whose process stopped while its pipeline was paused (by hand or by the watchdog) goes back to queued instead of looking running until unpaused, which also kept a deploy's drain waiting. (#291)
+
+- **A run no longer takes another run's commit for its own**: after orca's database was restored from a backup or made anew over the same warehouse, a new run given a lost run's number recognised that run's snapshots as its commits and skipped its writes; each run now has a random token that its commits carry (`orca.run-token`), and snapshots from before the upgrade are recognised by the number as before. (#293)
+
+- **`replaces=` keeps the registry hash**: switching a step from `writes=` keeps its done keys. (#296)
+- **Step `version=`**: raising it marks the step's outputs to be made again. (#296)
+
+- **Fills follow `version=`**: raising a step's version fills its partitions again. (#298)
+
+- **Out of memory at the maximum stays failed**: #287's failed run is no longer retried on the next pass. (#300)
+
+- **Queue what a sensor is behind, with an estimate**: the Progress card's Following line has a Queue them button for the days or months not queued yet, and Start runs previews say about how long the backfill or the one run would take. (#301)
+
+- **`max_runs = "auto"`**: runs as many at once as the host has room for, up to a ceiling. (#302)
+
+- **A run held at its own memory limit no longer holds every start**: memory-pressure admission ignores the stall it causes. (#303)
+
 ## 0.21.1 - 2026-11-10
 
 - **Long partition lists shortened**: a run over many partitions shows its first and last and the count on its page (the full list folds under them) and while a deploy waits for it. (#277)
