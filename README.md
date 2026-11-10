@@ -281,9 +281,12 @@ comptime Refresh = Step["refresh", Day, Int64, refresh, Mapped, replaces=["mojo.
 The new version is a new hash. Once it's registered, the keys done under
 the old one are no longer done: coverage counts again from zero, a keyed
 sensor queues every key at its next snapshot, and `orca backfill <pipeline>
-@all` queues them all. A time-partitioned pipeline's fills don't run
-partitions they already ran, so regenerate its history with `orca backfill
-<pipeline> <range>` or `orca rebuild <dataset> <range>` (which also reruns
-what reads it), at a time of your choosing.
+@all` queues them all. A time-partitioned pipeline with `fills = "all"`
+fills its partitions again, within its fill limits (`fill_max_runs`,
+`fill_window`, `fill_budget_per_day`), since its fill counts a partition
+done only under code with the same steps' versions; any other change of
+code fills nothing again. With `since_registration`, regenerate its history
+with `orca backfill <pipeline> <range>` or `orca rebuild <dataset> <range>`
+(which also reruns what reads it). `orca register` says which applies.
 
 Part of [magmalake](https://magmalake.dev).

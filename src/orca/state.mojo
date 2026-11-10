@@ -51,6 +51,23 @@ from orca.store import (
 )
 
 
+def data_version_sql(describe: String) -> String:
+    """SQL for the data version of the `describe` JSON `describe` (a jsonb
+    expression): its steps' `version=` as `<step>=<version>`, by step
+    name, comma-separated; empty when no step sets one (#297). The fill
+    takes a partition done under another code as done only when this
+    matches (`orca.fill`)."""
+    return String(
+        (
+            "coalesce((SELECT string_agg((x->>'name') || '=' ||"
+            " (x->>'version'), ',' ORDER BY x->>'name') FROM"
+            " jsonb_array_elements(("
+        ),
+        describe,
+        ")->'steps') AS x WHERE x->>'version' IS NOT NULL), '')",
+    )
+
+
 def _migrations() -> List[List[String]]:
     """Each migration is a list of statements; its version is its index + 1.
 
@@ -767,6 +784,20 @@ def _migrations() -> List[List[String]]:
                 " orca.uuidv7()"
             ),
         ],
+        # Each version's data version (#297): its steps' `version=`, which
+        # the fill compares so a raised one fills the partitions again.
+        # Additive: older binaries neither read nor write it, and leave it
+        # null on the versions they record, which reads as none. The
+        # pipelines' current versions get theirs from their describe.
+        [
+            "ALTER TABLE orca.pipeline_versions ADD COLUMN data_version text",
+            String(
+                "UPDATE orca.pipeline_versions v SET data_version = ",
+                data_version_sql("p.describe"),
+                " FROM orca.pipelines p WHERE p.name = v.pipeline AND",
+                " p.registry_hash = v.registry_hash",
+            ),
+        ],
     ]
 
 
@@ -1041,14 +1072,20 @@ struct State(Movable):
         return Int(
             self.conn.query(
                 (
-                    "INSERT INTO orca.pipeline_versions (pipeline,"
-                    " registry_hash, source, commit_sha, dirty, image) SELECT"
-                    " $1, $2, coalesce(d->'source'->>'repo', ''),"
-                    " coalesce(d->'source'->>'commit', ''),"
-                    " coalesce((d->'source'->>'dirty')::boolean, false), $4"
-                    " FROM (SELECT $3::jsonb AS d) AS x ON CONFLICT (pipeline,"
-                    " registry_hash, source, commit_sha, dirty, image) DO"
-                    " UPDATE SET last_seen = now() RETURNING id"
+                    String(
+                        "INSERT INTO orca.pipeline_versions (pipeline,",
+                        " registry_hash, source, commit_sha, dirty, image,",
+                        " data_version) SELECT $1, $2,",
+                        " coalesce(d->'source'->>'repo', ''),",
+                        " coalesce(d->'source'->>'commit', ''),",
+                        " coalesce((d->'source'->>'dirty')::boolean, false),",
+                        " $4, ",
+                        data_version_sql("d"),
+                        " FROM (SELECT $3::jsonb AS d) AS x ON CONFLICT",
+                        " (pipeline, registry_hash, source, commit_sha, dirty,",
+                        " image) DO UPDATE SET last_seen = now(), data_version",
+                        " = excluded.data_version RETURNING id",
+                    )
                 ),
                 Params()
                 .text(pipeline)
