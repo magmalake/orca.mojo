@@ -695,7 +695,8 @@ def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
     """A worker's run's cgroup (`orca.cgroup`), at its process's end: its
     limit on the attempts it made, and after an out-of-memory kill, while
     the start is still this worker's, those left running failed saying so
-    and the pipeline's memory raised, up to its request's maximum."""
+    and the pipeline's memory raised, up to its request's maximum; killed
+    at that maximum, the run fails too, unretried."""
     var run = _num(v, "run")
     var start = _num(v, "start")
     var limit = Int(_num(v, "memory_limit_mb"))
@@ -758,6 +759,17 @@ def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
         Params().text(r.text("pipeline")).int64(Int64(next)).int64(run),
     )
     print("run", run, "on", w.user(), why)
+    # At the most it may ask for, a retry would be killed again: the run
+    # fails now, with the kill as its error.
+    if next <= limit:
+        _ = db.conn.execute(
+            (
+                "UPDATE orca.runs SET status = 'failed', ended = now(),"
+                " heartbeat = NULL, retry_at = NULL, error = $4 WHERE id = $1"
+                " AND status = 'running' AND worker = $2 AND starts = $3"
+            ),
+            Params().int64(run).int64(Int64(w.id)).int64(start).text(why),
+        )
 
 
 def exited(mut db: State, w: WorkerAuth, v: Value) raises -> String:

@@ -5,7 +5,8 @@
 # pipeline's next run starts from that limit; the run page, its JSON and
 # Ops > Control's show the limits; no run cgroup or process is left; and a
 # scheduler that starts removes an empty cgroup a dead one left; and a run
-# held at memory.high short of memory.max is killed as out of memory.
+# held at memory.high short of memory.max is killed as out of memory; and
+# one killed at its memory_gb's maximum fails, unretried.
 #
 # The scheduler makes the cgroups under its own cgroup, which it has to be
 # able to write (delegated). Where it isn't, and `sudo -n` works (GitHub's
@@ -212,6 +213,21 @@ if [ -f "$cgbase/memory.pressure" ]; then
 else
     echo "cgroups: no memory.pressure in $cgbase: the held case is skipped"
 fi
+
+# Killed at the most it may ask for (memory_gb = 0.25: 256 MB, under the
+# step's 300), a run fails then and there with the kill as its error: a
+# retry would ask for the same and be killed again.
+q "UPDATE orca.pipelines SET memory_raised_mb = NULL WHERE name = 'grower'" > /dev/null
+./build/orca register --memory-gb 0.25 ./build/grower >> "$log" 2>&1 || fail "register --memory-gb 0.25"
+./build/orca backfill grower 2024-05 >> "$log" 2>&1 || fail "backfill 2024-05"
+r5=$(q "SELECT max(id) FROM orca.runs")
+until_ 60 "run $r5 didn't fail: $(q "SELECT id, status, starts, error FROM orca.runs WHERE id = $r5")" \
+    is "SELECT status FROM orca.runs WHERE id = $r5" failed
+spent=$(q "SELECT starts || '|' || coalesce(error, '') FROM orca.runs WHERE id = $r5")
+case "$spent" in
+    "1|out of memory at 256 MB: "*"the most it may ask for"*) ;;
+    *) fail "run $r5 wasn't failed by its kill at its maximum, unretried: $spent" ;;
+esac
 
 # A scheduler that starts removes an empty cgroup a dead one left.
 kill "$sched"

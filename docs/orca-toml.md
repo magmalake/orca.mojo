@@ -221,7 +221,9 @@ env = { DISTA_WORKER_SLOTS = "auto", GHARCHIVE_PARALLEL = "auto" }
   <limit>`, and the pipeline then asks for `ORCA_RUN_MEMORY_GROWTH` (1.5)
   times that at least, up to `memory_gb`'s maximum: its retry and its later
   runs, until 20 of its runs after the one killed have succeeded
-  (registering a different `memory_gb` forgets it sooner). A run without a
+  (registering a different `memory_gb` forgets it sooner). Killed at that
+  maximum already, the run fails then, with the kill as its error, rather
+  than retrying at the same limit. A run without a
   request is limited to `ORCA_RUN_MEMORY_MB` (default what the host can
   grant). Set the scheduler's and the worker's environment; the UI reads
   `ORCA_RUN_MEMORY_GROWTH` for workers' runs.

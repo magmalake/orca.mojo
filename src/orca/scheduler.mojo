@@ -1669,19 +1669,21 @@ struct Scheduler(Movable):
             c.path = ""
         return c^
 
-    def _uncontain(mut self, pid: Int, code: Int, mut over: String):
+    def _uncontain(mut self, pid: Int, code: Int, mut over: String) -> Bool:
         """At the reap of `pid`: if the kernel killed its run's processes
         for their memory, `over` says so, and its pipeline asks for more
         from now on; its attempts get its limit; the cgroup is emptied of
-        what's left of the run, and removed."""
+        what's left of the run, and removed. True if it was killed at the
+        most it may ask for, so a retry would be killed again."""
         if pid not in self._contained:
-            return
+            return False
         var c: Contained
         try:
             c = self._contained.pop(pid)
         except:
-            return
+            return False
         var stalled = self._stalled.pop(pid, False)
+        var spent = False
         if (
             code != 0
             and not over
@@ -1697,6 +1699,7 @@ struct Scheduler(Movable):
                 stalled and Cgroups.oom_kills(c.path) == 0,
             )
             print("run", c.run, "pid", pid, over)
+            spent = next <= c.limit_mb
             try:
                 _ = self.db.conn.execute(
                     (
@@ -1742,6 +1745,7 @@ struct Scheduler(Movable):
         _ = put_cgroup(String(c.path, "/cgroup.kill"), "1")
         if not Cgroups.remove(c.path):
             self._unswept.append(c.path)
+        return spent
 
     def _record_cgroups(mut self):
         """Every 5 s, each contained run's memory now, for Ops > Control;
@@ -2062,10 +2066,12 @@ struct Scheduler(Movable):
             if done.pid in self._control:
                 ctl = self._control.pop(done.pid)
                 over = ctl.value().over
-            self._uncontain(done.pid, done.code, over)
+            var spent = self._uncontain(done.pid, done.code, over)
             if spawned[0] >= 0:
                 try:
                     self._exited(spawned, done.pid, done.code, over)
+                    if spent:
+                        self._fail_spent(spawned, over)
                 except e:
                     print("orca: can't record run", spawned[0], "exiting:", e)
             if done.pid in self._meters:
@@ -2280,6 +2286,26 @@ struct Scheduler(Movable):
             print("run", spawned[0], "failed:", why)
         elif crashed_by_signal(code) or over:
             self._crashed(spawned, pid, code, over)
+
+    def _fail_spent(
+        mut self, spawned: Tuple[Int, Int, String], over: String
+    ) raises:
+        """Fails the run a process killed for its memory at the most it may
+        ask for was started for, with `over` as its error: a retry would
+        ask for the same and be killed again."""
+        var n = self.db.conn.execute(
+            (
+                "UPDATE orca.runs SET status = 'failed', ended = now(),"
+                " heartbeat = NULL, retry_at = NULL, error = $3 WHERE id = $1"
+                " AND status = 'running' AND starts = $2"
+            ),
+            Params()
+            .int64(Int64(spawned[0]))
+            .int64(Int64(spawned[1]))
+            .text(over),
+        )
+        if n == 1:
+            print("run", spawned[0], "failed, not retried:", over)
 
     def _crashed(
         mut self,
