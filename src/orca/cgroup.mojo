@@ -205,9 +205,15 @@ stalled on memory) at or above which a run at its limit is held there."""
 def full_avg10(text: String) -> Float64:
     """`full avg10` from a `memory.pressure` file's `some ...` and
     `full ...` lines; -1 without it."""
+    return avg10_of(text, "full")
+
+
+def avg10_of(text: String, kind: String) -> Float64:
+    """`avg10` of the `some` or `full` line (`kind`) of a `memory.pressure`
+    file; -1 without it."""
     for line in text.splitlines():
         var words = line.split()
-        if len(words) < 2 or String(words[0]) != "full":
+        if len(words) < 2 or String(words[0]) != kind:
             continue
         for w in words:
             var kv = String(w)
@@ -241,6 +247,21 @@ def held(current_bytes: Int, limit_mb: Int, full_pct: Float64) -> Bool:
     and its tasks all stalled on memory at least `HELD_PRESSURE` percent
     of the time."""
     return at_limit(current_bytes, limit_mb) and full_pct >= HELD_PRESSURE
+
+
+def own_limit_pressure(contained: Dict[Int, Contained]) -> Float64:
+    """The most `some avg10` of the contained runs now at their own memory
+    limit (`at_limit`): the stall their limits cause, which the host's
+    pressure counts too, though the host may have memory to spare. 0 for
+    none."""
+    var most = 0.0
+    for e in contained.items():
+        ref c = e.value
+        if not at_limit(Cgroups.current(c.path), c.limit_mb):
+            continue
+        var some = avg10_of(_read(String(c.path, "/memory.pressure")), "some")
+        most = max(most, some)
+    return most
 
 
 def run_name(run: Int, start: Int, owner: Int) -> String:

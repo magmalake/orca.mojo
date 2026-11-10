@@ -26,7 +26,9 @@ same signal before memory runs out (Weiner et al., ASPLOS 2022).
 5. none: macOS, or a kernel built or booted without PSI (`psi=0`). Then
    nothing is held, and the scheduler says so once.
 
-**Admission** (`Admission`): while `some avg10` is over the limit
+**Admission** (`Admission`): while `some avg10`, less what runs held at
+their own memory limits explain (the most of their cgroups' `some avg10`),
+is over the limit
 (`ORCA_ADMIT_MEMORY_PRESSURE`, percent, default 10; 0 turns it off), no new
 run starts on this host; runs already going go on. The hold ends once
 `avg10` is under half the limit, or has stayed at most the limit for
@@ -401,10 +403,19 @@ struct Admission(Copyable, Movable):
     def from_env() -> Admission:
         return Admission(admit_limit(), grace_seconds())
 
-    def observe(mut self, psi: Optional[Psi], now: Float64, idle: Bool):
+    def observe(
+        mut self,
+        psi: Optional[Psi],
+        now: Float64,
+        idle: Bool,
+        own: Float64 = 0.0,
+    ):
         """Takes a reading (None: none could be read, which holds nothing),
         at `now`, with `idle` whether none of orca's runs is going on this
-        host."""
+        host. `own` is the part of `some avg10` that runs held at their own
+        memory limits explain (`orca.cgroup.own_limit_pressure`), which
+        holds nothing: the host may have memory to spare, and such a run is
+        killed and retried bigger in its own time."""
         self.reading = psi
         self.stuck = False
         self.released = False
@@ -412,7 +423,7 @@ struct Admission(Copyable, Movable):
         if self.limit <= 0.0 or not psi:
             self.holding = False
         else:
-            var avg = psi.value().some.avg10
+            var avg = max(psi.value().some.avg10 - own, 0.0)
             if not self.holding:
                 if avg > self.limit:
                     self.holding = True
@@ -433,7 +444,7 @@ struct Admission(Copyable, Movable):
             self.escape = False
             self.released = was
             return
-        var avg = psi.value().some.avg10
+        var avg = max(psi.value().some.avg10 - own, 0.0)
         self.hold = String(
             WAITING_PRESSURE,
             pct_text(avg),
