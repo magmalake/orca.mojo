@@ -611,7 +611,11 @@ dump is lost: runs and their steps, attempts and logs' records, sensor
 progress, registrations, users and tokens added, watchdog trips. The
 warehouse isn't in the dump: snapshots committed since stay in the tables,
 and the runs that made them are gone from orca's history, so a rebuild or
-backfill of those keys runs them again.
+backfill of those keys runs them again. The new runs are given the lost
+runs' numbers, and commit all the same: a snapshot carries its run's token
+as well as its number. A lost run of an orca from before run tokens (#292)
+left snapshots without one, which a new run with its number, pipeline, step
+and partition still takes for its own commits and doesn't write again.
 
 **Finding a sha.** Images are tagged by the project's short commit sha on
 GHCR, never by version: `orca-stack tags --previous` has the one before,

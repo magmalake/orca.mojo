@@ -686,6 +686,15 @@ struct HttpStore(Movable, RunStore):
         )
         return pins_of(got["pins"])
 
+    def run_token(mut self) raises -> String:
+        # An `orca ui` from before run tokens refuses the call: then the
+        # run has none here, and its commits are recognised as before them.
+        try:
+            var got = self.api.post("run_token", self._for_run().finish())
+            return got["token"].string_value()
+        except:
+            return String()
+
     def record(mut self, commit: Bool, t: TableSnapshot) raises:
         _ = self.api.post(
             "record",

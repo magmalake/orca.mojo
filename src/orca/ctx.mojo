@@ -50,6 +50,9 @@ struct Ctx(Movable):
     var attempt: Int
     var code: String
     """The pipeline's registry hash, in hex."""
+    var token: String
+    """The run's random token (`Store.run_token`), which its commits carry
+    beside its number; empty for a run without one."""
     var pinned: Dict[String, Int64]
     """Table location to the snapshot an earlier attempt of this step read."""
     var reads: List[TableSnapshot]
@@ -80,6 +83,7 @@ struct Ctx(Movable):
         var declared_reads: List[String] = List[String](),
         var declared_writes: List[String] = List[String](),
         var declared_replaces: List[String] = List[String](),
+        token: String = "",
     ):
         self.pipeline = pipeline
         self.run = run
@@ -94,6 +98,7 @@ struct Ctx(Movable):
         self.declared_replaces = declared_replaces^
         self.attempt = attempt
         self.code = code
+        self.token = token
         self.pinned = pinned^
         self.reads = List[TableSnapshot]()
         self.commits = List[TableSnapshot]()
@@ -216,6 +221,8 @@ struct Ctx(Movable):
         s["orca.commit"] = String(self.commits_to(table))
         s["orca.code"] = self.code
         s["orca.reads"] = reads^
+        if self.token:
+            s["orca.run-token"] = self.token
         return s^
 
     def replaces(self, dataset: String) -> Bool:
@@ -238,6 +245,13 @@ struct Ctx(Movable):
 
         Every key must be there: a missing one doesn't match an empty value,
         such as a gather step's partition (found by fuzz/fuzz_summary.mojo).
+
+        And not by another run that had this run's number: one a restore of
+        orca's database lost, or one of another database over the same
+        tables (#292). A snapshot that carries a run token (`orca.run-token`)
+        is this run's only if the token is this run's; a snapshot without
+        one, or a run without one, is told by the number alone, as before
+        tokens.
         """
         if self.run <= 0:
             return False
@@ -247,7 +261,18 @@ struct Ctx(Movable):
             and _has(summary, "orca.step", self.step)
             and _has(summary, "orca.partition", self.partition)
             and _has(summary, "orca.commit", String(self.commits_to(table)))
+            and self._token_fits(summary)
         )
+
+    def _token_fits(self, summary: Dict[String, String]) -> Bool:
+        """Whether a snapshot with `summary` could be this run's by its run
+        token: one of them has none, or they are the same."""
+        if not self.token:
+            return True
+        var theirs = summary.get("orca.run-token")
+        if not theirs:
+            return True
+        return theirs.value() == self.token
 
 
 def _has(summary: Dict[String, String], key: String, value: String) -> Bool:

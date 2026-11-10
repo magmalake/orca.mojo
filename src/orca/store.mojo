@@ -347,6 +347,13 @@ trait Store:
         read, each table at its first attempt's snapshot."""
         ...
 
+    def run_token(mut self) raises -> String:
+        """The run's random token, made with the run and the same for all
+        its attempts, which goes into the summaries of the snapshots it
+        commits (`Ctx.token`); empty for a run without one: an in-memory
+        run, or one created before tokens."""
+        return String()
+
     def record(mut self, commit: Bool, t: TableSnapshot) raises:
         """Records that the attempt last started read `t` (or, if `commit`,
         committed it). What a `Recorder` from this store calls."""

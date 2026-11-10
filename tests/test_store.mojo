@@ -22,6 +22,7 @@ from store_suite import (
     check_killed_anywhere_then_resumed,
     check_reads_are_pinned_across_attempts,
     check_resume_skips_what_succeeded,
+    check_runs_have_tokens,
     check_runs_pages,
     check_runs_pages,
     check_versions,
@@ -141,6 +142,11 @@ def test_sqlite_lost_run_stops() raises:
 def test_sqlite_reads_are_pinned_across_attempts() raises:
     var s = _file("pinned")
     check_reads_are_pinned_across_attempts(s)
+
+
+def test_sqlite_runs_have_tokens() raises:
+    var s = _file("tokens")
+    check_runs_have_tokens(s)
 
 
 def test_sqlite_runs_pages() raises:

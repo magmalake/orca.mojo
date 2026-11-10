@@ -76,6 +76,22 @@ def new_run[S: RunStore](mut s: S, owner: String) raises -> Int:
     return run
 
 
+def check_runs_have_tokens[S: RunStore](mut s: S) raises:
+    """Each run has a token of its own, the same each time it's asked for
+    (#292)."""
+    var first = new_run(s, "a:1")
+    var a = s.run_token()
+    assert_true(a.byte_length() >= 32)
+    assert_equal(s.run_token(), a)
+    var second = new_run(s, "a:1")
+    var b = s.run_token()
+    assert_true(b.byte_length() >= 32)
+    assert_true(a != b)
+    s.own(first, "a:1", "h")
+    assert_equal(s.run_token(), a)
+    s.own(second, "a:1", "h")
+
+
 def check_claim_needs_a_stale_heartbeat[S: RunStore](mut s: S) raises:
     var run = new_run(s, "a:1")
     with assert_raises(contains="is held by a:1"):
@@ -273,6 +289,9 @@ struct Dying[S: RunStore](Movable, Store):
         mut self, step: String, partition: String
     ) raises -> Dict[String, Int64]:
         return self.store[].pinned_reads(step, partition)
+
+    def run_token(mut self) raises -> String:
+        return self.store[].run_token()
 
     def record(mut self, commit: Bool, t: TableSnapshot) raises:
         self.store[].record(commit, t)

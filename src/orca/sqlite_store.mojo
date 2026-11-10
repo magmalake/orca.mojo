@@ -166,6 +166,13 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE attempts ADD COLUMN cpu_seconds REAL",
             "ALTER TABLE attempts ADD COLUMN peak_cpus REAL",
         ],
+        # A random token per run, as Postgres's migration 47 keeps it
+        # (#292): a file that was deleted and made again gives out the same
+        # run numbers. SQLite adds no column with a default that isn't
+        # constant, so `create_run` sets it, and older runs have none.
+        [
+            "ALTER TABLE runs ADD COLUMN token TEXT",
+        ],
     ]
 
 
@@ -484,14 +491,14 @@ struct SqliteStore(Movable, RunStore):
         var st = self._stmt(
             String(
                 "INSERT INTO runs (pipeline, registry_hash, partitions,",
-                " trigger, status, owner, heartbeat, created, started) VALUES",
-                " (?1, ?2, ?3, ?4, 'running', ?5, ",
+                " trigger, status, owner, heartbeat, created, started, token)",
+                " VALUES (?1, ?2, ?3, ?4, 'running', ?5, ",
                 _NOW,
                 ", ",
                 _NOW,
                 ", ",
                 _NOW,
-                ") RETURNING id",
+                ", lower(hex(randomblob(16)))) RETURNING id",
             )
         )
         st.bind_text(1, pipeline)
@@ -939,6 +946,16 @@ struct SqliteStore(Movable, RunStore):
         except e:
             _rollback(self.db)
             raise e^
+
+    def run_token(mut self) raises -> String:
+        var st = self._stmt(
+            "SELECT coalesce(token, '') FROM runs WHERE id = ?1"
+        )
+        st.bind_int(1, self.run)
+        var got = st.step()
+        if not got:
+            return String()
+        return got.value().text_val(0)
 
     def pinned_reads(
         mut self, step: String, partition: String

@@ -938,6 +938,8 @@ def store_call(
             text_field(v, "step"), text_field(v, "partition")
         )
         return String('{"pins": ', pins_json(pins), "}")
+    if call == "run_token":
+        return String('{"token": ', quote(store.run_token()), "}")
     if call == "record":
         var attempt = _num(v, "attempt_id")
         _check_attempt(db, run, attempt)

@@ -741,6 +741,18 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.attempts ADD COLUMN memory_stall_ms bigint",
             "ALTER TABLE orca.attempts ADD COLUMN memory_stall_full_ms bigint",
         ],
+        # A random token per run (#292): in the summaries of the snapshots
+        # the run commits, beside its number, so a run that is given the
+        # number of one a restore lost doesn't take that run's commits for
+        # its own (`Ctx.made`). Additive: the default gives one to the runs
+        # an older binary creates, which neither reads nor writes it, and to
+        # the runs there already are.
+        [
+            (
+                "ALTER TABLE orca.runs ADD COLUMN token uuid DEFAULT"
+                " gen_random_uuid()"
+            ),
+        ],
     ]
 
 
@@ -1706,6 +1718,23 @@ struct PgStore(Movable, RunStore):
         while True:
             try:
                 return self._pinned_reads(step, partition)
+            except e:
+                r.again(e, self.db, self.url)
+
+    def run_token(mut self) raises -> String:
+        var r = DbRetry()
+        while True:
+            try:
+                var rows = self.db.conn.query(
+                    (
+                        "SELECT coalesce(token::text, '') AS token FROM"
+                        " orca.runs WHERE id = $1"
+                    ),
+                    Params().int64(Int64(self.run)),
+                )
+                if len(rows) == 0:
+                    return String()
+                return rows.row(0).text("token")
             except e:
                 r.again(e, self.db, self.url)
 
