@@ -148,6 +148,7 @@ from orca.cgroup import (
     held_text,
     ceiling_mb,
     oom_text,
+    own_limit_pressure,
     put as put_cgroup,
     raised_mb,
     raised_request,
@@ -2291,7 +2292,9 @@ struct Scheduler(Movable):
         self._pressure_unread = not psi
         var was = self.admission.hold
         var now = Float64(t) / 1e9
-        self.admission.observe(psi, now, self._idle())
+        self.admission.observe(
+            psi, now, self._idle(), own_limit_pressure(self._contained)
+        )
         ref a = self.admission
         var r = Report.of(self.psi, a, now)
         if a.held() and not was:

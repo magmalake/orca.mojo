@@ -1,7 +1,7 @@
 """Containment (orca.cgroup): the limit, margin and retry arithmetic, and
 reading /proc/self/cgroup and memory.events."""
 
-from std.os import setenv, unsetenv
+from std.os import getenv, makedirs, setenv, unsetenv
 from std.testing import (
     TestSuite,
     assert_equal,
@@ -11,7 +11,9 @@ from std.testing import (
 )
 
 from orca.cgroup import (
+    Contained,
     MemoryKnobs,
+    avg10_of,
     ceiling_mb,
     event,
     full_avg10,
@@ -21,6 +23,7 @@ from orca.cgroup import (
     held,
     max_mb,
     oom_text,
+    own_limit_pressure,
     own_path,
     owner_of,
     raised_mb,
@@ -127,6 +130,41 @@ def test_pressure() raises:
     assert_equal(full_avg10(text), 91.25)
     assert_equal(full_avg10("some avg10=1.00 avg60=0 avg300=0 total=1\n"), -1.0)
     assert_equal(full_avg10(""), -1.0)
+
+
+def _fake_cgroup(dir: String, current_mb: Int, some: String) raises:
+    _ = makedirs(dir, exist_ok=True)
+    with open(String(dir, "/memory.current"), "w") as f:
+        f.write(current_mb * 1024 * 1024, "\n")
+    with open(String(dir, "/memory.pressure"), "w") as f:
+        f.write(
+            "some avg10=",
+            some,
+            " avg60=0.00 avg300=0.00 total=1\nfull avg10=0.00 avg60=0.00",
+            " avg300=0.00 total=1\n",
+        )
+
+
+def test_own_limit_pressure() raises:
+    """What runs held at their own limits explain of the host's pressure:
+    the most of their `some avg10`; a run under its limit explains none."""
+    assert_equal(
+        avg10_of("some avg10=81.27 avg60=0 avg300=0 total=1\n", "some"), 81.27
+    )
+    var base = String(getenv("TMPDIR", "/tmp"), "/orca-test-own-limit")
+    _fake_cgroup(String(base, "/held"), 510, "81.50")
+    _fake_cgroup(String(base, "/also"), 1000, "40.00")
+    _fake_cgroup(String(base, "/easy"), 100, "90.00")
+    var c = Dict[Int, Contained]()
+    c[1] = Contained(1, 1, "p", String(base, "/held"), 512, 640, 1024, 512)
+    c[2] = Contained(2, 1, "p", String(base, "/also"), 1024, 1280, 2048, 1024)
+    assert_equal(own_limit_pressure(c), 81.5)
+    _ = c.pop(1)
+    assert_equal(own_limit_pressure(c), 40.0)
+    c[3] = Contained(3, 1, "p", String(base, "/easy"), 512, 640, 1024, 512)
+    _ = c.pop(2)
+    assert_equal(own_limit_pressure(c), 0.0)
+    assert_equal(own_limit_pressure(Dict[Int, Contained]()), 0.0)
 
 
 def test_stall_totals() raises:

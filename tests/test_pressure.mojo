@@ -180,6 +180,22 @@ def test_hold_and_resume_below_half() raises:
     assert_false(a.released)
 
 
+def test_own_limits_hold_nothing() raises:
+    """A run held at its own memory limit stalls the host's reading too;
+    what it explains holds nothing (orca #266 on the lab: one run at 512 MB
+    held every start with 13 GB free)."""
+    var a = Admission(10.0)
+    a.observe(_psi(81.0), 0.0, False, own=80.0)
+    assert_false(a.held())
+    # More than the held runs explain: the rest holds.
+    a.observe(_psi(81.0), 1.0, False, own=60.0)
+    assert_true(a.held())
+    assert_equal(a.hold, "waiting: memory pressure 21% (limit 10%)")
+    # Never below 0.
+    a.observe(_psi(5.0), 2.0, False, own=40.0)
+    assert_false(a.held())
+
+
 def test_resume_after_calm() raises:
     var a = Admission(10.0)
     a.observe(_psi(12.0), 0.0, False)

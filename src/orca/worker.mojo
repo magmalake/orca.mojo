@@ -59,7 +59,14 @@ from std.time import perf_counter_ns, sleep
 from json import Value
 
 from orca.admission import Report
-from orca.cgroup import Cgroups, Contained, HeldWatch, MemoryKnobs, held_text
+from orca.cgroup import (
+    Cgroups,
+    Contained,
+    HeldWatch,
+    MemoryKnobs,
+    held_text,
+    own_limit_pressure,
+)
 from orca.cgroup import put as put_cgroup
 from orca.cgroup import start_limit_mb
 from orca.control import fetch_secret
@@ -493,7 +500,12 @@ struct Worker(Movable):
             var idle = len(self.running) == 0
             var was = self.admission.held()
             if self.psi:
-                self.admission.observe(read_psi(self.psi.path), now, idle)
+                self.admission.observe(
+                    read_psi(self.psi.path),
+                    now,
+                    idle,
+                    own_limit_pressure(self.contained),
+                )
             var allowed = self.admission.allows(idle)
             if allowed == 0:
                 slots = 0
