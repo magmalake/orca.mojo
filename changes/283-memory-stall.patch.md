@@ -1,1 +1,0 @@
-- **Memory stall time per attempt**: each attempt of a run with a cgroup records how long its tasks waited on memory (`memory_stall_ms`, `memory_stall_full_ms`, from PSI), to tell a tight grant from a comfortable one. (#283)

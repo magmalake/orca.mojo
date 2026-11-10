@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.21.1 - 2026-11-10
+
+- **Long partition lists shortened**: a run over many partitions shows its first and last and the count on its page (the full list folds under them) and while a deploy waits for it. (#277)
+
+- **Runs held at their memory limit are killed**: a run throttled at its cgroup's `memory.high` that can't reach `memory.max` used to hang for hours; after two minutes held there (`ORCA_RUN_MEMORY_HELD_SECONDS`) it now fails out of memory and retries bigger. (#279)
+
+- **Out-of-memory raises expire**: the memory an out-of-memory kill raised a pipeline to now lasts until 20 of its runs after that one have succeeded, instead of for good, so one unusual run no longer holds every later run at its size. (#280)
+
+- **Memory stall time per attempt**: each attempt of a run with a cgroup records how long its tasks waited on memory (`memory_stall_ms`, `memory_stall_full_ms`, from PSI), to tell a tight grant from a comfortable one. (#283)
+
+- **Learned CPUs fit the host**: a `cpus = "auto"` request is at most what the host grants a run, so a pipeline whose runs peaked on more cores runs on fewer instead of waiting forever. (#284)
+
 ## 0.21.0 - 2026-11-09
 
 - **`"auto"` requests**: `memory_gb = "auto"`, `cpus = "auto"` or `"auto..MAX"` in orca.toml admit and grant a pipeline's runs what its last 20 runs suggest, recorded on each run (`learned from 20 runs`), with no request until it has 3 and `learn = false` to turn it off (#275).
