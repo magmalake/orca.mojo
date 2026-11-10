@@ -89,7 +89,7 @@ auth="Authorization: Bearer $token"
 
 # Backfill, with what it skips and its preview, as locally.
 r backfill --preview toy 2024-01..2024-03 || fail "preview: $(out)"
-[ "$(out)" = "This queues 3 runs: 2024-01 … 2024-03." ] || fail "preview said: $(out)"
+[ "$(out)" = "This queues 3 runs: 2024-01 … 2024-03. No estimate yet: no run of it has succeeded." ] || fail "preview said: $(out)"
 [ "$(./build/orca backfill --preview toy 2024-01..2024-03)" = "$(out)" ] || fail "the local preview differs"
 [ "$(q "SELECT count(*) FROM orca.runs")" -eq 0 ] || fail "a preview queued runs"
 r backfill toy 2024-01..2024-03 || fail "backfill: $(out)"
