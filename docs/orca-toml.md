@@ -220,7 +220,8 @@ env = { DISTA_WORKER_SLOTS = "auto", GHARCHIVE_PARALLEL = "auto" }
   is killed by orca the same way. The attempt fails `out of memory at
   <limit>`, and the pipeline then asks for `ORCA_RUN_MEMORY_GROWTH` (1.5)
   times that at least, up to `memory_gb`'s maximum: its retry and its later
-  runs (registering a different `memory_gb` forgets it). A run without a
+  runs, until 20 of its runs after the one killed have succeeded
+  (registering a different `memory_gb` forgets it sooner). A run without a
   request is limited to `ORCA_RUN_MEMORY_MB` (default what the host can
   grant). Set the scheduler's and the worker's environment; the UI reads
   `ORCA_RUN_MEMORY_GROWTH` for workers' runs.

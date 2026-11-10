@@ -741,9 +741,10 @@ def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
     _ = db.conn.execute(
         (
             "UPDATE orca.pipelines SET memory_raised_mb ="
-            " greatest(coalesce(memory_raised_mb, 0), $2) WHERE name = $1"
+            " greatest(coalesce(memory_raised_mb, 0), $2), memory_raised_run"
+            " = $3 WHERE name = $1"
         ),
-        Params().text(r.text("pipeline")).int64(Int64(next)),
+        Params().text(r.text("pipeline")).int64(Int64(next)).int64(run),
     )
     print("run", run, "on", w.user(), why)
 

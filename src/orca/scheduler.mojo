@@ -261,8 +261,10 @@ from orca.pressure import (
 )
 from orca.recommend import (
     DEFAULT,
+    LEARN_RUNS,
     Recommendation,
     RunRequest,
+    expire_raised,
     learned,
     resolve_request,
 )
@@ -1696,10 +1698,13 @@ struct Scheduler(Movable):
                 _ = self.db.conn.execute(
                     (
                         "UPDATE orca.pipelines SET memory_raised_mb ="
-                        " greatest(coalesce(memory_raised_mb, 0), $2) WHERE"
-                        " name = $1"
+                        " greatest(coalesce(memory_raised_mb, 0), $2),"
+                        " memory_raised_run = $3 WHERE name = $1"
                     ),
-                    Params().text(c.pipeline).int64(Int64(next)),
+                    Params()
+                    .text(c.pipeline)
+                    .int64(Int64(next))
+                    .int64(Int64(c.run)),
                 )
             except e:
                 print("orca: can't raise", c.pipeline, "memory:", e)
@@ -2159,6 +2164,20 @@ struct Scheduler(Movable):
             self._expire()
         except e:
             print("orca: can't expire snapshots:", e)
+        try:
+            for name in expire_raised(self.db):
+                print(
+                    "orca:",
+                    name,
+                    (
+                        "no longer asks for the memory an out-of-memory kill"
+                        " raised it to:"
+                    ),
+                    LEARN_RUNS,
+                    "runs have succeeded since",
+                )
+        except e:
+            print("orca: can't expire out-of-memory raises:", e)
         for p in registered(self.db):
             if p.cron:
                 try:

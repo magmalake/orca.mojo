@@ -14,6 +14,10 @@ the request they suggest:
   least 1; none where peak cores aren't measured (macOS);
 - each is clamped to the pipeline's declared range (`cpus`, `memory_gb`),
   saying so;
+- an out-of-memory raise lasts while the run that caused it is among the
+  `LEARN_RUNS` it learns from: once that many of the pipeline's runs after it
+  have succeeded, `expire_raised` forgets it, and the peaks alone decide.
+  Without that one unusual run would hold every later run at its size;
 - with fewer than `MIN_RUNS` runs there's none.
 
 This is the simplest rule that can work: a percentile over a fixed window,
@@ -229,6 +233,27 @@ def recommend(
     for i in range(len(clamped)):
         r.clamped.write(" and " if i else "", clamped[i])
     return r^
+
+
+def expire_raised(mut db: State) raises -> List[String]:
+    """Forgets each pipeline's out-of-memory raise (`memory_raised_mb`) once
+    `LEARN_RUNS` of its runs after the one that caused it
+    (`memory_raised_run`) have succeeded, and returns their names. The
+    scheduler calls it each pass."""
+    var out = List[String]()
+    for r in db.conn.query(
+        (
+            "UPDATE orca.pipelines p SET memory_raised_mb = NULL,"
+            " memory_raised_run = NULL WHERE p.memory_raised_mb IS NOT NULL"
+            " AND p.memory_raised_run IS NOT NULL AND (SELECT count(*) FROM"
+            " orca.runs r WHERE r.pipeline = p.name AND r.status ="
+            " 'succeeded' AND r.id > p.memory_raised_run) >= $1 RETURNING"
+            " p.name"
+        ),
+        Params().int64(Int64(LEARN_RUNS)),
+    ):
+        out.append(r.text("name"))
+    return out^
 
 
 def learned(

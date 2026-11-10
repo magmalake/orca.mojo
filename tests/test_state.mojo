@@ -14,6 +14,7 @@ from std.testing import (
 from postgres import Connection, Params
 
 from orca import PgStore, RunResult, State, parse_months
+from orca.recommend import LEARN_RUNS, expire_raised
 from orca.state import migration_floor, schema_ahead
 from store_suite import (
     Touching,
@@ -49,9 +50,9 @@ def test_migrate_is_idempotent() raises:
     var db = _db()
     db.migrate()
     assert_equal(
-        _count("SELECT max(version) AS n FROM orca.schema_version"), 44
+        _count("SELECT max(version) AS n FROM orca.schema_version"), 45
     )
-    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 44)
+    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 45)
 
 
 def test_each_version_records_its_floor() raises:
@@ -70,12 +71,13 @@ def test_each_version_records_its_floor() raises:
     assert_equal(migration_floor(23), 1)
     assert_equal(migration_floor(24), 24)
     assert_equal(migration_floor(40), 24)
-    # 41 (orca.alerts), 42 (orca.schedulers), 43 (fill_lag) and 44
-    # (learned requests) are additive.
+    # 41 (orca.alerts), 42 (orca.schedulers), 43 (fill_lag), 44 (learned
+    # requests) and 45 (memory_raised_run) are additive.
     assert_equal(migration_floor(41), 24)
     assert_equal(migration_floor(42), 24)
     assert_equal(migration_floor(43), 24)
     assert_equal(migration_floor(44), 24)
+    assert_equal(migration_floor(45), 24)
 
 
 def test_the_schema_check() raises:
@@ -91,7 +93,7 @@ def test_the_schema_check() raises:
 
 def test_an_older_binary_runs_on_additive_migrations() raises:
     _ = _db()
-    # A binary that knows 30 migrations: 31..44 are additive.
+    # A binary that knows 30 migrations: 31..45 are additive.
     _ = setenv("ORCA_TEST_MIGRATIONS", "30", True)
     try:
         var old = State(getenv("ORCA_DATABASE_URL"))
@@ -99,7 +101,7 @@ def test_an_older_binary_runs_on_additive_migrations() raises:
         # It runs on the schema, and doesn't touch the versions.
         _ = _new_run(old, "a:1")
         assert_equal(
-            _count("SELECT max(version) AS n FROM orca.schema_version"), 44
+            _count("SELECT max(version) AS n FROM orca.schema_version"), 45
         )
         # One that knows 23 doesn't: 24 raised the floor.
         _ = setenv("ORCA_TEST_MIGRATIONS", "23", True)
@@ -130,7 +132,7 @@ def test_floors_are_filled_in_for_an_older_database() raises:
             "SELECT count(*) AS n FROM orca.schema_version WHERE min_binary ="
             " 24"
         ),
-        21,
+        22,
     )
     assert_equal(
         _count(
@@ -139,6 +141,46 @@ def test_floors_are_filled_in_for_an_older_database() raises:
         ),
         0,
     )
+
+
+def test_an_oom_raise_expires_after_the_learning_window() raises:
+    """A pipeline's out-of-memory raise holds while the run that caused it
+    is among the last LEARN_RUNS; once that many of its runs after it have
+    succeeded, `expire_raised` forgets it (census #97: one 1.5 GB outlier
+    held a 77 MB pipeline at 1.7 GB for good)."""
+    var db = _db()
+    db.register("floor", "0x1", "{}")
+    var raised = db.create_run("floor", "0x1", "2024-01", "manual", "a:1")
+    _ = db.conn.execute(
+        (
+            "UPDATE orca.pipelines SET memory_raised_mb = 1728,"
+            " memory_raised_run = $1 WHERE name = 'floor'"
+        ),
+        Params().int64(Int64(raised)),
+    )
+    var ids = List[Int]()
+    for _ in range(LEARN_RUNS):
+        ids.append(db.create_run("floor", "0x1", "2024-02", "manual", "a:1"))
+    var done = "UPDATE orca.runs SET status = 'succeeded' WHERE id = $1"
+    # One short of the window, and failed runs don't count.
+    for i in range(LEARN_RUNS - 1):
+        _ = db.conn.execute(done, Params().int64(Int64(ids[i])))
+    _ = db.conn.execute(
+        "UPDATE orca.runs SET status = 'failed' WHERE id = $1",
+        Params().int64(Int64(ids[LEARN_RUNS - 1])),
+    )
+    assert_equal(len(expire_raised(db)), 0)
+    var floor = (
+        "SELECT coalesce(memory_raised_mb, 0) AS n FROM orca.pipelines WHERE"
+        " name = 'floor'"
+    )
+    assert_equal(_count(floor), 1728)
+    _ = db.conn.execute(done, Params().int64(Int64(ids[LEARN_RUNS - 1])))
+    var gone = expire_raised(db)
+    assert_equal(len(gone), 1)
+    assert_equal(gone[0], "floor")
+    assert_equal(_count(floor), 0)
+    assert_equal(len(expire_raised(db)), 0)
 
 
 def test_a_queued_run_can_be_claimed() raises:
