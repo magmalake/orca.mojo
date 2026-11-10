@@ -645,7 +645,8 @@ earlier, cancel the runs in the UI.
 Every run on the server shares one machine. Where orca can make cgroups, each
 run gets one with a memory limit (`memory.high`) at its grant, and the kernel
 kills only that run's processes if they go 25% past it
-(`ORCA_RUN_MEMORY_MARGIN`); the attempt fails `out of memory at <limit>`, and
+(`ORCA_RUN_MEMORY_MARGIN`), or orca does once it has been held, throttled, at
+the limit for two minutes (`ORCA_RUN_MEMORY_HELD_SECONDS`); the attempt fails `out of memory at <limit>`, and
 the retry and the pipeline's later runs ask for 1.5 times as much
 (`ORCA_RUN_MEMORY_GROWTH`), up to `memory_gb`'s maximum. Without it, a run
 that runs away can push the machine into the kernel's OOM killer, which picks
