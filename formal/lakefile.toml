@@ -9,8 +9,13 @@ relaxedAutoImplicit = false
 [[lean_lib]]
 name = "Orca"
 
-# The model as a program: prints what the model says each event sequence
-# leaves in the table, for tests/test_formal_retry.mojo (difftest/).
+# The models as a program: prints what each model says a sequence of events
+# leaves behind, for the Mojo tests that replay them (difftest/).
+[[lean_lib]]
+name = "Oracle"
+roots = ["Oracle.Main"]
+globs = ["Oracle.+"]
+
 [[lean_exe]]
 name = "orca-oracle"
 root = "Oracle.Main"

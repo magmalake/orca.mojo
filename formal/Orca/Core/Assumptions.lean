@@ -19,9 +19,11 @@ def IcebergAllOrNothing
   ∀ t s t' out, commit t s t' out →
     (t' = t ∧ out = none) ∨ ∃ id, t' = t ++ [Snapshot.mk id s] ∧ out = some id
 
-/-- A Postgres transaction is atomic: recording `r` either writes nothing and
-fails, or writes exactly `r` and succeeds. -/
-def PostgresAtomic (record : Ledger → Record → Ledger → Bool → Prop) : Prop :=
+/-- A Postgres transaction is atomic: recording row `r` either writes nothing
+and fails, or writes exactly `r` and succeeds. For rows of any kind: the
+commits of `Orca/Retry`, the reads of `Orca/Pins`. -/
+def PostgresAtomic {α : Type}
+    (record : List α → α → List α → Bool → Prop) : Prop :=
   ∀ l r l' ok, record l r l' ok →
     (l' = l ∧ ok = false) ∨ (l' = l ++ [r] ∧ ok = true)
 
