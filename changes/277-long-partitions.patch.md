@@ -1,1 +1,0 @@
-- **Long partition lists shortened**: a run over many partitions shows its first and last and the count on its page (the full list folds under them) and while a deploy waits for it. (#277)
