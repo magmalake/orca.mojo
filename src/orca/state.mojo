@@ -721,6 +721,19 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.runs ADD COLUMN request_source text",
             "ALTER TABLE orca.runs ADD COLUMN request_runs int",
         ],
+        # The run whose out-of-memory kill last raised a pipeline's memory
+        # (`memory_raised_mb`): the raise expires once LEARN_RUNS of its runs
+        # after that one have succeeded (orca.recommend.expire_raised). A
+        # raise from before it counts from the pipeline's latest run.
+        # Additive: an older binary neither reads it nor expires anything.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN memory_raised_run bigint",
+            (
+                "UPDATE orca.pipelines p SET memory_raised_run = (SELECT"
+                " max(r.id) FROM orca.runs r WHERE r.pipeline = p.name) WHERE"
+                " memory_raised_mb IS NOT NULL"
+            ),
+        ],
     ]
 
 
