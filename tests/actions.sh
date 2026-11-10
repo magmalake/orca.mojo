@@ -157,9 +157,11 @@ echo "$p" | jq -e '.preview | .runs == 2 and .keys == ["2024-07", "2024-08"] and
 json '/pipelines/toy?preview=1&partitions=2024-05..2024-08&rerun=1' | jq -e '.preview | .runs == 4 and .done == []
     and .commands.backfill == "orca backfill --rerun toy 2024-05..2024-08"' > /dev/null || fail "the rerun preview"
 page=$(curl -fsS "$base/pipelines/toy?preview=1&partitions=2024-05..2024-08")
-echo "$page" | grep -qF '<p data-preview="backfill">This queues 2 runs: 2024-07 … 2024-08. 2 already done are skipped.</p>' \
-    || fail "the preview line"
-echo "$page" | grep -qF 'One run over the whole range runs all 4 months, done or not.' || fail "the one-run line"
+echo "$page" | grep -qE '<p data-preview="backfill">This queues 2 runs: 2024-07 … 2024-08. 2 already done are skipped. About [0-9]+m, 2 runs at once \([0-9]+ s a month over its last [0-9]+ runs?\).</p>' \
+    || fail "the preview line: $(echo "$page" | grep -o '<p data-preview="backfill">[^<]*')"
+echo "$page" | grep -qE 'One run over the whole range runs all 4 months, done or not. About [0-9]+m \(' || fail "the one-run line"
+echo "$p" | jq -e '.preview.estimate | .sample_runs > 0 and .per_key_seconds >= 0 and .backfill_seconds >= 0
+    and .one_run_seconds >= .backfill_seconds' > /dev/null || fail "the preview's estimate: $(echo "$p" | jq -c .preview.estimate)"
 echo "$page" | grep -qF 'name="partitions" required placeholder="2024-01..2024-01" value="2024-05..2024-08">' \
     || fail "the preview doesn't keep the range"
 echo "$page" | grep -qF '<code data-cmd="backfill">orca login &lt;url&gt; &amp;&amp; orca --remote &lt;url&gt; backfill toy 2024-05..2024-08</code>' || fail "the preview's command"

@@ -25,9 +25,13 @@ from orca.calendar import (
     year_of,
 )
 from orca.civil import Civil, now
+from orca.estimate import estimate_text
 from orca.follow import Follow, LISTED
 from orca.html import Html, url_encode
-from orca.month import days_in
+from orca.ui.layout import act_button
+from orca.day import Day
+from orca.month import Month, days_in
+from orca.views.commands import shell_quote
 from orca.state import State
 
 
@@ -404,10 +408,79 @@ def _key_links(
     h.raw("</span>")
 
 
-def follow_html(mut h: Html, name: String, f: Follow):
+def key_ranges(keys: List[String], unit: String) raises -> String:
+    """Sorted day (month) keys as `orca backfill` takes them, each run of
+    consecutive ones as `FIRST..LAST`: `2023-01-01..2023-01-31,2023-03-04`."""
+    var out = String()
+    var i = 0
+    while i < len(keys):
+        var j = i
+        while j + 1 < len(keys):
+            var nxt: String
+            if unit == "day":
+                nxt = String(Day.parse(keys[j]).next())
+            else:
+                nxt = String(Month.parse(keys[j]).next())
+            if nxt != keys[j + 1]:
+                break
+            j += 1
+        if out:
+            out.write(",")
+        out.write(keys[i])
+        if j > i:
+            out.write("..", keys[j])
+        i = j + 1
+    return out^
+
+
+def _queue_waiting(mut h: Html, name: String, f: Follow, max_runs: Int):
+    """A button that backfills the keys in no run yet: a run for each, as
+    `orca backfill` over them would queue."""
+    var n = len(f.waiting)
+    var units = String(f.unit, "" if n == 1 else "s")
+    var keys: String
+    try:
+        keys = key_ranges(f.waiting, f.unit)
+    except:
+        keys = String(",").join(f.waiting)
+    var tell = String(
+        "This queues ",
+        n,
+        " run" if n == 1 else " runs",
+        ", one per ",
+        f.unit,
+        ": ",
+        f.waiting[0],
+    )
+    if n > 1:
+        tell.write(" … ", f.waiting[n - 1])
+    tell.write(
+        ". ",
+        estimate_text(
+            f.pace, f.pace.backfill(n, n, max_runs), f.unit, min(max_runs, n)
+        ),
+    )
+    h.raw('<span class="follow__queue">')
+    act_button(
+        h,
+        String("/pipelines/", url_encode(name), "/backfill"),
+        "Queue them",
+        "queue them",
+        String("orca backfill ", shell_quote(name), " ", shell_quote(keys)),
+        ask=String("Queue the ", units, " not queued yet?"),
+        tell=tell,
+        yes=String("Queue ", n, " run" if n == 1 else " runs"),
+        harm=False,
+        partitions=keys,
+    )
+    h.raw("</span>")
+
+
+def follow_html(mut h: Html, name: String, f: Follow, max_runs: Int = 1):
     """The Progress card's Following line: what the sensor follows, how
     many of its days (months) are done, and what's behind, by state, with
-    the first of each linked."""
+    the first of each linked, and a button that queues the ones in no run
+    yet."""
     var base = String("/pipelines/", url_encode(name))
     var unit = String(f.unit, "" if f.available == 1 else "s")
     if f.upstream:
@@ -435,6 +508,8 @@ def follow_html(mut h: Html, name: String, f: Follow):
     _key_links(h, base, f.unit, "Running or queued", f.live)
     _key_links(h, base, f.unit, "Failed", f.failed)
     _key_links(h, base, f.unit, "Not queued", f.waiting)
+    if f.waiting:
+        _queue_waiting(h, name, f, max_runs)
 
 
 comptime _COVERAGE_JS = """
@@ -499,6 +574,7 @@ comptime COVERAGE_STYLE = """
 .cov__grid .cal--behind { border-color: var(--warn); }
 .cal__key.cal--behind::after { content: none; }
 .follow__keys { display: block; font-size: 0.8125rem; color: var(--muted); }
+.follow__queue { display: block; margin-top: 0.35rem; }
 .cov__ends { display: flex; justify-content: space-between; margin: 0; font-size: 0.7rem; }
 @media (max-width: 640px) {
   .cov__months { grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); gap: 0.75rem; }

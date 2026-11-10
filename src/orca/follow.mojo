@@ -24,6 +24,7 @@ from postgres import Params
 from orca.calendar import Cell, states_of
 from orca.civil import Civil, now
 from orca.day import Day
+from orca.estimate import Pace, pace
 from orca.json import quote
 from orca.month import Month
 from orca.name import sort_texts
@@ -76,6 +77,8 @@ struct Follow(Movable):
     """Behind: in no run yet."""
     var keys: Dict[String, Bool]
     """Every key they have, for the calendar's `behind`."""
+    var pace: Pace
+    """How long its recent runs took, to estimate queuing `waiting`."""
 
     def __init__(out self, unit: String):
         self.datasets = List[String]()
@@ -87,6 +90,7 @@ struct Follow(Movable):
         self.failed = List[String]()
         self.waiting = List[String]()
         self.keys = Dict[String, Bool]()
+        self.pace = Pace(-1.0, 0)
 
     def behind(self) -> Int:
         return len(self.live) + len(self.failed) + len(self.waiting)
@@ -141,6 +145,8 @@ def follow(
                 f.failed.append(c.key)
             else:
                 f.waiting.append(c.key)
+    if f.waiting:
+        f.pace = pace(db, pipeline)
     return f^
 
 

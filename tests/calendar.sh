@@ -268,6 +268,15 @@ echo "$page" | grep -qF 'cal--open" data-key="2024-03-09"' || fail "2024-03-09 i
 echo "$page" | grep -qF '<span class="cal__key cal--behind"></span> 2 behind what it follows' || fail "no behind in the legend"
 echo "$page" | grep -qF 'Behind: up.days has it' || fail "no help for behind"
 get '/pipelines/toy?tab=operate' | grep -qF 'cal--behind' && fail "toy follows nothing"
+# Its Queue them button backfills just those two, as ranges of consecutive days.
+echo "$p" | grep -qF 'action="/pipelines/daily/backfill" data-confirm="Queue the days not queued yet?" data-confirm-body="This queues 2 runs, one per day: 2024-03-01 … 2024-03-08. ' \
+    || fail "no Queue them: $(echo "$p" | grep -o '<span class="follow__queue">.*')"
+echo "$p" | grep -qF '<input type="hidden" name="partitions" value="2024-03-01,2024-03-08">' || fail "Queue them's partitions"
+[ "$(post /pipelines/daily/backfill partitions=2024-03-01,2024-03-08)" = 303 ] || fail "Queue them: $(cat "$log.body")"
+j=$(curl -fsS -H 'Accept: application/json' "$base/api/pipelines/daily")
+echo "$j" | jq -e '.follow | .waiting.count == 0 and .live.count == 5' > /dev/null \
+    || fail "Queue them didn't queue them: $(echo "$j" | jq -c .follow)"
+get '/pipelines/daily/progress' | grep -qF 'follow__queue' && fail "Queue them with nothing left to queue"
 echo "ok   calendar: how far a sensor is behind what it follows"
 
 kill "$ui" 2> /dev/null || true

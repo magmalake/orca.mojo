@@ -1,0 +1,1 @@
+- **Queue what a sensor is behind, with an estimate**: the Progress card's Following line has a Queue them button for the days or months not queued yet, and Start runs previews say about how long the backfill or the one run would take. (#PR)

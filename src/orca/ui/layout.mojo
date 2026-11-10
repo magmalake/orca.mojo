@@ -771,6 +771,7 @@ def act_button(
     yes: String = "",
     no: String = "",
     harm: Bool = True,
+    partitions: String = "",
 ):
     """A small form posting to `action`, beside the status it changes: a
     button labelled `label` whose title is the command line that does the
@@ -778,7 +779,8 @@ def act_button(
     `danger` one (red), or one with a question `ask`, asks first where
     there's JavaScript (`ask_attrs`): `ask`, or "`label`?", with `tell`
     saying what will happen and `yes`/`no` on the buttons; yes is red
-    unless `harm` is false."""
+    unless `harm` is false. `step` and `partitions`, if given, are posted
+    as those fields."""
     h.raw('<form class="act" method="post" action="')
     h.text(action)
     h.raw('"')
@@ -788,6 +790,10 @@ def act_button(
     if step:
         h.raw('<input type="hidden" name="step" value="')
         h.text(step)
+        h.raw('">')
+    if partitions:
+        h.raw('<input type="hidden" name="partitions" value="')
+        h.text(partitions)
         h.raw('">')
     h.raw('<button type="submit" class="act__btn', " danger" if danger else "")
     h.raw('" title="')
