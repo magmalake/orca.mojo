@@ -1,0 +1,1 @@
+- **Out-of-memory raises expire**: the memory an out-of-memory kill raised a pipeline to now lasts until 20 of its runs after that one have succeeded, instead of for good, so one unusual run no longer holds every later run at its size. (#280)
