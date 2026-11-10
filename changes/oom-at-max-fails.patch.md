@@ -1,1 +1,0 @@
-- **Out of memory at the maximum fails at once**: a run killed for its memory at `memory_gb`'s maximum fails with that as its error, instead of retrying at the same limit and ending "interrupted: its process stopped, and its retries are spent". (#PR)
