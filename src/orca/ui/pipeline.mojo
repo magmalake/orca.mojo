@@ -8,7 +8,7 @@ pipeline in every run it was in.
 from postgres import Params
 
 from orca.civil import now
-from orca.config import config_html
+from orca.config_show import config_html
 from orca.coverage import Coverage
 from orca.dag import DagStep, dag_svg
 from orca.fill import FillStatus, eta_text, lag_note, money

@@ -127,7 +127,10 @@ from objectstore.crypto import sha256_hex
 from postgres import Params
 
 from orca.awsec2 import Ec2, Instance
-from orca.config import env_json, parse_env
+from orca.config import (
+    env_json,
+    parse_env,
+)
 from orca.json import quote
 from orca.proc import capture
 from orca.sample import sample_seconds

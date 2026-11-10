@@ -9,7 +9,10 @@ from std.os import getenv
 from postgres import Params
 
 from orca.civil import Civil, now
-from orca.config import Shown, shown
+from orca.config_show import (
+    Shown,
+    shown,
+)
 from orca.coverage import Coverage, coverage
 from orca.cron import CronExpr
 from orca.fill import FillStatus, fill_status

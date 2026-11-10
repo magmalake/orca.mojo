@@ -73,6 +73,8 @@ from orca.config import (
     ProjectConfig,
     RegisterFlags,
     canonical_flag,
+)
+from orca.config_show import (
     export_toml,
     show_json,
     shown,
