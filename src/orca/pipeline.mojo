@@ -458,6 +458,8 @@ struct Pipeline[
             )
             # Every attempt reads the snapshots the first one read.
             var pinned = store.pinned_reads(T.step_name(), partition)
+            # The run's commits carry its token beside its number.
+            var token = store.run_token()
             var code = hex(Self.registry_hash())
             var wait = Float64(T.backoff())
             for k in range(T.max_retries() + 1):
@@ -498,6 +500,7 @@ struct Pipeline[
                     T.dataset_reads(),
                     T.dataset_writes(),
                     T.dataset_replaces(),
+                    token,
                 )
                 ctx.log_to_file(String("attempt ", attempt, " started"))
                 var out = List[UInt8]()

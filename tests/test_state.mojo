@@ -25,6 +25,7 @@ from store_suite import (
     check_killed_anywhere_then_resumed,
     check_reads_are_pinned_across_attempts,
     check_resume_skips_what_succeeded,
+    check_runs_have_tokens,
     check_runs_pages,
     check_versions,
 )
@@ -50,9 +51,9 @@ def test_migrate_is_idempotent() raises:
     var db = _db()
     db.migrate()
     assert_equal(
-        _count("SELECT max(version) AS n FROM orca.schema_version"), 46
+        _count("SELECT max(version) AS n FROM orca.schema_version"), 47
     )
-    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 46)
+    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 47)
 
 
 def test_each_version_records_its_floor() raises:
@@ -72,13 +73,15 @@ def test_each_version_records_its_floor() raises:
     assert_equal(migration_floor(24), 24)
     assert_equal(migration_floor(40), 24)
     # 41 (orca.alerts), 42 (orca.schedulers), 43 (fill_lag), 44 (learned
-    # requests), 45 (memory_raised_run) and 46 (memory stall) are additive.
+    # requests), 45 (memory_raised_run), 46 (memory stall) and 47 (run
+    # tokens) are additive.
     assert_equal(migration_floor(41), 24)
     assert_equal(migration_floor(42), 24)
     assert_equal(migration_floor(43), 24)
     assert_equal(migration_floor(44), 24)
     assert_equal(migration_floor(45), 24)
     assert_equal(migration_floor(46), 24)
+    assert_equal(migration_floor(47), 24)
 
 
 def test_the_schema_check() raises:
@@ -94,7 +97,7 @@ def test_the_schema_check() raises:
 
 def test_an_older_binary_runs_on_additive_migrations() raises:
     _ = _db()
-    # A binary that knows 30 migrations: 31..46 are additive.
+    # A binary that knows 30 migrations: 31..47 are additive.
     _ = setenv("ORCA_TEST_MIGRATIONS", "30", True)
     try:
         var old = State(getenv("ORCA_DATABASE_URL"))
@@ -102,7 +105,7 @@ def test_an_older_binary_runs_on_additive_migrations() raises:
         # It runs on the schema, and doesn't touch the versions.
         _ = _new_run(old, "a:1")
         assert_equal(
-            _count("SELECT max(version) AS n FROM orca.schema_version"), 46
+            _count("SELECT max(version) AS n FROM orca.schema_version"), 47
         )
         # One that knows 23 doesn't: 24 raised the floor.
         _ = setenv("ORCA_TEST_MIGRATIONS", "23", True)
@@ -133,7 +136,7 @@ def test_floors_are_filled_in_for_an_older_database() raises:
             "SELECT count(*) AS n FROM orca.schema_version WHERE min_binary ="
             " 24"
         ),
-        23,
+        24,
     )
     assert_equal(
         _count(
@@ -267,6 +270,11 @@ def test_pg_lost_run_stops() raises:
 def test_pg_reads_are_pinned_across_attempts() raises:
     var s = _store()
     check_reads_are_pinned_across_attempts(s)
+
+
+def test_pg_runs_have_tokens() raises:
+    var s = _store()
+    check_runs_have_tokens(s)
 
 
 def test_pg_runs_pages() raises:

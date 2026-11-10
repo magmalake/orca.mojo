@@ -74,6 +74,18 @@ def sqlite_path(url: String) -> String:
     return rest^
 
 
+# SQL for a new UUID version 7, as text: the milliseconds since 1970 in its
+# first 48 bits, then the version, the variant and random bits. A run's
+# token, as Postgres's `orca.uuidv7()` makes it.
+comptime _UUID7 = (
+    "(SELECT lower(substr(t.ms, 1, 8) || '-' || substr(t.ms, 9, 4) || '-7' ||"
+    " substr(hex(randomblob(2)), 2, 3) || '-' || substr('89ab', 1 + (random()"
+    " & 3), 1) || substr(hex(randomblob(2)), 2, 3) || '-' ||"
+    " hex(randomblob(6))) FROM (SELECT printf('%012x', CAST((julianday('now')"
+    " - 2440587.5) * 86400000 AS INTEGER)) AS ms) t)"
+)
+
+
 def _migrations() -> List[List[String]]:
     """Each migration is a list of statements; its version is its index + 1."""
     return [
@@ -165,6 +177,14 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE attempts ADD COLUMN peak_rss_bytes INTEGER",
             "ALTER TABLE attempts ADD COLUMN cpu_seconds REAL",
             "ALTER TABLE attempts ADD COLUMN peak_cpus REAL",
+        ],
+        # A random token per run, as Postgres's migration 47 keeps it
+        # (#292): a file that was deleted and made again gives out the same
+        # run numbers. SQLite adds no column with a default that isn't
+        # constant, so `create_run` sets it (`_UUID7`), and older runs have
+        # none.
+        [
+            "ALTER TABLE runs ADD COLUMN token TEXT",
         ],
     ]
 
@@ -484,13 +504,15 @@ struct SqliteStore(Movable, RunStore):
         var st = self._stmt(
             String(
                 "INSERT INTO runs (pipeline, registry_hash, partitions,",
-                " trigger, status, owner, heartbeat, created, started) VALUES",
-                " (?1, ?2, ?3, ?4, 'running', ?5, ",
+                " trigger, status, owner, heartbeat, created, started, token)",
+                " VALUES (?1, ?2, ?3, ?4, 'running', ?5, ",
                 _NOW,
                 ", ",
                 _NOW,
                 ", ",
                 _NOW,
+                ", ",
+                _UUID7,
                 ") RETURNING id",
             )
         )
@@ -939,6 +961,16 @@ struct SqliteStore(Movable, RunStore):
         except e:
             _rollback(self.db)
             raise e^
+
+    def run_token(mut self) raises -> String:
+        var st = self._stmt(
+            "SELECT coalesce(token, '') FROM runs WHERE id = ?1"
+        )
+        st.bind_int(1, self.run)
+        var got = st.step()
+        if not got:
+            return String()
+        return got.value().text_val(0)
 
     def pinned_reads(
         mut self, step: String, partition: String

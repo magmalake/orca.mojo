@@ -741,6 +741,32 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.attempts ADD COLUMN memory_stall_ms bigint",
             "ALTER TABLE orca.attempts ADD COLUMN memory_stall_full_ms bigint",
         ],
+        # A random token per run (#292): in the summaries of the snapshots
+        # the run commits, beside its number, so a run that is given the
+        # number of one a restore lost doesn't take that run's commits for
+        # its own (`Ctx.made`). A UUID version 7: its first 48 bits are the
+        # milliseconds since 1970 it was made at, the rest random.
+        # Postgres has `uuidv7()` from 18 on and orca runs on 16 and 17 too
+        # (its deployments are on 17), so `orca.uuidv7()` makes one from a
+        # random UUID: the time over its first six bytes, and the version's
+        # 4 turned into a 7. Additive: the default gives a token to the runs
+        # an older binary creates, which neither reads nor writes it; the
+        # runs there already are have none, and are told by their number.
+        [
+            (
+                "CREATE OR REPLACE FUNCTION orca.uuidv7() RETURNS uuid"
+                " LANGUAGE sql VOLATILE AS $$ SELECT"
+                " encode(set_bit(set_bit(overlay(uuid_send(gen_random_uuid())"
+                " placing substring(int8send(floor(extract(epoch FROM"
+                " clock_timestamp()) * 1000)::bigint) from 3) from 1 for 6),"
+                " 52, 1), 53, 1), 'hex')::uuid $$"
+            ),
+            "ALTER TABLE orca.runs ADD COLUMN token uuid",
+            (
+                "ALTER TABLE orca.runs ALTER COLUMN token SET DEFAULT"
+                " orca.uuidv7()"
+            ),
+        ],
     ]
 
 
@@ -1706,6 +1732,23 @@ struct PgStore(Movable, RunStore):
         while True:
             try:
                 return self._pinned_reads(step, partition)
+            except e:
+                r.again(e, self.db, self.url)
+
+    def run_token(mut self) raises -> String:
+        var r = DbRetry()
+        while True:
+            try:
+                var rows = self.db.conn.query(
+                    (
+                        "SELECT coalesce(token::text, '') AS token FROM"
+                        " orca.runs WHERE id = $1"
+                    ),
+                    Params().int64(Int64(self.run)),
+                )
+                if len(rows) == 0:
+                    return String()
+                return rows.row(0).text("token")
             except e:
                 r.again(e, self.db, self.url)
 
