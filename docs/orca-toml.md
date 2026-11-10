@@ -40,6 +40,7 @@ hostname = "orca.mlake.dev"
 |---|---|
 | `[defaults]` | Values for every pipeline the file names. It doesn't apply to pipelines the file leaves out. |
 | `[pipelines.<name>]` | One pipeline's own values, by the name its `describe` gives. An empty table is allowed: the pipeline is then "in the file" and gets `[defaults]`. |
+| `[pools.<name>]` | A pool of workers orca grows and shrinks itself: [Worker pools](#worker-pools). |
 | `[stack]` | Reserved for `orca aws up`, which doesn't read it yet. It is accepted and not checked. |
 
 Any other table, and any key at the top level, is refused.
@@ -450,6 +451,38 @@ The export has a table for every registered pipeline, holding what is registered
 5. Check with `orca config show <pipeline>`. Every value should say `orca.toml`, and the header should name the commit.
 
 From then on a flag is a one-off, such as `--workers 0..8` for a backfill. The next registration without it goes back to the file.
+
+## Worker pools
+
+A `[pools.<name>]` table makes a pool of [remote workers](workers.md) that
+orca grows and shrinks itself (#267). Pipelines run on it with
+`placement = "worker:<name>"`, as on workers started by hand.
+
+```toml
+[pools.lab]
+provider = "hetzner"
+machines = [
+  { type = "cax31", wait = 600 },   # prefer this; keep trying it for 10 min
+  { type = "cax21", wait = 600 },
+  { type = "cpx32" },               # the last: no wait, keep trying it
+]
+locations = ["hel1", "nbg1", "fsn1"]
+max_machines = 3
+idle_seconds = 900
+```
+
+| Key | Type | Default | |
+|---|---|---|---|
+| `provider` | `"hetzner"` or `"ec2"` | (required) | Where the machines are made. |
+| `machines` | list of `{ type, wait }` | (required) | Machine types in order of preference. `wait` is how many seconds orca keeps trying a type before moving to the next; every entry but the last needs one. |
+| `locations` | list of strings | none | Where to try each type, in order (Hetzner locations; required there). |
+| `max_machines` | 1 to 100 | 1 | The most machines the pool has at once. |
+| `idle_seconds` | 60 to 86400 | 900 | How long a machine may sit idle, with nothing queued for the pool, before it's removed. |
+
+`orca register` with the file records its pools in `orca.pools`. A pool the
+file no longer has is deleted there, and its machines are removed once
+idle. A machine that's running is never replaced by a type higher in the
+list: the order only matters when orca adds one.
 
 ## Fills
 

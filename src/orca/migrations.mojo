@@ -763,6 +763,31 @@ def _migrations() -> List[List[String]]:
                 " p.registry_hash = v.registry_hash",
             ),
         ],
+        # Worker pools orca grows itself (#267, orca.pool_config): each
+        # pool's settings from orca.toml, and the machines it made, kept
+        # after they end for Ops. New tables: additive.
+        [
+            (
+                "CREATE TABLE orca.pools (name text PRIMARY KEY, provider text"
+                " NOT NULL, machines jsonb NOT NULL, locations jsonb NOT NULL"
+                " DEFAULT '[]', max_machines integer NOT NULL DEFAULT 1,"
+                " idle_seconds integer NOT NULL DEFAULT 900, updated"
+                " timestamptz NOT NULL DEFAULT now())"
+            ),
+            (
+                "CREATE TABLE orca.pool_machines (id bigserial PRIMARY KEY,"
+                " pool text NOT NULL, provider text NOT NULL, name text NOT"
+                " NULL, server_type text NOT NULL, location text NOT NULL"
+                " DEFAULT '', provider_id text, address text, worker bigint"
+                " REFERENCES orca.workers ON DELETE SET NULL, launched"
+                " timestamptz NOT NULL DEFAULT now(), joined timestamptz,"
+                " idle_since timestamptz, ended timestamptz, why text)"
+            ),
+            (
+                "CREATE INDEX pool_machines_live ON orca.pool_machines (pool)"
+                " WHERE ended IS NULL"
+            ),
+        ],
     ]
 
 

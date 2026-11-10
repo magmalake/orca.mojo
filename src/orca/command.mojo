@@ -86,6 +86,7 @@ from orca.instances import (
     overlap_refusal,
     wait_for_lead,
 )
+from orca.pool_config import read_pools, record_pools
 from orca.registering import register_pipeline
 from orca.scheduler import Scheduler
 from orca.tick import tick
@@ -963,6 +964,14 @@ def _register(url: String, args: List[String]) raises -> Int:
                 file=stderr,
             )
         print("registered", got)
+    if file.is_file():
+        # Its worker pools (orca.pool_config): the file's, and only those.
+        var pools = read_pools(file.doc)
+        var gone = record_pools(s.db, pools)
+        for p in pools:
+            print("pool", p.name, String("(", p.provider, ")"))
+        for g in gone:
+            print("pool", g, "removed: its machines go once idle")
     return 0
 
 

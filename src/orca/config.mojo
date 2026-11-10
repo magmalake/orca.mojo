@@ -76,6 +76,7 @@ from orca.secrets import (
     parse_secrets,
     secret_problem,
 )
+from orca.pool_config import read_pools
 from orca.toml import (
     BOOLEAN,
     FLOAT,
@@ -593,7 +594,7 @@ struct ProjectConfig(Movable):
                     top,
                     (
                         "is a key at the top; the file has [defaults],"
-                        " [pipelines.<name>] and [stack]"
+                        " [pipelines.<name>], [pools.<name>] and [stack]"
                     ),
                 )
             if top == "defaults":
@@ -613,6 +614,12 @@ struct ProjectConfig(Movable):
                     self._check_table(
                         q, String("[pipelines.", toml_key(name), "]")
                     )
+            elif top == "pools":
+                # Worker pools orca grows itself (orca.pool_config).
+                try:
+                    _ = read_pools(self.doc)
+                except e:
+                    raise Error(self.path, ":", e)
             elif top != "stack":
                 # [stack] is for `orca aws up`, which doesn't read it yet.
                 self._fail(
@@ -620,7 +627,7 @@ struct ProjectConfig(Movable):
                     String("[", toml_key(top), "]"),
                     (
                         "isn't a table orca knows: [defaults],"
-                        " [pipelines.<name>] or [stack]"
+                        " [pipelines.<name>], [pools.<name>] or [stack]"
                     ),
                 )
 
