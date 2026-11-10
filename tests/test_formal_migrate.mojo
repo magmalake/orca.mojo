@@ -77,9 +77,7 @@ def _replay(events: String) raises -> String:
         elif e == UInt8(ord("d")):
             outcomes += _migrate_as("46")
         elif e == UInt8(ord("n")):
-            _ = conn.execute(
-                "UPDATE orca.schema_version SET min_binary = NULL"
-            )
+            _ = conn.execute("UPDATE orca.schema_version SET min_binary = NULL")
             outcomes += "-"
         else:
             raise Error("unknown event in ", events)
