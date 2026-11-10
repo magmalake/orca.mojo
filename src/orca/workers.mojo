@@ -765,7 +765,8 @@ def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
         _ = db.conn.execute(
             (
                 "UPDATE orca.runs SET status = 'failed', ended = now(),"
-                " heartbeat = NULL, retry_at = NULL, error = $4 WHERE id = $1"
+                " heartbeat = NULL, retry_at = NULL, error = $4,"
+                " unretried_start = starts WHERE id = $1"
                 " AND status = 'running' AND worker = $2 AND starts = $3"
             ),
             Params().int64(run).int64(Int64(w.id)).int64(start).text(why),

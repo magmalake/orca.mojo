@@ -2296,8 +2296,9 @@ struct Scheduler(Movable):
         var n = self.db.conn.execute(
             (
                 "UPDATE orca.runs SET status = 'failed', ended = now(),"
-                " heartbeat = NULL, retry_at = NULL, error = $3 WHERE id = $1"
-                " AND status = 'running' AND starts = $2"
+                " heartbeat = NULL, retry_at = NULL, error = $3,"
+                " unretried_start = starts WHERE id = $1 AND status ="
+                " 'running' AND starts = $2"
             ),
             Params()
             .int64(Int64(spawned[0]))
@@ -2952,7 +2953,8 @@ struct Scheduler(Movable):
         """Gives each failed run that may be retried its time to start:
         the pipeline's `retry_seconds` (or `ORCA_RETRY_SECONDS`) doubling
         with each start that wasn't after a deferral, up to its
-        `max_retry_seconds`, plus up to a tenth as jitter."""
+        `max_retry_seconds`, plus up to a tenth as jitter. Not one whose
+        failure at this start isn't retried (`unretried_start`)."""
         var base = Int64(p.retry_seconds) if p.retry_seconds > 0 else (
             self.retry_seconds
         )
@@ -2969,7 +2971,8 @@ struct Scheduler(Movable):
                 ),
                 _RETRIED,
                 " AND retry_at IS NULL AND starts - deferrals BETWEEN 1 AND $4",
-                " AND (registry_hash = $6 OR allow_new_code)",
+                " AND (registry_hash = $6 OR allow_new_code) AND",
+                " unretried_start IS DISTINCT FROM starts",
             ),
             Params()
             .text(p.name)
