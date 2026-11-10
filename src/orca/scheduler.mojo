@@ -143,7 +143,9 @@ from orca.cgroup import (
     Cgroups,
     Contained,
     MemoryKnobs,
+    HeldWatch,
     at_limit,
+    held_text,
     ceiling_mb,
     oom_text,
     put as put_cgroup,
@@ -1304,8 +1306,11 @@ struct Scheduler(Movable):
     var _unswept: List[String]
     """Runs' cgroups to remove once their processes have left them."""
     var _stalled: Dict[Int, Bool]
-    """Contained runs' processes killed for a stale heartbeat while held at
-    their memory limit: out of memory, as a kill at memory.max is."""
+    """Contained runs' processes killed while held at their memory limit,
+    for a stale heartbeat or by `_kill_held`: out of memory, as a kill at
+    memory.max is."""
+    var _held: HeldWatch
+    """Since when contained runs have been held at their memory limit."""
     var _cgroups_next: Int
     """When the runs' cgroups' memory is next recorded, on the monotonic
     clock."""
@@ -1387,6 +1392,7 @@ struct Scheduler(Movable):
         self._contained = Dict[Int, Contained]()
         self._unswept = List[String]()
         self._stalled = Dict[Int, Bool]()
+        self._held = HeldWatch()
         self._cgroups_next = 0
         self.instance = 0
         self.leading = True
@@ -1481,6 +1487,31 @@ struct Scheduler(Movable):
             self.instance,
             "ended its drain; the leader queues its runs again",
         )
+
+    def _kill_held(mut self):
+        """Kills each contained run held at its memory limit (`held`) for
+        `ORCA_RUN_MEMORY_HELD_SECONDS` in a row: throttled at memory.high,
+        it may never reach memory.max, and its heartbeat, kept on another
+        thread, stays fresh. Reaped, it's out of memory (`_uncontain`)."""
+        var held_s = self.cgroups.knobs.held_s
+        for pid in self._held.due(self._contained, held_s):
+            self._stalled[pid] = True
+            if pid in self._control:
+                _ = external_call["kill", c_int](c_int(-pid), c_int(9))
+            _ = external_call["kill", c_int](c_int(pid), c_int(9))
+            try:
+                ref c = self._contained[pid]
+                print(
+                    "killed pid",
+                    pid,
+                    "of",
+                    c.pipeline,
+                    "run",
+                    c.run,
+                    String("(", held_text(c, held_s), ")"),
+                )
+            except:
+                pass
 
     def _kill_wedged(mut self) raises:
         """Kills each process of ours whose run's heartbeat went stale: it's
@@ -2045,6 +2076,7 @@ struct Scheduler(Movable):
                 except e:
                     print("orca: can't keep the driver log at", log, ":", e)
         var readings = self._sample()
+        self._kill_held()
         try:
             self._kill_wedged()
         except e:

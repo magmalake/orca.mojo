@@ -734,7 +734,9 @@ def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
         ceiling = Request.of("", r.text("memory_gb")).memory_max_mb
     var g = getenv("ORCA_RUN_MEMORY_GROWTH")
     var next = raised_mb(limit, growth_pct_of(g) if g else 150, ceiling)
-    var why = oom_text(limit, kill, next)
+    # `held` from a worker that knows it (an older one doesn't send it).
+    var held = String("held") in v and _num(v, "held") == 1
+    var why = oom_text(limit, kill, next, held)
     _ = db.interrupt(Int(run), why)
     _ = db.conn.execute(
         (

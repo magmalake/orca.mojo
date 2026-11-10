@@ -14,8 +14,10 @@ from orca.cgroup import (
     MemoryKnobs,
     ceiling_mb,
     event,
+    full_avg10,
     growth_pct_of,
     has_word,
+    held,
     max_mb,
     oom_text,
     own_path,
@@ -116,6 +118,29 @@ def test_events() raises:
     assert_equal(event("oom_kill x\n", "oom_kill"), 0)
 
 
+def test_pressure() raises:
+    var text = (
+        "some avg10=93.60 avg60=87.14 avg300=86.19 total=3235372442\n"
+        "full avg10=91.25 avg60=87.13 avg300=86.18 total=3233770492\n"
+    )
+    assert_equal(full_avg10(text), 91.25)
+    assert_equal(full_avg10("some avg10=1.00 avg60=0 avg300=0 total=1\n"), -1.0)
+    assert_equal(full_avg10(""), -1.0)
+
+
+def test_held() raises:
+    var mb = 1024 * 1024
+    # Run 23 on beta: 595 MB of anonymous memory at a 512 MB limit, every
+    # task stalled ~90% of the time.
+    assert_true(held(595 * mb, 512, 93.6))
+    # At the limit but making progress (page cache being reclaimed).
+    assert_false(held(510 * mb, 512, 3.0))
+    # Stalled, but well under the limit: the host's pressure, not its own.
+    assert_false(held(200 * mb, 512, 93.6))
+    # No PSI to read.
+    assert_false(held(595 * mb, 512, -1.0))
+
+
 def test_controllers() raises:
     assert_true(has_word("cpuset cpu io memory pids\n", "memory"))
     assert_false(has_word("cpuset cpu io pids\n", "memory"))
@@ -133,10 +158,12 @@ def test_knobs() raises:
     _ = unsetenv("ORCA_RUN_MEMORY_MB")
     _ = unsetenv("ORCA_RUN_MEMORY_MARGIN")
     _ = unsetenv("ORCA_RUN_MEMORY_GROWTH")
+    _ = unsetenv("ORCA_RUN_MEMORY_HELD_SECONDS")
     var k = MemoryKnobs.from_env()
     assert_equal(k.default_mb, 0)
     assert_equal(k.margin_pct, 25)
     assert_equal(k.growth_pct, 150)
+    assert_equal(k.held_s, 120)
     _ = setenv("ORCA_RUN_MEMORY_GROWTH", "2", True)
     _ = setenv("ORCA_RUN_MEMORY_MARGIN", "10", True)
     _ = setenv("ORCA_RUN_MEMORY_MB", "512", True)
