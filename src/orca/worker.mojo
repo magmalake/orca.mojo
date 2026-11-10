@@ -369,6 +369,10 @@ struct Worker(Movable):
                 print(
                     "run", r.spec.run, "pid", pid, "out of memory", flush=True
                 )
+            var stall = Cgroups.stall_ms(cg.path)
+            body = body^.int("memory_stall_ms", Int64(stall[0])).int(
+                "memory_stall_full_ms", Int64(stall[1])
+            )
             body = body^.int("memory_limit_mb", Int64(cg.limit_mb)).int(
                 "memory_max_mb", Int64(cg.kill_mb)
             ).int("oom", Int64(1 if oom else 0)).int(

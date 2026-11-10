@@ -734,6 +734,13 @@ def _migrations() -> List[List[String]]:
                 " memory_raised_mb IS NOT NULL"
             ),
         ],
+        # How long an attempt's run waited on memory (orca.cgroup; #281):
+        # its cgroup's memory.pressure totals at the reap, in ms, some tasks
+        # and all of them; null where it had no cgroup or no PSI. Additive.
+        [
+            "ALTER TABLE orca.attempts ADD COLUMN memory_stall_ms bigint",
+            "ALTER TABLE orca.attempts ADD COLUMN memory_stall_full_ms bigint",
+        ],
     ]
 
 

@@ -36,6 +36,11 @@ run starts is in it from its first instruction.
   cap). The retry, and every later run of the pipeline, asks for at least
   that: it's its request's minimum, which admission waits for, or with no
   request its limit. Registering a different `memory_gb` forgets it.
+- **Stall time.** At the reap, the cgroup's `memory.pressure` totals say
+  how long the run's tasks waited on memory over the start: some of them
+  (`some`) and all of them at once (`full`). They go on its attempts
+  (`memory_stall_ms`, `memory_stall_full_ms`; for #281): how tight a grant
+  was, where a kill only says it was too tight.
 - The cgroup is removed (`rmdir`) once the tree has left it, then or on a
   later tick; a scheduler that starts removes the empty ones a previous
   scheduler left (`stale`).
@@ -212,6 +217,23 @@ def full_avg10(text: String) -> Float64:
                 except:
                     return -1.0
     return -1.0
+
+
+def stall_total_us(text: String, kind: String) -> Int:
+    """`total=` of the `some` or `full` line (`kind`) of a `memory.pressure`
+    file: microseconds its tasks waited on memory; -1 without it."""
+    for line in text.splitlines():
+        var words = line.split()
+        if len(words) < 2 or String(words[0]) != kind:
+            continue
+        for w in words:
+            var kv = String(w)
+            if kv.startswith("total="):
+                try:
+                    return Int(String(kv[byte=6:]))
+                except:
+                    return -1
+    return -1
 
 
 def held(current_bytes: Int, limit_mb: Int, full_pct: Float64) -> Bool:
@@ -564,6 +586,18 @@ struct Cgroups(Copyable, Movable):
         """The cgroup's `full avg10` (`memory.pressure`); -1 if it can't be
         read (a kernel without PSI)."""
         return full_avg10(_read(String(path, "/memory.pressure")))
+
+    @staticmethod
+    def stall_ms(path: String) -> Tuple[Int, Int]:
+        """How long the cgroup's tasks waited on memory, in ms: some of them,
+        and all of them at once; each -1 if it can't be read."""
+        var text = _read(String(path, "/memory.pressure"))
+        var some = stall_total_us(text, "some")
+        var full = stall_total_us(text, "full")
+        return (
+            some // 1000 if some >= 0 else -1,
+            full // 1000 if full >= 0 else -1,
+        )
 
     @staticmethod
     def current(path: String) -> Int:
