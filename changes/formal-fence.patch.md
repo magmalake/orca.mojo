@@ -1,0 +1,1 @@
+- **A Lean model of fencing**: `formal/` gains a model of a run's owner and heartbeat with a proof that a commit which lands within half the stale limit of its fence check lands while its process still owns the run, checked in CI and against `PgStore`; nothing changes for a pipeline. (#PR)

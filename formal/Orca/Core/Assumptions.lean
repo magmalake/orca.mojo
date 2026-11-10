@@ -36,4 +36,17 @@ def CrashLosesOnlyMemory (crash : State → State → Prop) : Prop :=
     s'.table = s.table ∧ s'.ledger = s.ledger ∧ s'.done = 0 ∧
       s'.phase = Phase.looking
 
+/-- The database's clock doesn't run backwards: `advance a b` reads "the
+clock can go from `a` to `b`". Heartbeats are written and compared by the
+database's `now()` alone, so no two hosts' clocks are compared. -/
+def ClockMonotone (advance : Nat → Nat → Prop) : Prop :=
+  ∀ a b, advance a b → a ≤ b
+
+/-- A commit lands at most `half` after the fence check before it, where
+`half` is half the stale limit: `lands f t` reads "a commit fenced at `f`
+can land at `t`". This is the condition `orca.ctx` states for fencing: a run
+can't be claimed during a commit "unless the commit takes that long". -/
+def CommitLandsWithin (half : Nat) (lands : Nat → Nat → Prop) : Prop :=
+  ∀ f t, lands f t → t ≤ f + half
+
 end Orca.Assumptions
