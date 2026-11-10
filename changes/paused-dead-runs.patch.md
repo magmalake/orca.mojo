@@ -1,1 +1,0 @@
-- **A paused pipeline's stopped runs are queued again**: a run whose process stopped while its pipeline was paused (by hand or by the watchdog) goes back to queued instead of looking running until unpaused, which also kept a deploy's drain waiting. (#PR)
