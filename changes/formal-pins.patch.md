@@ -1,0 +1,1 @@
+- **A Lean model of pinned reads**: `formal/` gains a model of `Ctx.pin` with a proof that every attempt of a step reads the snapshot its first attempt read, checked in CI and against the memory and SQLite stores; nothing changes for a pipeline. (#PR)

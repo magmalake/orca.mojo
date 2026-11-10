@@ -5,6 +5,7 @@ but `propext`, `Quot.sound` and `Classical.choice`. -/
 
 #print axioms Orca.no_double_commit
 #print axioms Orca.retry_records_its_own_commit
+#print axioms Orca.Pins.retry_reads_same_snapshot
 #print axioms Orca.idealEnv_iceberg
 #print axioms Orca.idealEnv_postgres
 #print axioms Orca.idealEnv_crash
