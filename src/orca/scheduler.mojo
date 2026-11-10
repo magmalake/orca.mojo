@@ -169,6 +169,7 @@ from orca.config import (
     RegisterFlags,
     env_json,
     parse_env,
+    max_runs_auto,
     parse_max_runs,
     parse_worker_procs,
     parse_workers,
@@ -284,6 +285,13 @@ comptime _HOST_LOCK = 0x6F726364  # "orcd"
 """Held while a start is weighed against what this host's running runs
 weren't granted (`orca.resources`)."""
 
+comptime AUTO_ONE_AT_A_TIME = (
+    'waiting: max_runs = "auto" starts one run at a time until its runs'
+    " have a request to weigh (cpus, memory_gb, learned or declared)"
+)
+"""Why a queued run of a `max_runs = "auto"` pipeline with no request waits
+while another runs."""
+
 comptime _WORKER_OWNER = "worker"
 """A run's owner once a worker claimed it and before its process did
 (`orca.workers.WORKER_OWNER`, which imports this module)."""
@@ -363,6 +371,9 @@ struct Registered(Copyable, Movable):
     """The learned request cached in `orca.pipelines.learned` (its runs,
     memory and CPUs), learned from `learned_key`."""
     var learned_key: String
+    var max_runs_auto: Bool
+    """`max_runs = "auto"` (#266): as many runs at once as this host has
+    room for, `max_runs` the ceiling."""
 
     def request(self) raises -> Request:
         """As declared: `auto` not resolved (`run_request` does)."""
@@ -490,7 +501,8 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " catchup, coalesce(describe->'partitions'->>'kind', 'monthly') AS"
             " kind, coalesce(describe->'partitions'->>'start', '') AS start,"
             " coalesce(max_runs, (describe->>'max_runs')::bigint, 1) AS"
-            " max_runs, coalesce((describe->>'run_retries')::bigint, 3) AS"
+            " max_runs, coalesce(max_runs_auto, false) AS max_runs_auto,"
+            " coalesce((describe->>'run_retries')::bigint, 3) AS"
             " run_retries, coalesce((describe->>'retry_seconds')::bigint, 0) AS"
             " retry_seconds, coalesce((describe->>'max_retry_seconds')::bigint,"
             " 0) AS max_retry_seconds, coalesce((describe->>'sensor')::boolean,"
@@ -585,6 +597,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                     False,
                 ),
                 r.text("learned_key"),
+                r.bool("max_runs_auto"),
             )
         )
     # A fixed count, or no tasks: no scaling.
@@ -1832,8 +1845,10 @@ struct Scheduler(Movable):
         if r.text("worker_procs"):
             worker_procs = parse_worker_procs(r.text("worker_procs"))
         var max_runs = -1
+        var auto_runs = False
         if r.text("max_runs"):
             max_runs = parse_max_runs(r.text("max_runs"))
+            auto_runs = max_runs_auto(r.text("max_runs"))
         # Fills (orca.fill): only from the file.
         if r.text("fills") == "all":
             var why = fill_refusal(
@@ -1879,7 +1894,8 @@ struct Scheduler(Movable):
                 " worker_type, ec2_workers, spot, ec2_min_workers, secrets,"
                 " worker_procs, placement, max_runs, env, config, fills,"
                 " fill_order, fill_max_runs, fill_budget_per_day, fill_window,"
-                " cpus, memory_gb, fill_lag, learn) SELECT d->>'pipeline',"
+                " cpus, memory_gb, fill_lag, learn, max_runs_auto) SELECT"
+                " d->>'pipeline',"
                 " d->>'registry_hash',"
                 " d, $2, $3, CASE WHEN $4 THEN now() END, nullif($5, ''),"
                 " nullif($6, ''), nullif($7, ''), nullif($8, 0), $9,"
@@ -1888,7 +1904,8 @@ struct Scheduler(Movable):
                 " nullif($16, '')::jsonb, $17::jsonb, nullif($18, ''),"
                 " nullif($19, ''), nullif($20, -1), nullif($21, -1::float8),"
                 " nullif($22, ''), nullif($23, ''), nullif($24, ''),"
-                " nullif($25, ''), nullif($26, '')::boolean FROM"
+                " nullif($25, ''), nullif($26, '')::boolean, CASE WHEN $15 > 0"
+                " THEN $27 END FROM"
                 " (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO UPDATE SET"
                 " registry_hash = EXCLUDED.registry_hash, describe ="
                 " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
@@ -1912,7 +1929,9 @@ struct Scheduler(Movable):
                 " THEN EXCLUDED.placement WHEN $13 = '' THEN"
                 " orca.pipelines.placement ELSE nullif($13, 'default') END,"
                 " max_runs = CASE WHEN $14 OR $15 > 0 THEN EXCLUDED.max_runs"
-                " ELSE orca.pipelines.max_runs END, env = CASE WHEN $14 THEN"
+                " ELSE orca.pipelines.max_runs END, max_runs_auto = CASE WHEN"
+                " $14 OR $15 > 0 THEN EXCLUDED.max_runs_auto ELSE"
+                " orca.pipelines.max_runs_auto END, env = CASE WHEN $14 THEN"
                 " EXCLUDED.env ELSE orca.pipelines.env END, config = CASE WHEN"
                 " $14 THEN EXCLUDED.config ELSE jsonb_build_object('sources',"
                 " coalesce(orca.pipelines.config->'sources', '{}'::jsonb) ||"
@@ -1969,7 +1988,8 @@ struct Scheduler(Movable):
             .text(r.text("cpus"))
             .text(r.text("memory_gb"))
             .text(r.text("fill_lag"))
-            .text(r.text("learn")),
+            .text(r.text("learn"))
+            .bool(auto_runs),
         )
         var name = res.row(0).text("name")
         var version = self.db.version(
@@ -2335,8 +2355,9 @@ struct Scheduler(Movable):
         var n = self.db.conn.execute(
             (
                 "UPDATE orca.runs SET status = 'failed', ended = now(),"
-                " heartbeat = NULL, retry_at = NULL, error = $3 WHERE id = $1"
-                " AND status = 'running' AND starts = $2"
+                " heartbeat = NULL, retry_at = NULL, error = $3,"
+                " unretried_start = starts WHERE id = $1 AND status ="
+                " 'running' AND starts = $2"
             ),
             Params()
             .int64(Int64(spawned[0]))
@@ -2991,7 +3012,8 @@ struct Scheduler(Movable):
         """Gives each failed run that may be retried its time to start:
         the pipeline's `retry_seconds` (or `ORCA_RETRY_SECONDS`) doubling
         with each start that wasn't after a deferral, up to its
-        `max_retry_seconds`, plus up to a tenth as jitter."""
+        `max_retry_seconds`, plus up to a tenth as jitter. Not one whose
+        failure at this start isn't retried (`unretried_start`)."""
         var base = Int64(p.retry_seconds) if p.retry_seconds > 0 else (
             self.retry_seconds
         )
@@ -3008,7 +3030,8 @@ struct Scheduler(Movable):
                 ),
                 _RETRIED,
                 " AND retry_at IS NULL AND starts - deferrals BETWEEN 1 AND $4",
-                " AND (registry_hash = $6 OR allow_new_code)",
+                " AND (registry_hash = $6 OR allow_new_code) AND",
+                " unretried_start IS DISTINCT FROM starts",
             ),
             Params()
             .text(p.name)
@@ -3287,6 +3310,22 @@ struct Scheduler(Movable):
                 request.memory_max_mb,
                 p.memory_raised_mb,
             )
+        # max_runs = "auto" (#266): how many follows the host's room, which
+        # admission below weighs; with no request to weigh yet (nothing
+        # declared, nothing learned), one run at a time.
+        if (
+            p.max_runs_auto
+            and not fill
+            and local
+            and free > 0
+            and not request.any()
+        ):
+            if live > 0:
+                free = 0
+                if not hold:
+                    hold = String(AUTO_ONE_AT_A_TIME)
+            else:
+                free = 1
         var grants = List[Grant]()
         var admitted = request.any() and (control or placed == "local")
         if admitted and free > 0:

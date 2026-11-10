@@ -111,7 +111,7 @@ comptime USAGE = """usage:
                 [--workers N|MIN..MAX] [--worker-procs N|auto] [--spot]
                 [--secret NAME=ID ...]
                 [--placement control|ec2|worker:<pool>|default]
-                [--max-runs N] [--cpus N|MIN..MAX] [--memory-gb N|MIN..MAX]
+                [--max-runs N|auto] [--cpus N|MIN..MAX] [--memory-gb N|MIN..MAX]
                 [--config <orca.toml>|--no-config]
                 [<pipeline binary> ...]
                 (no binaries: every [pipelines.<name>] of the file, in

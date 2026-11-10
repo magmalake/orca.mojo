@@ -168,14 +168,42 @@ def parse_workers(v: String) raises -> Tuple[Int, Int]:
     raise Error("not a count or a range MIN..MAX: ", v)
 
 
+comptime AUTO_MAX_RUNS = 64
+"""`max_runs = "auto"`'s ceiling when it names none."""
+
+
 def parse_max_runs(v: String) raises -> Int:
+    """`max_runs`' count, or for `auto` and `auto..N` its ceiling (64, or
+    N): `max_runs_auto` says which."""
+    var t = v
+    if v == "auto":
+        return AUTO_MAX_RUNS
+    if v.startswith("auto.."):
+        t = String(v[byte = String("auto..").byte_length() :])
     try:
-        var n = Int(v)
+        var n = Int(t)
         if n >= 1 and n <= 10000:
             return n
     except:
         pass
-    raise Error("max_runs is a count from 1 to 10000, not ", v)
+    raise Error(
+        'max_runs is a count from 1 to 10000, "auto" or "auto..N", not ', v
+    )
+
+
+def max_runs_auto(v: String) -> Bool:
+    """Whether `max_runs`' value is `auto` or `auto..N` (#266): as many
+    runs at once as this host has room for, up to the ceiling."""
+    return v == "auto" or v.startswith("auto..")
+
+
+def max_runs_text(n: Int, auto: Bool) -> String:
+    """`max_runs` as orca.toml writes it."""
+    if not auto:
+        return String(n)
+    if n == AUTO_MAX_RUNS:
+        return String("auto")
+    return String("auto..", n)
 
 
 def _instance_type(v: String) raises -> String:
@@ -210,7 +238,7 @@ def _canonical(key: String, text: String) raises -> String:
         var n = parse_worker_procs(text)
         return String("auto") if n == 0 else String(n)
     if key == "max_runs":
-        return String(parse_max_runs(text))
+        return max_runs_text(parse_max_runs(text), max_runs_auto(text))
     if key == "cpus":
         return canonical_cpus(text)
     if key == "memory_gb":
@@ -274,12 +302,16 @@ def _canonical_toml(key: String, v: TomlValue) raises -> String:
     var numeric = key == "workers" or key == "worker_procs" or key == "max_runs"
     if v.kind == INTEGER and numeric:
         return _canonical(key, v.text)
-    if v.kind == STRING and key != "max_runs":
+    if key == "max_runs" and v.kind == STRING:
+        if not max_runs_auto(v.text):
+            raise Error('is a count, "auto" or "auto..N", not ', v.text)
+        return _canonical(key, v.text)
+    if v.kind == STRING:
         return _canonical(key, v.text)
     if numeric and key != "max_runs":
         raise Error("is a count or a string, not ", v.kind)
     if key == "max_runs":
-        raise Error("is a count, not ", v.kind)
+        raise Error('is a count, "auto" or "auto..N", not ', v.kind)
     raise Error("is a string, not ", v.kind)
 
 
@@ -1128,8 +1160,9 @@ def config_html(
 
 comptime _SHOWN_SQL = (
     "SELECT name, head_type, worker_type, ec2_workers, ec2_min_workers,"
-    " worker_procs, placement, max_runs, coalesce(describe->>'max_runs', '1')"
-    " AS code_max_runs, describe->>'workers' AS code_workers,"
+    " worker_procs, placement, max_runs, coalesce(max_runs_auto, false) AS"
+    " max_runs_auto, coalesce(describe->>'max_runs', '1') AS code_max_runs,"
+    " describe->>'workers' AS code_workers,"
     " jsonb_array_length(coalesce(describe->'tasks', '[]')) > 0 AS tasks,"
     " coalesce(secrets::text, '') AS secrets, coalesce(env::text, '') AS env,"
     " coalesce(config::text, '') AS config, coalesce(image, '') AS image,"
@@ -1137,10 +1170,9 @@ comptime _SHOWN_SQL = (
     " coalesce(fill_order, '') AS fill_order, coalesce(fill_max_runs, 0) AS"
     " fill_max_runs, coalesce(fill_budget_per_day, -1) AS fill_budget,"
     " coalesce(fill_window, '') AS fill_window, coalesce(fill_lag, '') AS"
-    " fill_lag, coalesce(cpus, '') AS cpus,"
-    " coalesce(memory_gb, '') AS memory_gb, learn FROM orca.pipelines WHERE"
-    " binary_path IS"
-    " NOT NULL AND ($1 = '' OR name = $1) ORDER BY name"
+    " fill_lag, coalesce(cpus, '') AS cpus, coalesce(memory_gb, '') AS"
+    " memory_gb, learn FROM orca.pipelines WHERE binary_path IS NOT NULL AND"
+    " ($1 = '' OR name = $1) ORDER BY name"
 )
 
 
@@ -1279,7 +1311,14 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
             )
         else:
             var w = _source(sources, "max_runs")
-            s.add("max_runs", String(r.int64("max_runs")), w[0], w[1])
+            s.add(
+                "max_runs",
+                max_runs_text(
+                    Int(r.int64("max_runs")), r.bool("max_runs_auto")
+                ),
+                w[0],
+                w[1],
+            )
         # A request (orca.resources), only when it has one.
         for key in ["cpus", "memory_gb"]:
             if r.text(key):
@@ -1436,7 +1475,11 @@ def export_toml(mut db: State) raises -> String:
             else:
                 out.write("worker_procs = ", n, "\n")
         if not r.is_null("max_runs"):
-            out.write("max_runs = ", r.int64("max_runs"), "\n")
+            if r.bool("max_runs_auto"):
+                var t = max_runs_text(Int(r.int64("max_runs")), True)
+                out.write("max_runs = ", toml_string(t), "\n")
+            else:
+                out.write("max_runs = ", r.int64("max_runs"), "\n")
         for key in ["cpus", "memory_gb"]:
             if r.text(key):
                 out.write(key, " = ", toml_string(r.text(key)), "\n")

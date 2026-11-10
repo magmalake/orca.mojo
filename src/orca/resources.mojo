@@ -21,7 +21,9 @@ Postgres and the UI (`ORCA_RESERVE_CPUS`, 1, and `ORCA_RESERVE_MEMORY_MB`,
 1536), less the grants of the runs going there. Otherwise the run waits,
 queued, `held` with why (`WAITING`...): "waiting: needs 2 GB, 1.3 GB free of
 grants". Runs without a request take no part: they're neither checked nor
-counted. `max_runs` and `fill_max_runs` stay as caps on top.
+counted. `max_runs` and `fill_max_runs` stay as caps on top; with
+`max_runs = "auto"` (#266) the grants alone decide how many run at once, up
+to its ceiling, and a pipeline with no request to weigh starts one at a time.
 
 **Grants.** A run that starts gets up to its maximum from what's left,
 fixed for that start's life, in `ORCA_GRANT_CPUS` and
