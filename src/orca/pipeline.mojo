@@ -178,13 +178,14 @@ struct Pipeline[
                 Self.Ts[i].function(),
             )
             # Only when declared, so a pipeline without datasets keeps the
-            # hash it had before they existed.
+            # hash it had before they existed. A dataset in `replaces=` is
+            # among `dataset_writes()`, hashed as a write: declaring that a
+            # step replaces what it wrote changes what a rerun does, not
+            # what its runs made, so it keeps the keys done (#295).
             for d in Self.Ts[i].dataset_reads():
                 all.write("\treads ", d)
             for d in Self.Ts[i].dataset_writes():
                 all.write("\twrites ", d)
-            for d in Self.Ts[i].dataset_replaces():
-                all.write("\treplaces ", d)
             all.write("\n")
         for t in Self.tasks.names():
             all.write("task\t", t, "\n")
