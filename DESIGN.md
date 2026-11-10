@@ -55,7 +55,7 @@ def main() raises:
 - **One input per step, as in dista.** Several upstreams arrive later as `after=(A, B)` and a struct input; the taxi load doesn't need it.
 - **Step outputs are small values**: paths, snapshot IDs, counts. They're stored in Postgres through dista's codec, so a resumed run hands a step the same input the first attempt had. The data itself goes in tables.
 - **`Ctx`** is what a step gets besides its input: the run and step IDs, the partition key, a logger, the catalog, and the run's dista runtime. Its table methods are where pinning and lineage happen (below).
-- **The registry hash** of a pipeline is a hash over its steps' linkage names, their kinds and edges, and the dista registry hash. A run records it, so the code a run ran is known, and resuming with a different binary is refused.
+- **The registry hash** of a pipeline is a hash over its steps' linkage names, their kinds and edges, their declared datasets (`replaces=` hashed as writes, so switching to it keeps the hash), a step's `version=` when one is set, and the dista registry hash. A run records it, so the code a run ran is known, and resuming with a different binary is refused.
 
 ### Heavy work inside a step
 

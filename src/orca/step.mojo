@@ -186,6 +186,12 @@ trait StepLike:
         ...
 
     @staticmethod
+    def code_version() -> Int:
+        """The step's `version=`: raising it says its outputs must be made
+        again, so its pipeline's keys are no longer done; 0 when not set."""
+        ...
+
+    @staticmethod
     def upstream_function() -> StaticString:
         """The function of the step this one follows; empty for a first step."""
         ...
@@ -261,6 +267,10 @@ struct NoStep(StepLike):
         return 0
 
     @staticmethod
+    def code_version() -> Int:
+        return 0
+
+    @staticmethod
     def upstream_function() -> StaticString:
         return ""
 
@@ -311,6 +321,7 @@ struct Step[
     reads: List[StaticString] = [],
     writes: List[StaticString] = [],
     replaces: List[StaticString] = [],
+    version: Int = 0,
 ](StepLike):
     """A step named `name` running `f` on an `A_` to make an `R_`."""
 
@@ -340,6 +351,10 @@ struct Step[
     @staticmethod
     def timeout() -> Int:
         return Self.timeout_seconds
+
+    @staticmethod
+    def code_version() -> Int:
+        return Self.version
 
     @staticmethod
     def upstream_function() -> StaticString:
@@ -395,6 +410,7 @@ struct Step[
         comptime assert (
             Self.timeout_seconds >= 0
         ), "timeout_seconds can't be negative"
+        comptime assert Self.version >= 0, "version can't be negative"
         comptime for i in range(len(Self.reads)):
             comptime assert _is_dataset(
                 Self.reads[i]
