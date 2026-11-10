@@ -553,11 +553,13 @@ th[aria-sort] { color: var(--text); }
 .range { margin: 1.25rem 0 0; font-size: 0.875rem; color: var(--muted); }
 svg.fl { display: block; width: 100%; min-width: 34rem; height: auto; font-family: var(--mono); }
 .fl--0 { fill: var(--lake); } .fl--1 { fill: var(--ember); } .fl--2 { fill: #7a5af8; }
+.fl--3 { fill: #d4a72c; }
 .fl--live { fill: var(--live); } .fl--bad { fill: var(--bad); } .fl--faint { fill: var(--faint); }
 .fl__line { fill: none; stroke-width: 1.75; stroke-linejoin: round; }
 .fl__line.fl--0 { stroke: var(--lake); } .fl__line.fl--1 { stroke: var(--ember); }
 .fl__line.fl--faint { stroke: var(--faint); stroke-dasharray: 4 3; }
 .fl__line.fl--2 { stroke: #7a5af8; } .fl__line.fl--live { stroke: var(--live); }
+.fl__line.fl--3 { stroke: #d4a72c; }
 .fl__line.fl--bad { stroke: var(--bad); }
 /* A warning on the home and system pages (orca.system). */
 .alert { margin: 0 0 1.25rem; padding: 0.6rem 0.9rem; border-radius: var(--radius); font-size: 0.9rem;
@@ -572,6 +574,7 @@ svg.fl { display: block; width: 100%; min-width: 34rem; height: auto; font-famil
   background: currentColor; }
 .fl__key.fl--0 { color: var(--lake); } .fl__key.fl--1 { color: var(--ember); }
 .fl__key.fl--2 { color: #7a5af8; } .fl__key.fl--live { color: var(--live); }
+.fl__key.fl--3 { color: #d4a72c; }
 .fl__key.fl--bad { color: var(--bad); } .fl__key.fl--faint { color: var(--faint); }
 .cal { display: grid; gap: 0.4rem; max-width: 22rem; margin: 0.3rem 0; }
 .cal[hidden] { display: none; }

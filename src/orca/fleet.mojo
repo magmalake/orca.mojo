@@ -641,6 +641,7 @@ def fleet_charts(mut db: State, hours: Int) raises -> Charts:
     var heads = List[Float64]()
     var workers = List[Float64]()
     var control = List[Float64]()
+    var self_hosted = List[Float64]()
     var started = List[Float64]()
     var finished = List[Float64]()
     var failed = List[Float64]()
@@ -686,6 +687,13 @@ def fleet_charts(mut db: State, hours: Int) raises -> Charts:
             " 'worker' AND i.launched < hrs.h + interval '1 hour' AND"
             " coalesce(i.ended, now()) > hrs.h)::float8 AS workers, CASE WHEN"
             " coalesce(fl.ctl, false) THEN 1.0 ELSE 0.0 END AS control,"
+            # A self-hosted worker (`orca worker`, a token per machine) that
+            # ran a run that hour, or was seen in it.
+            " (SELECT count(*) FROM orca.workers w WHERE (w.last_seen >="
+            " hrs.h AND w.last_seen < hrs.h + interval '1 hour') OR EXISTS"
+            " (SELECT 1 FROM orca.runs r WHERE r.worker = w.id AND r.started"
+            " < hrs.h + interval '1 hour' AND coalesce(r.ended, now()) >"
+            " hrs.h))::float8 AS self_hosted,"
             " coalesce(st.n, 0)::float8 AS started, coalesce(en.n, 0)::float8"
             " AS finished, coalesce(en.bad, 0)::float8 AS failed,"
             " coalesce(fa.n, 0)::float8 AS attempts, coalesce(fl.busy,"
@@ -708,6 +716,7 @@ def fleet_charts(mut db: State, hours: Int) raises -> Charts:
         heads.append(r.float64("heads"))
         workers.append(r.float64("workers"))
         control.append(r.float64("control"))
+        self_hosted.append(r.float64("self_hosted"))
         started.append(r.float64("started"))
         finished.append(r.float64("finished"))
         failed.append(r.float64("failed") + r.float64("attempts"))
@@ -723,6 +732,7 @@ def fleet_charts(mut db: State, hours: Int) raises -> Charts:
             Series("heads", "fl--0", heads^),
             Series("workers", "fl--1", workers^),
             Series("control", "fl--2", control^),
+            Series("self-hosted", "fl--3", self_hosted^),
         ],
         [
             Series("started", "fl--live", started^),
@@ -1151,7 +1161,11 @@ def charts_html(mut h: Html, c: Charts, range: String, base: String):
         ' href="#hours">Hosts over time</a></h2>'
     )
     h.raw(
-        '<p class="muted">Hosts that ran during each hour, by role.</p>',
+        (
+            '<p class="muted">Hosts that ran during each hour, by role: EC2'
+            " heads and workers, the control host, and self-hosted workers"
+            " (orca worker) that ran a run or were seen that hour.</p>"
+        ),
         _chart(
             "Hosts over time",
             "",

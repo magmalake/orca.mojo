@@ -164,6 +164,7 @@ echo "$api" | jq -e '[.hosts[] | {(.id): .state}] | add | .["i-w2"] == "draining
 echo "$api" | jq -e '.hosts[] | select(.id == "i-w3") | .sampled == false' > /dev/null || fail "a host with no samples"
 echo "$api" | jq -e '.charts | .hours == 24 and (.labels_utc | length) == 24 and (.hosts.heads | length) == 24 and (.runs.started | add) == 2
     and (.hosts.heads[-1] == 1) and (.hosts.workers[-1] == 3) and (.hosts.control[-1] == 1)
+    and (.hosts["self-hosted"][-1] == 1) and (.hosts["self-hosted"][0] == 0)
     and (.cpu["vCPUs busy"][-1] > 0) and (.network["in (MB/s)"][-1] > 0)' > /dev/null \
     || fail "the charts: $(echo "$api" | jq -c '.charts' | cut -c1-600)"
 curl -fsS "$base/api/fleet?range=7d" | jq -e '.charts.hours == 168 and (.charts.labels_utc | length) == 168' > /dev/null || fail "?range=7d"
