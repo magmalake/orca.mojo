@@ -1,1 +1,0 @@
-- **A Lean model of retries**: `formal/` holds a Lean 4 model of a step's attempts and commits with a proof that a retried step never commits twice, checked in CI and against `orca.tables.append`; nothing changes for a pipeline. (#286)
