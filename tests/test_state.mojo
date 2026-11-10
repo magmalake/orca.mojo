@@ -51,9 +51,9 @@ def test_migrate_is_idempotent() raises:
     var db = _db()
     db.migrate()
     assert_equal(
-        _count("SELECT max(version) AS n FROM orca.schema_version"), 49
+        _count("SELECT max(version) AS n FROM orca.schema_version"), 50
     )
-    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 49)
+    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 50)
 
 
 def test_each_version_records_its_floor() raises:
@@ -74,7 +74,8 @@ def test_each_version_records_its_floor() raises:
     assert_equal(migration_floor(40), 24)
     # 41 (orca.alerts), 42 (orca.schedulers), 43 (fill_lag), 44 (learned
     # requests), 45 (memory_raised_run), 46 (memory stall), 47 (run tokens),
-    # 48 (unretried_start) and 49 (max_runs_auto) are additive.
+    # 48 (unretried_start), 49 (max_runs_auto) and 50 (data_version) are
+    # additive.
     assert_equal(migration_floor(41), 24)
     assert_equal(migration_floor(42), 24)
     assert_equal(migration_floor(43), 24)
@@ -84,6 +85,7 @@ def test_each_version_records_its_floor() raises:
     assert_equal(migration_floor(47), 24)
     assert_equal(migration_floor(48), 24)
     assert_equal(migration_floor(49), 24)
+    assert_equal(migration_floor(50), 24)
 
 
 def test_the_schema_check() raises:
@@ -99,7 +101,7 @@ def test_the_schema_check() raises:
 
 def test_an_older_binary_runs_on_additive_migrations() raises:
     _ = _db()
-    # A binary that knows 30 migrations: 31..49 are additive.
+    # A binary that knows 30 migrations: 31..50 are additive.
     _ = setenv("ORCA_TEST_MIGRATIONS", "30", True)
     try:
         var old = State(getenv("ORCA_DATABASE_URL"))
@@ -107,7 +109,7 @@ def test_an_older_binary_runs_on_additive_migrations() raises:
         # It runs on the schema, and doesn't touch the versions.
         _ = _new_run(old, "a:1")
         assert_equal(
-            _count("SELECT max(version) AS n FROM orca.schema_version"), 49
+            _count("SELECT max(version) AS n FROM orca.schema_version"), 50
         )
         # One that knows 23 doesn't: 24 raised the floor.
         _ = setenv("ORCA_TEST_MIGRATIONS", "23", True)
@@ -138,7 +140,7 @@ def test_floors_are_filled_in_for_an_older_database() raises:
             "SELECT count(*) AS n FROM orca.schema_version WHERE min_binary ="
             " 24"
         ),
-        26,
+        27,
     )
     assert_equal(
         _count(

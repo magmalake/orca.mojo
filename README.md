@@ -263,4 +263,30 @@ first commit fails instead of committing. `replace_partitions` and
 pipeline whose steps append is refused unless `--allow-append` (in the UI,
 a confirm button). See `orca.tables` and DESIGN.md.
 
+Switching a step from `writes=` to `replaces=` keeps the pipeline's
+registry hash, and so its done keys, as long as the datasets keep their
+order.
+
+## When a step's outputs must be made again
+
+The registry hash covers a pipeline's step names, functions, edges and
+declared datasets, not what a step's body does. When a change to the code
+means its earlier outputs are wrong, raise the step's `version=` (an
+integer; none is 0):
+
+```mojo
+comptime Refresh = Step["refresh", Day, Int64, refresh, Mapped, replaces=["mojo.repo_stats"], version=2]
+```
+
+The new version is a new hash. Once it's registered, the keys done under
+the old one are no longer done: coverage counts again from zero, a keyed
+sensor queues every key at its next snapshot, and `orca backfill <pipeline>
+@all` queues them all. A time-partitioned pipeline with `fills = "all"`
+fills its partitions again, within its fill limits (`fill_max_runs`,
+`fill_window`, `fill_budget_per_day`), since its fill counts a partition
+done only under code with the same steps' versions; any other change of
+code fills nothing again. With `since_registration`, regenerate its history
+with `orca backfill <pipeline> <range>` or `orca rebuild <dataset> <range>`
+(which also reruns what reads it). `orca register` says which applies.
+
 Part of [magmalake](https://magmalake.dev).

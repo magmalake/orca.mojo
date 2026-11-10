@@ -1,0 +1,2 @@
+- **`replaces=` keeps the registry hash**: switching a step from `writes=` keeps its done keys. (#296)
+- **Step `version=`**: raising it marks the step's outputs to be made again. (#296)

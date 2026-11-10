@@ -32,7 +32,9 @@ mapped step, a run over it succeeded), when a live run has it, or when a
 fill run of it was ever queued, so a fill never runs a partition twice:
 one whose fill run failed past its retries, or was cancelled, is left to a
 person (`orca backfill`, or resume in the UI). Running done partitions
-again stays `orca backfill --rerun`.
+again stays `orca backfill --rerun`. All of that is within the pipeline's
+current data version, its steps' `version=` (#297): raising one makes every
+partition fillable again, and the fill regenerates them within its limits.
 
 **Limits**, each a reason the pipeline page gives for a fill being idle:
 the pipeline paused (by a person or by the watchdog, `orca.watchdog`), the
@@ -490,20 +492,38 @@ struct FillStatus(Copyable, Movable):
         self.lag = 0
 
 
+comptime _SAME_DATA = (
+    "SELECT r.id FROM orca.runs r LEFT JOIN (SELECT registry_hash,"
+    " max(data_version) AS dv FROM orca.pipeline_versions WHERE pipeline = $1"
+    " GROUP BY registry_hash) AS h ON h.registry_hash = r.registry_hash WHERE"
+    " r.pipeline = $1 AND coalesce(h.dv, '') = coalesce((SELECT"
+    " v.data_version FROM orca.pipelines p JOIN orca.pipeline_versions v ON"
+    " v.id = p.version WHERE p.name = $1), '')"
+)
+"""The runs of pipeline `$1` whose code has its current data version
+(`orca.state.data_version_sql`): the same steps' `version=`. A run's is its
+registry hash's, since a step's version is in the hash; a hash recorded
+before data versions, or none, has none."""
+
 comptime _DONE_ANY_CODE = (
     "WITH m AS (SELECT x->>'name' AS step FROM orca.pipelines p,"
     " jsonb_array_elements(p.describe->'steps') AS x WHERE p.name = $1 AND"
-    " x->>'kind' = 'mapped') SELECT st.partition AS key FROM orca.steps st"
+    " x->>'kind' = 'mapped'), same AS ("
+    + _SAME_DATA
+    + ") SELECT st.partition AS key FROM orca.steps st"
     " JOIN orca.runs r ON r.id = st.run WHERE r.pipeline = $1 AND st.status ="
-    " 'succeeded' AND st.step IN (SELECT step FROM m) GROUP BY st.partition"
-    " HAVING count(DISTINCT st.step) = (SELECT count(*) FROM m) UNION SELECT"
-    " k.key FROM orca.runs r, unnest(string_to_array(r.partitions, ',')) AS"
-    " k(key) WHERE r.pipeline = $1 AND r.status = 'succeeded' AND NOT EXISTS"
-    " (SELECT 1 FROM m)"
+    " 'succeeded' AND st.step IN (SELECT step FROM m) AND r.id IN (SELECT id"
+    " FROM same) GROUP BY st.partition HAVING count(DISTINCT st.step) ="
+    " (SELECT count(*) FROM m) UNION SELECT k.key FROM orca.runs r,"
+    " unnest(string_to_array(r.partitions, ',')) AS k(key) WHERE r.pipeline ="
+    " $1 AND r.status = 'succeeded' AND r.id IN (SELECT id FROM same) AND NOT"
+    " EXISTS (SELECT 1 FROM m)"
 )
-"""The keys done for pipeline `$1` in a run of any of its code: every
-mapped step succeeded for the key; with no mapped step, a run over it
-succeeded. (`orca.scheduler.DONE_SQL` asks the same of the current code.)"""
+"""The keys done for pipeline `$1` in a run of any of its code with its
+current data version: every mapped step succeeded for the key; with no
+mapped step, a run over it succeeded. (`orca.scheduler.DONE_SQL` asks the
+same of the current code.) A raised `version=` is a new data version, so
+the fill runs the partitions again (#297)."""
 
 
 def fill_status(
@@ -540,8 +560,9 @@ def fill_status(
             " gone, r.status = 'failed' AND r.starts - r.deferrals <= $2 AS"
             " again"
             " FROM orca.runs r, unnest(string_to_array(r.partitions, ',')) AS"
-            " k(key) WHERE r.pipeline = $1 AND r.trigger = 'fill' ORDER BY"
-            " k.key, r.id DESC"
+            " k(key) WHERE r.pipeline = $1 AND r.trigger = 'fill' AND r.id IN ("
+            + _SAME_DATA
+            + ") ORDER BY k.key, r.id DESC"
         ),
         Params().text(p.name).int64(Int64(run_retries)),
     ):

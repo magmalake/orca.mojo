@@ -1998,6 +1998,22 @@ struct Scheduler(Movable):
             got[1],
             res.row(0).text("image"),
         )
+        # The data version before and after (#297), for the notice below:
+        # a first registration has no before.
+        var dv = self.db.conn.query(
+            (
+                "SELECT p.version IS NOT NULL AS was, coalesce((SELECT"
+                " data_version FROM orca.pipeline_versions WHERE id ="
+                " p.version), '') AS old, coalesce((SELECT data_version FROM"
+                " orca.pipeline_versions WHERE id = $2), '') AS new FROM"
+                " orca.pipelines p WHERE p.name = $1"
+            ),
+            Params().text(name).int64(Int64(version)),
+        )
+        var data_changed = dv.row(0).bool("was") and dv.row(0).text(
+            "old"
+        ) != dv.row(0).text("new")
+        var data_version = dv.row(0).text("new")
         _ = self.db.conn.execute(
             "UPDATE orca.pipelines SET version = $2 WHERE name = $1",
             Params().text(name).int64(Int64(version)),
@@ -2027,6 +2043,29 @@ struct Scheduler(Movable):
                     Params().text(name).text(c.dataset).int64(c.snapshot),
                 )
         for q in registered(self.db, name):
+            if data_changed:
+                var what = String(
+                    "its steps' version= is now ",
+                    data_version if data_version else "none",
+                )
+                if q.fill.all:
+                    print(
+                        "orca:",
+                        q.name,
+                        String(what, ":"),
+                        "its fill runs its partitions again, within its",
+                        "fill limits",
+                    )
+                else:
+                    print(
+                        "orca:",
+                        q.name,
+                        String(what, ":"),
+                        "its keys are no longer done; regenerate its history",
+                        "with `orca backfill",
+                        q.name,
+                        '<range>` (or fills = "all")',
+                    )
             var twice = repeated_fill(q, now)
             if twice:
                 print("orca: warning:", twice)

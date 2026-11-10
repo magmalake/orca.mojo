@@ -329,5 +329,69 @@ def test_registry_hash() raises:
     assert_true(hex(Labels.registry_hash()) in Labels.describe())
 
 
+def test_registry_hash_replaces() raises:
+    # writes= and replaces= of the same dataset hash alike, so switching a
+    # step to replaces= keeps its pipeline's done keys; another dataset, or
+    # a read, is a different DAG.
+    comptime Writes = Pipeline[
+        "p", Step["key", Month, Int, key, Mapped, writes=["lake.a"]]
+    ]
+    comptime Replaces = Pipeline[
+        "p", Step["key", Month, Int, key, Mapped, replaces=["lake.a"]]
+    ]
+    comptime Both = Pipeline[
+        "p",
+        Step[
+            "key",
+            Month,
+            Int,
+            key,
+            Mapped,
+            writes=["lake.a"],
+            replaces=["lake.a"],
+        ],
+    ]
+    comptime Other = Pipeline[
+        "p", Step["key", Month, Int, key, Mapped, replaces=["lake.b"]]
+    ]
+    comptime Reads = Pipeline[
+        "p",
+        Step[
+            "key",
+            Month,
+            Int,
+            key,
+            Mapped,
+            reads=["lake.c"],
+            replaces=["lake.a"],
+        ],
+    ]
+    assert_equal(Writes.registry_hash(), Replaces.registry_hash())
+    assert_equal(Writes.registry_hash(), Both.registry_hash())
+    assert_true(Replaces.registry_hash() != Other.registry_hash())
+    assert_true(Replaces.registry_hash() != Reads.registry_hash())
+    assert_true('"replaces": ["lake.a"]' in Replaces.describe())
+
+
+def test_registry_hash_version() raises:
+    # No version= keeps the hash it had; setting or raising one changes it,
+    # so the pipeline's keys are no longer done.
+    comptime Unset = Pipeline["p", Step["key", Month, Int, key, Mapped]]
+    comptime Zero = Pipeline[
+        "p", Step["key", Month, Int, key, Mapped, version=0]
+    ]
+    comptime One = Pipeline[
+        "p", Step["key", Month, Int, key, Mapped, version=1]
+    ]
+    comptime Two = Pipeline[
+        "p", Step["key", Month, Int, key, Mapped, version=2]
+    ]
+    assert_equal(Unset.registry_hash(), Zero.registry_hash())
+    assert_true(Unset.registry_hash() != One.registry_hash())
+    assert_true(One.registry_hash() != Two.registry_hash())
+    assert_true('"version": 2' in Two.describe())
+    assert_false('"version"' in Unset.describe())
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

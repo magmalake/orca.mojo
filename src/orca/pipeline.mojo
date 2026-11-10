@@ -178,13 +178,19 @@ struct Pipeline[
                 Self.Ts[i].function(),
             )
             # Only when declared, so a pipeline without datasets keeps the
-            # hash it had before they existed.
+            # hash it had before they existed. A dataset in `replaces=` is
+            # among `dataset_writes()`, hashed as a write: declaring that a
+            # step replaces what it wrote changes what a rerun does, not
+            # what its runs made, so it keeps the keys done (#295).
             for d in Self.Ts[i].dataset_reads():
                 all.write("\treads ", d)
             for d in Self.Ts[i].dataset_writes():
                 all.write("\twrites ", d)
-            for d in Self.Ts[i].dataset_replaces():
-                all.write("\treplaces ", d)
+            # Only when set, so a step without one keeps the hash it had: a
+            # new `version=` makes the pipeline's keys not done, for the
+            # step's outputs to be made again.
+            comptime if Self.Ts[i].code_version() > 0:
+                all.write("\tversion ", Self.Ts[i].code_version())
             all.write("\n")
         for t in Self.tasks.names():
             all.write("task\t", t, "\n")
@@ -253,6 +259,8 @@ struct Pipeline[
             # Only when set, so a step without one keeps the describe it had.
             comptime if S.timeout() > 0:
                 out.write('"timeout_seconds": ', S.timeout(), ", ")
+            comptime if S.code_version() > 0:
+                out.write('"version": ', S.code_version(), ", ")
             out.write('"reads": ', _names(S.dataset_reads()), ", ")
             out.write('"writes": ', _names(S.dataset_writes()))
             # Only when declared, as for the timeout: a step without them
