@@ -9,17 +9,20 @@ Supported, as TOML 1.0 has them: comments, `[table]` headers with bare,
 quoted and dotted keys, `key = value` with dotted keys, basic strings (with
 every escape) and literal strings, integers (decimal, with `_` between
 digits), floats, booleans, arrays of those (over several lines, with
-comments and a trailing comma), and inline tables, nested. A key or table
+comments and a trailing comma), inline tables, nested, and arrays of inline
+tables (`machines = [{ type = "cax31", wait = 600 }, ...]`). A key or table
 defined twice, a dotted key extending a table a header defined, and a header
 reopening an inline table are refused, as TOML refuses them. Not supported,
 each refused with a message saying so: arrays of tables (`[[x]]`),
 multi-line strings, dates and times, hexadecimal, octal and binary integers,
-`inf` and `nan`, arrays of arrays or of tables, and keys holding control
-characters.
+`inf` and `nan`, arrays of arrays, arrays mixing tables with other values,
+and keys holding control characters.
 
 The document is flat: an entry per table and per value, in the order the
 file has them, each with its whole key path, so a reader looks values up by
-path and a new key needs no new type. mojoshelf's `mojo-toml` is built for
+path and a new key needs no new type. An array of tables is an `ARRAY`
+entry whose items are its elements' indices, of kind `TABLE`, and each
+element a table at the array's path and its index: `machines.0.type`. mojoshelf's `mojo-toml` is built for
 Mojo before 1.0, which is why orca has its own.
 """
 
@@ -159,9 +162,58 @@ struct TomlDoc(Movable):
         for e in self.entries:
             if e.value.kind == TABLE and len(self.keys(e.path)) > 0:
                 continue
+            if self._in_table_array(e.path):
+                continue
             for k in range(len(e.path)):
                 out.write("." if k > 0 else "", toml_key(e.path[k]))
-            out.write(" = ", e.value, "\n")
+            out.write(" = ", self._value(e.path, e.value), "\n")
+        return out^
+
+    def is_table_array(self, v: TomlValue) -> Bool:
+        """Whether `v` is an array of tables (`machines.0`, ...)."""
+        return (
+            v.kind == ARRAY
+            and len(v.item_kinds) > 0
+            and v.item_kinds[0] == TABLE
+        )
+
+    def _in_table_array(self, path: List[String]) -> Bool:
+        """Whether `path` is inside an element of an array of tables."""
+        for n in range(1, len(path)):
+            var v = self.get(List[String](path[:n]))
+            if v and self.is_table_array(v.value()):
+                return True
+        return False
+
+    def _value(self, path: List[String], v: TomlValue) -> String:
+        """`v`, at `path`, as TOML: an array of tables or a table as inline
+        ones, from their entries."""
+        if self.is_table_array(v):
+            var out = String("[")
+            for i in range(len(v.items)):
+                var p = path.copy()
+                p.append(v.items[i])
+                out.write(", " if i > 0 else "", self._inline(p))
+            out.write("]")
+            return out^
+        if v.kind == TABLE:
+            return self._inline(path)
+        return String(v)
+
+    def _inline(self, path: List[String]) -> String:
+        """The table at `path` as an inline table."""
+        var out = String("{")
+        var first = True
+        for k in self.keys(path):
+            var p = path.copy()
+            p.append(k)
+            var v = self.get(p)
+            if not v:
+                continue
+            out.write("" if first else ",", " ", toml_key(k), " = ")
+            out.write(self._value(p, v.value()))
+            first = False
+        out.write(" }" if not first else "}")
         return out^
 
 
@@ -550,8 +602,10 @@ struct _Parser(Movable):
                 break
             if self.at_end():
                 self.fail("an array without its closing ']'")
-            if self.peek() == ord("[") or self.peek() == ord("{"):
-                self.fail("arrays of arrays or of tables aren't supported")
+            if self.peek() == ord("["):
+                self.fail("arrays of arrays aren't supported")
+            if self.peek() == ord("{"):
+                self.fail("an array can't mix inline tables with other values")
             var v = self.scalar()
             items.append(v.text)
             kinds.append(v.kind)
@@ -566,6 +620,55 @@ struct _Parser(Movable):
             else:
                 self.fail("expected ',' or ']' in an array")
         return TomlValue(ARRAY, "", items^, kinds^, line)
+
+    def _tables_ahead(mut self) raises -> Bool:
+        """Whether the array starting here holds inline tables: its first
+        element, past blanks and comments, starts with `{`."""
+        var pos = self.pos
+        var line = self.line
+        self.pos += 1
+        self.skip_blank()
+        var tables = self.peek() == ord("{")
+        self.pos = pos
+        self.line = line
+        return tables
+
+    def table_array(mut self, path: List[String], how: Int) raises:
+        """An array of inline tables at `path`, from its `[`: the array's
+        entry, then each element as a table at `path` and its index."""
+        var at = len(self.doc.entries)
+        self.doc._add(
+            path.copy(),
+            TomlValue(ARRAY, "", List[String](), List[String](), self.line),
+            how,
+        )
+        self.pos += 1
+        var n = 0
+        while True:
+            self.skip_blank()
+            if self.peek() == ord("]"):
+                self.pos += 1
+                return
+            if self.at_end():
+                self.fail("an array without its closing ']'")
+            if self.peek() != ord("{"):
+                self.fail("an array can't mix inline tables with other values")
+            var p = path.copy()
+            p.append(String(n))
+            self.inline_table(p)
+            self.doc.entries[at].value.items.append(String(n))
+            self.doc.entries[at].value.item_kinds.append(TABLE)
+            n += 1
+            self.skip_blank()
+            if self.peek() == ord(","):
+                self.pos += 1
+            elif self.peek() == ord("]"):
+                self.pos += 1
+                return
+            elif self.at_end():
+                self.fail("an array without its closing ']'")
+            else:
+                self.fail("expected ',' or ']' in an array")
 
     def table_at(mut self, path: List[String], how: Int) raises:
         """Makes the tables above `path`'s last key that aren't there, as
@@ -638,6 +741,9 @@ struct _Parser(Movable):
             self.fail(String(_dotted(path), " is defined twice"))
         if self.peek() == ord("{"):
             self.inline_table(path)
+            return
+        if self.peek() == ord("[") and self._tables_ahead():
+            self.table_array(path, how)
             return
         var v = self.array() if self.peek() == ord("[") else self.scalar()
         self.doc._add(path^, v^, how)

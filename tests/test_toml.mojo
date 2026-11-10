@@ -162,8 +162,49 @@ def test_the_subset_says_what_it_leaves_out() raises:
     _refused("a = inf\n", "inf and nan")
     _refused("a = -nan\n", "inf and nan")
     _refused("a = [[1]]\n", "arrays of arrays")
-    _refused("a = [{b = 1}]\n", "arrays of arrays")
+    _refused("a = [1, {b = 1}]\n", "mix inline tables")
+    _refused("a = [{b = 1}, 2]\n", "mix inline tables")
     _refused('"a\\u0001" = 1\n', "control character")
+
+
+def test_arrays_of_inline_tables() raises:
+    """`[{...}, ...]`: an `ARRAY` of indices, each element a table under
+    its index (orca #267's `machines`)."""
+    var doc = parse_toml(
+        String(
+            "[pools.lab]\n",
+            "machines = [\n",
+            '  { type = "cax31", wait = 600 },  # first\n',
+            '  { type = "cpx32", where = { zone = "a" } },\n',
+            "]\n",
+            'locations = ["hel1", "nbg1"]\n',
+            "empty = []\n",
+        )
+    )
+    var m = doc.get(["pools", "lab", "machines"]).value().copy()
+    assert_equal(m.kind, ARRAY)
+    assert_equal(m.items, ["0", "1"])
+    assert_equal(m.item_kinds, [TABLE, TABLE])
+    assert_true(doc.is_table_array(m))
+    assert_equal(_text(doc, ["pools", "lab", "machines", "0", "type"]), "cax31")
+    assert_equal(_text(doc, ["pools", "lab", "machines", "0", "wait"]), "600")
+    assert_equal(
+        _text(doc, ["pools", "lab", "machines", "1", "where", "zone"]), "a"
+    )
+    assert_false(Bool(doc.get(["pools", "lab", "machines", "1", "wait"])))
+    assert_equal(doc.keys(["pools", "lab", "machines"]), ["0", "1"])
+    assert_false(doc.is_table_array(doc.get(["pools", "lab", "empty"]).value()))
+    # It reads back from its dump.
+    var again = parse_toml(doc.dump())
+    assert_equal(len(again.entries), len(doc.entries))
+    for e in doc.entries:
+        var v = again.get(e.path)
+        assert_true(Bool(v), String("lost ", e.path[len(e.path) - 1]))
+        assert_equal(v.value().text, e.value.text)
+        assert_equal(v.value().items, e.value.items)
+    _refused("a = [{b = 1}, {b = 1, b = 2}]\n", "defined twice")
+    _refused("a = [{b = 1}\n", "closing")
+    _refused("a = [{b = 1}]\na.c = 2\n", "is a value")
 
 
 def test_errors_name_the_line() raises:
