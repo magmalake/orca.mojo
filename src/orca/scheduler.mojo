@@ -382,17 +382,20 @@ def recorded_memory_gb(p: Registered, sized: RunRequest) -> String:
     ) else p.memory_gb
 
 
-def run_request(mut db: State, p: Registered) raises -> RunRequest:
+def run_request(
+    mut db: State, p: Registered, most_cpus: Int = 0
+) raises -> RunRequest:
     """The request a start of `p` gets now (`orca.recommend`'s
     `resolve_request`): as declared, or for `auto` what its runs suggest. That is cached on the
     pipeline (`orca.pipelines.learned`) and learned again only when what it
     was learned from (`learn_key`) has changed, so a start doesn't query
-    its runs' peaks each tick."""
+    its runs' peaks each tick. Learned CPUs are at most `most_cpus`, what
+    the host grants a run."""
     var declared = p.request()
     if not declared.auto() or not p.learn:
         return resolve_request(declared, Recommendation.none(), p.learn)
     if p.learned_key == p.learn_key:
-        return resolve_request(declared, p.learned, True)
+        return resolve_request(declared, p.learned, True, most_cpus)
     var rec = learned(db, p.name, p.cpus, p.memory_gb)
     _ = db.conn.execute(
         (
@@ -407,7 +410,7 @@ def run_request(mut db: State, p: Registered) raises -> RunRequest:
         .int64(Int64(rec.memory_mb))
         .int64(Int64(rec.cpus)),
     )
-    return resolve_request(declared, rec, True)
+    return resolve_request(declared, rec, True, most_cpus)
 
 
 def _ec2_spec(p: Registered, run: Int, start: Int, new_code: Bool) -> Ec2Spec:
@@ -3098,7 +3101,7 @@ struct Scheduler(Movable):
         # pass makes, each granted from it for its life.
         var sized = RunRequest(Request(0, 0, 0, 0), "", 0, "")
         if control or placed == "local":
-            sized = run_request(self.db, p)
+            sized = run_request(self.db, p, self.room.cpus)
         var tx = self.db.conn.begin()
         _ = tx.query(
             "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
