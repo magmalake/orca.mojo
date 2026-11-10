@@ -228,6 +228,10 @@ case "$spent" in
     "1|out of memory at 256 MB: "*"the most it may ask for"*) ;;
     *) fail "run $r5 wasn't failed by its kill at its maximum, unretried: $spent" ;;
 esac
+# And it stays so: no retry is scheduled (ORCA_RETRY_SECONDS is 1).
+sleep 5
+spent=$(q "SELECT status || '|' || starts || '|' || coalesce(retry_at::text, '') FROM orca.runs WHERE id = $r5")
+[ "$spent" = "failed|1|" ] || fail "run $r5 was retried after its kill at its maximum: $spent"
 
 # A scheduler that starts removes an empty cgroup a dead one left.
 kill "$sched"

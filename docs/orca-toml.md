@@ -55,7 +55,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 | `worker_type` | string, an instance type | `ORCA_EC2_WORKER_TYPE`, else `c7g.xlarge` | `--worker-type` | Only used on EC2. |
 | `workers` | integer `N` (at least 1), or string `"MIN..MAX"` | the code's `workers`, else 2; 0 for a pipeline without tasks | `--workers` | With `MIN..MAX`, the run scales between the two. |
 | `worker_procs` | integer from 1 to 256, or `"auto"` | 1 | `--worker-procs` | `auto` means one dista process per vCPU. |
-| `max_runs` | integer from 1 to 10000 | the code's `Pipeline[..., max_runs=]`, else 1 | `--max-runs` (new) | Overrides the code's value. |
+| `max_runs` | integer from 1 to 10000, or string `"auto"` or `"auto..N"` | the code's `Pipeline[..., max_runs=]`, else 1 | `--max-runs` (new) | Overrides the code's value. `auto`: [How many at once](#how-many-at-once). |
 | `cpus` | integer `N` from 1 to 1024, or string `"MIN..MAX"`, `"auto"` or `"auto..MAX"` | none: no request | `--cpus` | Whole CPUs the run asks for. See [Requests and grants](#requests-and-grants); `auto`: [Learned requests](#learned-requests). |
 | `memory_gb` | number `N` (decimals allowed), or string `"MIN..MAX"`, `"auto"` or `"auto..MAX"`, over 0 and up to 65536 | none: no request | `--memory-gb` | GB of memory the run asks for. |
 | `learn` | boolean | `true` | none | `false`: `auto` asks for nothing instead of what its runs suggest. See [Learned requests](#learned-requests). |
@@ -273,6 +273,29 @@ and where it came from (`request_source`: `declared`, `learned` or
 44). Its page shows it beside the grant (**Requested** `3.25 GB · learned
 from 20 runs`), and its JSON has `request_source`. Before rolling orca back
 past this, register without `auto`: an older orca refuses it.
+
+### How many at once
+
+`max_runs = "auto"` starts another run of the pipeline whenever its request
+fits in what this host's running runs weren't granted, up to a ceiling of
+64 (`"auto..N"` sets the ceiling to N). A bigger host runs more of them at
+once with no change to orca.toml: at 2 GB a run, 4 on a host with 8 GB to
+grant, 12 on one with 24.
+
+```toml
+[pipelines.gharchive]
+memory_gb = "auto"     # learned from its runs
+max_runs = "auto"
+```
+
+It needs a request to weigh, declared or learned. Until it has one (no
+`cpus` or `memory_gb`, or `auto` with nothing learned yet), it starts one
+run at a time, and its queued runs say so: `waiting: max_runs = "auto"
+starts one run at a time until its runs have a request to weigh`. On EC2,
+Kubernetes and remote workers, where there is no host's room to weigh, the
+ceiling is the limit (a worker still admits what it takes against its own
+host). `fill_max_runs` is still a count. An older orca reads `"auto"` as
+its ceiling.
 
 ### Memory pressure
 

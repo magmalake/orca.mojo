@@ -14,6 +14,8 @@
 # - plain, with no request, is started as before: with no check, no grant,
 #   while wide waits for more memory than the host has, which the
 #   pipeline's page, the run's and their JSON say;
+# - max_runs = "auto" runs as many at once as fit (4 of 2 GB in 8 GB), and
+#   with no request to weigh, one at a time;
 # - a remote worker (`orca worker`) admits a run against its own host the
 #   same way, and passes the grant.
 #
@@ -226,6 +228,64 @@ if curl -fsS "$base/pipelines/plain" | grep -q 'Requested<span'; then fail "plai
 q "UPDATE orca.runs SET status = 'cancelled', ended = now() WHERE id = $w3" > /dev/null
 stop_sched
 echo "ok   a pipeline without a request is started as before, while one with a request waits"
+
+# max_runs = "auto" (#266): as many at once as the host has room for, and
+# with no request to weigh, one at a time.
+export ORCA_HOST_MEMORY_MB=8192
+cat > build/grants-auto.toml << 'EOF'
+[pipelines.narrow]
+memory_gb = 2
+max_runs = "auto"
+
+[pipelines.plain]
+max_runs = "auto..3"
+EOF
+for b in narrow plain; do
+    ./build/orca register --config build/grants-auto.toml "./build/$b" >> "$log" 2>&1 || fail "register $b with max_runs auto"
+done
+./build/orca config show narrow > build/grants-show.out 2>&1 || fail "config show narrow"
+grep -qE '^  max_runs +auto +orca.toml \[pipelines.narrow\]$' build/grants-show.out \
+    || fail "config show narrow: $(cat build/grants-show.out)"
+is "SELECT max_runs || ' ' || max_runs_auto FROM orca.pipelines WHERE name = 'plain'" "3 true" \
+    || fail "plain's max_runs: $(q "SELECT max_runs, max_runs_auto FROM orca.pipelines WHERE name = 'plain'")"
+bad 'max_runs = "many"' 'max_runs: is a count, "auto" or "auto..N", not many'
+bad 'max_runs = "auto..0"' 'max_runs: max_runs is a count from 1 to 10000, "auto" or "auto..N", not auto..0'
+# most_of PIPELINE: until every run has ended, the most of its runs running
+# at once, and why the last one held waited.
+most_of() {
+    most=0
+    held=
+    i=0
+    while ! ended; do
+        i=$((i + 1)); [ "$i" -lt 900 ] || fail "the runs didn't end: $(q "SELECT id, pipeline, status, held FROM orca.runs WHERE status NOT IN ('succeeded', 'failed', 'cancelled')")"
+        n=$(q "SELECT count(*) FROM orca.runs WHERE status = 'running' AND pipeline = '$1'")
+        [ "$n" -le "$most" ] || most=$n
+        h=$(q "SELECT held FROM orca.runs WHERE status = 'queued' AND pipeline = '$1' AND held IS NOT NULL LIMIT 1")
+        [ -z "$h" ] || held=$h
+        sleep 0.1
+    done
+    [ "$(q "SELECT count(*) FROM orca.runs WHERE pipeline = '$1' AND status <> 'succeeded' AND partitions LIKE '2025-%'")" -eq 0 ] \
+        || fail "$1's runs that didn't succeed: $(q "SELECT id, status, error FROM orca.runs WHERE pipeline = '$1' AND status <> 'succeeded'")"
+}
+start_sched
+for m in 01 02 03 04 05 06; do
+    ./build/orca backfill narrow 2025-$m >> "$log" 2>&1 || fail "backfill narrow 2025-$m"
+done
+most_of narrow
+[ "$most" -eq 4 ] || fail "$most of narrow's 2 GB runs ran at once in 8 GB, not 4"
+echo "$held" | grep -qE '^waiting: needs 2 GB, 0 GB free of grants$' || fail "narrow's held: '$held'"
+echo "ok   max_runs = \"auto\" runs as many at once as the host has room for (4 of 2 GB in 8 GB)"
+for m in 01 02 03; do
+    ./build/orca backfill plain 2025-$m >> "$log" 2>&1 || fail "backfill plain 2025-$m"
+done
+most_of plain
+[ "$most" -eq 1 ] || fail "$most of plain's runs ran at once with no request to weigh"
+[ "$held" = 'waiting: max_runs = "auto" starts one run at a time until its runs have a request to weigh (cpus, memory_gb, learned or declared)' ] \
+    || fail "plain's held: '$held'"
+stop_sched
+./build/orca register --config build/grants.toml ./build/narrow >> "$log" 2>&1 || fail "register narrow back"
+./build/orca register --config build/grants.toml ./build/plain >> "$log" 2>&1 || fail "register plain back"
+echo "ok   with no request to weigh, max_runs = \"auto\" starts one run at a time"
 
 # On a remote worker, against its own host.
 export ORCA_HOST_MEMORY_MB=8192
