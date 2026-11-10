@@ -773,6 +773,10 @@ def _migrations() -> List[List[String]]:
         # (which starts it again) is retried as usual. Additive: an older
         # binary ignores it and retries, as it did.
         ["ALTER TABLE orca.runs ADD COLUMN unretried_start integer"],
+        # max_runs = "auto" (#266): how many runs at once follows what this
+        # host has free, with max_runs as the ceiling. Additive: an older
+        # binary ignores it and runs up to the ceiling.
+        ["ALTER TABLE orca.pipelines ADD COLUMN max_runs_auto boolean"],
     ]
 
 

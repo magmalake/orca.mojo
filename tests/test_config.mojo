@@ -249,6 +249,26 @@ def test_learned_requests() raises:
     _refused("[pipelines.a]\nlearn = 0\n", "true or false")
 
 
+def test_auto_max_runs() raises:
+    # `max_runs = "auto"` and `"auto..N"` (#266): the ceiling is 64 or N.
+    var f = ProjectConfig(
+        String(
+            '[pipelines.a]\nmax_runs = "auto"\n',
+            '[pipelines.b]\nmax_runs = "auto..64"\n',
+            '[pipelines.c]\nmax_runs = "auto..8"\n',
+        ),
+        "orca.toml",
+    )
+    assert_equal(resolve("a", RegisterFlags(), f).text("max_runs"), "auto")
+    assert_equal(resolve("b", RegisterFlags(), f).text("max_runs"), "auto")
+    assert_equal(resolve("c", RegisterFlags(), f).text("max_runs"), "auto..8")
+    assert_equal(canonical_flag("max_runs", "auto..3"), "auto..3")
+    assert_equal(canonical_flag("max_runs", "3"), "3")
+    _refused('[pipelines.a]\nmax_runs = "auto.."\n', "auto..N")
+    _refused('[pipelines.a]\nmax_runs = "auto..0"\n', "auto..N")
+    _refused('[pipelines.a]\nmax_runs = "autos"\n', "auto..N")
+
+
 def test_keys_and_tables_are_checked() raises:
     _refused("[pipelines.a]\nworkrs = 4\n", "has no key workrs")
     _refused('[defaults]\nfils = "all"\n', "has no key fils")
