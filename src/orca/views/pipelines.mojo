@@ -18,13 +18,15 @@ from orca.lineage import SnapshotRef
 from orca.live import live_sql
 from orca.recommend import Recommendation
 from orca.schedule import Schedule
-from orca.scheduler import (
+from orca.queueing import (
     current_keys,
     done_keys,
-    fill_key,
-    fill_pipeline,
     keep_keys,
     kept_keys,
+)
+from orca.registered import (
+    fill_key,
+    fill_pipeline,
     registered,
 )
 from orca.state import State

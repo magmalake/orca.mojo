@@ -17,7 +17,8 @@ from orca.html import Html, url_encode
 from orca.json import quote
 from orca.recommend import Recommendation
 from orca.sample import fixed1
-from orca.scheduler import done_keys, registered
+from orca.queueing import done_keys
+from orca.registered import registered
 from orca.source import web_url
 from orca.state import State
 from orca.ui.coverage import coverage_href, coverage_html, follow_html

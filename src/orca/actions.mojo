@@ -26,17 +26,19 @@ from orca.live import live_runs
 from orca.month import Month
 from orca.name import parse_names
 from orca.pause import set_paused
-from orca.scheduler import (
+from orca.queueing import (
     ALLOW_APPEND_HOW,
-    RETRIED_SQL,
-    Registered,
     append_again,
     appending_writes,
     backfill,
     partition_keys,
-    registered,
     rerun_refusal,
 )
+from orca.registered import (
+    Registered,
+    registered,
+)
+from orca.scheduler import RETRIED_SQL
 from orca.sensors import rebuild
 from orca.state import State
 

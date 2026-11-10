@@ -15,7 +15,7 @@ from postgres import Connection, Params
 
 from orca import PgStore, RunResult, State, parse_months
 from orca.recommend import LEARN_RUNS, expire_raised
-from orca.state import migration_floor, schema_ahead
+from orca.migrations import migration_floor, schema_ahead
 from store_suite import (
     Touching,
     check_a_store_that_lost_its_run_stops,

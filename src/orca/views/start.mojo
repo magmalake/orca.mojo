@@ -3,7 +3,8 @@ the command that queues it, for a pipeline's Operate tab and its JSON.
 """
 
 from orca.estimate import Pace, estimate_text, pace
-from orca.scheduler import preview_backfill, registered
+from orca.queueing import preview_backfill
+from orca.registered import registered
 from orca.state import State
 from orca.views.pipelines import PipelineRow
 
