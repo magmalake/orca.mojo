@@ -369,7 +369,7 @@ theorem inv_forget {R : List Nat} {db : Db} (inv : Inv R db) :
 theorem Reachable.inv {R : List Nat} {db : Db} (h : Reachable R db) :
     Inv R db := by
   induction h with
-  | empty => exact ⟨fun row hr => by cases hr, fun row hr => by cases hr⟩
+  | empty => exact ⟨fun row hr => (by cases hr), fun row hr => (by cases hr)⟩
   | byMigrate known _ hm ih => exact inv_migrate ih known hm
   | byForget _ ih => exact inv_forget ih
 
