@@ -1502,7 +1502,12 @@ struct Scheduler(Movable):
             try:
                 ref c = self._contained[pid]
                 print(
-                    "killed pid", pid, "of", c.pipeline, "run", c.run,
+                    "killed pid",
+                    pid,
+                    "of",
+                    c.pipeline,
+                    "run",
+                    c.run,
                     String("(", held_text(c, held_s), ")"),
                 )
             except:

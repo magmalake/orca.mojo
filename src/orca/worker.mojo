@@ -472,7 +472,10 @@ struct Worker(Movable):
                 try:
                     ref c = self.contained[pid]
                     print(
-                        "orca worker: killed run", c.run, "pid", pid,
+                        "orca worker: killed run",
+                        c.run,
+                        "pid",
+                        pid,
                         String("(", held_text(c, held_s), ")"),
                         flush=True,
                     )

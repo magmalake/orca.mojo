@@ -340,7 +340,9 @@ struct HeldWatch(Copyable, Movable):
     def __init__(out self):
         self.since = Dict[Int, Int]()
 
-    def due(mut self, contained: Dict[Int, Contained], held_s: Int) -> List[Int]:
+    def due(
+        mut self, contained: Dict[Int, Contained], held_s: Int
+    ) -> List[Int]:
         """The processes of `contained` held for `held_s` seconds in a row,
         each named once; none when `held_s` is 0."""
         var out = List[Int]()
@@ -374,7 +376,11 @@ struct HeldWatch(Copyable, Movable):
 def held_text(c: Contained, held_s: Int) -> String:
     """Why a held run's process was killed, for the log."""
     return String(
-        "held at its memory limit (", _mb_text(c.limit_mb), ") for ", held_s, " s"
+        "held at its memory limit (",
+        _mb_text(c.limit_mb),
+        ") for ",
+        held_s,
+        " s",
     )
 
 
