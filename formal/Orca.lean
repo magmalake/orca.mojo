@@ -1,5 +1,7 @@
 import Orca.Core.Types
 import Orca.Core.Assumptions
+import Orca.Fence.Model
+import Orca.Fence.OwnerCommits
 import Orca.Migrate.Model
 import Orca.Migrate.Floor
 import Orca.Pins.Model

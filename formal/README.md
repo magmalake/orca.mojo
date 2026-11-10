@@ -18,6 +18,11 @@ an attempt reads a table, `Ctx.pin` takes the snapshot an earlier attempt
 read, or else the current one, and records it before answering; a new
 attempt starts from the store's `pinned_reads`.
 
+**Only the run's owner commits** (`Orca/Fence`). Another process takes a
+run over only once its heartbeat is older than the stale limit (`claim`),
+and a process commits only right after checking that it still owns the run
+and that its heartbeat is younger than half the limit (`Ctx.fence`).
+
 **A binary runs only on a schema it can run on** (`Orca/Migrate`). Each
 migration applied records the fewest migrations a binary must know to run on
 the schema it left (`min_binary`, from `migration_floor`); a binary older
@@ -28,6 +33,7 @@ which is what lets a deploy be rolled back past additive migrations.
 |---|---|
 | `no_double_commit` | In every reachable state, at most one snapshot in the table is the step's commit number `n`. |
 | `retry_records_its_own_commit` | Every commit on record in Postgres names a snapshot in the table that is the step's commit of that number. |
+| `Fence.commit_only_by_owner` | A commit that lands within half the stale limit of its fence check lands while its process still owns the run. |
 | `Migrate.runs_only_knowing_the_floor` | A binary that `migrate` lets go on knows every floor-raising migration up to the version of the database it leaves. |
 | `Migrate.runs_when_only_additive_since` | A binary that knows every floor-raising migration the database has had is let go on, if every row it doesn't know states its floor. |
 | `Pins.retry_reads_same_snapshot` | Any two answers `Ctx.pin` ever gave for one table, in any attempts of the step, are the same snapshot. |
@@ -46,6 +52,8 @@ need it.
 | `IcebergAllOrNothing` | A commit call leaves the table as it was, or adds exactly one snapshot with the summary it was given. | `Retry` |
 | `PostgresAtomic` | Recording a row writes nothing, or exactly that row. | `Retry`, `Pins` |
 | `CrashLosesOnlyMemory` | A crash, possible from every state, leaves the table and the ledger as they were; the next attempt starts over. | `Retry` |
+| `ClockMonotone` | The database's clock doesn't run backwards. | `Fence` |
+| `CommitLandsWithin` | A commit lands at most half the stale limit after its fence check. | `Fence` |
 
 `no_double_commit` doesn't need `PostgresAtomic` in its model (recognition
 reads the table only); it takes it because one invariant carries both
@@ -57,9 +65,19 @@ one transaction.
 
 ## What the models leave out
 
-- **One live attempt** (both models)**.** Attempts follow each other; two processes running
-  the same step of the same run at once are not modelled. Orca rules that
-  out with the run's owner and `Ctx.fence`, which nothing here proves.
+- **One live attempt** (`Retry`, `Pins`)**.** Attempts follow each other; two
+  processes running the same step of the same run at once are not modelled.
+  Orca rules that out with the run's owner and `Ctx.fence`, which is what
+  `Fence.commit_only_by_owner` is about; the two aren't composed into one
+  theorem yet.
+- **Fence: nothing else touches the heartbeat.** The model has beats, claims
+  and fence checks. A run's end (`finish_run`, a cancel, a timeout), which
+  clears the heartbeat or changes the status, isn't in it; nor is a claim's
+  check of the status. `CommitLandsWithin` is an assumption about Iceberg
+  and the network, which the code doesn't enforce: a commit slower than
+  half the stale limit, begun by a process that then lost its run, is the
+  case the theorem leaves open. The stale limit must be at least twice the
+  fence's bound, and the bound more than 0.
 - **Other writers never carry this step's identity.** Another snapshot with
   the same pipeline, run, step, partition and commit number would be taken
   for the step's own. Run IDs come from Postgres; that they're unique is
@@ -91,6 +109,8 @@ one transaction.
 | `Orca/Core/Assumptions.lean` | the three environment assumptions |
 | `Orca/Retry/Model.lean` | `made`, `findCommit`, the step relation, reachable states |
 | `Orca/Retry/NoDoubleCommit.lean` | the invariant and the two theorems |
+| `Orca/Fence/Model.lean` | `claimable`, `freshAt`, the step relation over a run's owner and heartbeat |
+| `Orca/Fence/OwnerCommits.lean` | the invariant and the theorem |
 | `Orca/Migrate/Model.lean` | `floorOf`, `schemaAhead`, `migrate` over the rows of `orca.schema_version` |
 | `Orca/Migrate/Floor.lean` | the invariant and the two theorems |
 | `Orca/Pins/Model.lean` | `lookup`, `pinsOf`, the step relation for reads |
@@ -101,6 +121,7 @@ one transaction.
 | `difftest/retry.cases` | `orca-oracle retry`: 363 sequences of up to five events, and the table each leaves |
 | `difftest/pins.cases` | `orca-oracle pins`: 3905 sequences of up to five events, and the answers `Ctx.pin` gives |
 | `difftest/migrate.cases` | `orca-oracle migrate`: `migration_floor`, 810 `schema_ahead` verdicts, and 155 sequences of binaries migrating |
+| `difftest/fence.cases` | `orca-oracle fence`: 4680 sequences of up to four events, and which claims and fence checks pass |
 | `scripts/check.sh` | the gate CI runs |
 
 ## Build and check
@@ -116,6 +137,7 @@ lake exe orca-oracle retry > difftest/retry.cases   # after changing an oracle
 pixi run -e data test-formal-retry            # from the root: retry.cases through orca.tables.append
 pixi run test-formal-pins                     # pins.cases through Ctx.pin and the stores
 pixi run test-formal-migrate                  # migrate.cases through orca.state, on a throwaway Postgres
+pixi run test-formal-fence                    # fence.cases through PgStore, on a throwaway Postgres
 ```
 
 ## The differential tests
@@ -143,6 +165,12 @@ oracle's line.
   are which binaries refused, and the version and floor left. The oracle's
   `raisers` must be `_floor_raisers`: adding a floor-raiser fails this test
   until the oracle has it too.
+
+- `tests/test_formal_fence.mojo`: `PgStore.claim`, `PgStore.fence` and
+  `beat_run` for two owners on a run per sequence, with a stale limit of
+  1000 s; time passes by moving the run's heartbeat back. Compared are which
+  claims and checks passed. `SqliteStore`'s fence, the same rule against its
+  file, isn't replayed.
 
 The oracles share their models' functions (`findCommit` and `made`;
 `lookup`, `pinsOf` and `afterRecord`), but take whole calls as one event.
