@@ -74,6 +74,18 @@ def sqlite_path(url: String) -> String:
     return rest^
 
 
+# SQL for a new UUID version 7, as text: the milliseconds since 1970 in its
+# first 48 bits, then the version, the variant and random bits. A run's
+# token, as Postgres's `orca.uuidv7()` makes it.
+comptime _UUID7 = (
+    "(SELECT lower(substr(t.ms, 1, 8) || '-' || substr(t.ms, 9, 4) || '-7' ||"
+    " substr(hex(randomblob(2)), 2, 3) || '-' || substr('89ab', 1 + (random()"
+    " & 3), 1) || substr(hex(randomblob(2)), 2, 3) || '-' ||"
+    " hex(randomblob(6))) FROM (SELECT printf('%012x', CAST((julianday('now')"
+    " - 2440587.5) * 86400000 AS INTEGER)) AS ms) t)"
+)
+
+
 def _migrations() -> List[List[String]]:
     """Each migration is a list of statements; its version is its index + 1."""
     return [
@@ -169,7 +181,8 @@ def _migrations() -> List[List[String]]:
         # A random token per run, as Postgres's migration 47 keeps it
         # (#292): a file that was deleted and made again gives out the same
         # run numbers. SQLite adds no column with a default that isn't
-        # constant, so `create_run` sets it, and older runs have none.
+        # constant, so `create_run` sets it (`_UUID7`), and older runs have
+        # none.
         [
             "ALTER TABLE runs ADD COLUMN token TEXT",
         ],
@@ -498,7 +511,9 @@ struct SqliteStore(Movable, RunStore):
                 _NOW,
                 ", ",
                 _NOW,
-                ", lower(hex(randomblob(16)))) RETURNING id",
+                ", ",
+                _UUID7,
+                ") RETURNING id",
             )
         )
         st.bind_text(1, pipeline)

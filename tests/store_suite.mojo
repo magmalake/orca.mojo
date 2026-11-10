@@ -76,17 +76,48 @@ def new_run[S: RunStore](mut s: S, owner: String) raises -> Int:
     return run
 
 
+def _is_uuid7(token: String) -> Bool:
+    """Whether `token` is a UUID as text (8-4-4-4-12) of version 7 and the
+    standard variant."""
+    var b = token.as_bytes()
+    if len(b) != 36:
+        return False
+    for i in [8, 13, 18, 23]:
+        if b[i] != UInt8(ord("-")):
+            return False
+    var variant = b[19]
+    return b[14] == UInt8(ord("7")) and (
+        variant == UInt8(ord("8"))
+        or variant == UInt8(ord("9"))
+        or variant == UInt8(ord("a"))
+        or variant == UInt8(ord("b"))
+    )
+
+
+def _time_of(token: String) -> String:
+    """The 12 hex digits of a UUID version 7's time, which sort as it does."""
+    var b = token.as_bytes()
+    var out = String()
+    for i in range(13):
+        if i != 8:
+            out += chr(Int(b[i]))
+    return out
+
+
 def check_runs_have_tokens[S: RunStore](mut s: S) raises:
     """Each run has a token of its own, the same each time it's asked for
     (#292)."""
     var first = new_run(s, "a:1")
     var a = s.run_token()
-    assert_true(a.byte_length() >= 32)
+    assert_true(_is_uuid7(a))
     assert_equal(s.run_token(), a)
     var second = new_run(s, "a:1")
     var b = s.run_token()
-    assert_true(b.byte_length() >= 32)
+    assert_true(_is_uuid7(b))
     assert_true(a != b)
+    # The time comes first, so a later run's token sorts after an earlier
+    # one's, unless they were made in the same millisecond.
+    assert_true(_time_of(a) <= _time_of(b))
     s.own(first, "a:1", "h")
     assert_equal(s.run_token(), a)
     s.own(second, "a:1", "h")

@@ -66,22 +66,22 @@ def _snapshots(name: String) raises -> Int:
 def test_a_run_with_another_token_commits_again() raises:
     var t = _create("restored")
     # Run 7, which a restore of orca's database then loses.
-    var lost = _ctx("restored", 1, "11111111-1111-4111-8111-111111111111")
+    var lost = _ctx("restored", 1, "01938f2a-0000-7111-8111-111111111111")
     var first = append(lost, t, _rows(1))
     assert_equal(_snapshots("restored"), 1)
     # The run the restored database numbers 7: the same pipeline, step and
     # partition, and a token of its own. Its commit isn't there yet.
-    var again = _ctx("restored", 1, "22222222-2222-4222-8222-222222222222")
+    var again = _ctx("restored", 1, "01938f2b-0000-7222-8222-222222222222")
     var second = append(again, t, _rows(2))
     assert_equal(_snapshots("restored"), 2)
     if first == second:
         raise Error("the new run took the lost run's commit for its own")
     assert_equal(
         t.metadata.snapshots[1].summary["orca.run-token"],
-        "22222222-2222-4222-8222-222222222222",
+        "01938f2b-0000-7222-8222-222222222222",
     )
     # Its retry finds that commit, and not the lost run's.
-    var retry = _ctx("restored", 2, "22222222-2222-4222-8222-222222222222")
+    var retry = _ctx("restored", 2, "01938f2b-0000-7222-8222-222222222222")
     assert_equal(append(retry, t, _rows(3)), second)
     assert_equal(_snapshots("restored"), 2)
 
@@ -92,7 +92,7 @@ def test_a_commit_from_before_tokens_is_still_recognised() raises:
     var before = _ctx("upgraded", 1, "")
     var first = append(before, t, _rows(1))
     # Its retry, by a binary that gives the run a token, finds the commit.
-    var after = _ctx("upgraded", 2, "33333333-3333-4333-8333-333333333333")
+    var after = _ctx("upgraded", 2, "01938f2c-0000-7333-8333-333333333333")
     assert_equal(append(after, t, _rows(2)), first)
     assert_equal(_snapshots("upgraded"), 1)
 
@@ -101,7 +101,7 @@ def test_a_run_without_a_token_recognises_its_commit() raises:
     var t = _create("worker")
     # A worker's run whose `orca ui` knows tokens for one attempt and not
     # for the next (an image rolled back): the number alone tells.
-    var with_token = _ctx("worker", 1, "44444444-4444-4444-8444-444444444444")
+    var with_token = _ctx("worker", 1, "01938f2d-0000-7444-8444-444444444444")
     var first = append(with_token, t, _rows(1))
     var without = _ctx("worker", 2, "")
     assert_equal(append(without, t, _rows(2)), first)
