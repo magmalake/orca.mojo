@@ -59,7 +59,8 @@ from std.time import perf_counter_ns, sleep
 from json import Value
 
 from orca.admission import Report
-from orca.cgroup import Cgroups, Contained, MemoryKnobs, put as put_cgroup
+from orca.cgroup import Cgroups, Contained, HeldWatch, MemoryKnobs, held_text
+from orca.cgroup import put as put_cgroup
 from orca.cgroup import start_limit_mb
 from orca.control import fetch_secret
 from orca.http_store import Body, StateApi
@@ -161,6 +162,10 @@ struct Worker(Movable):
     """Where the runs' cgroups go (`orca.cgroup`), or why they don't."""
     var contained: Dict[Int, Contained]
     """The runs' processes' cgroups, by pid."""
+    var held: HeldWatch
+    """Since when they have been held at their memory limit."""
+    var stalled: Dict[Int, Bool]
+    """Those killed for being held there: out of memory at the reap."""
     var unswept: List[String]
     """Cgroups to remove once empty."""
     var room_mb: Int
@@ -193,6 +198,8 @@ struct Worker(Movable):
         self.admission = Admission.from_env()
         self.cgroups = Cgroups.off("off: not serving")
         self.contained = Dict[Int, Contained]()
+        self.held = HeldWatch()
+        self.stalled = Dict[Int, Bool]()
         self.unswept = List[String]()
         self.room_mb = 0
 
@@ -356,14 +363,17 @@ struct Worker(Movable):
         )
         if pid in self.contained:
             var cg = self.contained.pop(pid)
-            var oom = code != 0 and Cgroups.oom_kills(cg.path) > 0
+            var stalled = self.stalled.pop(pid, False)
+            var oom = code != 0 and (stalled or Cgroups.oom_kills(cg.path) > 0)
             if oom:
                 print(
                     "run", r.spec.run, "pid", pid, "out of memory", flush=True
                 )
             body = body^.int("memory_limit_mb", Int64(cg.limit_mb)).int(
                 "memory_max_mb", Int64(cg.kill_mb)
-            ).int("oom", Int64(1 if oom else 0))
+            ).int("oom", Int64(1 if oom else 0)).int(
+                "held", Int64(1 if oom and stalled else 0)
+            )
             _ = put_cgroup(String(cg.path, "/cgroup.kill"), "1")
             if not Cgroups.remove(cg.path):
                 self.unswept.append(cg.path)
@@ -454,6 +464,20 @@ struct Worker(Movable):
                         left.append(path)
                 self.unswept = left^
             self._sample()
+            var held_s = self.cgroups.knobs.held_s
+            for pid in self.held.due(self.contained, held_s):
+                self.stalled[pid] = True
+                # Its own process group (spawned with group=True).
+                _ = external_call["kill", c_int](c_int(-pid), c_int(9))
+                try:
+                    ref c = self.contained[pid]
+                    print(
+                        "orca worker: killed run", c.run, "pid", pid,
+                        String("(", held_text(c, held_s), ")"),
+                        flush=True,
+                    )
+                except:
+                    pass
             var slots = self.max_runs - len(self.running)
             # Memory pressure (orca.pressure): no claim while this host is
             # over the limit, but one at a time once a hold has lasted its

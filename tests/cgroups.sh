@@ -4,7 +4,8 @@
 # "out of memory at <limit>"; its retry has a bigger limit and succeeds; the
 # pipeline's next run starts from that limit; the run page, its JSON and
 # Ops > Control's show the limits; no run cgroup or process is left; and a
-# scheduler that starts removes an empty cgroup a dead one left.
+# scheduler that starts removes an empty cgroup a dead one left; and a run
+# held at memory.high short of memory.max is killed as out of memory.
 #
 # The scheduler makes the cgroups under its own cgroup, which it has to be
 # able to write (delegated). Where it isn't, and `sudo -n` works (GitHub's
@@ -181,6 +182,32 @@ until_ 10 "run cgroups are left: $(ls -d "$cgbase"/orca-run-* 2> /dev/null)" \
     sh -c "! ls -d '$cgbase'/orca-run-* > /dev/null 2>&1"
 if ps -eo args | grep -q '^[^ ]*build/grower resume'; then
     fail "grower processes are left: $(ps -eo pid,args | grep 'build/grower')"
+fi
+
+# A run held at memory.high short of memory.max (a margin of 100%: 300 MB at
+# a 200 MB limit is throttled, and never reaches the 400 MB kill) is killed
+# after ORCA_RUN_MEMORY_HELD_SECONDS and counts as out of memory: its retry
+# asks for 400 MB and succeeds. Needs the cgroup's PSI (memory.pressure).
+if [ -f "$cgbase/memory.pressure" ]; then
+    kill "$sched"
+    wait "$sched" 2> /dev/null || true
+    q "UPDATE orca.pipelines SET memory_raised_mb = NULL WHERE name = 'grower'" > /dev/null
+    export ORCA_RUN_MEMORY_MARGIN=100 ORCA_RUN_MEMORY_HELD_SECONDS=3
+    start_scheduler
+    ./build/orca backfill grower 2024-04 >> "$log" 2>&1 || fail "backfill 2024-04"
+    r4=$(q "SELECT max(id) FROM orca.runs")
+    until_ 120 "run $r4 didn't succeed: $(q "SELECT id, status, starts, error FROM orca.runs WHERE id = $r4")" \
+        is "SELECT status FROM orca.runs WHERE id = $r4" succeeded
+    held=$(q "SELECT a.attempt || '|' || a.status || '|' || coalesce(a.error, '') FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r4 ORDER BY a.attempt" | head -1)
+    case "$held" in
+        "1|failed|out of memory at 200 MB: "*"held at their cgroup's memory.high"*"its retry asks for 400 MB") ;;
+        *) fail "run $r4's first attempt isn't a kill for being held at 200 MB: $held" ;;
+    esac
+    said "of grower run $r4 (held at its memory limit (200 MB) for 3 s)" || fail "the held kill wasn't said"
+    export ORCA_RUN_MEMORY_MARGIN=0
+    unset ORCA_RUN_MEMORY_HELD_SECONDS
+else
+    echo "cgroups: no memory.pressure in $cgbase: the held case is skipped"
 fi
 
 # A scheduler that starts removes an empty cgroup a dead one left.

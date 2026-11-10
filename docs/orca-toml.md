@@ -214,7 +214,10 @@ env = { DISTA_WORKER_SLOTS = "auto", GHARCHIVE_PARALLEL = "auto" }
 - **Enforced where orca can make cgroups** (`orca.cgroup`;
   [docs/hetzner.md](hetzner.md#a-cgroup-per-run)): a run's grant is its
   cgroup's `memory.high`, and `ORCA_RUN_MEMORY_MARGIN` (25) percent above it
-  the kernel kills the run, it alone. The attempt fails `out of memory at
+  the kernel kills the run, it alone. A run held at its grant short of that
+  (throttled, its memory not reclaimable: at the limit with its tasks
+  stalled on memory, PSI) for `ORCA_RUN_MEMORY_HELD_SECONDS` (120; 0: never)
+  is killed by orca the same way. The attempt fails `out of memory at
   <limit>`, and the pipeline then asks for `ORCA_RUN_MEMORY_GROWTH` (1.5)
   times that at least, up to `memory_gb`'s maximum: its retry and its later
   runs (registering a different `memory_gb` forgets it). A run without a

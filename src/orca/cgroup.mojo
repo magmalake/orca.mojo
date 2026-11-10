@@ -18,6 +18,14 @@ run starts is in it from its first instruction.
   past it the kernel kills the run's processes, all of them
   (`memory.oom.group`), and none of anything else's. `memory.swap.max` is 0,
   so the limit is one of memory, not of memory and swap.
+- **Held at the limit.** A run past `memory.high` whose memory the kernel
+  can't reclaim (anonymous, and no swap) is throttled, not killed: each
+  allocation waits, so it may creep towards `memory.max` for hours.
+  The scheduler checks its runs each tick: one at its limit (`at_limit`)
+  with every task stalled on memory most of the time (the cgroup's
+  `memory.pressure` `full avg10` at least `HELD_PRESSURE`) for
+  `ORCA_RUN_MEMORY_HELD_SECONDS` (120; 0: never) in a row is killed, and
+  counts as out of memory as below.
 - At the reap, `memory.events`' `oom_kill` says whether the kernel killed
   them for it: the attempts fail with `out of memory at <limit>` rather
   than signal 9.
@@ -43,6 +51,7 @@ from std.ffi import c_int, external_call
 from std.os import getenv, listdir, mkdir, rmdir
 from std.os.path import exists, isdir
 from std.sys.info import CompilationTarget
+from std.time import perf_counter_ns
 
 from orca.resources import gb_text
 from orca.sample import _read
@@ -119,13 +128,13 @@ def oom_text(
     limit_mb: Int, kill_mb: Int, next_mb: Int, stalled: Bool = False
 ) -> String:
     """An attempt's error after the kernel killed its run for its memory,
-    or, `stalled`, after the scheduler killed it for a heartbeat that went
-    stale while it was held at its limit."""
+    or, `stalled`, after the scheduler killed it while it was held at its
+    limit (`held`, or a heartbeat that went stale there)."""
     var t = String("out of memory at ", _mb_text(limit_mb), ": ")
     if stalled:
         t.write(
             "the run's processes were held at their cgroup's memory.high,",
-            " throttled, until its heartbeat went stale",
+            " throttled, until orca killed them",
         )
     else:
         t.write(
@@ -181,6 +190,35 @@ def at_limit(current_bytes: Int, limit_mb: Int) -> Bool:
     return current_bytes >= 0 and current_bytes * 100 >= (
         limit_mb * 1024 * 1024 * 95
     )
+
+
+comptime HELD_PRESSURE: Float64 = 50.0
+"""The `full avg10` (percent of the last 10 s all the run's tasks were
+stalled on memory) at or above which a run at its limit is held there."""
+
+
+def full_avg10(text: String) -> Float64:
+    """`full avg10` from a `memory.pressure` file's `some ...` and
+    `full ...` lines; -1 without it."""
+    for line in text.splitlines():
+        var words = line.split()
+        if len(words) < 2 or String(words[0]) != "full":
+            continue
+        for w in words:
+            var kv = String(w)
+            if kv.startswith("avg10="):
+                try:
+                    return Float64(String(kv[byte=6:]))
+                except:
+                    return -1.0
+    return -1.0
+
+
+def held(current_bytes: Int, limit_mb: Int, full_pct: Float64) -> Bool:
+    """Whether a run's cgroup is held at its limit now: at it (`at_limit`)
+    and its tasks all stalled on memory at least `HELD_PRESSURE` percent
+    of the time."""
+    return at_limit(current_bytes, limit_mb) and full_pct >= HELD_PRESSURE
 
 
 def run_name(run: Int, start: Int, owner: Int) -> String:
@@ -275,6 +313,9 @@ struct MemoryKnobs(ImplicitlyCopyable, Movable):
     var growth_pct: Int
     """`ORCA_RUN_MEMORY_GROWTH` (1.5) as a percentage: a retry's memory
     after an out-of-memory kill."""
+    var held_s: Int
+    """`ORCA_RUN_MEMORY_HELD_SECONDS` (120): how long a run may be held at
+    its limit (`held`) before it's killed as out of memory; 0: never."""
 
     @staticmethod
     def from_env() raises -> MemoryKnobs:
@@ -283,7 +324,58 @@ struct MemoryKnobs(ImplicitlyCopyable, Movable):
             _env_int("ORCA_RUN_MEMORY_MB", 0, 0),
             _env_int("ORCA_RUN_MEMORY_MARGIN", 25, 0),
             growth_pct_of(g) if g else 150,
+            _env_int("ORCA_RUN_MEMORY_HELD_SECONDS", 120, 0),
         )
+
+
+struct HeldWatch(Copyable, Movable):
+    """Since when each contained run has been held at its memory limit
+    (`held`), to say which have been held `ORCA_RUN_MEMORY_HELD_SECONDS`
+    in a row: the scheduler's and a worker's runs alike."""
+
+    var since: Dict[Int, Int]
+    """A run's process to the first check (monotonic ns) of the unbroken
+    stretch it has been held; -1 once `due` has named it."""
+
+    def __init__(out self):
+        self.since = Dict[Int, Int]()
+
+    def due(mut self, contained: Dict[Int, Contained], held_s: Int) -> List[Int]:
+        """The processes of `contained` held for `held_s` seconds in a row,
+        each named once; none when `held_s` is 0."""
+        var out = List[Int]()
+        if held_s <= 0:
+            return out^
+        var t = Int(perf_counter_ns())
+        var gone = List[Int]()
+        for e in self.since.items():
+            if e.key not in contained:
+                gone.append(e.key)
+        for pid in gone:
+            _ = self.since.pop(pid, 0)
+        for e in contained.items():
+            ref c = e.value
+            var pressure = Cgroups.full_pressure(c.path)
+            if not held(Cgroups.current(c.path), c.limit_mb, pressure):
+                if self.since.get(e.key, 0) >= 0:
+                    _ = self.since.pop(e.key, 0)
+                continue
+            var since = self.since.get(e.key, t)
+            if since < 0:
+                continue
+            if t - since >= held_s * 1_000_000_000:
+                out.append(e.key)
+                self.since[e.key] = -1
+            else:
+                self.since[e.key] = since
+        return out^
+
+
+def held_text(c: Contained, held_s: Int) -> String:
+    """Why a held run's process was killed, for the log."""
+    return String(
+        "held at its memory limit (", _mb_text(c.limit_mb), ") for ", held_s, " s"
+    )
 
 
 # ── the hierarchy ────────────────────────────────────────────────────────────
@@ -321,7 +413,7 @@ struct Cgroups(Copyable, Movable):
 
     @staticmethod
     def off(why: String) -> Cgroups:
-        return Cgroups(String(), why, MemoryKnobs(0, 25, 150))
+        return Cgroups(String(), why, MemoryKnobs(0, 25, 150, 120))
 
     def on(self) -> Bool:
         return self.base != ""
@@ -428,7 +520,7 @@ struct Cgroups(Copyable, Movable):
         return Cgroups(
             base,
             String("on: runs' cgroups go in ", base),
-            MemoryKnobs(0, 25, 150),
+            MemoryKnobs(0, 25, 150, 120),
         )
 
     def make(
@@ -460,6 +552,12 @@ struct Cgroups(Copyable, Movable):
     def oom_kills(path: String) -> Int:
         """The processes the kernel killed in the cgroup for its memory."""
         return event(_read(String(path, "/memory.events")), "oom_kill")
+
+    @staticmethod
+    def full_pressure(path: String) -> Float64:
+        """The cgroup's `full avg10` (`memory.pressure`); -1 if it can't be
+        read (a kernel without PSI)."""
+        return full_avg10(_read(String(path, "/memory.pressure")))
 
     @staticmethod
     def current(path: String) -> Int:
