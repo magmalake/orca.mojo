@@ -10,6 +10,18 @@ the entry to one bullet: a bold title and one sentence on what changed for a
 user (and anything they must do when upgrading), then `(#<pr>)`; the details
 go in the PR.
 
+## Code shape
+
+- **File size.** Keep a source file under 1,000 lines, and split it before
+  it passes 1,500. Split by concern into modules of their own, not into
+  `part1`/`part2`. A change that would push a file past the limit splits it
+  first, in a PR of its own that only moves code.
+- **No circular imports.** Modules form layers: a module imports only those
+  below it, never one that imports it back, directly or through others.
+  Mojo compiles a cycle, so the compiler won't catch one. When two modules
+  need each other, move what they share into a lower module, or pass a
+  function or value in from the caller, instead.
+
 ## Migrations
 
 A deploy can be rolled back to an older image without restoring the
