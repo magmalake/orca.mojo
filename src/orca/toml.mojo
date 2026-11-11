@@ -811,7 +811,14 @@ struct _Parser(Movable):
                 _ARRAY_HEADER,
             )
         elif self.doc.entries[i].how != _ARRAY_HEADER:
-            self.fail(String(_dotted(at), " is defined already, not as [[", _dotted(path), "]]"))
+            self.fail(
+                String(
+                    _dotted(at),
+                    " is defined already, not as [[",
+                    _dotted(path),
+                    "]]",
+                )
+            )
         var n = String(len(self.doc.entries[i].value.items))
         self.doc.entries[i].value.items.append(n)
         self.doc.entries[i].value.item_kinds.append(TABLE)

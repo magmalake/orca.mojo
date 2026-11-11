@@ -104,7 +104,9 @@ def parse_upgrade(text: String) raises -> List[UpgradeStep]:
     if not versions:
         return out^
     if versions.value().kind != ARRAY:
-        raise Error("upgrade: `version` must be an array of tables ([[version]])")
+        raise Error(
+            "upgrade: `version` must be an array of tables ([[version]])"
+        )
     var ids = Dict[String, Bool]()
     for vi in versions.value().items:
         var vp: List[String] = ["version", vi]
@@ -135,38 +137,66 @@ def parse_upgrade(text: String) raises -> List[UpgradeStep]:
             if when.byte_length() == 0:
                 when = "after"
             if when != "before" and when != "after":
-                raise Error("upgrade: the step ", id, ": when is before or after, not '", when, "'")
+                raise Error(
+                    "upgrade: the step ",
+                    id,
+                    ": when is before or after, not '",
+                    when,
+                    "'",
+                )
             var rp = p.copy()
             rp.append("run")
             var mp = p.copy()
             mp.append("manual")
             var run = _string(doc, rp, String("the step ", id, "'s `run`"))
-            var manual = _string(doc, mp, String("the step ", id, "'s `manual`"))
+            var manual = _string(
+                doc, mp, String("the step ", id, "'s `manual`")
+            )
             if (run.byte_length() > 0) == (manual.byte_length() > 0):
-                raise Error("upgrade: the step ", id, " needs one of run and manual")
+                raise Error(
+                    "upgrade: the step ", id, " needs one of run and manual"
+                )
             if run.byte_length() > 0:
                 if not run.startswith("orca "):
-                    raise Error("upgrade: the step ", id, " runs '", run, "': only orca commands run")
+                    raise Error(
+                        "upgrade: the step ",
+                        id,
+                        " runs '",
+                        run,
+                        "': only orca commands run",
+                    )
                 # What orca-stack upgrade-run passes on: words of these, no quoting.
                 for b in run.as_bytes():
                     var ok = (
                         (b >= UInt8(ord("a")) and b <= UInt8(ord("z")))
                         or (b >= UInt8(ord("A")) and b <= UInt8(ord("Z")))
                         or (b >= UInt8(ord("0")) and b <= UInt8(ord("9")))
-                        or b == UInt8(ord(" ")) or b == UInt8(ord("."))
-                        or b == UInt8(ord("_")) or b == UInt8(ord(":"))
-                        or b == UInt8(ord("/")) or b == UInt8(ord("@"))
-                        or b == UInt8(ord("=")) or b == UInt8(ord(","))
-                        or b == UInt8(ord("+")) or b == UInt8(ord("-"))
+                        or b == UInt8(ord(" "))
+                        or b == UInt8(ord("."))
+                        or b == UInt8(ord("_"))
+                        or b == UInt8(ord(":"))
+                        or b == UInt8(ord("/"))
+                        or b == UInt8(ord("@"))
+                        or b == UInt8(ord("="))
+                        or b == UInt8(ord(","))
+                        or b == UInt8(ord("+"))
+                        or b == UInt8(ord("-"))
                     )
                     if not ok:
                         raise Error(
-                            "upgrade: the step ", id, "'s command has '", chr(Int(b)),
+                            "upgrade: the step ",
+                            id,
+                            "'s command has '",
+                            chr(Int(b)),
                             "': letters, digits, spaces and ._:/@=,+- only",
                         )
                 out.append(UpgradeStep(version, id, when, "run", run))
             else:
-                out.append(UpgradeStep(version, id, when, "manual", manual.replace("\t", " ")))
+                out.append(
+                    UpgradeStep(
+                        version, id, when, "manual", manual.replace("\t", " ")
+                    )
+                )
     return out^
 
 
@@ -195,14 +225,26 @@ def select_steps(
     # Stable by version: an insertion sort keeps the file's order within one.
     for i in range(1, len(picked)):
         var j = i
-        while j > 0 and version_less(version_parts(picked[j].version), version_parts(picked[j - 1].version)):
+        while j > 0 and version_less(
+            version_parts(picked[j].version),
+            version_parts(picked[j - 1].version),
+        ):
             picked.swap_elements(j - 1, j)
             j -= 1
     return picked^
 
 
 def step_line(s: UpgradeStep) -> String:
-    return String("step\t", s.id, "\t", s.when, "\t", s.kind, "\t", s.text.replace("\n", " "))
+    return String(
+        "step\t",
+        s.id,
+        "\t",
+        s.when,
+        "\t",
+        s.kind,
+        "\t",
+        s.text.replace("\n", " "),
+    )
 
 
 def upgrade_command(args: List[String]) raises -> Int:
