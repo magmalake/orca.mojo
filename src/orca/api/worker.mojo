@@ -8,6 +8,8 @@
 | `/api/worker/claim` | the worker's heartbeat, and with `slots` > 0 a queued run of its pool to start: its spec, or `null` |
 | `/api/worker/release` | a run it was given and won't start: queued again, held saying why |
 | `/api/worker/exited` | a run's process ended, with its samples |
+| `/api/worker/cluster` | a run this worker started as a cluster: its head's address and token (`orca.run_cluster`) |
+| `/api/worker/left` | a member's process ended |
 | `/api/worker/boot` | a machine the pool autoscaler made, booting: the image, its login and the bucket's variables (`orca.pool_boot`) |
 | `/api/worker/store/<call>` | a `RunStore` call of a run this worker claimed (`orca.state.PgStore`) |
 
@@ -31,6 +33,7 @@ from json import Value, loads
 from threads import AtomicFlag, WorkerPool
 from threads.ffi import OpaquePtr, opaque_ptr
 
+from orca.run_cluster import member_left, report_head
 from orca.pool_boot import BOOT_PATH, boot_answer
 from orca.http_store import STORE_PATH
 from orca.json import quote
@@ -80,6 +83,8 @@ def routes() -> List[WorkerRoute]:
         WorkerRoute("/api/worker/release", False, _release),
         WorkerRoute("/api/worker/exited", False, _exited),
         WorkerRoute(BOOT_PATH, False, _boot),
+        WorkerRoute("/api/worker/cluster", False, _cluster),
+        WorkerRoute("/api/worker/left", False, _left),
         WorkerRoute(STORE_PATH, True, _store),
     ]
 
@@ -102,6 +107,16 @@ def _release(mut db: State, w: WorkerCall) raises -> Page:
 
 def _exited(mut db: State, w: WorkerCall) raises -> Page:
     return _answer(200, exited(db, w.worker, w.body))
+
+
+def _cluster(mut db: State, w: WorkerCall) raises -> Page:
+    """A run's head, started by this worker (`orca.run_cluster`)."""
+    return _answer(200, report_head(db, w.worker.id, w.body))
+
+
+def _left(mut db: State, w: WorkerCall) raises -> Page:
+    """A member's process ended (`orca.run_cluster`)."""
+    return _answer(200, member_left(db, w.worker.id, w.body))
 
 
 def _boot(mut db: State, w: WorkerCall) raises -> Page:

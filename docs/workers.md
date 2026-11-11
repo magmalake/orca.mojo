@@ -85,6 +85,41 @@ a worker still has by what its token's worker last said.
 When a worker dies, its fill runs are queued again for the pool (below),
 so the fill goes on on the other machine.
 
+## One run over several workers
+
+A pipeline with dista tasks can spread one run's cluster over several
+workers of its pool (#268). `workers = N` (or `--workers N`) on a pipeline
+placed `worker:<pool>` lets each run use up to N more machines than the one
+that starts it; without it, a run stays on one machine, as before.
+
+```toml
+[pipelines.fanout]
+placement = "worker:lab"
+workers = 2      # up to 2 more machines join each run
+```
+
+- **The worker that claims the run** starts it as a cluster of its own: a
+  dista head on a free port, a dista worker, and the run's driver joining
+  them. It reports the head's address, the one it was started with
+  `--advertise <address>` (or `ORCA_WORKER_ADVERTISE`), to the UI.
+- **Another worker of the pool** with room and nothing to start is given
+  the run to join: it starts a dista worker against that head, sized as a
+  run of the pipeline would be on its machine and counted against its room
+  as one. dista uses a worker that joins a running job at once.
+- **A cluster token.** orca makes one for each run start and gives it, as
+  `DISTA_TOKEN`, to the run's head, its driver and every member, the
+  members over the worker API's TLS. dista refuses any connection without
+  it (dista#124), so nothing else on the network joins the run, submits to
+  it or fetches its results. It authenticates, it doesn't encrypt: keep the
+  pool's machines on a private network.
+- **When the run ends,** each member is told to stop on its worker's next
+  claim, and a member's dista worker gives up on a head that's gone within
+  10 s anyway. `orca.run_members` keeps who joined each run start, with its
+  grant, and when and why it ended.
+
+A worker without `--advertise` neither starts a run as a cluster nor joins
+one: such a run runs on its machine alone.
+
 ## Tokens
 
 On the server:

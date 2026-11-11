@@ -191,7 +191,7 @@ comptime USAGE = """usage:
   orca worker-token revoke <id>
   orca worker --pool <pool> [--remote <url>] [--token-file <path>]
               [--max-runs N] [--poll-seconds S] [--dir <dir>]
-              [--image <image>] [--name <name>]
+              [--image <image>] [--name <name>] [--advertise <address>]
                 (runs pool's runs here, over the UI's API: orca.worker)
   orca login [<url>] [--user NAME] [--days N] [--label L]
   orca logout [<url>]
