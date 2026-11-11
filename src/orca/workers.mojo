@@ -73,7 +73,7 @@ from orca.http_store import (
 )
 from orca.civil import now
 from orca.json import quote
-from orca.live import dead_sql, stale_limit, start_grace
+from orca.live import behind_sql, dead_sql, stale_limit, start_grace
 from orca.cgroup import growth_pct_of, oom_text, raised_mb, raised_request
 from orca.recommend import RunRequest
 from orca.resources import Grant, Request, Room, admit
@@ -493,17 +493,18 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     # runs: the others of a pipeline would be refused for the same reasons
     # (its cap, image or request), and a long queue of one pipeline at its
     # max_runs mustn't hide the runs of the others behind it. The other
-    # runs first, then the fill runs, each oldest first.
+    # runs first, then the fill runs, each oldest first. One behind an
+    # older run of its keys waits for it (orca.live.behind_sql).
     var candidates = db.conn.query(
-        (
-            "SELECT id, pipeline, trigger FROM (SELECT DISTINCT ON"
-            " (r.pipeline, r.trigger = 'fill') r.id, r.pipeline, r.trigger"
-            " FROM orca.runs r JOIN orca.pipelines p ON p.name = r.pipeline"
-            " WHERE r.status = 'queued' AND p.placement = $1 AND NOT p.paused"
-            " AND p.binary_path IS NOT NULL AND (r.trigger <> 'fill' OR"
-            " p.fills = 'all') ORDER BY r.pipeline, r.trigger = 'fill', r.id)"
-            " AS c ORDER BY trigger = 'fill', id"
-        ),
+        "SELECT id, pipeline, trigger FROM (SELECT DISTINCT ON"
+        " (r.pipeline, r.trigger = 'fill') r.id, r.pipeline, r.trigger"
+        " FROM orca.runs r JOIN orca.pipelines p ON p.name = r.pipeline"
+        " WHERE r.status = 'queued' AND p.placement = $1 AND NOT p.paused"
+        " AND p.binary_path IS NOT NULL AND (r.trigger <> 'fill' OR"
+        " p.fills = 'all') AND NOT "
+        + behind_sql("r")
+        + " ORDER BY r.pipeline, r.trigger = 'fill', r.id) AS c ORDER BY"
+        " trigger = 'fill', id",
         Params().text(w.placement()),
     )
     var hour = Int((now() % 86400) // 3600)

@@ -24,6 +24,7 @@ from orca.fill import (
     fill_status,
 )
 from orca.system import system_now
+from orca.live import behind_sql
 from orca.kube import (
     RunSpec,
     cpu_millis,
@@ -350,9 +351,11 @@ def _start(
             String(
                 (
                     "SELECT id, allow_new_code FROM orca.runs WHERE"
-                    " pipeline = $1 AND (status"
+                    " pipeline = $1 AND ((status"
                 ),
-                " = 'queued' OR (status = 'deferred' AND retry_at <= $4) OR",
+                " = 'queued' AND NOT ",
+                behind_sql(),
+                ") OR (status = 'deferred' AND retry_at <= $4) OR",
                 " (status = 'failed' AND ",
                 _RETRIED,
                 " AND retry_at <= $4) OR (status = 'running' AND ",

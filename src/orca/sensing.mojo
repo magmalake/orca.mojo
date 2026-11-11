@@ -9,7 +9,7 @@ from postgres import (
 )
 from orca.civil import Civil
 from orca.cron import CronExpr
-from orca.live import live_runs
+from orca.live import is_live_sql, live_runs
 from orca.schedule import Schedule
 from orca.sensors import (
     join_keys,
@@ -118,6 +118,9 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
     var taken = List[Int]()
     var unusable = List[Tuple[Int, String]]()
     var all = List[String]()
+    # Each key a snapshot offers, with that snapshot: a live run of the
+    # key may have read an older one.
+    var offered = Offered()
     for i in range(len(datasets)):
         # Seen by another tick already, or twice in this one.
         var new = tx.query(
@@ -136,8 +139,9 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
         # Keys that aren't partitions, such as a week another writer
         # put in `orca.partitions`, run nothing: the snapshot is seen,
         # with why, so it doesn't stop the others or the next tick.
+        var mk = List[String]()
         try:
-            _ = map_keys(ks, p.kind, p.start)
+            mk = map_keys(ks, p.kind, p.start)
         except e:
             _ = tx.execute(
                 (
@@ -153,19 +157,28 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
             unusable.append((i, String(e)))
             continue
         taken.append(i)
+        for k in mk:
+            offered.add(k, datasets[i], snapshots[i])
         all.extend(ks^)
     var run = Int64(-1)
     # Keys a live run has are left to it, which becomes the snapshot's
-    # run if it left nothing else.
-    var live = live_runs(tx, p.name)
+    # run if it left nothing else; but a key whose live runs all read an
+    # older snapshot than one offering it is queued again, behind them
+    # (#139).
+    var live = _live_for(tx, p, offered)
     var mapped = List[String]()
     var held = Int64(-1)
+    var behind = Int64(-1)
     for k in map_keys(all, p.kind, p.start):
-        var in_run = live.get(k)
-        if not in_run:
-            mapped.append(k)
-        elif held < 0:
-            held = Int64(in_run.value())
+        var in_run = live[0].get(k)
+        if in_run:
+            if held < 0:
+                held = Int64(in_run.value())
+            continue
+        mapped.append(k)
+        var stale = live[1].get(k)
+        if stale and behind < 0:
+            behind = Int64(stale.value())
     var did = String()
     if len(mapped) == 0:
         run = held
@@ -173,6 +186,8 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
         var q = _queue_sensed(tx, p, mapped)
         run = q[0]
         did = q[1]
+        if behind >= 0:
+            did.write(", behind live run ", behind)
     if run >= 0:
         for i in taken:
             _ = tx.execute(
@@ -210,10 +225,81 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
         )
 
 
+struct Offered(Movable):
+    """Keys sensed snapshots offer, each beside its dataset and snapshot."""
+
+    var keys: List[String]
+    var datasets: List[String]
+    var snapshots: List[String]
+
+    def __init__(out self):
+        self.keys = List[String]()
+        self.datasets = List[String]()
+        self.snapshots = List[String]()
+
+    def add(mut self, key: String, dataset: String, snapshot: Int64):
+        self.keys.append(key)
+        self.datasets.append(dataset)
+        self.snapshots.append(String(snapshot))
+
+
+def _live_for(
+    mut tx: Transaction, p: Registered, offered: Offered
+) raises -> Tuple[Dict[String, Int], Dict[String, Int]]:
+    """Of the keys `offered`, those a live run of `p` has, each with the
+    first live run that read no older snapshot of the datasets offering
+    it, which the key is left to; and, for the others, the first live run
+    that did, which a run queued for the key waits behind. A run
+    read an older snapshot when a step over the key (or over all the
+    run's keys) read the dataset at another one, unless orca committed
+    both and that one later. One that hasn't read it yet will read the
+    new one."""
+    var left = Dict[String, Int]()
+    var stale = Dict[String, Int]()
+    if len(offered.keys) == 0:
+        return (left^, stale^)
+    for r in tx.query(
+        String(
+            (
+                "WITH x AS (SELECT x.key, x.ds, x.snap FROM"
+                " unnest(string_to_array($2, ','),"
+            ),
+            " string_to_array($3, ','), string_to_array($4,",
+            " ',')::bigint[]) AS x(key, ds, snap)), l AS (SELECT DISTINCT",
+            " k.key, r.id FROM orca.runs r, unnest(string_to_array(",
+            "r.partitions, ',')) AS k(key) WHERE r.pipeline = $1 AND ",
+            is_live_sql("r"),
+            " AND k.key IN (SELECT key FROM x)) SELECT l.key, l.id, EXISTS",
+            " (SELECT 1 FROM x JOIN orca.steps s ON s.run = l.id AND",
+            " s.partition IN (l.key, '') JOIN orca.attempts a ON a.step =",
+            " coalesce(s.copied_from, s.id) JOIN orca.reads rd ON",
+            " rd.attempt = a.id AND rd.dataset = x.ds WHERE x.key = l.key",
+            " AND rd.snapshot_id <> x.snap AND NOT EXISTS (SELECT 1 FROM",
+            " orca.commits cr, orca.commits cx WHERE cr.dataset = x.ds AND",
+            " cr.snapshot_id = rd.snapshot_id AND cx.dataset = x.ds AND",
+            " cx.snapshot_id = x.snap AND cr.attempt > cx.attempt)) AS",
+            " behind FROM l ORDER BY l.key, l.id",
+        ),
+        Params()
+        .text(p.name)
+        .text(join_keys(offered.keys))
+        .text(join_keys(offered.datasets))
+        .text(join_keys(offered.snapshots)),
+    ):
+        var k = r.text("key")
+        var id = Int(r.int64("id"))
+        if r.bool("behind"):
+            if k not in stale:
+                stale[k] = id
+        elif k not in left:
+            left[k] = id
+    return (left^, stale^)
+
+
 def _queue_sensed(
     mut tx: Transaction, p: Registered, keys: List[String]
 ) raises -> Tuple[Int64, String]:
-    """Runs of `p` over `keys` (sorted, none in a live run), trigger
+    """Runs of `p` over `keys` (sorted, none left to a live run), trigger
     `sensor`; returns the first, and what was done for the log. With
     `keys_per_run` 1, the default, one run over them all, as before #240.
     Above 1, at most `keys_per_run` keys to a run (#240): the sensor runs
