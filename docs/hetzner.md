@@ -574,7 +574,7 @@ default); the scheduler and UI then log `orca: the database is at schema
 version 41, ahead of this binary's 40; its migrations since are additive,
 so running on it` and go on. A migration that renames, drops or retypes
 something, or changes what a value means, raises the floor (AGENTS.md's
-Migrations; the list is `_floor_raisers` in `src/orca/state.mojo`), and an
+Migrations; the list is `_floor_raisers` in `src/orca/migrations.mojo`), and an
 orca from before it refuses to start: `orca: the database is at schema
 version N, newer than this binary's M, and a migration since needs a binary
 that knows at least K`. This applies from orca 0.16.0 (the first that

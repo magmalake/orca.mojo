@@ -8,7 +8,7 @@ database runs on it only if it knows that many. Rows written before the
 column existed have none, until a binary that knows their version fills
 them in.
 
-Mirrors src/orca/state.mojo#migration_floor+schema_ahead+State.migrate.
+Mirrors src/orca/migrations.mojo#migration_floor+schema_ahead and src/orca/state.mojo#State.migrate.
 -/
 namespace Orca.Migrate
 

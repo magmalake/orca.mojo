@@ -1,0 +1,26 @@
+#!/bin/sh
+# orca.hcloud (the pool autoscaler's Hetzner client, #267) against
+# tests/fake_hcloud.py: types, firewalls, create with and without stock,
+# list by label over pages, delete, a server's user data run, and errors that
+# keep the token out.
+set -eu
+cd "$(dirname "$0")/.."
+. "$PWD/tests/port.sh"
+mkdir -p build
+dir=$PWD/build/hcloud
+rm -rf "$dir"
+mkdir -p "$dir"
+free_port port
+python3 tests/fake_hcloud.py "$port" "$dir" &
+fake=$!
+trap 'kill $fake 2> /dev/null || true' EXIT
+export ORCA_HCLOUD_ENDPOINT="http://127.0.0.1:$port/v1" ORCA_HCLOUD_TOKEN=test-token HCLOUD_DIR="$dir"
+i=0
+until curl -s -o /dev/null "$ORCA_HCLOUD_ENDPOINT/server_types"; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || { echo "FAIL: the fake didn't start"; exit 1; }
+    sleep 0.1
+done
+# shellcheck disable=SC2086
+scripts/mojo-build.sh -I src $DEP_INC tests/test_hcloud.mojo -o build/test-hcloud
+./build/test-hcloud
+echo "hcloud: ok"

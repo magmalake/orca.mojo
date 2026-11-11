@@ -15,6 +15,7 @@ from orca.config import (
     parse_workers,
     resolve,
 )
+from orca.pool_config import NO_WAIT, read_pools
 
 comptime EXAMPLE = """[defaults]
 placement = "ec2"
@@ -267,6 +268,102 @@ def test_auto_max_runs() raises:
     _refused('[pipelines.a]\nmax_runs = "auto.."\n', "auto..N")
     _refused('[pipelines.a]\nmax_runs = "auto..0"\n', "auto..N")
     _refused('[pipelines.a]\nmax_runs = "autos"\n', "auto..N")
+
+
+comptime POOL = """[pools.lab]
+provider = "hetzner"
+machines = [
+  { type = "cax31", wait = 600 },
+  { type = "cpx32" },
+]
+locations = ["hel1", "nbg1"]
+max_machines = 3
+"""
+
+
+def test_pools() raises:
+    # [pools.<name>] (orca.pool_config, #267): checked with the file.
+    var f = ProjectConfig(POOL, "orca.toml")
+    var pools = read_pools(f.doc)
+    assert_equal(len(pools), 1)
+    ref p = pools[0]
+    assert_equal(p.name, "lab")
+    assert_equal(p.provider, "hetzner")
+    assert_equal(len(p.machines), 2)
+    assert_equal(p.machines[0].type, "cax31")
+    assert_equal(p.machines[0].wait, 600)
+    assert_equal(p.machines[1].wait, NO_WAIT)
+    assert_equal(p.locations, ["hel1", "nbg1"])
+    assert_equal(p.max_machines, 3)
+    assert_equal(p.idle_seconds, 900)
+    assert_equal(
+        p.machines_json(),
+        '[{"type": "cax31", "wait": 600}, {"type": "cpx32"}]',
+    )
+    assert_equal(p.locations_json(), '["hel1", "nbg1"]')
+    var bare = (
+        '[pools.lab]\nprovider = "ec2"\nmachines = [{ type = "c7g.large" }]\n'
+    )
+    assert_equal(
+        read_pools(ProjectConfig(bare, "orca.toml").doc)[0].max_machines, 1
+    )
+    _refused('[pools.lab]\nmachines = [{ type = "a" }]\n', "needs a provider")
+    _refused(
+        '[pools.lab]\nprovider = "gcp"\nmachines = [{ type = "a" }]\n',
+        'provider is "hetzner" or "ec2"',
+    )
+    _refused('[pools.lab]\nprovider = "ec2"\n', "needs machines")
+    _refused(
+        '[pools.lab]\nprovider = "ec2"\nmachines = ["a"]\n',
+        "machines is a list of tables",
+    )
+    _refused(
+        (
+            '[pools.lab]\nprovider = "ec2"\nmachines = [{ type = "a" }, { type'
+            ' = "b" }]\n'
+        ),
+        "needs a wait",
+    )
+    _refused(
+        (
+            '[pools.lab]\nprovider = "ec2"\nmachines = [{ type = "a", wait = 1,'
+            ' size = 2 }, { type = "b" }]\n'
+        ),
+        "has no key size",
+    )
+    _refused(
+        '[pools.lab]\nprovider = "ec2"\nmachines = [{ type = "A!" }]\n',
+        "not a machine type",
+    )
+    _refused(
+        (
+            '[pools.lab]\nprovider = "ec2"\nmachines = [{ type = "a", wait = 5'
+            ' }, { type = "a" }]\n'
+        ),
+        "twice",
+    )
+    _refused(
+        '[pools.lab]\nprovider = "hetzner"\nmachines = [{ type = "cax31" }]\n',
+        "needs locations",
+    )
+    _refused(
+        (
+            '[pools.lab]\nprovider = "ec2"\nmachines = [{ type = "a"'
+            " }]\nmax_machines = 0\n"
+        ),
+        "max_machines is from 1",
+    )
+    _refused(
+        (
+            '[pools.lab]\nprovider = "ec2"\nmachines = [{ type = "a" }]\nidle'
+            " = 5\n"
+        ),
+        "has no key idle",
+    )
+    _refused(
+        '[pools.Lab]\nprovider = "ec2"\nmachines = [{ type = "a" }]\n',
+        "a-z, 0-9",
+    )
 
 
 def test_keys_and_tables_are_checked() raises:

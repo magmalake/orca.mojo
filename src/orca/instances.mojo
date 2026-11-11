@@ -23,7 +23,8 @@ from std.time import sleep
 from postgres import Params
 
 from orca.live import stale_limit
-from orca.state import State, known_migrations, live_older, migration_floor
+from orca.migrations import known_migrations, migration_floor
+from orca.state import State, live_older
 from orca.store import process_owner
 
 

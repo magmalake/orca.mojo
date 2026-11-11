@@ -23,7 +23,7 @@ from std.testing import assert_equal
 from postgres import Connection
 
 from orca import State
-from orca.state import migration_floor, schema_ahead
+from orca.migrations import migration_floor, schema_ahead
 
 comptime CASES = "formal/difftest/migrate.cases"
 

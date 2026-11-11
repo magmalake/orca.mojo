@@ -9,7 +9,10 @@ from std.os import getenv
 from postgres import Params
 
 from orca.civil import Civil, now
-from orca.config import Shown, shown
+from orca.config_show import (
+    Shown,
+    shown,
+)
 from orca.coverage import Coverage, coverage
 from orca.cron import CronExpr
 from orca.fill import FillStatus, fill_status
@@ -18,13 +21,15 @@ from orca.lineage import SnapshotRef
 from orca.live import live_sql
 from orca.recommend import Recommendation
 from orca.schedule import Schedule
-from orca.scheduler import (
+from orca.queueing import (
     current_keys,
     done_keys,
-    fill_key,
-    fill_pipeline,
     keep_keys,
     kept_keys,
+)
+from orca.registered import (
+    fill_key,
+    fill_pipeline,
     registered,
 )
 from orca.state import State

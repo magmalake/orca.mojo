@@ -1,0 +1,1 @@
+- **`[pools.<name>]` in orca.toml**: a worker pool for orca to grow and shrink, recorded by `orca register`. (#310)

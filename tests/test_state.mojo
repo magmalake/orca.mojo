@@ -14,8 +14,10 @@ from std.testing import (
 from postgres import Connection, Params
 
 from orca import PgStore, RunResult, State, parse_months
+from orca.config import ProjectConfig
+from orca.pool_config import PoolConfig, read_pools, record_pools
 from orca.recommend import LEARN_RUNS, expire_raised
-from orca.state import migration_floor, schema_ahead
+from orca.migrations import migration_floor, schema_ahead
 from store_suite import (
     Touching,
     check_a_store_that_lost_its_run_stops,
@@ -51,9 +53,9 @@ def test_migrate_is_idempotent() raises:
     var db = _db()
     db.migrate()
     assert_equal(
-        _count("SELECT max(version) AS n FROM orca.schema_version"), 50
+        _count("SELECT max(version) AS n FROM orca.schema_version"), 52
     )
-    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 50)
+    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 52)
 
 
 def test_each_version_records_its_floor() raises:
@@ -74,8 +76,8 @@ def test_each_version_records_its_floor() raises:
     assert_equal(migration_floor(40), 24)
     # 41 (orca.alerts), 42 (orca.schedulers), 43 (fill_lag), 44 (learned
     # requests), 45 (memory_raised_run), 46 (memory stall), 47 (run tokens),
-    # 48 (unretried_start), 49 (max_runs_auto) and 50 (data_version) are
-    # additive.
+    # 48 (unretried_start), 49 (max_runs_auto), 50 (data_version), 51
+    # (orca.pools) and 52 (the pool autoscaler's state) are additive.
     assert_equal(migration_floor(41), 24)
     assert_equal(migration_floor(42), 24)
     assert_equal(migration_floor(43), 24)
@@ -86,6 +88,8 @@ def test_each_version_records_its_floor() raises:
     assert_equal(migration_floor(48), 24)
     assert_equal(migration_floor(49), 24)
     assert_equal(migration_floor(50), 24)
+    assert_equal(migration_floor(51), 24)
+    assert_equal(migration_floor(52), 24)
 
 
 def test_the_schema_check() raises:
@@ -101,7 +105,7 @@ def test_the_schema_check() raises:
 
 def test_an_older_binary_runs_on_additive_migrations() raises:
     _ = _db()
-    # A binary that knows 30 migrations: 31..50 are additive.
+    # A binary that knows 30 migrations: 31..52 are additive.
     _ = setenv("ORCA_TEST_MIGRATIONS", "30", True)
     try:
         var old = State(getenv("ORCA_DATABASE_URL"))
@@ -109,7 +113,7 @@ def test_an_older_binary_runs_on_additive_migrations() raises:
         # It runs on the schema, and doesn't touch the versions.
         _ = _new_run(old, "a:1")
         assert_equal(
-            _count("SELECT max(version) AS n FROM orca.schema_version"), 50
+            _count("SELECT max(version) AS n FROM orca.schema_version"), 52
         )
         # One that knows 23 doesn't: 24 raised the floor.
         _ = setenv("ORCA_TEST_MIGRATIONS", "23", True)
@@ -140,7 +144,7 @@ def test_floors_are_filled_in_for_an_older_database() raises:
             "SELECT count(*) AS n FROM orca.schema_version WHERE min_binary ="
             " 24"
         ),
-        27,
+        29,
     )
     assert_equal(
         _count(
@@ -189,6 +193,49 @@ def test_an_oom_raise_expires_after_the_learning_window() raises:
     assert_equal(gone[0], "floor")
     assert_equal(_count(floor), 0)
     assert_equal(len(expire_raised(db)), 0)
+
+
+def test_pools_are_recorded_from_the_file() raises:
+    """`record_pools` (#267): orca.pools is what orca.toml says, a pool the
+    file no longer has deleted."""
+    var db = _db()
+    var two = ProjectConfig(
+        String(
+            (
+                '[pools.a]\nprovider = "ec2"\nmachines = [{ type = "c7g.large"'
+                " }]\n"
+            ),
+            '[pools.b]\nprovider = "hetzner"\nmachines = [{ type = "cax31",',
+            ' wait = 60 }, { type = "cpx32" }]\nlocations = ["hel1"]\n',
+            "max_machines = 2\n",
+        ),
+        "orca.toml",
+    )
+    assert_equal(len(record_pools(db, read_pools(two.doc))), 0)
+    assert_equal(_count("SELECT count(*) AS n FROM orca.pools"), 2)
+    assert_equal(
+        _count(
+            "SELECT max_machines AS n FROM orca.pools WHERE name = 'b' AND"
+            " machines->0->>'type' = 'cax31' AND (machines->1->'wait') IS NULL"
+            " AND locations = '[\"hel1\"]'"
+        ),
+        2,
+    )
+    var one = ProjectConfig(
+        '[pools.b]\nprovider = "ec2"\nmachines = [{ type = "c7g.large" }]\n',
+        "orca.toml",
+    )
+    var gone = record_pools(db, read_pools(one.doc))
+    assert_equal(gone, ["a"])
+    assert_equal(
+        _count(
+            "SELECT count(*) AS n FROM orca.pools WHERE name = 'b' AND provider"
+            " = 'ec2' AND max_machines = 1"
+        ),
+        1,
+    )
+    _ = record_pools(db, List[PoolConfig]())
+    assert_equal(_count("SELECT count(*) AS n FROM orca.pools"), 0)
 
 
 def test_a_queued_run_can_be_claimed() raises:

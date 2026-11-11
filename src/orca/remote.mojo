@@ -51,7 +51,7 @@ from orca.html import url_encode
 from orca.json import quote
 from orca.lineage import SnapshotRef
 from orca.pressure import pct_text
-from orca.scheduler import file_names
+from orca.queueing import file_names
 from orca.state import State
 from orca.ui.parts import took_text
 from orca.usage import usage_of, usage_text

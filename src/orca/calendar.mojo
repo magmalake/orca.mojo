@@ -27,7 +27,7 @@ from orca.day import Day
 from orca.json import quote
 from orca.live import live_sql
 from orca.month import Month, days_in
-from orca.scheduler import done_keys
+from orca.queueing import done_keys
 from orca.state import State
 
 

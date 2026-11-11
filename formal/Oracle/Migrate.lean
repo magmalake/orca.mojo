@@ -20,7 +20,7 @@ tests/test_formal_migrate.mojo checks against `orca.state`
   outcome is `o` (the binary goes on), `x` (it refuses) or `-` (for `n`);
   then the database's version and stated floor.
 
-`raisers` must be `_floor_raisers` of src/orca/state.mojo.
+`raisers` must be `_floor_raisers` of src/orca/migrations.mojo.
 -/
 namespace Orca.Oracle.Migrate
 

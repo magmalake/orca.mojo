@@ -77,7 +77,7 @@ from orca.live import dead_sql, stale_limit, start_grace
 from orca.cgroup import growth_pct_of, oom_text, raised_mb, raised_request
 from orca.recommend import RunRequest
 from orca.resources import Grant, Request, Room, admit
-from orca.scheduler import (
+from orca.registered import (
     recorded_cpus,
     recorded_memory_gb,
     registered,

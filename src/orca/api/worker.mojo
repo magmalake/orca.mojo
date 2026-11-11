@@ -8,6 +8,7 @@
 | `/api/worker/claim` | the worker's heartbeat, and with `slots` > 0 a queued run of its pool to start: its spec, or `null` |
 | `/api/worker/release` | a run it was given and won't start: queued again, held saying why |
 | `/api/worker/exited` | a run's process ended, with its samples |
+| `/api/worker/boot` | a machine the pool autoscaler made, booting: the image, its login and the bucket's variables (`orca.pool_boot`) |
 | `/api/worker/store/<call>` | a `RunStore` call of a run this worker claimed (`orca.state.PgStore`) |
 
 Every call is checked the same way first: the token is a live worker
@@ -30,6 +31,7 @@ from json import Value, loads
 from threads import AtomicFlag, WorkerPool
 from threads.ffi import OpaquePtr, opaque_ptr
 
+from orca.pool_boot import BOOT_PATH, boot_answer
 from orca.http_store import STORE_PATH
 from orca.json import quote
 from orca.state import State
@@ -77,6 +79,7 @@ def routes() -> List[WorkerRoute]:
         WorkerRoute("/api/worker/claim", False, _claim),
         WorkerRoute("/api/worker/release", False, _release),
         WorkerRoute("/api/worker/exited", False, _exited),
+        WorkerRoute(BOOT_PATH, False, _boot),
         WorkerRoute(STORE_PATH, True, _store),
     ]
 
@@ -99,6 +102,15 @@ def _release(mut db: State, w: WorkerCall) raises -> Page:
 
 def _exited(mut db: State, w: WorkerCall) raises -> Page:
     return _answer(200, exited(db, w.worker, w.body))
+
+
+def _boot(mut db: State, w: WorkerCall) raises -> Page:
+    """A machine the pool autoscaler made, booting: what it needs to run its
+    worker (`orca.pool_boot`); 403 for any other token."""
+    try:
+        return _answer(200, boot_answer(db, w.worker.id))
+    except e:
+        return _error(403, String(e))
 
 
 def _store(mut db: State, w: WorkerCall) raises -> Page:

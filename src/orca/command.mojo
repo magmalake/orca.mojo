@@ -73,6 +73,8 @@ from orca.config import (
     ProjectConfig,
     RegisterFlags,
     canonical_flag,
+)
+from orca.config_show import (
     export_toml,
     show_json,
     shown,
@@ -84,7 +86,10 @@ from orca.instances import (
     overlap_refusal,
     wait_for_lead,
 )
+from orca.pool_config import read_pools, record_pools
+from orca.registering import register_pipeline
 from orca.scheduler import Scheduler
+from orca.tick import tick
 from orca.control import fetch_secret
 from orca.ec2 import vcpus
 from orca.fleet import hourly_price
@@ -494,7 +499,7 @@ def _command(args: List[String], target: String) raises -> Int:
     if cmd == "tick" and len(args) == 2:
         var s = Scheduler(url)
         s.wait_for_binaries = True
-        s.tick(now())
+        tick(s, now())
         return 0
     if cmd == "scheduler" and len(args) >= 3:
         return _scheduler(url, args)
@@ -507,7 +512,7 @@ def _command(args: List[String], target: String) raises -> Int:
             # A tick that fails (the database is down) is tried again; the
             # state it would have changed is all in Postgres.
             try:
-                s.tick(now())
+                tick(s, now())
             except e:
                 print("orca: tick failed:", e)
                 try:
@@ -946,7 +951,7 @@ def _register(url: String, args: List[String]) raises -> Int:
             " s; register once it does (orca scheduler status)",
         )
     for k in range(len(paths)):
-        var got = s.register(paths[k], now(), flags, file)
+        var got = register_pipeline(s, paths[k], now(), flags, file)
         if file.is_file() and not file.has(got):
             print(
                 String(
@@ -959,6 +964,14 @@ def _register(url: String, args: List[String]) raises -> Int:
                 file=stderr,
             )
         print("registered", got)
+    if file.is_file():
+        # Its worker pools (orca.pool_config): the file's, and only those.
+        var pools = read_pools(file.doc)
+        var gone = record_pools(s.db, pools)
+        for p in pools:
+            print("pool", p.name, String("(", p.provider, ")"))
+        for g in gone:
+            print("pool", g, "removed: its machines go once idle")
     return 0
 
 
