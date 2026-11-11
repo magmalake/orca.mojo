@@ -15,7 +15,9 @@ firewall `ORCA_HCLOUD_FIREWALL` (none by default), labelled `orca=pool`,
 sharing a project keep their machines apart), which is how `machines`
 finds a pool's.
 
-**EC2** isn't here yet: `Provider.of("ec2")` raises saying so.
+**EC2** (`orca.machines_ec2`): subnets for locations, the security group
+and instance profile from the scheduler's settings, Ubuntu for the type's
+architecture, the same labels as tags.
 
 Architectures are Docker's (`arm64`, `amd64`), the names an image's
 manifest uses, so the autoscaler can tell whether the worker image runs on
@@ -25,6 +27,7 @@ a type before it makes one.
 from std.os import getenv
 
 from orca.hcloud import Created, HCloud, ServerSpec
+from orca.machines_ec2 import Ec2Machines
 
 comptime POOL_LABEL = "orca-pool"
 comptime OWNER_LABEL = "orca-owner"
@@ -75,6 +78,7 @@ struct Provider(Movable):
     var owner: String
     """The stack's id, a label on every machine; empty for none."""
     var _hcloud: Optional[HCloud]
+    var _ec2: Optional[Ec2Machines]
     var image: String
     var ssh_keys: List[String]
     var firewall: String
@@ -85,6 +89,7 @@ struct Provider(Movable):
         self.kind = kind
         self.owner = owner
         self._hcloud = hcloud^
+        self._ec2 = None
         self.image = getenv("ORCA_HCLOUD_IMAGE", "ubuntu-24.04")
         self.ssh_keys = _list_env("ORCA_HCLOUD_SSH_KEYS")
         self.firewall = getenv("ORCA_HCLOUD_FIREWALL")
@@ -97,11 +102,15 @@ struct Provider(Movable):
         if kind == "hetzner":
             return Provider(kind, owner, HCloud.from_env())
         if kind == "ec2":
-            raise Error("orca: pools on ec2 aren't supported yet (#267)")
+            var p = Provider(kind, owner, None)
+            p._ec2 = Ec2Machines()
+            return p^
         raise Error("orca: no provider ", kind)
 
     def arch(self, machine_type: String) raises -> String:
         """`machine_type`'s architecture, Docker's name for it."""
+        if self._ec2:
+            return self._ec2.value().arch(machine_type)
         return docker_arch(self._hcloud.value().arch(machine_type))
 
     def create(self, spec: MachineSpec) raises -> Created:
@@ -113,6 +122,14 @@ struct Provider(Movable):
         ]
         if self.owner:
             labels.append((OWNER_LABEL, self.owner))
+        if self._ec2:
+            return self._ec2.value().create(
+                spec.name,
+                spec.machine_type,
+                spec.location,
+                spec.user_data,
+                labels,
+            )
         return self._hcloud.value().create(
             ServerSpec(
                 spec.name,
@@ -130,6 +147,13 @@ struct Provider(Movable):
         """The provider's machines of `pool`, whatever orca.pool_machines
         says: the autoscaler deletes those it doesn't know."""
         var out = List[Machine]()
+        if self._ec2:
+            var tags: List[Tuple[String, String]] = [(POOL_LABEL, pool)]
+            if self.owner:
+                tags.append((OWNER_LABEL, self.owner))
+            for i in self._ec2.value().instances(tags):
+                out.append(Machine(i[0], i[1], i[2], i[3], "", i[4], pool))
+            return out^
         var selector = String(POOL_LABEL, "=", pool)
         if self.owner:
             selector.write(",", OWNER_LABEL, "=", self.owner)
@@ -149,4 +173,6 @@ struct Provider(Movable):
 
     def delete(self, id: String) raises -> Bool:
         """Deletes machine `id`: True once it's gone, now or before."""
+        if self._ec2:
+            return self._ec2.value().delete(id)
         return self._hcloud.value().delete(id)

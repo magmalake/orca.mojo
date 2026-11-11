@@ -15,6 +15,7 @@ python3 tests/fake_hcloud.py "$port" "$dir" &
 fake=$!
 trap 'kill $fake 2> /dev/null || true' EXIT
 export ORCA_HCLOUD_ENDPOINT="http://127.0.0.1:$port/v1" ORCA_HCLOUD_TOKEN=test-token HCLOUD_DIR="$dir"
+unset AWS_REGION AWS_DEFAULT_REGION
 i=0
 until curl -s -o /dev/null "$ORCA_HCLOUD_ENDPOINT/server_types"; do
     i=$((i + 1)); [ "$i" -lt 100 ] || { echo "FAIL: the fake didn't start"; exit 1; }

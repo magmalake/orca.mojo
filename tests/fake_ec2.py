@@ -20,6 +20,15 @@ It also stands in for Secrets Manager's GetSecretValue (a JSON POST with
 `X-Amz-Target: secretsmanager.GetSecretValue`), as tests/fake_secret.sh
 does: the value of ID is `s3cr3t-<ID with / as ->-value`, and orca/missing
 isn't found.
+
+For worker pools (orca.machines_ec2): DescribeInstanceTypes (a type with
+`g.` in its name, `c7g.large`, is arm64, the rest x86_64), tag filters
+(`tag:<key>`) in DescribeInstances, and SSM's GetParameter (`X-Amz-Target:
+AmazonSSM.GetParameter`), which answers `ami-<arch>` for Canonical's
+Ubuntu parameters. An instance tagged `orca-pool` gets ORCA_BOOT_DIR
+(<dir>/<id>.boot) and SERVER_NAME (its Name tag); while <dir>/pool-stock
+exists, one is made only for a `<type> <subnet>` line of it, and refused
+`InsufficientInstanceCapacity` otherwise.
 """
 
 import base64
@@ -64,6 +73,16 @@ def _item(iid, i):
     )
 
 
+class Ec2Error(Exception):
+    def __init__(self, code, message, status=400):
+        super().__init__(message)
+        self.code, self.message, self.status = code, message, status
+
+
+def _arch(t):
+    return "arm64" if "g." in t else "x86_64"
+
+
 def _run(p):
     count = int(p["MaxCount"])
     tags = {}
@@ -71,6 +90,13 @@ def _run(p):
     while f"TagSpecification.1.Tag.{n}.Key" in p:
         tags[p[f"TagSpecification.1.Tag.{n}.Key"]] = p[f"TagSpecification.1.Tag.{n}.Value"]
         n += 1
+    stock = os.path.join(DIR, "pool-stock")
+    if "orca-pool" in tags and os.path.exists(stock):
+        with open(stock) as f:
+            have = {tuple(l.split()[:2]) for l in f if len(l.split()) >= 2}
+        if (p["InstanceType"], p.get("SubnetId", "")) not in have:
+            raise Ec2Error("InsufficientInstanceCapacity",
+                           f"no {p['InstanceType']} capacity in {p.get('SubnetId', '')}", 500)
     script = base64.b64decode(p["UserData"]).decode()
     if tags.get("orca.role") == "worker" and os.path.exists(os.path.join(DIR, "no-workers")):
         script = "#!/bin/sh\nsleep 3600\n"
@@ -89,6 +115,8 @@ def _run(p):
         with open(path, "w") as f:
             f.write(re.sub(r"(?<=[\s>'\"])/tmp/orca-", tmp + "/orca-", script))
         env = dict(os.environ, HOSTNAME=iid)
+        if "orca-pool" in tags:
+            env.update(ORCA_BOOT_DIR=os.path.join(DIR, f"{iid}.boot"), SERVER_NAME=tags.get("Name", iid))
         out = open(os.path.join(DIR, f"{iid}.log"), "w")
         proc = subprocess.Popen(
             ["sh", path], env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True
@@ -123,10 +151,22 @@ def _describe(p):
             continue
         if "instance-state-name" in filters and _state(i) not in filters["instance-state-name"]:
             continue
+        if any(k.startswith("tag:") and i["tags"].get(k[4:]) not in v for k, v in filters.items()):
+            continue
         items.append(_item(iid, i))
     return (
         "<DescribeInstancesResponse><reservationSet><item><instancesSet>"
         f"{''.join(items)}</instancesSet></item></reservationSet></DescribeInstancesResponse>"
+    )
+
+
+def _types(p):
+    t = p.get("InstanceType.1", "")
+    return (
+        "<DescribeInstanceTypesResponse><instanceTypeSet><item>"
+        f"<instanceType>{t}</instanceType><processorInfo><supportedArchitectures>"
+        f"<item>{_arch(t)}</item></supportedArchitectures></processorInfo>"
+        "</item></instanceTypeSet></DescribeInstanceTypesResponse>"
     )
 
 
@@ -169,6 +209,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.headers.get("X-Amz-Target") == "secretsmanager.GetSecretValue":
             self._secret(body)
             return
+        if self.headers.get("X-Amz-Target") == "AmazonSSM.GetParameter":
+            name = json.loads(body).get("Name", "")
+            arch = "arm64" if "/arm64/" in name else "amd64"
+            data = json.dumps({"Parameter": {"Name": name, "Value": f"ami-{arch}"}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-amz-json-1.1")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         p = {k: v[0] for k, v in urllib.parse.parse_qs(body, keep_blank_values=True).items()}
         action = p.get("Action", "")
         with LOCK:
@@ -176,8 +226,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 f.write(json.dumps({"action": action, "params": p}) + "\n")
             try:
                 xml = {"RunInstances": _run, "DescribeInstances": _describe,
-                       "TerminateInstances": _terminate}[action](p)
+                       "TerminateInstances": _terminate, "DescribeInstanceTypes": _types}[action](p)
                 status = 200
+            except Ec2Error as e:
+                xml = f"<Response><Errors><Error><Code>{e.code}</Code><Message>{e.message}</Message></Error></Errors></Response>"
+                status = e.status
             except KeyError:
                 xml = f"<Response><Errors><Error><Code>InvalidAction</Code><Message>{action}</Message></Error></Errors></Response>"
                 status = 400

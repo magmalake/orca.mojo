@@ -475,7 +475,7 @@ idle_seconds = 900
 |---|---|---|---|
 | `provider` | `"hetzner"` or `"ec2"` | (required) | Where the machines are made. |
 | `machines` | list of `{ type, wait }` | (required) | Machine types in order of preference. `wait` is how many seconds orca keeps trying a type before moving to the next; every entry but the last needs one. |
-| `locations` | list of strings | none | Where to try each type, in order (Hetzner locations; required there). |
+| `locations` | list of strings | none | Where to try each type, in order: Hetzner locations (required there), or EC2 subnet IDs (none: the default subnet, or `ORCA_EC2_SUBNET`). |
 | `max_machines` | 1 to 100 | 1 | The most machines the pool has at once. |
 | `idle_seconds` | 10 to 86400 | 900 | How long a machine may sit idle, with nothing queued for the pool, before it's removed. |
 
@@ -509,6 +509,9 @@ What the scheduler and the UI need, in their environment:
 |---|---|
 | `ORCA_HCLOUD_TOKEN`, or `ORCA_HCLOUD_TOKEN_SECRET` | Hetzner's API token (scheduler), or the secret that holds it. |
 | `ORCA_HCLOUD_FIREWALL`, `ORCA_HCLOUD_SSH_KEYS`, `ORCA_HCLOUD_IMAGE` | The firewall and SSH keys (names) to give each machine, and its OS image (`ubuntu-24.04`). |
+| `AWS_REGION` and credentials (or an instance role) | EC2's API (scheduler), for `provider = "ec2"`. |
+| `ORCA_POOL_EC2_SECURITY_GROUP`, `ORCA_POOL_EC2_PROFILE` | On EC2, each instance's security group and instance profile (else `ORCA_EC2_SECURITY_GROUP`, `ORCA_EC2_PROFILE`). The profile's role is how its worker reaches the bucket. |
+| `ORCA_POOL_EC2_AMI_ARM64`, `ORCA_POOL_EC2_AMI_AMD64` | On EC2, the image to pin per architecture; else Ubuntu 24.04 from Canonical's public SSM parameter. |
 | `ORCA_WORKER_IMAGE` | The image the machines run, the server's own (scheduler and UI). |
 | `ORCA_UI_URL` (or `ORCA_POOL_REMOTE`) | Where machines reach the UI. |
 | `ORCA_REGISTRY_USER`, `ORCA_REGISTRY_TOKEN_SECRET` | The login to pull a private image: the UI hands it to a booting machine, and the scheduler reads the image's architectures with it. |
