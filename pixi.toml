@@ -154,6 +154,8 @@ test-hcloud = { cmd = "tests/hcloud.sh" }
 test-pool-scale = { cmd = "scripts/with-postgres.sh tests/pool_scale.sh" }
 # The same on EC2, against tests/fake_ec2.py (#267).
 test-pool-scale-ec2 = { cmd = "scripts/with-postgres.sh tests/pool_scale_ec2.sh" }
+# One run over two workers of a pool, with a cluster token (#268).
+test-run-cluster = { cmd = "scripts/with-postgres.sh tests/run_cluster.sh" }
 test-secrets = { cmd = "scripts/with-postgres.sh tests/secrets.sh" }
 # Placement (orca.control): runs on the scheduler's own host, within its
 # limits, beside runs on the stand-in EC2.
@@ -328,8 +330,6 @@ test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh" }
 # Remote workers (orca.worker, orca.workers): orca ui, the scheduler and an
 # `orca worker` with no database, committing to a local warehouse.
 test-worker = { cmd = "scripts/with-postgres.sh tests/worker.sh" }
-# One run over two workers of a pool, with a cluster token (#268).
-test-run-cluster = { cmd = "scripts/with-postgres.sh tests/run_cluster.sh" }
 # CI runs these three groups on runners of their own; test-data is all three.
 test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-replace", "test-replace-concurrent", "test-formal-retry", "test-run-token", "test-chaos-tables", "test-lineage", "test-commits", "test-expire", "test-taxi"] }
 test-data-sensors = { depends-on = ["build-shared", "test-sensors", "test-keys-per-run", "test-lineage-s3", "test-sensors-s3", "test-sample-s3", "test-worker"] }
