@@ -6,7 +6,9 @@
 # - a live run that read an older raw.events has its month queued again,
 #   in a run of its own that waits for it, then runs on the new snapshot;
 # - a live run that read the new snapshot already is left the month, and
-#   nothing is queued.
+#   nothing is queued;
+# - a run left running whose process died holds nothing back: a newer run
+#   of its month starts.
 #
 # The live runs are rows a process elsewhere would hold. Needs
 # ORCA_DATABASE_URL (pixi run -e data test-sensed-behind-live starts a
@@ -62,6 +64,8 @@ behind=$(sensed_run "$s1")
 [ "$(q "SELECT partitions || ' ' || trigger || ' ' || status FROM orca.runs WHERE id = $behind")" = "2024-03 sensor queued" ] \
     || fail "the run behind it: $(q "SELECT partitions, trigger, status FROM orca.runs WHERE id = $behind")"
 grep -q "behind live run $live" "$log" || fail "the tick didn't say it queued behind run $live"
+[ "$(q "SELECT held FROM orca.runs WHERE id = $behind")" = "waiting: for run $live, which has 2024-03" ] \
+    || fail "run $behind's held: $(q "SELECT held FROM orca.runs WHERE id = $behind")"
 # It waits while the live run goes on, though a slot is free.
 for _ in 1 2; do
     q "UPDATE orca.runs SET heartbeat = now() WHERE id = $live" > /dev/null
@@ -81,6 +85,7 @@ until [ "$(q "SELECT status FROM orca.runs WHERE id = $behind")" = succeeded ]; 
 done
 [ "$(q "SELECT string_agg(DISTINCT rd.snapshot_id::text, ',') FROM orca.reads rd JOIN orca.attempts a ON a.id = rd.attempt JOIN orca.steps s ON s.id = a.step WHERE s.run = $behind AND rd.dataset = 'raw.events'")" = "$s1" ] \
     || fail "run $behind didn't read raw.events@$s1"
+[ "$(q "SELECT held IS NULL FROM orca.runs WHERE id = $behind")" = t ] || fail "run $behind still says it waits"
 
 # A live run that read s2 already: s2 is left to it.
 s2=$(source_commit 2024-04)
@@ -91,4 +96,18 @@ tick
     || fail "a run was queued beside live run $live2"
 grep -q "left to live run $live2" "$log" || fail "the tick didn't say it left raw.events@$s2 to run $live2"
 end_run "$live2"
-echo "ok   sensed behind live: an older pin queues the keys behind the run, the same one leaves them to it"
+
+# A run of 2024-06 left running an hour ago, with no beat since: its
+# process died, so a newer run of 2024-06 starts and runs.
+dead=$(q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, owner, heartbeat, started, starts) SELECT name, registry_hash, '2024-06', 'manual', 'running', 'elsewhere:1', now() - interval '1 hour', now() - interval '1 hour', 1 FROM orca.pipelines WHERE name = 'clean' RETURNING id")
+s3=$(source_commit 2024-06)
+tick
+newer=$(sensed_run "$s3")
+[ -n "$newer" ] && [ "$newer" != "$dead" ] || fail "raw.events@$s3 was left to dead run $dead"
+i=0
+until [ "$(q "SELECT status FROM orca.runs WHERE id = $newer")" = succeeded ]; do
+    i=$((i + 1)); [ "$i" -lt 300 ] || fail "run $newer behind dead run $dead: $(q "SELECT status, held FROM orca.runs WHERE id = $newer")"
+    tick
+    sleep 0.2
+done
+echo "ok   sensed behind live: an older pin queues the keys behind the run, the same one leaves them to it, a dead one holds nothing back"
