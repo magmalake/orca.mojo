@@ -97,6 +97,9 @@ a_ran=$(cat "$dir"/a/fanout-"$run"-*-worker.log 2> /dev/null | grep -c "trips on
 echo "ok   b joins as a member; both run tasks (a $a_ran, b $b_ran of 31)"
 
 # The result: what any one machine computes, fanout's sum of its days.
+# The driver's log is kept once its process has ended, a moment after.
+logged() { grep -q "trips in 1 months" "$ORCA_LOGS/fanout/$run/driver.log" 2> /dev/null; }
+until_ 30 "no total in run $run's driver log" logged
 spread=$(grep -ho "[0-9]* trips in 1 months" "$ORCA_LOGS/fanout/$run/driver.log" | head -1)
 want=$(awk 'BEGIN { t = 0; for (d = 1; d <= 31; d++) t += (2024 * 13 + 31 + d * 7) % 1000; print t " trips in 1 months" }')
 [ "$spread" = "$want" ] || fail "spread: '$spread', one machine: '$want'"
