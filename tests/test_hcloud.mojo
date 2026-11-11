@@ -123,7 +123,7 @@ def test_errors_keep_the_token_out() raises:
 
 def test_the_provider() raises:
     """orca.machines over Hetzner: Docker's architecture names, a pool's
-    machines by label, and EC2 not here yet."""
+    machines by label, and EC2 needing its region."""
     var p = Provider.of("hetzner")
     assert_equal(p.arch("cax21"), "arm64")
     assert_equal(p.arch("cx33"), "amd64")
@@ -138,7 +138,7 @@ def test_the_provider() raises:
     assert_equal(ms[0].pool, "p")
     assert_equal(len(p.machines("other")), 0)
     assert_true(p.delete(ms[0].id))
-    with assert_raises(contains="pools on ec2 aren't supported yet"):
+    with assert_raises(contains="needs AWS_REGION"):
         _ = Provider.of("ec2")
 
 

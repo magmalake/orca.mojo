@@ -41,11 +41,8 @@ once the process has ended, as on an EC2 head.
 from std.os import getenv
 
 from json import loads
-from objectstore.crypto import sha256_hex
-from objectstore.http import Header, HttpClient, Response
-from objectstore.s3 import S3Credentials, instance_credentials
-from objectstore.sigv4 import AmzTime, QueryParam, sign_request
 
+from orca.awsjson import aws_json
 from orca.json import quote
 from orca.proc import binary_seconds, capture
 from orca.system import Now
@@ -251,62 +248,21 @@ def fetch_secret(id: String) raises -> String:
 
 
 def get_secret_value(id: String) raises -> String:
-    """Secrets Manager's `GetSecretValue` of `id`, over objectstore's SigV4
-    and HTTP, with the credentials of the `AWS_*` environment or else the
-    instance role; `ORCA_SECRETS_ENDPOINT` points it elsewhere, as the tests
-    do at their stand-in (`tests/fake_ec2.py`)."""
-    var region = getenv("AWS_REGION", getenv("AWS_DEFAULT_REGION"))
-    if not region:
-        raise Error("can't read secret ", id, ": no AWS_REGION")
-    var endpoint = String(
-        getenv(
-            "ORCA_SECRETS_ENDPOINT",
-            String("https://secretsmanager.", region, ".amazonaws.com"),
-        ).rstrip("/")
-    )
-    var host = String(endpoint[byte = endpoint.find("://") + 3 :])
-    var cred = S3Credentials(
-        getenv("AWS_ACCESS_KEY_ID"),
-        getenv("AWS_SECRET_ACCESS_KEY"),
-        getenv("AWS_SESSION_TOKEN"),
-    )
-    if not cred.is_set():
-        var role = instance_credentials()
-        if not role:
-            raise Error("can't read secret ", id, ": no AWS credentials")
-        cred = role.take()
-    var body = String('{"SecretId": ', quote(id), "}")
-    var when = AmzTime.now()
-    var headers: List[Header] = [
-        Header("content-type", "application/x-amz-json-1.1"),
-        Header("host", host),
-        Header("x-amz-date", when.amz_date),
-        Header("x-amz-target", "secretsmanager.GetSecretValue"),
-    ]
-    if cred.session_token:
-        headers.append(Header("x-amz-security-token", cred.session_token))
-    var signed = sign_request(
-        "POST",
-        "/",
-        List[QueryParam](),
-        headers,
-        sha256_hex(body),
-        cred.access_key_id,
-        cred.secret_access_key,
-        region,
-        "secretsmanager",
-        when,
-    )
-    headers.append(Header("authorization", signed.authorization))
-    var resp: Response
+    """Secrets Manager's `GetSecretValue` of `id` (`orca.awsjson`), with
+    the credentials of the `AWS_*` environment or else the instance role;
+    `ORCA_SECRETS_ENDPOINT` points it elsewhere, as the tests do at their
+    stand-in (`tests/fake_ec2.py`)."""
+    var got: Tuple[Int, String]
     try:
-        resp = HttpClient().post(
-            String(endpoint, "/"), body.as_bytes(), headers
+        got = aws_json(
+            "secretsmanager",
+            "secretsmanager.GetSecretValue",
+            "ORCA_SECRETS_ENDPOINT",
+            String('{"SecretId": ', quote(id), "}"),
         )
     except e:
         raise Error("can't read secret ", id, ": ", e)
-    var text = String(from_utf8_lossy=Span(resp.body))
-    if resp.status != 200:
+    if got[0] != 200:
         # Its error names a type and a message, never a value.
-        raise Error("can't read secret ", id, ": ", resp.status, " ", text)
-    return loads(text)["SecretString"].string_value()
+        raise Error("can't read secret ", id, ": ", got[0], " ", got[1])
+    return loads(got[1])["SecretString"].string_value()

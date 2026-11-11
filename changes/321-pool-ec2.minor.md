@@ -1,0 +1,1 @@
+- **Worker pools on EC2**: `provider = "ec2"` makes instances in the pool's subnets, with Ubuntu for each type's architecture. (#321)

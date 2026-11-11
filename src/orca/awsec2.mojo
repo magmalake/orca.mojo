@@ -260,3 +260,24 @@ struct Ec2(Movable):
         for i in range(len(ids)):
             params.append((String("InstanceId.", i + 1), ids[i]))
         _ = self.call("TerminateInstances", params)
+
+    def instance_type_arches(
+        self, instance_type: String
+    ) raises -> List[String]:
+        """The architectures `instance_type` supports (`arm64`, `x86_64`,
+        ...), as `DescribeInstanceTypes` lists them."""
+        var xml = self.call(
+            "DescribeInstanceTypes", [("InstanceType.1", instance_type)]
+        )
+        var block = _between(xml, "supportedArchitectures")[0]
+        var out = List[String]()
+        var at = 0
+        while True:
+            var got = _between(block, "item", at)
+            if got[1] < 0:
+                break
+            out.append(got[0])
+            at = got[1]
+        if len(out) == 0:
+            raise Error("orca: EC2 has no instance type ", instance_type)
+        return out^
