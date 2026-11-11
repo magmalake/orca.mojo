@@ -272,6 +272,13 @@ get '/pipelines/toy?tab=operate' | grep -qF 'cal--behind' && fail "toy follows n
 echo "$p" | grep -qF 'action="/pipelines/daily/backfill" data-confirm="Queue the days not queued yet?" data-confirm-body="This queues 2 runs, one per day: 2024-03-01 … 2024-03-08. ' \
     || fail "no Queue them: $(echo "$p" | grep -o '<span class="follow__queue">.*')"
 echo "$p" | grep -qF '<input type="hidden" name="partitions" value="2024-03-01,2024-03-08">' || fail "Queue them's partitions"
+# Its "Log in to queue them" comes back to the pipeline's page (and tab), not
+# to the polled fragment (#314).
+echo "$p" | grep -qF 'href="/login?next=%2Fpipelines%2Fdaily"' || fail "Log in to queue them doesn't come back to the page"
+get '/pipelines/daily/progress?tab=operate' | grep -qF 'href="/login?next=%2Fpipelines%2Fdaily%3Ftab%3Doperate"' \
+    || fail "Log in to queue them doesn't come back to the operate tab"
+get '/pipelines/daily?tab=operate' | grep -qF 'data-poll="/pipelines/daily/progress?tab=operate"' \
+    || fail "the operate tab's Progress card doesn't poll with its tab"
 [ "$(post /pipelines/daily/backfill partitions=2024-03-01,2024-03-08)" = 303 ] || fail "Queue them: $(cat "$log.body")"
 j=$(curl -fsS -H 'Accept: application/json' "$base/api/pipelines/daily")
 echo "$j" | jq -e '.follow | .waiting.count == 0 and .live.count == 5' > /dev/null \

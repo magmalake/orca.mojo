@@ -202,7 +202,7 @@ echo "$page" | grep -q 'id="config"\|id="steps"\|id="start"' && fail "the Runs t
 page=$(html '/pipelines/toy?tab=operate')
 echo "$page" | grep -q 'id="coverage"' && echo "$page" | grep -q 'id="start"' && echo "$page" | grep -q '<h2>Stop runs' \
     || fail "the Operate tab"
-echo "$page" | grep -q 'data-poll="/pipelines/toy/progress"' || fail "Operate has no live Progress"
+echo "$page" | grep -q 'data-poll="/pipelines/toy/progress?tab=operate"' || fail "Operate has no live Progress"
 [ "$(json '/pipelines/toy?tab=runs' | jq -c '[.steps | length, (.runs | length)]')" = "$(json /pipelines/toy | jq -c '[.steps | length, (.runs | length)]')" ] \
     || fail "the JSON differs by tab"
 ORCA_NOW=2024-01-15T00:00Z ./build/orca register ./build/daily >> "$log" 2>&1 || fail "register daily"
