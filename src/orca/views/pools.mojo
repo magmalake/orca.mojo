@@ -35,7 +35,8 @@ comptime SELF_HOSTED = "self-hosted"
 comptime KUBERNETES = "kubernetes"
 
 comptime GONE_MINUTES = 60
-"""How long an ended instance stays listed, as gone."""
+"""How long an ended instance stays listed, as gone; and how long a gone
+machine stays in Pools' default view."""
 comptime _SPARK_SECONDS = 600
 
 
@@ -92,6 +93,15 @@ struct Machine(Copyable, Movable):
 
     def live(self) -> Bool:
         return self.state != "gone"
+
+    def recent(self) -> Bool:
+        """Whether it is live, or went gone within `GONE_MINUTES`: an ended
+        instance always has; a worker, if it was heard from that recently."""
+        return (
+            self.live()
+            or self.kind == EC2
+            or (self.seen_ago >= 0 and self.seen_ago < GONE_MINUTES * 60)
+        )
 
 
 def type_size(instance_type: String) -> Tuple[Int, Int]:
@@ -391,13 +401,30 @@ def pool_counts(ms: List[Machine]) -> List[PoolCount]:
     return out^
 
 
-def filtered(ms: List[Machine], pool: String, kind: String) -> List[Machine]:
-    """The machines of `pool` (any if empty) and `kind` (any if empty)."""
+def filtered(
+    ms: List[Machine], pool: String, kind: String, gone: Bool = True
+) -> List[Machine]:
+    """The machines of `pool` (any if empty) and `kind` (any if empty); with
+    `gone` false, not those that went gone more than `GONE_MINUTES` ago."""
     var out = List[Machine]()
     for m in ms:
         if (not pool or m.pool == pool) and (not kind or m.kind == kind):
-            out.append(m.copy())
+            if gone or m.recent():
+                out.append(m.copy())
     return out^
+
+
+def old_gone(ms: List[Machine]) -> Tuple[Int, Int]:
+    """How many of `ms` are gone for good (not `recent`), and the seconds
+    since the freshest was heard from; -1 if none ever was."""
+    var n = 0
+    var seen = -1
+    for m in ms:
+        if not m.recent():
+            n += 1
+            if m.seen_ago >= 0 and (seen < 0 or m.seen_ago < seen):
+                seen = m.seen_ago
+    return (n, seen)
 
 
 @fieldwise_init
