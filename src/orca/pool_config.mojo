@@ -105,15 +105,15 @@ def _type_problem(t: String) -> String:
 struct _Reader:
     """Reads one `[pools.<name>]` table, failing with its line."""
 
-    var where: String
+    var table: String
     var line: Int
 
-    def __init__(out self, where: String, line: Int):
-        self.where = where
+    def __init__(out self, table: String, line: Int):
+        self.table = table
         self.line = line
 
     def fail(self, line: Int, msg: String) raises:
-        raise Error(line if line > 0 else self.line, ": ", self.where, " ", msg)
+        raise Error(line if line > 0 else self.line, ": ", self.table, " ", msg)
 
 
 def _int(
