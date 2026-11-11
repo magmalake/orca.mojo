@@ -511,6 +511,7 @@ What the scheduler and the UI need, in their environment:
 |---|---|
 | `ORCA_HCLOUD_TOKEN`, or `ORCA_HCLOUD_TOKEN_SECRET` | Hetzner's API token (scheduler), or the secret that holds it. |
 | `ORCA_HCLOUD_FIREWALL`, `ORCA_HCLOUD_SSH_KEYS`, `ORCA_HCLOUD_IMAGE` | The firewall and SSH keys (names) to give each machine, and its OS image (`ubuntu-24.04`). |
+| `ORCA_HCLOUD_NETWORK`, `ORCA_HCLOUD_NETWORK_ZONE`, `ORCA_HCLOUD_NETWORK_RANGE` | The private network every Hetzner machine joins (`orca-<stack id>`, made in `eu-central` over `10.77.0.0/16` if it isn't there; `none` for none). One run spread over several machines talks over it, and each machine's worker advertises its address on it. |
 | `AWS_REGION` and credentials (or an instance role) | EC2's API (scheduler), for `provider = "ec2"`. |
 | `ORCA_POOL_EC2_SECURITY_GROUP`, `ORCA_POOL_EC2_PROFILE` | On EC2, each instance's security group and instance profile (else `ORCA_EC2_SECURITY_GROUP`, `ORCA_EC2_PROFILE`). The profile's role is how its worker reaches the bucket. |
 | `ORCA_POOL_EC2_AMI_ARM64`, `ORCA_POOL_EC2_AMI_AMD64` | On EC2, the image to pin per architecture; else Ubuntu 24.04 from Canonical's public SSM parameter. |

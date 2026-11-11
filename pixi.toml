@@ -157,6 +157,8 @@ test-pool-scale = { cmd = "scripts/with-postgres.sh tests/pool_scale.sh" }
 test-pool-scale-ec2 = { cmd = "scripts/with-postgres.sh tests/pool_scale_ec2.sh" }
 # One run over two workers of a pool, with a cluster token (#268).
 test-run-cluster = { cmd = "scripts/with-postgres.sh tests/run_cluster.sh" }
+# One run over two machines the pool autoscaler makes (#268).
+test-pool-spread = { cmd = "scripts/with-postgres.sh tests/pool_spread.sh" }
 test-secrets = { cmd = "scripts/with-postgres.sh tests/secrets.sh" }
 # Placement (orca.control): runs on the scheduler's own host, within its
 # limits, beside runs on the stand-in EC2.
@@ -196,7 +198,7 @@ test-kind = { cmd = "tests/kind.sh" }
 build-shared = { cmd = "scripts/build-shared.sh" }
 # CI runs these two halves on runners of their own; `test` is both.
 # The executor, stores, workers, clouds and the data a run makes:
-test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-hetzner", "test-compile-fail", "test-store", "test-formal-pins", "test-state", "test-formal-migrate", "test-formal-fence", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-worker-procs", "test-no-workers", "test-pool", "test-hcloud", "test-pool-scale", "test-pool-scale-ec2", "test-run-cluster", "test-secrets", "test-placement", "test-usage", "test-resources", "test-recommend", "test-grants", "test-pressure", "test-cgroups", "test-aws", "test-source", "test-highlight", "test-step-cards", "test-graph", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
+test-executor = { depends-on = ["build-shared", "test-sample", "test-steps", "test-cron", "test-warehouse", "test-cli", "test-hetzner", "test-compile-fail", "test-store", "test-formal-pins", "test-state", "test-formal-migrate", "test-formal-fence", "test-kill", "test-crash", "test-tasks", "test-logs", "test-ec2", "test-autoscale", "test-worker-procs", "test-no-workers", "test-pool", "test-hcloud", "test-pool-scale", "test-pool-scale-ec2", "test-run-cluster", "test-pool-spread", "test-secrets", "test-placement", "test-usage", "test-resources", "test-recommend", "test-grants", "test-pressure", "test-cgroups", "test-aws", "test-source", "test-highlight", "test-step-cards", "test-graph", "test-locate", "test-timeline", "test-lost-workers", "test-datasets", "test-db-blip", "test-chaos", "test-chaos-sqlite"] }
 # The scheduler, the UI, and what a registration and its code control:
 test-scheduler-ui = { depends-on = ["build-shared", "test-toml", "test-upgrade", "test-config", "test-fill", "test-fill-version", "test-pool-fills", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-system", "test-actions", "test-calendar", "test-ui-login", "test-ui-drain", "test-remote", "test-worker-api", "test-pause", "test-older-binary", "test-watchdog", "test-notify", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-adopt", "test-overlap", "test-one-run-per-key", "test-hourly", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
 test = { depends-on = ["test-executor", "test-scheduler-ui"] }
