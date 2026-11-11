@@ -7,6 +7,7 @@ from orca.queueing import preview_backfill
 from orca.registered import registered
 from orca.state import State
 from orca.views.pipelines import PipelineRow
+from orca.timekeys import unit_of
 
 
 @fieldwise_init
@@ -71,11 +72,9 @@ def start_preview(
 
 
 def unit_word(kind: String, n: Int) -> String:
-    """A partition of `kind`, as a word: day, month or key, plural unless
-    `n` is 1."""
-    var one = String("day") if kind == "daily" else (
-        String("month") if kind == "monthly" else String("key")
-    )
+    """A partition of `kind`, as a word: hour, day, month or key, plural
+    unless `n` is 1."""
+    var one = unit_of(kind)
     return one if n == 1 else String(one, "s")
 
 

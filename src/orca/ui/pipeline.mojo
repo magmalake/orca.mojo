@@ -68,6 +68,7 @@ from orca.views.pipelines import (
 from orca.views.runs import VersionRow
 from orca.views.steps import step_cards_of
 from orca.web.page import Page
+from orca.timekeys import is_time_kind
 
 
 def _keys_html(mut h: Html, name: String, k: KeyCounts):
@@ -411,7 +412,7 @@ def _coverage_fact(mut h: Html, p: PipelineRow, cov: Optional[Coverage]):
     """The Progress card's Coverage (`orca.coverage`): done of total and
     the percent, linking to the year calendar (a monthly pipeline's year,
     a keyed one's Keys); "—" when there's nothing to count."""
-    var dated = p.kind == "daily" or p.kind == "monthly"
+    var dated = is_time_kind(p.kind)
     if not dated and p.kind != "keyed":
         return
     fact_item(h, "Coverage", "coverage", COVERAGE_HELP, "partitions")
@@ -796,7 +797,7 @@ def pipeline_html(
                 repo = web_url(v.versions[0].source)
             config_html(h, v.configs[0], repo, links.pipeline.url)
     elif tab == "operate":
-        if p.kind == "daily" or p.kind == "monthly":
+        if is_time_kind(p.kind):
             coverage_html(
                 h, db, p.name, p.kind, p.start, ask.cal, ask.cov, v.following
             )

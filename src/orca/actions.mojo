@@ -20,10 +20,7 @@ from std.os import getenv
 
 from postgres import Params
 
-from orca.day import Day
-from orca.key import parse_keys
 from orca.live import live_runs
-from orca.month import Month
 from orca.name import parse_names
 from orca.pause import set_paused
 from orca.queueing import (
@@ -41,6 +38,7 @@ from orca.registered import (
 from orca.scheduler import RETRIED_SQL
 from orca.sensors import rebuild
 from orca.state import State
+from orca.timekeys import parse_time_keys
 
 
 @fieldwise_init
@@ -416,11 +414,8 @@ def cancel_runs(
             if kind == "keyed":
                 for n in parse_names(keys):
                     joined.write("," if joined else "", n)
-            elif kind == "daily":
-                for k in parse_keys[Day](keys, start):
-                    joined.write("," if joined else "", k)
             else:
-                for k in parse_keys[Month](keys, start):
+                for k in parse_time_keys(kind, keys, start):
                     joined.write("," if joined else "", k)
         except e:
             return Outcome.no(String(e))

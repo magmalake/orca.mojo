@@ -97,6 +97,21 @@ def test_range() raises:
     assert_equal(len(range_keys("daily", "", "UTC", t)), 0)
 
 
+def test_range_hourly() raises:
+    var t = parse_time("2024-03-01T02:30Z")
+    assert_equal(last_ended("hourly", "UTC", t), "2024-03-01T01")
+    var hours = range_keys("hourly", "2024-02-29T22", "UTC", t)
+    assert_equal(len(hours), 4)
+    assert_equal(hours[0], "2024-02-29T22")
+    assert_equal(hours[3], "2024-03-01T01")
+    # A lag of 45 minutes: 01:00-02:00 ended 30 minutes ago and waits.
+    assert_equal(last_ended("hourly", "UTC", t, 45 * 60), "2024-03-01T00")
+    var w = lag_wait("hourly", "UTC", t, 45 * 60)
+    assert_equal(w[0], "2024-03-01T01")
+    assert_equal(w[1], parse_time("2024-03-01T02:45Z"))
+    assert_equal(fill_refusal("hourly", "2024-01-01T00", False, "p"), "")
+
+
 def test_lag_values() raises:
     assert_equal(parse_fill_lag("0"), 0)
     assert_equal(parse_fill_lag("2h"), 7200)

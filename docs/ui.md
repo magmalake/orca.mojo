@@ -205,10 +205,11 @@ each pipeline of `/` and on `/api/pipelines/<name>`'s `pipeline`, as
 rounded down to a tenth; the page shows it rounded down to a whole
 percent, so 100% means all of them). `src/orca/coverage.mojo` defines it:
 
-- **Daily or monthly**: partitions done of those in the range so far,
-  from the first partition through the last one that has ended on the
-  schedule's clock (UTC without a schedule): yesterday for a daily
-  pipeline, last month for a monthly one. That's the range a fill works
+- **Hourly, daily or monthly**: partitions done of those in the range so
+  far, from the first partition through the last one that has ended on the
+  schedule's clock (UTC without a schedule): the last hour for an hourly
+  pipeline, yesterday for a daily one, last month for a monthly one. An
+  hourly pipeline's Coverage card shows a day of hours (`?cal=YYYY-MM-DD`). That's the range a fill works
   through; today's day, still going, is in neither number, nor is one
   that ended less than the pipeline's
   [`fill_lag`](orca-toml.md#the-lag) ago.

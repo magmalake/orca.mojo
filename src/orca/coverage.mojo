@@ -39,6 +39,7 @@ from orca.queueing import (
     kept_keys,
 )
 from orca.state import State
+from orca.timekeys import is_time_kind, unit_of
 
 
 @fieldwise_init
@@ -104,10 +105,10 @@ def coverage(
     to count. `fill_lag` is as registered (empty for none)."""
     var keys: List[String]
     var unit: String
-    if kind == "daily" or kind == "monthly":
+    if is_time_kind(kind):
         var lag = parse_fill_lag(fill_lag) if fill_lag else 0
         keys = range_keys(kind, start, tz, now(), lag)
-        unit = "day" if kind == "daily" else "month"
+        unit = unit_of(kind)
     elif kind == "keyed":
         var kept = kept_keys(db, name)
         if not kept:

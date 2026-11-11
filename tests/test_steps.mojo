@@ -17,6 +17,8 @@ from orca import (
     Daily,
     Day,
     Gather,
+    Hour,
+    Hourly,
     Mapped,
     Month,
     Monthly,
@@ -155,6 +157,58 @@ def test_day_ranges() raises:
         _ = parse_partitions[Daily[]]("2024-01-01..2024-01-03,2024-01-02")
 
 
+# --- hours ---
+
+
+def test_hour_parse_and_write() raises:
+    var h = Hour.parse("2024-02-29T07")
+    assert_equal(h.year, 2024)
+    assert_equal(h.day, 29)
+    assert_equal(h.hour, 7)
+    assert_equal(String(h), "2024-02-29T07")
+    assert_equal(String(h.next()), "2024-02-29T08")
+    assert_equal(String(Hour(2023, 12, 31, 23).next()), "2024-01-01T00")
+    assert_equal(String(Hour(2024, 3, 1, 0).prev()), "2024-02-29T23")
+    assert_equal(String(Hour(2024, 1, 1, 0).prev()), "2023-12-31T23")
+    assert_true(Hour.parse("2024-01-01T09") < Hour.parse("2024-01-01T10"))
+    assert_equal(String(Hour.parse("2024-02-29T07").day_of()), "2024-02-29")
+    for bad in [
+        "2024-02-29T24",
+        "2024-02-30T01",
+        "2024-02-29T7",
+        "2024-02-29",
+        "2024-02-29 07",
+        "2024-02-29T-1",
+    ]:
+        with assert_raises(contains="not an hour"):
+            _ = Hour.parse(bad)
+
+
+def test_hour_ranges_and_fills() raises:
+    var hs = parse_partitions[Hourly[]]("2024-02-29T22..2024-03-01T01")
+    assert_equal(len(hs), 4)
+    assert_equal(String(hs[2]), "2024-03-01T00")
+    assert_equal(
+        len(parse_partitions[Hourly[]]("2024-01-01T00..2024-12-31T23")),
+        366 * 24,
+    )
+    with assert_raises(contains="before the pipeline's first partition"):
+        _ = parse_partitions[Hourly["2024-01-01T05"]](
+            "2024-01-01T04..2024-01-01T06"
+        )
+    # A fire at 2024-03-01 00:05 fills that hour, or with fills=Previous
+    # the one before.
+    assert_equal(
+        String(Hourly[].fill(2024, 3, 1, 0, previous=False)), "2024-03-01T00"
+    )
+    assert_equal(
+        String(Hourly[].fill(2024, 3, 1, 0, previous=True)), "2024-02-29T23"
+    )
+    assert_equal(
+        String(Daily[].fill(2024, 3, 1, 17, previous=False)), "2024-03-01"
+    )
+
+
 def test_keys_before_the_start_are_refused() raises:
     assert_equal(
         len(parse_partitions[Monthly["2011-01"]]("2011-01..2011-03")), 3
@@ -239,6 +293,29 @@ comptime DayCounts = Pipeline["day_counts", DayCount, partitions=Daily[]]
 
 def count_days(mut ctx: Ctx, days: Seq[Day]) raises -> Int:
     return len(days)
+
+
+def hour_of(mut ctx: Ctx, h: Hour) raises -> Int:
+    return h.hour
+
+
+comptime HourOf = Step["hour", Hour, Int, hour_of, Mapped]
+comptime Hours = Pipeline["hours", HourOf, partitions=Hourly["2024-01-01T00"]]
+
+
+def test_an_hourly_pipeline() raises:
+    var res = Hours.run(
+        parse_partitions[Hours.partitions]("2024-01-01T21..2024-01-02T02")
+    )
+    assert_true(res.succeeded())
+    assert_equal(len(res.steps), 6)
+    assert_equal(res.output[Int]("hour", "2024-01-01T23"), 23)
+    assert_equal(res.output[Int]("hour", "2024-01-02T01"), 1)
+    var d = Hours.describe()
+    assert_true(
+        '"partitions": {"kind": "hourly", "start": "2024-01-01T00"}' in d, d
+    )
+    assert_true('"input": "orca.hour.Hour"' in d, d)
 
 
 def test_a_daily_pipeline() raises:

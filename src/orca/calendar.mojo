@@ -4,7 +4,8 @@ a monthly pipeline, month) is in, read from the database alone.
 `orca ui` draws it twice, as the picker on the Start runs form and as the
 read-only coverage on a pipeline's page, and serves it as JSON at
 `/pipelines/<name>/calendar?month=2023-01`. Daily pipelines have a month of
-days at a time; monthly ones a year of months. The states, in the order
+days at a time; monthly ones a year of months; hourly ones a day of hours
+(`?month=2023-01-31`). The states, in the order
 they win:
 
 - `outside`: before the pipeline's first partition, or after today.
@@ -15,7 +16,7 @@ they win:
   it (`orca.follow`); only on the page's coverage.
 - `open`: none of the above, so a backfill would queue it.
 
-Daily and monthly keys are zero-padded, so they compare as text.
+Hourly, daily and monthly keys are zero-padded, so they compare as text.
 """
 
 from std.collections import Dict
@@ -24,11 +25,13 @@ from postgres import Params
 
 from orca.civil import Civil, now
 from orca.day import Day
+from orca.hour import Hour
 from orca.json import quote
 from orca.live import live_sql
 from orca.month import Month, days_in
 from orca.queueing import done_keys
 from orca.state import State
+from orca.timekeys import unit_of
 
 
 comptime _LAST_SQL = (
@@ -49,17 +52,18 @@ struct Cell(Copyable, Movable):
 struct Calendar(Movable):
     var pipeline: String
     var kind: String
-    """`daily` (cells are days of one month) or `monthly` (months of one
-    year)."""
+    """`daily` (cells are days of one month), `monthly` (months of one
+    year) or `hourly` (hours of one day)."""
     var period: String
-    """`YYYY-MM` for days, `YYYY` for months."""
+    """`YYYY-MM` for days, `YYYY` for months, `YYYY-MM-DD` for hours."""
     var prev: String
     """The period before, empty if it ends before the pipeline starts."""
     var next: String
     """The period after, empty if it starts after today."""
     var start: String
     var today: String
-    """Today's key: `YYYY-MM-DD` or `YYYY-MM`."""
+    """Today's key: `YYYY-MM-DD`, `YYYY-MM` or, for hours, this hour's
+    `YYYY-MM-DDTHH`."""
     var weekday: Int
     """Of a month's first day, with Monday as 0."""
     var cells: List[Cell]
@@ -117,6 +121,8 @@ def calendar(
     """`pipeline`'s calendar of `period` (see `Calendar.period`; today's if
     empty), with `start` its first partition (or empty); keys in `upstream`
     that are only open are `behind`."""
+    if kind == "hourly":
+        return _hours(db, pipeline, start, period, upstream)
     if kind != "daily" and kind != "monthly":
         raise Error(pipeline, " has ", kind, " partitions, not dated ones")
     var t = Civil.of(now())
@@ -141,6 +147,49 @@ def calendar(
             _pad(ym[0] + 1, 4) if String(Month(ym[0] + 1, 1))
             <= cal.today else String()
         )
+    cal.cells = _cells(
+        db,
+        pipeline,
+        start,
+        cal.today,
+        keys,
+        done_keys(db, pipeline, keys),
+        upstream,
+    )
+    return cal^
+
+
+def _hours(
+    mut db: State,
+    pipeline: String,
+    start: String,
+    period: String,
+    upstream: Dict[String, Bool],
+) raises -> Calendar:
+    """An hourly pipeline's calendar: the 24 hours of the day `period`
+    (`YYYY-MM-DD`; today's, UTC, if empty)."""
+    var t = Civil.of(now())
+    var cal = Calendar(pipeline, "hourly")
+    cal.start = start
+    cal.today = String(Hour(t.year, t.month, t.day, t.hour))
+    var d = Day(t.year, t.month, t.day) if not period else (
+        Day.parse(period) if period.byte_length()
+        == 10 else Day.parse(String(period, "-01"))
+    )
+    cal.period = String(d)
+    var keys = List[String]()
+    for h in range(24):
+        keys.append(String(Hour(d.year, d.month, d.day, h)))
+    var before = d.prev()
+    var after = d.next()
+    cal.prev = String(before) if (
+        not start
+        or String(Hour(before.year, before.month, before.day, 23)) >= start
+    ) else String()
+    cal.next = (
+        String(after) if String(Hour(after.year, after.month, after.day, 0))
+        <= cal.today else String()
+    )
     cal.cells = _cells(
         db,
         pipeline,
@@ -383,7 +432,7 @@ def calendar_json(c: Calendar) -> String:
         ', "kind": ',
         quote(c.kind),
         ', "unit": ',
-        quote("day" if c.kind == "daily" else "month"),
+        quote(unit_of(c.kind)),
         ', "period": ',
         quote(c.period),
         ', "prev": ',

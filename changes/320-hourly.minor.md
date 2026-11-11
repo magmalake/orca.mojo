@@ -1,0 +1,1 @@
+- **Hourly partitions**: `partitions=Hourly["2026-11-11T00"]` gives a pipeline a partition per hour (`Hour`, `YYYY-MM-DDTHH`), for schedules, fills, sensors, backfills and the coverage card. (#306)

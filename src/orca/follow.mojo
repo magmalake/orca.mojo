@@ -30,6 +30,7 @@ from orca.month import Month
 from orca.name import sort_texts
 from orca.sensors import key_kind, map_keys, split_keys
 from orca.state import State
+from orca.timekeys import containing_key, is_time_kind, unit_of
 
 
 comptime _UPSTREAM_SQL = (
@@ -101,16 +102,14 @@ def follow(
 ) raises -> Optional[Follow]:
     """How far the dated sensor `pipeline` (of `kind`, from `start`) is
     behind what it follows; None if it isn't a dated sensor."""
-    if kind != "daily" and kind != "monthly":
+    if not is_time_kind(kind):
         return None
     var rows = db.conn.query(_UPSTREAM_SQL, Params().text(pipeline))
     if len(rows) == 0:
         return None
-    var f = Follow("day" if kind == "daily" else "month")
+    var f = Follow(unit_of(kind))
     var t = Civil.of(now())
-    var today = String(Day(t.year, t.month, t.day)) if kind == "daily" else (
-        String(Month(t.year, t.month))
-    )
+    var today = containing_key(kind, t.year, t.month, t.day, t.hour)
     var seen = Dict[String, Bool]()
     var keys = List[String]()
     for r in rows:

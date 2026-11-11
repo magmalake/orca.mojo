@@ -7,7 +7,8 @@ a strip of every month of its range linking to their years). Both are in
 the page; the links work without scripts (`?cov=month|year`, with `?cal=`
 the month or year), and with them the tabs switch in place and the choice
 is kept in `localStorage`, as the Steps tabs are. Year is the default. A
-monthly pipeline's card is its year of months, as before. For a sensor,
+monthly pipeline's card is its year of months, as before, and an hourly
+one's a day of hours (`?cal=YYYY-MM-DD`). For a sensor,
 the days what it follows has but it hasn't done, failed or started are
 `behind` (`orca.follow`), and `follow_html` is its Progress card's
 Following line.
@@ -30,6 +31,7 @@ from orca.follow import Follow, LISTED
 from orca.html import Html, url_encode
 from orca.ui.layout import act_button
 from orca.day import Day
+from orca.hour import Hour
 from orca.month import Month, days_in
 from orca.views.commands import shell_quote
 from orca.state import State
@@ -71,7 +73,7 @@ def state_words(state: String) -> String:
 
 
 def _cal_title(c: Calendar) raises -> String:
-    if c.kind == "monthly":
+    if c.kind == "monthly" or c.kind == "hourly":
         return c.period
     var y = c.period[byte=:4]
     var m = Int(c.period[byte=5:7])
@@ -168,11 +170,16 @@ def _month_html(
     view: String,
     follows: List[String],
 ):
-    """A month of days (a year of months for a monthly pipeline), as the
-    card has always drawn it."""
+    """A month of days (a year of months for a monthly pipeline, a day of
+    hours for an hourly one), as the card has always drawn it."""
     var daily = c.kind == "daily"
+    var hourly = c.kind == "hourly"
     h.raw('<div class="cal cal--static" role="group" aria-label="')
-    h.text("Days" if daily else "Months", " of ", c.pipeline)
+    h.text(
+        "Days" if daily else ("Hours" if hourly else "Months"),
+        " of ",
+        c.pipeline,
+    )
     h.raw('">')
     try:
         _nav(
@@ -181,7 +188,7 @@ def _month_html(
             c.prev,
             c.next,
             _cal_title(c),
-            "month" if daily else "year",
+            "month" if daily else ("day" if hourly else "year"),
             view,
         )
     except:
@@ -199,7 +206,11 @@ def _month_html(
             h,
             cell.key,
             cell.state,
-            String(i + 1) if daily else String(month_name(i + 1)[byte=:3]),
+            String(i + 1) if daily else (
+                String(cell.key[byte=11:]) if hourly else String(
+                    month_name(i + 1)[byte=:3]
+                )
+            ),
         )
     h.raw("</ul>")
     var counts = List[Int]()
@@ -394,8 +405,9 @@ def _key_links(
     h.text(what, ": ")
     for i in range(min(len(keys), LISTED)):
         h.raw(", " if i else "", '<a href="')
-        var period = String(keys[i][byte=:7]) if unit == "day" else String(
-            keys[i][byte=:4]
+        var period = String(keys[i][byte=:7]) if unit == "day" else (
+            String(keys[i][byte=:10]) if unit
+            == "hour" else String(keys[i][byte=:4])
         )
         h.text(base, "?cal=", period)
         if unit == "day":
@@ -419,6 +431,8 @@ def key_ranges(keys: List[String], unit: String) raises -> String:
             var nxt: String
             if unit == "day":
                 nxt = String(Day.parse(keys[j]).next())
+            elif unit == "hour":
+                nxt = String(Hour.parse(keys[j]).next())
             else:
                 nxt = String(Month.parse(keys[j]).next())
             if nxt != keys[j + 1]:

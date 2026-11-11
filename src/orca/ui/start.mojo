@@ -8,6 +8,7 @@ from orca.ui.layout import cmd_box, docs_link
 from orca.views.commands import backfill_cmd, remote_cmd, shell_quote
 from orca.views.pipelines import PipelineRow
 from orca.views.start import StartPreview, one_run_line, preview_line, unit_word
+from orca.timekeys import example_of
 
 
 comptime _CAL_SCRIPT = """
@@ -225,7 +226,7 @@ def start_html(
     var base = String("/pipelines/", url_encode(p.name))
     var unit = unit_word(p.kind, 1)
     var units = unit_word(p.kind, 2)
-    var example = String("2024-01-01" if p.kind == "daily" else "2024-01")
+    var example = example_of(p.kind)
     h.raw(
         "<h2>Start runs",
         docs_link("cli"),

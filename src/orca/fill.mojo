@@ -76,12 +76,15 @@ from std.os import getenv
 from postgres import Params, Transaction
 
 from orca.civil import Civil
-from orca.day import Day
 from orca.fleet import hourly_price
 from orca.json import quote
-from orca.key import parse_keys
 from orca.live import dead_sql, live_runs, stale_limit, start_grace
-from orca.month import Month
+from orca.timekeys import (
+    is_time_kind,
+    parse_time_keys,
+    containing_key,
+    prev_key,
+)
 from orca.tz import Zone
 
 comptime ALL = "all"
@@ -273,7 +276,7 @@ def fill_refusal(
             " is keyed: its keys come from its keys dataset, which its",
             " sensor or `orca backfill ",
             pipeline,
-            " @all` runs; fills are for Daily and Monthly partitions",
+            " @all` runs; fills are for Hourly, Daily and Monthly partitions",
         )
     if sensor:
         return String(
@@ -282,18 +285,19 @@ def fill_refusal(
             " filling its range by itself would run partitions whose input",
             " may not be there; backfill it by hand",
         )
-    if kind != "daily" and kind != "monthly":
-        return String(pipeline, " has no Daily or Monthly partitions")
+    if not is_time_kind(kind):
+        return String(pipeline, " has no Hourly, Daily or Monthly partitions")
     if not start:
         return String(pipeline, " has no first partition to fill from")
     return ""
 
 
-def _last_ended(kind: String, zone: Zone, now: Int64) -> String:
+def _last_ended(kind: String, zone: Zone, now: Int64) raises -> String:
     var local = Civil.of(zone.to_local(now))
-    if kind == "daily":
-        return String(Day.containing(local.year, local.month, local.day).prev())
-    return String(Month.containing(local.year, local.month, local.day).prev())
+    return prev_key(
+        kind,
+        containing_key(kind, local.year, local.month, local.day, local.hour),
+    )
 
 
 def last_ended(
@@ -312,7 +316,7 @@ def lag_wait(
     """The partition that has ended by `now` but less than `lag` seconds
     ago, the oldest if several, and when it becomes fillable (its end plus
     `lag`, UTC seconds); `("", 0)` if none waits."""
-    if lag <= 0 or (kind != "daily" and kind != "monthly"):
+    if lag <= 0 or not is_time_kind(kind):
         return (String(), Int64(0))
     var zone = Zone.load(tz if tz else "UTC")
     var fillable = _last_ended(kind, zone, now - Int64(lag))
@@ -340,14 +344,9 @@ def range_keys(
     var last = last_ended(kind, tz, now, lag)
     if last < start:  # keys of one kind order as text
         return out^
-    var r = String(start, "..", last)
-    if kind == "daily":
-        for k in parse_keys[Day](r):
-            out.append(String(k))
-    elif kind == "monthly":
-        for k in parse_keys[Month](r):
-            out.append(String(k))
-    return out^
+    if not is_time_kind(kind):
+        return out^
+    return parse_time_keys(kind, String(start, "..", last))
 
 
 def run_hourly(

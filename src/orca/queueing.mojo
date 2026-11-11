@@ -7,10 +7,8 @@ from postgres import (
     Params,
     Transaction,
 )
-from orca.day import Day
-from orca.key import parse_keys
 from orca.live import live_runs
-from orca.month import Month
+from orca.timekeys import parse_time_keys
 from orca.name import (
     Name,
     parse_names,
@@ -263,13 +261,7 @@ def partition_keys(p: Registered, keys: String) raises -> List[String]:
                 raise Error("orca: ", n, " isn't a key of ", p.keys_dataset)
             texts.append(n.text)
         return texts^
-    if p.kind == "daily":
-        for k in parse_keys[Day](keys, p.start):
-            texts.append(String(k))
-    else:
-        for k in parse_keys[Month](keys, p.start):
-            texts.append(String(k))
-    return texts^
+    return parse_time_keys(p.kind, keys, p.start)
 
 
 comptime DONE_SQL = (

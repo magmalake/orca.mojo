@@ -32,10 +32,17 @@ from orca.ctx import Ctx
 from orca.civil import Civil, now, parse_time, utc
 from orca.cron import CronExpr
 from orca.day import Day
+from orca.hour import Hour
 from orca.key import Key, TimeKey, parse_keys
 from orca.month import Month, days_in, parse_months
 from orca.name import Name, parse_names
-from orca.partitions import Daily, Monthly, Partitions, parse_partitions
+from orca.partitions import (
+    Daily,
+    Hourly,
+    Monthly,
+    Partitions,
+    parse_partitions,
+)
 from orca.pipeline import (
     FAILED,
     SKIPPED,

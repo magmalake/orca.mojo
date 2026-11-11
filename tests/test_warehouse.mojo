@@ -136,6 +136,25 @@ def test_parse_sense() raises:
         _ = parse_sense("a.b twelve other -\n")
 
 
+def test_map_hourly_keys() raises:
+    assert_equal(key_kind("2024-02-29T07"), "hourly")
+    assert_equal(key_kind("2024-02-29 07"), "")
+    assert_equal(
+        join_keys(map_keys(["2024-02-29T07", "2024-02-29T23"], "daily")),
+        "2024-02-29",
+    )
+    assert_equal(join_keys(map_keys(["2024-03-01T00"], "monthly")), "2024-03")
+    var hours = map_keys(["2024-02-29"], "hourly")
+    assert_equal(len(hours), 24)
+    assert_equal(hours[0], "2024-02-29T00")
+    assert_equal(hours[23], "2024-02-29T23")
+    assert_equal(len(map_keys(["2024-02"], "hourly")), 29 * 24)
+    assert_equal(
+        join_keys(map_keys(["2024-01-01"], "hourly", "2024-01-01T22")),
+        "2024-01-01T22,2024-01-01T23",
+    )
+
+
 def test_map_keys() raises:
     assert_equal(key_kind("2024-03"), "monthly")
     assert_equal(key_kind("2024-03-01"), "daily")
