@@ -296,8 +296,8 @@ run at a time, and its queued runs say so: `waiting: max_runs = "auto"
 starts one run at a time until its runs have a request to weigh`. On EC2,
 Kubernetes and remote workers, where there is no host's room to weigh, the
 ceiling is the limit (a worker still admits what it takes against its own
-host). `fill_max_runs` is still a count. An older orca reads `"auto"` as
-its ceiling.
+host). `fill_max_runs = "auto"` works the same way for fill runs. An older
+orca reads `"auto"` as its ceiling.
 
 ### Memory pressure
 
