@@ -431,6 +431,16 @@ def _coverage_fact(mut h: Html, p: PipelineRow, cov: Optional[Coverage]):
     h.raw("</dd>")
 
 
+def pipeline_progress_here(name: String, tab: String) -> String:
+    """Where the Progress fragment's "Log in to ..." links come back to: the
+    pipeline's page, on `tab` (as the poll URL gives it) if that is one of
+    its tabs other than the overview."""
+    var base = String("/pipelines/", url_encode(name))
+    if tab == "runs" or tab == "operate":
+        return String(base, "?tab=", tab)
+    return base
+
+
 def pipeline_progress(mut db: State, name: String) raises -> Page:
     """The Progress card of a pipeline's page, as a fragment."""
     var ps = pipeline_rows(db, name)
@@ -891,7 +901,9 @@ def _cards_html(
         '"><section class="card card--facts" id="progress">',
         '<h2>Progress</h2><div data-poll="',
     )
-    h.text(base, "/progress")
+    # The tab rides along, so the fragment's "Log in to ..." links come back
+    # to this page and tab (pipeline_progress_here), not to the fragment.
+    h.text(base, "/progress", "" if tab == "overview" else String("?tab=", tab))
     h.raw('" data-poll-every="5">')
     _progress_html(h, p, fill, fires, cov, f)
     h.raw("</div></section>")
