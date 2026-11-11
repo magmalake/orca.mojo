@@ -680,8 +680,8 @@ comptime PROJECT_DOCKERFILE: StaticString = """# The image `orca aws push` build
 #     docker build -f project.Dockerfile --build-arg ORCA_VERSION=0.24.0 \\
 #         -t ghcr.io/<owner>/<project>:<version> .
 #
-# Name the image after the project (ghcr.io/magmalake/mojourney, not
-# ghcr.io/morca-dev/census), and set ORCA_IMAGE in deploy/hetzner's
+# Name the image after the project (ghcr.io/morca-dev/census, not
+# ghcr.io/morca-dev/morca), and set ORCA_IMAGE in deploy/hetzner's
 # hetzner.env to it. ORCA_RUNTIME names another runtime repository, such as
 # one built locally (`docker build -f deploy/runtime.Dockerfile -t
 # orca-runtime:0.24.0 .` in orca.mojo, then --build-arg ORCA_RUNTIME=orca-runtime).
