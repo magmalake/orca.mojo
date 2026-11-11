@@ -164,8 +164,10 @@ def test_worker_run() raises:
         env^,
         secrets^,
         Grant(3, 2048),
+        2,
     )
     var got = worker_run_of(loads(worker_run_json(w)))
+    assert_equal(got.members, 2)
     assert_equal(got.grant.cpus, 3)
     assert_equal(got.grant.memory_mb, 2048)
     assert_equal(got.run, 12)

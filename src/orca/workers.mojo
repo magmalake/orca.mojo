@@ -51,6 +51,15 @@ from std.os import getenv
 from json import Value, loads
 from postgres import Params
 
+from orca.run_cluster import (
+    MEMBER_GRANTS_SQL,
+    MEMBER_MB_SQL,
+    join_claim,
+    member_spec_json,
+    members_of,
+    members_to_stop,
+    stop_json,
+)
 from orca.admission import (
     PressureRow,
     Report,
@@ -325,6 +334,9 @@ struct WorkerRun(Copyable, Movable):
     """What this start was granted of the worker's host (`orca.resources`);
     none for a pipeline without a request, or a worker that didn't say
     what it can grant."""
+    var members: Int
+    """How many more workers its dista cluster may spread over
+    (`orca.run_cluster`); 0 runs it on this worker alone."""
 
 
 def _pairs_json(
@@ -362,6 +374,7 @@ def worker_run_json(w: WorkerRun) -> String:
         .raw("secrets", _pairs_json(w.secrets, "name", "id"))
         .int("grant_cpus", Int64(w.grant.cpus))
         .int("grant_memory_mb", Int64(w.grant.memory_mb))
+        .int("members", Int64(w.members))
         .finish()
     )
 
@@ -384,6 +397,7 @@ def worker_run_of(v: Value) raises -> WorkerRun:
             Int(v["grant_memory_mb"].int_value()) if String("grant_memory_mb")
             in v else 0,
         ),
+        Int(v["members"].int_value()) if String("members") in v else 0,
     )
 
 
@@ -472,7 +486,62 @@ def _num(v: Value, key: String) raises -> Int64:
 
 
 def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
-    """`/api/worker/claim`'s answer: `{"run": <spec>|null, "refused": ...}`."""
+    """`/api/worker/claim`'s answer: `{"run": <spec>|null, "refused": ...,
+    "join": <member spec>, "stop": [member, ...]}`. With no run to start,
+    room left and an address the pool's machines reach it at
+    (`advertise`), a run to join (`orca.run_cluster`); and always the
+    members it has whose run has ended, to stop."""
+    var stop = members_to_stop(db, w.id)
+    var answer = _claim_run(db, w, v)
+    var slots = Int(v["slots"].int_value()) if String("slots") in v else 0
+    var advertise = text_field(v, "advertise")
+    if answer.startswith('{"run": null') and slots > 0 and advertise:
+        var room_cpus = -1
+        var room_mb = -1
+        if String("room_cpus") in v and String("room_memory_mb") in v:
+            room_cpus = Int(v["room_cpus"].int_value())
+            room_mb = Int(v["room_memory_mb"].int_value())
+        var g = db.conn.query(
+            String(
+                "SELECT coalesce(sum(grant_cpus), 0)",
+                MEMBER_GRANTS_SQL,
+                " AS cpus, coalesce(sum(grant_memory_mb), 0)",
+                MEMBER_MB_SQL,
+                " AS mb FROM orca.runs WHERE worker = $1 AND status =",
+                " 'running'",
+            ),
+            Params().int64(Int64(w.id)),
+        ).row(0)
+        var name = text_field(v, "name")
+        var joined = join_claim(
+            db,
+            w.id,
+            w.placement(),
+            room_cpus,
+            room_mb,
+            Int(g.int64("cpus")),
+            Int(g.int64("mb")),
+            String("worker ", name) if name else w.user(),
+        )
+        if joined:
+            var head = String(answer[byte = : answer.byte_length() - 1])
+            answer = String(
+                head,
+                ', "join": ',
+                member_spec_json(joined.value()),
+                "}",
+            )
+    return String(
+        answer[byte = : answer.byte_length() - 1],
+        ', "stop": ',
+        stop_json(stop),
+        "}",
+    )
+
+
+def _claim_run(mut db: State, w: WorkerAuth, v: Value) raises -> String:
+    """A queued run of the pool for the worker to start: `{"run":
+    <spec>|null, "refused": ...}`."""
     _seen(db, w, v)
     var slots = Int(v["slots"].int_value()) if String("slots") in v else 0
     if slots <= 0:
@@ -575,8 +644,11 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
         if admitted:
             var g = tx.query(
                 String(
-                    "SELECT coalesce(sum(grant_cpus), 0) AS cpus,",
-                    " coalesce(sum(grant_memory_mb), 0) AS mb FROM orca.runs",
+                    "SELECT coalesce(sum(grant_cpus), 0)",
+                    MEMBER_GRANTS_SQL,
+                    " AS cpus, coalesce(sum(grant_memory_mb), 0)",
+                    MEMBER_MB_SQL,
+                    " AS mb FROM orca.runs",
                     " WHERE worker = $1 AND status = 'running' AND NOT ",
                     dead,
                 ),
@@ -643,6 +715,7 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
             p.env.copy(),
             p.secrets.copy(),
             grant,
+            members_of(db, p.name) if p.workers > 0 else 0,
         )
         _ = tx.execute(
             (

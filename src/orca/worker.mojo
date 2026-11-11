@@ -58,6 +58,14 @@ from std.time import perf_counter_ns, sleep
 
 from json import Value
 
+from orca.run_cluster import MemberSpec, member_spec_of
+from orca.tokens import new_token
+from orca.worker_cluster import (
+    free_port,
+    start_dista_worker,
+    start_head,
+    stop_group,
+)
 from orca.admission import Report
 from orca.cgroup import (
     Cgroups,
@@ -103,7 +111,7 @@ from orca.workers import (
 comptime WORKER_USAGE = """usage:
   orca worker --pool <pool> [--remote <url>] [--token-file <path>]
               [--max-runs N] [--poll-seconds S] [--dir <dir>]
-              [--image <image>] [--name <name>]
+              [--image <image>] [--name <name>] [--advertise <address>]
               (the token: ORCA_WORKER_TOKEN, or --token-file)"""
 
 
@@ -112,6 +120,9 @@ struct _Running(Copyable, Movable):
     var spec: WorkerRun
     var stage: String
     var env: List[String]
+    var helpers: List[Int]
+    """Its cluster's head and dista worker (`orca.worker_cluster`), stopped
+    when it ends; empty for a run on this worker alone."""
 
 
 def _memory_mb() -> Int:
@@ -178,6 +189,13 @@ struct Worker(Movable):
     var room_mb: Int
     """The memory this host can grant, the limit of a run without a
     grant."""
+    var advertise: String
+    """The address the pool's machines reach this one at (`--advertise`):
+    with it, a run that spreads is started as a cluster here, and runs are
+    joined (`orca.run_cluster`); without it, neither."""
+    var members: Dict[Int, Int]
+    """The dista workers this one runs for other workers' runs: pid to
+    `orca.run_members` id."""
 
     def __init__(
         out self,
@@ -189,6 +207,7 @@ struct Worker(Movable):
         max_runs: Int,
         poll: Float64,
         dir: String,
+        advertise: String = "",
     ) raises:
         self.api = StateApi(url, token)
         self.token = token
@@ -209,6 +228,8 @@ struct Worker(Movable):
         self.stalled = Dict[Int, Bool]()
         self.unswept = List[String]()
         self.room_mb = 0
+        self.advertise = advertise
+        self.members = Dict[Int, Int]()
 
     def _running_ids(self) -> String:
         var ids = String()
@@ -261,6 +282,41 @@ struct Worker(Movable):
         )
         with open(stage, "w") as f:
             f.write("")  # keep-log heads it with the start
+        # A run that spreads over the pool (orca.run_cluster): its head and a
+        # dista worker here, the driver joining them, the others told where.
+        var helpers = List[Int]()
+        var cluster_head = String()
+        var cluster_token = String()
+        if spec.members > 0 and self.advertise:
+            var port = free_port()
+            cluster_token = new_token()
+            var base = String(
+                self.dir, "/", spec.pipeline, "-", spec.run, "-", spec.start
+            )
+            helpers.append(
+                start_head(
+                    spec.binary,
+                    env,
+                    String(base, "-head.log"),
+                    port,
+                    cluster_token,
+                )
+            )
+            helpers.append(
+                start_dista_worker(
+                    spec.binary,
+                    env,
+                    String(base, "-worker.log"),
+                    String("127.0.0.1:", port),
+                    self.advertise,
+                    cluster_token,
+                    spec.grant.cpus,
+                    False,
+                )
+            )
+            env.append(String("DISTA_HEAD=127.0.0.1:", port))
+            env.append(String("DISTA_TOKEN=", cluster_token))
+            cluster_head = String(self.advertise, ":", port)
         var argv: List[String] = [spec.binary, "resume", String(spec.run)]
         if spec.allow_new_code:
             argv.append("--allow-new-code")
@@ -307,7 +363,19 @@ struct Worker(Movable):
             pid,
             flush=True,
         )
-        self.running[pid] = _Running(spec.copy(), stage, env^)
+        self.running[pid] = _Running(spec.copy(), stage, env^, helpers^)
+        if cluster_head:
+            try:
+                _ = self._post(
+                    "/api/worker/cluster",
+                    Body()
+                    .int("run", Int64(spec.run))
+                    .int("start", Int64(spec.start))
+                    .text("head", cluster_head)
+                    .text("token", cluster_token),
+                )
+            except e:
+                print("orca worker: can't report run", spec.run, "'s head:", e)
         # The machine's metrics while the run's process lives, as the
         # scheduler's beside a local run (orca.sample): the Machines card.
         var metrics = metrics_location(
@@ -327,6 +395,57 @@ struct Worker(Movable):
                 )
             except e:
                 print("orca worker: no sampler for run", spec.run, ":", e)
+
+    def _join(mut self, m: MemberSpec) raises:
+        """A dista worker for another worker's run (`orca.run_cluster`)."""
+        var env = grant_env(m.env, m.grant, pressure_env(self.psi))
+        for s in m.secrets:
+            env.append(String(s[0], "=", fetch_secret(s[1])))
+        if self.image:
+            env.append(String("ORCA_IMAGE=", self.image))
+        makedirs(self.dir, exist_ok=True)
+        var pid = start_dista_worker(
+            m.binary,
+            env,
+            String(
+                self.dir,
+                "/",
+                m.pipeline,
+                "-",
+                m.run,
+                "-",
+                m.start,
+                "-member-",
+                m.member,
+                ".log",
+            ),
+            m.head,
+            self.advertise,
+            m.token,
+            m.grant.cpus,
+            True,
+        )
+        self.members[pid] = m.member
+        print(
+            "joined",
+            m.pipeline,
+            "run",
+            m.run,
+            "start",
+            m.start,
+            "as member",
+            m.member,
+            "pid",
+            pid,
+            flush=True,
+        )
+
+    def _stop_member(mut self, member: Int):
+        for e in self.members.items():
+            if e.value == member:
+                stop_group(e.key)
+                print("stopping member", member, "pid", e.key, flush=True)
+                return
 
     def _sample(mut self):
         """Samples each run's process tree (none on macOS)."""
@@ -352,9 +471,19 @@ struct Worker(Movable):
                 except:
                     pass
             return
+        if pid in self.members:
+            var member = self.members.pop(pid)
+            print("member", member, "pid", pid, "exited", code, flush=True)
+            _ = self._post(
+                "/api/worker/left",
+                Body().int("member", Int64(member)).int("code", Int64(code)),
+            )
+            return
         if pid not in self.running:
             return
         var r = self.running.pop(pid)
+        for h in r.helpers:
+            stop_group(h)
         print("run", r.spec.run, "pid", pid, "exited", code, flush=True)
         var m = self.meters.pop(pid, Meter())
         m.end(done.max_rss, done.cpu_seconds)
@@ -492,7 +621,7 @@ struct Worker(Movable):
                     )
                 except:
                     pass
-            var slots = self.max_runs - len(self.running)
+            var slots = self.max_runs - len(self.running) - len(self.members)
             # Memory pressure (orca.pressure): no claim while this host is
             # over the limit, but one at a time once a hold has lasted its
             # grace with none of its runs going.
@@ -539,6 +668,7 @@ struct Worker(Movable):
                     .int("memory_mb", Int64(mem))
                     .int("room_cpus", Int64(room.cpus))
                     .int("room_memory_mb", Int64(room.memory_mb))
+                    .text("advertise", self.advertise)
                     .raw(
                         "pressure",
                         Report.of(self.psi, self.admission, now).json(),
@@ -562,6 +692,20 @@ struct Worker(Movable):
             if String("refused") in got:
                 var why = got["refused"].string_value()
                 print("orca worker: not given a run:", why, flush=True)
+            if String("stop") in got:
+                for s in got["stop"].array_items():
+                    self._stop_member(Int(s.int_value()))
+            if String("join") in got and not got["join"].is_null():
+                var m = member_spec_of(got["join"])
+                try:
+                    self._join(m)
+                except e:
+                    print("orca worker: can't join run", m.run, ":", e)
+                    _ = self._post(
+                        "/api/worker/left",
+                        Body().int("member", Int64(m.member)).int("code", 127),
+                    )
+                continue
             if not got["run"].is_null():
                 var spec = worker_run_of(got["run"])
                 try:
@@ -599,6 +743,7 @@ def worker_command(args: List[String], target: String) raises -> Int:
     var dir = String(getenv("TMPDIR", "/tmp").rstrip("/"), "/orca-worker")
     var image = getenv("ORCA_IMAGE")
     var name = _hostname()
+    var advertise = getenv("ORCA_WORKER_ADVERTISE")
     var i = 2
     while i < len(args):
         var a = args[i]
@@ -627,6 +772,8 @@ def worker_command(args: List[String], target: String) raises -> Int:
             image = val
         elif a == "--name":
             name = val
+        elif a == "--advertise":
+            advertise = val
         else:
             return _usage(String("unknown argument: ", a))
         i += 2
@@ -658,5 +805,7 @@ def worker_command(args: List[String], target: String) raises -> Int:
         return _usage(
             "orca worker needs a token: ORCA_WORKER_TOKEN, or --token-file"
         )
-    var w = Worker(url, token, pool, name, image, max_runs, poll, dir)
+    var w = Worker(
+        url, token, pool, name, image, max_runs, poll, dir, advertise
+    )
     return w.serve()

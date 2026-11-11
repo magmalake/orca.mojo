@@ -807,6 +807,25 @@ def _migrations() -> List[List[String]]:
         # a backfill, a sensor's run or a fill run takes. Additive: an
         # older binary reads the code's from `describe`, as it did.
         ["ALTER TABLE orca.pipelines ADD COLUMN keys_per_run integer"],
+        # One run over several workers of a pool (#268, orca.run_cluster):
+        # its dista head's address and cluster token for the start it's in,
+        # and the workers that joined it. Additive.
+        [
+            "ALTER TABLE orca.runs ADD COLUMN cluster_head text",
+            "ALTER TABLE orca.runs ADD COLUMN cluster_token text",
+            (
+                "CREATE TABLE orca.run_members (id bigserial PRIMARY KEY, run"
+                " bigint NOT NULL REFERENCES orca.runs ON DELETE CASCADE,"
+                " start integer NOT NULL, worker bigint REFERENCES"
+                " orca.workers ON DELETE SET NULL, grant_cpus integer,"
+                " grant_memory_mb integer, joined timestamptz NOT NULL DEFAULT"
+                " now(), ended timestamptz, why text)"
+            ),
+            (
+                "CREATE INDEX run_members_live ON orca.run_members (run) WHERE"
+                " ended IS NULL"
+            ),
+        ],
     ]
 
 

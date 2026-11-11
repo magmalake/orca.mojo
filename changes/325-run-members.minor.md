@@ -1,0 +1,1 @@
+- **One run over several workers of a pool**: `workers = N` on a pool pipeline lets a run's dista cluster spread over N more machines, guarded by a token. (#325)
