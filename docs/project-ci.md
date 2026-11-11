@@ -34,7 +34,7 @@ jobs:
     uses: magmalake/orca.mojo/.github/workflows/project-image.yml@v0.24.0
     permissions: { contents: read, packages: write }
     with:
-      image: ghcr.io/magmalake/mojourney
+      image: ghcr.io/mojourney/census
       configs: orca.toml orca.dev.toml
       push: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
       extra-tags: ${{ github.ref == 'refs/heads/dev' && 'dev' || '' }}
@@ -44,7 +44,7 @@ jobs:
     needs: [test, image]
     uses: magmalake/orca.mojo/.github/workflows/project-release.yml@v0.24.0
     permissions: { contents: write }
-    with: { image: ghcr.io/magmalake/mojourney }
+    with: { image: ghcr.io/mojourney/census }
 ```
 
 Only the job that pushes needs `packages: write`, and only the release job

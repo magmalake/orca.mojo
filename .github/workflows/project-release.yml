@@ -7,7 +7,7 @@
 #         needs: image
 #         uses: magmalake/orca.mojo/.github/workflows/project-release.yml@v0.24.0
 #         permissions: { contents: write }
-#         with: { image: ghcr.io/magmalake/mojourney }
+#         with: { image: ghcr.io/mojourney/census }
 #
 # The notes are the version's section of CHANGELOG.md, as `shelf release
 # apply` writes it (`## <version> - <date>`), and a line naming the image.

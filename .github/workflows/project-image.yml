@@ -3,7 +3,7 @@
 #     jobs:
 #       image:
 #         uses: magmalake/orca.mojo/.github/workflows/project-image.yml@v0.24.0
-#         with: { image: ghcr.io/magmalake/mojourney, configs: orca.toml }
+#         with: { image: ghcr.io/mojourney/census, configs: orca.toml }
 #
 # One job per architecture, each on a runner of its own (no emulation) and
 # built for a baseline CPU (MOJO_TARGET_CPU): neoverse-n1 on arm64, which
@@ -23,7 +23,7 @@ on:
   workflow_call:
     inputs:
       image:
-        description: "The image's repository, such as ghcr.io/magmalake/mojourney"
+        description: "The image's repository, such as ghcr.io/mojourney/census"
         type: string
         required: true
       dockerfile:
