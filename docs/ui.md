@@ -27,6 +27,17 @@ runs thinner, with a line from a run to the sensor or keyed runs its
 commits started. Its data is `GET /api/gantt?window=24h` (`1h`, `6h`,
 `24h`, `7d`).
 
+Under the tabs, **Recent runs** has a row per batch: the runs one
+`orca backfill`, fill pass or sensor pass queued together share a batch
+(`orca.runs.batch`, migration 56, its first run's id). A batch's row says
+how many runs it has and how many are running, queued, succeeded, failed
+and cancelled, over a bar of those that have ended, and links to
+`/runs?batch=<id>`; a run with no batch is its own row, as on `/runs`.
+Batches with a run running, or one that failed in the last day, come
+first, then those with runs queued, then the rest by when they last
+ended. The JSON's `recent` has the rows (`runs` stays the newest 10 runs),
+and a run's page says which batch it's part of.
+
 ## Lists of runs, in pages
 
 `/runs`, a pipeline's Runs tab and a dataset's snapshots come a page at a
@@ -71,6 +82,7 @@ refreshing with them applied (its `/runs/table` fragment carries them).
 | `?since=` | created in the last `1h`, `24h`, `7d` (any `<n>h` or `<n>d`), or `today` since midnight UTC: the quick picks beside the dates |
 | `?key=` | a partition: a glob matched against each of a run's partitions (`2023-08-*`, `?` for one character), or else any part of them (`modular/` for a keyed pipeline's repositories) |
 | `?run=` | one run: the page goes to it (`/runs/<id>`), the JSON is the list of it |
+| `?batch=` | the runs queued together in that batch: a backfill, a fill pass or a sensor pass (`runs_batch`, migration 56) |
 
 The JSON's `filters` has each (`status` as it was, comma-joined, and
 `statuses` as a list; null for those not set), and `counts` each status's

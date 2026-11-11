@@ -20,6 +20,7 @@ from orca.ui.layout import (
     page_html,
 )
 from orca.ui.parts import runs_table_html
+from orca.ui.recent import recent_table
 from orca.views.code import runs_code
 from orca.views.runs import (
     RUNS_PAGE,
@@ -168,8 +169,12 @@ def runs_table(mut db: State, url: String) raises -> Page:
     """`/runs/table`: a runs list's page (`?view=list`, `pipeline` or
     `home`, its filters, `limit` and cursor) as an HTML fragment. While it
     has a run going on it says to ask again in `LIVE_EVERY` seconds; else
-    the newest page says `IDLE_EVERY`, and an older one answers 286."""
-    var p = runs_page(db, runs_fragment_query(url))
+    the newest page says `IDLE_EVERY`, and an older one answers 286. The
+    home page's is its Recent runs, a row per batch (`recent_table`)."""
+    var q = runs_fragment_query(url)
+    if q.view == "home":
+        return recent_table(db, q.size)
+    var p = runs_page(db, q^)
     var h = Html()
     _runs_list_html(h, db, p)
     var live = p.live()
@@ -328,6 +333,8 @@ def runs_filters_html(
     h.raw('"></label>')
     if q.since:
         _hidden(h, "since", q.since)
+    if q.batch > 0:
+        _hidden(h, "batch", String(q.batch))
     if q.size != q.default_size():
         h.raw('<input type="hidden" name="limit" value="', q.size, '">')
     h.raw('<button type="submit">Filter</button>')

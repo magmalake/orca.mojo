@@ -7,6 +7,7 @@ from postgres import (
     Params,
     Transaction,
 )
+from orca.batches import mark_batch
 from orca.fill import fill_status
 from orca.live import (
     dead_sql,
@@ -283,6 +284,7 @@ def _fill_for_workers(
             .row(0)
             .int64("id")
         )
+    mark_batch(tx, ids)
     tx.commit()
     if again > 0:
         print("requeued", again, "fill runs of", p.name, "for pool", pool)
