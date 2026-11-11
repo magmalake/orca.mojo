@@ -1,0 +1,1 @@
+- **Hetzner stacks can run self-growing worker pools**: a pool token secret, and the image and login the machines use. (#316)

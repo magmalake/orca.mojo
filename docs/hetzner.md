@@ -730,6 +730,29 @@ scheduler says why once (`orca: run cgroups off: ...`) and runs as before:
 `ORCA_CGROUPS=0` in `settings.env` (a line of `EXTRA_ENV_FILE`) turns it off from orca's side. Ops >
 Control lists each run going with its memory against its limit.
 
+## Worker pools that grow themselves
+
+A `[pools.<name>]` table in orca.toml ([orca-toml.md](orca-toml.md#worker-pools))
+has the scheduler make and remove Hetzner machines as runs wait. On this
+stack it needs a Hetzner API token (read-write) for the project the
+machines go in:
+
+```sh
+# SECRETS_FILE: a key secrets/orca/hcloud-token, or in hetzner.env:
+HCLOUD_POOL_TOKEN_FILE=~/ops/mojourney/hcloud-token.sops
+```
+
+`deploy.sh` then sends it to `/etc/orca/secrets/orca/hcloud-token` and puts
+in settings.env `ORCA_HCLOUD_TOKEN_SECRET`, the firewall
+(`ORCA_HCLOUD_FIREWALL`, the stack's, ssh from `ADMIN_IP` only) and SSH key
+(`ORCA_HCLOUD_SSH_KEYS`, the stack's) each machine gets (`POOL_FIREWALL`
+and `POOL_SSH_KEYS` name others), and `ORCA_UI_URL` from `UI_URL`, where the
+machines reach the UI. `orca-stack` gives the scheduler and the UI
+`ORCA_WORKER_IMAGE`, the image it's running, which the machines run too,
+and with `GHCR_USER` the registry login (`ORCA_REGISTRY_USER`,
+`ORCA_REGISTRY_TOKEN_SECRET=orca/ghcr-token`) a booting machine pulls it
+with. A machine's own startup script holds only a worker token of its own.
+
 ## Backups and restore
 
 The server runs `orca-stack backup` every night at 02:30 UTC
