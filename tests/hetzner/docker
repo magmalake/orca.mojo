@@ -114,6 +114,18 @@ case "$all" in
         esac
         ;;
     *"FROM orca.schedulers WHERE ended IS NULL"*) cat "$FAKE/instances" 2> /dev/null || true ;;
+    # The image's upgrade steps: $FAKE/steps's lines whose when matches;
+    # $FAKE/no-upgrade is an image whose orca has no `orca upgrade`.
+    "run --rm "*" upgrade --from "*)
+        [ ! -f "$FAKE/no-upgrade" ] || exit 2
+        echo "upgrade $all" >> "$FAKE/docker.log"
+        w=${all##*--when }
+        [ ! -f "$FAKE/steps" ] || awk -F'\t' -v w="$w" '$3 == w' "$FAKE/steps"
+        ;;
+    "exec scheduler orca backfill "*)
+        echo "step $all" >> "$FAKE/docker.log"
+        [ ! -f "$FAKE/step-fails" ] || exit 1
+        ;;
     "run --rm "*" scheduler can-overlap")
         if [ -f "$FAKE/can-overlap" ]; then cat "$FAKE/can-overlap"; else echo "no: no live scheduler instance leads"; fi
         grep -q '^yes' "$FAKE/can-overlap" 2> /dev/null || exit 1

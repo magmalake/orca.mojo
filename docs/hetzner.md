@@ -561,6 +561,60 @@ PIPELINE=KEY]...`; `orca-stack checked` prints the last result, `ok` or
 `failed`, its time, `plain` or `canary`, and the tags it checked, which is
 what [promote.sh](#a-dev-stack) reads.
 
+### A release's upgrade steps
+
+A release that needs something done around its deploy says so in its
+image, at `/opt/orca/upgrade.toml` (`ORCA_UPGRADE`), and `deploy.sh` shows
+or runs it. Examples are a backfill after the deploy, or a check before it
+such as a new secret, outbound HTTPS to a new host, or a minimum orca:
+
+```toml
+[[version]]
+version = "1.2.0"
+
+[[version.step]]
+id = "1.2.0-retool"     # unique and stable
+when = "after"          # before | after (the default)
+run = "orca backfill --rerun mojo_retool @all"   # an orca command
+
+[[version.step]]
+id = "1.2.0-egress"
+when = "before"
+manual = "The console downloads its model from huggingface.co: allow outbound HTTPS."
+```
+
+`orca upgrade --from <deployed> --to <new>` prints the steps of every version
+after `--from` up to `--to`, a line each:
+`step<TAB><id><TAB><before|after><TAB><run|manual><TAB><command or text>`.
+Only the new version's steps are printed when `--from` isn't a version, a
+commit for example. A `run` is one `orca` command of letters, digits, spaces
+and `._:/@=,+-`. It's checked when the file is read and again on the
+server, and runs in the scheduler (`docker exec scheduler orca ...`).
+
+When the orca tag changes (not for a rollback), `deploy.sh`:
+
+- **First reads the `before` steps** from the new image, pulled for it
+  (`orca-stack upgrade-steps`), before anything else. It lists them, and
+  each must be done before it goes on:
+  - It asks for a manual one (`[id] done? [y/N]`), unless `--confirmed
+    id,...` names it. With `--yes`, an unconfirmed manual step stops the
+    deploy, nothing changed: do it, then deploy with `--confirmed <id>`.
+  - It asks before running a command, or runs it with `--yes`.
+- **After registering the pipelines, before unpausing them, does the
+  `after` steps:** it runs each command (asking, or with `--yes`), and
+  prints each instruction, waiting for Enter without `--yes`. A failed
+  command doesn't stop the rest. The deploy then fails at the end, saying
+  which step failed, with everything else deployed and checked.
+
+What makes a step run once is the range: a deploy from 1.1.0 to 1.2.0 takes
+1.2.0's steps, the next one from 1.2.0 doesn't, and a deploy that skips a
+version takes the skipped version's steps too. Nothing is recorded in the
+database, so a deploy of the same tag again (`--all`) runs none, and a
+rollback and a deploy forward again run them again. A dry run prints the
+`orca-stack upgrade-steps` commands but can't list the steps: it doesn't
+reach the server. An image whose orca has no `orca upgrade` (before 0.23)
+has no steps.
+
 ## Rolling back
 
 **What is kept.** Each apply that changes a tag records the tags it

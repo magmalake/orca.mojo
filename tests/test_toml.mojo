@@ -153,7 +153,6 @@ def test_what_toml_refuses() raises:
 
 
 def test_the_subset_says_what_it_leaves_out() raises:
-    _refused("[[a]]\n", "arrays of tables")
     _refused('a = """x"""\n', "multi-line strings")
     _refused("a = '''x'''\n", "multi-line strings")
     _refused("a = 1979-05-27\n", "dates and times")
@@ -205,6 +204,37 @@ def test_arrays_of_inline_tables() raises:
     _refused("a = [{b = 1}, {b = 1, b = 2}]\n", "defined twice")
     _refused("a = [{b = 1}\n", "closing")
     _refused("a = [{b = 1}]\na.c = 2\n", "is a value")
+
+
+def test_arrays_of_table_headers() raises:
+    """`[[x]]` headers, and `[[x.y]]` adding to the last `[[x]]`."""
+    var doc = parse_toml(
+        String(
+            "top = 1\n",
+            "[[version]]\n",
+            'version = "1.1.0"\n',
+            "[[version.step]]\n",
+            'id = "a"\n',
+            "[[version.step]]\n",
+            'id = "b"\n',
+            "[[version]]\n",
+            'version = "1.2.0"\n',
+            "[[version.step]]\n",
+            'id = "c"\n',
+            "[after]\n",
+            "x = 2\n",
+        )
+    )
+    var v = doc.get(["version"])
+    assert_true(v.value().kind == "array")
+    assert_equal(len(v.value().items), 2)
+    assert_equal(doc.get(["version", "0", "version"]).value().text, "1.1.0")
+    assert_equal(len(doc.get(["version", "0", "step"]).value().items), 2)
+    assert_equal(doc.get(["version", "0", "step", "1", "id"]).value().text, "b")
+    assert_equal(doc.get(["version", "1", "step", "0", "id"]).value().text, "c")
+    assert_equal(doc.get(["after", "x"]).value().text, "2")
+    _refused("a = 1\n[[a]]\n", "defined already")
+    _refused("[[a]\n", "expected ']]'")
 
 
 def test_errors_name_the_line() raises:
