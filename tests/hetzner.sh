@@ -56,10 +56,15 @@
 # - package.sh's release tarball unpacks to orca-hetzner-<version>/ with
 #   every script, server/ and the example settings, and its up.sh and
 #   deploy.sh run from there (hetzner.env next to them), printing the
-#   version and sending the tarball's own server files.
+#   version and sending the tarball's own server files;
+# - a shared hetzner.env (a secrets repository's) names its files relative
+#   to its folder, and a laptop's <NAME>.local.env (or HETZNER_LOCAL_ENV)
+#   is read after it, its relative names from its own folder; the first
+#   line names both; a missing HETZNER_LOCAL_ENV, or one that sets NAME,
+#   is refused.
 set -eu
 cd "$(dirname "$0")/.."
-FAKE=$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner.XXXXXX")
+FAKE=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner.XXXXXX")" && pwd)
 export FAKE
 trap 'rm -rf "$FAKE"' EXIT INT TERM
 export PATH="$PWD/tests/hetzner:$PATH"
@@ -92,7 +97,9 @@ EOS
 : > "$FAKE/extra.env"
 export HETZNER_ENV="$FAKE/hetzner.env"
 XDG_STATE_HOME="$FAKE/xdg"
-export XDG_STATE_HOME
+# No laptop's own settings (~/.config/orca-hetzner/<NAME>.local.env) but the tests'.
+XDG_CONFIG_HOME="$FAKE/config"
+export XDG_STATE_HOME XDG_CONFIG_HOME
 
 fail() {
     echo "FAIL: $*"
@@ -705,6 +712,53 @@ stack resume > /dev/null
 # Postgres: started once, by the first apply, and never stopped or removed.
 [ "$(grep -c 'run -d --name postgres' "$FAKE/docker.all")" = 1 ] || fail "Postgres was started more than once"
 grep -q '\(stop\|rm\).* postgres$' "$FAKE/docker.all" && fail "Postgres was stopped or removed"
+
+# One hetzner.env for every laptop: in a secrets repository, its file names
+# relative to its folder, and each laptop's ADMIN_IP and ssh key in
+# <XDG_CONFIG_HOME>/orca-hetzner/<NAME>.local.env, read after it (its own
+# relative names from its folder). The first line names both files.
+shared=$FAKE/ops-secrets/prod
+mkdir -p "$shared/creds" "$XDG_CONFIG_HOME/orca-hetzner/keys"
+cp "$FAKE/s3.env" "$shared/creds/s3.env"
+: > "$shared/tunnel.env"
+: > "$XDG_CONFIG_HOME/orca-hetzner/keys/laptop.pub"
+cat > "$shared/hetzner.env" << 'EOS'
+NAME=orca
+BUCKET=bkt
+S3_ENDPOINT=https://example.invalid
+S3_REGION=fsn1
+S3_CREDENTIALS_FILE=creds/s3.env
+TUNNEL_TOKEN_FILE=./tunnel.env
+ORCA_IMAGE=img
+ADMIN_IP=192.0.2.1/32
+SSH_PUBLIC_KEY_FILE=/nowhere/id.pub
+EOS
+local_env=$XDG_CONFIG_HOME/orca-hetzner/orca.local.env
+printf 'ADMIN_IP=198.51.100.9/32\nSSH_PUBLIC_KEY_FILE=keys/laptop.pub\n' > "$local_env"
+(cd "$FAKE" && HETZNER_ENV=ops-secrets/prod/hetzner.env sh "$OLDPWD/deploy/hetzner/up.sh" --dry-run) > "$FAKE/out" 2>&1 \
+    || fail "up.sh --dry-run with a shared hetzner.env"
+real=$(cd "$shared" && pwd) # HETZNER_ENV was relative: from the folder it was given in
+has "up.sh: stack orca, settings $real/hetzner.env and $local_env"
+has "orca-stack sync s3.env < $real/creds/s3.env"
+has "orca-stack sync tunnel.env < $real/./tunnel.env"
+has "public-key-from-file $XDG_CONFIG_HOME/orca-hetzner/keys/laptop.pub"
+# Without the local file, the shared file's own settings.
+rm "$local_env"
+HETZNER_ENV=$shared/hetzner.env sh deploy/hetzner/deploy.sh --dry-run ttt0000 > "$FAKE/out" 2>&1 \
+    || fail "deploy.sh --dry-run with no local file"
+has "deploy.sh: stack orca, settings $shared/hetzner.env$"
+# HETZNER_LOCAL_ENV names another; one that's missing, or that sets NAME, is refused.
+echo "ADMIN_IP=198.51.100.10/32" > "$FAKE/other.local.env"
+HETZNER_ENV=$shared/hetzner.env HETZNER_LOCAL_ENV=$FAKE/other.local.env sh deploy/hetzner/deploy.sh --dry-run ttt0000 > "$FAKE/out" 2>&1 \
+    || fail "deploy.sh --dry-run with HETZNER_LOCAL_ENV"
+has "settings $shared/hetzner.env and $FAKE/other.local.env"
+HETZNER_ENV=$shared/hetzner.env HETZNER_LOCAL_ENV=$FAKE/none.env sh deploy/hetzner/deploy.sh --dry-run ttt0000 > "$FAKE/out" 2>&1 \
+    && fail "a missing HETZNER_LOCAL_ENV"
+has "no $FAKE/none.env (HETZNER_LOCAL_ENV)"
+echo NAME=orca-dev >> "$FAKE/other.local.env"
+HETZNER_ENV=$shared/hetzner.env HETZNER_LOCAL_ENV=$FAKE/other.local.env sh deploy/hetzner/deploy.sh --dry-run ttt0000 > "$FAKE/out" 2>&1 \
+    && fail "a local file that sets NAME"
+has "sets NAME: the stack's name belongs in $shared/hetzner.env"
 
 # The release tarball (deploy/hetzner/package.sh), run from where it's unpacked.
 sh deploy/hetzner/package.sh 9.8.7 "$FAKE/pkg" > "$FAKE/out" 2>&1 || fail "package.sh"

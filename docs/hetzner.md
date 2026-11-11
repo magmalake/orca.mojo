@@ -159,7 +159,7 @@ A file that isn't `KEY=value` lines (a bare token) must be encrypted with
 quotes the offending line, the secret itself.
 
 then in `hetzner.env` `S3_CREDENTIALS_FILE=$HOME/dev/ops-secrets/prod/s3.sops.env`
-and so on, and delete the plain files. SOPS reads the extension: `.env` is
+and so on (or relative, [below](#one-hetznerenv-for-every-laptop)), and delete the plain files. SOPS reads the extension: `.env` is
 an env file (the keys stay readable, the values are encrypted), no known
 extension is binary (the whole file). Losing the age key loses the files,
 so keep its backup off the laptop; if it leaks, change the secrets
@@ -208,6 +208,33 @@ or point `SOPS_AGE_KEY_FILE` at `se-key.txt`.
 `--dry-run` doesn't decrypt: it prints `+ sops -d <file> (once)` and a
 `| ssh ... orca-stack sync <name>` line for each secret no `*_FILE` setting
 gives, assuming the file has them.
+
+#### One `hetzner.env` for every laptop
+
+`hetzner.env` holds no secret, so it can live in the secrets repository
+too (`prod/hetzner.env`), one copy for every laptop. Two things make that
+work:
+
+- **Relative file names.** A relative `SECRETS_FILE`, `*_FILE` or
+  `EXTRA_ENV_FILE` is read from the folder `hetzner.env` is in, so
+  `SECRETS_FILE=secrets.sops.yaml` works wherever the repository is cloned.
+- **A file of each laptop's own.** `ADMIN_IP` (the firewall's ssh source)
+  and `SSH_PUBLIC_KEY_FILE` belong to a laptop, not the stack. Put them in
+  `~/.config/orca-hetzner/<NAME>.local.env` (`orca.local.env`; or the file
+  `HETZNER_LOCAL_ENV` names, which must then exist). It's read after the
+  shared file, so whatever it sets wins, and its own relative names are read
+  from its folder. It can't set `NAME`, which picks it.
+
+```sh
+# ~/.config/orca-hetzner/orca.local.env
+ADMIN_IP=203.0.113.7/32
+SSH_PUBLIC_KEY_FILE=$HOME/.ssh/id_ed25519.pub
+```
+
+The scripts' first line names both files: `deploy.sh: stack orca, settings
+.../ops-secrets/prod/hetzner.env and ~/.config/orca-hetzner/orca.local.env`.
+Two laptops share the stack's firewall, which lets in one `ADMIN_IP`: the
+last `up.sh` sets it.
 
 ## The census: `orca.toml`
 
