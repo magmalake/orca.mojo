@@ -1,0 +1,1 @@
+- **A check after each deploy, and promote.sh**: `deploy.sh` ends with `orca-stack check` (containers, one scheduler, pipeline binaries, and `CANARY` runs on a dev stack) and fails when it fails; `promote.sh --from <dev settings>` deploys to production the tags the dev stack checked. (#PR)

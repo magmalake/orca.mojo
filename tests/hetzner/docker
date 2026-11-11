@@ -24,6 +24,12 @@
 # container's hostname is h-<the name it was started with>; the instances
 # of a hostname are $FAKE/instances; `orca scheduler drain` makes
 # scheduler-old exit unless $FAKE/old-stays exists.
+#
+# orca-stack check: the registrations are toy and manual1, binaries
+# /opt/orca/pipelines/<name>, paused as $FAKE/paused says; $FAKE/unregistered
+# makes there be none; `exec scheduler test -x PATH` fails for a path listed
+# in $FAKE/no-binary; `orca start P K` queues run 70N (N counts them, in
+# $FAKE/canary.log), whose status is $FAKE/canary-status/<P> or succeeded.
 echo "docker $*" >> "$FAKE/docker.log"
 echo "docker $*" >> "$FAKE/docker.all"
 touch "$FAKE/paused"
@@ -49,6 +55,24 @@ case "$all" in
             i=$((i + 1))
             echo "  run 9$i mojo_history 2026-11-07 on bgent, running 00:10:00"
         done
+        ;;
+    *"coalesce(binary_path, '-')"*)
+        [ ! -f "$FAKE/unregistered" ] || exit 0
+        for p in manual1 toy; do
+            if grep -qx "$p" "$FAKE/paused"; then pp=t; else pp=f; fi
+            echo "$p /opt/orca/pipelines/$p $pp"
+        done
+        ;;
+    "exec scheduler test -x "*) if grep -qxF "${all##* }" "$FAKE/no-binary" 2> /dev/null; then exit 1; fi ;;
+    "exec scheduler orca start "*)
+        echo "$5 $6" >> "$FAKE/canary.log"
+        echo "queued run 70$(wc -l < "$FAKE/canary.log" | tr -d ' ')"
+        ;;
+    *"SELECT status FROM orca.runs WHERE id = 70"*)
+        n=${all##*= 70}
+        n=${n%%[!0-9]*}
+        p=$(sed -n "${n}p" "$FAKE/canary.log" | cut -d' ' -f1)
+        cat "$FAKE/canary-status/$p" 2> /dev/null || echo succeeded
         ;;
     *"status = 'running'"*) cat "$FAKE/running" 2> /dev/null || echo 0 ;;
     *"WHERE NOT paused"*) printf 'manual1\ntoy\n' | grep -vxF -f "$FAKE/paused" || true ;;

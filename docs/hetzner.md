@@ -535,6 +535,32 @@ pauses and waits as above, and says why. So does the deploy that turns
 `--force` and a dry run don't overlap. `orca-stack status` lists the
 scheduler instances (`orca scheduler status`) when `OVERLAP=1`.
 
+### The check after each deploy
+
+Every `deploy.sh` (a rollback too) ends with `orca-stack check`, a smoke
+check that prints a line per item, `ok` or `FAIL` with why, and fails the
+deploy when one fails. It undoes nothing; `./deploy.sh --rollback` is the
+way back. It checks:
+
+- Postgres answers, and each container (scheduler, ui, sampler, the apps,
+  cloudflared) is running the image `stack.conf` says, the UI and the apps
+  healthy as apply probes them;
+- one scheduler: no `scheduler-next` or `scheduler-old` is left, and with
+  `OVERLAP=1` exactly one instance leads;
+- the pipelines: at least one registered, and each one's binary is in the
+  scheduler's image (`orca-stack register` fixes a stale one); the paused
+  ones are listed;
+- canary runs, if `hetzner.env` has `CANARY="PIPELINE=KEY ..."`: a run each
+  (`orca start`), one at a time, waited for up to `CANARY_TIMEOUT` seconds
+  (default 1800), each of which must succeed. For a dev stack, not
+  production: they are real runs.
+
+`up.sh` runs it too, but only reports: a new stack has nothing registered
+yet. Run it by hand with `ssh root@<ip> orca-stack check [--canary
+PIPELINE=KEY]...`; `orca-stack checked` prints the last result, `ok` or
+`failed`, its time, `plain` or `canary`, and the tags it checked, which is
+what [promote.sh](#a-dev-stack) reads.
+
 ## Rolling back
 
 **What is kept.** Each apply that changes a tag records the tags it
@@ -992,9 +1018,13 @@ ssh root@<ip> orca-stack register       # orca.dev.toml's pipelines
 ./down.sh                               # when it's not needed: the Volume stays, up.sh brings it back
 ```
 
-**Release check list on dev**, before the same tag goes to production:
+**Release check list on dev**, before the same tag goes to production.
+Set `CANARY` in the dev stack's settings (e.g. `CANARY="mojo_repos=2026-11-01
+gharchive=2026-11-08"`) and steps 2, 3 and 5, and step 4 inside the server (not the public URLs), are
+[the check deploy.sh ends with](#the-check-after-each-deploy):
 
-1. `./deploy.sh <tag>`: it ends with `done`, and says what it replaced.
+1. `./deploy.sh <tag>`: it ends with `check: all ok` and `done`, and says
+   what it replaced.
 2. `ssh root@<ip> orca-stack status`: every container up, `deployed: <tag>`
    and `before:` the tag before.
 3. The pipelines registered: `docker exec scheduler orca status` lists
@@ -1013,7 +1043,19 @@ ssh root@<ip> orca-stack register       # orca.dev.toml's pipelines
    `./deploy.sh --rollback` again to go forward; `orca-stack status` shows
    `<tag>` deployed.
 
-Then `./deploy.sh <tag>` with production's settings.
+Then promote what dev checked, from production's settings:
+
+```sh
+export HETZNER_ENV=~/.config/orca-hetzner/hetzner.env   # production's
+./promote.sh --from ~/.config/orca-hetzner/dev.env      # --dry-run first, if you like
+```
+
+`promote.sh` asks the dev stack for its last check (`orca-stack checked`)
+and refuses unless it passed on the tags dev runs now, so the tags that
+ship are the ones that were tested, never rebuilt. It then runs
+`deploy.sh` with them (`<tag>`, plus `console=<tag>` for an app on its own
+tag) and any of deploy.sh's flags given (`--no-backup`, `--timeout S`,
+`--yes`, ...). It warns when dev's check ran no canary.
 
 **Cost**: a CAX11, its IPv4 address, a 10 GB Volume and its bucket's
 storage: a few euros a month (see [Costs](#costs)). In a project of its own,

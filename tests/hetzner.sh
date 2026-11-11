@@ -61,7 +61,16 @@
 #   to its folder, and a laptop's <NAME>.local.env (or HETZNER_LOCAL_ENV)
 #   is read after it, its relative names from its own folder; the first
 #   line names both; a missing HETZNER_LOCAL_ENV, or one that sets NAME,
-#   is refused.
+#   is refused;
+# - orca-stack check: ok on a healthy stack, and FAIL naming what's wrong (a
+#   stopped container, an unhealthy UI, a scheduler-old left, a pipeline
+#   whose binary isn't in the image, none registered, a canary run that
+#   failed or didn't end in time); checked keeps the result, kind and tags;
+#   deploy.sh ends with it (hetzner.env's CANARY as --canary) and fails
+#   when it fails;
+# - promote.sh deploys the tags the dev stack checked, with the flags
+#   given, and refuses when its last check failed, was of other tags, or
+#   when --from is the target's own settings.
 set -eu
 cd "$(dirname "$0")/.."
 FAKE=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner.XXXXXX")" && pwd)
@@ -759,6 +768,111 @@ echo NAME=orca-dev >> "$FAKE/other.local.env"
 HETZNER_ENV=$shared/hetzner.env HETZNER_LOCAL_ENV=$FAKE/other.local.env sh deploy/hetzner/deploy.sh --dry-run ttt0000 > "$FAKE/out" 2>&1 \
     && fail "a local file that sets NAME"
 has "sets NAME: the stack's name belongs in $shared/hetzner.env"
+# orca-stack check: the smoke check deploy.sh ends with.
+export ORCA_STACK_CHECK_SECONDS=0
+tags=$(stack tags)
+stack check > "$FAKE/out" 2>&1 || fail "check on a healthy stack"
+has "check: ok    postgres: ready"
+has "check: ok    scheduler: img:"
+has "check: ok    ui: img:.*, healthy"
+has "check: ok    pipelines: 2 registered, each binary in the image; paused: manual1"
+has "check: all ok"
+stack checked | grep -q "^ok [0-9T:-]*Z plain $tags\$" || fail "checked: $(stack checked)"
+check_fails() { # WHY: check fails, saying WHY, and checked says failed
+    stack check "$@" > "$FAKE/out" 2>&1 && fail "check passed, though: $why_"
+    has "$why_"
+    has "check: 1 failed"
+    stack checked | grep -q '^failed ' || fail "checked after a failed check: $(stack checked)"
+}
+echo exited > "$FAKE/containers/sampler/status"
+why_="FAIL  sampler: exited"
+check_fails
+echo running > "$FAKE/containers/sampler/status"
+mkdir -p "$FAKE/health"
+echo 500 > "$FAKE/health/ui"
+why_="FAIL  ui: answered 500 on :8270/healthz"
+check_fails
+rm "$FAKE/health/ui"
+mkdir "$FAKE/containers/scheduler-old"
+echo running > "$FAKE/containers/scheduler-old/status"
+why_="FAIL  scheduler-old is still there"
+check_fails
+rm -r "$FAKE/containers/scheduler-old"
+echo /opt/orca/pipelines/toy > "$FAKE/no-binary"
+why_="FAIL  pipelines: not in the scheduler's image: toy (/opt/orca/pipelines/toy)"
+check_fails
+rm "$FAKE/no-binary"
+touch "$FAKE/unregistered"
+why_="FAIL  pipelines: none registered"
+check_fails
+rm "$FAKE/unregistered"
+# Canary runs: each started and waited for.
+: > "$FAKE/canary.log"
+stack check --canary toy=2024-01 --canary manual1=x > "$FAKE/out" 2>&1 || fail "check with canaries"
+has "check: ok    canary toy 2024-01: run 701 succeeded"
+has "check: ok    canary manual1 x: run 702 succeeded"
+[ "$(cat "$FAKE/canary.log")" = "toy 2024-01
+manual1 x" ] || fail "the canaries started: $(cat "$FAKE/canary.log")"
+stack checked | grep -q "^ok .* canary $tags\$" || fail "checked after canaries: $(stack checked)"
+mkdir -p "$FAKE/canary-status"
+echo failed > "$FAKE/canary-status/toy"
+why_="FAIL  canary toy 2024-01: run 703 failed"
+check_fails --canary toy=2024-01
+echo running > "$FAKE/canary-status/toy"
+why_="FAIL  canary toy 2024-01: run 704 still running after 0s"
+check_fails --canary toy=2024-01 --timeout 0
+rm -r "$FAKE/canary-status"
+stack check --canary toy > "$FAKE/out" 2>&1 && fail "a --canary without a key"
+has "needs PIPELINE=KEY"
+# deploy.sh ends with it, CANARY's runs as --canary; it fails when the check does.
+echo 'CANARY="toy=2024-02 manual1=y"' >> "$FAKE/hetzner.env"
+echo CANARY_TIMEOUT=60 >> "$FAKE/hetzner.env"
+sh deploy/hetzner/deploy.sh --dry-run uuu1111 > "$FAKE/out" 2>&1 || fail "a dry run with CANARY"
+has "+ ssh root@<server-ip> orca-stack check --canary toy=2024-02 --canary manual1=y --timeout 60"
+deploy uuu1111 || fail "a deploy with canaries"
+has "checking the stack (canary runs: toy=2024-02 manual1=y)"
+has "check: ok    canary manual1 y"
+has "check: all ok"
+echo /opt/orca/pipelines/manual1 > "$FAKE/no-binary"
+deploy --all uuu1111 && fail "a deploy whose check fails"
+has "uuu1111 is deployed, but the check failed (above)"
+rm "$FAKE/no-binary"
+sed -i.bak '/^CANARY/d' "$FAKE/hetzner.env"
+stack check --canary toy=2024-03 > /dev/null 2>&1 || fail "a check with a canary"
+
+# promote.sh: the tags the dev stack checked go to production (the fake
+# server is both stacks' here).
+sed 's/^NAME=orca$/NAME=orca-dev/' "$FAKE/hetzner.env" > "$FAKE/dev.env"
+promote() { sh deploy/hetzner/promote.sh "$@" > "$FAKE/out" 2>&1; }
+promote --from "$FAKE/dev.env" --dry-run || fail "promote --dry-run"
+has "deploy.sh --dry-run <dev-tag>"
+promote --from "$FAKE/dev.env" --no-backup || fail "promote"
+has "promote.sh: stack orca-dev"
+has "promote.sh: dev checked orca uuu1111, console mmm3333 at .* (canary)"
+has "promote.sh: deploy.sh --no-backup uuu1111 console=mmm3333 (settings $FAKE/hetzner.env)"
+has "deploy.sh: stack orca, settings $FAKE/hetzner.env"
+has "deploy.sh .*done: orca uuu1111, console mmm3333"
+# An app on its own tag goes along as app=tag.
+deploy uuu1111 console=vvv2222 || fail "a deploy of the console's own tag"
+promote --from "$FAKE/dev.env" || fail "promote with an app's own tag"
+has "deploy.sh uuu1111 console=vvv2222"
+# Refused: a failed check, a check of other tags, the target's own settings.
+echo /opt/orca/pipelines/toy > "$FAKE/no-binary"
+stack check > /dev/null 2>&1 || true
+rm "$FAKE/no-binary"
+promote --from "$FAKE/dev.env" && fail "promote after a failed check"
+has "the dev stack's last check failed"
+stack check > /dev/null 2>&1 || fail "check again"
+stack apply --tag www3333 > /dev/null 2>&1 || fail "an apply after the check"
+promote --from "$FAKE/dev.env" && fail "promote of tags dev hasn't checked"
+has "the dev stack runs orca www3333, console vvv2222, but its last check was of orca uuu1111, console vvv2222"
+promote --from "$FAKE/hetzner.env" && fail "promote from the target itself"
+has "promote goes from dev to another stack"
+promote --from "$FAKE/dev.env" uuu1111 && fail "promote with a tag"
+has "promote takes no tags"
+stack register > /dev/null 2>&1
+deploy uuu1111 > /dev/null 2>&1 || fail "back to uuu1111"
+unset ORCA_STACK_CHECK_SECONDS
 
 # The release tarball (deploy/hetzner/package.sh), run from where it's unpacked.
 sh deploy/hetzner/package.sh 9.8.7 "$FAKE/pkg" > "$FAKE/out" 2>&1 || fail "package.sh"
@@ -766,7 +880,7 @@ cmp -s "$FAKE/pkg/orca-hetzner-9.8.7.tar.gz" "$FAKE/pkg/orca-hetzner.tar.gz" || 
 mkdir "$FAKE/unpacked"
 (cd "$FAKE/unpacked" && gzip -dc "$FAKE/pkg/orca-hetzner.tar.gz" | tar -xf -) || fail "unpacking"
 pkg=$FAKE/unpacked/orca-hetzner-9.8.7
-for f in up.sh deploy.sh down.sh rescale.sh backup.sh lib.sh cloud-init.yaml hetzner.env.example \
+for f in up.sh deploy.sh promote.sh down.sh rescale.sh backup.sh lib.sh cloud-init.yaml hetzner.env.example \
     README.md VERSION server/orca-stack server/secret-fetch server/orca-backup.service server/orca-backup.timer; do
     [ -f "$pkg/$f" ] || fail "no $f in the tarball"
 done

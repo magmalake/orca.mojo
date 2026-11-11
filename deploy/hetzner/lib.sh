@@ -211,6 +211,16 @@ parse_common() { # sets REST to the arguments not handled here
     done
 }
 
+# check_args: orca-stack check's arguments from hetzner.env: a --canary for
+# each of CANARY's PIPELINE=KEY, and CANARY_TIMEOUT's --timeout.
+check_args() {
+    for c in ${CANARY:-}; do
+        case $c in ?*=?*) ;; *) die "CANARY: '$c' isn't PIPELINE=KEY" ;; esac
+        printf ' --canary %s' "$c"
+    done
+    [ -z "${CANARY_TIMEOUT:-}" ] || printf ' --timeout %s' "$CANARY_TIMEOUT"
+}
+
 # --- the server's settings, from hetzner.env (up.sh and deploy.sh) ---------
 
 # need_settings: what settings.env, the secret files and the stack settings

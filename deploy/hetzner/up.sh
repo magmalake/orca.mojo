@@ -126,6 +126,10 @@ if [ -n "$restore" ]; then
     remote orca-stack restore "$restore"
 fi
 remote orca-stack apply ${force:+"$force"}
+# The smoke check, as deploy.sh ends with; a new stack fails its
+# registration part until the pipelines are registered (below).
+# shellcheck disable=SC2046
+remote orca-stack check $(check_args) || echo "up: the check failed (above); on a new stack, register the pipelines and run ssh root@$IP orca-stack check" >&2
 
 cat << EOS
 

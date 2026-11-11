@@ -24,7 +24,7 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner-package.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
 dir=$tmp/$name
 mkdir -p "$dir/server"
-for f in up.sh deploy.sh down.sh rescale.sh backup.sh lib.sh cloud-init.yaml hetzner.env.example; do
+for f in up.sh deploy.sh promote.sh down.sh rescale.sh backup.sh lib.sh cloud-init.yaml hetzner.env.example; do
     cp -p "$src/$f" "$dir/$f"
 done
 for f in orca-stack secret-fetch orca-backup.service orca-backup.timer; do
@@ -42,7 +42,8 @@ The guide: https://github.com/magmalake/orca.mojo/blob/v$version/docs/hetzner.md
 cp hetzner.env.example hetzner.env   # or point HETZNER_ENV at a copy outside this directory
 ./up.sh --dry-run                    # prints every hcloud and ssh command; runs none
 ./up.sh
-./deploy.sh <orca-tag> [<app>=<tag> ...]
+./deploy.sh <orca-tag> [<app>=<tag> ...]   # ends with orca-stack check
+HETZNER_ENV=prod.env ./promote.sh --from dev.env   # what dev checked, to production
 \`\`\`
 
 Needs hcloud (with a context), ssh, jq and a POSIX sh.

@@ -66,6 +66,11 @@
 # stops if that fails, unless --no-backup. The server keeps the tags it ran
 # before (orca-stack tags --previous); --rollback applies those again, the
 # same way (docs/hetzner.md#rolling-back).
+#
+# It ends with orca-stack check (docs/hetzner.md#the-check-after-each-deploy):
+# the containers, one scheduler, the pipelines' binaries, and a canary run
+# for each of hetzner.env's CANARY; when the check fails the deploy fails,
+# with nothing undone.
 set -eu
 # shellcheck source=lib.sh
 . "$(dirname "$0")/lib.sh"
@@ -288,4 +293,11 @@ if [ "$quiesced" = 1 ]; then
     remote orca-stack resume
 fi
 remote orca-stack status
+# The smoke check (orca-stack check): containers, one scheduler, the
+# pipelines' binaries, and hetzner.env's CANARY runs. Nothing is undone when
+# it fails: it says what's wrong, and --rollback is a command away.
+log "checking the stack${CANARY:+ (canary runs: $CANARY)}"
+# shellcheck disable=SC2046
+remote orca-stack check $(check_args) \
+    || die "$to is deployed, but the check failed (above)${dump:+; backup before it: $dump}; ./deploy.sh --rollback goes back"
 log "done: $to${dump:+ (backup before it: $dump)}"
