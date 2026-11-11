@@ -1,1 +1,0 @@
-- **Release upgrade steps**: `deploy.sh` reads the new image's `upgrade.toml` (`orca upgrade`), listing the before-deploy steps first (`--confirmed id,...`) and running the after-deploy ones once the pipelines are registered. (#324)

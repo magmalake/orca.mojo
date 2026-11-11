@@ -17,7 +17,9 @@
 # As in deploy/project.Dockerfile, the binaries have line tables (-g1),
 # compressed, and the image has llvm-symbolizer, so a crash's stack dump
 # names its frames.
-FROM ghcr.io/prefix-dev/pixi:0.78.0 AS build
+# pixi's -bookworm image, not its default (Ubuntu): the build stage then
+# installs from Debian's mirrors, the same release as the runtime stage.
+FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS build
 ARG DISTA_REV=27e6e88df1b79fdc424314386a835d1d08b0db2a
 ARG K8S_REV=6cb83ce08e02234873f2d09c7501208eedb5589f
 ARG PIPELINES="examples/toy.mojo examples/fanout.mojo"

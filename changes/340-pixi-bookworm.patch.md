@@ -1,0 +1,1 @@
+- **Image build stages on Debian**: they start from `pixi:0.78.0-bookworm`, the same release as the runtime stage, instead of pixi's Ubuntu default. (#340)

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.23.0 - 2026-11-11
+
+- **Hosts over time counts self-hosted workers**: Ops › Pools' chart shows them beside EC2 and the control host. (#305)
+
+- **Internal: scheduler.mojo and state.mojo split into layered modules**: no behaviour change. (#308)
+
+- **orca.toml reads arrays of inline tables**: `[{ a = 1 }, { a = 2 }]`, for config that lists entries. (#309)
+
+- **`[pools.<name>]` in orca.toml**: a worker pool for orca to grow and shrink, recorded by `orca register`. (#310)
+
+- **A Hetzner client for worker pools**: orca.machines creates, lists and deletes a pool's servers. (#312)
+
+- **Worker pools grow and shrink themselves**: orca makes and removes `[pools.<name>]` machines as runs wait. (#313)
+
+- **One `hetzner.env` for every laptop**: relative file names in it are read from its folder, and a laptop's own `ADMIN_IP` and ssh key can go in `~/.config/orca-hetzner/<NAME>.local.env`, read after it. (#315)
+
+- **Hetzner stacks can run self-growing worker pools**: a pool token secret, and the image and login the machines use. (#316)
+
+- **Log in from the Progress card**: "Log in to queue them" comes back to the pipeline's page and tab, not to a bare fragment. (#317)
+
+- **A check after each deploy, and promote.sh**: `deploy.sh` ends with `orca-stack check` (containers, one scheduler, pipeline binaries, and `CANARY` runs on a dev stack) and fails when it fails; `promote.sh --from <dev settings>` deploys to production the tags the dev stack checked. (#318)
+
+- **Sensors and fills honour `keys_per_run`**: above 1, a sensor tops up its queued runs and batches new keys, and fill runs take `keys_per_run` partitions each; `keys_per_run` can be set in `orca.toml`. (#319)
+
+- **Hourly partitions**: `partitions=Hourly["2026-11-11T00"]` gives a pipeline a partition per hour (`Hour`, `YYYY-MM-DDTHH`), for schedules, fills, sensors, backfills and the coverage card. (#306)
+
+- **Worker pools on EC2**: `provider = "ec2"` makes instances in the pool's subnets, with Ubuntu for each type's architecture. (#321)
+
+- **Release upgrade steps**: `deploy.sh` reads the new image's `upgrade.toml` (`orca upgrade`), listing the before-deploy steps first (`--confirmed id,...`) and running the after-deploy ones once the pipelines are registered. (#324)
+
 ## 0.22.0 - 2026-11-10
 
 - **A Lean model of retries**: `formal/` holds a Lean 4 model of a step's attempts and commits with a proof that a retried step never commits twice, checked in CI and against `orca.tables.append`; nothing changes for a pipeline. (#286)

@@ -1,1 +1,0 @@
-- **Log in from the Progress card**: "Log in to queue them" comes back to the pipeline's page and tab, not to a bare fragment. (#317)
