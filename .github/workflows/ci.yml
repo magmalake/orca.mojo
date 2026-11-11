@@ -433,6 +433,13 @@ jobs:
   # warehouse and MinIO, and local mode over an S3 warehouse crashes forked
   # workers on macOS, orca #135). The nightly leg's macos-latest runs the two
   # halves of `test` in full.
+  #
+  # Also left out, to keep the job near 20 minutes (the cold build of the
+  # shared binaries is 7 of them): test-compile-fail, test-config, test-fill,
+  # test-chaos-sqlite, test-crash, test-versions, test-ec2, test-hetzner,
+  # test-pool-scale, test-pool-scale-ec2 and test-placement, which pass on a
+  # Mac, and test-ui, whose run can end before the test asks for its live
+  # attempt's facts (the 286 "stop polling" answer) on the slower runner.
   macos:
     name: macOS (m4)
     needs: [changes, release]
@@ -480,11 +487,8 @@ jobs:
             test-highlight test-step-cards test-graph test-locate test-timeline \
             test-metrics test-tasks test-store test-formal-pins test-resources \
             test-recommend test-worker-api test-state test-formal-migrate \
-            test-formal-fence test-cli test-compile-fail test-logs test-config \
-            test-fill test-remote test-chaos-sqlite test-kill test-crash \
-            test-scheduler test-ui test-chaos test-versions test-hcloud test-ec2 \
-            test-hetzner test-aws test-pool-scale test-pool-scale-ec2 \
-            test-worker-procs test-placement; do
+            test-formal-fence test-cli test-logs test-remote test-kill \
+            test-scheduler test-chaos test-hcloud test-aws test-worker-procs; do
             echo "::group::$t"
             pixi run -e default "$t"
             echo "::endgroup::"
