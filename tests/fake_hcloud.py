@@ -13,7 +13,9 @@ Stock: a create succeeds only for a type and location named in
 test can change it); any other is refused 412 `resource_unavailable`, as
 Hetzner refuses a type it's out of. A location not in hel1, nbg1, fsn1 is
 `invalid_input`. Types starting with `cax` are `arm`, the rest `x86`; the
-types are cax11..cax41, cx23..cx53, cpx12..cpx62 and ccx13..ccx63. The one
+types are cax11..cax41, cx23..cx53, cpx12..cpx62 and ccx13..ccx63. A type named in <dir>/quota (words) is
+refused 403 `resource_limit_exceeded`, as a project over its core quota is.
+The one
 firewall is `orca-lab`, id 42. Networks are made by POST /v1/networks and
 listed by name; a server attached to one shows a private address in it.
 
@@ -108,6 +110,13 @@ def _create(body):
         return _error("invalid_input", f"location {loc} not found", 400)
     if any(s["name"] == name for s in SERVERS.values()):
         return _error("uniqueness_error", "server name is already used", 409)
+    try:
+        with open(os.path.join(DIR, "quota")) as f:
+            refused = f.read().split()
+    except FileNotFoundError:
+        refused = []
+    if t in refused:
+        return _error("resource_limit_exceeded", "shared core limit exceeded", 403)
     if (t, loc) not in _stock():
         return _error("resource_unavailable", f"{t} is unavailable in {loc}", 412)
     for f in body.get("firewalls", []):

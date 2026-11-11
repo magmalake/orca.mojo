@@ -148,6 +148,18 @@ until_ 20 "the stray wasn't deleted: $(servers)" only_other
 rm -f "$dir/no-run"
 echo "ok   a stray of this stack's is deleted, another stack's left alone"
 
+# Over the project's quota for cax31: the next type, at once, saying why.
+rm -f "$dir/no-run"
+printf 'cax31 hel1\ncpx32 hel1\n' > "$dir/stock"
+echo cax31 > "$dir/quota"
+before=$(q "SELECT count(*) FROM orca.pool_machines")
+./build/orca backfill plain 2024-04 >> "$log" 2>&1 || fail "backfill 2024-04"
+until_ 30 "no machine after the quota refusal: $(status)" has_status ": cpx32 in hel1"
+has_status "cax31 refused for quota" || fail "the quota refusal isn't said: $(status)"
+is "SELECT count(*) FROM orca.pool_machines" $((before + 1)) || fail "machines: $(q "SELECT name, server_type FROM orca.pool_machines")"
+rm -f "$dir/quota"
+echo "ok   a type refused for the project's quota: the next is made at once, saying why"
+
 # /api/worker/boot only for a token the autoscaler made.
 tok=$(./build/orca worker-token create --pool t --label hand 2>> "$log") || fail "worker-token create"
 code=$(curl -s -o "$dir/boot.out" -w '%{http_code}' -X POST -H "Authorization: Bearer $tok" \
