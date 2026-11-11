@@ -1,0 +1,112 @@
+# The runtime image, ghcr.io/magmalake/orca-runtime (deploy/runtime.Dockerfile),
+# which project images build FROM (deploy/project.Dockerfile). Called by CI
+# on pull requests and main, to build and test it, and by the release
+# workflow for each release, to push it as orca-runtime:<version>. Pushing a
+# v<version> tag by hand pushes that version too (the release workflow's
+# own tag, made with its token, starts no workflow, so it calls this).
+#
+# One image per architecture, each on its own runner (no emulation), built
+# for a baseline CPU (MOJO_TARGET_CPU) and tested with tests/runtime-image.sh,
+# which also builds a scratch project's image on it. A push sends each as
+# <version>-<arch>, and `manifest` joins them under <version>.
+name: runtime image
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "The commit to build (default: the caller's)"
+        type: string
+        default: ""
+      version:
+        description: "The version to push it as (0.24.0); empty pushes nothing"
+        type: string
+        default: ""
+  push:
+    tags: ['v*']
+
+jobs:
+  image:
+    name: runtime image (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            cpu: neoverse-n1
+          - arch: amd64
+            runner: ubuntu-24.04
+            cpu: x86-64-v3
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    env:
+      GHCR_IMAGE: ghcr.io/magmalake/orca-runtime
+      VERSION: ${{ inputs.version || (github.ref_type == 'tag' && github.ref_name) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: The version
+        run: |
+          v=${VERSION#v}
+          if [ -n "$v" ]; then
+            have=$(sed -n 's/^version = "\(.*\)"$/\1/p' shelf.toml)
+            [ "$have" = "$v" ] || { echo "::error::shelf.toml says $have, not $v"; exit 1; }
+          fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+      # pixi, for the scratch project's lock (tests/runtime-image.sh).
+      - run: git config --global maintenance.auto false && git config --global gc.auto 0
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: v0.78.0
+          run-install: false
+      - name: Build the runtime image
+        run: |
+          docker build -f deploy/runtime.Dockerfile \
+            --build-arg MOJO_TARGET_CPU=${{ matrix.cpu }} --build-arg ORCA_VERSION="$VERSION" \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
+            --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
+            -t orca-runtime:ci .
+          docker image ls orca-runtime:ci --format 'size: {{.Size}}'
+      - name: Test it, and a project's image on it
+        run: sh tests/runtime-image.sh orca-runtime:ci --project ${{ matrix.cpu }}
+      - name: Log in to GHCR
+        if: env.VERSION != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push ${{ env.VERSION }}-${{ matrix.arch }}
+        if: env.VERSION != ''
+        run: |
+          docker tag orca-runtime:ci "$GHCR_IMAGE:$VERSION-${{ matrix.arch }}"
+          docker push "$GHCR_IMAGE:$VERSION-${{ matrix.arch }}"
+
+  # The version as one image for both architectures, so each host pulls its own.
+  manifest:
+    needs: image
+    if: inputs.version != '' || github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      GHCR_IMAGE: ghcr.io/magmalake/orca-runtime
+      VERSION: ${{ inputs.version || github.ref_name }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Join the architectures
+        run: |
+          v=${VERSION#v}
+          docker buildx imagetools create -t "$GHCR_IMAGE:$v" "$GHCR_IMAGE:$v-arm64" "$GHCR_IMAGE:$v-amd64"
+          docker buildx imagetools inspect "$GHCR_IMAGE:$v" | grep -E 'Platform: +linux/(arm64|amd64)'

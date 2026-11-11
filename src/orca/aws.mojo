@@ -18,8 +18,10 @@ its user already has (`aws login`, or `AWS_PROFILE` for a named profile).
 `--email`, for the Budgets alert, and makes the database's password. `push`
 builds the project's image from a staged copy of `pixi.toml`, `pixi.lock`,
 `bin/`, `pipelines/` and `src/`, with the project's `Dockerfile.orca` or
-else the template (deploy/project.Dockerfile), for arm64, tagged with the
-commit (or `--tag`) and `latest`, and pushes it to the stack's repository.
+else the template (deploy/project.Dockerfile, which builds FROM
+`ghcr.io/magmalake/orca-runtime:<the orca-mojo version in pixi.lock>`),
+for arm64, tagged with the commit (or `--tag`) and `latest`, and pushes it
+to the stack's repository.
 `register` and `app` run on the control instance through SSM: `register`
 moves the scheduler and the UI to the image (`orca-refresh`) and registers
 each pipeline, `/opt/orca/pipelines/<pipeline>`, with the flags given, as
@@ -331,6 +333,31 @@ def _git(args: String) -> String:
         return ""
 
 
+def lock_orca_version(lock: String) -> String:
+    """The orca-mojo version a project's pixi.lock resolved, which names the
+    runtime image its Dockerfile builds FROM (`orca-runtime:<version>`):
+    a source package's record (`- conda_source: orca-mojo[...] @ git+...`,
+    then its `version:` line) or a channel package's file name
+    (`- conda: .../orca-mojo-0.24.0-<build>.conda`); "" if it has neither."""
+    var in_orca = False
+    for raw in lock.split("\n"):
+        var line = String(raw)
+        if line.startswith("- "):
+            in_orca = line.startswith("- conda_source: orca-mojo[")
+            var at = line.find("/orca-mojo-")
+            if line.startswith("- conda: ") and at >= 0:
+                var rest = String(line[byte = at + 11 :])
+                var dash = rest.find("-")
+                if dash > 0:
+                    return String(rest[byte=:dash])
+            continue
+        if in_orca:
+            var t = String(raw.strip())
+            if t.startswith("version: "):
+                return String(t[byte=9:].strip())
+    return ""
+
+
 def _tag(o: _Opts) -> String:
     """The image tag: `--tag`, else the commit's first 12, else latest."""
     if o.tag:
@@ -501,15 +528,33 @@ def _push(o: _Opts) raises -> Int:
             "/; done",
         )
     )
+    # The template builds FROM the runtime image of the orca the project
+    # pins (deploy/project.Dockerfile); a Dockerfile.orca may use it too.
+    var lock: String
+    with open("pixi.lock", "r") as f:
+        lock = f.read()
+    var orca_version = lock_orca_version(lock)
     var dockerfile = String("Dockerfile.orca")
     if not exists(dockerfile):
+        if not orca_version:
+            print(
+                "orca aws push: pixi.lock has no orca-mojo, whose version"
+                " names the image the project's builds on"
+                " (ghcr.io/magmalake/orca-runtime:<version>); run pixi"
+                " install first"
+            )
+            return 2
         dockerfile = String(_DIR, "/Dockerfile")
         _write(dockerfile, PROJECT_DOCKERFILE)
+    var version_arg = String("")
+    if orca_version:
+        version_arg = String(" --build-arg ORCA_VERSION=", _q(orca_version))
     var image = String(repo, ":", tag)
     _run(
         String(
             "docker build --platform linux/arm64 -f ",
             _q(dockerfile),
+            version_arg,
             " --build-arg ORCA_SOURCE=",
             _q(_git("remote get-url origin")),
             " --build-arg ORCA_COMMIT=",

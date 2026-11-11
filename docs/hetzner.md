@@ -60,9 +60,10 @@ Cloudflare ---- tunnel ------>| cloudflared -> ui:8270, console:8080            
    (from the scripts' directory, [below](#first-setup))
    and `export HETZNER_ENV=~/.config/orca-hetzner/hetzner.env` (or put the
    export in your shell's profile).
-7. **Images**: the scheduler's image is the project's (for the census,
-   the one `orca aws push` builds from its `Dockerfile.orca`), at
-   `ghcr.io/magmalake/orca:<tag>`; see [Images](#images).
+7. **Images**: the scheduler's image is the project's, built on orca's
+   runtime image (`ghcr.io/magmalake/orca-runtime:<orca version>`) and
+   named after the project (`ORCA_IMAGE`; the census's is still
+   `ghcr.io/magmalake/orca:<tag>`); see [Images](#images).
 
 ## First setup
 
@@ -926,12 +927,46 @@ Hetzner console. The Volume has delete protection, which `--all` lifts.
 
 ## Images
 
-The scripts pull `ghcr.io/magmalake/orca:<tag>` (`ORCA_IMAGE` in
-`hetzner.env`). The orca repository's CI doesn't push images anywhere (ECR
-is only pushed by `orca aws push`, from a project's own build), so there is
-nothing to add behind a CI build here. A project publishes to GHCR from its
-own CI, tagged `<short-sha>` of the commit; there are no orca version tags
-(`ORCA_TAG=0.10.0` does not exist). The census builds and pushes only from
+The scripts pull `<ORCA_IMAGE>:<tag>`, the project's image (`ORCA_IMAGE` in
+`hetzner.env`, `ghcr.io/magmalake/orca` unless it says otherwise). Name a
+project's image after the project, `ghcr.io/magmalake/mojourney` rather
+than `ghcr.io/magmalake/orca`: it's the project's code, versioned by the
+project. The census's is still `ghcr.io/magmalake/orca`.
+
+**The runtime image.** Each orca release has
+`ghcr.io/magmalake/orca-runtime:<version>` (`0.24.0`, for linux/arm64 and
+linux/amd64; [`deploy/runtime.Dockerfile`](../deploy/runtime.Dockerfile)):
+orca's own `orca` and `orca_maintain`, git, libcurl, the CA bundles where
+libcurl, OpenSSL and flare look for them, llvm-symbolizer, and the
+`/opt/orca` layout and environment. orca's CI builds and tests it on every
+pull request and pushes it when a release is tagged. A project's image
+builds `FROM` it and adds only its own programs:
+[`deploy/project.Dockerfile`](../deploy/project.Dockerfile), the image
+`orca aws push` builds, compiles the project's `bin/*.mojo` and
+`pipelines/*.mojo` into `/opt/orca/bin` and `/opt/orca/pipelines`, with the
+libraries they link. `ORCA_VERSION` picks the runtime: the orca-mojo
+version the project pins (`orca aws push` reads it from `pixi.lock`), so
+the runtime and the pipelines are the same orca. Moving the project to a
+new orca moves its image to that release's runtime. A
+`bin/scheduler.mojo` or `bin/orca_maintain.mojo` of the project's own
+replaces the runtime's; without them the image runs the runtime's.
+
+A project with a `Dockerfile.orca` of its own (the census) can start it the
+same way:
+
+```dockerfile
+ARG ORCA_VERSION
+FROM ghcr.io/magmalake/orca-runtime:${ORCA_VERSION}
+COPY --from=build /out/bin /opt/orca/bin
+```
+
+and build it with `--build-arg ORCA_VERSION=<the orca it pins>`. A
+`Dockerfile.orca` that builds everything itself, like the census's today,
+keeps working as before.
+
+A project publishes its image to GHCR from its own CI, tagged `<short-sha>`
+of the commit (and its own version, for a release of the project); orca's
+versions name only the runtime (`ORCA_TAG=0.10.0` is not a project image). The census builds and pushes only from
 its `dev` branch (also tagged `dev`; main builds no image, and `latest` is
 no longer moved), so a release reaches `dev` first, then the dev stack, then
 production. To find a sha, read the `dev` branch's image job in the
@@ -960,11 +995,13 @@ permissions: { contents: read, packages: write }
 steps:
   - uses: docker/login-action@v3
     with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
-  - run: docker buildx build --platform linux/arm64 -f Dockerfile.orca -t ghcr.io/magmalake/orca:${{ github.ref_name }} --push .
+  - run: docker buildx build --platform linux/arm64 -f Dockerfile.orca --build-arg ORCA_VERSION=0.24.0 -t ghcr.io/magmalake/mojourney:${{ github.ref_name }} --push .
 ```
 
 The workflow's `GITHUB_TOKEN` can push to a package only if the package lets
 the repository write to it (the package's settings > Manage Actions access).
+The runtime package, `orca-runtime`, must be public for a project's build
+to pull it without a login (or the build logs in to GHCR first).
 The server needs ARM images (`linux/arm64`). A new GHCR package is private,
 and an organization may forbid public packages, so the private route is the
 default: set `GHCR_USER` and `GHCR_TOKEN_FILE` in `hetzner.env` (a token with
@@ -978,8 +1015,9 @@ CPU it runs on, so a binary built on a runner dies on the server with
 SIGILL (exit 132). The image `orca aws push` builds from
 [`deploy/project.Dockerfile`](../deploy/project.Dockerfile) passes
 `--target-cpu "$MOJO_TARGET_CPU"` (default `neoverse-n1`; N1 code runs on
-N2, V1, V2 and Graviton). A project with its own `Dockerfile.orca` must do
-the same in every `mojo build` of it:
+N2, V1, V2 and Graviton), and the runtime image's arm64 binaries are built
+for N1 too. A project with its own `Dockerfile.orca` must do the same in
+every `mojo build` of it:
 
 ```dockerfile
 ARG MOJO_TARGET_CPU=neoverse-n1

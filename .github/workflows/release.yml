@@ -1,6 +1,7 @@
 # A GitHub release for each orca version, with the Hetzner deploy tooling
 # (deploy/hetzner/package.sh) as its assets, so deploying needs no checkout
-# of orca.mojo (#247). `shelf release` merges a PR from
+# of orca.mojo (#247), and its runtime image, orca-runtime:<version>
+# (runtime-image.yml). `shelf release` merges a PR from
 # release/orca-mojo-<version>: its merge commit is tagged v<version> and
 # released. By hand (Actions > release > Run workflow, or `gh workflow run
 # release.yml -f version=0.18.0 -f ref=<sha>`) for a version released
@@ -33,6 +34,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+      runtime: ${{ steps.version.outputs.runtime }}
     env:
       GH_TOKEN: ${{ github.token }}
       WANT_VERSION: ${{ inputs.version }}
@@ -48,6 +53,7 @@ jobs:
           fetch-depth: 0
 
       - name: The version and commit
+        id: version
         run: |
           version=${WANT_VERSION:-${HEAD_REF#release/orca-mojo-}}
           version=${version#v}
@@ -60,6 +66,10 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
           echo "SHA=$sha" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          # A version from before the runtime image has none to push.
+          echo "runtime=$([ -f deploy/runtime.Dockerfile ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: The deploy tooling's tarball
         run: |
@@ -91,3 +101,18 @@ jobs:
           else
             gh release create "v$VERSION" "$@" --target "$SHA" --title "orca-mojo $VERSION" --notes-file "$notes"
           fi
+
+  # The version's runtime image, ghcr.io/magmalake/orca-runtime:<version>,
+  # which project images build FROM: built and tested at the released commit,
+  # then pushed. Its own job, after the release: a failed push can be run
+  # again (Re-run failed jobs) without touching the release.
+  runtime-image:
+    needs: release
+    if: needs.release.outputs.runtime == 'true'
+    uses: ./.github/workflows/runtime-image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      ref: ${{ needs.release.outputs.sha }}
+      version: ${{ needs.release.outputs.version }}

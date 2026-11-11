@@ -1,0 +1,18 @@
+# The workspace deploy/runtime.Dockerfile builds orca's own binaries in: a
+# project that adds this checkout of orca-mojo, as a project adds a release
+# of it (`pixi shelf add orca-mojo`), so the runtime's `orca` and
+# `orca_maintain` link the same packages a project's pipelines do. The
+# Dockerfile puts it at /src/project, next to the checkout at
+# /src/orca.mojo, the path below. No pixi.lock: orca-mojo's own
+# dependencies are pinned by revision in its pixi.toml, and a lock here
+# would go stale on every release, which changes orca-mojo's version. The
+# image keeps the lock this resolved to, at /opt/orca/share/pixi.lock.
+[workspace]
+name = "orca-runtime"
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+platforms = ["linux-64", "linux-aarch64"]
+preview = ["pixi-build"]
+
+[dependencies]
+mojo-compiler = "==1.2.0"
+orca-mojo = { path = "../orca.mojo" }

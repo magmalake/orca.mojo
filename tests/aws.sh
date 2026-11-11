@@ -62,12 +62,34 @@ echo "ok   up"
 if "$orca" aws push > ../push.out 2>&1; then fail "push without linux-aarch64"; fi
 grep -q "pixi workspace platform add linux-aarch64" ../push.out || fail "push's message: $(cat ../push.out)"
 printf '[workspace]\nplatforms = ["osx-arm64", "linux-aarch64"]\n' > pixi.toml
+# The template builds FROM orca-runtime:<the orca-mojo in pixi.lock>: none
+# there, no build.
 calls > /dev/null
+if "$orca" aws push --tag v1 > ../push.out 2>&1; then fail "push without orca-mojo in pixi.lock"; fi
+grep -q "pixi.lock has no orca-mojo" ../push.out || fail "push's lock message: $(cat ../push.out)"
+calls | grep -q "docker build" && fail "push built without a version"
+# A source package's record, as `pixi shelf add` pins one by revision.
+cat > pixi.lock << 'EOF'
+packages:
+- conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libpq-18.1-h1.conda
+  sha256: 00
+- conda_source: orca-mojo[1ff61e40] @ git+https://github.com/magmalake/orca.mojo?rev=abc#abc
+  version: 0.24.0
+  build: he8cfe8b_0
+- conda_source: other-mojo[11] @ git+https://example.com/other?rev=def#def
+  version: 9.9.9
+EOF
 "$orca" aws push --tag v1 > ../push.out 2>&1 || fail "push: $(cat ../push.out)"
 got=$(calls)
 repo=123456789012.dkr.ecr.us-east-2.amazonaws.com/orca
-echo "$got" | grep -q "docker build --platform linux/arm64 -f build/orca-aws/Dockerfile .* -t $repo:v1 -t $repo:latest build/orca-aws/context" \
+echo "$got" | grep -q "docker build --platform linux/arm64 -f build/orca-aws/Dockerfile --build-arg ORCA_VERSION=0.24.0 .* -t $repo:v1 -t $repo:latest build/orca-aws/context" \
     || fail "push's build: $got"
+grep -q '^FROM ${ORCA_RUNTIME}:${ORCA_VERSION}' build/orca-aws/Dockerfile || fail "the template isn't FROM the runtime"
+# A channel package's file name.
+printf 'packages:\n- conda: https://repo.example/linux-aarch64/orca-mojo-0.25.1-h0_0.conda\n  sha256: 00\n' > pixi.lock
+calls > /dev/null
+"$orca" aws push --tag v1 > ../push.out 2>&1 || fail "push with a channel package: $(cat ../push.out)"
+calls | grep -q "ORCA_VERSION=0.25.1 " || fail "the channel package's version"
 echo "$got" | grep -q "docker login --username AWS --password-stdin 123456789012.dkr.ecr.us-east-2.amazonaws.com" || fail "push's login: $got"
 echo "$got" | grep -q "docker push $repo:v1" && echo "$got" | grep -q "docker push $repo:latest" || fail "push's pushes: $got"
 [ -f build/orca-aws/context/bin/scheduler.mojo ] && [ -f build/orca-aws/context/pipelines/daily.mojo ] || fail "the staged context"
