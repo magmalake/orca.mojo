@@ -679,7 +679,7 @@ comptime PROJECT_DOCKERFILE: StaticString = """# The image `orca aws push` build
 # has not, so a binary built there dies on the server with SIGILL (exit
 # 132). N1 code runs on N2, V1, V2 and Graviton. Build for something else
 # with --build-arg MOJO_TARGET_CPU=<cpu>; this is for linux/arm64 images.
-FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS build
+FROM ghcr.io/prefix-dev/pixi:0.78.0 AS build
 ARG MOJO_TARGET_CPU=neoverse-n1
 ARG ORCA_SOURCE=""
 ARG ORCA_COMMIT=""
