@@ -235,6 +235,50 @@ jobs:
       # The called workflow's push steps, which only a release runs.
       packages: write
 
+  # orca's reusable workflows for a project's CI (docs/project-ci.md), each
+  # called as a project calls it, on a scratch project that adds this commit
+  # of orca-mojo (tests/example-project.sh). Nothing is pushed or released:
+  # the image is built on a runtime built from this commit, and the release
+  # only writes its notes.
+  project-image:
+    needs: [changes, release]
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
+    uses: ./.github/workflows/project-image.yml
+    permissions:
+      contents: read
+    with:
+      image: ghcr.io/magmalake/orca-example-project
+      prepare: sh tests/example-project.sh build/example-project
+      context: build/example-project
+      configs: build/example-project/orca.toml
+      orca-repository: ${{ github.repository }}
+      orca-ref: ${{ github.sha }}
+      build-runtime: true
+      smoke: docker run --rm --entrypoint toy "$IMAGE" run --partitions 2024-01
+
+  project-test:
+    needs: [changes, release]
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
+    uses: ./.github/workflows/project-test.yml
+    permissions:
+      contents: read
+    with:
+      prepare: sh tests/example-project.sh build/example-project
+      manifest-path: build/example-project/pixi.toml
+      runners: '["ubuntu-24.04"]'
+
+  project-release:
+    needs: [changes, release]
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
+    uses: ./.github/workflows/project-release.yml
+    permissions:
+      contents: read
+    with:
+      # A released version's section, which CHANGELOG.md keeps.
+      version: "0.23.0"
+      image: ghcr.io/magmalake/orca-example-project
+      dry-run: true
+
   # Every fuzz harness under fuzz/, for a short session each, with all bounds
   # checks on. Longer sessions are a FUZZ_RUNS away locally.
   fuzz:
@@ -425,7 +469,7 @@ jobs:
   # gate doesn't cover.)
   ci:
     if: ${{ always() && github.event_name != 'schedule' }}
-    needs: [release, release-check, changes, test, kind, runtime-image, fuzz, format, formal, data]
+    needs: [release, release-check, changes, test, kind, runtime-image, project-image, project-test, project-release, fuzz, format, formal, data]
     runs-on: ubuntu-latest
     steps:
       - env:

@@ -988,7 +988,9 @@ The tunnel restarts once, which drops traffic for a few seconds. The
 defaults in `lib.sh` and `orca-stack` only apply when `hetzner.env` doesn't
 set it; bump them along with the example's.
 
-For example:
+orca's reusable workflows build, check, test and push it for both
+architectures, and make a tag's release: see [A project's CI](project-ci.md).
+By hand, for example:
 
 ```yaml
 permissions: { contents: read, packages: write }
