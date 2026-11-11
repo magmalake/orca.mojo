@@ -1,1 +1,0 @@
-- **Reusable CI for projects**: a project's CI can call orca's `project-image.yml`, `project-test.yml` and `project-release.yml`, pinned to an orca tag. (#344)

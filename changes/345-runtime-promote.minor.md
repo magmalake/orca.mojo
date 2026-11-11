@@ -1,1 +1,0 @@
-- **Runtime image locked and promoted:** it installs from a committed lock, and a release tags main's tested image instead of rebuilding it. (#345)
