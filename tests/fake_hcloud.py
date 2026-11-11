@@ -20,7 +20,13 @@ Each server's user data runs as <dir>/server-<id>.sh with output in
 <dir>/server-<id>.log and SERVER_NAME (and HOSTNAME, which bash resets) set
 to its name, unless <dir>/no-run
 exists; deleting the server kills its process group. A server's address is
-127.0.0.1.
+127.0.0.1, and its ORCA_BOOT_DIR is <dir>/boot-<id> (orca.pool_boot's
+script keeps its files there rather than /etc/orca).
+
+It's a container registry too, for orca.registry: GET /token gives the
+pull token `reg-token`, and GET /v2/<repo>/manifests/<tag> with it an OCI
+index whose Linux platforms are the words of <dir>/arches ("amd64 arm64"
+without the file).
 """
 
 import http.server
@@ -112,7 +118,8 @@ def _create(body):
         with open(script, "w") as f:
             f.write(body.get("user_data", ""))
         log = open(os.path.join(DIR, f"server-{sid}.log"), "w")
-        env = dict(os.environ, HOSTNAME=name, SERVER_NAME=name)
+        env = dict(os.environ, HOSTNAME=name, SERVER_NAME=name,
+                   ORCA_BOOT_DIR=os.path.join(DIR, f"boot-{sid}"))
         proc = subprocess.Popen(["sh", script], stdout=log, stderr=log, env=env, cwd=DIR,
                                 start_new_session=True)
     SERVERS[sid] = {"name": name, "type": t, "location": loc,
@@ -152,6 +159,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         with LOCK:
             with open(os.path.join(DIR, "calls.jsonl"), "a") as f:
                 f.write(json.dumps({"method": method, "path": self.path, "body": raw}) + "\n")
+            if url.path == "/token":
+                return self._reply(200, {"token": "reg-token"})
+            m = re.fullmatch(r"/v2/(.+)/manifests/([^/]+)", url.path)
+            if m and method == "GET":
+                if self.headers.get("Authorization") != "Bearer reg-token":
+                    return self._reply(401, {"errors": [{"code": "UNAUTHORIZED"}]})
+                try:
+                    with open(os.path.join(DIR, "arches")) as f:
+                        arches = f.read().split()
+                except FileNotFoundError:
+                    arches = ["amd64", "arm64"]
+                ms = [{"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                       "digest": f"sha256:{a}", "size": 1,
+                       "platform": {"architecture": a, "os": "linux"}} for a in arches]
+                ms.append({"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                           "digest": "sha256:att", "size": 1,
+                           "platform": {"architecture": "unknown", "os": "unknown"}})
+                return self._reply(200, {"schemaVersion": 2,
+                                         "mediaType": "application/vnd.oci.image.index.v1+json",
+                                         "manifests": ms})
             if self.headers.get("Authorization") != "Bearer test-token":
                 return self._reply(*_error("unauthorized", "unable to authenticate", 401))
             path = url.path

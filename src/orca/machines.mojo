@@ -1,7 +1,7 @@
 """Machines for a worker pool, from whichever provider the pool names (#267):
 what the autoscaler (`orca.pool_scale`) calls, so it never knows which.
 
-    var p = Provider.of("hetzner")   # raises without the provider's settings
+    var p = Provider.of("hetzner", owner)   # raises without its settings
     p.arch("cax31")                  # "arm64": Docker's name, for the image
     var got = p.create(MachineSpec("orca-lab-7", "cax31", "hel1", data, "lab"))
     for m in p.machines("lab"): ...
@@ -10,8 +10,10 @@ what the autoscaler (`orca.pool_scale`) calls, so it never knows which.
 **Hetzner** (`orca.hcloud`): the token as there; a machine is a server of
 `ORCA_HCLOUD_IMAGE` (`ubuntu-24.04`), with the project's SSH keys
 `ORCA_HCLOUD_SSH_KEYS` (comma-separated names, none by default) and the
-firewall `ORCA_HCLOUD_FIREWALL` (none by default), labelled `orca=pool`
-and `orca-pool=<pool>`, which is how `machines` finds a pool's.
+firewall `ORCA_HCLOUD_FIREWALL` (none by default), labelled `orca=pool`,
+`orca-pool=<pool>` and `orca-owner=<owner>` (the stack's id, so stacks
+sharing a project keep their machines apart), which is how `machines`
+finds a pool's.
 
 **EC2** isn't here yet: `Provider.of("ec2")` raises saying so.
 
@@ -25,6 +27,7 @@ from std.os import getenv
 from orca.hcloud import Created, HCloud, ServerSpec
 
 comptime POOL_LABEL = "orca-pool"
+comptime OWNER_LABEL = "orca-owner"
 
 
 @fieldwise_init
@@ -69,24 +72,30 @@ def _list_env(name: String) -> List[String]:
 
 struct Provider(Movable):
     var kind: String
+    var owner: String
+    """The stack's id, a label on every machine; empty for none."""
     var _hcloud: Optional[HCloud]
     var image: String
     var ssh_keys: List[String]
     var firewall: String
 
-    def __init__(out self, kind: String, var hcloud: Optional[HCloud]):
+    def __init__(
+        out self, kind: String, owner: String, var hcloud: Optional[HCloud]
+    ):
         self.kind = kind
+        self.owner = owner
         self._hcloud = hcloud^
         self.image = getenv("ORCA_HCLOUD_IMAGE", "ubuntu-24.04")
         self.ssh_keys = _list_env("ORCA_HCLOUD_SSH_KEYS")
         self.firewall = getenv("ORCA_HCLOUD_FIREWALL")
 
     @staticmethod
-    def of(kind: String) raises -> Provider:
+    def of(kind: String, owner: String = "") raises -> Provider:
         """The provider `kind` (`hetzner`; `ec2` isn't here yet), from this
-        process's settings; raises without them."""
+        process's settings, its machines labelled `owner`; raises without
+        them."""
         if kind == "hetzner":
-            return Provider(kind, HCloud.from_env())
+            return Provider(kind, owner, HCloud.from_env())
         if kind == "ec2":
             raise Error("orca: pools on ec2 aren't supported yet (#267)")
         raise Error("orca: no provider ", kind)
@@ -98,6 +107,12 @@ struct Provider(Movable):
     def create(self, spec: MachineSpec) raises -> Created:
         """Makes the machine `spec` says: ok, or no stock of its type in its
         location (try again later, or elsewhere), or why not."""
+        var labels: List[Tuple[String, String]] = [
+            ("orca", "pool"),
+            (POOL_LABEL, spec.pool),
+        ]
+        if self.owner:
+            labels.append((OWNER_LABEL, self.owner))
         return self._hcloud.value().create(
             ServerSpec(
                 spec.name,
@@ -105,7 +120,7 @@ struct Provider(Movable):
                 spec.location,
                 self.image,
                 spec.user_data,
-                [("orca", "pool"), (POOL_LABEL, spec.pool)],
+                labels^,
                 self.ssh_keys.copy(),
                 self.firewall,
             )
@@ -115,7 +130,10 @@ struct Provider(Movable):
         """The provider's machines of `pool`, whatever orca.pool_machines
         says: the autoscaler deletes those it doesn't know."""
         var out = List[Machine]()
-        for s in self._hcloud.value().servers(String(POOL_LABEL, "=", pool)):
+        var selector = String(POOL_LABEL, "=", pool)
+        if self.owner:
+            selector.write(",", OWNER_LABEL, "=", self.owner)
+        for s in self._hcloud.value().servers(selector):
             out.append(
                 Machine(
                     s.id,

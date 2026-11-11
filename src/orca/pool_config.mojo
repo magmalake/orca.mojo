@@ -268,7 +268,7 @@ def read_pool(doc: TomlDoc, name: String) raises -> PoolConfig:
         machines^,
         locations^,
         _int(doc, xp, r, "max_machines", 1, MAX_MACHINES, DEFAULT_MAX_MACHINES),
-        _int(doc, ip, r, "idle_seconds", 60, 86400, DEFAULT_IDLE_SECONDS),
+        _int(doc, ip, r, "idle_seconds", 10, 86400, DEFAULT_IDLE_SECONDS),
     )
 
 

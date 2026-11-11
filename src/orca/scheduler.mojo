@@ -144,6 +144,7 @@ from postgres import (
     Params,
     Transaction,
 )
+from orca.pool_scale import PoolScaler
 from orca.expiry import (
     expirable,
     expire_argv,
@@ -311,6 +312,8 @@ struct Scheduler(Movable):
     """Set with `ORCA_RUNNER=kubernetes`."""
     var ec2: Optional[Ec2Runner]
     """Set with `ORCA_RUNNER=ec2`; with neither, runs are local processes."""
+    var pools: PoolScaler
+    """The pool autoscaler's state between passes (`orca.pool_scale`)."""
     var logs: String
     var _polled: Dict[String, Int]
     """When each sensor's binary was last asked to `sense`, on the monotonic
@@ -427,6 +430,7 @@ struct Scheduler(Movable):
         var runner = getenv("ORCA_RUNNER", "local")
         self.runner = None
         self.ec2 = None
+        self.pools = PoolScaler()
         if runner == "kubernetes":
             self.runner = KubeRunner()
         elif runner == "ec2":

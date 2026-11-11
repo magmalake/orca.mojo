@@ -477,12 +477,42 @@ idle_seconds = 900
 | `machines` | list of `{ type, wait }` | (required) | Machine types in order of preference. `wait` is how many seconds orca keeps trying a type before moving to the next; every entry but the last needs one. |
 | `locations` | list of strings | none | Where to try each type, in order (Hetzner locations; required there). |
 | `max_machines` | 1 to 100 | 1 | The most machines the pool has at once. |
-| `idle_seconds` | 60 to 86400 | 900 | How long a machine may sit idle, with nothing queued for the pool, before it's removed. |
+| `idle_seconds` | 10 to 86400 | 900 | How long a machine may sit idle, with nothing queued for the pool, before it's removed. |
 
 `orca register` with the file records its pools in `orca.pools`. A pool the
 file no longer has is deleted there, and its machines are removed once
 idle. A machine that's running is never replaced by a type higher in the
 list: the order only matters when orca adds one.
+
+The leading scheduler grows and shrinks each pool (`orca.pool_scale`):
+
+- **Grow.** While runs of the pool's pipelines have waited 20 s that a
+  worker could start (at most `max_runs` less those running, per
+  pipeline), no machine of it is still booting, and it has fewer than
+  `max_machines`, it makes one. It tries the type it's on in each location
+  in turn, keeps trying it for its `wait`, then moves to the next. It skips
+  a type whose architecture (as the provider says) the worker image has no
+  variant for. `orca.pools.status` says what the last try came to.
+- **Boot.** The machine's startup script holds only a worker token of its
+  own. With it, the machine asks the UI's `/api/worker/boot` for the image,
+  the login to pull it and the bucket's variables, then runs
+  `orca worker` in Docker with run cgroups.
+- **Shrink.** A machine idle for `idle_seconds` with nothing waiting is
+  removed: its token revoked, then the machine deleted. So is one whose
+  worker never shows up (15 min) or goes silent (5 min), whose runs are
+  queued again, and a machine with the pool's and this stack's labels that
+  orca doesn't know.
+
+What the scheduler and the UI need, in their environment:
+
+| Variable | |
+|---|---|
+| `ORCA_HCLOUD_TOKEN`, or `ORCA_HCLOUD_TOKEN_SECRET` | Hetzner's API token (scheduler), or the secret that holds it. |
+| `ORCA_HCLOUD_FIREWALL`, `ORCA_HCLOUD_SSH_KEYS`, `ORCA_HCLOUD_IMAGE` | The firewall and SSH keys (names) to give each machine, and its OS image (`ubuntu-24.04`). |
+| `ORCA_WORKER_IMAGE` | The image the machines run, the server's own (scheduler and UI). |
+| `ORCA_UI_URL` (or `ORCA_POOL_REMOTE`) | Where machines reach the UI. |
+| `ORCA_REGISTRY_USER`, `ORCA_REGISTRY_TOKEN_SECRET` | The login to pull a private image: the UI hands it to a booting machine, and the scheduler reads the image's architectures with it. |
+| `ORCA_POOL_SCALE_SECONDS` (15), `ORCA_POOL_GROW_AFTER` (20), `ORCA_POOL_TRY_SECONDS` (60), `ORCA_POOL_BOOT_SECONDS` (900), `ORCA_POOL_LOST_SECONDS` (300), `ORCA_POOL_IMAGE_SECONDS` (600) | How often it looks, how long runs wait before it grows, between tries, for a machine to join, for a worker gone silent, and between reads of the image's architectures. |
 
 ## Fills
 

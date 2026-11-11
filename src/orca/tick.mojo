@@ -2,6 +2,7 @@
 second): what each registered pipeline is due, started.
 """
 
+from std.time import perf_counter_ns
 from std.os import remove
 from postgres import Params
 from orca.alerts import failed_runs
@@ -128,6 +129,13 @@ def tick(mut self: Scheduler, now: Int64) raises:
                 print("deleted", n, "objects of runs that ended")
         except e:
             print("orca: can't sweep run clusters:", e)
+    # Worker pools orca grows and shrinks (orca.pool_scale), every
+    # ORCA_POOL_SCALE_SECONDS.
+    if self.pools.due(Float64(perf_counter_ns()) / 1e9):
+        try:
+            self.pools.scale(self.db)
+        except e:
+            print("orca: can't scale worker pools:", e)
     if self.ec2:
         try:
             var n = self.ec2.value().sweep(self.db)

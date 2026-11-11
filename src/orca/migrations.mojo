@@ -789,6 +789,20 @@ def _migrations() -> List[List[String]]:
                 " WHERE ended IS NULL"
             ),
         ],
+        # The pool autoscaler (#267, orca.pool_scale): which machine type a
+        # pool is trying and since when, its last attempt and what that came
+        # to; and this stack's id, the label that marks its machines.
+        # Additive.
+        [
+            (
+                "ALTER TABLE orca.pools ADD COLUMN trying integer NOT NULL"
+                " DEFAULT 0"
+            ),
+            "ALTER TABLE orca.pools ADD COLUMN trying_since timestamptz",
+            "ALTER TABLE orca.pools ADD COLUMN last_try timestamptz",
+            "ALTER TABLE orca.pools ADD COLUMN status text",
+            "CREATE TABLE orca.stack_identity (id text PRIMARY KEY)",
+        ],
     ]
 
 
