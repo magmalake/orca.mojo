@@ -260,6 +260,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " '') AS placement, coalesce(env::text, '') AS env, coalesce(fills,"
             " '') AS fill_mode, coalesce(fill_order, '') AS fill_order,"
             " coalesce(fill_max_runs, 0) AS fill_max_runs,"
+            " coalesce(fill_max_runs_auto, false) AS fill_max_runs_auto,"
             " coalesce(fill_budget_per_day, -1) AS fill_budget,"
             " coalesce(fill_window, '') AS fill_window, coalesce(fill_lag, '')"
             " AS fill_lag, coalesce(cpus, '') AS cpus, coalesce(memory_gb, '')"
@@ -320,6 +321,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                     r.float64("fill_budget"),
                     r.text("fill_window"),
                     r.text("fill_lag"),
+                    r.bool("fill_max_runs_auto"),
                 ),
                 r.text("cpus"),
                 r.text("memory_gb"),

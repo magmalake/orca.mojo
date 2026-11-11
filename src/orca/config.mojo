@@ -59,6 +59,8 @@ from orca.fill import (
     lag_text,
     parse_fill_budget,
     parse_fill_lag,
+    fill_max_runs_auto,
+    fill_max_runs_text,
     parse_fill_max_runs,
     parse_fill_order,
     parse_fill_window,
@@ -275,7 +277,9 @@ def _canonical(key: String, text: String) raises -> String:
     if key == "fill_order":
         return parse_fill_order(text)
     if key == "fill_max_runs":
-        return String(parse_fill_max_runs(text))
+        return fill_max_runs_text(
+            parse_fill_max_runs(text), fill_max_runs_auto(text)
+        )
     if key == "fill_budget_per_day":
         return String(parse_fill_budget(text))
     if key == "fill_window":
@@ -304,6 +308,10 @@ def _canonical_toml(key: String, v: TomlValue) raises -> String:
     if key == "learn":
         if v.kind != BOOLEAN:
             raise Error("is true or false, not ", v.kind)
+        return _canonical(key, v.text)
+    if key == "fill_max_runs" and v.kind == STRING:
+        if not fill_max_runs_auto(v.text):
+            raise Error('is a count, "auto" or "auto..N", not ', v.text)
         return _canonical(key, v.text)
     if key == "fill_max_runs" or key == "keys_per_run":
         if v.kind != INTEGER:

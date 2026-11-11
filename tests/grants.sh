@@ -287,6 +287,33 @@ stop_sched
 ./build/orca register --config build/grants.toml ./build/plain >> "$log" 2>&1 || fail "register plain back"
 echo "ok   with no request to weigh, max_runs = \"auto\" starts one run at a time"
 
+# fill_max_runs = "auto" (#322): fill runs too, as many as fit.
+cat > build/grants-fill.toml << 'EOF'
+[pipelines.narrow]
+memory_gb = 2
+fills = "all"
+fill_max_runs = "auto"
+EOF
+./build/orca register --config build/grants-fill.toml ./build/narrow >> "$log" 2>&1 || fail "register narrow with fills"
+is "SELECT fill_max_runs || ' ' || fill_max_runs_auto FROM orca.pipelines WHERE name = 'narrow'" "64 true" \
+    || fail "narrow's fill_max_runs: $(q "SELECT fill_max_runs, fill_max_runs_auto FROM orca.pipelines WHERE name = 'narrow'")"
+./build/orca config show narrow 2>&1 | grep -qE '^  fill_max_runs +auto ' || fail "config show: $(./build/orca config show narrow 2>&1)"
+start_sched
+most=0
+i=0
+until [ "$(q "SELECT count(*) FROM orca.runs WHERE pipeline = 'narrow' AND trigger = 'fill' AND status = 'succeeded'")" -ge 8 ]; do
+    i=$((i + 1)); [ "$i" -lt 900 ] || fail "fill runs didn't run: $(q "SELECT status, count(*) FROM orca.runs WHERE trigger = 'fill' GROUP BY 1")"
+    n=$(q "SELECT count(*) FROM orca.runs WHERE pipeline = 'narrow' AND trigger = 'fill' AND status = 'running'")
+    [ "$n" -le "$most" ] || most=$n
+    sleep 0.1
+done
+stop_sched
+q "UPDATE orca.runs SET status = 'cancelled', ended = now() WHERE trigger = 'fill' AND status IN ('queued', 'running')" > /dev/null
+q "UPDATE orca.pipelines SET fills = NULL WHERE name = 'narrow'" > /dev/null
+[ "$most" -eq 4 ] || fail "$most of narrow's 2 GB fill runs ran at once in 8 GB, not 4"
+./build/orca register --config build/grants.toml ./build/narrow >> "$log" 2>&1 || fail "register narrow back"
+echo "ok   fill_max_runs = \"auto\" runs as many fill runs at once as fit (4 of 2 GB in 8 GB)"
+
 # On a remote worker, against its own host.
 export ORCA_HOST_MEMORY_MB=8192
 ./build/orca register --config build/grants.toml --placement worker:g ./build/wide >> "$log" 2>&1 || fail "register wide on a worker"

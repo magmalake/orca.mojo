@@ -1,0 +1,1 @@
+- **`fill_max_runs = "auto"`**: fill runs go as many at once as the host has room for, up to a ceiling. (#PR)
