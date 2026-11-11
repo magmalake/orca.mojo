@@ -23,7 +23,7 @@ autoscaler makes one, at most once every `ORCA_POOL_TRY_SECONDS` (60):
   no wait and is tried for as long as there's demand;
 - once one is made, or the demand goes, it starts again from the first.
 
-The machine is named `orca-<pool>-<n>`, labelled with the pool and this
+The machine is named `orca-pool-<pool>-<n>`, labelled with the pool and this
 stack's id (`orca.stack_identity`, so a project several stacks share keeps
 them apart), and booted as a worker (`orca.pool_boot`) with a token of its
 own. `orca.pools.status` says what the last attempt came to.
@@ -573,7 +573,8 @@ struct PoolScaler(Movable):
             .row(0)
             .int64("id")
         )
-        var name = String("orca-", pool.replace("_", "-"), "-", id)
+        # orca-pool-<pool>-<n>: plainly a pool's, beside the stack's own.
+        var name = String("orca-pool-", pool.replace("_", "-"), "-", id)
         var issued = create_worker_token(
             db, pool, name, 30, String(CREATED_BY, pool)
         )

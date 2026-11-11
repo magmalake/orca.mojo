@@ -108,7 +108,12 @@ echo "ok   a type the image has no variant for is skipped, saying so"
 
 # Both architectures: cax31 for its 3 s, then cpx32, in hel1.
 echo "amd64 arm64" > "$dir/arches"
-until_ 30 "no cpx32 made: $(status)" has_status "made orca-t-"
+until_ 30 "no cpx32 made: $(status)" has_status "made orca-pool-t-"
+# Ops > Pools shows the pool: its types, its machine, the last try.
+curl -fsS "$base/ops/pools" | grep -q 'id="autoscaled"' || fail "no Autoscaled pools card on Ops > Pools"
+curl -fsS -H 'Accept: application/json' "$base/api/pools" > "$dir/pools.json" || fail "GET /api/pools"
+jq -e '.autoscaled | length == 1 and .[0].name == "t" and .[0].provider == "hetzner" and .[0].live == 1 and .[0].max_machines == 2 and (.[0].machines | map(.type)) == ["cax31", "cpx32"] and .[0].machines[0].wait == 3 and (.[0].status | test("made orca-pool-t-"))' "$dir/pools.json" > /dev/null \
+    || fail "the autoscaled pools JSON: $(jq -c .autoscaled "$dir/pools.json")"
 has_status ": cpx32 in hel1" || fail "made the wrong one: $(status)"
 is "SELECT server_type || ' ' || arch || ' ' || location FROM orca.pool_machines" "cpx32 amd64 hel1" \
     || fail "the machine: $(q "SELECT server_type, arch, location FROM orca.pool_machines")"
