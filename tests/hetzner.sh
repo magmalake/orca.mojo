@@ -368,18 +368,19 @@ all_secrets='{"s3.env": "AWS_ACCESS_KEY_ID=x4\nAWS_SECRET_ACCESS_KEY=onefile55\n
  "secrets/orca/github-token": "ghp_gh77\n\n",
  "secrets/orca/ntfy-topic": "topic88",
  "secrets/orca/ntfy-token": "tk_ntfy99",
- "ghcr-token": "ghcr11"}'
+ "ghcr-token": "ghcr11",
+ "secrets/orca/hcloud-token": "hc_pool12"}'
 secrets_file "$all_secrets"
 sed -i.bak '/^S3_CREDENTIALS_FILE=/d; /^TUNNEL_TOKEN_FILE=/d' "$FAKE/hetzner.env"
 echo "SECRETS_FILE=$FAKE/secrets.sops.yaml" >> "$FAKE/hetzner.env"
 secret_files() { cat "$ORCA_CONF/settings.env" "$ORCA_CONF/s3.env" "$ORCA_CONF/tunnel.env" 2> /dev/null | cksum; }
-values='onefile55\|tunnel66\|ghp_gh77\|topic88\|tk_ntfy99\|ghcr11'
+values='onefile55\|tunnel66\|ghp_gh77\|topic88\|tk_ntfy99\|ghcr11\|hc_pool12'
 : > "$FAKE/sops.calls"
 before=$(secret_files)
 sh deploy/hetzner/deploy.sh --dry-run eee5555 > "$FAKE/out" 2>&1 || fail "a dry run with SECRETS_FILE"
-has "# a dry run doesn't decrypt $FAKE/secrets.sops.yaml: it assumes it has s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token$"
+has "# a dry run doesn't decrypt $FAKE/secrets.sops.yaml: it assumes it has s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token secrets/orca/hcloud-token$"
 has "^  + sops -d $FAKE/secrets.sops.yaml (once)$"
-for n in s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token; do
+for n in s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token secrets/orca/hcloud-token; do
     has "^  | ssh root@<server-ip> orca-stack sync $n$"
 done
 has "# settings.env from .*ORCA_NOTIFY_SECRET ORCA_NOTIFY_TOKEN_SECRET"
@@ -392,6 +393,13 @@ grep -q "$values" "$FAKE/out" && fail "a SECRETS_FILE value was printed"
 has "  orca-stack: s3.env: changed$"
 has "  orca-stack: secrets/orca/ntfy-topic: new$"
 has "  orca-stack: ghcr-token: new$"
+has "  orca-stack: secrets/orca/hcloud-token: new$"
+# Worker pools (orca #267): the Hetzner token's id, the stack's firewall and
+# key, and the registry login's id, in settings.env; the worker image in
+# orca.env; ghcr-token among the secrets for orca.
+grep -qx "ORCA_HCLOUD_TOKEN_SECRET=orca/hcloud-token" "$ORCA_CONF/settings.env" || fail "no ORCA_HCLOUD_TOKEN_SECRET"
+grep -q "^ORCA_HCLOUD_FIREWALL=." "$ORCA_CONF/settings.env" || fail "no ORCA_HCLOUD_FIREWALL"
+grep -q "^ORCA_HCLOUD_SSH_KEYS=." "$ORCA_CONF/settings.env" || fail "no ORCA_HCLOUD_SSH_KEYS"
 same() { # NAME CONTENT
     printf '%s\n' "$2" | cmp -s - "$ORCA_CONF/$1" || fail "/etc/orca/$1 isn't SECRETS_FILE's value"
     [ "$(mode "$ORCA_CONF/$1")" = -rw------- ] || fail "$1 is $(mode "$ORCA_CONF/$1")"

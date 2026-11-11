@@ -197,7 +197,7 @@ cmd_configure() {
 
 # The files sync may write (in $CONF): settings.env and the secret files
 # up.sh and deploy.sh send.
-SYNC_FILES="settings.env s3.env tunnel.env ghcr-token secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token"
+SYNC_FILES="settings.env s3.env tunnel.env ghcr-token secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token secrets/orca/hcloud-token"
 
 # key_changes OLD NEW: "added A, B; removed C; changed D" between two
 # KEY=VALUE files (the last line of a key counts, as docker's --env-file
@@ -304,6 +304,8 @@ ORCA_UI_LOGIN=required
 ORCA_UI_SECURE_COOKIES=1
 ORCA_UI_TRUST_PROXY=1
 EOS
+        # What machines of a worker pool run: the server's own image.
+        echo "ORCA_WORKER_IMAGE=$image:$tag"
         # Off unless OVERLAP=1: the old way, one scheduler at a time.
         [ "$(conf_get OVERLAP)" != 1 ] || echo ORCA_OVERLAP=on
     } > "$1/orca.env"
@@ -325,6 +327,10 @@ pull() { # IMAGE: fatal on failure (a trial run may use an image it has)
 login() {
     if [ -n "$(conf_get GHCR_USER)" ] && [ -f "$CONF/ghcr-token" ]; then
         docker login ghcr.io -u "$(conf_get GHCR_USER)" --password-stdin < "$CONF/ghcr-token" > /dev/null
+        # For orca too (ORCA_REGISTRY_TOKEN_SECRET=orca/ghcr-token): a worker
+        # pool's booting machine pulls the image with it.
+        mkdir -p "$CONF/secrets/orca"
+        install -m 600 "$CONF/ghcr-token" "$CONF/secrets/orca/ghcr-token"
     fi
 }
 

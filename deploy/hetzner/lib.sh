@@ -203,7 +203,7 @@ need_settings() {
 # Its top-level keys are these, the files' names under /etc/orca, and each
 # value is the file's content (a string). One decrypt per run: a Secure
 # Enclave age key (age-plugin-se) asks for Touch ID once, not per file.
-SECRET_NAMES="s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token"
+SECRET_NAMES="s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token secrets/orca/hcloud-token"
 SECRETS_JSON=
 SECRETS_KEYS=
 SECRETS_LOADED=0
@@ -217,6 +217,7 @@ secret_var() {
         secrets/orca/ntfy-topic) echo NTFY_TOPIC_FILE ;;
         secrets/orca/ntfy-token) echo NTFY_TOKEN_FILE ;;
         ghcr-token) echo GHCR_TOKEN_FILE ;;
+        secrets/orca/hcloud-token) echo HCLOUD_POOL_TOKEN_FILE ;;
     esac
 }
 
@@ -316,7 +317,23 @@ write_settings() {
             echo "ORCA_NOTIFY_SECRET=orca/ntfy-topic"
             [ -z "${NTFY_URL:-}" ] || echo "ORCA_NOTIFY_URL=$NTFY_URL"
             ! has_secret secrets/orca/ntfy-token || echo "ORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token"
-            [ -z "${UI_URL:-}" ] || echo "ORCA_UI_URL=$UI_URL"
+        fi
+        # Where links point, and where pool machines reach the UI.
+        [ -z "${UI_URL:-}" ] || echo "ORCA_UI_URL=$UI_URL"
+        # Worker pools orca grows itself ([pools.<name>], orca #267): the
+        # Hetzner token is a secret file, only its id is here; the machines
+        # get the stack's firewall and SSH key unless POOL_FIREWALL and
+        # POOL_SSH_KEYS say otherwise. The registry login lets a booting
+        # machine pull the image (orca-stack copies ghcr-token among the
+        # secrets for it).
+        if has_secret secrets/orca/hcloud-token; then
+            echo "ORCA_HCLOUD_TOKEN_SECRET=orca/hcloud-token"
+            echo "ORCA_HCLOUD_FIREWALL=${POOL_FIREWALL:-$NAME}"
+            echo "ORCA_HCLOUD_SSH_KEYS=${POOL_SSH_KEYS:-$NAME}"
+        fi
+        if [ -n "${GHCR_USER:-}" ] && has_secret ghcr-token; then
+            echo "ORCA_REGISTRY_USER=$GHCR_USER"
+            echo "ORCA_REGISTRY_TOKEN_SECRET=orca/ghcr-token"
         fi
         [ -z "${FIXED_COST:-}" ] || echo "ORCA_FIXED_COST=$FIXED_COST"
         [ -z "${POSTHOG_KEY:-}" ] || echo "ORCA_POSTHOG_KEY=$POSTHOG_KEY"
