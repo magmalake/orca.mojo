@@ -1,0 +1,1 @@
+- **A Hetzner client for worker pools**: orca.machines creates, lists and deletes a pool's servers. (#312)
