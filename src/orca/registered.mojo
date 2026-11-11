@@ -238,13 +238,14 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " kind, coalesce(describe->'partitions'->>'start', '') AS start,"
             " coalesce(max_runs, (describe->>'max_runs')::bigint, 1) AS"
             " max_runs, coalesce(max_runs_auto, false) AS max_runs_auto,"
-            " coalesce((describe->>'run_retries')::bigint, 3) AS"
-            " run_retries, coalesce((describe->>'retry_seconds')::bigint, 0) AS"
+            " coalesce((describe->>'run_retries')::bigint, 3) AS run_retries,"
+            " coalesce((describe->>'retry_seconds')::bigint, 0) AS"
             " retry_seconds, coalesce((describe->>'max_retry_seconds')::bigint,"
             " 0) AS max_retry_seconds, coalesce((describe->>'sensor')::boolean,"
-            " false) AS sensor, coalesce((describe->>'keys_per_run')::bigint,"
-            " 1) AS keys_per_run, coalesce(describe->'partitions'->>'dataset',"
-            " '') AS keys_dataset, coalesce(image, '') AS image, CASE WHEN"
+            " false) AS sensor, coalesce(keys_per_run,"
+            " (describe->>'keys_per_run')::bigint, 1) AS keys_per_run,"
+            " coalesce(describe->'partitions'->>'dataset', '') AS keys_dataset,"
+            " coalesce(image, '') AS image, CASE WHEN"
             " jsonb_array_length(coalesce(describe->'tasks', '[]')) > 0 THEN"
             " coalesce(ec2_workers, (describe->>'workers')::bigint, 2) ELSE 0"
             " END AS workers, coalesce(head_type, '') AS head_type,"
@@ -258,24 +259,22 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
             " coalesce(fill_budget_per_day, -1) AS fill_budget,"
             " coalesce(fill_window, '') AS fill_window, coalesce(fill_lag, '')"
             " AS fill_lag, coalesce(cpus, '') AS cpus, coalesce(memory_gb, '')"
-            " AS memory_gb,"
-            " coalesce(memory_raised_mb, 0) AS memory_raised_mb,"
+            " AS memory_gb, coalesce(memory_raised_mb, 0) AS memory_raised_mb,"
             " coalesce(learn, true) AS learn, CASE WHEN cpus LIKE 'auto%' OR"
             " memory_gb LIKE 'auto%' THEN concat_ws('/', coalesce((SELECT"
             " r.id::text || CASE WHEN EXISTS (SELECT 1 FROM orca.steps s JOIN"
             " orca.attempts a ON a.step = s.id WHERE s.run = r.id AND"
-            " a.peak_rss_bytes IS NOT NULL) THEN 'm' ELSE '' END FROM"
-            " orca.runs r WHERE r.pipeline = orca.pipelines.name AND r.status"
-            " = 'succeeded' ORDER BY r.id DESC LIMIT 1), ''),"
+            " a.peak_rss_bytes IS NOT NULL) THEN 'm' ELSE '' END FROM orca.runs"
+            " r WHERE r.pipeline = orca.pipelines.name AND r.status ="
+            " 'succeeded' ORDER BY r.id DESC LIMIT 1), ''),"
             " coalesce(memory_raised_mb, 0), coalesce(cpus, ''),"
             " coalesce(memory_gb, '')) ELSE '' END AS learn_key,"
             " coalesce(learned->>'key', '') AS learned_key,"
             " coalesce((learned->>'runs')::bigint, 0) AS learned_runs,"
             " coalesce((learned->>'memory_mb')::bigint, 0) AS"
             " learned_memory_mb, coalesce((learned->>'cpus')::bigint, 0) AS"
-            " learned_cpus FROM orca.pipelines"
-            " WHERE binary_path IS NOT NULL AND ($1 = '' OR name = $1) ORDER BY"
-            " name"
+            " learned_cpus FROM orca.pipelines WHERE binary_path IS NOT NULL"
+            " AND ($1 = '' OR name = $1) ORDER BY name"
         ),
         Params().text(only),
     )
@@ -379,4 +378,5 @@ def fill_pipeline(
         p.worker_type,
         p.workers,
         pool,
+        p.keys_per_run,
     )

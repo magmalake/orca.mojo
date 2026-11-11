@@ -75,7 +75,9 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   tick and from `<binary> sense` every `ORCA_SENSE_SECONDS` (asked in a
   child the next ticks check on, killed after `ORCA_BINARY_SECONDS`), and
   queues a
-  run, trigger `sensor`, for those it hasn't seen. A keyed sensor's keys
+  run, trigger `sensor`, for those it hasn't seen; with `keys_per_run`
+  above 1 the keys go first to its queued sensor runs that haven't
+  started, up to that, then to new runs of that many (#240). A keyed sensor's keys
   dataset is sensed too: a new snapshot of it queues the keys that aren't
   done, in runs of `keys_per_run`. Each rebuild queues its
   next level once the one before has succeeded.
@@ -87,7 +89,7 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   shows, and printed once rather than on every tick.
 - **Fills** (`orca.fill`). A pipeline registered with `fills = "all"` in
   orca.toml has a second pass after its other runs': runs with trigger
-  `fill`, one partition each, over the partitions of its range no run has
+  `fill`, `keys_per_run` partitions each, over the partitions of its range no run has
   taken (`fill_status`), up to `fill_max_runs` beside `max_runs`, none
   while its other runs are queued, it's paused, outside `fill_window` or
   over `fill_budget_per_day`.

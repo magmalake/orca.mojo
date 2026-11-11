@@ -84,7 +84,8 @@ struct Pipeline[
     `schedule` for the partition its fires `fills` (`orca.schedule`), and,
     with `sensor`, when a dataset it reads gets a new snapshot
     (`orca.sensors`). A backfill puts `keys_per_run` keys in each run it
-    queues: one for time keys by default, tens to hundreds for keyed
+    queues, and so do a fill and, above 1, a sensor (#240; orca.toml's
+    `keys_per_run` overrides it): one for time keys by default, tens to hundreds for keyed
     partitions (`orca.keyed`), whose runs then each go through many keys.
     On Kubernetes, a run of a pipeline with `tasks` gets a cluster of
     `workers` dista workers (`orca.kube`); locally it forks `ORCA_WORKERS`.

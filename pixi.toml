@@ -310,6 +310,8 @@ test-commits = { cmd = "tests/concurrent_commits.sh" }
 # Snapshot expiry: orca expire, orca_maintain and the scheduler's sweep.
 test-expire = { cmd = "scripts/with-postgres.sh tests/expire.sh" }
 test-sensors = { cmd = "scripts/with-postgres.sh tests/sensors.sh" }
+# keys_per_run for sensors and fills (#240), over tests/sensors.
+test-keys-per-run = { cmd = "scripts/with-postgres.sh tests/keys_per_run.sh" }
 # The same two over MinIO: the warehouse and logs in object storage.
 test-lineage-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/lineage.sh" }
 test-sensors-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/sensors.sh" }
@@ -324,7 +326,7 @@ test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh" }
 test-worker = { cmd = "scripts/with-postgres.sh tests/worker.sh" }
 # CI runs these three groups on runners of their own; test-data is all three.
 test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-replace", "test-replace-concurrent", "test-formal-retry", "test-run-token", "test-chaos-tables", "test-lineage", "test-commits", "test-expire", "test-taxi"] }
-test-data-sensors = { depends-on = ["build-shared", "test-sensors", "test-lineage-s3", "test-sensors-s3", "test-sample-s3", "test-worker"] }
+test-data-sensors = { depends-on = ["build-shared", "test-sensors", "test-keys-per-run", "test-lineage-s3", "test-sensors-s3", "test-sample-s3", "test-worker"] }
 test-data-keyed = { depends-on = ["build-shared", "test-keyed", "test-keyed-backfills", "test-keyed-sensor", "test-keyed-names"] }
 test-data = { depends-on = ["test-data-tables", "test-data-sensors", "test-data-keyed"] }
 taxi = { cmd = "scripts/mojo-build.sh -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi" }

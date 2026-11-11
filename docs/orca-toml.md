@@ -65,6 +65,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 | `fills` | string: `"all"` or `"since_registration"` | `since_registration` | none | `all`: the scheduler fills the pipeline's whole range by itself. See [Fills](#fills). |
 | `fill_order` | string: `"oldest"` or `"newest"` | `oldest` | none | Which end of the range fills first. |
 | `fill_max_runs` | integer from 1 to 10000 | 1 | none | Fill runs at once, on top of `max_runs`. |
+| `keys_per_run` | integer from 1 to 10000 | the code's `Pipeline[..., keys_per_run=]`, else 1 | none | Keys a run takes: a backfill's runs, a sensor's runs above 1, and fill runs. See [Keys per run](#keys-per-run). |
 | `fill_budget_per_day` | number from 0 to 100000, US dollars | none | none | Estimated spend of fill runs a UTC day. Fill runs on EC2 or Kubernetes don't start without it. |
 | `fill_window` | string `"A..B"`, UTC hours: A from 0 to 23, B from 1 to 24 | `"0..24"`, all day | none | Fill runs start from hour A up to hour B. `"22..6"` wraps past midnight. |
 | `fill_lag` | string, a duration: a whole number of `s`, `m`, `h` or `d`, up to `31d`; or `0` | `0`, none | none | How long after its end a partition is filled. See [The lag](#the-lag). |
@@ -89,7 +90,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 Each refusal names the file and line, and nothing is registered:
 
 ```text
-orca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, cpus, memory_gb, learn, fills, fill_order, fill_max_runs, fill_budget_per_day, fill_window, fill_lag, secrets and env)
+orca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, keys_per_run, cpus, memory_gb, learn, fills, fill_order, fill_max_runs, fill_budget_per_day, fill_window, fill_lag, secrets and env)
 orca.toml:3: [pipelines.toy] workers: not a count or a range MIN..MAX: 4..2
 ```
 
@@ -391,6 +392,7 @@ gharchive  registered from orca.toml @ 3f2a9c1d0b7e, sha256 b0e8af31ea3e
   workers                 0..8        flag --workers
   worker_procs            1           orca.toml [pipelines.gharchive]
   max_runs                2           orca.toml [pipelines.gharchive]
+  keys_per_run            1           code default (the pipeline's keys_per_run)
   image                   …/orca:3f2a9c1  flag --image
   env.GHARCHIVE_PARALLEL  16          orca.toml [pipelines.gharchive]
   env.DISTA_WORKER_SLOTS  4           orca.toml [pipelines.gharchive]
@@ -514,6 +516,29 @@ What the scheduler and the UI need, in their environment:
 | `ORCA_REGISTRY_USER`, `ORCA_REGISTRY_TOKEN_SECRET` | The login to pull a private image: the UI hands it to a booting machine, and the scheduler reads the image's architectures with it. |
 | `ORCA_POOL_SCALE_SECONDS` (15), `ORCA_POOL_GROW_AFTER` (20), `ORCA_POOL_TRY_SECONDS` (60), `ORCA_POOL_BOOT_SECONDS` (900), `ORCA_POOL_LOST_SECONDS` (300), `ORCA_POOL_IMAGE_SECONDS` (600) | How often it looks, how long runs wait before it grows, between tries, for a machine to join, for a worker gone silent, and between reads of the image's architectures. |
 
+
+## Keys per run
+
+`keys_per_run` is how many keys one run takes (#240). The code sets it
+(`Pipeline[..., keys_per_run=N]`, default 1); orca.toml overrides it, so a
+deployment sizes it without a rebuild. A run's fixed cost (a worker claiming
+it, a dista cluster, loading tables, a replace commit) is then paid once per
+batch, not per key.
+
+- **A backfill** queues runs of up to `keys_per_run` of the keys it takes.
+- **A fill run** takes up to `keys_per_run` partitions, in `fill_order`.
+  `fill_max_runs` still caps the runs.
+- **A sensor**, above 1: the keys of new snapshots go first to its sensor
+  runs that are queued and haven't started, up to `keys_per_run` each,
+  oldest first, then to new runs of up to `keys_per_run`, in key order. A
+  catch-up behind an upstream that commits one day a run so makes a run per
+  `keys_per_run` days instead of one per day, while a new day in steady
+  state is still one run of one key. At 1, the default, a sensor queues one
+  run over everything one tick sensed, as before.
+
+A run over many keys fails as a whole when one key fails, and its retry
+resumes with the steps already done skipped.
+
 ## Fills
 
 With `fills = "all"` a pipeline fills its whole range by itself, within limits (#155, `src/orca/fill.mojo`). People change the limits; nobody has to drive a long backfill by hand.
@@ -525,7 +550,7 @@ The default, `fills = "since_registration"`, is what orca did before. A schedule
 On every tick, after a pipeline's other runs have started, the scheduler queues and starts fill runs for it:
 
 - **The range** is the pipeline's first partition through the last one that has ended on its schedule's wall clock (UTC without a schedule), at least `fill_lag` ago: yesterday for a daily pipeline, last month for a monthly one. The partition still going is the schedule's. See [The lag](#the-lag).
-- **One partition per fill run**, in `fill_order`. The run's trigger is `fill` (`orca.runs.trigger`), so the runs page can filter for them.
+- **`keys_per_run` partitions per fill run** (one by default), in `fill_order`; a run's own partitions are in ascending order. The run's trigger is `fill` (`orca.runs.trigger`), so the runs page can filter for them.
 - **A partition is taken** when it's done in a run of any of the pipeline's code, when a live run has it, or when a fill run of it was ever queued. A fill never runs a partition twice. A fill run that fails is retried like a scheduled run, up to `run_retries`. A partition whose fill run failed past its retries, or was cancelled, is left to a person: `orca backfill`, or resume in the UI. Running done partitions again stays `orca backfill --rerun`.
 - **Fill runs don't count against `max_runs`.** At most `fill_max_runs` fill runs are going, beside up to `max_runs` other runs.
 - **On a worker pool** (`placement = "worker:<pool>"`) the scheduler queues the fill runs the same way and leaves them for a worker of the pool to claim. `fill_max_runs` caps the fill runs going across the whole pool, the queued ones included; each worker's `--max-runs` caps what one machine takes. See [Fills on a pool](workers.md#fills-on-a-pool).

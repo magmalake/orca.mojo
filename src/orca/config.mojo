@@ -10,6 +10,7 @@ runs (#145), read by `orca register` and `orca aws register`.
     workers = "0..4"             # or a count, 4
     worker_procs = 1             # or "auto", one per vCPU
     max_runs = 2                 # over the code's Pipeline max_runs
+    keys_per_run = 30            # over the code's: keys a run takes (#240)
     cpus = "1..16"               # a request: MIN..MAX (orca.resources)
     memory_gb = "2..24"          # or "auto", "auto..24" (orca.recommend)
     learn = false                # don't: "auto" is then no request
@@ -101,6 +102,7 @@ comptime SCALAR_KEYS = [
     "workers",
     "worker_procs",
     "max_runs",
+    "keys_per_run",
     "cpus",
     "memory_gb",
     "learn",
@@ -192,6 +194,24 @@ def parse_max_runs(v: String) raises -> Int:
     )
 
 
+comptime MAX_KEYS_PER_RUN = 10000
+"""The most keys `keys_per_run` may put in one run."""
+
+
+def parse_keys_per_run(v: String) raises -> Int:
+    """`keys_per_run`: how many keys a backfill, a sensor's run or a fill
+    run takes (#240), from 1 to `MAX_KEYS_PER_RUN`."""
+    try:
+        var n = Int(v)
+        if n >= 1 and n <= MAX_KEYS_PER_RUN:
+            return n
+    except:
+        pass
+    raise Error(
+        "keys_per_run is a count from 1 to ", MAX_KEYS_PER_RUN, ", not ", v
+    )
+
+
 def max_runs_auto(v: String) -> Bool:
     """Whether `max_runs`' value is `auto` or `auto..N` (#266): as many
     runs at once as this host has room for, up to the ceiling."""
@@ -240,6 +260,8 @@ def _canonical(key: String, text: String) raises -> String:
         return String("auto") if n == 0 else String(n)
     if key == "max_runs":
         return max_runs_text(parse_max_runs(text), max_runs_auto(text))
+    if key == "keys_per_run":
+        return String(parse_keys_per_run(text))
     if key == "cpus":
         return canonical_cpus(text)
     if key == "memory_gb":
@@ -283,7 +305,7 @@ def _canonical_toml(key: String, v: TomlValue) raises -> String:
         if v.kind != BOOLEAN:
             raise Error("is true or false, not ", v.kind)
         return _canonical(key, v.text)
-    if key == "fill_max_runs":
+    if key == "fill_max_runs" or key == "keys_per_run":
         if v.kind != INTEGER:
             raise Error("is a count, not ", v.kind)
         return _canonical(key, v.text)

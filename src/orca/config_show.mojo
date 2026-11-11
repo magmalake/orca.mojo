@@ -302,6 +302,8 @@ comptime _SHOWN_SQL = (
     "SELECT name, head_type, worker_type, ec2_workers, ec2_min_workers,"
     " worker_procs, placement, max_runs, coalesce(max_runs_auto, false) AS"
     " max_runs_auto, coalesce(describe->>'max_runs', '1') AS code_max_runs,"
+    " keys_per_run, coalesce(describe->>'keys_per_run', '1') AS"
+    " code_keys_per_run,"
     " describe->>'workers' AS code_workers,"
     " jsonb_array_length(coalesce(describe->'tasks', '[]')) > 0 AS tasks,"
     " coalesce(secrets::text, '') AS secrets, coalesce(env::text, '') AS env,"
@@ -459,6 +461,16 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
                 w[0],
                 w[1],
             )
+        if r.is_null("keys_per_run"):
+            s.add(
+                "keys_per_run",
+                r.text("code_keys_per_run"),
+                CODE_DEFAULT,
+                "the pipeline's keys_per_run",
+            )
+        else:
+            var w = _source(sources, "keys_per_run")
+            s.add("keys_per_run", String(r.int64("keys_per_run")), w[0], w[1])
         # A request (orca.resources), only when it has one.
         for key in ["cpus", "memory_gb"]:
             if r.text(key):
@@ -620,6 +632,8 @@ def export_toml(mut db: State) raises -> String:
                 out.write("max_runs = ", toml_string(t), "\n")
             else:
                 out.write("max_runs = ", r.int64("max_runs"), "\n")
+        if not r.is_null("keys_per_run"):
+            out.write("keys_per_run = ", r.int64("keys_per_run"), "\n")
         for key in ["cpus", "memory_gb"]:
             if r.text(key):
                 out.write(key, " = ", toml_string(r.text(key)), "\n")
