@@ -22,6 +22,9 @@
 #   rollback [--force]                         apply the tags deployed before, and
 #                                              register the pipelines again
 #   register                                   docker exec scheduler orca register
+#   upgrade-steps --tag T --from F --when W    T's image's upgrade steps (orca upgrade)
+#                                              for a deploy from F, before or after
+#   upgrade-run orca ARG...                    docker exec scheduler orca ARG... (a step)
 #   can-overlap [--tag T]                      exit 0 if the new image's scheduler may start
 #                                              beside the old one (OVERLAP=1, docs/overlap.md)
 #   drain-old [--timeout SECONDS]              ask scheduler-old to drain, wait for it to exit,
@@ -856,6 +859,53 @@ rollback_args() {
     done < "$CONF/deployed.prev"
 }
 
+# upgrade-steps --tag T --from F --when before|after: the upgrade steps
+# (orca#323) of the image at T for a deploy from F, from the image's
+# /opt/orca/upgrade.toml (`orca upgrade`), as its
+# "step<TAB>id<TAB>when<TAB>kind<TAB>text" lines. None for a tag that isn't a
+# version, or an image whose orca has no `orca upgrade` (before 0.23).
+cmd_upgrade_steps() {
+    t=
+    f=
+    w=after
+    while [ $# -gt 0 ]; do
+        [ $# -ge 2 ] || die "upgrade-steps: $1 needs a value"
+        case "$1" in
+            --tag) t=$2 ;;
+            --from) f=$2 ;;
+            --when) w=$2 ;;
+            *) die "upgrade-steps: unknown argument $1" ;;
+        esac
+        shift 2
+    done
+    safe "$t"
+    [ -z "$f" ] || safe "$f"
+    case "$w" in before | after) ;; *) die "upgrade-steps: --when is before or after" ;; esac
+    case "$t" in v[0-9]*.* | [0-9]*.*) ;; *) return 0 ;; esac
+    image=$(conf_get ORCA_IMAGE)
+    login
+    pull "$image:$t"
+    rc=0
+    out=$(docker run --rm "$image:$t" upgrade --from "${f:-none}" --to "$t" --when "$w" 2>&1) || rc=$?
+    if [ "$rc" = 2 ]; then
+        echo "orca-stack: $image:$t has no orca upgrade (orca before 0.23): no upgrade steps" >&2
+        return 0
+    fi
+    [ "$rc" = 0 ] || die "orca upgrade in $image:$t failed: $(echo "$out" | tail -n 1)"
+    echo "$out" | grep '^step	' || true
+}
+
+# upgrade-run orca ARG...: an upgrade step's command, in the scheduler.
+cmd_upgrade_run() {
+    [ "${1:-}" = orca ] || die "upgrade-run runs orca commands only"
+    for a in "$@"; do
+        case "$a" in
+            "" | *[!A-Za-z0-9._:/@=,+-]*) die "refusing the argument '$a' (letters, digits and ._:/@=,+- only)" ;;
+        esac
+    done
+    docker exec scheduler "$@"
+}
+
 cmd_rollback() {
     force=
     [ "${1:-}" != --force ] || force=--force
@@ -1312,6 +1362,8 @@ case "$sub" in
     tags) cmd_tags "$@" ;;
     rollback) cmd_rollback "$@" ;;
     register) cmd_register ;;
+    upgrade-steps) cmd_upgrade_steps "$@" ;;
+    upgrade-run) cmd_upgrade_run "$@" ;;
     can-overlap) cmd_can_overlap "$@" ;;
     drain-old) cmd_drain_old "$@" ;;
     quiesce) cmd_quiesce "$@" ;;

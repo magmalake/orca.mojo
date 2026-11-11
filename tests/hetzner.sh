@@ -882,6 +882,53 @@ stack register > /dev/null 2>&1
 deploy uuu1111 > /dev/null 2>&1 || fail "back to uuu1111"
 unset ORCA_STACK_CHECK_SECONDS
 
+# Upgrade steps (orca#323): from the new image's upgrade.toml (orca upgrade).
+# A before step that isn't confirmed stops a --yes deploy before anything
+# changes; with --confirmed it goes on, and the after steps run (a command)
+# or are printed (an instruction).
+printf 'step\tb1\tbefore\tmanual\tAllow egress to example.org.\nstep\ta1\tafter\trun\torca backfill --rerun toy @all\nstep\ta2\tafter\tmanual\tCheck /live.\n' > "$FAKE/steps"
+: > "$FAKE/docker.log"
+deploy --yes 1.1.0 && fail "a deploy with an unconfirmed before step"
+has "\[b1\] Allow egress to example.org."
+has "\[b1\] needs doing before this deploy"
+has "nothing was deployed"
+grep -q "step exec" "$FAKE/docker.log" && fail "an after step ran though the deploy stopped"
+deploy --yes --confirmed b1 1.1.0 || fail "deploy.sh --confirmed b1 1.1.0"
+has "\[b1\] confirmed"
+has "\[a2\] to do: Check /live."
+grep -q "step exec scheduler orca backfill --rerun toy @all" "$FAKE/docker.log" || fail "the after step a1 didn't run"
+grep -q "upgrade run --rm img:1.1.0 upgrade --from .* --to 1.1.0 --when before" "$FAKE/docker.log" \
+    || fail "the before steps weren't read from the new image"
+# The same orca tag again: no steps.
+: > "$FAKE/docker.log"
+deploy --yes --all 1.1.0 || fail "deploy.sh --all 1.1.0"
+grep -q "^upgrade " "$FAKE/docker.log" && fail "steps read for the tag already deployed"
+# From 1.1.0: the image is asked for the steps after it.
+touch "$FAKE/step-fails"
+deploy --yes --confirmed b1 1.2.0 && fail "a deploy whose after step failed"
+has "upgrade steps failed: a1"
+has "1.2.0 is deployed and checked"
+grep -q "upgrade run --rm img:1.2.0 upgrade --from 1.1.0 --to 1.2.0 --when after" "$FAKE/docker.log" \
+    || fail "the steps weren't asked for from 1.1.0"
+rm "$FAKE/step-fails"
+# A rollback runs none.
+: > "$FAKE/docker.log"
+deploy --yes --rollback || fail "deploy.sh --rollback"
+grep -q "^upgrade \|^step " "$FAKE/docker.log" && fail "a rollback read or ran upgrade steps"
+# An image whose orca has no `orca upgrade`: no steps.
+touch "$FAKE/no-upgrade"
+deploy --yes 1.3.0 || fail "deploy.sh 1.3.0 of an image without orca upgrade"
+rm "$FAKE/no-upgrade" "$FAKE/steps"
+# A dry run lists nothing and needs no confirmation.
+deploy --dry-run 1.4.0 || fail "deploy.sh --dry-run 1.4.0"
+has "orca-stack upgrade-steps --tag 1.4.0 --from <deployed> --when before"
+has "orca-stack upgrade-steps --tag 1.4.0 --from <deployed> --when after"
+# orca-stack upgrade-run refuses what isn't an orca command.
+stack upgrade-run rm -rf / > "$FAKE/out" 2>&1 && fail "upgrade-run ran rm"
+has "orca commands only"
+stack upgrade-run orca backfill 'a;b' > "$FAKE/out" 2>&1 && fail "upgrade-run took a ;"
+has "refusing the argument"
+
 # The release tarball (deploy/hetzner/package.sh), run from where it's unpacked.
 sh deploy/hetzner/package.sh 9.8.7 "$FAKE/pkg" > "$FAKE/out" 2>&1 || fail "package.sh"
 cmp -s "$FAKE/pkg/orca-hetzner-9.8.7.tar.gz" "$FAKE/pkg/orca-hetzner.tar.gz" || fail "the two tarballs differ"

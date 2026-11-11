@@ -164,6 +164,11 @@ jobs:
           ref: 0d76aa7b672c85580f4d8c5de855772bc972d535
           path: sqlite.mojo
 
+      # Off before setup-pixi restores rattler's git cache: git's
+      # background maintenance in a cached repo races its
+      # `git clone --local` (mojo-census#135).
+      - run: git config --global maintenance.auto false && git config --global gc.auto 0
+
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           # Pinned: pixi.lock is written by this version, and a newer pixi
@@ -236,6 +241,11 @@ jobs:
           repository: magmalake/dista.mojo
           ref: df018565d71a8f7061350deeeb02f31555526429
           path: dista.mojo
+      # Off before setup-pixi restores rattler's git cache: git's
+      # background maintenance in a cached repo races its
+      # `git clone --local` (mojo-census#135).
+      - run: git config --global maintenance.auto false && git config --global gc.auto 0
+
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           pixi-version: v0.78.0
@@ -269,6 +279,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Off before setup-pixi restores rattler's git cache: git's
+      # background maintenance in a cached repo races its
+      # `git clone --local` (mojo-census#135).
+      - run: git config --global maintenance.auto false && git config --global gc.auto 0
+
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           pixi-version: v0.78.0
@@ -366,6 +381,11 @@ jobs:
         with: {repository: magmalake/sqlite.mojo, ref: 0d76aa7b672c85580f4d8c5de855772bc972d535, path: sqlite.mojo}
       - uses: actions/checkout@v4
         with: {repository: magmalake/postgres.mojo, ref: 324b2bb61e2e80327654abecf70fd4b2defbc50d, path: postgres.mojo}
+      # Off before setup-pixi restores rattler's git cache: git's
+      # background maintenance in a cached repo races its
+      # `git clone --local` (mojo-census#135).
+      - run: git config --global maintenance.auto false && git config --global gc.auto 0
+
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           pixi-version: v0.78.0
