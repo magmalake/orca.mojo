@@ -1,0 +1,1 @@
+- **Worker pools grow and shrink themselves**: orca makes and removes `[pools.<name>]` machines as runs wait. (#313)
