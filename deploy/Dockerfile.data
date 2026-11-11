@@ -5,7 +5,7 @@
 # from the repository root:
 #
 #     docker build -f deploy/Dockerfile.data -t orca:data .
-FROM ghcr.io/prefix-dev/pixi:0.78.0 AS build
+FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS build
 ARG PIPELINES="examples/toy.mojo examples/fanout.mojo examples/taxi/taxi.mojo"
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
