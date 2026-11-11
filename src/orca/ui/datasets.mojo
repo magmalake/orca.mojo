@@ -136,9 +136,9 @@ def datasets_page(mut db: State) raises -> Page:
     for d in ds:
         h.raw("<tr><td>")
         h.link(dataset_href(d.name), d.name)
-        h.raw("</td><td>")
+        h.raw('</td><td class="names">')
         _pipeline_links(h, d.writers)
-        h.raw("</td><td>")
+        h.raw('</td><td class="names">')
         _pipeline_links(h, d.readers)
         h.raw("</td>")
         h.num(d.commits)
@@ -476,7 +476,7 @@ def _rebuilds_table(mut h: Html, rbs: List[Rebuild]):
         h.mono(r.partitions)
         h.raw("<td>")
         h.status(r.status)
-        h.raw("</td><td>")
+        h.raw('</td><td class="names">')
         for i in range(len(r.plan)):
             if i:
                 h.raw(", ")
@@ -564,7 +564,7 @@ def _made_table(mut h: Html, ms: List[Made]):
         h.text(m.code)
         h.raw("</code></td>")
         h.cell(m.ended)
-        h.raw("<td>")
+        h.raw('<td class="names">')
         for k in range(len(m.inputs)):
             if k:
                 h.raw(", ")
