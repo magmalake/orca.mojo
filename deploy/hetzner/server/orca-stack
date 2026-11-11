@@ -37,6 +37,14 @@
 #   list-backups                               the dumps, and which have a <time>.paused
 #   restore [--force] <key|latest>             pg_restore into the (empty) database, then
 #                                              unpause what a deploy's quiesce had paused
+#   check [--canary PIPELINE=KEY]... [--timeout SECONDS]
+#                                              the smoke check deploy.sh and up.sh end with:
+#                                              each container up, on its image and healthy,
+#                                              one scheduler, every pipeline's binary in its
+#                                              image; each --canary starts a run and waits
+#                                              for it (--timeout, default 1800 s); exit 1 if
+#                                              any fails; the result is kept for checked
+#   checked                                    the last check: "ok|failed TIME plain|canary TAGS"
 #
 # apply starts a container again only when what it would be started with
 # differs from what it runs: the image (a tag, or the same tag pushed
@@ -1135,6 +1143,160 @@ cmd_restore() {
     echo "orca-stack: restored $key; now: orca-stack apply"
 }
 
+# --- check: the smoke check at the end of every deploy ---------------------
+
+check_ok() { echo "orca-stack: check: ok    $*"; }
+check_fail() {
+    echo "orca-stack: check: FAIL  $*"
+    check_bad=$((check_bad + 1))
+}
+
+# check_one NAME FILES HEALTH IMAGE ARGS... (a containers callback): NAME runs
+# IMAGE and passes its health checks within 30 s (HEALTH - has none).
+check_one() {
+    k_cur=$(docker inspect -f '{{.State.Status}} {{.Config.Image}} {{.Image}} {{index .Config.Labels "orca.stack.spec"}} {{index .Config.Labels "orca.stack.args"}} {{index .Config.Labels "orca.stack.files"}}' "$1" 2> /dev/null) || {
+        check_fail "$1: no such container"
+        return 0
+    }
+    k_status=${k_cur%% *}
+    k_image=${k_cur#* }
+    k_image=${k_image%% *}
+    if [ "$k_status" != running ]; then
+        check_fail "$1: $k_status"
+    elif [ "$k_image" != "$4" ]; then
+        check_fail "$1: runs $k_image, not $4"
+    elif [ "$3" != - ] && ! healthy "$1" "$3" "${ORCA_STACK_CHECK_SECONDS:-30}"; then
+        check_fail "$1: $why"
+    else
+        check_ok "$1: $k_image$([ "$3" = - ] || echo ", healthy")"
+    fi
+}
+
+# canary_run PIPELINE KEY TIMEOUT: a run of PIPELINE over KEY, waited for;
+# ok if it succeeded within TIMEOUT seconds.
+canary_run() {
+    c_out=$(docker exec scheduler orca start "$1" "$2" 2>&1) || {
+        check_fail "canary $1 $2: orca start: $(echo "$c_out" | tail -n 1)"
+        return 0
+    }
+    c_run=$(echo "$c_out" | sed -n 's/^queued run \([0-9][0-9]*\)$/\1/p' | tail -n 1)
+    [ -n "$c_run" ] || {
+        check_fail "canary $1 $2: orca start said: $(echo "$c_out" | tail -n 1)"
+        return 0
+    }
+    c_t=0
+    while :; do
+        c_st=$(psql_q "SELECT status FROM orca.runs WHERE id = $c_run" 2> /dev/null) || c_st=
+        case $c_st in
+            succeeded)
+                check_ok "canary $1 $2: run $c_run succeeded"
+                return 0
+                ;;
+            failed | cancelled)
+                check_fail "canary $1 $2: run $c_run $c_st (orca status $c_run)"
+                return 0
+                ;;
+        esac
+        [ "$c_t" -lt "$3" ] || {
+            check_fail "canary $1 $2: run $c_run still ${c_st:-unknown} after ${c_t}s (paused? orca status $c_run)"
+            return 0
+        }
+        sleep 5
+        c_t=$((c_t + 5))
+    done
+}
+
+cmd_check() {
+    canaries=
+    ctimeout=1800
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --canary | --timeout)
+                [ $# -ge 2 ] || die "$1 needs a value"
+                safe "$2"
+                if [ "$1" = --timeout ]; then
+                    case $2 in *[!0-9]*) die "--timeout needs seconds" ;; esac
+                    ctimeout=$2
+                else
+                    case $2 in ?*=?*) ;; *) die "--canary needs PIPELINE=KEY, not $2" ;; esac
+                    canaries="$canaries $2"
+                fi
+                shift
+                ;;
+            *) die "usage: orca-stack check [--canary PIPELINE=KEY]... [--timeout SECONDS]" ;;
+        esac
+        shift
+    done
+    check_bad=0
+    # Each container apply starts, on the image the conf says, healthy.
+    newtag=
+    only=
+    appsets=
+    desired
+    rm -f "$APPS"
+    APPS=$CONF/apps
+    [ -f "$APPS" ] || APPS=/dev/null
+    ENVDIR=$CONF
+    if docker exec postgres pg_isready -h 127.0.0.1 -U orca -d orca > /dev/null 2>&1; then
+        check_ok "postgres: ready"
+    else
+        check_fail "postgres: not ready"
+    fi
+    containers check_one
+    # One scheduler: none of a deploy's second one left beside it.
+    for c in scheduler-next scheduler-old; do
+        ! docker inspect "$c" > /dev/null 2>&1 || check_fail "$c is still there (orca-stack drain-old)"
+    done
+    if [ "$(conf_get OVERLAP)" = 1 ]; then
+        leaders=$(docker exec scheduler orca scheduler status 2> /dev/null | grep -c ' leading ' || true)
+        if [ "$leaders" = 1 ]; then
+            check_ok "scheduler instances: one leads"
+        else
+            check_fail "scheduler instances: ${leaders:-0} lead (orca scheduler status)"
+        fi
+    fi
+    # The pipelines: registered, each one's binary in the scheduler's image.
+    regs=$(psql_q "SELECT name || ' ' || coalesce(binary_path, '-') || ' ' || paused FROM orca.pipelines ORDER BY name" 2> /dev/null) || regs=
+    n=0
+    missing=
+    paused=
+    for line in $(echo "$regs" | tr ' ' '|'); do
+        pname=${line%%|*}
+        rest=${line#*|}
+        pbin=${rest%%|*}
+        n=$((n + 1))
+        [ "${rest#*|}" != t ] || paused="$paused $pname"
+        if [ "$pbin" = - ]; then
+            missing="$missing $pname (no binary)"
+        elif ! docker exec scheduler test -x "$pbin" > /dev/null 2>&1; then
+            missing="$missing $pname ($pbin)"
+        fi
+    done
+    if [ "$n" = 0 ]; then
+        check_fail "pipelines: none registered (orca-stack register)"
+    elif [ -n "$missing" ]; then
+        check_fail "pipelines: not in the scheduler's image:$missing (orca-stack register)"
+    else
+        check_ok "pipelines: $n registered, each binary in the image; paused:${paused:- none}"
+    fi
+    # The canary runs, one at a time.
+    for c in $canaries; do
+        canary_run "${c%%=*}" "${c#*=}" "$ctimeout"
+    done
+    result=ok
+    [ "$check_bad" = 0 ] || result=failed
+    mkdir -p "$STATE"
+    # RESULT TIME KIND TAGS: TAGS last, as cmd_tags prints them (they may have spaces).
+    echo "$result $(date -u +%FT%TZ) $([ -z "$canaries" ] && echo plain || echo canary) $(cmd_tags)" > "$STATE/checked"
+    [ "$check_bad" = 0 ] || die "check: $check_bad failed (above)"
+    echo "orca-stack: check: all ok"
+}
+
+cmd_checked() {
+    [ -s "$STATE/checked" ] || die "no check yet (orca-stack check)"
+    cat "$STATE/checked"
+}
+
 sub=${1:-}
 [ $# -eq 0 ] || shift
 case "$sub" in
@@ -1158,5 +1320,7 @@ case "$sub" in
     backup-now) cmd_backup_now ;;
     list-backups) cmd_list_backups ;;
     restore) cmd_restore "$@" ;;
-    *) die "usage: orca-stack configure|sync|app|apply|plan|status|tags|rollback|register|can-overlap|drain-old|quiesce|resume|backup|list-backups|restore" ;;
+    check) cmd_check "$@" ;;
+    checked) cmd_checked ;;
+    *) die "usage: orca-stack configure|sync|app|apply|plan|status|tags|rollback|register|can-overlap|drain-old|quiesce|resume|backup|list-backups|restore|check|checked" ;;
 esac
