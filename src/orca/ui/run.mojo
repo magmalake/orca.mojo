@@ -7,6 +7,8 @@ each machine's log.
 
 from postgres import Params
 
+from orca.ui.cluster import cluster_html
+from orca.views.cluster import cluster_rows
 from orca.dag import DagStep, aggregate, dag_svg
 from orca.html import Html, url_encode
 from orca.lineage import SnapshotRef
@@ -660,6 +662,7 @@ def _run_state(mut h: Html, mut db: State, r: RunRow, view: String = "") raises:
     var instances = instance_rows(db, r.id)
     if len(instances) > 0:
         instances_html(h, r.id, instances)
+    cluster_html(h, cluster_rows(db, r.id))
 
 
 def run_live(mut db: State, id: Int) raises -> Page:

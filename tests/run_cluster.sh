@@ -111,4 +111,15 @@ until_ 30 "the member wasn't ended: $(q "SELECT id, ended, why FROM orca.run_mem
 gone() { ! pgrep -f "DISTA_ROLE=worker" > /dev/null 2>&1 || ! grep -q "joined fanout" "build/run-cluster-b.out" || grep -qE "^(member [0-9]+ pid [0-9]+ exited|stopping member)" build/run-cluster-b.out; }
 until_ 30 "b's member is still running" gone
 echo "ok   once the run ends, the member is ended ($(q "SELECT why FROM orca.run_members WHERE run = $run"))"
+# The run's page and JSON show its cluster: the head, with its address, then
+# the member.
+page=$(curl -fsS "$base/runs/$run") || fail "GET /runs/$run"
+echo "$page" | grep -q 'id="cluster"' || fail "no Cluster card on the run's page"
+echo "$page" | grep -qF "$head" || fail "the Cluster card doesn't show the head's address"
+curl -fsS -H 'Accept: application/json' "$base/runs/$run" > "$dir/run.json" || fail "the run's JSON"
+jq -e --arg h "$head" '.cluster | length == 2 and .[0].role == "head" and .[0].address == $h and .[0].worker == "a" and .[1].role == "member" and .[1].worker == "b" and .[1].ended != null and .[1].why != null' "$dir/run.json" > /dev/null \
+    || fail "the run's JSON cluster: $(jq -c .cluster "$dir/run.json")"
+alone_page=$(curl -fsS -H 'Accept: application/json' "$base/runs/$(q "SELECT min(id) FROM orca.runs WHERE cluster_head IS NULL")" 2> /dev/null || echo '{"cluster": []}')
+echo "$alone_page" | jq -e '.cluster == [] or .cluster == null' > /dev/null || fail "a run on one machine shows a cluster"
+echo "ok   the run's page and JSON show its cluster: the head and its member"
 echo "run cluster: ok"
