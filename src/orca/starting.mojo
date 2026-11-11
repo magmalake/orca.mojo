@@ -248,8 +248,7 @@ def _start(
     # admission below weighs; with no request to weigh yet (nothing
     # declared, nothing learned), one run at a time.
     if (
-        p.max_runs_auto
-        and not fill
+        ((p.max_runs_auto and not fill) or (p.fill.max_runs_auto and fill))
         and local
         and free > 0
         and not request.any()

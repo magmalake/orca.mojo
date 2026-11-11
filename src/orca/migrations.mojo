@@ -826,6 +826,10 @@ def _migrations() -> List[List[String]]:
                 " ended IS NULL"
             ),
         ],
+        # fill_max_runs = "auto" (#322): fill runs follow the host's room, as
+        # max_runs = "auto" does. Additive: an older binary runs up to the
+        # ceiling.
+        ["ALTER TABLE orca.pipelines ADD COLUMN fill_max_runs_auto boolean"],
     ]
 
 
