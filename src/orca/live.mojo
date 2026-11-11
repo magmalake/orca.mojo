@@ -104,15 +104,83 @@ def live_sql() raises -> String:
     yet", and the scheduler starts it again at its `retry_at`), or running
     with its process alive. A run whose process died doesn't hold its keys, whatever its
     trigger, so a backfill or a sensor may queue them again."""
-    var stale = stale_limit()
     return String(
         "SELECT DISTINCT ON (k.key) k.key, r.id FROM orca.runs r,",
         " unnest(string_to_array(r.partitions, ',')) AS k(key) WHERE",
-        " r.pipeline = $1 AND (r.status IN ('queued', 'deferred') OR",
-        " (r.status = 'running'",
-        " AND NOT ",
-        dead_sql(String(stale), start_grace(stale), "r"),
-        ")) ORDER BY k.key, r.id",
+        " r.pipeline = $1 AND ",
+        is_live_sql("r"),
+        " ORDER BY k.key, r.id",
+    )
+
+
+def is_live_sql(t: String) raises -> String:
+    """SQL true for a live run of table reference `t`: queued, deferred,
+    or running with its process alive (`live_sql`)."""
+    var stale = stale_limit()
+    return String(
+        "(",
+        t,
+        ".status IN ('queued', 'deferred') OR (",
+        t,
+        ".status = 'running' AND NOT ",
+        dead_sql(String(stale), start_grace(stale), t),
+        "))",
+    )
+
+
+def behind_sql(t: String = "orca.runs") raises -> String:
+    """SQL true for a run of table reference `t` that has a key an older
+    live run of its pipeline has (`is_live_sql`): it waits for that run,
+    so two runs of a key don't run at once. A sensor queues one so when a
+    live run read an older snapshot than the one it sensed (#139). A run
+    whose process died holds nothing back, as it holds no keys."""
+    return String(
+        "EXISTS (SELECT 1 FROM orca.runs b WHERE b.pipeline = ",
+        t,
+        ".pipeline AND b.id < ",
+        t,
+        ".id AND ",
+        is_live_sql("b"),
+        " AND string_to_array(b.partitions, ',') && string_to_array(",
+        t,
+        ".partitions, ','))",
+    )
+
+
+comptime WAITING_BEHIND = "waiting: for run "
+"""How a queued run's `held` starts while it waits behind an older live run
+of its keys (`behind_sql`)."""
+
+
+def hold_behind(
+    mut tx: Transaction, pipeline: String, after: String = ""
+) raises:
+    """Says on `pipeline`'s queued runs that wait behind an older live run
+    (`behind_sql`) which run, and a key of it: "waiting: for run 12, which
+    has 2024-03". Those that said so and no longer wait say `after`
+    instead, or nothing."""
+    _ = tx.execute(
+        String(
+            "UPDATE orca.runs q SET held = w.why FROM (SELECT DISTINCT ON",
+            " (r.id) r.id, $2 || b.id || ', which has ' || k.key AS why",
+            " FROM orca.runs r CROSS JOIN LATERAL",
+            " unnest(string_to_array(r.partitions, ',')) AS k(key) JOIN",
+            " orca.runs b ON b.pipeline = r.pipeline AND b.id < r.id AND",
+            " k.key = ANY (string_to_array(b.partitions, ',')) AND ",
+            is_live_sql("b"),
+            " WHERE r.pipeline = $1 AND r.status = 'queued' ORDER BY r.id,",
+            " b.id, k.key) AS w WHERE q.id = w.id AND q.held IS DISTINCT",
+            " FROM w.why",
+        ),
+        Params().text(pipeline).text(WAITING_BEHIND),
+    )
+    _ = tx.execute(
+        String(
+            "UPDATE orca.runs SET held = nullif($3, '') WHERE pipeline = $1",
+            " AND status = 'queued' AND starts_with(held, $2) AND NOT ",
+            behind_sql(),
+        ),
+        Params().text(pipeline).text(WAITING_BEHIND).text(after),
     )
 
 

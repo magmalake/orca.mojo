@@ -10,6 +10,7 @@ from postgres import (
 from orca.fill import fill_status
 from orca.live import (
     dead_sql,
+    hold_behind,
     stale_sql,
 )
 from orca.scheduler import (
@@ -43,6 +44,9 @@ def _requeue_for_workers(
     )
     var lost = _requeue_lost(self, tx, p, dead, waiting)
     self._end_dead(tx, p, dead)
+    # One behind an older live run of its keys says which; a worker
+    # doesn't claim it until that run ends.
+    hold_behind(tx, p.name, waiting)
     if not p.fill.all:
         _ = tx.execute(
             (
