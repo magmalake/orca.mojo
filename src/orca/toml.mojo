@@ -10,11 +10,12 @@ quoted and dotted keys, `key = value` with dotted keys, basic strings (with
 every escape) and literal strings, integers (decimal, with `_` between
 digits), floats, booleans, arrays of those (over several lines, with
 comments and a trailing comma), inline tables, nested, and arrays of inline
-tables (`machines = [{ type = "cax31", wait = 600 }, ...]`). A key or table
+tables, inline (`machines = [{ type = "cax31", wait = 600 }, ...]`) or as
+`[[x]]` headers, nested too (`[[version.step]]` adds to the last
+`[[version]]`). A key or table
 defined twice, a dotted key extending a table a header defined, and a header
 reopening an inline table are refused, as TOML refuses them. Not supported,
-each refused with a message saying so: arrays of tables (`[[x]]`),
-multi-line strings, dates and times, hexadecimal, octal and binary integers,
+each refused with a message saying so: multi-line strings, dates and times, hexadecimal, octal and binary integers,
 `inf` and `nan`, arrays of arrays, arrays mixing tables with other values,
 and keys holding control characters.
 
@@ -44,6 +45,8 @@ comptime _DOTTED = 2
 """By a dotted key, `a.b = 1` making `a`."""
 comptime _INLINE = 3
 """An inline table, or one inside it: closed once it ends."""
+comptime _ARRAY_HEADER = 4
+"""An array of tables made by `[[x]]` headers, which more of them extend."""
 
 
 @fieldwise_init
@@ -686,6 +689,8 @@ struct _Parser(Movable):
                 )
                 continue
             ref e = self.doc.entries[i]
+            if e.how == _ARRAY_HEADER:
+                continue  # `[[x]]`'s array: the path goes on with an index
             if e.value.kind != TABLE:
                 self.fail(String(_dotted(p), " is a value, not a table"))
             if e.how == _INLINE and how != _INLINE:
@@ -778,10 +783,51 @@ struct _Parser(Movable):
                     )
                 )
 
+    def array_header(mut self) raises -> List[String]:
+        """`[[a.b]]`, from its `[[`: a new element of the array of tables
+        `a.b`, which it opens. A key on the way that is an array of tables
+        means its last element, as TOML has it: `[[version.step]]` adds a
+        step to the last `[[version]]`."""
+        self.pos += 2
+        var path = self.key()
+        if self.peek() != ord("]") or self.peek(1) != ord("]"):
+            self.fail("expected ']]' after an array of tables' name")
+        self.pos += 2
+        var at = List[String]()
+        for n in range(len(path) - 1):
+            at.append(path[n])
+            var i = self.doc.find(at)
+            if i >= 0 and self.doc.entries[i].how == _ARRAY_HEADER:
+                ref items = self.doc.entries[i].value.items
+                at.append(items[len(items) - 1])
+        at.append(path[len(path) - 1])
+        self.table_at(at, _IMPLICIT)
+        var i = self.doc.find(at)
+        if i < 0:
+            i = len(self.doc.entries)
+            self.doc._add(
+                at.copy(),
+                TomlValue(ARRAY, "", List[String](), List[String](), self.line),
+                _ARRAY_HEADER,
+            )
+        elif self.doc.entries[i].how != _ARRAY_HEADER:
+            self.fail(String(_dotted(at), " is defined already, not as [[", _dotted(path), "]]"))
+        var n = String(len(self.doc.entries[i].value.items))
+        self.doc.entries[i].value.items.append(n)
+        self.doc.entries[i].value.item_kinds.append(TABLE)
+        var el = at.copy()
+        el.append(n)
+        self.doc._add(
+            el.copy(),
+            TomlValue(TABLE, "", List[String](), List[String](), self.line),
+            _HEADER,
+        )
+        return el^
+
     def header(mut self) raises -> List[String]:
         """`[a.b]`, from its `[`: the table it opens."""
         if self.peek(1) == ord("["):
-            self.fail("arrays of tables ([[...]]) aren't supported")
+            return self.array_header()
         self.pos += 1
         var path = self.key()
         if self.peek() != ord("]"):

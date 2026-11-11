@@ -69,6 +69,7 @@ from orca.remote import (
     remote_target,
 )
 from orca.sample import sample_main
+from orca.upgrade import upgrade_command
 from orca.config import (
     ProjectConfig,
     RegisterFlags,
@@ -110,6 +111,9 @@ from orca.workers import (
 
 comptime USAGE = """usage:
   orca locate <pipeline binary> [...] [--root <dir>]
+  orca upgrade [--file <upgrade.toml>] [--from V] --to V [--when before|after]
+                (a release's upgrade steps, a line each, for deploy.sh;
+                the file defaults to ORCA_UPGRADE or /opt/orca/upgrade.toml)
   orca aws up|push|register|app|status|replace-control|down ...
                                     (orca aws for more)
   orca register [--image <image>] [--head-type T] [--worker-type T]
@@ -386,6 +390,9 @@ def _command(args: List[String], target: String) raises -> Int:
         return api_command(api, args)
     if args[1] == "locate":
         return _locate(args)
+    if args[1] == "upgrade":
+        # A file only, for deploy.sh: no database (orca.upgrade).
+        return upgrade_command(args)
     if args[1] == "aws":
         if len(args) > 2 and args[2] == "replace-control":
             return replace_control(args)
