@@ -4,7 +4,9 @@
 # Shared by the scripts in this directory (sourced, not run). POSIX sh.
 #
 # - the settings: $HETZNER_ENV, else hetzner.env next to the scripts
-#   (hetzner.env.example lists every one);
+#   (hetzner.env.example lists every one), then this laptop's own, if it
+#   has them: $HETZNER_LOCAL_ENV, else ~/.config/orca-hetzner/<NAME>.local.env;
+#   a relative file name in either is read from that file's folder;
 # - --dry-run: every hcloud and ssh command is printed, none is run, and
 #   nothing is created, changed or read from the server;
 # - nothing here prints a secret: files that hold one are only ever sent to
@@ -23,12 +25,55 @@ die() {
     exit 1
 }
 
+# The settings that name a file: a relative one is read from the folder of
+# the settings file that sets it (resolve_paths).
+PATH_SETTINGS="SECRETS_FILE S3_CREDENTIALS_FILE TUNNEL_TOKEN_FILE GITHUB_TOKEN_FILE
+NTFY_TOPIC_FILE NTFY_TOKEN_FILE GHCR_TOKEN_FILE EXTRA_ENV_FILE SSH_PUBLIC_KEY_FILE SSH_PRIVATE_KEY_FILE"
+
+# resolve_paths DIR: each PATH_SETTINGS that is set and relative becomes
+# DIR/<it>. Run after each settings file, so a shared hetzner.env (in a
+# secrets repository, say) can name its files wherever it is cloned.
+resolve_paths() {
+    for v in $PATH_SETTINGS; do
+        eval "val=\${$v:-}"
+        case $val in
+            "" | /*) ;;
+            *) eval "$v=\$1/\$val" ;;
+        esac
+    done
+}
+
+# absolute FILE: FILE, from the current folder if it's relative.
+absolute() {
+    case $1 in
+        /*) echo "$1" ;;
+        *) echo "$(pwd)/$1" ;;
+    esac
+}
+
 load_env() {
     HETZNER_ENV=${HETZNER_ENV:-$HERE/hetzner.env}
     [ -f "$HETZNER_ENV" ] || die "no $HETZNER_ENV (copy hetzner.env.example and fill it in, or set HETZNER_ENV)"
+    HETZNER_ENV=$(absolute "$HETZNER_ENV")
     # shellcheck disable=SC1090
     . "$HETZNER_ENV"
+    resolve_paths "$(dirname "$HETZNER_ENV")"
     NAME=${NAME:-orca}
+    # This laptop's settings (ADMIN_IP, SSH_PUBLIC_KEY_FILE...), read after
+    # the shared file, so they win. Optional, unless HETZNER_LOCAL_ENV names it.
+    LOCAL_ENV=${HETZNER_LOCAL_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/orca-hetzner/$NAME.local.env}
+    if [ -f "$LOCAL_ENV" ]; then
+        LOCAL_ENV=$(absolute "$LOCAL_ENV")
+        shared_name=$NAME
+        # shellcheck disable=SC1090
+        . "$LOCAL_ENV"
+        [ "${NAME:-}" = "$shared_name" ] || die "$LOCAL_ENV sets NAME: the stack's name belongs in $HETZNER_ENV"
+        resolve_paths "$(dirname "$LOCAL_ENV")"
+    elif [ -n "${HETZNER_LOCAL_ENV:-}" ]; then
+        die "no $HETZNER_LOCAL_ENV (HETZNER_LOCAL_ENV)"
+    else
+        LOCAL_ENV=
+    fi
     LOCATION=${LOCATION:-fsn1}
     SERVER_TYPE_SMALL=${SERVER_TYPE_SMALL:-cax21}
     SERVER_TYPE_BIG=${SERVER_TYPE_BIG:-cax41}
@@ -43,7 +88,7 @@ load_env() {
     # stack is in; otherwise hcloud's active one.
     [ -z "${HCLOUD_CONTEXT:-}" ] || export HCLOUD_CONTEXT
     # Which stack, as there may be more than one (docs/hetzner.md, A dev stack).
-    echo "$(basename "$0"): stack $NAME${HCLOUD_CONTEXT:+ (hcloud context $HCLOUD_CONTEXT)}, settings $HETZNER_ENV${SCRIPTS_VERSION:+, scripts $SCRIPTS_VERSION}" >&2
+    echo "$(basename "$0"): stack $NAME${HCLOUD_CONTEXT:+ (hcloud context $HCLOUD_CONTEXT)}, settings $HETZNER_ENV${LOCAL_ENV:+ and $LOCAL_ENV}${SCRIPTS_VERSION:+, scripts $SCRIPTS_VERSION}" >&2
 }
 
 # need VAR...: each is set in the settings file.

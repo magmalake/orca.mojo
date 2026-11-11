@@ -1,0 +1,1 @@
+- **One `hetzner.env` for every laptop**: relative file names in it are read from its folder, and a laptop's own `ADMIN_IP` and ssh key can go in `~/.config/orca-hetzner/<NAME>.local.env`, read after it. (#PR)
