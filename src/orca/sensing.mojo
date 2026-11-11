@@ -166,24 +166,13 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
             mapped.append(k)
         elif held < 0:
             held = Int64(in_run.value())
+    var did = String()
     if len(mapped) == 0:
         run = held
     if len(mapped) > 0:
-        run = (
-            tx.query(
-                (
-                    "INSERT INTO orca.runs (pipeline, registry_hash,"
-                    " partitions, trigger, status) VALUES ($1, $2, $3,"
-                    " 'sensor', 'queued') RETURNING id"
-                ),
-                Params()
-                .text(p.name)
-                .text(p.registry_hash)
-                .text(join_keys(mapped)),
-            )
-            .row(0)
-            .int64("id")
-        )
+        var q = _queue_sensed(tx, p, mapped)
+        run = q[0]
+        did = q[1]
     if run >= 0:
         for i in taken:
             _ = tx.execute(
@@ -204,7 +193,7 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
             String(datasets[i], "@", snapshots[i]),
             "for",
             p.name,
-            String("run ", run, " for ", join_keys(mapped)) if len(mapped)
+            did if len(mapped)
             > 0 else (
                 String("left to live run ", run) if run
                 >= 0 else "before its first partition"
@@ -219,6 +208,98 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
             "and ran nothing:",
             u[1],
         )
+
+
+def _queue_sensed(
+    mut tx: Transaction, p: Registered, keys: List[String]
+) raises -> Tuple[Int64, String]:
+    """Runs of `p` over `keys` (sorted, none in a live run), trigger
+    `sensor`; returns the first, and what was done for the log. With
+    `keys_per_run` 1, the default, one run over them all, as before #240.
+    Above 1, at most `keys_per_run` keys to a run (#240): the sensor runs
+    queued and never started take keys first, oldest first, up to that;
+    the rest are new runs, in key order. So a catch-up of one upstream
+    snapshot a tick still makes few runs. The caller holds `p`'s row
+    `FOR UPDATE`, as a start or a worker's claim does, so a run topped up
+    hasn't started meanwhile."""
+    var k = p.keys_per_run
+    if k <= 1:
+        var id = (
+            tx.query(
+                (
+                    "INSERT INTO orca.runs (pipeline, registry_hash,"
+                    " partitions, trigger, status) VALUES ($1, $2, $3,"
+                    " 'sensor', 'queued') RETURNING id"
+                ),
+                Params()
+                .text(p.name)
+                .text(p.registry_hash)
+                .text(join_keys(keys)),
+            )
+            .row(0)
+            .int64("id")
+        )
+        return (id, String("run ", id, " for ", join_keys(keys)))
+    var first = Int64(-1)
+    var log = String()
+    var i = 0
+    for r in tx.query(
+        (
+            "SELECT id, partitions FROM orca.runs WHERE pipeline = $1 AND"
+            " trigger = 'sensor' AND status = 'queued' AND starts = 0 AND"
+            " registry_hash = $2 ORDER BY id"
+        ),
+        Params().text(p.name).text(p.registry_hash),
+    ):
+        if i >= len(keys):
+            break
+        var have = split_keys(r.text("partitions"))
+        if len(have) >= k:
+            continue
+        var added = List[String]()
+        while i < len(keys) and len(have) + len(added) < k:
+            added.append(keys[i])
+            i += 1
+        var both = have.copy()
+        both.extend(added.copy())
+        var id = r.int64("id")
+        _ = tx.execute(
+            "UPDATE orca.runs SET partitions = $2 WHERE id = $1",
+            Params().int64(id).text(join_keys(map_keys(both, p.kind))),
+        )
+        if first < 0:
+            first = id
+        log.write(
+            "; " if log else "",
+            "run ",
+            id,
+            " (queued) takes ",
+            join_keys(added),
+        )
+    while i < len(keys):
+        var batch = List[String]()
+        while i < len(keys) and len(batch) < k:
+            batch.append(keys[i])
+            i += 1
+        var id = (
+            tx.query(
+                (
+                    "INSERT INTO orca.runs (pipeline, registry_hash,"
+                    " partitions, trigger, status) VALUES ($1, $2, $3,"
+                    " 'sensor', 'queued') RETURNING id"
+                ),
+                Params()
+                .text(p.name)
+                .text(p.registry_hash)
+                .text(join_keys(batch)),
+            )
+            .row(0)
+            .int64("id")
+        )
+        if first < 0:
+            first = id
+        log.write("; " if log else "", "run ", id, " for ", join_keys(batch))
+    return (first, log^)
 
 
 def _sensed(mut self: Scheduler, p: Registered, error: String) raises:

@@ -803,6 +803,10 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pools ADD COLUMN status text",
             "CREATE TABLE orca.stack_identity (id text PRIMARY KEY)",
         ],
+        # keys_per_run from orca.toml (#240), over the code's: how many keys
+        # a backfill, a sensor's run or a fill run takes. Additive: an
+        # older binary reads the code's from `describe`, as it did.
+        ["ALTER TABLE orca.pipelines ADD COLUMN keys_per_run integer"],
     ]
 
 

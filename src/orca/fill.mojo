@@ -416,6 +416,8 @@ struct FillPipeline(Copyable, Movable):
     var workers: Int
     var pool_seconds: Int
     """On EC2, how long an instance idles in the warm pool after a run."""
+    var keys_per_run: Int
+    """How many partitions a fill run takes (#240): 1 by default."""
 
 
 struct FillStatus(Copyable, Movable):
@@ -457,8 +459,8 @@ struct FillStatus(Copyable, Movable):
     var slots: Int
     """Fill runs that may start now, before the pipeline's own limits."""
     var next_keys: List[String]
-    """The partitions the next fill runs take, in `fill_order`, at most
-    `slots`."""
+    """The partitions of each of the next fill runs, comma-separated, in
+    `fill_order`, up to `keys_per_run` to a run; at most `slots` runs."""
     var lag_key: String
     """The partition that has ended but waits for `fill_lag`, or empty."""
     var lag_until: Int64
@@ -793,8 +795,20 @@ def fill_status(
             var one = COST_MARGIN * s.hourly * Float64(expected) / 3600.0
             var room = s.budget - s.spent - s.next_cost
             s.slots = min(s.slots, 1 + Int(room / one))
-        for i in range(min(s.slots, len(todo))):
-            s.next_keys.append(todo[i])
+        var k = max(p.keys_per_run, 1)
+        var i = 0
+        while len(s.next_keys) < s.slots and i < len(todo):
+            var batch = List[String]()
+            while i < len(todo) and len(batch) < k:
+                batch.append(todo[i])
+                i += 1
+            # Keys of one kind order as text; a run's are kept ascending.
+            if p.fill.newest_first:
+                batch.reverse()
+            var joined = String()
+            for j in range(len(batch)):
+                joined.write("," if j else "", batch[j])
+            s.next_keys.append(joined^)
     return s^
 
 
