@@ -1,1 +1,0 @@
-- **Locked runtime image, promoted at release:** the runtime image installs from a committed lock, and a release tags the image main already built and tested for its commit instead of rebuilding it. (#0)
