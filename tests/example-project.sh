@@ -13,7 +13,7 @@ set -eu
 cd "$(dirname "$0")/.."
 dir=${1:?usage: sh tests/example-project.sh <dir>}
 rev=${ORCA_REV:-$(git rev-parse HEAD)}
-repo=${ORCA_REPO:-https://github.com/magmalake/orca.mojo}
+repo=${ORCA_REPO:-https://github.com/morca-dev/morca}
 rm -rf "$dir"
 mkdir -p "$dir/pipelines"
 cp examples/toy.mojo "$dir/pipelines/"

@@ -22,7 +22,7 @@ run() { docker run --rm "$@"; }
 run "$img" 2>&1 | grep -q "orca locate" || fail "orca's usage"
 run --entrypoint orca_maintain "$img" 2>&1 | grep -q "expected .expire <dataset>" || fail "orca_maintain's usage"
 run --entrypoint /opt/orca/libexec/llvm-symbolizer "$img" --version | grep -q LLVM || fail "llvm-symbolizer"
-run --entrypoint git "$img" ls-remote https://github.com/magmalake/orca.mojo HEAD | grep -q HEAD \
+run --entrypoint git "$img" ls-remote https://github.com/morca-dev/morca HEAD | grep -q HEAD \
     || fail "git over HTTPS"
 # Every binary and library finds what it links.
 missing=$(run --entrypoint sh "$img" -c \
@@ -38,7 +38,7 @@ cpu=${3:-neoverse-n1}
 # orca-mojo as `pixi shelf add` pins it: by revision, which must be on
 # GitHub (CI's commit; ORCA_REV and ORCA_REPO say another).
 rev=${ORCA_REV:-$(git rev-parse HEAD)}
-repo=${ORCA_REPO:-https://github.com/magmalake/orca.mojo}
+repo=${ORCA_REPO:-https://github.com/morca-dev/morca}
 ctx=$PWD/build/runtime-project
 rm -rf "$ctx"
 mkdir -p "$ctx/pipelines"
@@ -56,7 +56,7 @@ orca-mojo = { git = "$repo", rev = "$rev" }
 EOF
 pixi lock --manifest-path "$ctx/pixi.toml"
 docker build -f deploy/project.Dockerfile --build-arg ORCA_RUNTIME="${img%:*}" --build-arg ORCA_VERSION="${img##*:}" \
-    --build-arg MOJO_TARGET_CPU="$cpu" --build-arg ORCA_SOURCE=https://github.com/magmalake/orca.mojo \
+    --build-arg MOJO_TARGET_CPU="$cpu" --build-arg ORCA_SOURCE=https://github.com/morca-dev/morca \
     --build-arg ORCA_COMMIT=0000000 -t runtime-project:ci "$ctx"
 proj=runtime-project:ci
 run --entrypoint sh "$proj" -c '[ -x /opt/orca/bin/orca_maintain ] && [ -x /opt/orca/bin/git ]' || fail "the project's layout"

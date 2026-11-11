@@ -27,11 +27,11 @@ on:
 
 jobs:
   test:
-    uses: magmalake/orca.mojo/.github/workflows/project-test.yml@v0.24.0
+    uses: morca-dev/morca/.github/workflows/project-test.yml@v0.24.0
     with: { tasks: "build test" }
 
   image:
-    uses: magmalake/orca.mojo/.github/workflows/project-image.yml@v0.24.0
+    uses: morca-dev/morca/.github/workflows/project-image.yml@v0.24.0
     permissions: { contents: read, packages: write }
     with:
       image: ghcr.io/mojourney/census
@@ -42,7 +42,7 @@ jobs:
   release:
     if: github.ref_type == 'tag'
     needs: [test, image]
-    uses: magmalake/orca.mojo/.github/workflows/project-release.yml@v0.24.0
+    uses: morca-dev/morca/.github/workflows/project-release.yml@v0.24.0
     permissions: { contents: write }
     with: { image: ghcr.io/mojourney/census }
 ```
@@ -63,7 +63,7 @@ dies on a CAX with SIGILL; see [Images](hetzner.md#images)), and
 3. builds the image: from
    [`deploy/project.Dockerfile`](../deploy/project.Dockerfile) of that orca
    release (`v<version>`, or `orca-ref`), `FROM`
-   `ghcr.io/magmalake/orca-runtime:<version>`, or from the project's own
+   `ghcr.io/morca-dev/morca-runtime:<version>`, or from the project's own
    `dockerfile`. The build args are `MOJO_TARGET_CPU`, `ORCA_SOURCE` (the
    repository's URL), `ORCA_COMMIT` (the commit), the version as
    `version-arg`, `ORCA_VERSION` and `ORCA_RUNTIME`, and `build-args`;
@@ -92,8 +92,8 @@ sha (7 characters), the version (a tag's name without its `v`, or
 | `arm64-runner`, `arm64-cpu` | `ubuntu-24.04-arm`, `neoverse-n1` | |
 | `amd64-runner`, `amd64-cpu` | `ubuntu-24.04`, `x86-64-v3` | |
 | `orca-version` | from `pixi.lock` | names the runtime image |
-| `runtime` | `ghcr.io/magmalake/orca-runtime` | the runtime's repository |
-| `orca-repository`, `orca-ref` | `magmalake/orca.mojo`, `v<orca-version>` | where the template comes from |
+| `runtime` | `ghcr.io/morca-dev/morca-runtime` | the runtime's repository |
+| `orca-repository`, `orca-ref` | `morca-dev/morca`, `v<orca-version>` | where the template comes from |
 | `build-runtime` | `false` | build the runtime from `orca-ref` instead of pulling it |
 | `prepare`, `smoke` | | shell commands, before the build and after the tests |
 | `timeout-minutes` | `90` | |

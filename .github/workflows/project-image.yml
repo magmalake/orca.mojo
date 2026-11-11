@@ -2,7 +2,7 @@
 #
 #     jobs:
 #       image:
-#         uses: magmalake/orca.mojo/.github/workflows/project-image.yml@v0.24.0
+#         uses: morca-dev/morca/.github/workflows/project-image.yml@v0.24.0
 #         with: { image: ghcr.io/mojourney/census, configs: orca.toml }
 #
 # One job per architecture, each on a runner of its own (no emulation) and
@@ -83,11 +83,11 @@ on:
       runtime:
         description: "The runtime image's repository"
         type: string
-        default: "ghcr.io/magmalake/orca-runtime"
+        default: "ghcr.io/morca-dev/morca-runtime"
       orca-repository:
         description: "Where orca's deploy/project.Dockerfile (and, with build-runtime, the runtime) come from"
         type: string
-        default: "magmalake/orca.mojo"
+        default: "morca-dev/morca"
       orca-ref:
         description: "The commit of orca-repository to take them from; empty is v<orca-version>"
         type: string

@@ -27,7 +27,7 @@ ARG ORCA_SOURCE=""
 ARG ORCA_COMMIT=""
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-RUN git clone -q https://github.com/magmalake/dista.mojo /src/dista.mojo \
+RUN git clone -q https://github.com/morca-dev/dista /src/dista.mojo \
     && git -C /src/dista.mojo checkout -q ${DISTA_REV} \
     && git clone -q https://github.com/magmalake/k8s.mojo /src/k8s.mojo \
     && git -C /src/k8s.mojo checkout -q ${K8S_REV}

@@ -38,7 +38,7 @@ free_port uport
 base="http://127.0.0.1:$uport"
 export ORCA_HCLOUD_ENDPOINT="http://127.0.0.1:$hport/v1" ORCA_HCLOUD_TOKEN=test-token
 export ORCA_REGISTRY_ENDPOINT="http://127.0.0.1:$hport"
-export ORCA_WORKER_IMAGE="ghcr.io/magmalake/orca:t1"
+export ORCA_WORKER_IMAGE="ghcr.io/morca-dev/census:t1"
 pids=
 sched=
 cleanup() {
@@ -102,7 +102,7 @@ echo arm64 > "$dir/arches"
 echo "cpx32 hel1" > "$dir/stock"
 ./build/orca backfill plain 2024-01..2024-03 >> "$log" 2>&1 || fail "backfill"
 until_ 20 "no waiting status: $(status)" has_status "waiting: no cax31 in hel1, nbg1 yet"
-has_status "cpx32 skipped: ghcr.io/magmalake/orca:t1 has no linux/amd64" || fail "the skip isn't said: $(status)"
+has_status "cpx32 skipped: ghcr.io/morca-dev/census:t1 has no linux/amd64" || fail "the skip isn't said: $(status)"
 [ -z "$(servers)" ] || fail "made a server: $(servers)"
 echo "ok   a type the image has no variant for is skipped, saying so"
 
