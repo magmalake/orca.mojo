@@ -1,1 +1,0 @@
-- **Long Read by lists wrap**: the Written by and Read by cells on Datasets (and the other pipeline lists) wrap between names within a maximum width. (#0)
