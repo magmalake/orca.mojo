@@ -1,1 +1,1 @@
-- **A gone worker's fill runs are audited**: a pool's fill run whose worker died is always queued again with why, in the audit log too. (#PR)
+- **A gone worker's fill runs are audited**: a pool's fill run whose worker died is always queued again with why, in the audit log too. (#351)
