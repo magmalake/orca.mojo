@@ -199,8 +199,12 @@ html '/ops/pools?kind=ec2&range=7d' | grep -qF '<a href="/ops/pools?kind=ec2&amp
 # minutes ago, and the workers' machines; not the control host, which is
 # Control.
 rows() { html "$1" | grep -o '<a href="/ops/pools/[a-z0-9-]*/[a-zA-Z0-9-]*"><code>[^<]*</code>' | sed 's/.*<code>//; s/<.code>//' | tr '\n' ' '; }
-want="i-head i-w1 i-w2 i-w3 i-gone w-lap box "
+# The default view leaves out `box`, a worker that never reported (gone for
+# good); i-gone ended ten minutes ago, so it stays; ?gone=1 lists box too.
+want="i-head i-w1 i-w2 i-w3 i-gone w-lap "
+all="${want}box "
 [ "$(rows /ops/pools)" = "$want" ] || fail "the machines: $(rows /ops/pools)"
+[ "$(rows '/ops/pools?gone=1')" = "$all" ] || fail "the machines with ?gone=1: $(rows '/ops/pools?gone=1')"
 echo "$page" | grep -qF '<code>control</code>' && fail "the control host is a row"
 echo "$page" | grep -qF "<a href=\"/ops/pools/ec2/i-head\"><code>i-head</code></a></td><td><a href=\"/ops/pools?pool=ec2\">ec2</a></td><td><span class=\"term\"" \
     || fail "the head's row"
@@ -234,11 +238,12 @@ json /ops/pools | jq -e '(.machines | length) == 7' > /dev/null || fail "/ops/po
 echo "ok   /ops/pools lists every pool's machines, EC2 and self-hosted"
 
 # Filters, as query parameters with plain links.
-[ "$(rows '/ops/pools?kind=self-hosted')" = "w-lap box " ] || fail "kind=self-hosted: $(rows '/ops/pools?kind=self-hosted')"
+[ "$(rows '/ops/pools?kind=self-hosted')" = "w-lap " ] || fail "kind=self-hosted: $(rows '/ops/pools?kind=self-hosted')"
+[ "$(rows '/ops/pools?kind=self-hosted&gone=1')" = "w-lap box " ] || fail "kind=self-hosted&gone=1"
 [ "$(rows '/ops/pools?kind=ec2')" = "i-head i-w1 i-w2 i-w3 i-gone " ] || fail "kind=ec2"
 [ "$(rows '/ops/pools?pool=ec2')" = "i-head i-w1 i-w2 i-w3 i-gone " ] || fail "pool=ec2"
 [ "$(rows '/ops/pools?pool=worker:bgent')" = "w-lap " ] || fail "pool=worker:bgent"
-[ "$(rows '/ops/pools?pool=worker%3Agh&kind=self-hosted')" = "box " ] || fail "pool and kind"
+[ "$(rows '/ops/pools?pool=worker%3Agh&kind=self-hosted&gone=1')" = "box " ] || fail "pool and kind"
 [ "$(rows '/ops/pools?pool=worker:bgent&kind=ec2')" = "" ] || fail "a pool of another kind"
 [ "$(rows '/ops/pools?kind=nonsense')" = "$want" ] || fail "an unknown kind is all"
 sh=$(html '/ops/pools?kind=self-hosted')
@@ -255,11 +260,51 @@ echo "$sh" | grep -q 'aria-label="Fleet CPU"' && fail "Fleet's charts without EC
     || fail "/api/pools?pool=worker:bgent"
 echo "ok   Pools filters by pool and kind"
 
+# Live machines by default: the gone ones left out sit behind a link that
+# keeps the filters, a machine gone for under an hour stays, dimmed, and
+# a pool with nothing live says so.
+sh=$(html '/ops/pools?kind=self-hosted')
+echo "$sh" | grep -qF '<p class="muted">1 gone machine, never seen · <a href="/ops/pools?kind=self-hosted&amp;gone=1">show all</a></p>' \
+    || fail "the show-all line: $(echo "$sh" | grep -o '[0-9] gone machine[^<]*<a[^>]*>[^<]*')"
+echo "$sh" | grep -qF 'data-poll="/ops/pools/live?kind=self-hosted"' || fail "the poll without ?gone"
+sh=$(html '/ops/pools?pool=worker%3Abgent&kind=self-hosted')
+echo "$sh" | grep -q 'gone machine' && fail "a gone line for a pool with none"
+echo "$sh" | grep -qF '<code>w-lap</code>' || fail "the live worker"
+sh=$(html '/ops/pools?kind=self-hosted&gone=1')
+echo "$sh" | grep -qF '<a href="/ops/pools?kind=self-hosted">hide gone</a>' || fail "the hide-gone link"
+echo "$sh" | grep -qF 'data-poll="/ops/pools/live?kind=self-hosted&amp;gone=1"' || fail "the poll keeps ?gone=1"
+echo "$sh" | grep -qF '<a class="ptabs__tab" href="/ops/pools?gone=1">All <span class="muted">7</span></a>' || fail "the tabs keep ?gone=1"
+echo "$sh" | grep -qF '<a href="/ops/pools?pool=worker%3Abgent&amp;kind=self-hosted&amp;gone=1">worker:bgent</a>' || fail "the pool links keep ?gone=1"
+echo "$(html '/ops/pools?pool=ec2')" | grep -qF '<tr class="pools__gone"><td><a href="/ops/pools/ec2/i-gone">' || fail "the recently ended instance isn't a dimmed row"
+# The empty state: a pool whose only machine is gone for good.
+sh=$(html '/ops/pools?pool=worker%3Agh')
+echo "$sh" | grep -qF '<p class="card__none">No machines running in worker:gh. 1 ran here before (never seen): <a href="/ops/pools?pool=worker%3Agh&amp;gone=1">show them</a>.</p>' \
+    || fail "the empty state: $(echo "$sh" | grep -o 'No machines[^/]*/a>')"
+echo "$sh" | grep -q '<table class="hosts pools">' && fail "a table with nothing live"
+# A machine heard from under an hour ago stays after it goes gone; an old
+# one leaves.
+q "UPDATE orca.workers SET revoked = now() WHERE id = $bid" > /dev/null
+q "UPDATE orca.workers SET last_seen = now() - interval '3 hours' WHERE id = $bid" > /dev/null
+sh=$(html '/ops/pools?pool=worker%3Agh')
+echo "$sh" | grep -qF 'last seen 3 h ago' || fail "the old gone worker's last seen: $(echo "$sh" | grep -o 'No machines[^/]*/a>')"
+q "UPDATE orca.workers SET last_seen = now() - interval '5 minutes' WHERE id = $bid" > /dev/null
+sh=$(html '/ops/pools?pool=worker%3Agh')
+echo "$sh" | grep -qF '<tr class="pools__gone"><td><a href="/ops/pools/self-hosted/'"$bid"'">' || fail "a worker gone 5 minutes ago isn't shown, dimmed"
+echo "$sh" | grep -q 'gone machine' && fail "a gone line for a recent one"
+q "UPDATE orca.workers SET revoked = NULL, last_seen = NULL WHERE id = $bid" > /dev/null
+# /api/pools has every machine; ?gone=0 matches the default view.
+[ "$(curl -fsS "$base/api/pools" | jq '.machines | length')" = 7 ] || fail "/api/pools isn't every machine"
+[ "$(curl -fsS "$base/api/pools?gone=0" | jq -r '[.machines[].name] | join(" ")')" = "i-head i-w1 i-w2 i-w3 i-gone w-lap" ] \
+    || fail "/api/pools?gone=0: $(curl -fsS "$base/api/pools?gone=0" | jq -c '[.machines[].name]')"
+[ "$(curl -fsS "$base/api/pools?gone=0" | jq -c '.pools | length')" = 3 ] || fail "/api/pools?gone=0 drops pools' counts"
+echo "ok   Pools lists live machines, gone ones behind ?gone=1; /api/pools?gone=0"
+
 # The live part, as a fragment that never ends.
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/ops/pools/live")" = 200 ] || fail "the fragment doesn't answer 200"
 html /ops/pools/live | grep -q '<html' && fail "the fragment is a page"
 html /ops/pools/live | grep -qF '<span class="stat__v">5</span>' || fail "the fragment's cards"
-[ "$(rows '/ops/pools/live?kind=self-hosted')" = "w-lap box " ] || fail "the fragment's filter"
+[ "$(rows '/ops/pools/live?kind=self-hosted')" = "w-lap " ] || fail "the fragment's filter"
+[ "$(rows '/ops/pools/live?kind=self-hosted&gone=1')" = "w-lap box " ] || fail "the fragment's ?gone=1"
 html '/ops/pools/live?kind=self-hosted' | grep -qF 'aria-label="About Last heartbeat"' || fail "the fragment's column help"
 q "UPDATE orca.workers SET revoked = now() WHERE id = $wid" > /dev/null
 html '/ops/pools/live?kind=self-hosted' | grep -qF '<span class="muted">revoked</span>' || fail "the fragment doesn't follow a revoke"
@@ -305,8 +350,8 @@ q "UPDATE orca.instances SET instance_type = '<b>x</b>' WHERE id = 'i-w3'" > /de
 q "UPDATE orca.workers SET name = '<i>w</i>' WHERE id = $bid" > /dev/null
 html /ops/pools | grep -qF '<b>x</b>' && fail "an instance type's markup reached the page"
 html /ops/pools | grep -qF '&lt;b&gt;x&lt;/b&gt;' || fail "the escaped instance type"
-html /ops/pools | grep -qF '<i>w</i>' && fail "a worker's name's markup reached the page"
-html /ops/pools | grep -qF '&lt;i&gt;w&lt;/i&gt;' || fail "the escaped worker name"
+html '/ops/pools?gone=1' | grep -qF '<i>w</i>' && fail "a worker's name's markup reached the page"
+html '/ops/pools?gone=1' | grep -qF '&lt;i&gt;w&lt;/i&gt;' || fail "the escaped worker name"
 # On the local runner the page says that no instances are launched; on others
 # it doesn't.
 html /ops/pools | grep -q 'launches no instances' && fail "the local-runner notice on a scheduler with no runner set"

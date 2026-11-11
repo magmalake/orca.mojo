@@ -30,7 +30,7 @@ stylesheet is served before any route is looked up.
 | `/ops/alerts` | Alerts (`orca.ui.alerts`): every alert sent (`orca.alerts`), newest first, 50 to a page (`?limit=`, at most 500; `?before=<id>`, `?after=<id>`), `?kind=` and `?state=open` or `resolved`; its kind, title and message, links, whether ntfy took it and whether it is still open; the newest page refreshes every 30 s from `/ops/alerts/live`; `/api/alerts` is the same as JSON |
 | `/ops/control` | Control, the one machine running the scheduler, this UI, Postgres and local and control-placed runs (so not a pool on Pools): its own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`), and the watchdog's banner, refreshed every 30 s from `/ops/control/live`; `/api/system` is the same as JSON; `/system` redirects here (301) |
 | `/metrics` | Prometheus gauges: the control instance's CPU, memory, disk, network and containers' memory, runs running and queued, hosts, and errors in the last hour; open like the other pages (reads need no login) |
-| `/ops/pools` | Pools, every machine runs are placed on (`orca.ui.pools`, `orca.views.pools`): a row per EC2 instance orca launched (live, and gone for an hour after it ended), per live Kubernetes run's pods (on the Kubernetes runner) and per worker token's machine (`orca.workers`), with its pool, kind, state, image, CPUs, memory, runs, last heartbeat, CPU and worker; `?pool=` (`ec2`, `kubernetes`, `worker:<pool>`) and `?kind=` (`ec2`, `k8s`, `self-hosted`) filter it; with EC2 in view, Fleet's cards (`orca.fleet`) and its charts over `?range=24h` or `7d`; refreshed every 10 s from `/ops/pools/live`; `/api/pools` the same as JSON |
+| `/ops/pools` | Pools, every machine runs are placed on (`orca.ui.pools`, `orca.views.pools`): a row per EC2 instance orca launched (live, and gone for an hour after it ended), per live Kubernetes run's pods (on the Kubernetes runner) and per worker token's machine (`orca.workers`), with its pool, kind, state, image, CPUs, memory, runs, last heartbeat, CPU and worker; `?pool=` (`ec2`, `kubernetes`, `worker:<pool>`) and `?kind=` (`ec2`, `k8s`, `self-hosted`) filter it; machines gone for over an hour are behind `?gone=1`; with EC2 in view, Fleet's cards (`orca.fleet`) and its charts over `?range=24h` or `7d`; refreshed every 10 s from `/ops/pools/live`; `/api/pools` the same as JSON, every machine unless `?gone=0` |
 | `/ops/pools/<kind>/<id>` | a machine: its facts, and an EC2 instance's samples over its run (the run page's Machines charts) or the runs a worker claimed |
 | `/ops/fleet`, `/ops/workers` | moved to `/ops/pools?kind=ec2` (Fleet's `?range=` kept) and `?kind=self-hosted` (301), as are `/ops/fleet/hosts`, `/ops/workers/live`, `/fleet` and `/fleet/hosts` (to `/ops/pools/live` for the fragments); asked for JSON, they answer Fleet's and Workers' JSON as before, as `/api/fleet` (the summary, hosts and charts of `orca.fleet`) and `/api/workers` (each worker token's pool, label, worker, image, last heartbeat, runs, CPUs and memory) do. A worker's own requests go to `/api/worker/...` with its token |
 | `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`orca.watchdog`); also the red banner on `/`, `/ops/pools` and `/ops/control`; the page refreshes every 30 s from `/watchdog/live` |
@@ -393,22 +393,22 @@ def _metrics(mut db: State, call: Call) raises -> Page:
     return metrics_page(db)
 
 
-def _ask(call: Call) -> PoolsAsk:
+def _ask(call: Call, gone: Bool) -> PoolsAsk:
     return pools_ask(
-        call.query("pool"), call.query("kind"), call.query("range")
+        call.query("pool"), call.query("kind"), call.query("range"), gone
     )
 
 
 def _pools(mut db: State, call: Call) raises -> Page:
-    return pools_page(db, _ask(call))
+    return pools_page(db, _ask(call, call.query("gone") == "1"))
 
 
 def _pools_live(mut db: State, call: Call) raises -> Page:
-    return pools_live(db, _ask(call))
+    return pools_live(db, _ask(call, call.query("gone") == "1"))
 
 
 def _pools_api(mut db: State, call: Call) raises -> Page:
-    return pools_api(db, _ask(call))
+    return pools_api(db, _ask(call, call.query("gone") != "0"))
 
 
 def _machine(mut db: State, call: Call) raises -> Page:

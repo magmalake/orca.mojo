@@ -37,6 +37,7 @@ from orca.views.pools import (
     kind_of,
     machine,
     machines,
+    old_gone,
     pool_counts,
     run_pipeline,
     worker_runs,
@@ -53,11 +54,14 @@ Workers table were."""
 
 @fieldwise_init
 struct PoolsAsk(Copyable, Movable):
-    """What the page was asked for: `?pool=`, `?kind=`, `?range=`."""
+    """What the page was asked for: `?pool=`, `?kind=`, `?range=`, and
+    `?gone=1`."""
 
     var pool: String
     var kind: String
     var range: String
+    var gone: Bool
+    """Whether machines gone for more than an hour are listed."""
 
     def query(self, with_range: Bool = True) -> String:
         """The query that asks for it again (`?` included; empty for none)."""
@@ -66,6 +70,8 @@ struct PoolsAsk(Copyable, Movable):
             q.write("?pool=", url_encode(self.pool))
         if self.kind:
             q.write("&" if q else "?", "kind=", self.kind)
+        if self.gone:
+            q.write("&" if q else "?", "gone=1")
         if with_range and self.range != "24h":
             q.write("&" if q else "?", "range=", self.range)
         return q^
@@ -77,9 +83,14 @@ struct PoolsAsk(Copyable, Movable):
         )
 
 
-def pools_ask(pool: String, kind: String, range: String) -> PoolsAsk:
+def pools_ask(
+    pool: String, kind: String, range: String, gone: Bool
+) -> PoolsAsk:
     return PoolsAsk(
-        pool, kind_of(kind), String("7d") if range == "7d" else String("24h")
+        pool,
+        kind_of(kind),
+        String("7d") if range == "7d" else String("24h"),
+        gone,
     )
 
 
@@ -172,10 +183,49 @@ def _th(mut h: Html, label: StaticString, num: Bool = False):
     h.raw(label, "</th>")
 
 
-def machines_html(mut h: Html, ms: List[Machine]):
-    """The table of machines, a row each."""
+def _gone_link(mut h: Html, ask: PoolsAsk, show: Bool, text: String):
+    h.raw('<a href="/ops/pools')
+    h.text(PoolsAsk(ask.pool, ask.kind, ask.range, show).query())
+    h.raw('">', text, "</a>")
+
+
+def _gone_html(mut h: Html, ask: PoolsAsk, gone: Tuple[Int, Int], none: Bool):
+    """Under the table: the machines it leaves out, and the link that lists
+    them; with them listed, the link back. With `none` (nothing is
+    running), it is the table's empty state."""
+    var n = gone[0]
+    if n == 0:
+        if none:
+            h.raw('<p class="card__none">No machines in this view.</p>')
+        return
+    var many = String(n, " gone machines" if n > 1 else " gone machine")
+    var seen = String("last seen ", _ago(gone[1])) if gone[1] >= 0 else String(
+        "never seen"
+    )
+    if ask.gone:
+        h.raw('<p class="muted">', many, ", ", seen, " · ")
+        _gone_link(h, ask, False, String("hide gone"))
+    elif none:
+        h.raw('<p class="card__none">No machines running')
+        if ask.pool:
+            h.raw(" in ")
+            h.text(ask.pool)
+        h.raw(". ", n, " ran here before (", seen, "): ")
+        _gone_link(h, ask, True, String("show them"))
+        h.raw(".")
+    else:
+        h.raw('<p class="muted">', many, ", ", seen, " · ")
+        _gone_link(h, ask, True, String("show all"))
+    h.raw("</p>")
+
+
+def machines_html(
+    mut h: Html, ms: List[Machine], ask: PoolsAsk, gone: Tuple[Int, Int]
+):
+    """The table of machines, a row each, and the gone ones it leaves out
+    (`gone`: how many, and when the freshest was last seen)."""
     if len(ms) == 0:
-        h.raw('<p class="card__none">No machines in this view.</p>')
+        _gone_html(h, ask, gone, True)
         return
     h.raw('<div class="scroll"><table class="hosts pools"><thead><tr>')
     _th(h, "Machine")
@@ -228,6 +278,7 @@ def machines_html(mut h: Html, ms: List[Machine]):
         _process_html(h, m)
         h.raw("</td></tr>")
     h.raw("</tbody></table></div>")
+    _gone_html(h, ask, gone, False)
 
 
 def _filters_html(mut h: Html, ask: PoolsAsk, counts: List[PoolCount]):
@@ -245,7 +296,7 @@ def _filters_html(mut h: Html, ask: PoolsAsk, counts: List[PoolCount]):
             if not k[0] or c.kind == k[0]:
                 n += c.machines
         h.raw('<a class="ptabs__tab" href="/ops/pools')
-        h.text(PoolsAsk(String(), String(k[0]), ask.range).query())
+        h.text(PoolsAsk(String(), String(k[0]), ask.range, ask.gone).query())
         h.raw('"', ' aria-current="page"' if ask.kind == k[0] else "", ">")
         h.raw(k[1], ' <span class="muted">', n, "</span></a>")
     h.raw("</nav>")
@@ -255,7 +306,7 @@ def _filters_html(mut h: Html, ask: PoolsAsk, counts: List[PoolCount]):
         h.raw("<strong>all</strong>")
     else:
         h.raw('<a href="/ops/pools')
-        h.text(PoolsAsk(String(), ask.kind, ask.range).query())
+        h.text(PoolsAsk(String(), ask.kind, ask.range, ask.gone).query())
         h.raw('">all</a>')
     for c in counts:
         if ask.kind and c.kind != ask.kind:
@@ -268,7 +319,7 @@ def _filters_html(mut h: Html, ask: PoolsAsk, counts: List[PoolCount]):
             h.raw("</strong>")
         else:
             h.raw('<a href="/ops/pools')
-            h.text(PoolsAsk(c.pool, ask.kind, ask.range).query())
+            h.text(PoolsAsk(c.pool, ask.kind, ask.range, ask.gone).query())
             h.raw('">')
             h.text(c.pool)
             h.raw("</a>")
@@ -300,7 +351,10 @@ def _live_html(mut h: Html, mut db: State, ask: PoolsAsk) raises:
         "pools",
         facts=False,
     )
-    machines_html(h, filtered(all, ask.pool, ask.kind))
+    var inview = filtered(all, ask.pool, ask.kind)
+    machines_html(
+        h, filtered(all, ask.pool, ask.kind, ask.gone), ask, old_gone(inview)
+    )
     h.raw("</section>")
 
 
@@ -382,7 +436,7 @@ def pools_json(ask: PoolsAsk, all: List[Machine]) -> String:
             "}",
         )
     out.write('], "machines": [')
-    var ms = filtered(all, ask.pool, ask.kind)
+    var ms = filtered(all, ask.pool, ask.kind, ask.gone)
     for i in range(len(ms)):
         out.write(", " if i else "", _machine_json(ms[i]))
     out.write("]}")
@@ -423,10 +477,15 @@ def pools_page(mut db: State, ask: PoolsAsk) raises -> Page:
             h,
             fleet_charts(db, 168 if ask.range == "7d" else 24),
             ask.range,
-            String("/ops/pools", PoolsAsk(ask.pool, ask.kind, "24h").query()),
+            String(
+                "/ops/pools",
+                PoolsAsk(ask.pool, ask.kind, "24h", ask.gone).query(),
+            ),
         )
     return Page(
-        200, pools_json(ask, machines(db)), page_html("Pools", "/ops/pools", h)
+        200,
+        pools_json(PoolsAsk(ask.pool, ask.kind, ask.range, True), machines(db)),
+        page_html("Pools", "/ops/pools", h),
     )
 
 
@@ -439,7 +498,8 @@ def pools_live(mut db: State, ask: PoolsAsk) raises -> Page:
 
 
 def pools_api(mut db: State, ask: PoolsAsk) raises -> Page:
-    """`/api/pools`: the page's machines as JSON, filtered as asked."""
+    """`/api/pools`: the page's machines as JSON, filtered as asked; `?gone=0`
+    leaves out those gone for more than an hour."""
     var j = pools_json(ask, machines(db))
     return Page(200, j.copy(), j^, "application/json")
 

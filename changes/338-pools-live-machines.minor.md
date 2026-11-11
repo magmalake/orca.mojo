@@ -1,0 +1,1 @@
+- **Pools lists live machines** Machines gone for over an hour are behind a "show all" link (`?gone=1`), and `/api/pools?gone=0` matches. (#338)
