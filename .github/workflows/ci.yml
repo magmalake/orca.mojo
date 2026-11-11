@@ -458,7 +458,16 @@ jobs:
       - name: Start from an empty build/
         run: rm -rf build
 
-      # pixi 0.78.0 is on the runner's PATH, as the lock needs.
+      # pixi 0.78.0 is installed for the runner's `ci` user, as the lock
+      # needs, but the runner service's PATH doesn't have it: add its usual
+      # homes, and say what is found.
+      - name: Find pixi
+        run: |
+          for d in "$HOME/.pixi/bin" /opt/homebrew/bin /usr/local/bin; do
+            [ -x "$d/pixi" ] && echo "$d" >> "$GITHUB_PATH" && PATH="$d:$PATH" && break
+          done
+          echo "user: $(id -un), HOME: $HOME, PATH: $PATH"
+          pixi --version
       - name: Install the environment
         run: pixi install --locked -e default
 
