@@ -938,9 +938,11 @@ project. The census's is still `ghcr.io/magmalake/orca`.
 linux/amd64; [`deploy/runtime.Dockerfile`](../deploy/runtime.Dockerfile)):
 orca's own `orca` and `orca_maintain`, git, libcurl, the CA bundles where
 libcurl, OpenSSL and flare look for them, llvm-symbolizer, and the
-`/opt/orca` layout and environment. orca's CI builds and tests it on every
-pull request and pushes it when a release is tagged. A project's image
-builds `FROM` it and adds only its own programs:
+`/opt/orca` layout and environment, installed from a committed lock
+(`deploy/runtime/pixi.lock`). orca's CI builds and tests it on every pull
+request, and on main pushes it as `orca-runtime:<sha>`; a release tags its
+commit's image `<version>` once main has pushed it, rebuilding nothing. A
+project's image builds `FROM` it and adds only its own programs:
 [`deploy/project.Dockerfile`](../deploy/project.Dockerfile), the image
 `orca aws push` builds, compiles the project's `bin/*.mojo` and
 `pipelines/*.mojo` into `/opt/orca/bin` and `/opt/orca/pipelines`, with the
