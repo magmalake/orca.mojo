@@ -50,7 +50,7 @@ struct Day(TimeKey):
         return Day(m.year, m.month, days_in(m.year, m.month))
 
     @staticmethod
-    def containing(year: Int, month: Int, day: Int) -> Day:
+    def containing(year: Int, month: Int, day: Int, hour: Int) -> Day:
         return Day(year, month, day)
 
     def month_of(self) -> Month:

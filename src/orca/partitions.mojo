@@ -5,11 +5,12 @@ comptime Taxi = Pipeline[
     "taxi", Download, Load, Compact, partitions=Monthly["2011-01"]
 ]
 comptime Weather = Pipeline["weather", Fetch, partitions=Daily["2020-01-01"]]
+comptime Poll = Pipeline["poll", Poll, partitions=Hourly["2026-11-11T00"]]
 comptime Labels = Pipeline["labels", Label, partitions=Keyed["av2.logs", "log_id"]]
 ```
 
 A pipeline's first step takes its key (`Month` for `Monthly`, `Day` for
-`Daily`, `Name` for `orca.keyed.Keyed`), or a `Seq` of them for a first
+`Daily`, `Hour` for `Hourly`, `Name` for `orca.keyed.Keyed`), or a `Seq` of them for a first
 gather step. `start` is the first partition: keys before it are refused,
 and phase 2's scheduler and backfills count from it. A pipeline without
 `partitions=` is `Monthly[]`, with no start.
@@ -21,6 +22,7 @@ current `keys`, read from their dataset.
 """
 
 from orca.day import Day
+from orca.hour import Hour
 from orca.key import Key, TimeKey, parse_keys
 from orca.month import Month
 
@@ -31,7 +33,7 @@ trait Partitions:
 
     @staticmethod
     def kind() -> StaticString:
-        """`monthly`, `daily` or `keyed`, as `describe` writes it."""
+        """`monthly`, `daily`, `hourly` or `keyed`, as `describe` writes it."""
         ...
 
     @staticmethod
@@ -57,9 +59,11 @@ trait Partitions:
         ...
 
     @staticmethod
-    def fill(year: Int, month: Int, day: Int, previous: Bool) raises -> Self.K:
-        """The key a date falls in, or the one before it; raises for keys
-        that aren't dates."""
+    def fill(
+        year: Int, month: Int, day: Int, hour: Int, previous: Bool
+    ) raises -> Self.K:
+        """The key a date and hour fall in, or the one before it; raises for
+        keys that aren't dates."""
         ...
 
     @staticmethod
@@ -69,8 +73,10 @@ trait Partitions:
         ...
 
 
-def _fill[K: TimeKey](year: Int, month: Int, day: Int, previous: Bool) -> K:
-    var k = K.containing(year, month, day)
+def _fill[
+    K: TimeKey
+](year: Int, month: Int, day: Int, hour: Int, previous: Bool) -> K:
+    var k = K.containing(year, month, day, hour)
     return k.prev() if previous else k^
 
 
@@ -100,8 +106,10 @@ struct Monthly[first: StaticString = ""](Partitions):
         return parse_keys[Month](s, Self.first)
 
     @staticmethod
-    def fill(year: Int, month: Int, day: Int, previous: Bool) raises -> Month:
-        return _fill[Month](year, month, day, previous)
+    def fill(
+        year: Int, month: Int, day: Int, hour: Int, previous: Bool
+    ) raises -> Month:
+        return _fill[Month](year, month, day, hour, previous)
 
     @staticmethod
     def keys() raises -> Tuple[Int64, List[String]]:
@@ -134,12 +142,51 @@ struct Daily[first: StaticString = ""](Partitions):
         return parse_keys[Day](s, Self.first)
 
     @staticmethod
-    def fill(year: Int, month: Int, day: Int, previous: Bool) raises -> Day:
-        return _fill[Day](year, month, day, previous)
+    def fill(
+        year: Int, month: Int, day: Int, hour: Int, previous: Bool
+    ) raises -> Day:
+        return _fill[Day](year, month, day, hour, previous)
 
     @staticmethod
     def keys() raises -> Tuple[Int64, List[String]]:
         raise Error("orca: daily partitions have no keys dataset")
+
+
+struct Hourly[first: StaticString = ""](Partitions):
+    """A partition per hour, from `first` (`YYYY-MM-DDTHH`) if given, on the
+    schedule's wall clock (UTC without a zone)."""
+
+    comptime K = Hour
+
+    @staticmethod
+    def kind() -> StaticString:
+        return "hourly"
+
+    @staticmethod
+    def start() -> StaticString:
+        return Self.first
+
+    @staticmethod
+    def dataset() -> StaticString:
+        return ""
+
+    @staticmethod
+    def column() -> StaticString:
+        return ""
+
+    @staticmethod
+    def parse(s: StringSlice, check: Bool) raises -> List[Hour]:
+        return parse_keys[Hour](s, Self.first)
+
+    @staticmethod
+    def fill(
+        year: Int, month: Int, day: Int, hour: Int, previous: Bool
+    ) raises -> Hour:
+        return _fill[Hour](year, month, day, hour, previous)
+
+    @staticmethod
+    def keys() raises -> Tuple[Int64, List[String]]:
+        raise Error("orca: hourly partitions have no keys dataset")
 
 
 def parse_partitions[P: Partitions](s: StringSlice) raises -> List[P.K]:

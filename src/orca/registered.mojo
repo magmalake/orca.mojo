@@ -19,6 +19,7 @@ from orca.fill import (
 )
 from orca.cron import CronExpr
 from orca.day import Day
+from orca.hour import Hour
 from orca.ec2 import Ec2Spec
 from orca.month import Month
 from orca.schedule import Schedule
@@ -185,11 +186,14 @@ def _ec2_spec(p: Registered, run: Int, start: Int, new_code: Bool) -> Ec2Spec:
 def fill_key(kind: String, fills: String, local: Civil) raises -> String:
     """The partition a fire fills, given its time on the schedule's wall
     clock: the key the time falls in, or the one before it."""
+    if kind == "hourly":
+        var h = Hour.containing(local.year, local.month, local.day, local.hour)
+        return String(h.prev() if fills == "previous" else h^)
     if kind == "daily":
-        var d = Day.containing(local.year, local.month, local.day)
+        var d = Day.containing(local.year, local.month, local.day, 0)
         return String(d.prev() if fills == "previous" else d^)
     if kind == "monthly":
-        var m = Month.containing(local.year, local.month, local.day)
+        var m = Month.containing(local.year, local.month, local.day, 0)
         return String(m.prev() if fills == "previous" else m^)
     raise Error("orca: unknown partitions '", kind, "'")
 

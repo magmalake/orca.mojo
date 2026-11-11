@@ -41,7 +41,7 @@ struct Month(TimeKey):
         return Month(self.year, self.month - 1)
 
     @staticmethod
-    def containing(year: Int, month: Int, day: Int) -> Month:
+    def containing(year: Int, month: Int, day: Int, hour: Int) -> Month:
         return Month(year, month)
 
     def __eq__(self, other: Self) -> Bool:

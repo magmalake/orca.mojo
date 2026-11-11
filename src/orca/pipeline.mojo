@@ -329,7 +329,7 @@ struct Pipeline[
         """The partition a fire at `fire` fills."""
         var c = Civil.of(s.zone.to_local(fire))
         return Self.partitions.fill(
-            c.year, c.month, c.day, previous=Self.fills == Previous
+            c.year, c.month, c.day, c.hour, previous=Self.fills == Previous
         )
 
     @staticmethod

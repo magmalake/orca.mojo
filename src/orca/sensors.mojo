@@ -42,21 +42,25 @@ runs itself.
 from postgres import Params
 
 from orca.day import Day
-from orca.key import parse_keys
+from orca.hour import Hour
 from orca.lineage import flows
 from orca.live import live_runs
 from orca.month import Month, days_in
 from orca.name import sort_texts
 from orca.state import State
+from orca.timekeys import parse_time_keys
 from orca.warehouse import Sensed
 
 
 def key_kind(key: StringSlice) -> String:
-    """`monthly` for a `YYYY-MM` key, `daily` for `YYYY-MM-DD`, or empty."""
+    """`monthly` for a `YYYY-MM` key, `daily` for `YYYY-MM-DD`, `hourly`
+    for `YYYY-MM-DDTHH`, or empty."""
     if key.byte_length() == 7:
         return "monthly"
     if key.byte_length() == 10:
         return "daily"
+    if key.byte_length() == 13 and key[byte=10] == "T":
+        return "hourly"
     return ""
 
 
@@ -73,23 +77,40 @@ def split_keys(s: StringSlice) -> List[String]:
 def map_keys(
     keys: List[String], kind: String, start: String = ""
 ) raises -> List[String]:
-    """`keys`, of either kind, as keys of `kind`: a day as its month, a
-    month as each of its days. Those before `start` are dropped, and the
-    rest are sorted, once each."""
+    """`keys`, of any time kind, as keys of `kind`: a key as the longer one
+    it falls in (an hour as its day or month, a day as its month), or as
+    each shorter one it has (a month as its days or hours, a day as its
+    hours). Those before `start` are dropped, and the rest are sorted, once
+    each."""
     var out = List[String]()
     for k in keys:
         var have = key_kind(k)
         var mapped = List[String]()
-        if have == "monthly" and kind == "monthly":
+        if have == kind and have == "monthly":
             mapped.append(String(Month.parse(k)))
-        elif have == "daily" and kind == "daily":
+        elif have == kind and have == "daily":
             mapped.append(String(Day.parse(k)))
+        elif have == kind and have == "hourly":
+            mapped.append(String(Hour.parse(k)))
         elif have == "daily" and kind == "monthly":
             mapped.append(String(Day.parse(k).month_of()))
+        elif have == "hourly" and kind == "monthly":
+            mapped.append(String(Hour.parse(k).month_of()))
+        elif have == "hourly" and kind == "daily":
+            mapped.append(String(Hour.parse(k).day_of()))
         elif have == "monthly" and kind == "daily":
             var m = Month.parse(k)
             for d in range(1, days_in(m.year, m.month) + 1):
                 mapped.append(String(Day(m.year, m.month, d)))
+        elif have == "monthly" and kind == "hourly":
+            var m = Month.parse(k)
+            for d in range(1, days_in(m.year, m.month) + 1):
+                for h in range(24):
+                    mapped.append(String(Hour(m.year, m.month, d, h)))
+        elif have == "daily" and kind == "hourly":
+            var d = Day.parse(k)
+            for h in range(24):
+                mapped.append(String(Hour(d.year, d.month, d.day, h)))
         else:
             raise Error("orca: not a partition key: '", k, "'")
         # Keys of one kind order as text.
@@ -248,16 +269,10 @@ def plan_rebuild(
     """The partitions a rebuild of `dataset` over `keys` is given, and the
     run of each pipeline downstream it would queue, by level; nothing is
     written. Raises, saying why, if there's nothing to rebuild."""
-    var given = List[String]()
     var parts = split_keys(keys)
     if len(parts) == 0:
         raise Error("orca: a rebuild needs partitions")
-    if key_kind(parts[0].split("..")[0]) == "daily":
-        for k in parse_keys[Day](keys):
-            given.append(String(k))
-    else:
-        for k in parse_keys[Month](keys):
-            given.append(String(k))
+    var given = parse_time_keys(key_kind(parts[0].split("..")[0]), keys)
     var level = _levels(db, dataset)
     if len(level) == 0:
         raise Error("orca: no registered pipeline reads ", dataset)

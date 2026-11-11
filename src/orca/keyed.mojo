@@ -106,7 +106,9 @@ struct Keyed[dataset_: StaticString, column_: StaticString](Partitions):
         return names^
 
     @staticmethod
-    def fill(year: Int, month: Int, day: Int, previous: Bool) raises -> Name:
+    def fill(
+        year: Int, month: Int, day: Int, hour: Int, previous: Bool
+    ) raises -> Name:
         raise Error("orca: keyed partitions have no calendar to fill")
 
     @staticmethod
