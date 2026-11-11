@@ -929,7 +929,7 @@ Hetzner console. The Volume has delete protection, which `--all` lifts.
 
 The scripts pull `<ORCA_IMAGE>:<tag>`, the project's image (`ORCA_IMAGE` in
 `hetzner.env`, `ghcr.io/magmalake/orca` unless it says otherwise). Name a
-project's image after the project, `ghcr.io/magmalake/mojourney` rather
+project's image after the project, `ghcr.io/mojourney/census` rather
 than `ghcr.io/magmalake/orca`: it's the project's code, versioned by the
 project. The census's is still `ghcr.io/magmalake/orca`.
 
@@ -990,14 +990,16 @@ The tunnel restarts once, which drops traffic for a few seconds. The
 defaults in `lib.sh` and `orca-stack` only apply when `hetzner.env` doesn't
 set it; bump them along with the example's.
 
-For example:
+orca's reusable workflows build, check, test and push it for both
+architectures, and make a tag's release: see [A project's CI](project-ci.md).
+By hand, for example:
 
 ```yaml
 permissions: { contents: read, packages: write }
 steps:
   - uses: docker/login-action@v3
     with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
-  - run: docker buildx build --platform linux/arm64 -f Dockerfile.orca --build-arg ORCA_VERSION=0.24.0 -t ghcr.io/magmalake/mojourney:${{ github.ref_name }} --push .
+  - run: docker buildx build --platform linux/arm64 -f Dockerfile.orca --build-arg ORCA_VERSION=0.24.0 -t ghcr.io/mojourney/census:${{ github.ref_name }} --push .
 ```
 
 The workflow's `GITHUB_TOKEN` can push to a package only if the package lets

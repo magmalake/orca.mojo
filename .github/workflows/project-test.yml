@@ -1,0 +1,100 @@
+# A project's tests, for an orca project's own CI to call (docs/project-ci.md):
+#
+#     jobs:
+#       test:
+#         uses: magmalake/orca.mojo/.github/workflows/project-test.yml@v0.24.0
+#         with: { tasks: "build test" }
+#
+# On each runner (arm64 and amd64 by default): pixi as orca's CI sets it up,
+# then each of the project's pixi tasks in turn. The setup carries the known
+# workarounds: git maintenance off before setup-pixi restores rattler's git
+# cache, since in a cached repo it races its `git clone --local`
+# (mojo-census#135, orca.mojo#326), and pixi pinned to the version that wrote
+# the lock. Pull requests read the cache but don't write it.
+name: project test
+
+on:
+  workflow_call:
+    inputs:
+      tasks:
+        description: "The pixi tasks to run, in turn, separated by spaces"
+        type: string
+        default: "test"
+      environment:
+        description: "The pixi environment they run in; empty is the default"
+        type: string
+        default: ""
+      manifest-path:
+        description: "The project's pixi.toml, in the checkout"
+        type: string
+        default: "pixi.toml"
+      runners:
+        description: "The runners, as a JSON list"
+        type: string
+        default: '["ubuntu-24.04-arm", "ubuntu-24.04"]'
+      pixi-version:
+        description: "The pixi that wrote pixi.lock"
+        type: string
+        default: "v0.78.0"
+      prepare:
+        description: "A shell command run in the checkout before pixi installs (it may write the manifest)"
+        type: string
+        default: ""
+      timeout-minutes:
+        type: number
+        default: 60
+
+jobs:
+  test:
+    name: test (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(inputs.runners) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v4
+      # Off before setup-pixi restores rattler's git cache: git's
+      # background maintenance in a cached repo races its
+      # `git clone --local` (mojo-census#135).
+      - run: git config --global maintenance.auto false && git config --global gc.auto 0
+
+      # Without `prepare`, setup-pixi installs (and caches) the environment.
+      - if: inputs.prepare == ''
+        uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: ${{ inputs.pixi-version }}
+          manifest-path: ${{ inputs.manifest-path }}
+          environments: ${{ inputs.environment }}
+          cache-write: ${{ !startsWith(github.event_name, 'pull_request') }}
+      # With it, pixi first, then `prepare`, then the install.
+      - if: inputs.prepare != ''
+        uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: ${{ inputs.pixi-version }}
+          run-install: false
+      - if: inputs.prepare != ''
+        name: Prepare
+        run: ${{ inputs.prepare }}
+      - if: inputs.prepare != ''
+        name: pixi install
+        env:
+          MANIFEST: ${{ inputs.manifest-path }}
+          PIXI_ENV: ${{ inputs.environment }}
+        run: |
+          locked=""
+          [ -f "$(dirname "$MANIFEST")/pixi.lock" ] && locked=--locked
+          pixi install --manifest-path "$MANIFEST" ${PIXI_ENV:+-e "$PIXI_ENV"} $locked
+
+      - name: pixi run ${{ inputs.tasks }}
+        env:
+          TASKS: ${{ inputs.tasks }}
+          MANIFEST: ${{ inputs.manifest-path }}
+          PIXI_ENV: ${{ inputs.environment }}
+        run: |
+          for t in $TASKS; do
+            echo "::group::pixi run $t"
+            pixi run --manifest-path "$MANIFEST" ${PIXI_ENV:+-e "$PIXI_ENV"} "$t"
+            echo "::endgroup::"
+          done
