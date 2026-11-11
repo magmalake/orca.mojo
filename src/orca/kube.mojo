@@ -29,7 +29,10 @@ killed left behind. Each pod's command runs with the sampler beside it
 (`orca.sample`, unless `ORCA_SAMPLE_SECONDS=0`), whose lines go to the
 pod's log prefixed `orca-sample `; before a finished Job is deleted, each
 of its pods' lines are kept in the run's `metrics/<pod>.jsonl` and left out
-of `driver.log`. A pod deleted before its Job finishes takes its samples
+of `driver.log`. A run ends when its driver says so, before its pods
+have, so the Job of a run that ended in the last `ORCA_KUBE_SETTLE_SECONDS`
+(30) is kept until it finishes: its pods' last lines and samples are in
+their logs by then, even a run shorter than its sampler's start. A pod deleted before its Job finishes takes its samples
 with it, as it does its log. Pods ask for `ORCA_DRIVER_CPU`, `ORCA_HEAD_CPU` and
 `ORCA_WORKER_CPU` (default 500m, 250m and 1) and `ORCA_POD_MEMORY` (512Mi)
 each; `cpu_millis` is a run's total, which the scheduler checks against
@@ -436,13 +439,29 @@ struct KubeRunner(Movable):
             Params(),
         ):
             live[r.text("k")] = True
+        # A run ends when its driver says so, before its pods have: their
+        # last lines and samples aren't in their logs yet, and a short run
+        # can end before its sampler's first line. Its Job is kept until it
+        # finishes, for `ORCA_KUBE_SETTLE_SECONDS` (30) at most.
+        var settling = Dict[String, Bool]()
+        for r in db.conn.query(
+            (
+                "SELECT id || '-' || starts AS k FROM orca.runs WHERE status <>"
+                " 'running' AND ended > now() - make_interval(secs => $1)"
+            ),
+            Params().float64(Float64(getenv("ORCA_KUBE_SETTLE_SECONDS", "30"))),
+        ):
+            settling[r.text("k")] = True
         var n = 0
         for o in self.k.list(JOBS, "orca.run").items:
             var finished = (
                 _count(o, "/status/succeeded") > 0
                 or _count(o, "/status/failed") > 0
             )
-            if finished or _key(o) not in live:
+            var key = _key(o)
+            if not finished and key in settling:
+                continue
+            if finished or key not in live:
                 self._keep_logs(db, o)
                 if self.k.delete(JOBS, _name_of(o)):
                     n += 1
@@ -453,8 +472,10 @@ struct KubeRunner(Movable):
                 if self.k.delete(SERVICES, _name_of(o)):
                     n += 1
         for o in self.k.list(PODS, "orca.run").items:
-            if _key(o) not in live and not o.try_at(
-                "/metadata/deletionTimestamp"
+            if (
+                _key(o) not in live
+                and _key(o) not in settling
+                and not o.try_at("/metadata/deletionTimestamp")
             ):
                 if self.k.delete(PODS, _name_of(o)):
                     n += 1
