@@ -21,7 +21,7 @@
 # The stages are ordered for the layer cache: `env` is the pixi environment
 # and depends only on orca's pixi.toml and src/; `curl` and `git` start from
 # it, so a change to bin/ alone reuses `pixi install` and git as they were.
-FROM ghcr.io/prefix-dev/pixi:0.78.0 AS env
+FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS env
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY pixi.toml /src/orca.mojo/pixi.toml

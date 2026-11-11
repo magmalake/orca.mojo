@@ -1,1 +1,1 @@
-- **A runtime image per release:** each release pushes `ghcr.io/magmalake/orca-runtime:<version>`, which the project image `orca aws push` builds now starts `FROM`. (#0)
+- **A runtime image per release:** each release pushes `ghcr.io/magmalake/orca-runtime:<version>`, which the project image `orca aws push` builds now starts `FROM`. (#336)

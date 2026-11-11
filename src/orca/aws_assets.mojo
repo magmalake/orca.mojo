@@ -706,7 +706,7 @@ ARG ORCA_VERSION=needs-build-arg-orca-version
 ARG ORCA_RUNTIME=ghcr.io/magmalake/orca-runtime
 FROM ${ORCA_RUNTIME}:${ORCA_VERSION} AS runtime
 
-FROM ghcr.io/prefix-dev/pixi:0.78.0 AS build
+FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \\
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src/project
