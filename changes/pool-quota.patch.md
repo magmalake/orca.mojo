@@ -1,1 +1,0 @@
-- **Pools fall back on a quota refusal**: a type the project's quota refuses moves the pool on to its next type at once. (#PR)
