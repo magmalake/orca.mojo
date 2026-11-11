@@ -218,6 +218,18 @@ jobs:
       - name: The scheduler, Postgres and the UI on kind
         run: tests/kind.sh
 
+  # The runtime image projects build FROM (deploy/runtime.Dockerfile), and a
+  # scratch project's image on it, for arm64 and amd64: built and tested,
+  # never pushed here. The release workflow pushes each release's.
+  runtime-image:
+    needs: [changes, release]
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
+    uses: ./.github/workflows/runtime-image.yml
+    permissions:
+      contents: read
+      # The called workflow's push steps, which only a release runs.
+      packages: write
+
   # Every fuzz harness under fuzz/, for a short session each, with all bounds
   # checks on. Longer sessions are a FUZZ_RUNS away locally.
   fuzz:
@@ -393,7 +405,7 @@ jobs:
   # gate doesn't cover.)
   ci:
     if: ${{ always() && github.event_name != 'schedule' }}
-    needs: [release, release-check, changes, test, kind, fuzz, format, formal, data]
+    needs: [release, release-check, changes, test, kind, runtime-image, fuzz, format, formal, data]
     runs-on: ubuntu-latest
     steps:
       - env:
