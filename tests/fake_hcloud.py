@@ -14,7 +14,8 @@ test can change it); any other is refused 412 `resource_unavailable`, as
 Hetzner refuses a type it's out of. A location not in hel1, nbg1, fsn1 is
 `invalid_input`. Types starting with `cax` are `arm`, the rest `x86`; the
 types are cax11..cax41, cx23..cx53, cpx12..cpx62 and ccx13..ccx63. The one
-firewall is `orca-lab`, id 42.
+firewall is `orca-lab`, id 42. Networks are made by POST /v1/networks and
+listed by name; a server attached to one shows a private address in it.
 
 Each server's user data runs as <dir>/server-<id>.sh with output in
 <dir>/server-<id>.log and SERVER_NAME (and HOSTNAME, which bash resets) set
@@ -42,7 +43,8 @@ import urllib.parse
 PORT = int(sys.argv[1])
 DIR = sys.argv[2]
 LOCK = threading.Lock()
-SERVERS = {}  # id -> {"name", "type", "location", "labels", "proc", "status"}
+SERVERS = {}  # id -> {"name", "type", "location", "labels", "proc", "status", "networks"}
+NETWORKS = {}  # id -> {"name", "ip_range", "zone"}
 COUNTER = [1000]
 LOCATIONS = ("hel1", "nbg1", "fsn1")
 TYPES = (
@@ -76,6 +78,7 @@ def _server(sid, s):
         "server_type": {"name": s["type"], "architecture": _arch(s["type"])},
         "datacenter": {"location": {"name": s["location"]}},
         "public_net": {"ipv4": {"ip": "127.0.0.1"}},
+        "private_net": [{"network": n, "ip": f"10.77.0.{int(sid) % 250 + 2}"} for n in s.get("networks", [])],
         "labels": s["labels"],
     }
 
@@ -122,8 +125,12 @@ def _create(body):
                    ORCA_BOOT_DIR=os.path.join(DIR, f"boot-{sid}"))
         proc = subprocess.Popen(["sh", script], stdout=log, stderr=log, env=env, cwd=DIR,
                                 start_new_session=True)
+    for n in body.get("networks", []):
+        if str(n) not in NETWORKS:
+            return _error("not_found", f"network {n} not found", 404)
     SERVERS[sid] = {"name": name, "type": t, "location": loc,
-                    "labels": body.get("labels", {}), "proc": proc, "status": "running"}
+                    "labels": body.get("labels", {}), "proc": proc, "status": "running",
+                    "networks": [int(n) for n in body.get("networks", [])]}
     return 201, {"server": _server(sid, SERVERS[sid]), "action": {"id": 1, "status": "running"}}
 
 
@@ -190,6 +197,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 name = q.get("name", [""])[0]
                 fws = [{"id": 42, "name": "orca-lab"}] if name in ("", "orca-lab") else []
                 return self._reply(200, {"firewalls": fws})
+            if method == "GET" and path == "/v1/networks":
+                name = q.get("name", [""])[0]
+                nets = [{"id": int(k), "name": v["name"], "ip_range": v["ip_range"]}
+                        for k, v in NETWORKS.items() if not name or v["name"] == name]
+                return self._reply(200, {"networks": nets})
+            if method == "POST" and path == "/v1/networks":
+                b = json.loads(raw or "{}")
+                if any(v["name"] == b.get("name") for v in NETWORKS.values()):
+                    return self._reply(*_error("uniqueness_error", "network name is already used", 409))
+                nid = str(500 + len(NETWORKS))
+                NETWORKS[nid] = {"name": b.get("name", ""), "ip_range": b.get("ip_range", ""),
+                                 "zone": (b.get("subnets") or [{}])[0].get("network_zone", "")}
+                return self._reply(201, {"network": {"id": int(nid), "name": NETWORKS[nid]["name"],
+                                                     "ip_range": NETWORKS[nid]["ip_range"]}})
             if method == "POST" and path == "/v1/servers":
                 return self._reply(*_create(json.loads(raw or "{}")))
             if method == "GET" and path == "/v1/servers":

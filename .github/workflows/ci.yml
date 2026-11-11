@@ -224,16 +224,51 @@ jobs:
         run: tests/kind.sh
 
   # The runtime image projects build FROM (deploy/runtime.Dockerfile), and a
-  # scratch project's image on it, for arm64 and amd64: built and tested,
-  # never pushed here. The release workflow pushes each release's.
+  # scratch project's image on it. On pull requests it's built and tested
+  # for arm64 and amd64, with the project on arm64 only, the servers'
+  # architecture: the project build is the same Dockerfile on both, and
+  # main runs it on both before anything is pushed. Never pushed here.
   runtime-image:
     needs: [changes, release]
-    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && github.event_name != 'push' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
     uses: ./.github/workflows/runtime-image.yml
     permissions:
       contents: read
-      # The called workflow's push steps, which only a release runs.
+    with:
+      project: arm64
+
+  # On main: the same, with the project on both architectures, then pushed
+  # as ghcr.io/magmalake/orca-runtime:<sha>. A release tags that image
+  # <version> (release.yml), so a release PR's merge commit needs it too.
+  # The only job here that can push a package.
+  runtime-image-main:
+    needs: [changes]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/runtime-image.yml
+    permissions:
+      contents: read
       packages: write
+    with:
+      push: true
+      project: arm64 amd64
+
+  # deploy/runtime/pixi.lock against what orca-mojo depends on now. Fast,
+  # and run on release PRs too (which skip runtime-image), so a release that
+  # moves a tin's revision can't merge with a lock main's image can't build
+  # from. A stale lock: `sh deploy/runtime/lock.sh` and commit it.
+  runtime-lock:
+    needs: [changes]
+    if: ${{ github.event_name != 'schedule' && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global maintenance.auto false && git config --global gc.auto 0
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: v0.78.0
+          run-install: false
+      - run: sh deploy/runtime/lock.sh --check
 
   # orca's reusable workflows for a project's CI (docs/project-ci.md), each
   # called as a project calls it, on a scratch project that adds this commit
@@ -469,17 +504,21 @@ jobs:
   # gate doesn't cover.)
   ci:
     if: ${{ always() && github.event_name != 'schedule' }}
-    needs: [release, release-check, changes, test, kind, runtime-image, project-image, project-test, project-release, fuzz, format, formal, data]
+    needs: [release, release-check, changes, test, kind, runtime-image, runtime-image-main, runtime-lock, project-image, project-test, project-release, fuzz, format, formal, data]
     runs-on: ubuntu-latest
     steps:
       - env:
           NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
         run: |
           python3 - <<'PY'
           import json, os, sys
           needs = json.loads(os.environ["NEEDS"])
           release = needs.pop("release")
           build = needs.pop("release-check")
+          # One of the runtime image's jobs runs: main's on a push, the
+          # other otherwise.
+          needs.pop("runtime-image" if os.environ["EVENT"] == "push" else "runtime-image-main")
           release_only = release["outputs"].get("release_only") == "true"
           prose_only = needs["changes"]["outputs"].get("code") == "false"
           ok = {"success", "skipped"} if release_only or prose_only else {"success"}

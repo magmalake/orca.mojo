@@ -62,6 +62,8 @@ struct ServerSpec(Copyable, Movable):
     """Names of the project's SSH keys to put on it; may be empty."""
     var firewall: String
     """A firewall's name to apply, or empty."""
+    var network: String
+    """A private network's id to attach it to, or empty."""
 
 
 @fieldwise_init
@@ -264,6 +266,40 @@ struct HCloud(Movable):
                 return _text(f, "id")
         raise Error("orca: Hetzner has no firewall named ", name)
 
+    def network_id(
+        self, name: String, zone: String, ip_range: String
+    ) raises -> String:
+        """The id of the private network `name`, made if there's none: one
+        `ip_range` with a cloud subnet of its first /24 in network zone
+        `zone` (`eu-central`: fsn1, nbg1 and hel1)."""
+        var got = self._call("GET", String("/networks?name=", _url_part(name)))
+        if got[0] != 200:
+            self._refused(String("network ", name), got)
+        for n in loads(got[1])["networks"].array_items():
+            if _text(n, "name") == name:
+                return _text(n, "id")
+        var slash = ip_range.find("/")
+        var base = String(ip_range[byte=:slash]) if slash > 0 else ip_range
+        var made = self._call(
+            "POST",
+            "/networks",
+            String(
+                '{"name": ',
+                quote(name),
+                ', "ip_range": ',
+                quote(ip_range),
+                ', "labels": {"orca": "pool"}, "subnets": [{"type": "cloud",',
+                ' "network_zone": ',
+                quote(zone),
+                ', "ip_range": ',
+                quote(String(base, "/24")),
+                "}]}",
+            ),
+        )
+        if made[0] != 201 and made[0] != 200:
+            self._refused(String("making network ", name), made)
+        return _text(loads(made[1])["network"], "id")
+
     def create(self, spec: ServerSpec) raises -> Created:
         """Makes the server `spec` says. Hetzner out of `spec`'s type in its
         location is `no_stock`; any other refusal is `why`."""
@@ -294,6 +330,8 @@ struct HCloud(Movable):
                 self.firewall_id(spec.firewall),
                 "}]",
             )
+        if spec.network:
+            body.write(', "networks": [', spec.network, "]")
         body.write("}")
         var got = self._call("POST", "/servers", body)
         if got[0] == 201 or got[0] == 200:

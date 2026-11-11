@@ -4,22 +4,24 @@
 # git, libcurl, the CA bundles where libcurl, OpenSSL and flare look for
 # them, llvm-symbolizer, and the /opt/orca layout and environment that
 # deploy/hetzner and `orca aws` run. orca's CI builds and tests it on every
-# pull request and pushes it for each release (.github/workflows/
-# runtime-image.yml). Build it from the repository root:
+# pull request, and pushes main's as orca-runtime:<sha>, which a release
+# tags <version> (.github/workflows/runtime-image.yml). Build it from the
+# repository root:
 #
 #     docker build -f deploy/runtime.Dockerfile -t orca-runtime:dev .
 #
 # The binaries are built in deploy/runtime/pixi.toml, a project that adds
 # this checkout of orca-mojo, so they link the same packages a project's
-# pipelines do. Like the project's image, everything has line tables (-g1),
-# compressed, and is built for MOJO_TARGET_CPU, not for the CPU of the
-# machine building it: GitHub's arm64 runners are Neoverse N2, with SVE2,
+# pipelines do, installed from its lock (deploy/runtime/lock.sh). Like
+# the project's image, everything has line tables (-g1), compressed, and
+# is built for MOJO_TARGET_CPU, not for the CPU of the machine building
+# it: GitHub's arm64 runners are Neoverse N2, with SVE2,
 # and Hetzner's CAX servers Neoverse N1, where an N2 binary dies with
 # SIGILL (exit 132). N1 code runs on N2, V1, V2 and Graviton. CI builds
 # amd64 for x86-64-v3 (AVX2).
 #
 # The stages are ordered for the layer cache: `env` is the pixi environment
-# and depends only on orca's pixi.toml and src/; `curl` and `git` start from
+# and depends only on orca's pixi.toml, src/ and the lock; `curl` and `git` start from
 # it, so a change to bin/ alone reuses `pixi install` and git as they were.
 FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS env
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
@@ -29,9 +31,9 @@ COPY src /src/orca.mojo/src
 # At /src/project, the directory deploy/project.Dockerfile builds a project
 # in, so the CA bundle paths compiled into conda's libcurl and OpenSSL are
 # the same in both (below).
-COPY deploy/runtime/pixi.toml /src/project/pixi.toml
+COPY deploy/runtime/pixi.toml deploy/runtime/pixi.lock /src/project/
 WORKDIR /src/project
-RUN pixi install
+RUN pixi install --locked
 
 FROM env AS build
 ARG MOJO_TARGET_CPU=neoverse-n1

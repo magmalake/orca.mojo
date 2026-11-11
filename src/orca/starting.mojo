@@ -24,6 +24,7 @@ from orca.fill import (
     fill_status,
 )
 from orca.system import system_now
+from orca.live import behind_sql, hold_behind
 from orca.kube import (
     RunSpec,
     cpu_millis,
@@ -289,16 +290,19 @@ def _start(
             # The ones that don't start say why; those that do, not.
             hold = got[1]
         free = len(grants)
-    # Its queued runs say why they wait, or no longer do.
+    # Its queued runs say why they wait, or no longer do; one behind an
+    # older live run of its keys, which run.
     _ = tx.execute(
         String(
             "UPDATE orca.runs SET held = nullif($2, '') WHERE pipeline = $1",
             " AND status = 'queued' AND held IS DISTINCT FROM nullif($2,",
-            " '')",
+            " '') AND NOT ",
+            behind_sql(),
             which,
         ),
         Params().text(p.name).text(hold),
     )
+    hold_behind(tx, p.name)
     if self.budget > 0 and free > 0 and not control:
         # Across pipelines: one start at a time weighs the budget.
         _ = tx.execute(
@@ -350,9 +354,11 @@ def _start(
             String(
                 (
                     "SELECT id, allow_new_code FROM orca.runs WHERE"
-                    " pipeline = $1 AND (status"
+                    " pipeline = $1 AND ((status"
                 ),
-                " = 'queued' OR (status = 'deferred' AND retry_at <= $4) OR",
+                " = 'queued' AND NOT ",
+                behind_sql(),
+                ") OR (status = 'deferred' AND retry_at <= $4) OR",
                 " (status = 'failed' AND ",
                 _RETRIED,
                 " AND retry_at <= $4) OR (status = 'running' AND ",

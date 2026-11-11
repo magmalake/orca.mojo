@@ -1,0 +1,1 @@
+- **Kubernetes runs keep their pods' last lines and samples**: a finished run's Job is kept until its pods finish. (#328)

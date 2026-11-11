@@ -120,6 +120,17 @@ workers = 2      # up to 2 more machines join each run
 A worker without `--advertise` neither starts a run as a cluster nor joins
 one: such a run runs on its machine alone.
 
+**On a pool orca grows** (`[pools.<name>]`), this is set up for you:
+- every Hetzner machine joins a private network of the stack's, and its
+  worker advertises its address there, read from the provider's metadata
+  (EC2: its private address);
+- its worker runs with host networking, so dista's ports are on that
+  address;
+- a running run that wants more members than have joined counts as the
+  pool's demand, so the pool grows for it (up to `max_machines`), and the
+  new machine joins the run;
+- a machine running only a member is busy, not idle.
+
 ## Tokens
 
 On the server:

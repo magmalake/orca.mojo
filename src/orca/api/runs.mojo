@@ -2,6 +2,7 @@
 code version, and a run's machines with their metrics.
 """
 
+from orca.ui.cluster import cluster_json
 from orca.json import quote
 from orca.metrics import InstanceMetrics, peaks_json
 from orca.source import commit_url
@@ -267,6 +268,7 @@ def run_json(v: RunView) -> String:
         j.write("null")
     j.write(', "instances": ')
     json_instances(j, r.id, v.instances, v.metrics)
+    j.write(', "cluster": ', cluster_json(v.cluster))
     j.write(', "sensed": [')
     for i in range(len(v.sensed)):
         j.write(", " if i else "", quote(String(v.sensed[i])))

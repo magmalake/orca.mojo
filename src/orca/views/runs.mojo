@@ -7,6 +7,7 @@ keyset by run id, so pages stay put as runs arrive).
 
 from postgres import Params, Row
 
+from orca.views.cluster import ClusterRow, cluster_rows
 from orca.actions import stalled_sql
 from orca.html import query_param, query_values, url_decode, url_encode
 from orca.json import quote
@@ -1288,6 +1289,8 @@ struct RunView(Movable):
     var steps: List[StepRow]
     var touches: List[Touch]
     var instances: List[InstanceRow]
+    var cluster: List[ClusterRow]
+    """The workers its dista cluster spread over (`orca.views.cluster`)."""
     var metrics: List[InstanceMetrics]
     var prev: Int64
     """The pipeline's run before it, or 0."""
@@ -1307,6 +1310,7 @@ struct RunView(Movable):
         self.steps = List[StepRow]()
         self.touches = List[Touch]()
         self.instances = List[InstanceRow]()
+        self.cluster = List[ClusterRow]()
         self.metrics = List[InstanceMetrics]()
         self.prev = 0
         self.next = 0
@@ -1358,6 +1362,7 @@ def run_view(mut db: State, id: Int) raises -> Optional[RunView]:
     ):
         v.sensed.append(SnapshotRef(x.text("dataset"), x.int64("snapshot_id")))
     v.instances = instance_rows(db, id)
+    v.cluster = cluster_rows(db, id)
     v.metrics = read_metrics(r.pipeline, id)
     # The pipeline's runs in order (all triggers, fills too).
     var nb = db.conn.query(
