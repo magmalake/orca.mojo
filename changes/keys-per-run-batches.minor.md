@@ -1,1 +1,0 @@
-- **Sensors and fills honour `keys_per_run`**: above 1, a sensor tops up its queued runs and batches new keys, and fill runs take `keys_per_run` partitions each; `keys_per_run` can be set in `orca.toml`. (#PR)
