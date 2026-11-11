@@ -1,5 +1,5 @@
 #!/bin/sh
-# deploy.sh [--dry-run] [--force] [--all] [--no-backup] [--timeout SECONDS] [--yes] <orca-tag> [<app>=<tag> ...]
+# deploy.sh [--dry-run] [--force] [--all] [--no-backup] [--timeout SECONDS] [--yes] [--confirmed ID,...] <orca-tag> [<app>=<tag> ...]
 # deploy.sh [--dry-run] [--force] [--no-backup] [--timeout SECONDS] [--yes] --rollback
 #
 # Code changes: pulls the images at the tags and starts again the containers
@@ -67,6 +67,15 @@
 # before (orca-stack tags --previous); --rollback applies those again, the
 # same way (docs/hetzner.md#rolling-back).
 #
+# When the orca tag changes (not for a rollback), the release's upgrade steps
+# (docs/hetzner.md#a-releases-upgrade-steps, the new image's upgrade.toml):
+# the "before" ones are listed first, before anything changes, and each must
+# be done (a command run, an instruction confirmed: asked for, or named in
+# --confirmed id,...; with --yes an unconfirmed instruction stops the deploy);
+# the "after" ones run once the pipelines are registered, before they're
+# unpaused (commands asked about, or run with --yes; instructions printed),
+# and a failed one fails the deploy at the end, the rest deployed.
+#
 # It ends with orca-stack check (docs/hetzner.md#the-check-after-each-deploy):
 # the containers, one scheduler, the pipelines' binaries, and a canary run
 # for each of hetzner.env's CANARY; when the check fails the deploy fails,
@@ -81,6 +90,7 @@ backup=1
 dump=
 rollback=0
 all=
+confirmed=,
 parse_common "$@"
 # shellcheck disable=SC2086
 set -- $REST
@@ -93,6 +103,11 @@ while [ $# -gt 0 ]; do
         --no-backup) backup=0 ;;
         --all) all=--all ;;
         --rollback) rollback=1 ;;
+        --confirmed)
+            [ $# -ge 2 ] || die "--confirmed needs step ids (a,b)"
+            confirmed=",$2,"
+            shift
+            ;;
         --timeout)
             [ $# -ge 2 ] || die "--timeout needs a number of seconds"
             timeout=$2
@@ -110,7 +125,7 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-usage="usage: deploy.sh [--dry-run] [--force] [--all] [--no-backup] [--timeout SECONDS] <orca-tag> [<app>=<tag> ...] | --rollback"
+usage="usage: deploy.sh [--dry-run] [--force] [--all] [--no-backup] [--timeout SECONDS] [--confirmed ID,...] <orca-tag> [<app>=<tag> ...] | --rollback"
 if [ "$rollback" = 1 ]; then
     [ -z "$tag" ] && [ -z "$args" ] || die "--rollback takes no tags: it applies the ones deployed before"
     [ -z "$all" ] || die "--rollback replaces what differs from the tags before; --all isn't for it"
@@ -158,6 +173,57 @@ else
     [ -z "$apps" ] || to="orca $tag$apps"
 fi
 log "previous tag $was, new tag $to"
+
+# The release's upgrade steps (orca#323): those of every version after the
+# orca tag deployed before up to the new one, from the new image's
+# upgrade.toml (orca-stack upgrade-steps). Not for a rollback, nor when the
+# orca tag stays.
+from=${was#orca }
+from=${from%%,*}
+steps=0
+[ "$rollback" = 0 ] && [ "$from" != "$tag" ] && steps=1
+
+# ask QUESTION: yes for a typed y or yes.
+ask() {
+    printf '%s [y/N] ' "$1" >&2
+    read -r answer
+    case "$answer" in y | Y | yes) return 0 ;; *) return 1 ;; esac
+}
+
+# upgrade_steps WHEN: the steps' lines, an empty list in a dry run (which
+# prints the command).
+upgrade_steps() {
+    remote_out "" orca-stack upgrade-steps --tag "$tag" --from "$from" --when "$1"
+}
+
+tab=$(printf '\t')
+if [ "$steps" = 1 ]; then
+    before=$(upgrade_steps before) || die "reading $tag's upgrade steps failed; nothing was deployed"
+    if [ -n "$before" ]; then
+        log "before deploying $tag:"
+        echo "$before" | while IFS="$tab" read -r _ id _ kind text; do
+            echo "  [$id] $text"
+        done
+        # Each one done, or confirmed, before anything changes.
+        while IFS="$tab" read -r _ id _ kind text; do
+            case "$confirmed" in *",$id,"*) log "[$id] confirmed (--confirmed)"; continue ;; esac
+            if [ "$kind" = run ]; then
+                if [ "$YES" = 1 ] || ask "run '$text' now?" < /dev/tty; then
+                    # shellcheck disable=SC2086
+                    remote orca-stack upgrade-run $text < /dev/null || die "[$id] '$text' failed; nothing was deployed"
+                else
+                    die "[$id] not run; nothing was deployed (run it, then deploy with --confirmed $id)"
+                fi
+            elif [ "$YES" = 1 ]; then
+                die "[$id] needs doing before this deploy: $text. Do it, then deploy with --confirmed $id; nothing was deployed"
+            else
+                ask "[$id] done?" < /dev/tty || die "[$id] not done; nothing was deployed (do it, then deploy again, or with --confirmed $id)"
+            fi
+        done << EOF
+$before
+EOF
+    fi
+fi
 
 # What the apply would replace. A dry run doesn't ask, and shows the
 # longest way: the scheduler replaced.
@@ -288,6 +354,37 @@ else
     fi
     [ "$failed" = 0 ] || finish_failed "$applied" "the deploy failed"
 fi
+# The release's after steps, the pipelines registered and still paused (if
+# this deploy paused them): a command is asked about (run with --yes), an
+# instruction printed. A failed one is said at the end, after the rest.
+step_failed=
+if [ "$steps" = 1 ]; then
+    after=$(upgrade_steps after) || { log "reading $tag's after steps failed: see orca upgrade in the image"; step_failed="(reading them)"; }
+    if [ -n "$after" ]; then
+        log "after deploying $tag:"
+        while IFS="$tab" read -r _ id _ kind text; do
+            if [ "$kind" = manual ]; then
+                echo "  [$id] to do: $text"
+                [ "$YES" = 1 ] || [ "$DRY_RUN" = 1 ] || {
+                    printf '  press Enter once noted ' >&2
+                    read -r _ < /dev/tty || true
+                }
+                continue
+            fi
+            if [ "$DRY_RUN" = 1 ]; then
+                echo "  [$id] would run: $text"
+            elif [ "$YES" = 1 ] || ask "[$id] run '$text' now?" < /dev/tty; then
+                log "[$id] $text"
+                # shellcheck disable=SC2086
+                remote orca-stack upgrade-run $text < /dev/null || step_failed="$step_failed $id"
+            else
+                echo "  [$id] not run; run it later: ssh root@$IP docker exec scheduler $text"
+            fi
+        done << EOF
+$after
+EOF
+    fi
+fi
 if [ "$quiesced" = 1 ]; then
     log "unpausing the pipelines it paused"
     remote orca-stack resume
@@ -300,4 +397,5 @@ log "checking the stack${CANARY:+ (canary runs: $CANARY)}"
 # shellcheck disable=SC2046
 remote orca-stack check $(check_args) \
     || die "$to is deployed, but the check failed (above)${dump:+; backup before it: $dump}; ./deploy.sh --rollback goes back"
+[ -z "$step_failed" ] || die "$to is deployed and checked, but upgrade steps failed:$step_failed (above); run them by hand: ssh root@$IP docker exec scheduler <the command>"
 log "done: $to${dump:+ (backup before it: $dump)}"

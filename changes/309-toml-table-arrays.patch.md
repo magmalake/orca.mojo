@@ -1,1 +1,0 @@
-- **orca.toml reads arrays of inline tables**: `[{ a = 1 }, { a = 2 }]`, for config that lists entries. (#309)
