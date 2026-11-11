@@ -44,16 +44,16 @@ RUN mkdir -p /out/bin /out/share && cp pixi.lock /out/share/pixi.lock \
 # The line tables compressed, which llvm-symbolizer reads as they are.
 RUN for b in /out/bin/*; do objcopy --compress-debug-sections=zlib "$b" || exit 1; done
 # Only the pixi environment's libraries the binaries link or dlopen: libpq
-# (postgres), libsqlite3 (orca.sqlite_store), flare's shims (orca ui, apps)
-# and every tin's shim, such as objectstore's and the codecs' (zstd, for
-# Iceberg writes); and llvm-symbolizer, which Mojo's runtime runs to name a
-# crash's frames, with what it links. Stripped of their symbol tables. Not
-# conda's libpsl, which brings ICU (36 MB) and which libcurl alone links:
-# the image has Debian's libpsl5. OpenSSL stays conda's: libcurl and libpq
-# need 3.2.
+# (postgres), flare's shims (orca ui, apps) and every tin's shim, such as
+# objectstore's and the codecs' (zstd, for Iceberg writes); and
+# llvm-symbolizer, which Mojo's runtime runs to name a crash's frames, with
+# what it links. Stripped of their symbol tables. Not conda's libpsl, which
+# brings ICU (36 MB) and which libcurl alone links: the image has Debian's
+# libpsl5. Not libsqlite3 either, which links ICU too: the image runs on
+# Postgres. OpenSSL stays conda's: libcurl and libpq need 3.2.
 RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib /out/libexec \
     && cp -L $env/bin/llvm-symbolizer /out/libexec/ \
-    && loaded=$(ls $env/lib/libpq.so.5 $env/lib/libsqlite3.so.0 $env/lib/libflare_*.so $env/lib/lib*mojo*.so 2>/dev/null) \
+    && loaded=$(ls $env/lib/libpq.so.5 $env/lib/libflare_*.so $env/lib/lib*mojo*.so 2>/dev/null) \
     && ldd /out/bin/* /out/libexec/* $loaded 2> /dev/null \
         | awk -v e="$env" '$3 ~ "^"e {print $3}' | grep -v -e '/libicu' -e '/libpsl' \
         | sort -u | xargs -r cp -L -t /out/lib \

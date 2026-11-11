@@ -8,7 +8,7 @@
 #
 # The runtime: orca, orca_maintain, git over HTTPS (libcurl and the CA
 # bundle), llvm-symbolizer, and every binary's libraries found. The
-# project: a scratch project that adds this checkout of orca-mojo, with
+# project: a scratch project that adds this commit of orca-mojo, with
 # examples/toy.mojo as its one pipeline and no bin/ of its own, built on the
 # runtime; its toy has its source map and runs a partition, and its `orca`
 # is the runtime's. Needs docker, and pixi for the project's lock.
@@ -18,10 +18,10 @@ img=$1
 fail() { echo "FAIL: $*"; exit 1; }
 run() { docker run --rm "$@"; }
 
-out=$(run "$img" 2>&1) || fail "orca: $out"
-echo "$out" | grep -q "orca locate" || fail "orca's usage: $out"
-run --entrypoint orca_maintain "$img" > /dev/null 2>&1 || [ $? -eq 2 ] || fail "orca_maintain didn't start"
-run --entrypoint llvm-symbolizer "$img" --version | grep -q LLVM || fail "llvm-symbolizer"
+# Without arguments, each prints its usage (and exits non-zero).
+run "$img" 2>&1 | grep -q "orca locate" || fail "orca's usage"
+run --entrypoint orca_maintain "$img" 2>&1 | grep -q "expected .expire <dataset>" || fail "orca_maintain's usage"
+run --entrypoint /opt/orca/libexec/llvm-symbolizer "$img" --version | grep -q LLVM || fail "llvm-symbolizer"
 run --entrypoint git "$img" ls-remote https://github.com/magmalake/orca.mojo HEAD | grep -q HEAD \
     || fail "git over HTTPS"
 # Every binary and library finds what it links.
@@ -35,12 +35,15 @@ echo "ok   runtime image"
 
 [ "${2:-}" = --project ] || exit 0
 cpu=${3:-neoverse-n1}
+# orca-mojo as `pixi shelf add` pins it: by revision, which must be on
+# GitHub (CI's commit; ORCA_REV and ORCA_REPO say another).
+rev=${ORCA_REV:-$(git rev-parse HEAD)}
+repo=${ORCA_REPO:-https://github.com/magmalake/orca.mojo}
 ctx=$PWD/build/runtime-project
 rm -rf "$ctx"
-mkdir -p "$ctx/pipelines" "$ctx/orca.mojo"
-cp -R pixi.toml src "$ctx/orca.mojo/"
+mkdir -p "$ctx/pipelines"
 cp examples/toy.mojo "$ctx/pipelines/"
-cat > "$ctx/pixi.toml" << 'EOF'
+cat > "$ctx/pixi.toml" << EOF
 [workspace]
 name = "runtime-project"
 channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
@@ -49,7 +52,7 @@ preview = ["pixi-build"]
 
 [dependencies]
 mojo-compiler = "==1.2.0"
-orca-mojo = { path = "orca.mojo" }
+orca-mojo = { git = "$repo", rev = "$rev" }
 EOF
 pixi lock --manifest-path "$ctx/pixi.toml"
 docker build -f deploy/project.Dockerfile --build-arg ORCA_RUNTIME="${img%:*}" --build-arg ORCA_VERSION="${img##*:}" \
