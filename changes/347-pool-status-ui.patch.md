@@ -1,1 +1,0 @@
-- **Ops › Pools shows the pools orca grows**: each one's types, live machines and last try; pool machines are named `orca-pool-<pool>-<n>`. (#347)
