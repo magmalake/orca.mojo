@@ -89,6 +89,15 @@ def _requeue_for_workers(
         Params().text(p.name).text(waiting),
     )
     tx.commit()
+    _say_lost(p, pool, lost)
+    if n > 0:
+        print("requeued", n, "runs of", p.name, "for pool", pool)
+
+
+def _say_lost(
+    p: Registered, pool: String, lost: List[Tuple[Int, String]]
+) raises:
+    """Prints each run `_requeue_lost` queued again, with why."""
     for l in lost:
         print(
             String("requeued run ", l[0], " of ", p.name, " for pool ", pool),
@@ -96,8 +105,6 @@ def _requeue_for_workers(
             l[1],
             sep="",
         )
-    if n > 0:
-        print("requeued", n, "runs of", p.name, "for pool", pool)
 
 
 def _requeue_lost(
@@ -240,6 +247,10 @@ def _fill_for_workers(
         "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
         Params().text(p.name),
     )
+    # A gone worker's fill runs first, as the other pass does, so they
+    # are queued again with why (and an audit row), not as merely dead:
+    # the tick's passes run a moment apart, and either may see them first.
+    var lost = _requeue_lost(self, tx, p, dead, waiting)
     var status = fill_status(tx, fill_pipeline(p), now, p.run_retries)
     var free = status.slots
     var again = 0
@@ -284,6 +295,7 @@ def _fill_for_workers(
             .int64("id")
         )
     tx.commit()
+    _say_lost(p, pool, lost)
     if again > 0:
         print("requeued", again, "fill runs of", p.name, "for pool", pool)
     for i in range(len(ids)):
