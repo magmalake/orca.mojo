@@ -103,20 +103,29 @@ struct _Live(Copyable, Movable):
 def demand(mut db: State, pool: String, after: Float64) raises -> Int:
     """The runs of `pool`'s pipelines queued at least `after` seconds that
     a worker could start: per pipeline at most `max_runs` less its running
-    ones, and its fill runs."""
+    ones, and its fill runs; and the members its running runs that spread
+    (#268) still want, once they've run `after` seconds."""
     var r = db.conn.query(
         (
-            "SELECT coalesce(sum(least(q.n, greatest(coalesce(p.max_runs,"
-            " (p.describe->>'max_runs')::bigint, 1) - coalesce(r.n, 0), 0))),"
-            " 0) + coalesce(sum(q.fills), 0) AS n FROM orca.pipelines p JOIN"
-            " (SELECT pipeline, count(*) FILTER (WHERE trigger <> 'fill') AS n,"
-            " count(*) FILTER (WHERE trigger = 'fill') AS fills FROM orca.runs"
-            " WHERE status = 'queued' AND created <= now() - make_interval(secs"
-            " => $2) GROUP BY pipeline) q ON q.pipeline = p.name LEFT JOIN"
-            " (SELECT pipeline, count(*) AS n FROM orca.runs WHERE status ="
-            " 'running' AND trigger <> 'fill' GROUP BY pipeline) r ON"
-            " r.pipeline = p.name WHERE p.placement = 'worker:' || $1 AND NOT"
-            " p.paused AND p.binary_path IS NOT NULL"
+            "SELECT (SELECT coalesce(sum(least(q.n,"
+            " greatest(coalesce(p.max_runs, (p.describe->>'max_runs')::bigint,"
+            " 1) - coalesce(r.n, 0), 0))), 0) + coalesce(sum(q.fills), 0) FROM"
+            " orca.pipelines p JOIN (SELECT pipeline, count(*) FILTER (WHERE"
+            " trigger <> 'fill') AS n, count(*) FILTER (WHERE trigger ="
+            " 'fill') AS fills FROM orca.runs WHERE status = 'queued' AND"
+            " created <= now() - make_interval(secs => $2) GROUP BY pipeline)"
+            " q ON q.pipeline = p.name LEFT JOIN (SELECT pipeline, count(*) AS"
+            " n FROM orca.runs WHERE status = 'running' AND trigger <> 'fill'"
+            " GROUP BY pipeline) r ON r.pipeline = p.name WHERE p.placement ="
+            " 'worker:' || $1 AND NOT p.paused AND p.binary_path IS NOT NULL)"
+            # Members a running run of the pool still wants (#268).
+            " + (SELECT coalesce(sum(greatest(coalesce(p2.ec2_workers, 0) -"
+            " (SELECT count(*) FROM orca.run_members m WHERE m.run = r2.id AND"
+            " m.start = r2.starts AND m.ended IS NULL), 0)), 0) FROM orca.runs"
+            " r2 JOIN orca.pipelines p2 ON p2.name = r2.pipeline WHERE"
+            " r2.status = 'running' AND r2.cluster_head IS NOT NULL AND"
+            " p2.placement = 'worker:' || $1 AND r2.started <= now() -"
+            " make_interval(secs => $2)) AS n"
         ),
         Params().text(pool).float64(after),
     )
@@ -132,11 +141,12 @@ def _live(mut db: State, pool: String) raises -> List[_Live]:
             " m.launched)::float8 AS age, w.last_seen IS NOT NULL AS seen,"
             " coalesce(extract(epoch FROM now() - w.last_seen)::float8, 0) AS"
             " silent, (coalesce(w.running, '') <> '' OR EXISTS (SELECT 1 FROM"
-            " orca.runs r WHERE r.worker = m.worker AND r.status ="
-            " 'running')) AS busy, coalesce(extract(epoch FROM now() -"
-            " m.idle_since)::float8, -1) AS idle_for FROM orca.pool_machines m"
-            " LEFT JOIN orca.workers w ON w.id = m.worker WHERE m.pool = $1 AND"
-            " m.ended IS NULL ORDER BY m.id"
+            " orca.runs r WHERE r.worker = m.worker AND r.status = 'running')"
+            " OR EXISTS (SELECT 1 FROM orca.run_members rm WHERE rm.worker ="
+            " m.worker AND rm.ended IS NULL)) AS busy, coalesce(extract(epoch"
+            " FROM now() - m.idle_since)::float8, -1) AS idle_for FROM"
+            " orca.pool_machines m LEFT JOIN orca.workers w ON w.id = m.worker"
+            " WHERE m.pool = $1 AND m.ended IS NULL ORDER BY m.id"
         ),
         Params().text(pool),
     ):

@@ -13,7 +13,11 @@ what the autoscaler (`orca.pool_scale`) calls, so it never knows which.
 firewall `ORCA_HCLOUD_FIREWALL` (none by default), labelled `orca=pool`,
 `orca-pool=<pool>` and `orca-owner=<owner>` (the stack's id, so stacks
 sharing a project keep their machines apart), which is how `machines`
-finds a pool's.
+finds a pool's. Every machine joins the private network
+`ORCA_HCLOUD_NETWORK` (`orca-<owner>`, made in `ORCA_HCLOUD_NETWORK_ZONE`,
+`eu-central`, over `ORCA_HCLOUD_NETWORK_RANGE`, `10.77.0.0/16`, if it isn't
+there; `none` for none): one run's dista cluster over several machines
+talks over it (#268), its public side only ssh.
 
 **EC2** (`orca.machines_ec2`): subnets for locations, the security group
 and instance profile from the scheduler's settings, Ubuntu for the type's
@@ -82,6 +86,9 @@ struct Provider(Movable):
     var image: String
     var ssh_keys: List[String]
     var firewall: String
+    var network: String
+    """The private network its machines join (`ORCA_HCLOUD_NETWORK`, else
+    `orca-<owner>`; `none` for no network)."""
 
     def __init__(
         out self, kind: String, owner: String, var hcloud: Optional[HCloud]
@@ -93,6 +100,11 @@ struct Provider(Movable):
         self.image = getenv("ORCA_HCLOUD_IMAGE", "ubuntu-24.04")
         self.ssh_keys = _list_env("ORCA_HCLOUD_SSH_KEYS")
         self.firewall = getenv("ORCA_HCLOUD_FIREWALL")
+        self.network = getenv("ORCA_HCLOUD_NETWORK")
+        if not self.network and owner:
+            self.network = String("orca-", owner)
+        if self.network == "none":
+            self.network = String()
 
     @staticmethod
     def of(kind: String, owner: String = "") raises -> Provider:
@@ -130,6 +142,14 @@ struct Provider(Movable):
                 spec.user_data,
                 labels,
             )
+        # The pool's private network (dista's traffic, #268), made once.
+        var network = String()
+        if self.network:
+            network = self._hcloud.value().network_id(
+                self.network,
+                getenv("ORCA_HCLOUD_NETWORK_ZONE", "eu-central"),
+                getenv("ORCA_HCLOUD_NETWORK_RANGE", "10.77.0.0/16"),
+            )
         return self._hcloud.value().create(
             ServerSpec(
                 spec.name,
@@ -140,6 +160,7 @@ struct Provider(Movable):
                 labels^,
                 self.ssh_keys.copy(),
                 self.firewall,
+                network,
             )
         )
 

@@ -106,6 +106,34 @@ def boot_script(
         "PY\n",
         'rm -f "$DIR/boot.json"\n',
         'echo "ORCA_WORKER_TOKEN=$TOKEN" >> "$DIR/worker.env"\n',
+        # The address the pool's machines reach this one at, for a run that
+        # spreads over them (#268): its private one, from Hetzner's or EC2's
+        # metadata, waited for while the private network attaches.
+        'ADV="${ORCA_BOOT_ADVERTISE:-}"\n',
+        "MD=http://169.254.169.254\n",
+        'if [ -z "$ADV" ] && curl -fsS -m 2 "$MD/hetzner/v1/metadata/hostname"',
+        " > /dev/null 2>&1; then\n",
+        # Hetzner: the private network can attach a little after boot.
+        "    i=0\n",
+        '    while [ -z "$ADV" ] && [ "$i" -lt 24 ]; do\n',
+        (
+            "        ADV=$(curl -fsS -m 3"
+            ' "$MD/hetzner/v1/metadata/private-networks"'
+        ),
+        " 2> /dev/null | sed -n 's/^- ip: *//p' | head -1)\n",
+        '        [ -n "$ADV" ] || { i=$((i + 1)); sleep 5; }\n',
+        "    done\n",
+        'elif [ -z "$ADV" ]; then\n',
+        # EC2 (IMDSv2); anywhere else none, and runs aren't spread there.
+        "    T=$(curl -fsS -m 2 -X PUT -H",
+        " 'X-aws-ec2-metadata-token-ttl-seconds: 60' \"$MD/latest/api/token\"",
+        ' 2> /dev/null) && ADV=$(curl -fsS -m 2 -H "X-aws-ec2-metadata-token:',
+        ' $T" "$MD/latest/meta-data/local-ipv4" 2> /dev/null) || ADV=\n',
+        "fi\n",
+        (
+            '[ -z "$ADV" ] || echo "ORCA_WORKER_ADVERTISE=$ADV" >>'
+            ' "$DIR/worker.env"\n'
+        ),
     )
     if command:
         out.write(
@@ -134,7 +162,7 @@ def boot_script(
         "fi\n",
         "mkdir -p /var/lib/orca/stage\n",
         "docker rm -f orca-worker > /dev/null 2>&1 || true\n",
-        "docker run -d --name orca-worker --restart always",
+        "docker run -d --name orca-worker --restart always --network host",
         ' --env-file "$DIR/worker.env"',
         " --cap-add SYS_ADMIN --security-opt apparmor=unconfined",
         " --cgroupns private -v /var/lib/orca/stage:/var/lib/orca/stage",
