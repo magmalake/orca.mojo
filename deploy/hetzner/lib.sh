@@ -28,7 +28,7 @@ die() {
 # The settings that name a file: a relative one is read from the folder of
 # the settings file that sets it (resolve_paths).
 PATH_SETTINGS="SECRETS_FILE S3_CREDENTIALS_FILE TUNNEL_TOKEN_FILE GITHUB_TOKEN_FILE
-NTFY_TOPIC_FILE NTFY_TOKEN_FILE GHCR_TOKEN_FILE EXTRA_ENV_FILE SSH_PUBLIC_KEY_FILE SSH_PRIVATE_KEY_FILE"
+NTFY_TOPIC_FILE NTFY_TOKEN_FILE GHCR_TOKEN_FILE EXTRA_ENV_FILE CONFIG_OVERLAY_FILE SSH_PUBLIC_KEY_FILE SSH_PRIVATE_KEY_FILE"
 
 # resolve_paths DIR: each PATH_SETTINGS that is set and relative becomes
 # DIR/<it>. Run after each settings file, so a shared hetzner.env (in a
@@ -240,6 +240,7 @@ check_args() {
 need_settings() {
     need BUCKET S3_ENDPOINT S3_REGION
     [ -z "${EXTRA_ENV_FILE:-}" ] || need_file EXTRA_ENV_FILE
+    [ -z "${CONFIG_OVERLAY_FILE:-}" ] || need_file CONFIG_OVERLAY_FILE
     load_secrets
     for name in $SECRET_NAMES; do
         v=$(secret_var "$name")
@@ -256,7 +257,7 @@ need_settings() {
     done
     [ -z "${GHCR_USER:-}" ] || has_secret ghcr-token \
         || die "GHCR_USER needs GHCR_TOKEN_FILE or a ghcr-token key in SECRETS_FILE"
-    for v in S3_CREDENTIALS_FILE TUNNEL_TOKEN_FILE GITHUB_TOKEN_FILE NTFY_TOPIC_FILE NTFY_TOKEN_FILE GHCR_TOKEN_FILE; do
+    for v in S3_CREDENTIALS_FILE TUNNEL_TOKEN_FILE GITHUB_TOKEN_FILE NTFY_TOPIC_FILE NTFY_TOKEN_FILE GHCR_TOKEN_FILE CONFIG_OVERLAY_FILE; do
         eval "val=\${$v:-}"
         if is_sops "$val"; then
             need_tool sops
@@ -267,7 +268,8 @@ need_settings() {
 
 # --- SECRETS_FILE: every secret in one SOPS file, one `sops -d` ----------------
 # Its top-level keys are these, the files' names under /etc/orca, and each
-# value is the file's content (a string). One decrypt per run: a Secure
+# value is the file's content (a string). It may have more secrets/orca/<id>
+# keys, the secrets the apps' [apps.<name>] secrets name (#331), sent the same way. One decrypt per run: a Secure
 # Enclave age key (age-plugin-se) asks for Touch ID once, not per file.
 SECRET_NAMES="s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token secrets/orca/hcloud-token"
 SECRETS_JSON=
@@ -329,7 +331,8 @@ load_secrets() {
         if type != "object" then "it is not a mapping of file names to their contents"
         else ($known | split(" ")) as $k | to_entries[]
             | if (.key | startswith("/") or contains("..")) then "\(.key | @json): a name has no leading / and no .."
-              elif (.key | IN($k[]) | not) then "\(.key | @json) is not one of: \($known)"
+              elif (.key | IN($k[]) | not) and (.key | test("^secrets/orca/[A-Za-z0-9_+=.@-]+(/[A-Za-z0-9_+=.@-]+)*$") | not)
+                then "\(.key | @json) is not one of: \($known), or secrets/orca/<id>"
               elif (.value | type) != "string" then "\(.key | @json): the value is a \(.value | type), not a string (quote it, or use |)"
               else empty end
         end') || {
@@ -403,6 +406,11 @@ write_settings() {
         fi
         [ -z "${FIXED_COST:-}" ] || echo "MORCA_FIXED_COST=$FIXED_COST"
         [ -z "${POSTHOG_KEY:-}" ] || echo "MORCA_POSTHOG_KEY=$POSTHOG_KEY"
+        # Where the UI's analytics go: a proxy such as /ph; PostHog's own without.
+        [ -z "${POSTHOG_HOST:-}" ] || echo "MORCA_POSTHOG_HOST=$POSTHOG_HOST"
+        # The stack's overlay on morca.toml (#332): sync_settings sends the
+        # file, and the scheduler has it here (morca-stack's OVERLAY).
+        [ -z "${CONFIG_OVERLAY_FILE:-}" ] || echo "MORCA_CONFIG_OVERLAY=/etc/orca/overlay/morca.overlay.toml"
         if [ -n "${EXTRA_ENV_FILE:-}" ] && [ -r "$EXTRA_ENV_FILE" ]; then cat "$EXTRA_ENV_FILE"; fi
     } > "$1"
 }
@@ -437,7 +445,7 @@ sync_file() {
 }
 
 # sync_settings DIR: brings the server's settings in line with hetzner.env,
-# as up.sh made them: settings.env, the secret files, the stack settings
+# as up.sh made them: settings.env, the secret files, the overlay, the stack settings
 # (morca-stack configure; not MORCA_TAG, which deploy.sh moves) and the apps.
 # Each prints what it changes, keys and file names only (a stack setting
 # old -> new: none is a secret). DIR is a local temporary directory. The
@@ -470,10 +478,26 @@ sync_settings_() {
         [ "$name" != ghcr-token ] || [ -n "${GHCR_USER:-}" ] || continue
         sync_file "$name" "$val" || return 1
     done
+    # The apps' secrets: SECRETS_FILE's other secrets/orca/<id> keys.
+    for name in $SECRETS_KEYS; do
+        case " $SECRET_NAMES " in *" $name "*) continue ;; esac
+        sync_secret "$name" || return 1
+    done
+    # The overlay, or none: one taken out of hetzner.env is removed.
+    if [ -n "${CONFIG_OVERLAY_FILE:-}" ]; then
+        sync_file overlay/morca.overlay.toml "$CONFIG_OVERLAY_FILE" || return 1
+    else
+        remote morca-stack sync --remove overlay/morca.overlay.toml || return 1
+    fi
     # GHCR_USER= (none in hetzner.env) removes it from stack.conf.
     remote morca-stack configure MORCA_IMAGE="$MORCA_IMAGE" CLOUDFLARED_IMAGE="$CLOUDFLARED_IMAGE" \
         BUCKET="$BUCKET" BACKUP_KEEP="$BACKUP_KEEP" GHCR_USER="${GHCR_USER:-}" || return 1
+    # APPS=console names an app; console:8080 also gives its port, for an
+    # app whose morca.toml has no [apps.console] port.
     for app in $APPS; do
-        remote morca-stack app "${app%%:*}" "${app#*:}" || return 1
+        case $app in
+            *:*) remote morca-stack app "${app%%:*}" "${app#*:}" || return 1 ;;
+            *) remote morca-stack app "$app" || return 1 ;;
+        esac
     done
 }

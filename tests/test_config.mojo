@@ -15,6 +15,7 @@ from morca.config import (
     parse_workers,
     resolve,
 )
+from morca.apps_config import apps_text
 from morca.pool_config import NO_WAIT, read_pools
 
 comptime EXAMPLE = """[defaults]
@@ -413,6 +414,215 @@ def test_no_file() raises:
     var none = ProjectConfig()
     assert_false(none.is_file())
     assert_false(resolve("x", RegisterFlags(), none).in_file)
+
+
+def _write(path: String, text: String) raises:
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def _load_refused(overlay: String, why: String) raises:
+    _write("build/test-config-overlay.toml", overlay)
+    try:
+        _ = ProjectConfig.load(
+            "build/test-config.toml", "build/test-config-overlay.toml"
+        )
+    except e:
+        if why not in String(e):
+            raise Error("refused ", repr(overlay), " but said: ", e)
+        return
+    raise Error("accepted: ", repr(overlay))
+
+
+def test_a_stack_overlay() raises:
+    # morca.toml with a stack's overlay laid on it (#332): a key replaces
+    # the file's, a table is merged key by key, and where each value came
+    # from says so.
+    _write(
+        "build/test-config.toml",
+        """[defaults]
+max_runs = 1
+
+[pipelines.gharchive]
+fills = "all"
+fill_lag = "2h"
+env = { SLOTS = "2", EVENTS = "off" }
+
+[pipelines.mojo_repos]
+placement = "worker:big"
+
+[pipelines.ballast]
+enabled = false
+""",
+    )
+    _write(
+        "build/test-config-overlay.toml",
+        """[pipelines.gharchive]
+fills = "since_registration"
+env = { SLOTS = "1" }
+
+[pipelines.mojo_repos]
+placement = "control"
+
+[pipelines.ballast]
+enabled = true
+""",
+    )
+    var f = ProjectConfig.load(
+        "build/test-config.toml", "build/test-config-overlay.toml"
+    )
+    assert_equal(f.overlay, "build/test-config-overlay.toml")
+    assert_equal(f.overlay_hash.byte_length(), 64)
+    assert_true(f.enabled("ballast"))
+    assert_true(f.enabled("gharchive"))
+    var g = resolve("gharchive", RegisterFlags(), f)
+    assert_equal(g.text("fills"), "since_registration")
+    assert_equal(
+        g.values["fills"].detail,
+        "[pipelines.gharchive], overlay build/test-config-overlay.toml:2",
+    )
+    assert_equal(g.values["fills"].line, 0)
+    assert_equal(g.text("fill_lag"), "2h")
+    assert_equal(g.values["fill_lag"].detail, "[pipelines.gharchive]")
+    assert_equal(g.values["fill_lag"].line, 6)
+    assert_equal(g.text("max_runs"), "1")
+    for kv in g.env_pairs():
+        if kv[0] == "SLOTS":
+            assert_equal(kv[1], "1")
+        if kv[0] == "EVENTS":
+            assert_equal(kv[1], "off")
+    assert_equal(len(g.env_pairs()), 2)
+    var m = resolve("mojo_repos", RegisterFlags(), f)
+    assert_equal(m.text("placement"), "control")
+    var locs = f.entries("placement")
+    assert_equal(
+        locs[0][0],
+        "build/test-config-overlay.toml:6: [pipelines.mojo_repos] placement",
+    )
+    assert_true(
+        '"overlay": "build/test-config-overlay.toml"' in g.config_json(f)
+    )
+    var shown = f.shown()
+    assert_true(
+        'fills = "since_registration"  # overlay'
+        " build/test-config-overlay.toml:2"
+        in shown
+    )
+    assert_true('fill_lag = "2h"\n' in shown)
+    # Without it, the file alone.
+    var plain = ProjectConfig.load("build/test-config.toml")
+    assert_false(plain.enabled("ballast"))
+    assert_equal(
+        resolve("gharchive", RegisterFlags(), plain).text("fills"), "all"
+    )
+    # [defaults] enabled = false turns off all but those that say true.
+    _write(
+        "build/test-config-overlay.toml",
+        "[defaults]\nenabled = false\n[pipelines.ballast]\nenabled = true\n",
+    )
+    var lab = ProjectConfig.load(
+        "build/test-config.toml", "build/test-config-overlay.toml"
+    )
+    assert_false(lab.enabled("gharchive"))
+    assert_false(lab.enabled("mojo_repos"))
+    assert_true(lab.enabled("ballast"))
+    # A pipeline the file hasn't, a bad value (at the overlay's line) and a
+    # file that isn't TOML are refused.
+    _load_refused(
+        '[pipelines.gharchiv]\nfills = "all"\n',
+        (
+            "build/test-config-overlay.toml:1: [pipelines.gharchiv] isn't a"
+            " pipeline of build/test-config.toml"
+        ),
+    )
+    _load_refused(
+        '\n[pipelines.gharchive]\nfills = "some"\n',
+        "build/test-config-overlay.toml:3: [pipelines.gharchive] fills: is",
+    )
+    _load_refused(
+        "[defaults]\nenabled = 1\n",
+        "build/test-config-overlay.toml:2: [defaults] enabled is true or false",
+    )
+    _load_refused("[defaults\n", "build/test-config-overlay.toml:1")
+    _load_refused(
+        "[apps.console]\nport = 1\n",
+        "[apps.console] isn't an app of build/test-config.toml",
+    )
+    try:
+        _ = ProjectConfig.load("build/test-config.toml", "build/no-such.toml")
+        raise Error("accepted a missing overlay")
+    except e:
+        assert_true("no build/no-such.toml" in String(e))
+
+
+def test_apps() raises:
+    # [apps.<name>] (#331): what an app gets, checked, and the lines
+    # `morca config apps` prints for the stack's script.
+    var f = ProjectConfig(
+        """[apps.console]
+port = 8080
+check = "/healthz"
+env = { CONSOLE_SEMANTIC = "1", N = 2 }
+lake = true
+secrets = { POSTHOG_KEY = "orca/posthog-key" }
+memory_gb = 1.5
+
+[apps.bare]
+""",
+        "morca.toml",
+    )
+    var apps = f.apps()
+    assert_equal(len(apps), 2)
+    assert_equal(apps[0].port, 8080)
+    assert_equal(apps[0].memory_mb, 1536)
+    assert_true(apps[0].lake)
+    assert_equal(apps[1].port, 0)
+    assert_equal(apps[1].check, "/")
+    assert_false(apps[1].lake)
+    assert_equal(
+        apps_text(apps),
+        String(
+            "console port 8080\nconsole check /healthz\nconsole lake true\n",
+            "console memory_mb 1536\nconsole env CONSOLE_SEMANTIC=1\n",
+            "console env N=2\nconsole secret POSTHOG_KEY orca/posthog-key\n",
+            "bare port 0\nbare check /\nbare lake false\nbare memory_mb 0\n",
+        ),
+    )
+    _refused(
+        "[apps.console]\nprt = 1\n",
+        "morca.toml:2: [apps.console] has no key prt",
+    )
+    _refused("[apps.console]\nport = 0\n", "port is a number from 1 to 65535")
+    _refused('[apps.console]\nport = "8080"\n', "port is a number")
+    _refused('[apps.console]\ncheck = "healthz"\n', "check is a path")
+    _refused("[apps.console]\nlake = 1\n", "lake is true or false")
+    _refused("[apps.console]\nmemory_gb = 0\n", "memory_gb is a number of GB")
+    _refused(
+        '[apps.console]\nenv = { PORT = "1" }\n',
+        "env: PORT is set by the stack",
+    )
+    _refused(
+        '[apps.console]\nenv = { AWS_ACCESS_KEY_ID = "x" }\n',
+        "env: AWS_ACCESS_KEY_ID comes with lake = true",
+    )
+    _refused(
+        '[apps.console]\nenv = { API_TOKEN = "x" }\n',
+        "env: API_TOKEN looks like a secret",
+    )
+    _refused(
+        '[apps.console]\nenv = { A = "x\\ny" }\n', "env: a value is one line"
+    )
+    _refused(
+        '[apps.console]\nsecrets = { K = "posthog-key" }\n',
+        "secrets: ID is a Secrets Manager secret under orca/",
+    )
+    _refused(
+        '[apps.console]\nsecrets = { K = "orca/../db-password" }\n',
+        "secrets: K: an ID has no .. or //",
+    )
+    _refused("[apps.ui]\n", "ui is one of the stack's own containers")
+    _refused("[apps.Console]\n", "an app's name is lower-case")
+    _refused("apps = 1\n", "is a key at the top")
 
 
 def main() raises:

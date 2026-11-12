@@ -62,6 +62,8 @@ struct Shown(Movable):
     var source: String
     var repo_path: String
     """The file's path in its checkout, for links to its lines."""
+    var overlay: String
+    """The stack's overlay laid on the file, if one was."""
     var overrides: List[Tuple[String, String]]
     var rows: List[_Row]
     var learned: Optional[Recommendation]
@@ -80,6 +82,7 @@ struct Shown(Movable):
         self.dirty = False
         self.source = String()
         self.repo_path = String()
+        self.overlay = String()
         self.overrides = List[Tuple[String, String]]()
         self.rows = List[_Row]()
         self.learned = None
@@ -112,6 +115,8 @@ struct Shown(Movable):
                 ', "dirty": ',
                 "true" if self.dirty else "false",
             )
+            if self.overlay:
+                out.write(', "overlay": ', quote(self.overlay))
         else:
             out.write(', "file": null')
         out.write(', "overrides": {')
@@ -162,6 +167,8 @@ struct Shown(Movable):
                 ", sha256 ",
                 self.hash[byte = : min(12, self.hash.byte_length())],
             )
+            if self.overlay:
+                out.write(", with the overlay ", self.overlay)
         else:
             out.write("  not registered from morca.toml")
         out.write("\n")
@@ -378,6 +385,9 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
                 var so = c.get("source")
                 if so and so.value().is_string():
                     s.source = so.value().string_value()
+                var ov = c.get("overlay")
+                if ov and ov.value().is_string():
+                    s.overlay = ov.value().string_value()
                 var rp = c.get("repo_path")
                 if rp and rp.value().is_string():
                     s.repo_path = rp.value().string_value()
