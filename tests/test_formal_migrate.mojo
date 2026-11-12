@@ -59,7 +59,7 @@ def _replay(events: String) raises -> String:
     """Replays `events` on an empty database, and renders the outcomes, the
     version and the floor as the oracle prints them."""
     var conn = Connection(getenv("MORCA_DATABASE_URL"))
-    _ = conn.execute("DROP SCHEMA IF EXISTS morca CASCADE")
+    _ = conn.execute("DROP SCHEMA IF EXISTS orca CASCADE")
     _ = conn.execute("CREATE SCHEMA orca")
     _ = conn.execute(
         "CREATE TABLE orca.schema_version (version int NOT NULL, min_binary"
