@@ -1,9 +1,14 @@
 """Where a pipeline binary's code came from: its git repository and commit,
-given at build time.
+given at build time:
 
     mojo build -D MORCA_SOURCE=https://github.com/me/lake \\
         -D MORCA_COMMIT=$(git rev-parse HEAD) \\
         -D MORCA_DIRTY=$(git diff --quiet HEAD && echo 0 || echo 1) ...
+
+or, for the repository and commit, at run time: a binary built without the
+defines reads `MORCA_SOURCE` and `MORCA_COMMIT` from its environment, which a
+project image sets (`ENV`). An image's programs then don't change with each
+commit, so Mojo's compile cache can serve a rebuild (census #153).
 
 `describe` reports them, `morca register` and each run record them as a
 version of the pipeline (`orca.pipeline_versions`), and `morca ui` links a
@@ -11,18 +16,24 @@ run to the commit it ran. A binary built without them has an empty source
 and is shown as such.
 """
 
+from std.os import getenv
 from std.sys import get_defined_string
 
 
 def source_repo() -> String:
-    return String(get_defined_string["MORCA_SOURCE", ""]())
+    """The repository: the define, else `MORCA_SOURCE` in the environment."""
+    var r = String(get_defined_string["MORCA_SOURCE", ""]())
+    return r if r else getenv("MORCA_SOURCE")
 
 
 def source_commit() -> String:
-    """The commit, or "" if what was defined isn't hex. `mojo build -D`
+    """The commit (the define, else `MORCA_COMMIT` in the environment), or
+    "" if it isn't hex. `mojo build -D`
     reads a value of digits alone as a number, which a real SHA, with 40
     characters, practically never is."""
     var c = String(get_defined_string["MORCA_COMMIT", ""]())
+    if not c:
+        c = getenv("MORCA_COMMIT")
     return c if is_hex(c) else String()
 
 
