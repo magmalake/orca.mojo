@@ -80,8 +80,9 @@ if [ "$DRY_RUN" = 1 ]; then
     dargs="<dev-tag>"
 else
     case $tags in
-        "morca "*)
-            dargs=$(echo "$tags" | sed 's/^morca //; s/, \([^ ,]*\) \([^ ,]*\)/ \1=\2/g')
+        # "orca T, ..." from a dev stack still on orca-hetzner 0.24.x.
+        "morca "* | "orca "*)
+            dargs=$(echo "$tags" | sed 's/^m\{0,1\}orca //; s/, \([^ ,]*\) \([^ ,]*\)/ \1=\2/g')
             ;;
         *) dargs=$tags ;;
     esac

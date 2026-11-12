@@ -89,7 +89,7 @@ else
     sed -e "s|@@HOSTNAME@@|$NAME|" -e "s|@@VOLUME_ID@@|$volume_id|" "$HERE/cloud-init.yaml" > "$tmp/cloud-init.yaml"
     hc server create --name "$SERVER" --type "$SERVER_TYPE_SMALL" --image "$SERVER_IMAGE" \
         --location "$LOCATION" --ssh-key "$ssh_key" --firewall "$NAME" --volume "$NAME-data" \
-        --user-data-from-file "$tmp/cloud-init.yaml" --label morca=true
+        --user-data-from-file "$tmp/cloud-init.yaml" --label orca=true
 fi
 if [ "$DRY_RUN" = 0 ]; then
     applied=$(hcloud firewall describe "$NAME" -o json | jq -r --arg s "$SERVER" '[.applied_to[]? | select(.type == "server") | .server.id] | length')

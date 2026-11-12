@@ -129,6 +129,17 @@ conf_get() { # KEY: its value in stack.conf, or empty
     [ -z "$_cv" ] || printf '%s\n' "$_cv"
 }
 
+# scli ARGS...: the scheduler container's command, morca, or orca in an
+# image from before the rename (#384), which the first deploy after it
+# quiesces and drains.
+scli() {
+    if docker exec scheduler test -x /opt/morca/bin/morca > /dev/null 2>&1; then
+        docker exec scheduler morca "$@"
+    else
+        docker exec scheduler orca "$@"
+    fi
+}
+
 orca_conf() { # stack.conf still has orca's ORCA_* keys: migrate_orca hasn't run
     [ -f "$CONF/stack.conf" ] && grep -q '^ORCA_' "$CONF/stack.conf"
 }
@@ -368,7 +379,7 @@ login() {
         docker login ghcr.io -u "$(conf_get GHCR_USER)" --password-stdin < "$CONF/ghcr-token" > /dev/null
         # For morca too (MORCA_REGISTRY_TOKEN_SECRET=orca/ghcr-token): a worker
         # pool's booting machine pulls the image with it.
-        mkdir -p "$CONF/secrets/morca"
+        mkdir -p "$CONF/secrets/orca"
         install -m 600 "$CONF/ghcr-token" "$CONF/secrets/orca/ghcr-token"
     fi
 }
@@ -647,11 +658,11 @@ EOF
             # The alias: NAME is answered with both until the old one stops.
             # An alias is only given on connecting, hence the reconnect, and
             # then the checks again.
-            if docker network disconnect morca "$a_name-next" > /dev/null \
-                && docker network connect --alias "$a_name" morca "$a_name-next" > /dev/null; then
+            if docker network disconnect orca "$a_name-next" > /dev/null \
+                && docker network connect --alias "$a_name" orca "$a_name-next" > /dev/null; then
                 ! healthy "$a_name-next" "$a_health" 30 || a_ok=1
             else
-                why="couldn't be given the alias $a_name on the morca network"
+                why="couldn't be given the alias $a_name on the orca network"
             fi
         fi
         if [ "$a_ok" = 0 ]; then
@@ -693,7 +704,7 @@ overlap_scheduler() {
     docker update --restart no scheduler > /dev/null
     docker rename scheduler scheduler-old
     docker rename scheduler-next scheduler
-    if ! docker exec scheduler morca scheduler wait-lead --timeout "$htimeout" > /dev/null 2>&1; then
+    if ! scli scheduler wait-lead --timeout "$htimeout" > /dev/null 2>&1; then
         echo "scheduler: replaced ($o_why), overlapping, but the new one doesn't lead after ${htimeout}s; scheduler-old drains all the same (docker logs scheduler)" >&2
         unhealthy="$unhealthy scheduler"
         replaced="$replaced scheduler"
@@ -836,7 +847,7 @@ cmd_apply() {
     mkdir -p "$DATA/pg" "$STATE/stage" "$STATE/backup" "$CONF/secrets"
     write_env "$CONF"
     login
-    docker network create morca > /dev/null 2>&1 || true
+    docker network create orca > /dev/null 2>&1 || true
 
     # Postgres: created once; its data is on the Volume. Later applies leave it alone.
     if ! docker inspect postgres > /dev/null 2>&1; then
@@ -905,7 +916,7 @@ apply_failed() {
 # scheduler may still be starting after an apply.
 cmd_register() {
     n=0
-    until out=$(docker exec scheduler morca register 2>&1); do
+    until out=$(scli register 2>&1); do
         n=$((n + 1))
         [ "$n" -lt "${MORCA_STACK_REGISTER_TRIES:-15}" ] || {
             echo "$out" >&2
@@ -976,12 +987,13 @@ cmd_upgrade_steps() {
 # upgrade-run morca ARG...: an upgrade step's command, in the scheduler.
 cmd_upgrade_run() {
     [ "${1:-}" = morca ] || die "upgrade-run runs morca commands only"
+    shift
     for a in "$@"; do
         case "$a" in
             "" | *[!A-Za-z0-9._:/@=,+-]*) die "refusing the argument '$a' (letters, digits and ._:/@=,+- only)" ;;
         esac
     done
-    docker exec scheduler "$@"
+    scli "$@"
 }
 
 cmd_rollback() {
@@ -1051,7 +1063,7 @@ cmd_drain_old() {
     host=$(docker inspect -f '{{.Config.Hostname}}' scheduler-old 2> /dev/null) || host=
     safe "$host"
     for id in $(psql_q "SELECT id FROM orca.schedulers WHERE ended IS NULL AND host = '$host' ORDER BY id" 2> /dev/null); do
-        docker exec scheduler morca scheduler drain "$id" > /dev/null 2>&1 || true
+        scli scheduler drain "$id" > /dev/null 2>&1 || true
         echo "morca-stack: asked scheduler instance $id (scheduler-old) to drain"
     done
     t=0
@@ -1078,7 +1090,7 @@ cmd_status() {
     echo "running runs: $(running_runs) here, $(worker_runs) on remote workers"
     if [ "$(conf_get OVERLAP)" = 1 ]; then
         echo "scheduler instances:"
-        docker exec scheduler morca scheduler status 2> /dev/null | sed 's/^/  /' || true
+        scli scheduler status 2> /dev/null | sed 's/^/  /' || true
     fi
     echo "tag: $(conf_get MORCA_TAG)   applied: $(cat "$STATE/applied" 2> /dev/null || echo never)"
     echo "deployed: $(cmd_tags)   before: $(cmd_tags --previous)"
@@ -1102,7 +1114,7 @@ cmd_quiesce() {
     done
     touch "$STATE/paused-by-quiesce"
     for p in $(psql_q "SELECT name FROM orca.pipelines WHERE NOT paused ORDER BY name"); do
-        docker exec scheduler morca pause "$p" > /dev/null
+        scli pause "$p" > /dev/null
         echo "$p" >> "$STATE/paused-by-quiesce"
         echo "morca-stack: paused $p"
     done
@@ -1143,7 +1155,7 @@ cmd_resume() {
         [ -n "$p" ] || continue
         # The scheduler may still be starting after an apply.
         n=0
-        until docker exec scheduler morca unpause "$p" > /dev/null 2>&1; do
+        until scli unpause "$p" > /dev/null 2>&1; do
             n=$((n + 1))
             [ "$n" -lt 30 ] || die "couldn't unpause $p; still paused: $(tr '\n' ' ' < "$STATE/paused-by-quiesce")"
             sleep 2
@@ -1214,7 +1226,7 @@ cmd_backup() {
     cat "$out"
     if [ "$rc" -ne 0 ]; then
         why=$(tail -n 3 "$out" | tr '\n' ' ' | cut -c1-300)
-        docker exec scheduler morca notify --kind backup-failed --subject nightly --priority high \
+        scli notify --kind backup-failed --subject nightly --priority high \
             --tags rotating_light --title "morca: nightly backup failed" "$why" > /dev/null 2>&1 || true
     fi
     rm -f "$out"
@@ -1246,7 +1258,7 @@ cmd_restore() {
     docker rm -f scheduler ui > /dev/null 2>&1 || true
     have=$(psql_q "SELECT count(*) FROM information_schema.schemata WHERE schema_name = 'orca'")
     if [ "$have" != 0 ]; then
-        [ "$force" = 1 ] || die "the database already has the morca schema; --force drops it first"
+        [ "$force" = 1 ] || die "the database already has the orca schema; --force drops it first"
         docker exec postgres psql -U orca -d orca -c 'DROP SCHEMA orca CASCADE' > /dev/null
     fi
     f=restore.dump
@@ -1306,7 +1318,7 @@ check_one() {
 # canary_run PIPELINE KEY TIMEOUT: a run of PIPELINE over KEY, waited for;
 # ok if it succeeded within TIMEOUT seconds.
 canary_run() {
-    c_out=$(docker exec scheduler morca start "$1" "$2" 2>&1) || {
+    c_out=$(scli start "$1" "$2" 2>&1) || {
         check_fail "canary $1 $2: morca start: $(echo "$c_out" | tail -n 1)"
         return 0
     }
@@ -1379,7 +1391,7 @@ cmd_check() {
         ! docker inspect "$c" > /dev/null 2>&1 || check_fail "$c is still there (morca-stack drain-old)"
     done
     if [ "$(conf_get OVERLAP)" = 1 ]; then
-        leaders=$(docker exec scheduler morca scheduler status 2> /dev/null | grep -c ' leading ' || true)
+        leaders=$(scli scheduler status 2> /dev/null | grep -c ' leading ' || true)
         if [ "$leaders" = 1 ]; then
             check_ok "scheduler instances: one leads"
         else

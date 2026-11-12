@@ -10,7 +10,7 @@
 #
 # Containers are directories in $FAKE/containers/<name>: image (the
 # reference it was started with), id (that image's id), status, labels
-# (KEY=VALUE lines) and aliases (on the morca network: --network-alias, or
+# (KEY=VALUE lines) and aliases (on the orca network: --network-alias, or
 # network connect --alias after a disconnect). An image's id is a hash of its reference,
 # or $FAKE/images/<reference with / and : as _> if there is one (a tag
 # pushed again). morca-stack's health probe (exec NAME bash -c ... PORT
@@ -45,6 +45,20 @@ image_id() {
 }
 C=$FAKE/containers
 all="$*"
+# Every network name it's given goes to $FAKE/networks: on the server it is
+# orca, live state the rename to morca (#384) leaves alone.
+case "$all" in
+    "network create "* | "network disconnect "*) echo "$3" >> "$FAKE/networks" ;;
+    "network connect --alias "*) echo "$5" >> "$FAKE/networks" ;;
+    "network connect "*) echo "$3" >> "$FAKE/networks" ;;
+esac
+prev=
+for a in "$@"; do
+    [ "$prev" != --network ] || echo "$a" >> "$FAKE/networks"
+    prev=$a
+done
+# A scheduler from before the rename has orca's command, not morca's.
+case "$all" in "exec scheduler orca "*) all="exec scheduler morca ${all#exec scheduler orca }" ;; esac
 case "$all" in
     *"pg_isready"*) exit 0 ;;
     "run --rm --entrypoint test "*" -x /opt/morca/bin/morca")
@@ -242,7 +256,7 @@ case "$all" in
         [ -d "$C/$2" ] && [ ! -d "$C/$3" ] || exit 1
         mv "$C/$2" "$C/$3"
         ;;
-    "network disconnect morca "*)
+    "network disconnect "*)
         [ -d "$C/$4" ] || exit 1
         : > "$C/$4/aliases"
         ;;

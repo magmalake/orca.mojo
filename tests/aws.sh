@@ -81,7 +81,7 @@ packages:
 EOF
 "$morca" aws push --tag v1 > ../push.out 2>&1 || fail "push: $(cat ../push.out)"
 got=$(calls)
-repo=123456789012.dkr.ecr.us-east-2.amazonaws.com/morca
+repo=123456789012.dkr.ecr.us-east-2.amazonaws.com/orca
 echo "$got" | grep -q "docker build --platform linux/arm64 -f build/morca-aws/Dockerfile --build-arg MORCA_VERSION=0.24.0 .* -t $repo:v1 -t $repo:latest build/morca-aws/context" \
     || fail "push's build: $got"
 grep -q '^FROM ${MORCA_RUNTIME}:${MORCA_VERSION}' build/morca-aws/Dockerfile || fail "the template isn't FROM the runtime"

@@ -183,6 +183,7 @@ log "previous tag $was, new tag $to"
 # upgrade.toml (morca-stack upgrade-steps). Not for a rollback, nor when the
 # morca tag stays.
 from=${was#morca }
+from=${from#orca }
 from=${from%%,*}
 steps=0
 [ "$rollback" = 0 ] && [ "$from" != "$tag" ] && steps=1
