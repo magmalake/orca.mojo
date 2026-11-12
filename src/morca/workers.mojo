@@ -92,6 +92,7 @@ from morca.registered import (
     registered,
     run_request,
 )
+from morca.handover import RunOutdated, run_outdated
 from morca.state import PgStore, State, beat_run
 from morca.store import FINAL, TableSnapshot
 from morca.tokens import (
@@ -1053,7 +1054,26 @@ def store_call(
             text_field(v, "owner"),
             text_field(v, "timeouts"),
         )
-        return String('{"stop": ', quote(why), "}")
+        # And whether a newer version leads, for its `morca.outdated()`;
+        # not knowing doesn't fail the beat.
+        var o = RunOutdated(False, String(), String(), String())
+        try:
+            o = run_outdated(store.db.conn, Int(run))
+        except:
+            pass
+        return String(
+            '{"stop": ',
+            quote(why),
+            ', "outdated": ',
+            "true" if o.outdated else "false",
+            ', "code_version": ',
+            quote(o.mine),
+            ', "desired_code_version": ',
+            quote(o.desired),
+            ', "outdated_why": ',
+            quote(o.why),
+            "}",
+        )
     raise Error("morca: no store call ", call)
 
 

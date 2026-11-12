@@ -27,8 +27,12 @@
 #   upgrade-run morca ARG...                    docker exec scheduler morca ARG... (a step)
 #   can-overlap [--tag T]                      exit 0 if the new image's scheduler may start
 #                                              beside the old one (OVERLAP=1, docs/overlap.md)
-#   drain-old [--timeout SECONDS]              ask scheduler-old to drain, wait for it to exit,
-#                                              remove it (stopped after the timeout)
+#   drain-old [--wait] [--timeout SECONDS]     ask the old schedulers to drain, and leave each
+#                                              a reaper that removes it once its last run
+#                                              ends; with --wait (or --timeout) wait for that
+#                                              instead (stopped after the timeout)
+#   reap-old NAME                              wait for old scheduler NAME to exit, then
+#                                              remove it (drain-old starts one in the background)
 #   quiesce [--timeout SECONDS] [--workers]    pause every pipeline, wait for the scheduler's
 #                                              runs to end (those on remote workers too
 #                                              with --workers: rescale.sh's)
@@ -79,15 +83,22 @@
 # Overlapping schedulers (OVERLAP=1 in stack.conf, MORCA_OVERLAP=on in
 # morca.env; docs/overlap.md). With --overlap (deploy.sh passes it when
 # can-overlap says yes) the new scheduler starts as scheduler-next beside
-# the old one; the old one is set not to restart and renamed scheduler-old,
-# the new one renamed scheduler, and apply waits until it leads (morca
-# scheduler wait-lead, HEALTH_TIMEOUT). The old one has seen it and drains:
-# it starts nothing and exits once its runs have ended. drain-old asks it
-# to drain, waits for that (bounded), and removes it. Runs aren't paused or
-# killed. A scheduler-old (or scheduler-next) left behind that isn't
-# running any more, say when drain-old didn't follow, holds no runs: the
-# next apply removes it first, naming its image and when it exited. A
-# running one stays until drain-old: can-overlap says no, and check fails.
+# the old one; the old one is set not to restart and renamed
+# scheduler-old-<UTC time>, the new one renamed scheduler, and apply waits
+# until it leads (morca scheduler wait-lead, HEALTH_TIMEOUT). The old one
+# has seen it and drains: it starts nothing, and exits once its runs have
+# ended, however long they take (#397: its runs see morca.outdated(), and
+# nothing stops them). drain-old asks it to drain and leaves a reaper
+# behind (reap-old, $STATE/reap-NAME.log) that removes its container once
+# it has exited; deploy.sh doesn't wait for it. Runs aren't paused or
+# killed. A deploy while one still drains overlaps again: its scheduler
+# becomes another scheduler-old-<time>, so several can drain at once, each
+# under its own name, and none is renamed over another. check reports each
+# one draining as information, not a failure. One that isn't running any
+# more (its reaper gone, say after a reboot) holds no runs: the next apply
+# removes it first, naming its image and when it exited, as it does a
+# scheduler-next left behind (#352). A scheduler-old from before #397 (no
+# time in its name) is one of them too.
 #
 # Each apply that changes a tag keeps what was deployed before it:
 # $CONF/deployed has the tags the last apply started ("morca TAG", then "app
@@ -181,6 +192,20 @@ WORKER_RUNS="r.status = 'running' AND r.placement LIKE 'worker:%'"
 
 running_runs() {
     psql_q "SELECT count(*) FROM orca.runs WHERE $HERE_RUNS" 2> /dev/null || echo 0
+}
+
+# The old schedulers overlapping deploys left draining, oldest first: each
+# scheduler-old-<UTC time>, and a scheduler-old from before #397.
+old_schedulers() {
+    docker ps -a --format '{{.Names}}' 2> /dev/null | grep -E '^scheduler-old(-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?)?$' | sort || true
+}
+
+# old_runs NAME: the running runs the old scheduler NAME's instances hold.
+old_runs() {
+    o_host=$(docker inspect -f '{{.Config.Hostname}}' "$1" 2> /dev/null) || o_host=
+    safe "$o_host"
+    [ -n "$o_host" ] || { echo 0; return 0; }
+    psql_q "SELECT count(*) FROM orca.runs r JOIN orca.schedulers s ON s.id = r.instance WHERE r.status = 'running' AND s.host = '$o_host'" 2> /dev/null || echo 0
 }
 
 worker_runs() {
@@ -696,21 +721,27 @@ overlap_scheduler() {
     o_files=$3
     o_why=$4
     shift 4
-    docker inspect scheduler-old > /dev/null 2>&1 && die "scheduler-old is still draining from a deploy before (morca-stack drain-old)"
+    # Its own name: one still draining from a deploy before keeps its own.
+    o_old=scheduler-old-$(date -u +%Y%m%dT%H%M%SZ)
+    o_n=1
+    while docker inspect "$o_old" > /dev/null 2>&1; do
+        o_n=$((o_n + 1))
+        o_old=${o_old%%Z*}Z-$o_n
+    done
     docker rm -f scheduler-next > /dev/null 2>&1 || true
     docker run -d --name scheduler-next --restart always \
         --label "orca.stack.spec=$o_spec" --label "orca.stack.args=$o_args" \
         --label "orca.stack.files=$o_files" "$@" > /dev/null
     docker update --restart no scheduler > /dev/null
-    docker rename scheduler scheduler-old
+    docker rename scheduler "$o_old"
     docker rename scheduler-next scheduler
     if ! scli scheduler wait-lead --timeout "$htimeout" > /dev/null 2>&1; then
-        echo "scheduler: replaced ($o_why), overlapping, but the new one doesn't lead after ${htimeout}s; scheduler-old drains all the same (docker logs scheduler)" >&2
+        echo "scheduler: replaced ($o_why), overlapping, but the new one doesn't lead after ${htimeout}s; $o_old drains all the same (docker logs scheduler)" >&2
         unhealthy="$unhealthy scheduler"
         replaced="$replaced scheduler"
         return 0
     fi
-    echo "scheduler: replaced ($o_why), overlapping: scheduler-old drains its runs"
+    echo "scheduler: replaced ($o_why), overlapping: $o_old drains its runs"
     replaced="$replaced scheduler"
 }
 
@@ -807,12 +838,12 @@ ago() { # TIME (docker's FinishedAt, UTC): how long ago, as "2d 23h", "4h 5m", "
     fi
 }
 
-# remove_exited: a scheduler-old or scheduler-next an earlier deploy left
-# behind that isn't running any more (an overlap's old scheduler that
+# remove_exited: an old scheduler or a scheduler-next an earlier deploy
+# left behind that isn't running any more (an overlap's old scheduler that
 # drained and exited, but wasn't removed) holds no runs: removed, saying
-# so. A running one is left alone; only drain-old ends it.
+# so. A running one is left alone: it drains for as long as its runs take.
 remove_exited() {
-    for r_name in scheduler-old scheduler-next; do
+    for r_name in $(old_schedulers) scheduler-next; do
         r_info=$(docker inspect -f '{{.Config.Image}} {{.State.Status}} {{.State.FinishedAt}}' "$r_name" 2> /dev/null) || continue
         read -r r_image r_status r_finished << EOF
 $r_info
@@ -841,7 +872,7 @@ cmd_apply() {
         tags_now > "$CONF/deployed"
     fi
     [ "${MORCA_STACK_TEST:-}" = 1 ] || mountpoint -q "$DATA" || die "$DATA (the Volume) isn't mounted; Postgres must not start on the root disk"
-    # Before the overlap's check for a scheduler-old still draining.
+    # The old schedulers that have exited, before the plan.
     remove_exited
     desired
     mkdir -p "$DATA/pg" "$STATE/stage" "$STATE/backup" "$CONF/secrets"
@@ -1015,10 +1046,11 @@ cmd_rollback() {
 
 # can-overlap [--tag T]: whether the image at T (the conf's tag without
 # it) may start its scheduler beside the running one: OVERLAP=1, the
-# scheduler running, none draining from a deploy before (a scheduler-old
-# that has exited doesn't count: apply removes it), and the new
-# binary's `morca scheduler can-overlap` (a migration that raises the floor
-# says no). Prints "yes" or "no: why"; exit 0 or 1.
+# scheduler running, and the new binary's `morca scheduler can-overlap` (a
+# migration that raises the floor past any live instance, the old
+# schedulers still draining included, says no). An old scheduler still
+# draining from a deploy before doesn't stop it: it drains on beside the
+# next. Prints "yes" or "no: why"; exit 0 or 1.
 cmd_can_overlap() {
     t=$(conf_get MORCA_TAG)
     if [ "${1:-}" = --tag ]; then
@@ -1030,9 +1062,6 @@ cmd_can_overlap() {
     ! orca_conf && [ ! -f "$CONF/renamed" ] || { echo "no: the first deploy after the orca -> morca rename (#384) replaces the scheduler"; return 1; }
     [ "$(docker inspect -f '{{.State.Running}}' scheduler 2> /dev/null)" = true ] \
         || { echo "no: no scheduler is running"; return 1; }
-    # One that has exited holds no runs, and apply removes it first.
-    [ "$(docker inspect -f '{{.State.Running}}' scheduler-old 2> /dev/null)" != true ] \
-        || { echo "no: scheduler-old is still draining (morca-stack drain-old)"; return 1; }
     image=$(conf_get MORCA_IMAGE)
     login
     pull "$image:$t"
@@ -1047,42 +1076,108 @@ cmd_can_overlap() {
     return 1
 }
 
-# drain-old [--timeout SECONDS]: asks scheduler-old's instances to drain
-# (they do once they see the new one; this says so in their rows too),
-# waits up to the timeout (3600) for the container to exit, then stops it if
-# it hasn't (its runs are killed, and the new scheduler queues them again)
-# and removes it.
+# drain-old [--wait] [--timeout SECONDS]: asks each old scheduler's
+# instances to drain (they do once they see the new one; this says so in
+# their rows too) and returns: each one exits once its last run ends,
+# however long that takes, and a reaper (reap-old, in the background,
+# $STATE/reap-NAME.log) then removes its container. One that has exited
+# already is removed now. With --wait it waits for them instead, and with
+# --timeout too stops one still running after that many seconds (its runs
+# are killed, and the new scheduler queues them again) and removes it.
 cmd_drain_old() {
-    timeout=3600
-    if [ "${1:-}" = --timeout ]; then
-        [ $# -ge 2 ] || die "--timeout needs a value"
-        timeout=$2
-    fi
-    case "$timeout" in "" | *[!0-9]*) die "the timeout is a number of seconds, not '$timeout'" ;; esac
-    docker inspect scheduler-old > /dev/null 2>&1 || { echo "morca-stack: no scheduler-old: nothing drains"; return 0; }
-    host=$(docker inspect -f '{{.Config.Hostname}}' scheduler-old 2> /dev/null) || host=
-    safe "$host"
-    for id in $(psql_q "SELECT id FROM orca.schedulers WHERE ended IS NULL AND host = '$host' ORDER BY id" 2> /dev/null); do
-        scli scheduler drain "$id" > /dev/null 2>&1 || true
-        echo "morca-stack: asked scheduler instance $id (scheduler-old) to drain"
+    wait=0
+    timeout=
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --wait) wait=1 ;;
+            --timeout)
+                [ $# -ge 2 ] || die "--timeout needs a value"
+                timeout=$2
+                wait=1
+                shift
+                ;;
+            *) die "usage: morca-stack drain-old [--wait] [--timeout SECONDS]" ;;
+        esac
+        shift
     done
+    case "$timeout" in *[!0-9]*) die "the timeout is a number of seconds, not '$timeout'" ;; esac
+    olds=$(old_schedulers)
+    [ -n "$olds" ] || { echo "morca-stack: no old scheduler: nothing drains"; return 0; }
+    for name in $olds; do
+        host=$(docker inspect -f '{{.Config.Hostname}}' "$name" 2> /dev/null) || host=
+        safe "$host"
+        for id in $(psql_q "SELECT id FROM orca.schedulers WHERE ended IS NULL AND host = '$host' ORDER BY id" 2> /dev/null); do
+            scli scheduler drain "$id" > /dev/null 2>&1 || true
+            echo "morca-stack: asked scheduler instance $id ($name) to drain"
+        done
+    done
+    for name in $olds; do
+        if [ "$wait" = 1 ]; then
+            drain_wait "$name" "$timeout"
+        elif [ "$(docker inspect -f '{{.State.Running}}' "$name" 2> /dev/null)" != true ]; then
+            docker rm -f "$name" > /dev/null 2>&1 || true
+            echo "morca-stack: $name drained and removed"
+        else
+            echo "morca-stack: $name drains $(old_runs "$name") run(s) in the background (outdated: morca.outdated() is true for them); it's removed once its last run ends"
+            reaper "$name"
+        fi
+    done
+}
+
+# drain_wait NAME [TIMEOUT]: waits for old scheduler NAME to exit (stopping
+# it after TIMEOUT seconds, if given), then removes it.
+drain_wait() {
+    host=$(docker inspect -f '{{.Config.Hostname}}' "$1" 2> /dev/null) || host=
+    safe "$host"
     t=0
-    while [ "$(docker inspect -f '{{.State.Running}}' scheduler-old 2> /dev/null)" = true ]; do
-        if [ "$t" -ge "$timeout" ]; then
-            echo "morca-stack: scheduler-old still runs after ${timeout}s: stopping it; the new scheduler queues its runs again"
-            docker stop -t 30 scheduler-old > /dev/null
+    while [ "$(docker inspect -f '{{.State.Running}}' "$1" 2> /dev/null)" = true ]; do
+        if [ -n "$2" ] && [ "$t" -ge "$2" ]; then
+            echo "morca-stack: $1 still runs after ${2}s: stopping it; the new scheduler queues its runs again"
+            docker stop -t 30 "$1" > /dev/null
             break
         fi
         if [ $((t % 60)) -eq 0 ]; then
-            echo "morca-stack: waiting for scheduler-old's runs:"
+            echo "morca-stack: waiting for $1's runs:"
             # a run over more than 3 partitions shows its first and last
             psql_q "SELECT '  run ' || r.id || ' ' || r.pipeline || ' ' || CASE WHEN cardinality(p.a) > 3 THEN p.a[1] || ' ... ' || p.a[cardinality(p.a)] || ' (' || cardinality(p.a) || ' partitions)' ELSE r.partitions END || ', running ' || date_trunc('second', now() - r.started) FROM orca.runs r JOIN orca.schedulers s ON s.id = r.instance CROSS JOIN LATERAL (SELECT string_to_array(r.partitions, ',') AS a) p WHERE r.status = 'running' AND s.host = '$host' ORDER BY r.id" 2> /dev/null || true
         fi
         sleep 5
         t=$((t + 5))
     done
-    docker rm -f scheduler-old > /dev/null
-    echo "morca-stack: scheduler-old drained and removed"
+    docker rm -f "$1" > /dev/null
+    echo "morca-stack: $1 drained and removed"
+}
+
+# reaper NAME: reap-old NAME in the background, out of this session (the
+# deploy's ssh), unless one is going already.
+reaper() {
+    r_pid=$STATE/reap-$1.pid
+    if [ -f "$r_pid" ] && kill -0 "$(cat "$r_pid")" 2> /dev/null; then
+        return 0
+    fi
+    mkdir -p "$STATE"
+    r_sid=
+    ! command -v setsid > /dev/null 2>&1 || r_sid=setsid
+    # shellcheck disable=SC2086
+    nohup $r_sid sh "$0" reap-old "$1" < /dev/null >> "$STATE/reap-$1.log" 2>&1 &
+    echo $! > "$r_pid"
+}
+
+# reap-old NAME: waits for old scheduler NAME to exit (once its last run
+# has ended), then removes it. Polls every MORCA_STACK_REAP_SECONDS (30).
+cmd_reap_old() {
+    [ $# -eq 1 ] || die "usage: morca-stack reap-old NAME"
+    case "$1" in scheduler-old | scheduler-old-*) ;; *) die "not an old scheduler: $1" ;; esac
+    safe "$1"
+    echo "morca-stack: $(date -u +%FT%TZ) waiting for $1 to drain"
+    while [ "$(docker inspect -f '{{.State.Running}}' "$1" 2> /dev/null)" = true ]; do
+        sleep "${MORCA_STACK_REAP_SECONDS:-30}"
+    done
+    if docker inspect "$1" > /dev/null 2>&1; then
+        docker rm -f "$1" > /dev/null
+        echo "morca-stack: $(date -u +%FT%TZ) $1 drained and removed"
+    fi
+    rm -f "$STATE/reap-$1.pid"
 }
 
 cmd_status() {
@@ -1092,6 +1187,13 @@ cmd_status() {
         echo "scheduler instances:"
         scli scheduler status 2> /dev/null | sed 's/^/  /' || true
     fi
+    for o in $(old_schedulers); do
+        if [ "$(docker inspect -f '{{.State.Running}}' "$o" 2> /dev/null)" = true ]; then
+            echo "$o: draining $(old_runs "$o") run(s) (outdated)"
+        else
+            echo "$o: exited; the next apply removes it"
+        fi
+    done
     echo "tag: $(conf_get MORCA_TAG)   applied: $(cat "$STATE/applied" 2> /dev/null || echo never)"
     echo "deployed: $(cmd_tags)   before: $(cmd_tags --previous)"
     [ ! -f "$STATE/paused-by-quiesce" ] || echo "paused by quiesce: $(tr '\n' ' ' < "$STATE/paused-by-quiesce")"
@@ -1289,6 +1391,7 @@ cmd_restore() {
 # --- check: the smoke check at the end of every deploy ---------------------
 
 check_ok() { echo "morca-stack: check: ok    $*"; }
+check_info() { echo "morca-stack: check: info  $*"; }
 check_fail() {
     echo "morca-stack: check: FAIL  $*"
     check_bad=$((check_bad + 1))
@@ -1386,9 +1489,15 @@ cmd_check() {
         check_fail "postgres: not ready"
     fi
     containers check_one
-    # One scheduler: none of a deploy's second one left beside it.
-    for c in scheduler-next scheduler-old; do
-        ! docker inspect "$c" > /dev/null 2>&1 || check_fail "$c is still there (morca-stack drain-old)"
+    # One scheduler: no scheduler-next left beside it. The old schedulers
+    # still draining (each for as long as its runs take) are information.
+    ! docker inspect scheduler-next > /dev/null 2>&1 || check_fail "scheduler-next is still there (morca-stack apply removes it once it has exited)"
+    for c in $(old_schedulers); do
+        if [ "$(docker inspect -f '{{.State.Running}}' "$c" 2> /dev/null)" = true ]; then
+            check_info "$c: draining $(old_runs "$c") run(s) (outdated)"
+        else
+            check_info "$c: exited; the next apply removes it"
+        fi
     done
     if [ "$(conf_get OVERLAP)" = 1 ]; then
         leaders=$(scli scheduler status 2> /dev/null | grep -c ' leading ' || true)
@@ -1484,6 +1593,7 @@ case "$sub" in
     upgrade-run) cmd_upgrade_run "$@" ;;
     can-overlap) cmd_can_overlap "$@" ;;
     drain-old) cmd_drain_old "$@" ;;
+    reap-old) cmd_reap_old "$@" ;;
     quiesce) cmd_quiesce "$@" ;;
     resume) cmd_resume ;;
     backup) cmd_backup ;;
@@ -1492,5 +1602,5 @@ case "$sub" in
     restore) cmd_restore "$@" ;;
     check) cmd_check "$@" ;;
     checked) cmd_checked ;;
-    *) die "usage: morca-stack configure|sync|app|apply|plan|status|tags|rollback|register|can-overlap|drain-old|quiesce|resume|backup|list-backups|restore|check|checked" ;;
+    *) die "usage: morca-stack configure|sync|app|apply|plan|status|tags|rollback|register|can-overlap|drain-old|reap-old|quiesce|resume|backup|list-backups|restore|check|checked" ;;
 esac

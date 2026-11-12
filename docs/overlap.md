@@ -123,11 +123,72 @@ claims runs any more.
 
 An instance that drains starts nothing, keeps supervising its children and
 the `keep-log`s their ends started, and once none is left ends its row
-(`role = 'ended'`, `ended` set) and exits 0. After `MORCA_DRAIN_SECONDS`
-(3600, the same as `morca-stack quiesce`'s default timeout) it kills what is
-left (each control run's process group too), ends its row and exits; the
-leader queues those runs again once their heartbeats are stale. An ended
-instance is gone at once, so nothing waits for its row to go stale.
+(`role = 'ended'`, `ended` set) and exits 0, however long that takes: a
+run may last months, and morca never stops one for a deploy (#397). With
+`MORCA_DRAIN_SECONDS` set, it kills what is left after that many seconds
+(each control run's process group too), ends its row and exits; the
+leader queues those runs again once their heartbeats are stale. Unset, the
+default since #397, there is no limit. An ended instance is gone at once,
+so nothing waits for its row to go stale.
+
+### Outdated runs
+
+A draining instance's runs, and any run whose pipeline has since been
+registered with other code, are **outdated**, and can find out
+(`morca.handover`, #397). Morca tells them and does nothing else: it
+doesn't cancel, kill or queue them again. Their code decides.
+
+- **Where the flag comes from.** Each run's heartbeat thread already beats
+  `orca.runs` on its own connection every fifth of the stale limit. On the
+  same beat it now asks whether the run is outdated (`outdated_sql`): its
+  scheduler instance drains (`draining_since` or `drain_asked` on its row,
+  while it lists the run), or its pipeline's registered version
+  (`orca.pipelines.version`) is other code than the one the run recorded
+  (`orca.runs.version`). A worker's run gets the same answer in the reply
+  to its beat (`/api/worker/store/beat`). The answer goes into an atomic
+  in the run's process, so `morca.outdated()` costs a load and can be
+  called between any two units of work. No new column: both conditions
+  are already in the schema.
+- **The code version** is the version row `morca register` and each run
+  already record (`orca.pipeline_versions`, `morca.source`): the source
+  commit the binary was built from (`-D MORCA_COMMIT`), whether its tree
+  was dirty, and the registry hash. Not the registry hash alone (what the
+  snapshot summaries carry as `orca.code`): it covers the DAG, the steps'
+  names, functions and datasets, not what a step's body does, so a fix to
+  a poll loop wouldn't change it. Not the image either: a registration's
+  image is where remote runs go (`--image`), a run's the one it ran in, so
+  the two differ for the same code. A build without a commit is told apart
+  by its registry hash, and during a deploy by its scheduler draining.
+- **The SDK.** `morca.outdated() -> Bool`; `morca.code_version()`, the
+  run's version (the commit's first 12 characters, `+dirty` after a dirty
+  tree's, or `code <registry hash>` without a commit);
+  `morca.desired_code_version()`, the version its pipeline is registered
+  with now, what a new run would start with; `morca.outdated_why()`, the
+  reason as the UI says it. All are false or empty until the first beat,
+  and for a run without a heartbeat (in memory, over SQLite).
+- **Shown.** A running run's page (Status card, "Version"), its JSON
+  (`run.code_version`, `run.desired_code_version`, `run.outdated`, also on
+  every running row of the pipeline's runs) and `morca status <pipeline>`
+  mark it `outdated (newer version <commit> is leading)`, or `outdated
+  (its scheduler drains: scheduler instance N takes over)` when the code is
+  the same (a deploy of new settings, say).
+
+A long poll loop hands over like this:
+
+```mojo
+from morca import Ctx, Name, outdated, outdated_why
+
+def follow(mut ctx: Ctx, key: Name) raises -> Int:
+    var polls = 0
+    while not outdated():
+        poll_once(key)        # one unit of work, saved before the next
+        polls += 1
+    ctx.log(String("handing over: ", outdated_why()))
+    return polls              # the step succeeds; the next run starts new code
+```
+
+A run that never asks runs on to its end under the old image, its
+scheduler draining beside the new one all that time.
 
 ### Registering after the handover
 
@@ -190,9 +251,15 @@ holds nothing.
 - **A deploy, overlapping.** The new instance starts, migrates (additive),
   joins and waits. The old one sees it on its next tick, gives up the lead
   and drains; the new one takes the lead on its next. The deploy waits for
-  that (`wait-lead`) and registers. New runs start under the new image;
-  the old image's runs finish under it, counted by the new leader, and the
-  old scheduler exits. The deploy then removes its container.
+  that (`wait-lead`), registers, and returns. New runs start under the new
+  image; the old image's runs see they're outdated and finish under it
+  when their code decides, counted by the new leader, and the old
+  scheduler exits. A reaper on the server then removes its container.
+- **A deploy while an old scheduler still drains.** It overlaps again,
+  unless the new binary raises the floor past any live instance: the
+  scheduler it replaces drains too, under a name of its own. Several old
+  instances can drain at once, each supervising its own runs; the newest
+  leads.
 - **A deploy that raises the floor.** `can-overlap` says no; the deploy
   pauses, waits for the runs, stops the old scheduler and starts the new
   one, as today.
@@ -222,18 +289,40 @@ default) the containers get `MORCA_OVERLAP=on`, and:
 - on `yes`, `morca-stack apply --overlap` starts the new scheduler as
   `scheduler-next` beside the old one, sets the old one's restart policy to
   `no` (a restart after its drain would be the newest instance and take
-  the lead back), renames it `scheduler-old` and the new one `scheduler`,
-  and waits for `morca scheduler wait-lead`;
-- the deploy registers the pipelines, then `morca-stack drain-old` asks the
-  old instance to drain, waits for its container to exit (bounded by the
-  deploy's `--timeout`, then stopped), and removes it;
-- a `scheduler-old` or `scheduler-next` left behind that isn't running any
-  more (one that exited when `drain-old` didn't follow) holds no runs: the
-  next `morca-stack apply` removes it first, naming its image and how long
-  ago it exited, and `can-overlap` doesn't count it (#352). A running one
-  stays until `drain-old`, and `can-overlap` says no and `morca-stack check`
-  fails while it's there;
+  the lead back), renames it `scheduler-old-<UTC time>` and the new one
+  `scheduler`, and waits for `morca scheduler wait-lead`;
+- the deploy registers the pipelines, then `morca-stack drain-old` asks
+  every old instance to drain and returns (#397): it leaves each a reaper
+  (`morca-stack reap-old`) that removes its container once it has exited.
+  `drain-old --wait` waits instead, and `--timeout` stops one after that;
+- an old scheduler still draining doesn't stop the next deploy from
+  overlapping: each gets its own name, so none shadows another. `morca-stack
+  check` and `status` report each as `scheduler-old-<time>: draining N
+  run(s) (outdated)`, as information;
+- an old scheduler or a `scheduler-next` left behind that isn't running any
+  more holds no runs: the next `morca-stack apply` removes it first,
+  naming its image and how long ago it exited (#352);
 - `morca-stack status` lists the instances (`morca scheduler status`).
+
+### Deploys that don't overlap
+
+The pause-and-wait path (`morca-stack quiesce`) still waits for the
+running runs, the old schedulers' included. It can't only pause new
+starts: it's taken when the schedulers can't overlap, and then the
+scheduler is replaced by stopping its container, whose child processes
+are every local and control run, so not waiting kills them. And when the
+reason is a migration that raises the floor, the old binary's runs can't
+go on over the new schema at all (`State.migrate` refuses while an older
+instance is live). So it is left as it was; overlapping, the default once
+#390 lands, is the path that doesn't wait.
+
+### Not in this slice
+
+- The required global drain limit (#390: `DRAIN_SECONDS` in hetzner.env,
+  a hard error when missing): until then `MORCA_DRAIN_SECONDS` is
+  optional and unset means no limit.
+- Concurrency keys (#397: one `mojo_live` across versions), and the limit
+  on how long a run waits for an older version's run.
 
 Each container stages its own runs' output in the shared stage volume
 under names of their own (run and start), so nothing collides.
@@ -253,3 +342,11 @@ drain that runs out and its requeue, register's wait, and the floor cases).
 
 Next: the stack (#246, above), the instances on Ops' System page, and making
 `MORCA_OVERLAP=on` the default once proven.
+
+#397's first slice: outdated runs (above, `morca.handover`), no drain
+limit by default, and deploys that don't wait for the old scheduler's runs
+(`drain-old` returns, old schedulers named by time, check's `info` line).
+Tested by `tests/outdated.sh` (three real instances: a run that hands
+over, one that ignores it and succeeds once it returns, nothing killed,
+the drain-only case) and `tests/hetzner.sh` (a deploy that returns while
+the old scheduler drains, a second deploy while it does, the reaper).

@@ -63,8 +63,9 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
 - **Overlapping instances** (`orca.instances`, docs/overlap.md). With
   `MORCA_OVERLAP=on` a deploy starts the new image's scheduler beside the
   old one: the newest live instance leads and alone decides, and an older
-  one starts nothing more, supervises its runs until they end (or kills
-  them after `MORCA_DRAIN_SECONDS`) and exits. A local or control-placed
+  one starts nothing more, supervises its runs until they end, however
+  long that takes (or kills them after `MORCA_DRAIN_SECONDS`, if set), and
+  exits. Its runs see that they're outdated (`morca.outdated()`). A local or control-placed
   run records the instance that started it; while that instance lists it
   the run is live (`morca.live.held_sql`), counted against `max_runs`, the
   control slots and the grants, and left alone. Once the instance is gone
@@ -412,8 +413,9 @@ struct Scheduler(Movable):
     """Whether this instance drains: it starts nothing, and exits once the
     processes it started have ended."""
     var drain_seconds: Float64
-    """`MORCA_DRAIN_SECONDS` (3600): how long a drain waits for its runs
-    before it kills what's left."""
+    """`MORCA_DRAIN_SECONDS`: how long a drain waits for its runs before it
+    kills what's left; unset (-1), it waits for as long as they take, which
+    may be months (#397: morca never stops a run for a deploy)."""
     var _drain_start: Int
     """When the drain began, on the monotonic clock."""
     var finished: Bool
@@ -487,7 +489,8 @@ struct Scheduler(Movable):
         self.instance = 0
         self.leading = True
         self.draining = False
-        self.drain_seconds = Float64(getenv("MORCA_DRAIN_SECONDS", "3600"))
+        var drain = getenv("MORCA_DRAIN_SECONDS")
+        self.drain_seconds = Float64(drain) if drain else -1.0
         self._drain_start = 0
         self.finished = False
         self._going = 0
@@ -520,7 +523,7 @@ struct Scheduler(Movable):
         """An instance's turn at the lead: marks it seen with its runs,
         drains once a newer instance is live or it's asked to, takes the
         lead when free otherwise, and while draining ends once nothing it
-        started is left (killing what is, after `drain_seconds`)."""
+        started is left (killing what is after `drain_seconds`, if set)."""
         var running = String()
         for e in self._spawned.items():
             if running:
@@ -555,7 +558,7 @@ struct Scheduler(Movable):
             print("morca: scheduler instance", self.instance, "drained")
             return
         var waited = Float64(Int(perf_counter_ns()) - self._drain_start) / 1e9
-        if waited < self.drain_seconds:
+        if self.drain_seconds < 0 or waited < self.drain_seconds:
             return
         for e in self._spawned.items():
             if e.key in self._control:

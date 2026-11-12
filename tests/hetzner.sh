@@ -48,13 +48,17 @@
 #   running on the workers (quiesce --workers, rescale.sh's, waits for them);
 # - with OVERLAP=1 and can-overlap saying yes, a deploy that replaces the
 #   scheduler pauses nothing: the new scheduler starts beside the old one,
-#   the old one is set not to restart and renamed scheduler-old, the new one
-#   leads and registers, then the old one is asked to drain, waited for
-#   (stopped after --timeout) and removed; can-overlap says no with OVERLAP
-#   off, or with a scheduler-old still draining (which apply leaves), and
-#   the deploy that turns OVERLAP on pauses and waits as before; a
-#   scheduler-old or scheduler-next that isn't running is removed by the
-#   next apply, saying so, and a deploy overlaps over it;
+#   the old one is set not to restart and renamed scheduler-old-<time>, the
+#   new one leads and registers, then the old one is asked to drain and the
+#   deploy returns without waiting for its runs (#397): check and status
+#   say it's draining N run(s), as information, and a reaper removes it
+#   once it exits. A second deploy while one drains overlaps again, its old
+#   scheduler under a name of its own beside the first; drain-old
+#   --timeout waits and stops one after it; can-overlap says no with
+#   OVERLAP off, and the deploy that turns OVERLAP on pauses and waits as
+#   before; an old scheduler or scheduler-next that isn't running (a
+#   scheduler-old from before #397 too) is removed by the next apply,
+#   saying so, and a deploy overlaps over it;
 # - package.sh's release tarball unpacks to morca-hetzner-<version>/ with
 #   every script, server/ and the example settings, and its up.sh and
 #   deploy.sh run from there (hetzner.env next to them), printing the
@@ -65,8 +69,8 @@
 #   line names both; a missing HETZNER_LOCAL_ENV, or one that sets NAME,
 #   is refused;
 # - morca-stack check: ok on a healthy stack, and FAIL naming what's wrong (a
-#   stopped container, an unhealthy UI, a running scheduler-old left (an
-#   exited one apply removes), a pipeline
+#   stopped container, an unhealthy UI, a scheduler-next left (a draining
+#   old scheduler is information, and an exited one apply removes), a pipeline
 #   whose binary isn't in the image, none registered, a canary run that
 #   failed or didn't end in time); checked keeps the result, kind and tags;
 #   deploy.sh ends with it (hetzner.env's CANARY as --canary) and fails
@@ -685,44 +689,93 @@ has "not overlapping the schedulers: no live scheduler instance leads"
 has "pausing the pipelines"
 grep -q 'run -d --name scheduler-next' "$FAKE/docker.log" && fail "overlapped when can-overlap said no"
 # can-overlap yes: the new scheduler beside the old one, nothing paused, the
-# old one told not to restart, renamed, asked to drain, and removed once it
-# has exited; registered from the new one, after it leads.
+# old one told not to restart, renamed scheduler-old-<time> and asked to
+# drain; registered from the new one, after it leads. One that has exited
+# by then (the fake's drain) is removed at once.
 echo yes > "$FAKE/can-overlap"
 echo 4 > "$FAKE/running"
 echo 7 > "$FAKE/instances"
 : > "$FAKE/docker.log"
 deploy qqq7777 || fail "an overlapping deploy"
 has "the new scheduler starts beside the old one, which drains its runs: not pausing anything"
-has "scheduler: replaced (image ppp6666 -> qqq7777), overlapping: scheduler-old drains its runs"
-has "asked scheduler instance 7 (scheduler-old) to drain"
-has "scheduler-old drained and removed"
+old_re='scheduler-old-[0-9]\{8\}T[0-9]\{6\}Z'
+grep -q "^scheduler: replaced (image ppp6666 -> qqq7777), overlapping: $old_re drains its runs$" "$FAKE/out" \
+    || fail "no line naming the old scheduler"
+grep -q "asked scheduler instance 7 ($old_re) to drain" "$FAKE/out" || fail "the old scheduler wasn't asked to drain"
+has "the old scheduler drains its runs in the background; not waiting for them"
+grep -q "$old_re drained and removed" "$FAKE/out" || fail "the exited old scheduler wasn't removed"
 grep -q 'exec scheduler morca pause' "$FAKE/docker.log" && fail "an overlapping deploy paused a pipeline"
-order=$(grep -oE 'run -d --name scheduler-next|update --restart no scheduler$|rename scheduler scheduler-old|rename scheduler-next scheduler|morca scheduler wait-lead|exec scheduler morca register|morca scheduler drain 7|rm -f scheduler-old' "$FAKE/docker.log" | tr '\n' ,)
-[ "$order" = "run -d --name scheduler-next,update --restart no scheduler,rename scheduler scheduler-old,rename scheduler-next scheduler,morca scheduler wait-lead,exec scheduler morca register,morca scheduler drain 7,rm -f scheduler-old," ] \
+order=$(grep -oE 'run -d --name scheduler-next|update --restart no scheduler$|rename scheduler scheduler-old-[0-9TZ]*|rename scheduler-next scheduler|morca scheduler wait-lead|exec scheduler morca register|morca scheduler drain 7|rm -f scheduler-old-[0-9TZ]*' "$FAKE/docker.log" | sed 's/-[0-9]\{8\}T[0-9]\{6\}Z/-T/' | tr '\n' ,)
+[ "$order" = "run -d --name scheduler-next,update --restart no scheduler,rename scheduler scheduler-old-T,rename scheduler-next scheduler,morca scheduler wait-lead,exec scheduler morca register,morca scheduler drain 7,rm -f scheduler-old-T," ] \
     || fail "the overlap's order: $order"
 grep -q 'stop .*scheduler' "$FAKE/docker.log" && fail "the old scheduler was stopped"
 [ "$(cat "$FAKE/containers/scheduler/image")" = img:qqq7777 ] || fail "scheduler runs $(cat "$FAKE/containers/scheduler/image")"
-[ ! -d "$FAKE/containers/scheduler-old" ] || fail "scheduler-old is left"
-# A drain that runs out: the old one is stopped, then removed.
+ls "$FAKE/containers" | grep -q '^scheduler-old' && fail "an old scheduler is left: $(ls "$FAKE/containers")"
+# Its runs go on (#397): the deploy doesn't wait for them, and the old
+# scheduler drains in the background, check saying so without failing.
 touch "$FAKE/old-stays"
+echo 2 > "$FAKE/old-running"
+export MORCA_STACK_REAP_SECONDS=1
+deploy rrr8888 || fail "an overlapping deploy whose old scheduler's runs go on"
+first=$(ls "$FAKE/containers" | grep '^scheduler-old-' || true)
+[ -n "$first" ] || fail "no old scheduler draining: $(ls "$FAKE/containers")"
+has "$first drains 2 run(s) in the background (outdated: morca.outdated() is true for them); it's removed once its last run ends"
+has "check: info  $first: draining 2 run(s) (outdated)"
+has "check: all ok"
+has "done: rrr8888"
+grep -q "stop .*$first" "$FAKE/docker.all" && fail "the old scheduler was stopped"
+[ "$(cat "$FAKE/containers/$first/image")" = img:qqq7777 ] || fail "$first runs $(cat "$FAKE/containers/$first/image")"
+[ -f "$MORCA_STATE/reap-$first.pid" ] || fail "no reaper for $first"
+stack status > "$FAKE/out" 2>&1 || fail "status beside a draining old scheduler"
+has "^$first: draining 2 run(s) (outdated)$"
+# A second deploy while it drains overlaps again: the scheduler it replaces
+# drains under a name of its own, beside the first, which keeps its own.
+sleep 1
+deploy sss9999 || fail "a deploy while an old scheduler drains"
+has "the new scheduler starts beside the old one, which drains its runs"
+second=$(ls "$FAKE/containers" | grep '^scheduler-old-' | grep -vx "$first" || true)
+[ -n "$second" ] || fail "no second old scheduler: $(ls "$FAKE/containers")"
+[ "$(ls "$FAKE/containers" | grep -c '^scheduler-old-')" = 2 ] || fail "old schedulers: $(ls "$FAKE/containers")"
+[ "$(cat "$FAKE/containers/$first/image")" = img:qqq7777 ] || fail "$first was replaced: $(cat "$FAKE/containers/$first/image")"
+[ "$(cat "$FAKE/containers/$second/image")" = img:rrr8888 ] || fail "$second runs $(cat "$FAKE/containers/$second/image")"
+[ "$(cat "$FAKE/containers/scheduler/image")" = img:sss9999 ] || fail "scheduler runs $(cat "$FAKE/containers/scheduler/image")"
+has "check: info  $first: draining 2 run(s) (outdated)"
+has "check: info  $second: draining 2 run(s) (outdated)"
+has "check: all ok"
+# Each one's reaper removes it once its last run has ended and it exits.
+echo exited > "$FAKE/containers/$first/status"
+i=0
+while [ -d "$FAKE/containers/$first" ]; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "$first wasn't removed once it exited"; sleep 0.1
+done
+[ -d "$FAKE/containers/$second" ] || fail "$second was removed while it drained"
+grep -q "$first drained and removed" "$MORCA_STATE/reap-$first.log" || fail "the reaper's log: $(cat "$MORCA_STATE/reap-$first.log")"
+echo exited > "$FAKE/containers/$second/status"
+i=0
+while [ -d "$FAKE/containers/$second" ]; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "$second wasn't removed once it exited"; sleep 0.1
+done
+# drain-old --timeout waits, and stops one still running after it.
+deploy ttt0000 || fail "an overlapping deploy"
 : > "$FAKE/docker.log"
-deploy --timeout 0 rrr8888 || fail "an overlapping deploy whose drain runs out"
-has "scheduler-old still runs after 0s: stopping it"
-grep -q 'stop -t 30 scheduler-old' "$FAKE/docker.log" || fail "scheduler-old wasn't stopped"
-[ ! -d "$FAKE/containers/scheduler-old" ] || fail "scheduler-old is left"
-rm "$FAKE/old-stays"
-# One still draining from before: no overlap, and apply leaves it.
+stack drain-old --timeout 0 > "$FAKE/out" 2>&1 || fail "drain-old --timeout 0"
+grep -q "$old_re still runs after 0s: stopping it" "$FAKE/out" || fail "drain-old --timeout didn't stop it"
+grep -q "stop -t 30 $old_re" "$FAKE/docker.log" || fail "the old scheduler wasn't stopped"
+ls "$FAKE/containers" | grep -q '^scheduler-old' && fail "an old scheduler is left: $(ls "$FAKE/containers")"
+rm "$FAKE/old-stays" "$FAKE/old-running"
+# One from before #397 (scheduler-old), still draining: the next deploy
+# overlaps beside it, apply leaves it, and drain-old counts it.
 mkdir "$FAKE/containers/scheduler-old"
 echo running > "$FAKE/containers/scheduler-old/status"
 echo img:f3516e2 > "$FAKE/containers/scheduler-old/image"
-stack can-overlap > "$FAKE/out" 2>&1 && fail "can-overlap with scheduler-old still there"
-has "no: scheduler-old is still draining"
+echo h-scheduler-old > "$FAKE/containers/scheduler-old/hostname"
+stack can-overlap > "$FAKE/out" 2>&1 || fail "can-overlap beside a draining scheduler-old"
 stack apply > "$FAKE/out" 2>&1 || fail "an apply beside a running scheduler-old"
 grep -q 'removed scheduler-old' "$FAKE/out" && fail "apply removed a running scheduler-old"
 [ -d "$FAKE/containers/scheduler-old" ] || fail "apply removed a running scheduler-old"
 # One that has exited (drain-old didn't follow), and a scheduler-next that
-# never ran: can-overlap says yes, the apply removes both first, naming
-# their images and when they exited, and the deploy overlaps.
+# never ran: the apply removes both first, naming their images and when
+# they exited, and the deploy overlaps.
 echo exited > "$FAKE/containers/scheduler-old/status"
 echo 2026-01-01T00:00:00.123456789Z > "$FAKE/containers/scheduler-old/finished"
 mkdir "$FAKE/containers/scheduler-next"
@@ -734,13 +787,14 @@ deploy uuu1212 || fail "an overlapping deploy over an exited scheduler-old"
 grep -q 'removed scheduler-old, left by a deploy before (img:f3516e2, exited, exited [0-9]*d [0-9]*h ago)$' "$FAKE/out" \
     || fail "no line naming the exited scheduler-old"
 has "removed scheduler-next, left by a deploy before (img:f3516e2, created, never ran)"
-has "scheduler: replaced (image rrr8888 -> uuu1212), overlapping: scheduler-old drains its runs"
-has "scheduler-old drained and removed"
+grep -q "^scheduler: replaced (image ttt0000 -> uuu1212), overlapping: $old_re drains its runs$" "$FAKE/out" \
+    || fail "no overlap over the exited scheduler-old"
+grep -q "$old_re drained and removed" "$FAKE/out" || fail "the old scheduler wasn't removed"
 has "check: all ok"
-[ ! -d "$FAKE/containers/scheduler-old" ] || fail "scheduler-old is left"
+ls "$FAKE/containers" | grep -q '^scheduler-old' && fail "an old scheduler is left: $(ls "$FAKE/containers")"
 # A new scheduler that doesn't lead: apply fails, and deploy.sh says so.
 touch "$FAKE/no-lead"
-stack apply --tag sss9999 --overlap > "$FAKE/out" 2>&1 && fail "an overlap whose new scheduler doesn't lead"
+stack apply --tag vvv3434 --overlap > "$FAKE/out" 2>&1 && fail "an overlap whose new scheduler doesn't lead"
 has "doesn't lead after"
 rm "$FAKE/no-lead"
 stack drain-old > /dev/null 2>&1 || fail "drain-old after the failed lead"
@@ -825,10 +879,19 @@ echo 500 > "$FAKE/health/ui"
 why_="FAIL  ui: answered 500 on :8270/healthz"
 check_fails
 rm "$FAKE/health/ui"
+mkdir "$FAKE/containers/scheduler-next"
+echo running > "$FAKE/containers/scheduler-next/status"
+why_="FAIL  scheduler-next is still there"
+check_fails
+rm -r "$FAKE/containers/scheduler-next"
+# An old scheduler still draining is information, not a failure.
 mkdir "$FAKE/containers/scheduler-old"
 echo running > "$FAKE/containers/scheduler-old/status"
-why_="FAIL  scheduler-old is still there"
-check_fails
+echo h-scheduler-old > "$FAKE/containers/scheduler-old/hostname"
+echo 1 > "$FAKE/old-running"
+stack check > "$FAKE/out" 2>&1 || fail "check failed beside a draining scheduler-old"
+has "check: info  scheduler-old: draining 1 run(s) (outdated)"
+rm "$FAKE/old-running"
 # One that has exited: apply removes it, saying how long ago it exited, and
 # the check passes.
 echo exited > "$FAKE/containers/scheduler-old/status"

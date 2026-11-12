@@ -9,6 +9,7 @@ from postgres import Params, Row
 
 from morca.views.cluster import ClusterRow, cluster_rows
 from morca.actions import stalled_sql
+from morca.handover import run_outdated
 from morca.html import query_param, query_values, url_decode, url_encode
 from morca.json import quote
 from morca.lineage import SnapshotRef
@@ -150,6 +151,14 @@ struct RunRow(Copyable, Movable):
     seconds summed and the most cores."""
     var resources: RunResources
     """What its latest start asked for and was granted (`morca.resources`)."""
+    var code_version: String
+    """While it runs, the version it runs (`morca.handover.version_label`);
+    else empty."""
+    var desired_code_version: String
+    """While it runs, the version its pipeline is registered with now."""
+    var outdated: String
+    """While it runs on outdated code (`morca.handover`), why: "newer
+    version X is leading"; else empty."""
 
 
 @fieldwise_init
@@ -363,9 +372,25 @@ def run_rows(
                 r.text("held"),
                 usage_columns(r),
                 _resources_of(r),
+                String(),
+                String(),
+                String(),
             )
         )
+    for i in range(len(out)):
+        with_versions(db, out[i])
     return out^
+
+
+def with_versions(mut db: State, mut r: RunRow) raises:
+    """Fills a running run's versions, and whether it's outdated
+    (`morca.handover`): one query per running run."""
+    if r.status != "running":
+        return
+    var o = run_outdated(db.conn, r.id)
+    r.code_version = o.mine
+    r.desired_code_version = o.desired
+    r.outdated = o.why
 
 
 def version_rows(
@@ -1246,7 +1271,7 @@ def runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
     if len(rows) == 0:
         return None
     var r = rows.row(0)
-    return RunRow(
+    var row = RunRow(
         id,
         r.text("pipeline"),
         r.text("partitions"),
@@ -1265,7 +1290,12 @@ def runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
         r.text("held"),
         usage_columns(r),
         _resources_of(r),
+        String(),
+        String(),
+        String(),
     )
+    with_versions(db, row)
+    return row^
 
 
 @fieldwise_init
