@@ -1,5 +1,6 @@
 """`/`, the home page: the pipelines, with their coverage
-(`orca.coverage`), schedules, next and last runs, the recent runs, and
+(`orca.coverage`), schedules, next and last runs, the recent runs (a row
+per batch, `orca.ui.recent`), and
 the Timeline tab (`orca.ui.viz`);
 `/home/pipelines` is its table of pipelines, as the fragment it refreshes
 from.
@@ -20,11 +21,12 @@ from orca.system import alert_html, system_now, warnings, warnings_json
 from orca.ui.coverage import coverage_href
 from orca.ui.layout import IDLE_EVERY, LIVE_EVERY, page_html
 from orca.ui.parts import pause_button
-from orca.ui.runs import runs_list
+from orca.ui.recent import recent_list
 from orca.ui.viz import gantt_panel, gantt_tabs
 from orca.views.code import pipeline_srcs
 from orca.views.pipelines import PipelineRow, pipeline_coverage, pipeline_rows
-from orca.views.runs import HOME_RUNS, RunsQuery, runs_page
+from orca.views.recent import json_recent, recent_rows
+from orca.views.runs import HOME_RUNS, RunsQuery, run_rows
 from orca.watchdog import active_trips, banner_html, trips_json
 from orca.web.page import Page
 
@@ -192,7 +194,8 @@ def home_pipelines(mut db: State) raises -> Page:
 def home(mut db: State) raises -> Page:
     var ps = pipeline_rows(db)
     var covs = _coverages(db, ps)
-    var recent = runs_page(db, RunsQuery.newest("home", HOME_RUNS))
+    var newest = run_rows(db, RunsQuery.newest("home", HOME_RUNS), HOME_RUNS)
+    var recent = recent_rows(db, HOME_RUNS)
     var per_day = _runs_per_day(db, 30)
     var fleet = fleet_summary(db)
     var alerts = warnings(system_now(db))
@@ -215,7 +218,9 @@ def home(mut db: State) raises -> Page:
             j.write(", ")
         json_pipeline(j, ps[i], covs[i])
     j.write('], "runs": ')
-    json_runs(j, recent.rows)
+    json_runs(j, newest)
+    j.write(', "recent": ')
+    json_recent(j, recent)
     j.write(', "runs_per_day": [')
     for i in range(len(per_day)):
         ref d = per_day[i]
@@ -265,6 +270,6 @@ def home(mut db: State) raises -> Page:
         "</div></section>",
     )
     h.raw('<section class="card"><h2>Recent runs</h2>')
-    runs_list(h, db, recent)
+    recent_list(h, db, recent, HOME_RUNS)
     h.raw('<p class="more"><a href="/runs">All runs</a></p></section>')
     return Page(200, j^, page_html("Pipelines", "/", h))

@@ -24,6 +24,7 @@ from orca.fill import (
     fill_status,
 )
 from orca.system import system_now
+from orca.batches import mark_batch
 from orca.live import behind_sql, hold_behind
 from orca.kube import (
     RunSpec,
@@ -381,6 +382,7 @@ def _start(
         if status:
             # New fill runs, over the partitions nothing has filled.
             ref next = status.value().next_keys
+            var filled = List[Int64]()
             for i in range(min(free - len(ids), len(next))):
                 ids.append(
                     tx.query(
@@ -399,7 +401,9 @@ def _start(
                     .int64("id")
                 )
                 new_code.append(False)
+                filled.append(ids[len(ids) - 1])
                 print("fill", p.name, next[i], "run", ids[len(ids) - 1])
+            mark_batch(tx, filled)
         for i in range(len(ids)):
             var id = ids[i]
             var grant = grants[i] if admitted else Grant.none()
