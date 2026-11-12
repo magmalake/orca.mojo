@@ -117,14 +117,40 @@ def parse_fill_order(v: String) raises -> String:
     raise Error('is "oldest" or "newest", not ', v)
 
 
+comptime AUTO_FILL_MAX_RUNS = 64
+"""`fill_max_runs = "auto"`'s ceiling when it names none."""
+
+
+def fill_max_runs_auto(v: String) -> Bool:
+    """Whether `fill_max_runs`' value is `auto` or `auto..N` (#322): as
+    many fill runs at once as the host has room for, up to the ceiling."""
+    return v == "auto" or v.startswith("auto..")
+
+
 def parse_fill_max_runs(v: String) raises -> Int:
+    """`fill_max_runs`' count, or for `auto` and `auto..N` its ceiling (64,
+    or N): `fill_max_runs_auto` says which."""
+    var t = v
+    if v == "auto":
+        return AUTO_FILL_MAX_RUNS
+    if v.startswith("auto.."):
+        t = String(v[byte = String("auto..").byte_length() :])
     try:
-        var n = Int(v)
+        var n = Int(t)
         if n >= 1 and n <= 10000:
             return n
     except:
         pass
-    raise Error("is a count from 1 to 10000, not ", v)
+    raise Error('is a count from 1 to 10000, "auto" or "auto..N", not ', v)
+
+
+def fill_max_runs_text(n: Int, auto: Bool) -> String:
+    """`fill_max_runs` as orca.toml writes it."""
+    if not auto:
+        return String(n)
+    if n == AUTO_FILL_MAX_RUNS:
+        return String("auto")
+    return String("auto..", n)
 
 
 def parse_fill_budget(v: String) raises -> Float64:
@@ -230,6 +256,9 @@ struct Fill(Copyable, Movable):
     var window_to: Int
     var lag: Int
     """`fill_lag` in seconds: how long after its end a partition fills."""
+    var max_runs_auto: Bool
+    """`fill_max_runs = "auto"`: `max_runs` is the ceiling, and the host's
+    room decides how many (#322)."""
 
     @staticmethod
     def of(
@@ -239,6 +268,7 @@ struct Fill(Copyable, Movable):
         budget: Float64,
         window: String,
         lag: String = "",
+        max_runs_auto: Bool = False,
     ) raises -> Fill:
         """From the registration's columns: empty or negative for what
         wasn't set."""
@@ -251,6 +281,7 @@ struct Fill(Copyable, Movable):
             w[0],
             w[1],
             parse_fill_lag(lag) if lag else 0,
+            max_runs_auto,
         )
 
     def in_window(self, hour: Int) -> Bool:

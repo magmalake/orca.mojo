@@ -1,6 +1,6 @@
 # The image `orca aws push` builds for a project that added orca with
 # `pixi shelf add orca-mojo`, on orca's runtime image,
-# ghcr.io/magmalake/orca-runtime:<ORCA_VERSION> (deploy/runtime.Dockerfile).
+# ghcr.io/morca-dev/morca-runtime:<ORCA_VERSION> (deploy/runtime.Dockerfile).
 # The runtime has orca's own `orca` and `orca_maintain`, git, libcurl, the CA
 # bundles, llvm-symbolizer and the /opt/orca layout and environment; this
 # adds only the project's programs:
@@ -16,7 +16,7 @@
 #
 # `src/` is on the import path if the project has one. A project with a
 # Dockerfile.orca of its own builds that instead, and can start it the same
-# way: `ARG ORCA_VERSION` and `FROM ghcr.io/magmalake/orca-runtime:${ORCA_VERSION}`.
+# way: `ARG ORCA_VERSION` and `FROM ghcr.io/morca-dev/morca-runtime:${ORCA_VERSION}`.
 #
 # ORCA_VERSION is the orca-mojo the project pins, which `orca aws push`
 # reads from pixi.lock; the runtime and the project's pipelines are then the
@@ -25,8 +25,8 @@
 #     docker build -f project.Dockerfile --build-arg ORCA_VERSION=0.24.0 \
 #         -t ghcr.io/<owner>/<project>:<version> .
 #
-# Name the image after the project (ghcr.io/magmalake/mojourney, not
-# ghcr.io/magmalake/orca), and set ORCA_IMAGE in deploy/hetzner's
+# Name the image after the project (ghcr.io/morca-dev/census, not
+# ghcr.io/morca-dev/morca), and set ORCA_IMAGE in deploy/hetzner's
 # hetzner.env to it. ORCA_RUNTIME names another runtime repository, such as
 # one built locally (`docker build -f deploy/runtime.Dockerfile -t
 # orca-runtime:0.24.0 .` in orca.mojo, then --build-arg ORCA_RUNTIME=orca-runtime).
@@ -48,7 +48,7 @@
 # with --build-arg MOJO_TARGET_CPU=<cpu> (x86-64-v3 for linux/amd64).
 # No default version: the error for a build without one names what's missing.
 ARG ORCA_VERSION=needs-build-arg-orca-version
-ARG ORCA_RUNTIME=ghcr.io/magmalake/orca-runtime
+ARG ORCA_RUNTIME=ghcr.io/morca-dev/morca-runtime
 FROM ${ORCA_RUNTIME}:${ORCA_VERSION} AS runtime
 
 FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS build

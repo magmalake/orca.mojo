@@ -23,7 +23,7 @@ autoscaler makes one, at most once every `ORCA_POOL_TRY_SECONDS` (60):
   no wait and is tried for as long as there's demand;
 - once one is made, or the demand goes, it starts again from the first.
 
-The machine is named `orca-<pool>-<n>`, labelled with the pool and this
+The machine is named `orca-pool-<pool>-<n>`, labelled with the pool and this
 stack's id (`orca.stack_identity`, so a project several stacks share keeps
 them apart), and booted as a worker (`orca.pool_boot`) with a token of its
 own. `orca.pools.status` says what the last attempt came to.
@@ -480,36 +480,65 @@ struct PoolScaler(Movable):
             trying_for = 0.0
             if at < 0:
                 at = 0
-        var i = usable[at]
-        var t = p.machines[i][0]
-        var wait = p.machines[i][1]
         var locations = p.locations.copy()
         if len(locations) == 0:
             locations.append("")
-        for loc in locations:
-            var made = self._make(db, provider, p.name, t, loc, image, remote)
-            if made[0]:
-                _ = db.conn.execute(
-                    (
-                        "UPDATE orca.pools SET trying = 0, trying_since = NULL,"
-                        " status = $2 WHERE name = $1"
+        # A type refused for the project's quota: the next usable type may
+        # fit, this pass (waiting doesn't free quota); every location shares
+        # the quota, so it isn't tried in the others.
+        var i = usable[at]
+        var t = p.machines[i][0]
+        var wait = p.machines[i][1]
+        while True:
+            i = usable[at]
+            t = p.machines[i][0]
+            wait = p.machines[i][1]
+            var quota_hit = False
+            for loc in locations:
+                var made = self._make(
+                    db, provider, p.name, t, loc, image, remote
+                )
+                if made[0]:
+                    _ = db.conn.execute(
+                        (
+                            "UPDATE orca.pools SET trying = 0, trying_since ="
+                            " NULL, status = $2 WHERE name = $1"
+                        ),
+                        Params().text(p.name).text(String(skipped, made[1])),
+                    )
+                    return
+                if made[3]:
+                    skipped.write(t, " refused for quota: ", made[1], "; ")
+                    quota_hit = True
+                    break
+                if not made[2]:
+                    # A refusal that isn't stock: say it, try again later.
+                    _ = db.conn.execute(
+                        (
+                            "UPDATE orca.pools SET trying = $2, status = $3"
+                            " WHERE name = $1"
+                        ),
+                        Params()
+                        .text(p.name)
+                        .int64(Int64(i))
+                        .text(String(skipped, made[1])),
+                    )
+                    return
+            if not quota_hit:
+                break
+            if at + 1 >= len(usable):
+                _status(
+                    db,
+                    p.name,
+                    String(
+                        skipped,
+                        "can't grow: the project's quota fits none of its",
+                        " types",
                     ),
-                    Params().text(p.name).text(String(skipped, made[1])),
                 )
                 return
-            if not made[2]:
-                # A refusal that isn't stock: say it, try again later.
-                _ = db.conn.execute(
-                    (
-                        "UPDATE orca.pools SET trying = $2, status = $3 WHERE"
-                        " name = $1"
-                    ),
-                    Params()
-                    .text(p.name)
-                    .int64(Int64(i))
-                    .text(String(skipped, made[1])),
-                )
-                return
+            at += 1
+            trying_for = 0.0
         var places = String(" in ", ", ".join(p.locations)) if len(
             p.locations
         ) else String()
@@ -566,14 +595,16 @@ struct PoolScaler(Movable):
         location: String,
         image: String,
         remote: String,
-    ) raises -> Tuple[Bool, String, Bool]:
-        """Makes one machine: (made, what it came to, out of stock)."""
+    ) raises -> Tuple[Bool, String, Bool, Bool]:
+        """Makes one machine: (made, what it came to, out of stock, refused
+        for quota)."""
         var id = Int(
             db.conn.query("SELECT nextval('orca.pool_machines_id_seq') AS id")
             .row(0)
             .int64("id")
         )
-        var name = String("orca-", pool.replace("_", "-"), "-", id)
+        # orca-pool-<pool>-<n>: plainly a pool's, beside the stack's own.
+        var name = String("orca-pool-", pool.replace("_", "-"), "-", id)
         var issued = create_worker_token(
             db, pool, name, 30, String(CREATED_BY, pool)
         )
@@ -608,6 +639,7 @@ struct PoolScaler(Movable):
                     "can't make ", machine_type, " in ", location, ": ", got.why
                 ),
                 got.no_stock,
+                got.quota(),
             )
         _ = db.conn.execute(
             (
@@ -632,4 +664,4 @@ struct PoolScaler(Movable):
         if location:
             what.write(" in ", location)
         print("pool", pool, what)
-        return (True, what^, False)
+        return (True, what^, False, False)

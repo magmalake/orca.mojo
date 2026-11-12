@@ -38,7 +38,7 @@ free_port uport
 base="http://127.0.0.1:$uport"
 export ORCA_HCLOUD_ENDPOINT="http://127.0.0.1:$hport/v1" ORCA_HCLOUD_TOKEN=test-token
 export ORCA_REGISTRY_ENDPOINT="http://127.0.0.1:$hport"
-export ORCA_WORKER_IMAGE="ghcr.io/magmalake/orca:t1"
+export ORCA_WORKER_IMAGE="ghcr.io/morca-dev/census:t1"
 pids=
 sched=
 cleanup() {
@@ -102,13 +102,18 @@ echo arm64 > "$dir/arches"
 echo "cpx32 hel1" > "$dir/stock"
 ./build/orca backfill plain 2024-01..2024-03 >> "$log" 2>&1 || fail "backfill"
 until_ 20 "no waiting status: $(status)" has_status "waiting: no cax31 in hel1, nbg1 yet"
-has_status "cpx32 skipped: ghcr.io/magmalake/orca:t1 has no linux/amd64" || fail "the skip isn't said: $(status)"
+has_status "cpx32 skipped: ghcr.io/morca-dev/census:t1 has no linux/amd64" || fail "the skip isn't said: $(status)"
 [ -z "$(servers)" ] || fail "made a server: $(servers)"
 echo "ok   a type the image has no variant for is skipped, saying so"
 
 # Both architectures: cax31 for its 3 s, then cpx32, in hel1.
 echo "amd64 arm64" > "$dir/arches"
-until_ 30 "no cpx32 made: $(status)" has_status "made orca-t-"
+until_ 30 "no cpx32 made: $(status)" has_status "made orca-pool-t-"
+# Ops > Pools shows the pool: its types, its machine, the last try.
+curl -fsS "$base/ops/pools" | grep -q 'id="autoscaled"' || fail "no Autoscaled pools card on Ops > Pools"
+curl -fsS -H 'Accept: application/json' "$base/api/pools" > "$dir/pools.json" || fail "GET /api/pools"
+jq -e '.autoscaled | length == 1 and .[0].name == "t" and .[0].provider == "hetzner" and .[0].live == 1 and .[0].max_machines == 2 and (.[0].machines | map(.type)) == ["cax31", "cpx32"] and .[0].machines[0].wait == 3 and (.[0].status | test("made orca-pool-t-"))' "$dir/pools.json" > /dev/null \
+    || fail "the autoscaled pools JSON: $(jq -c .autoscaled "$dir/pools.json")"
 has_status ": cpx32 in hel1" || fail "made the wrong one: $(status)"
 is "SELECT server_type || ' ' || arch || ' ' || location FROM orca.pool_machines" "cpx32 amd64 hel1" \
     || fail "the machine: $(q "SELECT server_type, arch, location FROM orca.pool_machines")"
@@ -147,6 +152,21 @@ only_other() { [ "$(servers)" = "other-stack" ]; }
 until_ 20 "the stray wasn't deleted: $(servers)" only_other
 rm -f "$dir/no-run"
 echo "ok   a stray of this stack's is deleted, another stack's left alone"
+
+# Over the project's quota for cax31: the next type, at once, saying why.
+rm -f "$dir/no-run"
+printf 'cax31 hel1\ncpx32 hel1\n' > "$dir/stock"
+echo cax31 > "$dir/quota"
+before=$(q "SELECT count(*) FROM orca.pool_machines")
+./build/orca backfill plain 2024-04 >> "$log" 2>&1 || fail "backfill 2024-04"
+# The status still says the last step's "made ...: cpx32 in hel1", so wait
+# for this step's machine, then for the pass that made it to say why.
+made_one() { is "SELECT count(*) FROM orca.pool_machines" $((before + 1)); }
+until_ 30 "no machine after the quota refusal: $(status) / $(q "SELECT name, server_type FROM orca.pool_machines")" made_one
+until_ 10 "the quota refusal isn't said: $(status)" has_status "cax31 refused for quota"
+has_status ": cpx32 in hel1" || fail "not cpx32: $(status)"
+rm -f "$dir/quota"
+echo "ok   a type refused for the project's quota: the next is made at once, saying why"
 
 # /api/worker/boot only for a token the autoscaler made.
 tok=$(./build/orca worker-token create --pool t --label hand 2>> "$log") || fail "worker-token create"

@@ -11,6 +11,11 @@ script that asks for JSON, as `/api/fleet` and `/api/workers` still do.
 
 from std.os import getenv
 
+from orca.ui.pool_status import (
+    scaled_pools,
+    scaled_pools_html,
+    scaled_pools_json,
+)
 from orca.fleet import (
     charts_html,
     fleet_charts,
@@ -338,6 +343,7 @@ def _live_html(mut h: Html, mut db: State, ask: PoolsAsk) raises:
     if ask.ec2():
         summary_html(h, fleet_summary(db), False)
     _filters_html(h, ask, pool_counts(all))
+    scaled_pools_html(h, scaled_pools(db))
     card_open(
         h,
         "machines",
@@ -484,7 +490,12 @@ def pools_page(mut db: State, ask: PoolsAsk) raises -> Page:
         )
     return Page(
         200,
-        pools_json(PoolsAsk(ask.pool, ask.kind, ask.range, True), machines(db)),
+        _with_scaled(
+            db,
+            pools_json(
+                PoolsAsk(ask.pool, ask.kind, ask.range, True), machines(db)
+            ),
+        ),
         page_html("Pools", "/ops/pools", h),
     )
 
@@ -500,8 +511,16 @@ def pools_live(mut db: State, ask: PoolsAsk) raises -> Page:
 def pools_api(mut db: State, ask: PoolsAsk) raises -> Page:
     """`/api/pools`: the page's machines as JSON, filtered as asked; `?gone=0`
     leaves out those gone for more than an hour."""
-    var j = pools_json(ask, machines(db))
+    var j = _with_scaled(db, pools_json(ask, machines(db)))
     return Page(200, j.copy(), j^, "application/json")
+
+
+def _with_scaled(mut db: State, var j: String) raises -> String:
+    """`j` (pools_json's object) with the autoscaled pools added."""
+    var head = String(j[byte = : j.byte_length() - 1])
+    return String(
+        head, ', "autoscaled": ', scaled_pools_json(scaled_pools(db)), "}"
+    )
 
 
 def _fact(mut h: Html, key: StaticString, id: StaticString):

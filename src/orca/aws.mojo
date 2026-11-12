@@ -19,7 +19,7 @@ its user already has (`aws login`, or `AWS_PROFILE` for a named profile).
 builds the project's image from a staged copy of `pixi.toml`, `pixi.lock`,
 `bin/`, `pipelines/` and `src/`, with the project's `Dockerfile.orca` or
 else the template (deploy/project.Dockerfile, which builds FROM
-`ghcr.io/magmalake/orca-runtime:<the orca-mojo version in pixi.lock>`),
+`ghcr.io/morca-dev/morca-runtime:<the orca-mojo version in pixi.lock>`),
 for arm64, tagged with the commit (or `--tag`) and `latest`, and pushes it
 to the stack's repository.
 `register` and `app` run on the control instance through SSM: `register`
@@ -540,7 +540,7 @@ def _push(o: _Opts) raises -> Int:
             print(
                 "orca aws push: pixi.lock has no orca-mojo, whose version"
                 " names the image the project's builds on"
-                " (ghcr.io/magmalake/orca-runtime:<version>); run pixi"
+                " (ghcr.io/morca-dev/morca-runtime:<version>); run pixi"
                 " install first"
             )
             return 2

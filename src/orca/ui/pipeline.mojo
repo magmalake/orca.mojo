@@ -296,7 +296,7 @@ def _fill_html(mut h: Html, s: FillStatus):
 
 
 comptime _FILLS_DOCS = (
-    "https://github.com/magmalake/orca.mojo/blob/main/docs/orca-toml.md#fills"
+    "https://github.com/morca-dev/morca/blob/main/docs/orca-toml.md#fills"
 )
 """Fills are documented in orca.toml's reference, not on the docs page."""
 

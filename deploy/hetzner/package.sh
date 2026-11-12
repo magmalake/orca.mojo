@@ -36,7 +36,7 @@ cat > "$dir/README.md" << EOF
 
 orca.mojo's deploy/hetzner at v$version: the scripts that make, deploy,
 rescale, back up and tear down an orca stack on one Hetzner Cloud server.
-The guide: https://github.com/magmalake/orca.mojo/blob/v$version/docs/hetzner.md
+The guide: https://github.com/morca-dev/morca/blob/v$version/docs/hetzner.md
 
 \`\`\`sh
 cp hetzner.env.example hetzner.env   # or point HETZNER_ENV at a copy outside this directory

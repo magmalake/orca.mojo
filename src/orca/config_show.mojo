@@ -12,6 +12,7 @@ from postgres import (
     Params,
     Row,
 )
+from orca.fill import fill_max_runs_text
 from orca.fill import SINCE_REGISTRATION
 from orca.html import Html
 from orca.json import quote
@@ -310,7 +311,8 @@ comptime _SHOWN_SQL = (
     " coalesce(config::text, '') AS config, coalesce(image, '') AS image,"
     " coalesce(spot, false) AS spot, coalesce(fills, '') AS fills,"
     " coalesce(fill_order, '') AS fill_order, coalesce(fill_max_runs, 0) AS"
-    " fill_max_runs, coalesce(fill_budget_per_day, -1) AS fill_budget,"
+    " fill_max_runs, coalesce(fill_max_runs_auto, false) AS fill_max_runs_auto,"
+    " coalesce(fill_budget_per_day, -1) AS fill_budget,"
     " coalesce(fill_window, '') AS fill_window, coalesce(fill_lag, '') AS"
     " fill_lag, coalesce(cpus, '') AS cpus, coalesce(memory_gb, '') AS"
     " memory_gb, learn FROM orca.pipelines WHERE binary_path IS NOT NULL AND"
@@ -539,7 +541,14 @@ def _show_fills(mut s: Shown, r: Row, sources: Optional[Value]) raises:
         s.add("fill_order", "oldest", CODE_DEFAULT, "")
     if r.int64("fill_max_runs") > 0:
         var w = _source(sources, "fill_max_runs")
-        s.add("fill_max_runs", String(r.int64("fill_max_runs")), w[0], w[1])
+        s.add(
+            "fill_max_runs",
+            fill_max_runs_text(
+                Int(r.int64("fill_max_runs")), r.bool("fill_max_runs_auto")
+            ),
+            w[0],
+            w[1],
+        )
     else:
         s.add("fill_max_runs", "1", CODE_DEFAULT, "")
     if r.float64("fill_budget") >= 0:
@@ -644,7 +653,11 @@ def export_toml(mut db: State) raises -> String:
         if r.text("fill_order"):
             out.write("fill_order = ", toml_string(r.text("fill_order")), "\n")
         if r.int64("fill_max_runs") > 0:
-            out.write("fill_max_runs = ", r.int64("fill_max_runs"), "\n")
+            if r.bool("fill_max_runs_auto"):
+                var t = fill_max_runs_text(Int(r.int64("fill_max_runs")), True)
+                out.write("fill_max_runs = ", toml_string(t), "\n")
+            else:
+                out.write("fill_max_runs = ", r.int64("fill_max_runs"), "\n")
         if r.float64("fill_budget") >= 0:
             out.write(
                 "fill_budget_per_day = ", String(r.float64("fill_budget")), "\n"

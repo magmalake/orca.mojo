@@ -1,0 +1,82 @@
+# A project's GitHub release for a tag, for an orca project's own CI to call
+# once the tag's image is pushed (docs/project-ci.md):
+#
+#     jobs:
+#       release:
+#         if: github.ref_type == 'tag'
+#         needs: image
+#         uses: morca-dev/morca/.github/workflows/project-release.yml@v0.24.0
+#         permissions: { contents: write }
+#         with: { image: ghcr.io/mojourney/census }
+#
+# The notes are the version's section of CHANGELOG.md, as `shelf release
+# apply` writes it (`## <version> - <date>`), and a line naming the image.
+# A release that exists already gets the notes again. With `dry-run`, the
+# notes go to the job's summary and nothing is released.
+name: project release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "The version; empty is the tag's name without its v"
+        type: string
+        default: ""
+      tag:
+        description: "The tag to release; empty is the one pushed"
+        type: string
+        default: ""
+      title:
+        description: "The release's title; empty is '<repository name> <version>'"
+        type: string
+        default: ""
+      changelog:
+        description: "The changelog, in the checkout"
+        type: string
+        default: "CHANGELOG.md"
+      image:
+        description: "The project's image, for the notes' image line; empty leaves it out"
+        type: string
+        default: ""
+      dry-run:
+        description: "Write the notes to the summary instead of releasing"
+        type: boolean
+        default: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+      TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
+      TITLE: ${{ inputs.title }}
+      CHANGELOG: ${{ inputs.changelog }}
+      IMAGE: ${{ inputs.image }}
+      DRY_RUN: ${{ inputs.dry-run }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The release
+        run: |
+          version=${VERSION:-$TAG}
+          version=${version#v}
+          [ -n "$version" ] || { echo "::error::no version: not a tag, and none given"; exit 1; }
+          [ -n "$TAG" ] || [ "$DRY_RUN" = true ] || { echo "::error::no tag to release"; exit 1; }
+          notes=$RUNNER_TEMP/notes.md
+          awk -v v="$version" '
+            on && /^## / { exit }
+            on { print; next }
+            $0 == "## " v || index($0, "## " v " ") == 1 { on = 1 }' "$CHANGELOG" > "$notes"
+          grep -q '[^[:space:]]' "$notes" || { echo "::error::$CHANGELOG has no section for $version"; exit 1; }
+          if [ -n "$IMAGE" ]; then
+            printf '\nImage: `%s:%s` (`:%s`).\n' "$IMAGE" "$version" "${GITHUB_SHA::7}" >> "$notes"
+          fi
+          title=${TITLE:-"${GITHUB_REPOSITORY#*/} $version"}
+          if [ "$DRY_RUN" = true ]; then
+            { echo "### $title (dry run)"; cat "$notes"; } >> "$GITHUB_STEP_SUMMARY"
+            cat "$notes"
+          elif gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file "$notes"
+          else
+            gh release create "$TAG" --verify-tag --title "$title" --notes-file "$notes"
+          fi
