@@ -186,10 +186,16 @@ jobs:
       # empty in every job. Restored from main's last run, it makes builds of
       # code main has built already 4-6x faster. It's content-addressed, so a
       # stale entry is never used. Saved by main and the nightly, like the
-      # environment.
+      # environment. build/.mojo-build goes with it: scripts/mojo-build.sh
+      # keys every binary on its sources and packages and copies an
+      # identical earlier build instead of compiling it (tens of MB; it
+      # prunes entries unused for two days itself). Keeping it halved
+      # test-executor on a warm runner (#342).
       - uses: actions/cache/restore@v4
         with:
-          path: orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
           restore-keys: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
 
@@ -206,7 +212,9 @@ jobs:
       - if: always() && github.event_name != 'pull_request'
         uses: actions/cache/save@v4
         with:
-          path: orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   # orca on a kind cluster (deploy/): the image, built with pixi inside
@@ -345,7 +353,9 @@ jobs:
           cache-write: ${{ github.event_name != 'pull_request' }}
       - uses: actions/cache/restore@v4
         with:
-          path: orca.mojo/.pixi/envs/fuzz/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/fuzz/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
           restore-keys: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-
       - name: Fuzz
@@ -361,7 +371,9 @@ jobs:
       - if: always() && github.event_name != 'pull_request'
         uses: actions/cache/save@v4
         with:
-          path: orca.mojo/.pixi/envs/fuzz/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/fuzz/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   format:
@@ -485,7 +497,9 @@ jobs:
           cache-write: ${{ github.event_name != 'pull_request' }}
       - uses: actions/cache/restore@v4
         with:
-          path: orca.mojo/.pixi/envs/data/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/data/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
           restore-keys: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
       - name: The ${{ matrix.group }} tests
@@ -496,7 +510,9 @@ jobs:
       - if: always() && github.event_name != 'pull_request'
         uses: actions/cache/save@v4
         with:
-          path: orca.mojo/.pixi/envs/data/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/data/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   # The one check to require: every Linux job above passed, or, for a
