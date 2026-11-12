@@ -1,0 +1,1 @@
+- **Cluster tests apart on one machine:** `MORCA_EC2_HEAD_PORT` (6390) sets the port of a run's dista head, which the tests set to one of their own; the stand-in clouds end an instance's processes with it. (#403)

@@ -118,13 +118,13 @@ for line in sys.stdin:
     if tags.get('orca.run') == '$f1':
         ud = base64.b64decode(p['UserData']).decode()
         print(tags['orca.role'], p['InstanceType'], p['MaxCount'], p.get('InstanceMarketOptions.MarketType', 'on-demand'),
-              p['InstanceInitiatedShutdownBehavior'], 'DISTA_HEAD=127.0.0.1:6390' in ud)
+              p['InstanceInitiatedShutdownBehavior'], 'DISTA_HEAD=127.0.0.1:$MORCA_EC2_HEAD_PORT' in ud)
 ")
 [ "$made" = "head c7g.large 1 on-demand terminate True
 worker c7g.xlarge 3 spot terminate True" ] || fail "run $f1's RunInstances: $made"
 workers=$(ids_of "$f1" worker)
 [ "$(echo "$workers" | wc -l | tr -d ' ')" -eq 3 ] || fail "3 worker instances: $workers"
-grep -q "DISTA_HEAD=127.0.0.1:6390" "$dir/$(echo "$workers" | head -1).sh" || fail "a worker's DISTA_HEAD"
+grep -q "DISTA_HEAD=127.0.0.1:$MORCA_EC2_HEAD_PORT" "$dir/$(echo "$workers" | head -1).sh" || fail "a worker's DISTA_HEAD"
 i=0
 while :; do
     n=0

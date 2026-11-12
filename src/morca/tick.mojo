@@ -59,6 +59,15 @@ def tick(mut self: Scheduler, now: Int64) raises:
             ctl = self._control.pop(done.pid)
             over = ctl.value().over
         var spent = self._uncontain(done.pid, done.code, over)
+        if self._wedged.pop(done.pid, False) and not over:
+            # Killed by _kill_wedged: its attempts say why, rather than
+            # "killed by signal 9".
+            over = String(
+                "killed: its heartbeat went stale (MORCA_STALE_SECONDS,",
+                " ",
+                Int(self.stale),
+                " s), so the scheduler stopped its process",
+            )
         if spawned[0] >= 0:
             try:
                 self._exited(spawned, done.pid, done.code, over)

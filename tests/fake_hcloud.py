@@ -22,7 +22,8 @@ listed by name; a server attached to one shows a private address in it.
 Each server's user data runs as <dir>/server-<id>.sh with output in
 <dir>/server-<id>.log and SERVER_NAME (and HOSTNAME, which bash resets) set
 to its name, unless <dir>/no-run
-exists; deleting the server kills its process group. A server's address is
+exists; deleting the server kills its process group, and so does its
+script's end, as a machine's would: nothing it started outlives it (#403). A server's address is
 127.0.0.1, and its MORCA_BOOT_DIR is <dir>/boot-<id> (morca.pool_boot's
 script keeps its files there rather than /etc/orca).
 
@@ -40,6 +41,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 
 PORT = int(sys.argv[1])
@@ -143,15 +145,34 @@ def _create(body):
     return 201, {"server": _server(sid, SERVERS[sid]), "action": {"id": 1, "status": "running"}}
 
 
+def _kill_group(s):
+    """Kills what's left of server `s`'s processes, once: its script's
+    process group (its own session)."""
+    if s["proc"] is None or s.get("gone"):
+        return
+    s["gone"] = True
+    try:
+        os.killpg(s["proc"].pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _reap():
+    """A server whose script exited is off: what it left running goes
+    with it."""
+    while True:
+        with LOCK:
+            for s in SERVERS.values():
+                if s["proc"] is not None and not s.get("gone") and s["proc"].poll() is not None:
+                    _kill_group(s)
+        time.sleep(0.2)
+
+
 def _delete(sid):
     s = SERVERS.pop(sid, None)
     if s is None:
         return _error("not_found", "server not found", 404)
-    if s["proc"] is not None and s["proc"].poll() is None:
-        try:
-            os.killpg(s["proc"].pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    _kill_group(s)
     return 200, {"action": {"id": 2, "command": "delete_server", "status": "running"}}
 
 
@@ -247,14 +268,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def _stop(*_):
-    for s in SERVERS.values():
-        if s["proc"] is not None and s["proc"].poll() is None:
-            try:
-                os.killpg(s["proc"].pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+    for s in list(SERVERS.values()):
+        _kill_group(s)
     sys.exit(0)
 
 
 signal.signal(signal.SIGTERM, _stop)
+threading.Thread(target=_reap, daemon=True).start()
 http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

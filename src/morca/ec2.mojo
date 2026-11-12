@@ -138,6 +138,22 @@ from morca.secrets import parse_secrets
 from morca.state import State
 
 comptime HEAD_PORT = 6390
+"""The port of a run's dista head on its head instance, unless
+`MORCA_EC2_HEAD_PORT` names another (`head_port`)."""
+
+
+def head_port() -> Int:
+    """`MORCA_EC2_HEAD_PORT`, or `HEAD_PORT` (6390): the port a run's head
+    listens on and its workers and driver reach it at. The stack's security
+    group opens 6390 only; tests that run at once on one machine, where
+    every stand-in instance shares 127.0.0.1, each pick their own."""
+    try:
+        var port = Int(getenv("MORCA_EC2_HEAD_PORT", String(HEAD_PORT)))
+        if port > 0 and port < 65536:
+            return port
+    except:
+        pass
+    return HEAD_PORT
 
 comptime _POOL_BODY = "# the pool's key is from here"
 """The line after the first run's in a pooled instance's script."""
@@ -417,7 +433,7 @@ struct Ec2Runner(Movable):
                 )
             # A pooled worker's head is its run's, set for each run.
             if not pool:
-                out.write("export DISTA_HEAD=", head, ":", HEAD_PORT, "\n")
+                out.write("export DISTA_HEAD=", head, ":", head_port(), "\n")
             out.write("export DISTA_ADVERTISE=", advertise, "\n")
         return out^
 
@@ -700,7 +716,7 @@ struct Ec2Runner(Movable):
         if pool:
             s.write(self._instance_id(), "\nwhile :; do\n")
             if role == "worker":
-                s.write('export DISTA_HEAD="$head:', HEAD_PORT, '"\n')
+                s.write('export DISTA_HEAD="$head:', head_port(), '"\n')
         s.write(self._secrets(r))
         # The head's or worker's output, and its machine's samples
         # (morca.sample), uploaded while it runs and once when it ends: an
@@ -806,7 +822,7 @@ struct Ec2Runner(Movable):
                     r,
                     [
                         String("DISTA_ROLE=head"),
-                        String("DISTA_PORT=", HEAD_PORT),
+                        String("DISTA_PORT=", head_port()),
                     ],
                     "",
                 )
@@ -822,7 +838,7 @@ struct Ec2Runner(Movable):
                 args.write(" --allow-new-code")
             var env = List[String]()
             if r.tasks:
-                env.append(String("DISTA_HEAD=127.0.0.1:", HEAD_PORT))
+                env.append(String("DISTA_HEAD=127.0.0.1:", head_port()))
             var out = String("/tmp/morca-", run, "-", start, "-driver.log")
             s.write(self._run(r, env, args), " > ", out, " 2>&1\n")
             if r.tasks:
@@ -1240,7 +1256,7 @@ struct Ec2Runner(Movable):
             var key = String(r.run, "-", r.start)
             live[key] = True
             var head_ip = row.text("address")
-            var head = String(head_ip, ":", HEAD_PORT)
+            var head = String(head_ip, ":", head_port())
             # A head whose port black-holes mustn't hold up the tick.
             var got_status: Tuple[Int, String]
             try:
