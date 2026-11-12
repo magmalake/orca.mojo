@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.25.1 - 2026-11-12
+
+- **The commit is read at run time:** a pipeline built without `-D MORCA_COMMIT`/`-D MORCA_SOURCE` reads them from its environment, and the project Dockerfiles set them with `ENV` instead of compiling them in. A new commit no longer changes every program, so Mojo's compile cache can serve a rebuild. (census #153)
+
+- **A wedged run keeps no process:** the scheduler fails, cancels or restarts a run whose heartbeat went stale only after it has killed and reaped the run's process, and its attempt says it was stopped for the stale heartbeat. (#398)
+
+- **Cluster tests apart on one machine:** `MORCA_EC2_HEAD_PORT` (6390) sets the port of a run's dista head, which the tests set to one of their own; the stand-in clouds end an instance's processes with it. (#403)
+
 ## 0.25.0 - 2026-11-12
 
 - **Breaking: orca is now morca.** The package `morca` (tin morca-mojo), the `morca` command, `morca.toml` and every `MORCA_*` variable replace their orca names, with no fallback. Upgrading means renaming them in a project; deploy/hetzner's `morca-stack` renames a server's keys on its first run. (#384)

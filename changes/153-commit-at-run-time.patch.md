@@ -1,1 +1,0 @@
-- **The commit is read at run time:** a pipeline built without `-D MORCA_COMMIT`/`-D MORCA_SOURCE` reads them from its environment, and the project Dockerfiles set them with `ENV` instead of compiling them in. A new commit no longer changes every program, so Mojo's compile cache can serve a rebuild. (census #153)
