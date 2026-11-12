@@ -12,7 +12,7 @@
 # - keyed pipelines with a schedule, with fills, or whose first step takes a
 #   Month don't compile.
 #
-# Needs ORCA_DATABASE_URL (pixi run -e data test-keyed starts a throwaway
+# Needs MORCA_DATABASE_URL (pixi run -e data test-keyed starts a throwaway
 # server) and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -27,8 +27,8 @@ done
 for pid in $pids; do wait "$pid"; done
 log=build/keyed.log
 : > "$log"
-export ORCA_WAREHOUSE=build/keyed-wh
-rm -rf "$ORCA_WAREHOUSE"
+export MORCA_WAREHOUSE=build/keyed-wh
+rm -rf "$MORCA_WAREHOUSE"
 fail() {
     echo "FAIL: $*"
     tail -30 "$log"
@@ -36,39 +36,39 @@ fail() {
 }
 labels() { ./build/kd-labels "$@" 2>> "$log"; }
 
-snap=$(./build/kd-names "$ORCA_WAREHOUSE") || fail "names"
+snap=$(./build/kd-names "$MORCA_WAREHOUSE") || fail "names"
 out=$(labels keys) || fail "keys exited $?"
 [ "$(echo "$out" | head -1)" = "$snap" ] || fail "keys' snapshot: $(echo "$out" | head -1), not $snap"
 want=$(i=0; while [ $i -lt 50 ]; do printf 'log-%02d\n' $i; i=$((i + 1)); done)
 [ "$(echo "$out" | tail -n +2)" = "$want" ] || fail "keys: $(echo "$out" | tail -n +2 | tr '\n' ' ')"
 
 # In memory: every key, a list, a file.
-out=$(env -u ORCA_DATABASE_URL ./build/kd-labels run --partitions @all 2>> "$log") || fail "run @all"
+out=$(env -u MORCA_DATABASE_URL ./build/kd-labels run --partitions @all 2>> "$log") || fail "run @all"
 echo "$out" >> "$log"
 [ "$(echo "$out" | grep -c '^label log-[0-9][0-9] succeeded$')" -eq 50 ] || fail "50 labels"
 echo "$out" | grep -q '^\[score\] 50 names, 300 bytes$' || fail "the score over 50"
 echo "$out" | grep -qx "run succeeded" || fail "run @all didn't succeed"
-out=$(env -u ORCA_DATABASE_URL ./build/kd-labels run --partitions log-07,log-03 2>> "$log") || fail "run a list"
+out=$(env -u MORCA_DATABASE_URL ./build/kd-labels run --partitions log-07,log-03 2>> "$log") || fail "run a list"
 [ "$(echo "$out" | grep '^label ' | tr '\n' ' ')" = "label log-07 succeeded label log-03 succeeded " ] || fail "the list: $out"
 printf 'log-01\n\nlog-02\nlog-49\n' > build/keyed-list.txt
-out=$(env -u ORCA_DATABASE_URL ./build/kd-labels run --partitions @file:build/keyed-list.txt 2>> "$log") || fail "run @file"
+out=$(env -u MORCA_DATABASE_URL ./build/kd-labels run --partitions @file:build/keyed-list.txt 2>> "$log") || fail "run @file"
 echo "$out" | grep -q '^\[score\] 3 names, 18 bytes$' || fail "the file's 3: $out"
 
 # Refused with exit code 2: a range, a name it hasn't, a malformed one.
 for bad in log-01..log-03 log-50 'log 1' @nope; do
     code=0
-    env -u ORCA_DATABASE_URL ./build/kd-labels run --partitions "$bad" > build/keyed-bad.txt 2>&1 || code=$?
+    env -u MORCA_DATABASE_URL ./build/kd-labels run --partitions "$bad" > build/keyed-bad.txt 2>&1 || code=$?
     [ "$code" -eq 2 ] || fail "--partitions '$bad' exited $code: $(cat build/keyed-bad.txt)"
 done
-env -u ORCA_DATABASE_URL ./build/kd-labels run --partitions log-50 2>&1 | grep -q "isn't a key of keys.logs" \
+env -u MORCA_DATABASE_URL ./build/kd-labels run --partitions log-50 2>&1 | grep -q "isn't a key of keys.logs" \
     || fail "an unknown name's message"
 
 # Recorded, and resumed by its names.
 out=$(labels run --partitions log-05,log-06) || fail "a recorded run"
 run=$(echo "$out" | sed -n 's/^run \([0-9]*\)$/\1/p' | head -1)
-[ "$(psql "$ORCA_DATABASE_URL" -Atc "SELECT partitions FROM orca.runs WHERE id = $run")" = "log-05,log-06" ] \
+[ "$(psql "$MORCA_DATABASE_URL" -Atc "SELECT partitions FROM orca.runs WHERE id = $run")" = "log-05,log-06" ] \
     || fail "run $run's partitions"
-psql "$ORCA_DATABASE_URL" -qc "UPDATE orca.runs SET status = 'failed', heartbeat = NULL WHERE id = $run; DELETE FROM orca.attempts WHERE step IN (SELECT id FROM orca.steps WHERE run = $run AND step = 'score'); DELETE FROM orca.steps WHERE run = $run AND step = 'score'"
+psql "$MORCA_DATABASE_URL" -qc "UPDATE orca.runs SET status = 'failed', heartbeat = NULL WHERE id = $run; DELETE FROM orca.attempts WHERE step IN (SELECT id FROM orca.steps WHERE run = $run AND step = 'score'); DELETE FROM orca.steps WHERE run = $run AND step = 'score'"
 out=$(labels resume "$run") || fail "resume: $out"
 echo "$out" | grep -q "resuming run $run with 2 steps done" || fail "resume: $out"
 echo "$out" | grep -qx "run succeeded" || fail "the resumed run"
@@ -79,7 +79,7 @@ echo "$out" | grep -qx "run succeeded" || fail "the resumed run"
 
 # A value that isn't a name is left out of the keys, and said, rather than
 # making every key unreadable.
-./build/kd-names "$ORCA_WAREHOUSE" 1 logs 0 2 'not a name ' > /dev/null 2>> "$log" || fail "names with a bad value"
+./build/kd-names "$MORCA_WAREHOUSE" 1 logs 0 2 'not a name ' > /dev/null 2>> "$log" || fail "names with a bad value"
 ./build/kd-labels keys > build/keyed-keys.txt 2> build/keyed-keys.err || fail "keys over a bad value exited $?"
 [ "$(tail -n +2 build/keyed-keys.txt)" = "$want" ] || fail "keys over a bad value: $(tail -n +2 build/keyed-keys.txt | tr '\n' ' ')"
 grep -q "keys.logs (log_id) has 1 values that aren't names, left out of its keys: not a name" build/keyed-keys.err \

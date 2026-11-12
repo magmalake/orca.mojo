@@ -1,0 +1,1 @@
+- **Breaking: orca is now morca.** The package `morca` (tin morca-mojo), the `morca` command, `morca.toml` and every `MORCA_*` variable replace their orca names, with no fallback. Upgrading means renaming them in a project; deploy/hetzner's `morca-stack` renames a server's keys on its first run. (#384)

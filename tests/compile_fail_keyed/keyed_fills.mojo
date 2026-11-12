@@ -1,6 +1,6 @@
 # expect: a keyed pipeline has no calendar to fill
-from orca import Current, Ctx, Mapped, Name, Pipeline, Step, orca_main
-from orca.keyed import Keyed
+from morca import Current, Ctx, Mapped, Name, Pipeline, Step, morca_main
+from morca.keyed import Keyed
 
 
 def label(mut ctx: Ctx, n: Name) raises -> Int:
@@ -14,4 +14,4 @@ comptime P = Pipeline[
 
 
 def main() raises:
-    orca_main[P]()
+    morca_main[P]()

@@ -1,5 +1,5 @@
 # expect: a dataset is named namespace.table
-from orca import Ctx, Mapped, Month, Pipeline, Step
+from morca import Ctx, Mapped, Month, Pipeline, Step
 
 
 def key(mut ctx: Ctx, m: Month) raises -> Int:

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Stands in for the aws command in tests/aws.sh and tests/replace_control.sh:
-# records each call to $FAKE_AWS_LOG and answers what orca aws asks. A stack
+# records each call to $FAKE_AWS_LOG and answers what morca aws asks. A stack
 # exists once deployed; its control slots follow the parameters deployed
 # (blue is i-0control, green i-0green), and a file `preslot` makes it one
 # from before the slots. On the control instance, `live` makes a run
@@ -56,7 +56,7 @@ case "$*" in
     *"ec2 stop-instances"* | *"ec2 start-instances"* | *"ec2 wait"* | *"s3 rm"*) ;;
     *"ecr get-login-password"*) echo password ;;
     *"ssm send-command"*)
-        s=$(echo "$*" | sed -n 's/.*# orca-replace \([a-z-]*\).*/\1/p')
+        s=$(echo "$*" | sed -n 's/.*# morca-replace \([a-z-]*\).*/\1/p')
         echo "${s:-register}" > "$state/step"
         echo cmd-1
         ;;

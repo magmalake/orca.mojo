@@ -1,0 +1,153 @@
+# morca on Kubernetes, in the `morca` namespace: Postgres, and the scheduler
+# with morca ui beside it in one pod. Each run gets a cluster of its own in
+# the morca-runs namespace (runs.yaml, morca.kube): a driver Job, and a dista
+# head and workers for a pipeline with tasks. Until logs go to object
+# storage, a run's logs are its pods' (kubectl -n morca-runs logs).
+#
+#     kubectl apply -f deploy/k8s/morca.yaml -f deploy/k8s/runs.yaml
+#     kubectl -n morca port-forward svc/morca-ui 8270:8270
+#
+# The password in morca-db is for a local cluster; anywhere else, make the
+# Secret yourself and leave it out of this file.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: morca
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: morca-db
+  namespace: morca
+stringData:
+  password: morca-local
+  url: postgresql://orca:morca-local@postgres.morca.svc:5432/orca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: morca
+spec:
+  selector: {app: postgres}
+  ports: [{port: 5432}]
+---
+# synchronous_commit stays on (the default): with it off, an immediate
+# restart can lose commits Postgres already acknowledged (DESIGN.md).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: morca
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-bookworm
+          args: ["-c", "synchronous_commit=on"]
+          env:
+            - {name: POSTGRES_USER, value: orca}
+            - {name: POSTGRES_DB, value: orca}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: morca-db, key: password}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports: [{containerPort: 5432}]
+          readinessProbe:
+            exec: {command: ["pg_isready", "-U", "orca", "-d", "orca"]}
+            periodSeconds: 2
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 2Gi}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: morca-scheduler
+  namespace: morca
+---
+# One replica: two schedulers are safe (every decision is a row in
+# Postgres), but one is all that's needed. Recreate, so an upgrade doesn't
+# run the old and the new at once.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: morca-scheduler
+  namespace: morca
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: morca-scheduler}
+  template:
+    metadata:
+      labels: {app: morca-scheduler}
+    spec:
+      serviceAccountName: morca-scheduler
+      containers:
+        - name: scheduler
+          image: morca:dev
+          imagePullPolicy: IfNotPresent
+          # MORCA_REGISTER: the pipeline binaries in the image to register
+          # before the first tick, separated by spaces; their runs' pods run
+          # MORCA_IMAGE.
+          command:
+            - /bin/sh
+            - -c
+            - for b in $MORCA_REGISTER; do morca register --image "$MORCA_IMAGE" "$b" || exit 1; done; exec morca scheduler
+          env:
+            - name: MORCA_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: morca-db, key: url}}
+            - {name: MORCA_LOGS, value: /var/orca/logs}
+            - {name: MORCA_REGISTER, value: ""}
+            - {name: MORCA_IMAGE, value: "morca:dev"}
+            - {name: MORCA_RUNNER, value: kubernetes}
+          volumeMounts: &logs [{name: logs, mountPath: /var/orca/logs}]
+          resources:
+            requests: {cpu: 500m, memory: 512Mi}
+        - name: ui
+          image: morca:dev
+          imagePullPolicy: IfNotPresent
+          args: [ui]
+          env:
+            - name: MORCA_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: morca-db, key: url}}
+            - {name: MORCA_LOGS, value: /var/orca/logs}
+            # Actions need a user (morca user add, in the scheduler's
+            # container); reading doesn't, so nothing should expose the
+            # Service outside the cluster but through a proxy that asks for
+            # a login too. Behind HTTPS, set MORCA_UI_SECURE_COOKIES=1, and
+            # MORCA_UI_TRUST_PROXY=1 if the proxy sets X-Forwarded-Proto.
+            - {name: MORCA_UI_ADDR, value: "0.0.0.0:8270"}
+            - {name: MORCA_UI_LOGIN, value: required}
+          ports: [{containerPort: 8270}]
+          readinessProbe:
+            httpGet: {path: /, port: 8270}
+            periodSeconds: 2
+          volumeMounts: *logs
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+      volumes:
+        - name: logs
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: morca-ui
+  namespace: morca
+spec:
+  selector: {app: morca-scheduler}
+  ports: [{port: 8270}]

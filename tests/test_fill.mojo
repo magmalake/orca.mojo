@@ -1,10 +1,10 @@
-"""Fills (`orca.fill`): what the keys take, the window, the range a fill
+"""Fills (`morca.fill`): what the keys take, the window, the range a fill
 covers, the price of a run, and which pipelines can't fill."""
 
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
-from orca.civil import parse_time
-from orca.fill import (
+from morca.civil import parse_time
+from morca.fill import (
     Fill,
     eta_text,
     FillStatus,

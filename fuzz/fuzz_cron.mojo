@@ -9,7 +9,7 @@ gaps, it must match every field. In New York it must at least come after.
 
 from harness import bytes_of, check, only_findings, run_harness, save_last
 
-from orca import Civil, CronExpr, Zone, utc
+from morca import Civil, CronExpr, Zone, utc
 
 
 def _has(bits: UInt64, v: Int) -> Bool:

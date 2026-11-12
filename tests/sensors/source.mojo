@@ -1,4 +1,4 @@
-"""Commits three rows to raw.events as a program that isn't an orca
+"""Commits three rows to raw.events as a program that isn't a morca
 pipeline would: with iceberg alone, its summary saying which partitions it
 holds only when given some.
 
@@ -14,7 +14,7 @@ from iceberg.schema import Schema
 from iceberg.transforms import PartitionSpec
 from iceberg.write import WriteOptions, write_data_files
 
-from orca.cli import seed_random
+from morca.cli import seed_random
 from rows import SCHEMA, rows
 
 
@@ -22,7 +22,7 @@ def main() raises:
     seed_random()  # iceberg draws snapshot IDs from std.random
     var args = argv()
     var root = String(args[1])
-    # A warehouse in object storage, as orca.tables opens one.
+    # A warehouse in object storage, as morca.tables opens one.
     var cat = FilesystemCatalog(
         root, FileIO()
     ) if "://" in root else FilesystemCatalog.local(root)

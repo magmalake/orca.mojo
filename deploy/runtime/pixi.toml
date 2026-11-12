@@ -1,20 +1,20 @@
-# The workspace deploy/runtime.Dockerfile builds orca's own binaries in: a
-# project that adds this checkout of orca-mojo, as a project adds a release
-# of it (`pixi shelf add orca-mojo`), so the runtime's `orca` and
-# `orca_maintain` link the same packages a project's pipelines do. The
+# The workspace deploy/runtime.Dockerfile builds morca's own binaries in: a
+# project that adds this checkout of morca-mojo, as a project adds a release
+# of it (`pixi shelf add morca-mojo`), so the runtime's `morca` and
+# `morca_maintain` link the same packages a project's pipelines do. The
 # Dockerfile puts it at /src/project, next to the checkout at
-# /src/orca.mojo, the path below. It installs `--locked` from pixi.lock
-# here, which `sh deploy/runtime/lock.sh` writes. The lock pins orca-mojo's
+# /src/morca, the path below. It installs `--locked` from pixi.lock
+# here, which `sh deploy/runtime/lock.sh` writes. The lock pins morca-mojo's
 # dependencies, not its version, so it stays valid across a release that
-# only bumps the version; a change to orca-mojo's dependencies needs it
+# only bumps the version; a change to morca-mojo's dependencies needs it
 # written again (CI's `runtime lock` job fails until it is). The image keeps
-# it at /opt/orca/share/pixi.lock.
+# it at /opt/morca/share/pixi.lock.
 [workspace]
-name = "orca-runtime"
+name = "morca-runtime"
 channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
 platforms = ["linux-64", "linux-aarch64"]
 preview = ["pixi-build"]
 
 [dependencies]
 mojo-compiler = "==1.2.0"
-orca-mojo = { path = "../orca.mojo" }
+morca-mojo = { path = "../morca" }

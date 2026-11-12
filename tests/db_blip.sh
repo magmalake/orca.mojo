@@ -6,7 +6,7 @@
 # on new connections, and succeed in the same process with one attempt per
 # step: nothing redone, nothing left running.
 #
-# Needs ORCA_DATABASE_URL and ORCA_PGDATA (pixi run test-db-blip starts a
+# Needs MORCA_DATABASE_URL and MORCA_PGDATA (pixi run test-db-blip starts a
 # throwaway server).
 set -eu
 cd "$(dirname "$0")/.."
@@ -15,15 +15,15 @@ mkdir -p build
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 log=build/db-blip.log
 : > "$log"
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 fail() {
     echo "FAIL: $*"
     tail -30 "$log"
     exit 1
 }
-restart() { pg_ctl -D "$ORCA_PGDATA" -m immediate -w restart > /dev/null 2>&1 || fail "pg_ctl restart"; }
+restart() { pg_ctl -D "$MORCA_PGDATA" -m immediate -w restart > /dev/null 2>&1 || fail "pg_ctl restart"; }
 
-ORCA_TOY_SLEEP=3 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 &
+MORCA_TOY_SLEEP=3 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 &
 toy=$!
 sleep 1.5
 restart
@@ -41,14 +41,14 @@ run=$(q "SELECT max(id) FROM orca.runs")
 [ "$(q "SELECT count(*) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $run AND a.status <> 'succeeded'")" -eq 0 ] \
     || fail "an attempt didn't succeed"
 
-# A server that stays away longer than ORCA_DB_RETRY_SECONDS still stops
+# A server that stays away longer than MORCA_DB_RETRY_SECONDS still stops
 # the run, as before: exit 3, the run left for a resume.
-ORCA_TOY_SLEEP=2 ORCA_DB_RETRY_SECONDS=2 ./build/toy run --partitions 2024-02 >> "$log" 2>&1 &
+MORCA_TOY_SLEEP=2 MORCA_DB_RETRY_SECONDS=2 ./build/toy run --partitions 2024-02 >> "$log" 2>&1 &
 toy=$!
 sleep 1
-pg_ctl -D "$ORCA_PGDATA" -m immediate -w stop > /dev/null 2>&1 || fail "pg_ctl stop"
+pg_ctl -D "$MORCA_PGDATA" -m immediate -w stop > /dev/null 2>&1 || fail "pg_ctl stop"
 code=0
 wait "$toy" || code=$?
-pg_ctl -D "$ORCA_PGDATA" -w start > /dev/null 2>&1 || fail "pg_ctl start"
+pg_ctl -D "$MORCA_PGDATA" -w start > /dev/null 2>&1 || fail "pg_ctl start"
 [ "$code" -eq 3 ] || fail "with the server gone, the run exited $code, not 3"
 echo "ok   db blip"

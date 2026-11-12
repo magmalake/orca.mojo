@@ -9,11 +9,11 @@
 # - both run its tasks, the total is one machine's;
 # - idle once the run ends, both are removed.
 #
-# Each fake server runs its boot script, which runs `orca worker` with the
-# address ORCA_BOOT_ADVERTISE gives it (127.0.0.1 here; the private one
+# Each fake server runs its boot script, which runs `morca worker` with the
+# address MORCA_BOOT_ADVERTISE gives it (127.0.0.1 here; the private one
 # from the provider's metadata on a real machine).
 #
-# Needs ORCA_DATABASE_URL (pixi run test-pool-spread), curl, jq, python3.
+# Needs MORCA_DATABASE_URL (pixi run test-pool-spread), curl, jq, python3.
 set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
@@ -22,22 +22,22 @@ mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/pool-spread.log
 : > "$log"
 dir=$PWD/build/pool-spread
 rm -rf "$dir"
 mkdir -p "$dir"
-export ORCA_WAREHOUSE="$dir/wh" ORCA_LOGS="$dir/logs"
-export ORCA_STALE_SECONDS=5 ORCA_START_SECONDS=20 ORCA_SAMPLE_SECONDS=0 ORCA_WATCHDOG_SECONDS=0
-export ORCA_FANOUT_SLEEP=4 ORCA_FANOUT_SHOW_HOST=1 DISTA_SHM=0
-export ORCA_BOOT_ADVERTISE=127.0.0.1
-unset ORCA_RUNNER ORCA_CONFIG ORCA_WORKER_ADVERTISE
+export MORCA_WAREHOUSE="$dir/wh" MORCA_LOGS="$dir/logs"
+export MORCA_STALE_SECONDS=5 MORCA_START_SECONDS=20 MORCA_SAMPLE_SECONDS=0 MORCA_WATCHDOG_SECONDS=0
+export MORCA_FANOUT_SLEEP=4 MORCA_FANOUT_SHOW_HOST=1 DISTA_SHM=0
+export MORCA_BOOT_ADVERTISE=127.0.0.1
+unset MORCA_RUNNER MORCA_CONFIG MORCA_WORKER_ADVERTISE
 free_port hport
 free_port uport
 base="http://127.0.0.1:$uport"
-export ORCA_HCLOUD_ENDPOINT="http://127.0.0.1:$hport/v1" ORCA_HCLOUD_TOKEN=test-token
-export ORCA_REGISTRY_ENDPOINT="http://127.0.0.1:$hport" ORCA_WORKER_IMAGE="ghcr.io/morca-dev/census:t1"
+export MORCA_HCLOUD_ENDPOINT="http://127.0.0.1:$hport/v1" MORCA_HCLOUD_TOKEN=test-token
+export MORCA_REGISTRY_ENDPOINT="http://127.0.0.1:$hport" MORCA_WORKER_IMAGE="ghcr.io/morca-dev/census:t1"
 pids=
 cleanup() { for p in $pids; do kill "$p" 2> /dev/null || true; done; }
 trap cleanup EXIT
@@ -48,7 +48,7 @@ fail() {
     for f in "$dir"/server-*.log; do [ -f "$f" ] && { echo "== $f"; tail -8 "$f"; }; done
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 is() { [ "$(q "$1")" = "$2" ]; }
 until_() {
     t=$1; what=$2; shift 2
@@ -57,13 +57,13 @@ until_() {
         i=$((i + 1)); [ "$i" -lt $((t * 10)) ] || fail "$what"; sleep 0.1
     done
 }
-env -u ORCA_DATABASE_URL python3 tests/fake_hcloud.py "$hport" "$dir" &
+env -u MORCA_DATABASE_URL python3 tests/fake_hcloud.py "$hport" "$dir" &
 pids="$pids $!"
-until_ 10 "the fake didn't start" curl -s -o /dev/null "$ORCA_HCLOUD_ENDPOINT/server_types"
+until_ 10 "the fake didn't start" curl -s -o /dev/null "$MORCA_HCLOUD_ENDPOINT/server_types"
 echo "cax31 hel1" > "$dir/stock"
-ORCA_UI_ADDR="127.0.0.1:$uport" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$uport" ./build/morca ui >> "$log" 2>&1 &
 pids="$pids $!"
-until_ 10 "orca ui didn't start" curl -fs "$base/" -o /dev/null
+until_ 10 "morca ui didn't start" curl -fs "$base/" -o /dev/null
 cat > build/pool-spread.toml << 'EOF'
 [pools.t]
 provider = "hetzner"
@@ -76,13 +76,13 @@ idle_seconds = 10
 placement = "worker:t"
 workers = 1
 EOF
-./build/orca register --config build/pool-spread.toml ./build/fanout >> "$log" 2>&1 || fail "register"
-ORCA_POOL_REMOTE="$base" ORCA_POOL_WORKER_COMMAND="$PWD/build/orca" \
-ORCA_POOL_SCALE_SECONDS=0.5 ORCA_POOL_GROW_AFTER=0 ORCA_POOL_TRY_SECONDS=0.5 ORCA_POOL_IMAGE_SECONDS=0 \
-    ./build/orca scheduler > build/pool-spread-sched.out 2>&1 &
+./build/morca register --config build/pool-spread.toml ./build/fanout >> "$log" 2>&1 || fail "register"
+MORCA_POOL_REMOTE="$base" MORCA_POOL_WORKER_COMMAND="$PWD/build/morca" \
+MORCA_POOL_SCALE_SECONDS=0.5 MORCA_POOL_GROW_AFTER=0 MORCA_POOL_TRY_SECONDS=0.5 MORCA_POOL_IMAGE_SECONDS=0 \
+    ./build/morca scheduler > build/pool-spread-sched.out 2>&1 &
 pids="$pids $!"
 
-./build/orca backfill fanout 2024-01 >> "$log" 2>&1 || fail "backfill"
+./build/morca backfill fanout 2024-01 >> "$log" 2>&1 || fail "backfill"
 run=$(q "SELECT max(id) FROM orca.runs")
 head_known() { [ -n "$(q "SELECT coalesce(cluster_head, '') FROM orca.runs WHERE id = $run")" ]; }
 until_ 60 "no head: $(q "SELECT status, held FROM orca.runs WHERE id = $run") / $(q "SELECT status FROM orca.pools")" head_known
@@ -103,9 +103,9 @@ until_ 120 "the run didn't succeed: $(q "SELECT status, error FROM orca.runs WHE
 ran_on=$(cat "$dir"/boot-*/stage/fanout-"$run"-*.log 2> /dev/null | grep -o "trips on orca-pool-t-[0-9]*" | sort -u | wc -l | tr -d ' ')
 [ "$ran_on" = 2 ] || fail "tasks ran on $ran_on machines"
 # The driver's log is kept once its process has ended, a moment after.
-logged() { grep -q "trips in 1 months" "$ORCA_LOGS/fanout/$run/driver.log" 2> /dev/null; }
+logged() { grep -q "trips in 1 months" "$MORCA_LOGS/fanout/$run/driver.log" 2> /dev/null; }
 until_ 30 "no total in run $run's driver log" logged
-spread=$(grep -ho "[0-9]* trips in 1 months" "$ORCA_LOGS/fanout/$run/driver.log" | head -1)
+spread=$(grep -ho "[0-9]* trips in 1 months" "$MORCA_LOGS/fanout/$run/driver.log" | head -1)
 want=$(awk 'BEGIN { t = 0; for (d = 1; d <= 31; d++) t += (2024 * 13 + 31 + d * 7) % 1000; print t " trips in 1 months" }')
 [ "$spread" = "$want" ] || fail "spread: '$spread', one machine: '$want'"
 echo "ok   both machines run its tasks, and the total is one machine's ($spread)"

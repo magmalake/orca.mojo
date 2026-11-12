@@ -10,7 +10,7 @@ from std.testing import (
     assert_true,
 )
 
-from orca.pressure import (
+from morca.pressure import (
     Admission,
     Psi,
     Stall,
@@ -75,8 +75,8 @@ def test_parse_refuses() raises:
 def test_own_cgroup() raises:
     assert_equal(own_cgroup("0::/\n"), "/")
     assert_equal(
-        own_cgroup("12:memory:/docker/abc\n0::/system.slice/orca.service\n"),
-        "/system.slice/orca.service",
+        own_cgroup("12:memory:/docker/abc\n0::/system.slice/morca.service\n"),
+        "/system.slice/morca.service",
     )
     assert_equal(own_cgroup("12:memory:/docker/abc\n"), "")
 
@@ -85,9 +85,9 @@ def test_cgroup_dirs() raises:
     var root = cgroup_dirs("/")
     assert_equal(len(root), 1)
     assert_equal(root[0], "/sys/fs/cgroup")
-    var deep = cgroup_dirs("/system.slice/orca.service", "/cg")
+    var deep = cgroup_dirs("/system.slice/morca.service", "/cg")
     assert_equal(len(deep), 3)
-    assert_equal(deep[0], "/cg/system.slice/orca.service")
+    assert_equal(deep[0], "/cg/system.slice/morca.service")
     assert_equal(deep[1], "/cg/system.slice")
     assert_equal(deep[2], "/cg")
 
@@ -128,13 +128,13 @@ def test_pick_source() raises:
 
 
 def test_find_source_override() raises:
-    _ = setenv("ORCA_MEMORY_PRESSURE_FILE", String(FIXTURES, "host.txt"))
+    _ = setenv("MORCA_MEMORY_PRESSURE_FILE", String(FIXTURES, "host.txt"))
     var s = find_source()
     assert_equal(s.kind, "file")
     var p = memory_pressure()
     assert_true(Bool(p))
     assert_equal(p.value().some.avg10, 23.47)
-    _ = unsetenv("ORCA_MEMORY_PRESSURE_FILE")
+    _ = unsetenv("MORCA_MEMORY_PRESSURE_FILE")
     assert_false(Bool(memory_pressure()))
 
 
@@ -147,15 +147,15 @@ def test_pct_text() raises:
 
 
 def test_admit_limit() raises:
-    _ = unsetenv("ORCA_ADMIT_MEMORY_PRESSURE")
+    _ = unsetenv("MORCA_ADMIT_MEMORY_PRESSURE")
     assert_equal(admit_limit(), 10.0)
-    _ = setenv("ORCA_ADMIT_MEMORY_PRESSURE", "0")
+    _ = setenv("MORCA_ADMIT_MEMORY_PRESSURE", "0")
     assert_equal(admit_limit(), 0.0)
-    _ = setenv("ORCA_ADMIT_MEMORY_PRESSURE", "2.5")
+    _ = setenv("MORCA_ADMIT_MEMORY_PRESSURE", "2.5")
     assert_equal(admit_limit(), 2.5)
-    _ = setenv("ORCA_ADMIT_MEMORY_PRESSURE", "lots")
+    _ = setenv("MORCA_ADMIT_MEMORY_PRESSURE", "lots")
     assert_equal(admit_limit(), 0.0)
-    _ = unsetenv("ORCA_ADMIT_MEMORY_PRESSURE")
+    _ = unsetenv("MORCA_ADMIT_MEMORY_PRESSURE")
 
 
 def test_hold_and_resume_below_half() raises:
@@ -182,7 +182,7 @@ def test_hold_and_resume_below_half() raises:
 
 def test_own_limits_hold_nothing() raises:
     """A run held at its own memory limit stalls the host's reading too;
-    what it explains holds nothing (orca #266 on the lab: one run at 512 MB
+    what it explains holds nothing (morca #266 on the lab: one run at 512 MB
     held every start with 13 GB free)."""
     var a = Admission(10.0)
     a.observe(_psi(81.0), 0.0, False, own=80.0)
@@ -232,7 +232,7 @@ def test_never_blocks_forever() raises:
     var a = Admission(10.0, grace=60.0)
     a.observe(_psi(50.0), 0.0, True)
     assert_false(a.escape)
-    # Busy with orca's own runs: no escape however long.
+    # Busy with morca's own runs: no escape however long.
     a.observe(_psi(50.0), 100.0, False)
     assert_false(a.escape)
     assert_equal(a.allows(False), 0)

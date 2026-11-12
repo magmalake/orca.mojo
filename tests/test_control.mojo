@@ -1,7 +1,7 @@
-"""Placement and the control runner's rules (orca.control): the
+"""Placement and the control runner's rules (morca.control): the
 `--placement` values, the limits from the environment, when the control
 instance's samples hold a run, what a run's process is given, and secrets
-read with `ORCA_SECRET_FETCH`. tests/placement.sh runs it all under the
+read with `MORCA_SECRET_FETCH`. tests/placement.sh runs it all under the
 scheduler.
 """
 
@@ -13,7 +13,7 @@ from std.testing import (
     assert_true,
 )
 
-from orca.control import (
+from morca.control import (
     ControlLimits,
     control_stage,
     fetch_secret,
@@ -22,7 +22,7 @@ from orca.control import (
     run_env,
     slots_reason,
 )
-from orca.system import Container, Now
+from morca.system import Container, Now
 
 
 def _now(age: Float64, mem: Float64, disk: Float64) -> Now:
@@ -63,10 +63,10 @@ def test_placements() raises:
 
 def test_limits() raises:
     for n in [
-        "ORCA_CONTROL_MAX_RUNS",
-        "ORCA_CONTROL_MEMORY_MB",
-        "ORCA_CONTROL_WORKERS",
-        "ORCA_CONTROL_NICE",
+        "MORCA_CONTROL_MAX_RUNS",
+        "MORCA_CONTROL_MEMORY_MB",
+        "MORCA_CONTROL_WORKERS",
+        "MORCA_CONTROL_NICE",
     ]:
         _ = unsetenv(n)
     var d = ControlLimits.from_env()
@@ -74,19 +74,19 @@ def test_limits() raises:
     assert_equal(d.memory_mb, 1024)
     assert_equal(d.workers, 1)
     assert_equal(d.nice, 10)
-    _ = setenv("ORCA_CONTROL_MAX_RUNS", "0")
-    _ = setenv("ORCA_CONTROL_WORKERS", "3")
+    _ = setenv("MORCA_CONTROL_MAX_RUNS", "0")
+    _ = setenv("MORCA_CONTROL_WORKERS", "3")
     var l = ControlLimits.from_env()
     assert_equal(l.max_runs, 0)
     assert_equal(l.workers, 3)
-    _ = setenv("ORCA_CONTROL_WORKERS", "0")
-    with assert_raises(contains="ORCA_CONTROL_WORKERS"):
+    _ = setenv("MORCA_CONTROL_WORKERS", "0")
+    with assert_raises(contains="MORCA_CONTROL_WORKERS"):
         _ = ControlLimits.from_env()
-    _ = setenv("ORCA_CONTROL_WORKERS", "lots")
-    with assert_raises(contains="ORCA_CONTROL_WORKERS"):
+    _ = setenv("MORCA_CONTROL_WORKERS", "lots")
+    with assert_raises(contains="MORCA_CONTROL_WORKERS"):
         _ = ControlLimits.from_env()
-    _ = unsetenv("ORCA_CONTROL_WORKERS")
-    _ = unsetenv("ORCA_CONTROL_MAX_RUNS")
+    _ = unsetenv("MORCA_CONTROL_WORKERS")
+    _ = unsetenv("MORCA_CONTROL_MAX_RUNS")
 
 
 def test_pressure() raises:
@@ -113,29 +113,29 @@ def test_run_env() raises:
     var l = ControlLimits(2, 512, 1, 10)
     var none = run_env(l, "", List[Tuple[String, String]]())
     assert_equal(len(none), 1)
-    assert_equal(none[0], "ORCA_WORKERS=1")
+    assert_equal(none[0], "MORCA_WORKERS=1")
     var e = run_env(
-        l, "repo/orca:v1", [("GITHUB_TOKEN", "tok"), ("API_KEY", "key")]
+        l, "repo/morca:v1", [("GITHUB_TOKEN", "tok"), ("API_KEY", "key")]
     )
     assert_equal(len(e), 5)
-    assert_equal(e[1], "ORCA_IMAGE=repo/orca:v1")
+    assert_equal(e[1], "MORCA_IMAGE=repo/morca:v1")
     assert_equal(e[2], "GITHUB_TOKEN=tok")
     assert_equal(e[3], "API_KEY=key")
-    assert_equal(e[4], "ORCA_SECRETS=GITHUB_TOKEN,API_KEY")
+    assert_equal(e[4], "MORCA_SECRETS=GITHUB_TOKEN,API_KEY")
 
 
 def test_stage() raises:
-    _ = setenv("ORCA_LOG_STAGE", "/var/lib/orca/stage")
+    _ = setenv("MORCA_LOG_STAGE", "/var/lib/orca/stage")
     assert_equal(
         control_stage("toy", 12, 3),
         "/var/lib/orca/stage/control/toy-12-3-driver.log",
     )
-    _ = unsetenv("ORCA_LOG_STAGE")
+    _ = unsetenv("MORCA_LOG_STAGE")
     var tmp = getenv("TMPDIR")
     _ = setenv("TMPDIR", "/tmp/x/")
     assert_equal(
         control_stage("toy", 1, 1),
-        "/tmp/x/orca-logs/control/toy-1-1-driver.log",
+        "/tmp/x/morca-logs/control/toy-1-1-driver.log",
     )
     if tmp:
         _ = setenv("TMPDIR", tmp)
@@ -144,12 +144,12 @@ def test_stage() raises:
 
 
 def test_fetch() raises:
-    _ = setenv("ORCA_SECRET_FETCH", "printf '%s-value\\n\\n'")
+    _ = setenv("MORCA_SECRET_FETCH", "printf '%s-value\\n\\n'")
     assert_equal(fetch_secret("orca/it's"), "orca/it's-value")
-    _ = setenv("ORCA_SECRET_FETCH", "false")
+    _ = setenv("MORCA_SECRET_FETCH", "false")
     with assert_raises(contains="can't read secret orca/x: exit 1"):
         _ = fetch_secret("orca/x")
-    _ = unsetenv("ORCA_SECRET_FETCH")
+    _ = unsetenv("MORCA_SECRET_FETCH")
 
 
 def main() raises:

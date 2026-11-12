@@ -1,6 +1,6 @@
 #!/bin/sh
-# Fills (orca.fill, #155): a pipeline filling its whole range by itself,
-# within limits, with ORCA_NOW stepping time. Over examples/daily.mojo
+# Fills (morca.fill, #155): a pipeline filling its whole range by itself,
+# within limits, with MORCA_NOW stepping time. Over examples/daily.mojo
 # (from 2024-01-01, 02:30 New York time for the day before, max_runs 1) on
 # the local runner:
 #
@@ -14,7 +14,7 @@
 #   starts, and the next UTC day they do again;
 # - fills = "all" is refused for a pipeline with no first partition, with
 #   the file and line;
-# - `orca config show` and `config export` have the keys, and
+# - `morca config show` and `config export` have the keys, and
 #   `/api/pipelines/<name>` the fill's numbers and why it's idle;
 # - with fill_lag a day ended less than the lag ago neither fills nor
 #   counts, and the page says when it fills.
@@ -25,7 +25,7 @@
 # run's estimate starts nothing; a big enough one starts a fill run on its
 # own head instance, which succeeds.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-fill starts a throwaway server),
+# Needs MORCA_DATABASE_URL (pixi run test-fill starts a throwaway server),
 # curl, jq and python3.
 set -eu
 cd "$(dirname "$0")/.."
@@ -39,7 +39,7 @@ scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 
 log=build/fill.log
 : > "$log"
@@ -47,7 +47,7 @@ proj=$PWD/build/fill-project
 dir=$PWD/build/fill-ec2
 rm -rf "$proj" "$dir" build/fill-logs
 mkdir -p "$proj" "$dir"
-export ORCA_WATCHDOG_SECONDS=0 ORCA_SAMPLE_SECONDS=0
+export MORCA_WATCHDOG_SECONDS=0 MORCA_SAMPLE_SECONDS=0
 ui=
 fake=
 sched=
@@ -65,18 +65,18 @@ fail() {
     stop
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 now=
 tick() {
     now=$1
-    ORCA_NOW="$1" ./build/orca tick >> "$log" 2>&1 || fail "tick at $1 exited $?"
+    MORCA_NOW="$1" ./build/morca tick >> "$log" 2>&1 || fail "tick at $1 exited $?"
     ui_at
 }
-toml() { cat > "$proj/orca.toml"; }
+toml() { cat > "$proj/morca.toml"; }
 reg() {  # reg TIME BINARY [FLAGS...]
     t=$1
     shift
-    ORCA_NOW="$t" ./build/orca register --config "$proj/orca.toml" "$@" >> "$log" 2>&1 \
+    MORCA_NOW="$t" ./build/morca register --config "$proj/morca.toml" "$@" >> "$log" 2>&1 \
         || fail "register $* at $t"
 }
 fills() { q "SELECT coalesce(string_agg(partitions, ',' ORDER BY id), '') FROM orca.runs WHERE pipeline = '$1' AND trigger = 'fill'"; }
@@ -105,12 +105,12 @@ ui_at() {
     [ -z "$ui" ] || { kill "$ui" 2> /dev/null || true; wait "$ui" 2> /dev/null || true; }
     free_port port
     base="http://127.0.0.1:$port"
-    ORCA_NOW="$now" ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+    MORCA_NOW="$now" MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
     ui=$!
     ui_now=$now
     i=0
     until curl -fs "$base/" > /dev/null 2>&1; do
-        i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+        i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
     done
 }
 # fill PIPELINE FIELD: the fill's field in /api/pipelines/<pipeline>.
@@ -133,8 +133,8 @@ T0=2024-01-08T12:00Z  # 07:00 in New York: the range is 2024-01-01..07
 reg "$T0" ./build/daily
 grep -q "daily fills its range with no fill_budget_per_day" "$log" || fail "no warning of no budget"
 ./build/daily run --partitions 2024-01-03 >> "$log" 2>&1 || fail "the manual run of 2024-01-03"
-[ "$(./build/orca backfill daily 2024-01-01..2024-01-02 2>> "$log")" = "queued 2 runs" ] || fail "the backfill"
-export ORCA_DAILY_SLEEP=3
+[ "$(./build/morca backfill daily 2024-01-01..2024-01-02 2>> "$log")" = "queued 2 runs" ] || fail "the backfill"
+export MORCA_DAILY_SLEEP=3
 tick "$T0"
 [ "$(fills daily)" = "" ] || fail "fill runs started before the queued backfill: $(fills daily)"
 idle_has daily "1 scheduled or backfill runs are queued"
@@ -187,23 +187,23 @@ echo "ok   nothing starts outside fill_window, oldest first inside it"
 
 # --- Pausing, by a person and by the watchdog ---
 settle
-./build/orca pause daily >> "$log" 2>&1 || fail "pause"
+./build/morca pause daily >> "$log" 2>&1 || fail "pause"
 tick 2024-01-20T23:10Z
 [ "$(fills daily | tr ',' '\n' | wc -l | tr -d ' ')" -eq 7 ] || fail "a fill run started while paused"
 idle_has daily paused
-./build/orca unpause daily >> "$log" 2>&1 || fail "unpause"
+./build/morca unpause daily >> "$log" 2>&1 || fail "unpause"
 tick 2024-01-20T23:11Z
 [ "$(fills daily | tr ',' '\n' | wc -l | tr -d ' ')" -eq 10 ] || fail "no fill after unpausing: $(fills daily)"
 settle
 # A rule over its limit: more than -1 launches in the last hour.
-ORCA_WATCHDOG_SECONDS=60 ORCA_WATCHDOG_LAUNCHES=-1 ORCA_NOW=2024-01-20T23:20Z ./build/orca tick >> "$log" 2>&1 \
+MORCA_WATCHDOG_SECONDS=60 MORCA_WATCHDOG_LAUNCHES=-1 MORCA_NOW=2024-01-20T23:20Z ./build/morca tick >> "$log" 2>&1 \
     || fail "the watchdog's tick"
 now=2024-01-20T23:20Z
 ui_at
 [ "$(q "SELECT paused FROM orca.pipelines WHERE name = 'daily'")" = t ] || fail "the watchdog didn't pause daily"
 [ "$(fills daily | tr ',' '\n' | wc -l | tr -d ' ')" -eq 10 ] || fail "a fill run started after the watchdog tripped"
 idle_has daily "paused by the watchdog (watchdog rule launches"
-./build/orca unpause daily >> "$log" 2>&1 || fail "unpause after the watchdog"
+./build/morca unpause daily >> "$log" 2>&1 || fail "unpause after the watchdog"
 echo "ok   no fill run starts while paused, by a person or by the watchdog"
 
 # --- The budget, a UTC day at a time ---
@@ -233,15 +233,15 @@ echo "ok   over fill_budget_per_day nothing starts, and the next UTC day it does
 
 # --- What registration refuses, and what config shows ---
 printf '[pipelines.fanout]\n\nfills = "all"\n' | toml
-ORCA_NOW=$T0 ./build/orca register --config "$proj/orca.toml" ./build/fanout > build/fill.out 2>&1 \
+MORCA_NOW=$T0 ./build/morca register --config "$proj/morca.toml" ./build/fanout > build/fill.out 2>&1 \
     && fail "fills = all registered for a pipeline with no first partition"
-grep -q "orca.toml:3: \[pipelines.fanout\] fills = \"all\" can't be registered: fanout has no first partition" build/fill.out \
+grep -q "morca.toml:3: \[pipelines.fanout\] fills = \"all\" can't be registered: fanout has no first partition" build/fill.out \
     || fail "the refusal: $(cat build/fill.out)"
-./build/orca config show daily > build/fill.out 2>> "$log" || fail "config show"
-grep -Eq "^  fills +all +orca.toml \[pipelines.daily\]$" build/fill.out || fail "show's fills: $(cat build/fill.out)"
-grep -Eq "^  fill_window +22..6 +orca.toml \[pipelines.daily\]$" build/fill.out || fail "show's fill_window"
+./build/morca config show daily > build/fill.out 2>> "$log" || fail "config show"
+grep -Eq "^  fills +all +morca.toml \[pipelines.daily\]$" build/fill.out || fail "show's fills: $(cat build/fill.out)"
+grep -Eq "^  fill_window +22..6 +morca.toml \[pipelines.daily\]$" build/fill.out || fail "show's fill_window"
 grep -Eq "^  fill_order +oldest +code default" build/fill.out || fail "show's fill_order"
-./build/orca config export --out - > build/fill.out 2>> "$log" || fail "config export"
+./build/morca config export --out - > build/fill.out 2>> "$log" || fail "config export"
 grep -q '^fill_budget_per_day = 0.05$' build/fill.out && grep -q '^fill_window = "22..6"$' build/fill.out \
     || fail "export: $(cat build/fill.out)"
 echo "ok   fills refused with no first partition; config show and export"
@@ -275,21 +275,21 @@ done
 [ "$(fill daily waits_for_lag)" = null ] || fail "still waits: $(fill daily waits_for_lag)"
 [ "$(fill daily total)" -eq 21 ] || fail "the range after the lag: $(fill daily total) days"
 settle
-./build/orca config show daily > build/fill.out 2>> "$log" || fail "config show"
-grep -Eq "^  fill_lag +2h +orca.toml \[pipelines.daily\]$" build/fill.out || fail "show's fill_lag: $(cat build/fill.out)"
-./build/orca config export --out - > build/fill.out 2>> "$log" || fail "config export"
+./build/morca config show daily > build/fill.out 2>> "$log" || fail "config show"
+grep -Eq "^  fill_lag +2h +morca.toml \[pipelines.daily\]$" build/fill.out || fail "show's fill_lag: $(cat build/fill.out)"
+./build/morca config export --out - > build/fill.out 2>> "$log" || fail "config export"
 grep -q '^fill_lag = "2h"$' build/fill.out || fail "export's fill_lag: $(cat build/fill.out)"
 echo "ok   fill_lag: a day fills two hours after it ends, not before; show and export"
 
 # --- The ec2 runner: the budget fails closed ---
 free_port ecport
-export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$ecport"
-export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
-export ORCA_EC2_POOL_SECONDS=0 ORCA_LOGS=$PWD/build/fill-logs ORCA_START_SECONDS=60
+export MORCA_RUNNER=ec2 MORCA_EC2_MODE=direct MORCA_EC2_ENDPOINT="http://127.0.0.1:$ecport"
+export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test MORCA_EC2_AMI=ami-test
+export MORCA_EC2_POOL_SECONDS=0 MORCA_LOGS=$PWD/build/fill-logs MORCA_START_SECONDS=60
 python3 tests/fake_ec2.py "$ecport" "$dir" >> "$log" 2>&1 &
 fake=$!
 i=0
-until curl -s -o /dev/null "$ORCA_EC2_ENDPOINT/"; do
+until curl -s -o /dev/null "$MORCA_EC2_ENDPOINT/"; do
     i=$((i + 1)); [ "$i" -lt 100 ] || fail "the stand-in EC2 didn't start"; sleep 0.1
 done
 launches() { grep -c '"RunInstances"' "$dir/calls.jsonl" 2> /dev/null || true; }
@@ -301,10 +301,10 @@ head_type = "m8g.xlarge"
 fills = "all"
 fill_budget_per_day = 1.0
 EOF
-reg "$T3" --image orca:test ./build/toy
+reg "$T3" --image morca:test ./build/toy
 tick "$T3"
 [ "$(fills toy)" = "" ] || fail "a fill run started at an unknown price"
-idle_has toy "price unknown: no price for m8g.xlarge in orca.fleet's table"
+idle_has toy "price unknown: no price for m8g.xlarge in morca.fleet's table"
 [ "$(fill toy price_per_hour)" = null ] || fail "a price for m8g.xlarge"
 toml << 'EOF'
 [pipelines.toy]
@@ -312,24 +312,24 @@ placement = "ec2"
 head_type = "c7g.large"
 fills = "all"
 EOF
-reg "$T3" --image orca:test ./build/toy
+reg "$T3" --image morca:test ./build/toy
 tick "$T3"
 [ "$(fills toy)" = "" ] || fail "a fill run started on ec2 with no budget"
 idle_has toy "no budget: its runs on ec2 cost money"
 printf '[pipelines.toy]\nplacement = "ec2"\nhead_type = "c7g.large"\nfills = "all"\nfill_budget_per_day = 0.05\n' | toml
-reg "$T3" --image orca:test ./build/toy
+reg "$T3" --image morca:test ./build/toy
 tick "$T3"
 [ "$(fills toy)" = "" ] || fail "a fill run started with a budget below its estimate"
 # An hour of a c7g.large ($0.0725) with the margin, before any has ended.
 idle_has toy 'budget: $0.00 of $0.05 spent today (UTC), and the runs going and one more may cost $0.09'
 [ "$(launches)" -eq 0 ] || fail "instances launched over the budget"
 printf '[pipelines.toy]\nplacement = "ec2"\nhead_type = "c7g.large"\nfills = "all"\nfill_budget_per_day = 1\n' | toml
-reg "$T3" --image orca:test ./build/toy
+reg "$T3" --image morca:test ./build/toy
 tick "$T3"
 [ "$(fills toy)" = "2024-01" ] || fail "no fill run on ec2 within the budget: $(fills toy)"
 [ "$(launches)" -eq 1 ] || fail "$(launches) launches for the fill run"
 grep '"RunInstances"' "$dir/calls.jsonl" | grep -q '"InstanceType": "c7g.large"' || fail "the head's type"
-ORCA_NOW=$T3 ./build/orca scheduler >> "$log" 2>&1 &
+MORCA_NOW=$T3 ./build/morca scheduler >> "$log" 2>&1 &
 sched=$!
 i=0
 until [ "$(q "SELECT count(*) FROM orca.runs WHERE pipeline = 'toy' AND trigger = 'fill' AND status = 'succeeded'")" -eq 2 ]; do

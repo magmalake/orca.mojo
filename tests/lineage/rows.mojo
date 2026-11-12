@@ -6,8 +6,8 @@ from iceberg.schema import Schema
 from iceberg.values import Datum
 from parquet import RecordBatch
 
-from orca import Ctx
-from orca.tables import ensure_table, scan
+from morca import Ctx
+from morca.tables import ensure_table, scan
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['

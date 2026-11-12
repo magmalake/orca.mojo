@@ -9,7 +9,7 @@ from std.testing import (
 )
 
 from dista import Seq
-from orca import (
+from morca import (
     FAILED,
     SKIPPED,
     SUCCEEDED,
@@ -29,7 +29,7 @@ from orca import (
     parse_names,
     parse_partitions,
 )
-from orca.name import path_segment
+from morca.name import path_segment
 
 
 # --- names ---
@@ -315,7 +315,7 @@ def test_an_hourly_pipeline() raises:
     assert_true(
         '"partitions": {"kind": "hourly", "start": "2024-01-01T00"}' in d, d
     )
-    assert_true('"input": "orca.hour.Hour"' in d, d)
+    assert_true('"input": "morca.hour.Hour"' in d, d)
 
 
 def test_a_daily_pipeline() raises:
@@ -339,7 +339,7 @@ def test_a_daily_pipeline() raises:
         ' "steps"'
         in d
     )
-    assert_true('"input": "orca.day.Day"' in d)
+    assert_true('"input": "morca.day.Day"' in d)
     assert_true(
         '"partitions": {"kind": "monthly", "start": null}' in Labels.describe()
     )
@@ -394,7 +394,7 @@ def test_describe() raises:
     assert_true('"name": "key", "kind": "mapped", "after": null' in d)
     assert_true('"name": "total", "kind": "gather", "after": "label"' in d)
     assert_true('"input": "dista.seq.Seq[test_steps.Labeled]"' in d)
-    assert_true('"function": "test_steps::label(orca::ctx::Ctx,' in d)
+    assert_true('"function": "test_steps::label(morca::ctx::Ctx,' in d)
 
 
 def test_registry_hash() raises:

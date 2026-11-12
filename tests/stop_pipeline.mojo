@@ -6,7 +6,7 @@ it, sleeps STOP_WAIT seconds with no timeout. Runs aren't retried.
 from std.os import getenv
 from std.time import sleep
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
 
 
 def _nap(name: StaticString) raises:
@@ -34,4 +34,4 @@ comptime Stopping = Pipeline[
 
 
 def main() raises:
-    orca_main[Stopping]()
+    morca_main[Stopping]()

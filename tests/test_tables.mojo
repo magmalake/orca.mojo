@@ -1,5 +1,5 @@
 """Pinned reads, recognised commits and declared datasets, over local
-Iceberg tables in a warehouse (`ORCA_WAREHOUSE`). Run under
+Iceberg tables in a warehouse (`MORCA_WAREHOUSE`). Run under
 scripts/with-postgres.sh, in the data environment."""
 
 from std.os import getenv, setenv
@@ -16,7 +16,7 @@ from postgres import Connection, Params
 
 from dista import Seq
 
-from orca import (
+from morca import (
     Ctx,
     Gather,
     Mapped,
@@ -28,7 +28,7 @@ from orca import (
     Step,
     parse_months,
 )
-from orca.tables import append, dataset_of, ensure_table, scan, table
+from morca.tables import append, dataset_of, ensure_table, scan, table
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -64,25 +64,25 @@ def _snapshots(t: Table) -> Int:
 
 
 def _table(name: String) raises -> Table:
-    return Table.load_local(String(getenv("ORCA_TEST_WH"), "/db/", name))
+    return Table.load_local(String(getenv("MORCA_TEST_WH"), "/db/", name))
 
 
 def load(mut ctx: Ctx, m: Month) raises -> Int64:
     """Appends 3 rows for the month to `out`; dies right after committing
-    while ORCA_TEST_DIE is set."""
+    while MORCA_TEST_DIE is set."""
     var out = _table("out")
     var id = append(ctx, out, _rows(String(m), 3))
-    if getenv("ORCA_TEST_DIE"):
+    if getenv("MORCA_TEST_DIE"):
         raise Error("died after committing")
     return id
 
 
 def taken_load(mut ctx: Ctx, m: Month) raises -> Int64:
     """Appends as `load` does, after making the run look lost as
-    ORCA_TEST_TAKE says: `owner`, another process claimed it; `stale`, this
+    MORCA_TEST_TAKE says: `owner`, another process claimed it; `stale`, this
     process's heartbeat went stale while it worked."""
-    var c = Connection(getenv("ORCA_DATABASE_URL"))
-    if getenv("ORCA_TEST_TAKE") == "owner":
+    var c = Connection(getenv("MORCA_DATABASE_URL"))
+    if getenv("MORCA_TEST_TAKE") == "owner":
         _ = c.execute(
             (
                 "UPDATE orca.runs SET owner = 'b:2', heartbeat = now() WHERE id"
@@ -103,13 +103,13 @@ def taken_load(mut ctx: Ctx, m: Month) raises -> Int64:
 
 
 def copy_count(mut ctx: Ctx, m: Month) raises -> Int:
-    """Counts `src` at the pinned snapshot. While ORCA_TEST_DIE is set,
+    """Counts `src` at the pinned snapshot. While MORCA_TEST_DIE is set,
     another writer appends to `src` first, then the attempt dies."""
     var src = _table("src")
     var n = 0
     for b in scan(ctx, src).to_batches():
         n += b.num_rows
-    if getenv("ORCA_TEST_DIE"):
+    if getenv("MORCA_TEST_DIE"):
         _ = src.append(_rows("late", 5))
         raise Error("died after reading")
     return n
@@ -146,10 +146,10 @@ def sum_all(mut ctx: Ctx, ms: Seq[Int]) raises -> Int64:
 
 
 def evolve(mut ctx: Ctx, m: Month) raises -> Int:
-    """`ensure_table` on `out` with the schema in ORCA_TEST_SCHEMA; returns
+    """`ensure_table` on `out` with the schema in MORCA_TEST_SCHEMA; returns
     how many schemas the table has after."""
     var t = ensure_table(
-        ctx, "db.out", Schema.parse(getenv("ORCA_TEST_SCHEMA"))
+        ctx, "db.out", Schema.parse(getenv("MORCA_TEST_SCHEMA"))
     )
     return len(t.metadata.schemas)
 
@@ -199,8 +199,8 @@ def _warehouse() raises -> FilesystemCatalog:
     while exists(root):
         n += 1
         root = String("build/wh-", now_ms(), "-", n)
-    _ = setenv("ORCA_TEST_WH", root)
-    _ = setenv("ORCA_WAREHOUSE", root)
+    _ = setenv("MORCA_TEST_WH", root)
+    _ = setenv("MORCA_WAREHOUSE", root)
     var cat = FilesystemCatalog.local(root)
     _ = cat.create_table("db", "out", Schema.parse(SCHEMA))
     _ = cat.create_table("db", "src", Schema.parse(SCHEMA))
@@ -208,7 +208,7 @@ def _warehouse() raises -> FilesystemCatalog:
 
 
 def _store(run_name: String) raises -> PgStore:
-    var url = getenv("ORCA_DATABASE_URL")
+    var url = getenv("MORCA_DATABASE_URL")
     var db = State(url)
     db.migrate()
     db.register(run_name, "h", "{}")
@@ -226,12 +226,12 @@ def test_a_commit_is_recognised_on_resume() raises:
     _ = _warehouse()
     var store = _store("loads")
     var months = parse_months("2024-01..2024-02")
-    _ = setenv("ORCA_TEST_DIE", "1")
+    _ = setenv("MORCA_TEST_DIE", "1")
     var res = Loads.execute(store, RunResult(), months, store.run)
     assert_true(not res.succeeded())
     assert_equal(_snapshots(_table("out")), 2)
     # The commits were recorded as they happened, before the attempts died.
-    var conn = Connection(getenv("ORCA_DATABASE_URL"))
+    var conn = Connection(getenv("MORCA_DATABASE_URL"))
     assert_equal(
         Int(
             conn.query(
@@ -247,7 +247,7 @@ def test_a_commit_is_recognised_on_resume() raises:
         ),
         2,
     )
-    _ = setenv("ORCA_TEST_DIE", "")
+    _ = setenv("MORCA_TEST_DIE", "")
     res = Loads.execute(store, _resume(store), months, store.run)
     assert_true(res.succeeded())
     var out = _table("out")
@@ -274,7 +274,7 @@ def test_a_lost_run_doesnt_commit() raises:
     heartbeat went stale while it was alive) doesn't commit (#60)."""
     _ = _warehouse()
     var store = _store("takens")
-    _ = setenv("ORCA_TEST_TAKE", "owner")
+    _ = setenv("MORCA_TEST_TAKE", "owner")
     var raised = False
     try:
         _ = Takens.execute(
@@ -292,7 +292,7 @@ def test_a_stale_heartbeat_doesnt_commit() raises:
     so it doesn't commit either; the attempt fails saying why."""
     _ = _warehouse()
     var store = _store("takens")
-    _ = setenv("ORCA_TEST_TAKE", "stale")
+    _ = setenv("MORCA_TEST_TAKE", "stale")
     var res = Takens.execute(
         store, RunResult(), parse_months("2024-01"), store.run
     )
@@ -303,7 +303,7 @@ def test_a_stale_heartbeat_doesnt_commit() raises:
 
 def test_in_memory_runs_dont_recognise() raises:
     _ = _warehouse()
-    _ = setenv("ORCA_TEST_DIE", "")
+    _ = setenv("MORCA_TEST_DIE", "")
     _ = Loads.run(parse_months("2024-01"))
     _ = Loads.run(parse_months("2024-01"))
     assert_equal(_snapshots(_table("out")), 2)
@@ -315,11 +315,11 @@ def test_a_resumed_step_reads_its_pinned_snapshot() raises:
     _ = src.append(_rows("2024-01", 4))
     var store = _store("copies")
     var months = parse_months("2024-01")
-    _ = setenv("ORCA_TEST_DIE", "1")
+    _ = setenv("MORCA_TEST_DIE", "1")
     var res = Copies.execute(store, RunResult(), months, store.run)
     assert_true(not res.succeeded())
     assert_equal(_count(_table("src")), 9)  # the late commit landed
-    _ = setenv("ORCA_TEST_DIE", "")
+    _ = setenv("MORCA_TEST_DIE", "")
     res = Copies.execute(store, _resume(store), months, store.run)
     assert_true(res.succeeded())
     assert_equal(res.output[Int]("copy_count", "2024-01"), 4)
@@ -332,9 +332,9 @@ def test_an_empty_table_stays_empty_for_the_step() raises:
     _ = _warehouse()
     var store = _store("copies")
     var months = parse_months("2024-01")
-    _ = setenv("ORCA_TEST_DIE", "1")
+    _ = setenv("MORCA_TEST_DIE", "1")
     _ = Copies.execute(store, RunResult(), months, store.run)
-    _ = setenv("ORCA_TEST_DIE", "")
+    _ = setenv("MORCA_TEST_DIE", "")
     var res = Copies.execute(store, _resume(store), months, store.run)
     assert_equal(res.output[Int]("copy_count", "2024-01"), 0)
 
@@ -353,7 +353,7 @@ def test_an_undeclared_dataset_fails_the_attempt() raises:
     assert_equal(
         _error(res),
         (
-            "orca: step sneak of sneaky reads db.out, which it doesn't declare"
+            "morca: step sneak of sneaky reads db.out, which it doesn't declare"
             " in reads="
         ),
     )
@@ -361,7 +361,7 @@ def test_an_undeclared_dataset_fails_the_attempt() raises:
     assert_equal(
         _error(res),
         (
-            "orca: step scribble of scribbles writes db.src, which it doesn't"
+            "morca: step scribble of scribbles writes db.src, which it doesn't"
             " declare in writes="
         ),
     )
@@ -376,10 +376,10 @@ def test_a_declared_dataset_loads_by_name() raises:
     assert_true(res.succeeded())
     assert_equal(res.output[Int]("by_name", "2024-01"), 3)
     assert_equal(
-        dataset_of(String(getenv("ORCA_TEST_WH"), "/db/src/")), "db.src"
+        dataset_of(String(getenv("MORCA_TEST_WH"), "/db/src/")), "db.src"
     )
     assert_equal(dataset_of("/elsewhere/db/src"), "")
-    assert_equal(dataset_of(String(getenv("ORCA_TEST_WH"), "/db")), "")
+    assert_equal(dataset_of(String(getenv("MORCA_TEST_WH"), "/db")), "")
 
 
 def test_a_gather_commit_holds_the_runs_partitions() raises:
@@ -396,13 +396,13 @@ def test_a_gather_commit_holds_the_runs_partitions() raises:
 
 def test_a_table_outside_the_warehouse_needs_no_declaration() raises:
     _ = _warehouse()
-    _ = setenv("ORCA_WAREHOUSE", "build/wh-elsewhere")
+    _ = setenv("MORCA_WAREHOUSE", "build/wh-elsewhere")
     var res = Sneaky.run(parse_months("2024-01"))
     assert_true(res.succeeded())
 
 
 def _evolve_with(schema: String) raises -> RunResult:
-    _ = setenv("ORCA_TEST_SCHEMA", schema)
+    _ = setenv("MORCA_TEST_SCHEMA", schema)
     return Evolves.run(parse_months("2024-01"))
 
 
@@ -448,7 +448,7 @@ def test_ensure_table_refuses_an_incompatible_schema() raises:
         "cannot change the type of 'month' from string to long" in _error(res),
         _error(res),
     )
-    assert_true(_error(res).startswith("orca: db.out can't take"), _error(res))
+    assert_true(_error(res).startswith("morca: db.out can't take"), _error(res))
     var dropped = (
         '{"schema-id":0,"type":"struct","fields":['
         '{"id":1,"name":"id","required":true,"type":"long"}]}'

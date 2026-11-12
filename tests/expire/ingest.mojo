@@ -3,8 +3,8 @@
 
 from iceberg.schema import Schema
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
-from orca.tables import append, ensure_table
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
+from morca.tables import append, ensure_table
 from rows import SCHEMA, rows
 
 
@@ -23,4 +23,4 @@ comptime Ingest = Pipeline["ingest", Load, partitions=Monthly["2024-01"]]
 
 
 def main() raises:
-    orca_main[Ingest]()
+    morca_main[Ingest]()

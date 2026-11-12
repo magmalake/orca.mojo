@@ -1,6 +1,6 @@
 #!/bin/sh
 # A fake ssh for tests/hetzner.sh: the "server" is this machine, with
-# orca-stack installed at $FAKE/orca-stack and the fake docker on its PATH.
+# morca-stack installed at $FAKE/morca-stack and the fake docker on its PATH.
 while [ $# -gt 0 ]; do
     case "$1" in
         -o | -i) shift 2 ;;
@@ -12,13 +12,17 @@ while [ $# -gt 0 ]; do
     esac
 done
 case "$1" in
-    "install -D -m 755 /dev/stdin /usr/local/sbin/orca-stack")
-        cat > "$FAKE/orca-stack"
-        chmod 755 "$FAKE/orca-stack"
+    "install -D -m 755 /dev/stdin /usr/local/sbin/morca-stack")
+        cat > "$FAKE/morca-stack"
+        chmod 755 "$FAKE/morca-stack"
         ;;
-    orca-stack)
+    "install -D -m 644 /dev/stdin /etc/systemd/system/orca-backup.service")
+        cat > "$FAKE/orca-backup.service"
+        ;;
+    "systemctl daemon-reload && rm -f /usr/local/sbin/orca-stack") ;;
+    morca-stack)
         shift
-        exec "$FAKE/orca-stack" "$@"
+        exec "$FAKE/morca-stack" "$@"
         ;;
     *)
         echo "fake ssh: unexpected command: $*" >&2

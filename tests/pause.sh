@@ -2,18 +2,18 @@
 # Pausing a pipeline and cancelling its runs in bulk, from the command line
 # and the UI, over examples/toy.mojo:
 #
-# - `orca pause`: a fire, a backfill and a retry that's due all stay queued
+# - `morca pause`: a fire, a backfill and a retry that's due all stay queued
 #   (or failed and due) through ticks; the pipeline page says paused, and
-#   offers to unpause; `orca unpause` (or the UI's form) lets the scheduler
+#   offers to unpause; `morca unpause` (or the UI's form) lets the scheduler
 #   start them;
-# - `orca cancel <pipeline> KEYS`: the runs over those keys that are queued
+# - `morca cancel <pipeline> KEYS`: the runs over those keys that are queued
 #   or due a retry end cancelled, the others stay; `@all` takes the rest, and
 #   a running run is asked to stop before its next step; a failed run that
 #   won't be retried, and a succeeded one, are left alone;
 # - the pipeline page's cancel form, empty for all of them;
 # - paused, a run whose process stopped is queued again.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-pause starts a throwaway server),
+# Needs MORCA_DATABASE_URL (pixi run test-pause starts a throwaway server),
 # curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -22,12 +22,12 @@ mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 
 log=build/pause.log
 : > "$log"
-export ORCA_LOGS=build/pause-logs
-rm -rf "$ORCA_LOGS"
+export MORCA_LOGS=build/pause-logs
+rm -rf "$MORCA_LOGS"
 ui=
 sched=
 toy=
@@ -42,19 +42,19 @@ fail() {
     stop
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
-orca() { ./build/orca "$@" 2>> "$log"; }
-tick() { ORCA_NOW="$1" ./build/orca tick >> "$log" 2>&1 || fail "tick at $1 exited $?"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
+morca() { ./build/morca "$@" 2>> "$log"; }
+tick() { MORCA_NOW="$1" ./build/morca tick >> "$log" 2>&1 || fail "tick at $1 exited $?"; }
 status_of() { q "SELECT status FROM orca.runs WHERE pipeline = 'toy' AND partitions = '$1' ORDER BY id DESC LIMIT 1"; }
 count() { q "SELECT count(*) FROM orca.runs WHERE pipeline = 'toy' AND status = '$1'"; }
 
-ORCA_NOW=2024-01-15T00:00Z ./build/orca register ./build/toy >> "$log" 2>&1 || fail "register"
+MORCA_NOW=2024-01-15T00:00Z ./build/morca register ./build/toy >> "$log" 2>&1 || fail "register"
 
 # Paused: nothing starts, but runs are still queued.
-[ "$(orca pause toy)" = "paused toy" ] || fail "orca pause"
-orca pause toy > /dev/null && fail "pausing a paused pipeline"
-orca pause nope > /dev/null && fail "pausing no pipeline"
-[ "$(orca backfill toy 2024-03..2024-06)" = "queued 4 runs" ] || fail "the backfill"
+[ "$(morca pause toy)" = "paused toy" ] || fail "morca pause"
+morca pause toy > /dev/null && fail "pausing a paused pipeline"
+morca pause nope > /dev/null && fail "pausing no pipeline"
+[ "$(morca backfill toy 2024-03..2024-06)" = "queued 4 runs" ] || fail "the backfill"
 # A run that failed and is due a retry, and two that are done with.
 q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, starts, retry_at)
    SELECT 'toy', registry_hash, '2024-07', 'backfill', 'failed', 1, 0 FROM orca.pipelines WHERE name = 'toy';
@@ -72,11 +72,11 @@ tick 2024-02-02T03:01Z
 # The UI says so, and offers to unpause.
 free_port port
 base="http://127.0.0.1:$port"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 ui=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 json() { curl -fsS -H 'Accept: application/json' "$base$1" || fail "GET $1"; }
 # post PATH [FIELD=VALUE]: the code, with the body in $log.body.
@@ -96,65 +96,65 @@ curl -fsS "$base/pipelines/toy?tab=operate" | grep -q 'action="/pipelines/toy/ca
 [ "$(post /pipelines/toy/pause)" = 409 ] || fail "the UI paused a paused pipeline"
 
 # Cancel by keys: just those runs. Then @all: the queued and the retrying.
-[ "$(orca cancel toy 2024-03..2024-04)" = "cancelled 2 runs" ] || fail "cancel 2024-03..2024-04"
+[ "$(morca cancel toy 2024-03..2024-04)" = "cancelled 2 runs" ] || fail "cancel 2024-03..2024-04"
 [ "$(status_of 2024-03)" = cancelled ] && [ "$(status_of 2024-04)" = cancelled ] \
     || fail "2024-03 and 2024-04 aren't cancelled"
 [ "$(status_of 2024-05)" = queued ] || fail "2024-05 was cancelled too"
-orca cancel toy 2024-13 > /dev/null && fail "cancelling a bad key"
-[ "$(orca cancel toy @all)" = "cancelled 4 runs" ] || fail "cancel @all"
+morca cancel toy 2024-13 > /dev/null && fail "cancelling a bad key"
+[ "$(morca cancel toy @all)" = "cancelled 4 runs" ] || fail "cancel @all"
 for k in 2024-01 2024-05 2024-06 2024-07; do
     [ "$(status_of $k)" = cancelled ] || fail "$k is $(status_of $k), not cancelled"
 done
 [ "$(status_of 2024-08)" = failed ] || fail "a failed run that won't be retried was cancelled"
 [ "$(status_of 2024-09)" = succeeded ] || fail "a succeeded run was cancelled"
-[ "$(orca cancel toy @all)" = "cancelled 0 runs" ] || fail "cancel @all again"
+[ "$(morca cancel toy @all)" = "cancelled 0 runs" ] || fail "cancel @all again"
 
 # The UI's cancel form, empty for all of the pipeline's runs.
-[ "$(orca backfill toy 2024-10..2024-11)" = "queued 2 runs" ] || fail "the second backfill"
+[ "$(morca backfill toy 2024-10..2024-11)" = "queued 2 runs" ] || fail "the second backfill"
 [ "$(post /pipelines/toy/cancel partitions=)" = 200 ] || fail "the UI's cancel: $(cat "$log.body")"
 [ "$(jq .cancelled "$log.body")" -eq 2 ] || fail "the UI cancelled $(cat "$log.body")"
 [ "$(count queued)" -eq 0 ] || fail "the UI's cancel left runs queued"
 
 # A running run is asked to stop, and ends cancelled before its next step.
-ORCA_TOY_SLEEP=1 ./build/toy run --partitions 2024-12 >> "$log" 2>&1 &
+MORCA_TOY_SLEEP=1 ./build/toy run --partitions 2024-12 >> "$log" 2>&1 &
 toy=$!
 i=0
 until [ "$(count running)" -eq 1 ]; do
     i=$((i + 1)); [ "$i" -lt 200 ] || fail "the slow run didn't start"; sleep 0.05
 done
-[ "$(orca cancel toy 2024-12)" = "cancelled 1 runs" ] || fail "cancel a running run"
+[ "$(morca cancel toy 2024-12)" = "cancelled 1 runs" ] || fail "cancel a running run"
 code=0; wait "$toy" || code=$?
 toy=
 [ "$code" = 1 ] || fail "the cancelled run's process exited $code"
 [ "$(status_of 2024-12)" = cancelled ] || fail "the running run ended $(status_of 2024-12)"
 
 # Unpaused from the UI, the scheduler starts what's queued.
-[ "$(orca backfill toy 2024-03)" = "queued 1 runs" ] || fail "the third backfill"
+[ "$(morca backfill toy 2024-03)" = "queued 1 runs" ] || fail "the third backfill"
 tick 2024-02-02T03:02Z
 [ "$(status_of 2024-03)" = queued ] || fail "started while still paused"
 [ "$(post /pipelines/toy/unpause)" = 200 ] || fail "the UI's unpause: $(cat "$log.body")"
 [ "$(json /pipelines/toy | jq .pipeline.paused)" = false ] || fail "still paused"
 [ "$(post /pipelines/toy/unpause)" = 409 ] || fail "unpaused an unpaused pipeline"
-ORCA_NOW=2024-02-02T03:03Z ./build/orca scheduler >> "$log" 2>&1 &
+MORCA_NOW=2024-02-02T03:03Z ./build/morca scheduler >> "$log" 2>&1 &
 sched=$!
 i=0
 until [ "$(status_of 2024-03)" = succeeded ]; do
     i=$((i + 1)); [ "$i" -lt 300 ] || fail "the queued run is $(status_of 2024-03) after unpausing"; sleep 0.2
 done
 kill "$sched"; wait "$sched" 2> /dev/null || true; sched=
-[ "$(orca pause toy)" = "paused toy" ] && [ "$(orca unpause toy)" = "unpaused toy" ] || fail "pause, unpause"
+[ "$(morca pause toy)" = "paused toy" ] && [ "$(morca unpause toy)" = "unpaused toy" ] || fail "pause, unpause"
 
 # Paused, a run whose process stopped with retries left is queued again,
 # not left looking running (nothing restarts it while paused, and a
 # deploy's drain would wait for it).
-orca pause toy > /dev/null || fail "pause again"
+morca pause toy > /dev/null || fail "pause again"
 q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, starts, started, heartbeat, placement)
    SELECT 'toy', registry_hash, '2023-12', 'backfill', 'running', 1, now() - interval '1 hour',
           now() - interval '1 hour', 'local' FROM orca.pipelines WHERE name = 'toy'" > /dev/null
 tick 2024-02-02T03:10Z
 [ "$(status_of 2023-12)" = queued ] || fail "a paused pipeline's dead run is $(status_of 2023-12), not queued"
 [ "$(q "SELECT starts FROM orca.runs WHERE partitions = '2023-12'")" = 1 ] || fail "the requeue reset its starts"
-orca cancel toy @all > /dev/null && orca unpause toy > /dev/null || fail "cancel, unpause"
+morca cancel toy @all > /dev/null && morca unpause toy > /dev/null || fail "cancel, unpause"
 
 stop
 echo "ok   pause"

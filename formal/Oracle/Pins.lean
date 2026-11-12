@@ -1,8 +1,8 @@
-import Orca.Pins.Model
+import Morca.Pins.Model
 import Oracle.Words
 
 /-!
-# `orca-oracle pins`
+# `morca-oracle pins`
 
 For every sequence of up to five events, the answers the pins model says
 `Ctx.pin` gives. tests/test_formal_pins.mojo replays the same sequences
@@ -18,9 +18,9 @@ begin with:
 
 An answer prints as the table and the snapshot, `a1`; no answers as `-`.
 -/
-namespace Orca.Oracle.Pins
+namespace Morca.Oracle.Pins
 
-open Orca.Pins
+open Morca.Pins
 
 def start : State :=
   { current := fun _ => 1,
@@ -61,4 +61,4 @@ def run (events : String) : List (String × Nat) :=
 def lines : List String :=
   (upTo ["a", "b", "A", "B", "x"] 5).map fun w => w ++ " " ++ render (run w)
 
-end Orca.Oracle.Pins
+end Morca.Oracle.Pins

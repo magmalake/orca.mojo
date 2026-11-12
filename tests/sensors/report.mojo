@@ -2,8 +2,8 @@
 lake.report."""
 
 from dista import Seq
-from orca import Ctx, Gather, Month, Monthly, Pipeline, Step, orca_main
-from orca.tables import append, table
+from morca import Ctx, Gather, Month, Monthly, Pipeline, Step, morca_main
+from morca.tables import append, table
 from rows import count, dataset, rows
 
 
@@ -28,4 +28,4 @@ comptime P = Pipeline[
 
 
 def main() raises:
-    orca_main[P]()
+    morca_main[P]()

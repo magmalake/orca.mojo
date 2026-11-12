@@ -1,7 +1,7 @@
 #!/bin/sh
 # Each attempt's log is where `status` says, with the step's lines and its
 # error; a run of a pipeline with dista tasks leaves its timeline beside them.
-# Needs ORCA_DATABASE_URL; pixi run test-logs gives it a fresh SQLite file,
+# Needs MORCA_DATABASE_URL; pixi run test-logs gives it a fresh SQLite file,
 # since nothing here needs Postgres.
 set -eu
 cd "$(dirname "$0")/.."
@@ -11,9 +11,9 @@ scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
 
-ORCA_LOGS=$(pwd)/build/logs-$$
-export ORCA_LOGS
-trap 'rm -rf "$ORCA_LOGS"' EXIT
+MORCA_LOGS=$(pwd)/build/logs-$$
+export MORCA_LOGS
+trap 'rm -rf "$MORCA_LOGS"' EXIT
 find_logs() { find "$1" -name "*.log" | sort; }
 log=build/logs.log
 
@@ -24,12 +24,12 @@ fail() {
 }
 
 # A failed attempt, resumed: two logs for measure 2024-02, each where it says.
-ORCA_TOY_FAIL=2024-02 ./build/toy run --partitions 2024-01..2024-02 > "$log" 2>&1 \
+MORCA_TOY_FAIL=2024-02 ./build/toy run --partitions 2024-01..2024-02 > "$log" 2>&1 \
     && fail "the failing run succeeded"
 run=$(sed -n 's/^run \([0-9][0-9]*\)$/\1/p' "$log" | head -1)
 ./build/toy resume "$run" > "$log" 2>&1 || fail "resume failed"
 ./build/toy status "$run" > "$log" 2>&1
-dir="$ORCA_LOGS/toy/$run"
+dir="$MORCA_LOGS/toy/$run"
 grep -qxF "measure 2024-02 succeeded after 2 attempts [$dir/measure/2024-02/2.log]" "$log" \
     || fail "status doesn't show measure 2024-02's second log"
 grep -qxF "total succeeded [$dir/total/_run/1.log]" "$log" \
@@ -46,10 +46,10 @@ n=$(find "$dir" -name '*.log' | wc -l)
 run=$(sed -n 's/^run \([0-9][0-9]*\)$/\1/p' "$log" | head -1)
 grep -q '91 days\|31 days, ' "$log" || fail "fanout didn't fan out"
 grep -q '^\[all_trips\] .* trips in 3 months$' "$log" || fail "no total"
-timeline="$ORCA_LOGS/fanout/$run/timeline.json"
+timeline="$MORCA_LOGS/fanout/$run/timeline.json"
 [ -s "$timeline" ] || fail "no timeline at $timeline"
 grep -q '"ph":"X"' "$timeline" || fail "the timeline isn't a Chrome trace"
-grep -q 'month_trips 2024-02\] 29 days' "$ORCA_LOGS/fanout/$run/month_trips/2024-02/1.log" \
+grep -q 'month_trips 2024-02\] 29 days' "$MORCA_LOGS/fanout/$run/month_trips/2024-02/1.log" \
     || fail "fanout's step log lacks its line"
 # `status` lists the latest runs; `--before` the ones older than a run.
 ./build/toy status > "$log" 2>&1 || fail "status"

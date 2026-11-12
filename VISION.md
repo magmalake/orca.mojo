@@ -1,8 +1,8 @@
-# orca: vision
+# morca: vision
 
 November 1, 2026
 
-orca orchestrates data pipelines written in Mojo. A pipeline is a DAG of steps, declared in Mojo and checked by the compiler. A schedule says when it runs, in cron syntax. A web UI shows what ran, what's running and what failed, and lets someone rerun or backfill it. The steps' heavy work runs on dista clusters. The data they read and write lives in Iceberg tables in object storage.
+morca orchestrates data pipelines written in Mojo. A pipeline is a DAG of steps, declared in Mojo and checked by the compiler. A schedule says when it runs, in cron syntax. A web UI shows what ran, what's running and what failed, and lets someone rerun or backfill it. The steps' heavy work runs on dista clusters. The data they read and write lives in Iceberg tables in object storage.
 
 ## Why
 
@@ -12,26 +12,26 @@ magmalake can now read and write a data lake in Mojo (Iceberg, Parquet, Arrow, o
 - **They don't know the data lake.** They track runs of code. Which Iceberg snapshot a step read, and which one it wrote, is left to each step to log somewhere.
 - **They bring a large stack.** A Python service, a metadata database, workers, a UI server and their dependencies, all to schedule work that's otherwise compiled Mojo.
 
-orca is that layer for this stack, built from the same tins.
+morca is that layer for this stack, built from the same tins.
 
 ## Where it fits
 
 ```
-  schedules · UI · reruns and backfills        orca
+  schedules · UI · reruns and backfills        morca
   ──────────────────────────────────────────
   steps: Mojo functions, one dista cluster     dista
   per run of a pipeline
   ──────────────────────────────────────────
   Iceberg in S3 (versioned datasets),          iceberg-mojo, parquet,
-  Lance (vectors), Postgres (orca's state)     objectstore, postgres
+  Lance (vectors), Postgres (morca's state)     objectstore, postgres
   ──────────────────────────────────────────
   Kubernetes
 ```
 
 - **One dista cluster per run.** A run of a pipeline gets a dista cluster of its own, sized for it, and gives it back when it ends. Runs don't share workers, so one run's failure or memory use can't reach another's.
 - **Datasets are Iceberg tables.** A step reads tables at known snapshots and commits new snapshots. A rerun of a step reads the same snapshots it read the first time, so its output is reproducible. Vectors and embeddings go in Lance.
-- **Lineage is recorded where the data is.** Every snapshot a step commits carries, in its summary properties, the run, the step and the snapshots it read. orca also keeps the same edges in a Postgres table, so the UI can walk from any dataset to the steps and inputs that made it, without scanning table metadata.
-- **orca's own state is in Postgres**, through postgres-mojo: pipelines, schedules, runs, step attempts and their logs' locations.
+- **Lineage is recorded where the data is.** Every snapshot a step commits carries, in its summary properties, the run, the step and the snapshots it read. morca also keeps the same edges in a Postgres table, so the UI can walk from any dataset to the steps and inputs that made it, without scanning table metadata.
+- **morca's own state is in Postgres**, through postgres-mojo: pipelines, schedules, runs, step attempts and their logs' locations.
 
 ## Principles
 
@@ -56,13 +56,13 @@ People building data pipelines in Mojo on a data lake, who want them scheduled, 
 - **The scheduler.** Cron expressions (`0 3 * * *`, with time zones), triggers on a new upstream snapshot, and manual runs. It decides which partitions are due, starts runs, retries failed steps with backoff, and enforces how many runs of a pipeline can run at once.
 - **The runner.** For each run, it starts a dista cluster on Kubernetes, runs the steps in dependency order, records each step's attempts, inputs, outputs and logs, and tears the cluster down.
 - **The UI.** A web interface served by the scheduler. It shows pipelines and their DAGs, schedules and the next runs due, run history with each step's status, timing and logs, a run's dista timeline, and the lineage graph of datasets. It can start a run, rerun from a failed step, and backfill a range of partitions.
-- **An API and a command line.** Everything the UI does, over HTTP, plus a `orca` command that drives it.
+- **An API and a command line.** Everything the UI does, over HTTP, plus a `morca` command that drives it.
 
 ## Non-goals
 
-- **Not Dagster-compatible.** orca borrows its ideas (assets, partitions, sensors) but not its API, and it doesn't run Python steps.
-- **Not a general workflow engine.** It orchestrates data pipelines over a data lake. Long-running business workflows with human steps and timers belong to a durable-execution system. Restate is the candidate for that, later, and for making orca's own runs durable.
-- **Not a compute engine.** Steps run on dista. orca decides when and in what order.
+- **Not Dagster-compatible.** morca borrows its ideas (assets, partitions, sensors) but not its API, and it doesn't run Python steps.
+- **Not a general workflow engine.** It orchestrates data pipelines over a data lake. Long-running business workflows with human steps and timers belong to a durable-execution system. Restate is the candidate for that, later, and for making morca's own runs durable.
+- **Not a compute engine.** Steps run on dista. morca decides when and in what order.
 - **Not multi-tenant at first.** One team, trusted code, no per-user quotas.
 
 ## Where it goes
@@ -91,4 +91,4 @@ Each phase ends at a gate: something that works, not a feature list.
 - **Where step code runs.** In the scheduler's own binary, with dista's workers built from the same code, or as a separate image per pipeline. One binary is simplest, but the scheduler shouldn't need every pipeline's dependencies, which is the same split dista's head and workers are heading for.
 - **The UI's stack.** Server-rendered HTML from flare with a little JavaScript, or a small single-page app against the API.
 - **Cluster start time.** A dista cluster per run is clean, but a cluster takes time to start. Short, frequent runs may want a warm pool.
-- **Restate.** When orca's own runs need to be durable across scheduler restarts, whether that's Postgres alone or Restate underneath.
+- **Restate.** When morca's own runs need to be durable across scheduler restarts, whether that's Postgres alone or Restate underneath.

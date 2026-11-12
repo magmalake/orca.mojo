@@ -2,8 +2,8 @@
 two names to keys.repos, `day-<DD>-a` and `day-<DD>-b`, and a row to
 lake.days. tests/keyed/history.mojo is keyed on keys.repos."""
 
-from orca import Ctx, Daily, Day, Mapped, Pipeline, Step, orca_main
-from orca.tables import append
+from morca import Ctx, Daily, Day, Mapped, Pipeline, Step, morca_main
+from morca.tables import append
 from repo_rows import repo_dataset, repo_rows
 
 
@@ -26,4 +26,4 @@ comptime Repos = Pipeline["repos", Find, partitions=Daily["2024-06-01"]]
 
 
 def main() raises:
-    orca_main[Repos]()
+    morca_main[Repos]()

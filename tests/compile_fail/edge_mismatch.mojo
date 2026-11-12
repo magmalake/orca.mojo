@@ -1,6 +1,6 @@
 # expect: a mapped step takes the output of the step it follows
 from dista import Seq
-from orca import Ctx, Gather, Mapped, Month, Pipeline, Step
+from morca import Ctx, Gather, Mapped, Month, Pipeline, Step
 
 
 def key(mut ctx: Ctx, m: Month) raises -> Int:

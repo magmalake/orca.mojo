@@ -1,7 +1,7 @@
 #!/bin/sh
-# What dista recovers from dead workers, and what's left to orca (DESIGN.md,
+# What dista recovers from dead workers, and what's left to morca (DESIGN.md,
 # "Failure and resume"), over examples/fanout.mojo, whose step waits on 31
-# dista tasks of ORCA_FANOUT_SLEEP seconds each over 4 local workers:
+# dista tasks of MORCA_FANOUT_SLEEP seconds each over 4 local workers:
 #
 # - One worker killed mid-step: dista sends its tasks to the others, and the
 #   run succeeds with the total of an undisturbed run.
@@ -10,7 +10,7 @@
 #   waiting for ever, and the run fails quickly. Resumed as a new process,
 #   with a fresh runtime, it succeeds with the same total.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-lost-workers starts a throwaway
+# Needs MORCA_DATABASE_URL (pixi run test-lost-workers starts a throwaway
 # server). A local runtime forks its head first and then its workers, so a
 # run's workers are its child processes after the lowest-numbered one.
 set -eu
@@ -20,8 +20,8 @@ mkdir -p build
 scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
 log=build/lost-workers.log
 : > "$log"
-export ORCA_WORKERS=4
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+export MORCA_WORKERS=4
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 fail() {
     echo "FAIL: $*"
     tail -30 "$log"
@@ -30,14 +30,14 @@ fail() {
 total() { sed -n 's/.*\[month_trips 2024-01\] 31 days, \([0-9]*\) trips.*/\1/p' "$1" | tail -1; }
 
 # The total of an undisturbed run, in memory.
-ORCA_DATABASE_URL= ./build/fanout run --partitions 2024-01 > "$log.base" 2>&1 || fail "the undisturbed run"
+MORCA_DATABASE_URL= ./build/fanout run --partitions 2024-01 > "$log.base" 2>&1 || fail "the undisturbed run"
 want=$(total "$log.base")
 [ -n "$want" ] || fail "no total in the undisturbed run"
 
 # start_slow: a run in the background whose step is waiting on its tasks;
 # sets $pid and $run.
 start_slow() {
-    ORCA_FANOUT_SLEEP=0.4 ./build/fanout run --partitions 2024-01 > "$log.run" 2>&1 &
+    MORCA_FANOUT_SLEEP=0.4 ./build/fanout run --partitions 2024-01 > "$log.run" 2>&1 &
     pid=$!
     i=0
     # Quietly: the run creates the schema as it starts.

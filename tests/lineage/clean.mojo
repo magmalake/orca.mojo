@@ -1,8 +1,8 @@
 """Reads lake.raw and writes as many rows to lake.clean, a month at a
 time."""
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
-from orca.tables import append, table
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
+from morca.tables import append, table
 from rows import count, dataset, rows
 
 
@@ -25,4 +25,4 @@ comptime P = Pipeline["clean", Clean, partitions=Monthly["2024-01"]]
 
 
 def main() raises:
-    orca_main[P]()
+    morca_main[P]()

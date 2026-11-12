@@ -6,7 +6,7 @@
 # backfilled from the UI run, and backfilled again with rerun=1; a running
 # run cancelled ends `cancelled` before its next step, and resumes onto new
 # code once that's confirmed; a cross-origin POST changes nothing.
-# Needs ORCA_DATABASE_URL (pixi run test-actions starts a throwaway server),
+# Needs MORCA_DATABASE_URL (pixi run test-actions starts a throwaway server),
 # curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -15,15 +15,15 @@ mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 
 log=build/actions.log
 : > "$log"
-export ORCA_LOGS=build/actions-logs
-rm -rf "$ORCA_LOGS"
+export MORCA_LOGS=build/actions-logs
+rm -rf "$MORCA_LOGS"
 # The scheduler's clock stays where the toy was registered, so it makes no
 # fires of its own: every run it starts is one the UI queued.
-export ORCA_NOW=2024-01-15T00:00Z
+export MORCA_NOW=2024-01-15T00:00Z
 ui=
 sched=
 stop() {
@@ -37,17 +37,17 @@ fail() {
     exit 1
 }
 
-./build/orca register ./build/toy >> "$log" 2>&1 || fail "register"
-ORCA_TOY_FAIL=2024-02 ./build/toy run --partitions 2024-01..2024-02 >> "$log" 2>&1 \
+./build/morca register ./build/toy >> "$log" 2>&1 || fail "register"
+MORCA_TOY_FAIL=2024-02 ./build/toy run --partitions 2024-01..2024-02 >> "$log" 2>&1 \
     && fail "the run didn't fail"
 
 free_port port
 base="http://127.0.0.1:$port"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 ui=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 
 json() { curl -fsS -H 'Accept: application/json' "$base$1" || fail "GET $1"; }
@@ -94,7 +94,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "Referer: $base/runs/$run" -X P
 [ "$(post "/runs/$run/resume")" = 303 ] || fail "resume answered $(cat "$log.body")"
 [ "$(json "/runs/$run" | jq -r .run.status)" = queued ] || fail "the resumed run isn't queued"
 [ "$(post "/runs/$run/resume")" = 409 ] || fail "a queued run was resumed"
-./build/orca scheduler >> "$log" 2>&1 &
+./build/morca scheduler >> "$log" 2>&1 &
 sched=$!
 until_status "$run" succeeded
 [ "$(json "/runs/$run" | jq -r '.steps[] | select(.step == "measure" and .partition == "2024-02") | .attempts')" -eq 2 ] \
@@ -145,17 +145,17 @@ echo "$page" | grep -qF '<button type="submit" class="primary">Backfill: one run
 echo "$page" | grep -qF 'formaction="/pipelines/toy/runs">Start one run over the whole range</button>' \
     || fail "the one-run button"
 echo "$page" | grep -qF ' Include months that already succeeded (rerun them)</label>' || fail "the rerun label"
-echo "$page" | grep -qF '<code data-cmd="backfill">orca login &lt;url&gt; &amp;&amp; orca --remote &lt;url&gt; backfill toy &lt;range&gt;</code>' || fail "the empty form's command"
+echo "$page" | grep -qF '<code data-cmd="backfill">morca login &lt;url&gt; &amp;&amp; morca --remote &lt;url&gt; backfill toy &lt;range&gt;</code>' || fail "the empty form's command"
 echo "$page" | grep -qF '</code></pre><button type="button" class="copy" data-copy>Copy</button></div>' || fail "the command's Copy button"
-before=$(psql "$ORCA_DATABASE_URL" -Atc "SELECT count(*), max(id) FROM orca.runs")
+before=$(psql "$MORCA_DATABASE_URL" -Atc "SELECT count(*), max(id) FROM orca.runs")
 p=$(json '/pipelines/toy?preview=1&partitions=2024-05..2024-08')
 echo "$p" | jq -e '.preview | .runs == 2 and .keys == ["2024-07", "2024-08"] and .done == ["2024-05", "2024-06"]
     and .one_run == 4 and .refused == null
-    and .commands.backfill == "orca backfill toy 2024-05..2024-08"
+    and .commands.backfill == "morca backfill toy 2024-05..2024-08"
     and .commands.run == "\(.commands.run | split(" ")[0]) run --partitions 2024-05..2024-08"' > /dev/null \
     || fail "the preview: $(echo "$p" | jq -c .preview)"
 json '/pipelines/toy?preview=1&partitions=2024-05..2024-08&rerun=1' | jq -e '.preview | .runs == 4 and .done == []
-    and .commands.backfill == "orca backfill --rerun toy 2024-05..2024-08"' > /dev/null || fail "the rerun preview"
+    and .commands.backfill == "morca backfill --rerun toy 2024-05..2024-08"' > /dev/null || fail "the rerun preview"
 page=$(curl -fsS "$base/pipelines/toy?preview=1&partitions=2024-05..2024-08")
 echo "$page" | grep -qE '<p data-preview="backfill">This queues 2 runs: 2024-07 … 2024-08. 2 already done are skipped. About [0-9]+m, 2 runs at once \([0-9]+ s a month over its last [0-9]+ runs?\).</p>' \
     || fail "the preview line: $(echo "$page" | grep -o '<p data-preview="backfill">[^<]*')"
@@ -164,11 +164,11 @@ echo "$p" | jq -e '.preview.estimate | .sample_runs > 0 and .per_key_seconds >= 
     and .one_run_seconds >= .backfill_seconds' > /dev/null || fail "the preview's estimate: $(echo "$p" | jq -c .preview.estimate)"
 echo "$page" | grep -qF 'name="partitions" required placeholder="2024-01..2024-01" value="2024-05..2024-08">' \
     || fail "the preview doesn't keep the range"
-echo "$page" | grep -qF '<code data-cmd="backfill">orca login &lt;url&gt; &amp;&amp; orca --remote &lt;url&gt; backfill toy 2024-05..2024-08</code>' || fail "the preview's command"
+echo "$page" | grep -qF '<code data-cmd="backfill">morca login &lt;url&gt; &amp;&amp; morca --remote &lt;url&gt; backfill toy 2024-05..2024-08</code>' || fail "the preview's command"
 curl -fsS "$base/pipelines/toy?preview=1&partitions=2024-05&rerun=1" | grep -qF 'name="rerun" value="1" checked>' \
     || fail "the preview doesn't keep rerun"
 curl -fsS "$base/pipelines/toy?preview=1&partitions=2023-13" | grep -q '<p class="refused">' || fail "a bad range's preview"
-[ "$(psql "$ORCA_DATABASE_URL" -Atc "SELECT count(*), max(id) FROM orca.runs")" = "$before" ] \
+[ "$(psql "$MORCA_DATABASE_URL" -Atc "SELECT count(*), max(id) FROM orca.runs")" = "$before" ] \
     || fail "a preview queued runs"
 echo "ok   the Start runs form's preview"
 
@@ -177,7 +177,7 @@ echo "ok   the Start runs form's preview"
 # keyed pipeline is a stand-in whose `keys` prints two names.
 printf '#!/bin/sh\n[ "$1" = keys ] && printf "1\\nalice\\nbob\\n"\n' > build/actions-keyed.sh
 chmod +x build/actions-keyed.sh
-psql "$ORCA_DATABASE_URL" -qc "INSERT INTO orca.pipelines (name, registry_hash, describe, binary_path)
+psql "$MORCA_DATABASE_URL" -qc "INSERT INTO orca.pipelines (name, registry_hash, describe, binary_path)
     VALUES ('names', 'k', '{\"pipeline\": \"names\", \"partitions\": {\"kind\": \"keyed\",
     \"dataset\": \"people.names\"}, \"steps\": []}', '$PWD/build/actions-keyed.sh')" > /dev/null
 [ "$(post /pipelines/names/runs partitions=carol)" = 409 ] || fail "a key the stand-in hasn't was started"
@@ -203,9 +203,9 @@ p=$(json "/pipelines/names?preview=1&partitions=@file:$PWD/build/actions-secret.
 echo "$p" | grep -q 'secret value' && fail "a preview of @file: echoed the file"
 echo "$p" | jq -e '.preview.refused | test("@file:")' > /dev/null || fail "a preview of @file: wasn't refused"
 json '/pipelines/names?preview=1&partitions=alice,bob' | jq -e '.preview | .runs >= 1 and .keys == ["alice", "bob"]
-    and .commands.backfill == "orca backfill names alice,bob"' > /dev/null \
+    and .commands.backfill == "morca backfill names alice,bob"' > /dev/null \
     || fail "a keyed preview: $(json '/pipelines/names?preview=1&partitions=alice,bob' | jq -c .preview)"
-want="orca backfill names 'alice bob;x'"
+want="morca backfill names 'alice bob;x'"
 got=$(json "/pipelines/names?preview=1&partitions=alice%20bob%3Bx" | jq -r .preview.commands.backfill)
 [ "$got" = "$want" ] || fail "a keyed command isn't quoted: $got"
 curl -fsS "$base/pipelines/names?tab=operate" | grep -qF 'Include keys that already succeeded (rerun them)' || fail "the keyed rerun label"
@@ -219,7 +219,7 @@ queued=$(json '/runs?trigger=ui' | jq -r '.runs[0].id')
 [ "$(post "/runs/$queued/cancel")" = 409 ] || fail "a cancelled run was cancelled again"
 
 # Cancel a running run: it stops before its next step and ends cancelled.
-ORCA_TOY_SLEEP=1 ./build/toy run --partitions 2024-08..2024-09 >> "$log" 2>&1 &
+MORCA_TOY_SLEEP=1 ./build/toy run --partitions 2024-08..2024-09 >> "$log" 2>&1 &
 toy=$!
 i=0
 until slow=$(json '/runs?status=running' | jq -r '.runs[0].id // empty') && [ -n "$slow" ]; do
@@ -237,11 +237,11 @@ code=0; wait "$toy" || code=$?
 
 # Resume it onto new code: refused until confirmed, then the scheduler
 # passes --allow-new-code and it finishes.
-psql "$ORCA_DATABASE_URL" -qc "UPDATE orca.runs SET registry_hash = 'old' WHERE id = $slow" > /dev/null
+psql "$MORCA_DATABASE_URL" -qc "UPDATE orca.runs SET registry_hash = 'old' WHERE id = $slow" > /dev/null
 [ "$(post "/runs/$slow/resume")" = 409 ] || fail "a resume onto new code wasn't refused"
 grep -q 'name="allow_new_code"' "$log.body" || fail "the refusal doesn't ask to confirm"
 [ "$(post "/runs/$slow/resume" allow_new_code=1)" = 303 ] || fail "the confirmed resume"
-./build/orca scheduler >> "$log" 2>&1 &
+./build/morca scheduler >> "$log" 2>&1 &
 sched=$!
 until_status "$slow" succeeded
 

@@ -6,7 +6,7 @@ process running its user data under sh.
 
 Every call is appended to <dir>/calls.jsonl as {"action", "params"}; each
 instance's script and output are <dir>/<id>.sh and <dir>/<id>.log, its /tmp
-is <dir>/<id>.tmp (the script's /tmp/orca-* files are moved there), and its
+is <dir>/<id>.tmp (the script's /tmp/morca-* files are moved there), and its
 environment has HOSTNAME set to its ID, so a test can tell instances apart.
 All instances share 127.0.0.1 as their private address. A process that
 exits is an instance that terminated, as `InstanceInitiatedShutdownBehavior
@@ -21,11 +21,11 @@ It also stands in for Secrets Manager's GetSecretValue (a JSON POST with
 does: the value of ID is `s3cr3t-<ID with / as ->-value`, and orca/missing
 isn't found.
 
-For worker pools (orca.machines_ec2): DescribeInstanceTypes (a type with
+For worker pools (morca.machines_ec2): DescribeInstanceTypes (a type with
 `g.` in its name, `c7g.large`, is arm64, the rest x86_64), tag filters
 (`tag:<key>`) in DescribeInstances, and SSM's GetParameter (`X-Amz-Target:
 AmazonSSM.GetParameter`), which answers `ami-<arch>` for Canonical's
-Ubuntu parameters. An instance tagged `orca-pool` gets ORCA_BOOT_DIR
+Ubuntu parameters. An instance tagged `orca-pool` gets MORCA_BOOT_DIR
 (<dir>/<id>.boot) and SERVER_NAME (its Name tag); while <dir>/pool-stock
 exists, one is made only for a `<type> <subnet>` line of it, and refused
 `InsufficientInstanceCapacity` otherwise.
@@ -113,10 +113,10 @@ def _run(p):
         tmp = os.path.join(DIR, f"{iid}.tmp")
         os.makedirs(tmp, exist_ok=True)
         with open(path, "w") as f:
-            f.write(re.sub(r"(?<=[\s>'\"])/tmp/orca-", tmp + "/orca-", script))
+            f.write(re.sub(r"(?<=[\s>'\"])/tmp/morca-", tmp + "/morca-", script))
         env = dict(os.environ, HOSTNAME=iid)
         if "orca-pool" in tags:
-            env.update(ORCA_BOOT_DIR=os.path.join(DIR, f"{iid}.boot"), SERVER_NAME=tags.get("Name", iid))
+            env.update(MORCA_BOOT_DIR=os.path.join(DIR, f"{iid}.boot"), SERVER_NAME=tags.get("Name", iid))
         out = open(os.path.join(DIR, f"{iid}.log"), "w")
         proc = subprocess.Popen(
             ["sh", path], env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True

@@ -8,14 +8,14 @@
 # - a keyed sensor reading another dataset `repos` writes isn't registered;
 # - with the scheduler running, a backfill of a day of `repos` starts a
 #   `history` run of that day's two names, and of no earlier ones;
-# - `orca lineage` goes from lake.history through keys.repos to `repos`.
+# - `morca lineage` goes from lake.history through keys.repos to `repos`.
 #
-# Needs ORCA_DATABASE_URL (pixi run -e data test-keyed-sensor starts a
+# Needs MORCA_DATABASE_URL (pixi run -e data test-keyed-sensor starts a
 # throwaway server) and jq.
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
-# The pipelines and orca compile at once (scripts/mojo-build.sh).
+# The pipelines and morca compile at once (scripts/mojo-build.sh).
 pids=
 for p in repos history days_reader; do
     # shellcheck disable=SC2086
@@ -23,12 +23,12 @@ for p in repos history days_reader; do
     pids="$pids $!"
 done
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 for pid in $pids $!; do wait "$pid"; done
 log=build/keyed-sensor.log
 : > "$log"
-export ORCA_WAREHOUSE=build/keyed-sensor-wh ORCA_SENSE_SECONDS=1 ORCA_STALE_SECONDS=10
-rm -rf "$ORCA_WAREHOUSE"
+export MORCA_WAREHOUSE=build/keyed-sensor-wh MORCA_SENSE_SECONDS=1 MORCA_STALE_SECONDS=10
+rm -rf "$MORCA_WAREHOUSE"
 sched=
 stop() {
     [ -z "$sched" ] || kill "$sched" 2> /dev/null || true
@@ -40,7 +40,7 @@ fail() {
     stop
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 # wait_runs PIPELINE AFTER N: until N runs of PIPELINE after run AFTER succeeded.
 wait_runs() {
     i=0
@@ -57,19 +57,19 @@ history_keys() {
 
 # Registered in either order; the writer again once the sensor is there.
 for b in repos history repos; do
-    ./build/orca register "./build/ks-$b" >> "$log" 2>&1 || fail "register $b"
+    ./build/morca register "./build/ks-$b" >> "$log" 2>&1 || fail "register $b"
 done
 code=0
-out=$(./build/orca register ./build/ks-days_reader 2>&1) || code=$?
+out=$(./build/morca register ./build/ks-days_reader 2>&1) || code=$?
 [ "$code" -eq 3 ] && echo "$out" | grep -q "reads lake.days, which repos (daily) writes, and no rule turns a name into a date" \
     || fail "days_reader registered ($code): $out"
 
-./build/orca scheduler >> "$log" 2>&1 &
+./build/morca scheduler >> "$log" 2>&1 &
 sched=$!
 
 # A day of repos: its commit to keys.repos starts history for its names.
 before=$(q "SELECT coalesce(max(id), 0) FROM orca.runs")
-[ "$(./build/orca backfill repos 2024-06-01 2>> "$log")" = "queued 1 runs" ] || fail "the first backfill"
+[ "$(./build/morca backfill repos 2024-06-01 2>> "$log")" = "queued 1 runs" ] || fail "the first backfill"
 wait_runs repos "$before" 1
 wait_runs history "$before" 1
 [ "$(history_keys "$before")" = "day-01-a,day-01-b" ] || fail "history ran $(history_keys "$before")"
@@ -78,7 +78,7 @@ wait_runs history "$before" 1
 
 # The next day: only the new names.
 before=$(q "SELECT coalesce(max(id), 0) FROM orca.runs")
-[ "$(./build/orca backfill repos 2024-06-02 2>> "$log")" = "queued 1 runs" ] || fail "the second backfill"
+[ "$(./build/morca backfill repos 2024-06-02 2>> "$log")" = "queued 1 runs" ] || fail "the second backfill"
 wait_runs repos "$before" 1
 wait_runs history "$before" 1
 sleep 3
@@ -88,7 +88,7 @@ sleep 3
 stop
 
 # Lineage, back from lake.history's latest snapshot through keys.repos.
-out=$(./build/orca lineage lake.history) || fail "orca lineage exited $?"
+out=$(./build/morca lineage lake.history) || fail "morca lineage exited $?"
 echo "$out" >> "$log"
 echo "$out" | grep -qE "^ *0 lake\.history@[0-9-]+ by history run [0-9]+ hist day-02-[ab] code 0x[0-9a-f]+ from keys\.repos@[0-9-]+\$" \
     || fail "lake.history's snapshot and its input: $out"

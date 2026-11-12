@@ -4,7 +4,7 @@
 # Deploys to this stack (HETZNER_ENV's, production) the tags the dev stack
 # (the settings file --from names) runs and checked: no rebuild, so what was
 # tested is what ships (#250). It asks the dev stack's server for its last
-# check (orca-stack checked) and refuses unless that check passed on the
+# check (morca-stack checked) and refuses unless that check passed on the
 # tags it runs now, then runs deploy.sh with those tags ("T", or "T
 # console=U" when an app runs another) and the other flags given
 # (--force, --all, --no-backup, --timeout S, --yes).
@@ -58,12 +58,12 @@ else
         load_env
         need_tool hcloud ssh
         IP=$(server_ip)
-        now=$(remote orca-stack tags) || die "couldn't ask the dev stack ($NAME) what it runs"
-        c=$(remote orca-stack checked) || die "the dev stack ($NAME) has no check: deploy there first (deploy.sh ends with orca-stack check)"
+        now=$(remote morca-stack tags) || die "couldn't ask the dev stack ($NAME) what it runs"
+        c=$(remote morca-stack checked) || die "the dev stack ($NAME) has no check: deploy there first (deploy.sh ends with morca-stack check)"
         set -- $c
         [ "$1" = ok ] || die "the dev stack's last check failed ($c): fix it there first"
         shift 3
-        [ "$*" = "$now" ] || die "the dev stack runs $now, but its last check was of $*: deploy.sh or ssh root@$IP orca-stack check there first"
+        [ "$*" = "$now" ] || die "the dev stack runs $now, but its last check was of $*: deploy.sh or ssh root@$IP morca-stack check there first"
         echo "$c"
     ) || exit 1
 fi
@@ -75,13 +75,14 @@ tags="$*"
 echo "promote.sh: dev checked $tags at $when ($kind)" >&2
 [ "$kind" = canary ] || echo "promote.sh: warning: dev's check ran no canary (CANARY in its settings)" >&2
 
-# "T" or "orca T, console U, ..." -> deploy.sh's arguments.
+# "T" or "morca T, console U, ..." -> deploy.sh's arguments.
 if [ "$DRY_RUN" = 1 ]; then
     dargs="<dev-tag>"
 else
     case $tags in
-        "orca "*)
-            dargs=$(echo "$tags" | sed 's/^orca //; s/, \([^ ,]*\) \([^ ,]*\)/ \1=\2/g')
+        # "orca T, ..." from a dev stack still on orca-hetzner 0.24.x.
+        "morca "* | "orca "*)
+            dargs=$(echo "$tags" | sed 's/^m\{0,1\}orca //; s/, \([^ ,]*\) \([^ ,]*\)/ \1=\2/g')
             ;;
         *) dargs=$tags ;;
     esac

@@ -2,25 +2,25 @@
 # A sensor whose datasets hold something it can't run doesn't stop
 # (tests/fake_sensor stands in for its binary, so no warehouse is needed):
 #
-# - a snapshot whose orca.partitions isn't a partition key (a week) is
+# - a snapshot whose morca.partitions isn't a partition key (a week) is
 #   recorded as seen with no run and why, and a snapshot of another dataset
 #   seen in the same tick still starts its run;
 # - the next ticks start nothing more, and say nothing more of it;
 # - a sense that fails is kept as the pipeline's sense_error, printed once
-#   however many ticks see it, shown by orca ui, and cleared once sensing
+#   however many ticks see it, shown by morca ui, and cleared once sensing
 #   works again.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-sense-errors starts a throwaway
+# Needs MORCA_DATABASE_URL (pixi run test-sense-errors starts a throwaway
 # server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/sense-errors.log
 : > "$log"
-export ORCA_SENSE_SECONDS=0 FAKE_SENSE="$PWD/build/sense-errors.txt"
+export MORCA_SENSE_SECONDS=0 FAKE_SENSE="$PWD/build/sense-errors.txt"
 rm -f "$FAKE_SENSE.fail"
 ui=
 fail() {
@@ -29,11 +29,11 @@ fail() {
     [ -z "$ui" ] || kill "$ui" 2> /dev/null || true
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
-tick() { ./build/orca tick >> "$log" 2>&1 || fail "a tick failed"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
+tick() { ./build/morca tick >> "$log" 2>&1 || fail "a tick failed"; }
 
 printf 'raw.a 1 other 2024-01\nraw.b -1 other -\n' > "$FAKE_SENSE"
-./build/orca register ./tests/fake_sensor >> "$log" 2>&1 || fail "register"
+./build/morca register ./tests/fake_sensor >> "$log" 2>&1 || fail "register"
 
 # raw.a gets a snapshot another writer says holds a week, raw.b a month.
 printf 'raw.a 2 other 2024-W12\nraw.b 3 other 2024-03\n' > "$FAKE_SENSE"
@@ -44,7 +44,7 @@ tick
     || fail "raw.a@2 isn't seen with why: $(q "SELECT * FROM orca.sensed")"
 [ "$(q "SELECT run IS NOT NULL AND error IS NULL FROM orca.sensed WHERE dataset = 'raw.b' AND snapshot_id = 3")" = t ] \
     || fail "raw.b@3 isn't seen with its run"
-grep -q "sensed raw.a@2 for fake_sensor and ran nothing: orca: not a partition key: '2024-W12'" "$log" \
+grep -q "sensed raw.a@2 for fake_sensor and ran nothing: morca: not a partition key: '2024-W12'" "$log" \
     || fail "the unusable snapshot isn't said"
 tick
 tick
@@ -63,11 +63,11 @@ tick
 
 free_port port
 base="http://127.0.0.1:$port"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 ui=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 page=$(curl -fsS -H 'Accept: application/json' "$base/pipelines/fake_sensor") || fail "GET /pipelines/fake_sensor"
 printf "%s" "$page" | jq -e '.pipeline.sense_error.error | startswith("sense exited 1")' > /dev/null || fail "the UI's sense_error: $page"

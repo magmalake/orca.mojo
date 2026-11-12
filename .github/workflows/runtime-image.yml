@@ -1,7 +1,7 @@
 # The runtime image, ghcr.io/morca-dev/morca-runtime (deploy/runtime.Dockerfile),
 # which project images build FROM (deploy/project.Dockerfile). Called by CI:
 # on pull requests to build and test it, and on main to build, test and push
-# it as orca-runtime:<sha>. A release builds nothing: it tags the image of
+# it as morca-runtime:<sha>. A release builds nothing: it tags the image of
 # the commit it releases <version> (release.yml).
 #
 # One image per architecture, each on its own runner (no emulation), built
@@ -18,7 +18,7 @@ on:
   workflow_call:
     inputs:
       push:
-        description: "Push the image as orca-runtime:<sha> (main only)"
+        description: "Push the image as morca-runtime:<sha> (main only)"
         type: boolean
         default: false
       project:
@@ -60,14 +60,14 @@ jobs:
             --build-arg MOJO_TARGET_CPU=${{ matrix.cpu }} \
             --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
             --label org.opencontainers.image.revision="$SHA" \
-            -t orca-runtime:ci .
-          docker image ls orca-runtime:ci --format 'size: {{.Size}}'
+            -t morca-runtime:ci .
+          docker image ls morca-runtime:ci --format 'size: {{.Size}}'
       - name: Test it${{ contains(inputs.project, matrix.arch) && ', and a project''s image on it' || '' }}
         run: |
           if ${{ contains(inputs.project, matrix.arch) }}; then
-            sh tests/runtime-image.sh orca-runtime:ci --project ${{ matrix.cpu }}
+            sh tests/runtime-image.sh morca-runtime:ci --project ${{ matrix.cpu }}
           else
-            sh tests/runtime-image.sh orca-runtime:ci
+            sh tests/runtime-image.sh morca-runtime:ci
           fi
       - name: Log in to GHCR
         if: inputs.push
@@ -79,7 +79,7 @@ jobs:
       - name: Push <sha>-${{ matrix.arch }}
         if: inputs.push
         run: |
-          docker tag orca-runtime:ci "$GHCR_IMAGE:$SHA-${{ matrix.arch }}"
+          docker tag morca-runtime:ci "$GHCR_IMAGE:$SHA-${{ matrix.arch }}"
           docker push "$GHCR_IMAGE:$SHA-${{ matrix.arch }}"
 
   # The commit's image as one for both architectures, so each host pulls its

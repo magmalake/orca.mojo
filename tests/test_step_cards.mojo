@@ -1,10 +1,10 @@
-"""The step cards' data (`orca.ui.step_cards`): type names as code writes them,
+"""The step cards' data (`morca.ui.step_cards`): type names as code writes them,
 the recorded signature, the signature and docstring found in a file, and
 the page's JSON, which nothing in it can end."""
 
 from std.testing import TestSuite, assert_equal, assert_true, assert_false
 
-from orca.ui.step_cards import (
+from morca.ui.step_cards import (
     AttemptCard,
     StepCard,
     cards_script,
@@ -19,24 +19,24 @@ from orca.ui.step_cards import (
 
 
 def test_short_type() raises:
-    assert_equal(short_type("orca.month.Month"), "Month")
+    assert_equal(short_type("morca.month.Month"), "Month")
     assert_equal(short_type("dista.seq.Seq[toy.Measured]"), "Seq[Measured]")
     assert_equal(short_type("SIMD[DType.int, 1]"), "Int")
     assert_equal(short_type("SIMD[DType.uint8, 1]"), "UInt8")
     assert_equal(short_type("SIMD[DType.float64, 4]"), "SIMD[DType.float64, 4]")
-    assert_equal(short_type("orca::ctx::Ctx"), "Ctx")
+    assert_equal(short_type("morca::ctx::Ctx"), "Ctx")
     assert_equal(short_type("Tuple[a.B, String]"), "Tuple[B, String]")
     assert_equal(short_type(""), "")
 
 
 def test_signature() raises:
     assert_equal(
-        function_name("toy::days(orca::ctx::Ctx,orca::month::Month)"), "days"
+        function_name("toy::days(morca::ctx::Ctx,morca::month::Month)"), "days"
     )
     assert_equal(function_name("s"), "s")
     assert_equal(
         signature(
-            "toy::total(orca::ctx::Ctx,dista::seq::Seq[toy::Measured])",
+            "toy::total(morca::ctx::Ctx,dista::seq::Seq[toy::Measured])",
             "dista.seq.Seq[toy.Measured]",
             "SIMD[DType.int, 1]",
         ),
@@ -44,7 +44,7 @@ def test_signature() raises:
     )
 
 
-comptime _SRC = '''from orca import Ctx
+comptime _SRC = '''from morca import Ctx
 
 
 @always_inline
@@ -123,8 +123,8 @@ def test_cards_script() raises:
             "mapped",
             "Runs once per partition.",
             "",
-            "toy::days(orca::ctx::Ctx,orca::month::Month)",
-            "orca.month.Month",
+            "toy::days(morca::ctx::Ctx,morca::month::Month)",
+            "morca.month.Month",
             "toy.Measured",
             ["toy.in"],
             ["toy.out</script>"],

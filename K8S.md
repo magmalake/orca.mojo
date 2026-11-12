@@ -1,12 +1,12 @@
-# orca on Kubernetes
+# morca on Kubernetes
 
 November 1, 2026
 
-How orca will create the pods a run needs, what that takes on AWS, how its cost stays bounded, and the small Kubernetes client it needs. This is phase 5 of [DESIGN.md](DESIGN.md). The client is built ([k8s.mojo](https://github.com/magmalake/k8s.mojo)), and so are the image, the manifests (`deploy/`) and a dista cluster per run (`orca.kube`), tested on kind (`tests/kind.sh`); object storage and AWS come next (DESIGN.md, phase 5).
+How morca will create the pods a run needs, what that takes on AWS, how its cost stays bounded, and the small Kubernetes client it needs. This is phase 5 of [DESIGN.md](DESIGN.md). The client is built ([k8s.mojo](https://github.com/magmalake/k8s.mojo)), and so are the image, the manifests (`deploy/`) and a dista cluster per run (`morca.kube`), tested on kind (`tests/kind.sh`); object storage and AWS come next (DESIGN.md, phase 5).
 
 ## Who creates the pods
 
-**The orca scheduler does**, not the pipeline binary and not dista. The scheduler is the generic `orca` binary, deployed as a Kubernetes Deployment. For each run it creates a few objects, all labelled `orca.run=<id>`:
+**The morca scheduler does**, not the pipeline binary and not dista. The scheduler is the generic `morca` binary, deployed as a Kubernetes Deployment. For each run it creates a few objects, all labelled `orca.run=<id>`:
 
 | Object | What it is |
 |---|---|
@@ -28,11 +28,11 @@ Driver-side autoscaling, a run asking for more workers while it runs as Ray's au
 
 ## How it talks to Kubernetes
 
-The Kubernetes API is HTTPS with JSON. Creating a pod is `POST /api/v1/namespaces/orca-runs/pods` with the pod's spec as the body.
+The Kubernetes API is HTTPS with JSON. Creating a pod is `POST /api/v1/namespaces/morca-runs/pods` with the pod's spec as the body.
 
 - **Authentication.** The scheduler runs under a **ServiceAccount**. Kubernetes mounts a token and the cluster's CA certificate into its pod (`/var/run/secrets/kubernetes.io/serviceaccount/`), and the scheduler sends the token as a bearer header.
-- **Authorization.** A **Role** in the `orca-runs` namespace grants create, get, list, watch and delete on pods, jobs and services there, and nothing else.
-- **Watching.** `GET ...?watch=true&labelSelector=orca.run%3D<id>` is a long-lived response with one JSON event per line.
+- **Authorization.** A **Role** in the `morca-runs` namespace grants create, get, list, watch and delete on pods, jobs and services there, and nothing else.
+- **Watching.** `GET ...?watch=true&labelSelector=morca.run%3D<id>` is a long-lived response with one JSON event per line.
 
 ### Cleanup, in layers
 
@@ -44,7 +44,7 @@ Orphaned clusters are the main cost risk, so cleanup doesn't depend on any one p
 
 ### Nodes
 
-orca never creates EC2 instances. Pods ask for CPU and memory; the cluster's node autoscaler (Karpenter, built into EKS Auto Mode) starts nodes for pods that are waiting and removes nodes once they're empty.
+morca never creates EC2 instances. Pods ask for CPU and memory; the cluster's node autoscaler (Karpenter, built into EKS Auto Mode) starts nodes for pods that are waiting and removes nodes once they're empty.
 
 ## What it needs on AWS
 
@@ -56,35 +56,35 @@ Everything goes in the project's selected Region; confirm it in AWS Settings > V
 | **EC2 nodes** | A small always-on node for the scheduler; Spot nodes for run clusters | Run nodes exist only while runs do |
 | **VPC and subnets** | Networking | A **NAT gateway** is the usual hidden cost. An S3 gateway endpoint, which has no charge, keeps S3 traffic off it |
 | **S3 bucket** | The warehouse, logs, checkpoints | Lifecycle rules expire old logs |
-| **Postgres** | orca's state | A small RDS instance, or a Postgres pod on an EBS volume. Either way with `synchronous_commit` on (see DESIGN.md's testing section) |
+| **Postgres** | morca's state | A small RDS instance, or a Postgres pod on an EBS volume. Either way with `synchronous_commit` on (see DESIGN.md's testing section) |
 | **ECR repository** | Pipeline images | A lifecycle policy drops old images |
 | **IAM roles**, through EKS Pod Identity | Run pods can read and write their bucket prefix and nothing else | The scheduler needs no AWS permissions, only Kubernetes RBAC |
 
 **Quotas.** The free plan's on-demand vCPU quota was 16 and Spot 32. If the paid plan kept those, a 12-node run needs an increase, requested in Service Quotas.
 
-**A cheaper first step** is k3s on one EC2 instance: no control-plane fee, and the same API, so orca doesn't change. It's a reasonable place to prove phase 5 before paying for EKS.
+**A cheaper first step** is k3s on one EC2 instance: no control-plane fee, and the same API, so morca doesn't change. It's a reasonable place to prove phase 5 before paying for EKS.
 
 ## Controlling cost
 
-Limits stack from orca down to AWS, and each layer catches what the one above misses:
+Limits stack from morca down to AWS, and each layer catches what the one above misses:
 
 | Layer | Control |
 |---|---|
-| **orca** | `max_runs` per pipeline; a total vCPU budget across all runs, checked before a cluster is created; a maximum cluster size per pipeline; a deadline per run. orca records pods × size × duration per run in Postgres, so the UI can show an estimated cost per run. |
-| **Kubernetes** | A **ResourceQuota** on `orca-runs`: a hard cap on the CPU and memory all run pods can request. If orca has a bug, extra pods just wait. |
+| **morca** | `max_runs` per pipeline; a total vCPU budget across all runs, checked before a cluster is created; a maximum cluster size per pipeline; a deadline per run. morca records pods × size × duration per run in Postgres, so the UI can show an estimated cost per run. |
+| **Kubernetes** | A **ResourceQuota** on `morca-runs`: a hard cap on the CPU and memory all run pods can request. If morca has a bug, extra pods just wait. |
 | **Karpenter** | **NodePool limits**, such as `cpu: 64`: the most EC2 that can run at once, whatever asks for it. |
-| **Spot** | Workers on Spot, typically 60–90% cheaper. A reclaimed worker means retried dista tasks, a lost driver means `orca resume`, both of which phase 1 already handles. The head and driver stay on on-demand. |
-| **AWS** | **Budgets** alerts in the Billing and Cost Management console. A **spend limit** in AWS Settings > Billing, which pauses the *whole project* when it's reached; only the project owner can set it. Tags `orca.pipeline` and `orca.run` on what runs create, for cost allocation. |
+| **Spot** | Workers on Spot, typically 60–90% cheaper. A reclaimed worker means retried dista tasks, a lost driver means `morca resume`, both of which phase 1 already handles. The head and driver stay on on-demand. |
+| **AWS** | **Budgets** alerts in the Billing and Cost Management console. A **spend limit** in AWS Settings > Billing, which pauses the *whole project* when it's reached; only the project owner can set it. Tags `morca.pipeline` and `orca.run` on what runs create, for cost allocation. |
 
 ## A Kubernetes client in Mojo
 
-orca needs a small one, not a general client. Go's client-go is generated from the whole OpenAPI spec; orca uses about three resource kinds and five operations:
+morca needs a small one, not a general client. Go's client-go is generated from the whole OpenAPI spec; morca uses about three resource kinds and five operations:
 
 - create, get and delete for Pod, Job and Service;
 - list and watch by label, where a watch is a stream of JSON lines;
 - configuration in-cluster (the service-account token and CA) and from a kubeconfig, for local testing on kind, which authenticates with client certificates.
 
-That's about 1,000–1,500 lines on what magmalake already has: HTTPS with a custom CA through objectstore's libcurl, or flare's TLS, and a JSON library. It goes in a tin of its own, [k8s.mojo](https://github.com/magmalake/k8s.mojo), rather than in orca: dista's planned `dista` command, for operating a cluster, needs the same calls.
+That's about 1,000–1,500 lines on what magmalake already has: HTTPS with a custom CA through objectstore's libcurl, or flare's TLS, and a JSON library. It goes in a tin of its own, [k8s.mojo](https://github.com/magmalake/k8s.mojo), rather than in morca: dista's planned `dista` command, for operating a cluster, needs the same calls.
 
 Until it exists, phase 5 can be prototyped two ways:
 

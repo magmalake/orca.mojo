@@ -1,5 +1,5 @@
 #!/bin/sh
-# Placement (orca register --placement, orca.control): the scheduler, on the
+# Placement (morca register --placement, morca.control): the scheduler, on the
 # ec2 runner against the stand-in EC2 (tests/fake_ec2.py), with this machine
 # as its control host. toy and fanout are placed on the control host, daily
 # keeps the scheduler's runner:
@@ -10,16 +10,16 @@
 #   instance's newest minute (made-up orca.system_minutes rows) has memory
 #   or a disk over 85%, and starts once it hasn't;
 # - control-placed runs start no instance, while daily's run starts one; at
-#   most ORCA_CONTROL_MAX_RUNS (2) run at once, a third held until one ends;
+#   most MORCA_CONTROL_MAX_RUNS (2) run at once, a third held until one ends;
 #   /api/fleet lists them on the control host, and the pages and JSON say where
 #   each run was placed;
 # - fanout's secret, read from the stand-in's Secrets Manager, reaches its
 #   step and its tasks (forked locally), and no log holds its value;
 # - a run whose process is killed is noticed and run again, and succeeds;
-# - a run over ORCA_CONTROL_MEMORY_MB is killed, saying so, and a run whose
+# - a run over MORCA_CONTROL_MEMORY_MB is killed, saying so, and a run whose
 #   secret can't be read fails to start, saying so.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-placement starts a throwaway
+# Needs MORCA_DATABASE_URL (pixi run test-placement starts a throwaway
 # server), python3, curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -31,7 +31,7 @@ for b in toy fanout daily; do
     scripts/mojo-build.sh -I src $DEP_INC "examples/$b.mojo" -o "build/$b"
 done
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/placement.log
 : > "$log"
 dir=$PWD/build/fake-ec2-placement
@@ -61,7 +61,7 @@ fail() {
     stop
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -qAtc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -qAtc "$1"; }
 until_true() {
     i=0
     until [ "$(q "$1")" = t ]; do
@@ -77,52 +77,52 @@ wait_file() {
 }
 json() { curl -fsS -H 'Accept: application/json' "$base$1" || fail "GET $1"; }
 value=s3cr3t-orca-github-token-value
-export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
-export ORCA_SECRETS_ENDPOINT="$ORCA_EC2_ENDPOINT"
-export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
-export ORCA_STALE_SECONDS=4 ORCA_START_SECONDS=60 ORCA_EC2_POOL_SECONDS=0
-export ORCA_LOGS=$PWD/build/placement-logs ORCA_LOG_STAGE=$PWD/build/placement-stage
-export ORCA_CLUSTER_LOG_SECONDS=1 ORCA_FLEET_SECONDS=0
+export MORCA_RUNNER=ec2 MORCA_EC2_MODE=direct MORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
+export MORCA_SECRETS_ENDPOINT="$MORCA_EC2_ENDPOINT"
+export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test MORCA_EC2_AMI=ami-test
+export MORCA_STALE_SECONDS=4 MORCA_START_SECONDS=60 MORCA_EC2_POOL_SECONDS=0
+export MORCA_LOGS=$PWD/build/placement-logs MORCA_LOG_STAGE=$PWD/build/placement-stage
+export MORCA_CLUSTER_LOG_SECONDS=1 MORCA_FLEET_SECONDS=0
 # The memory-pressure hold below seeds a 95 % /ops/control minute, which would
-# also trip the watchdog's control rule (orca.watchdog) and pause every
+# also trip the watchdog's control rule (morca.watchdog) and pause every
 # pipeline before placement could hold the run: this test is placement's.
-export ORCA_WATCHDOG_SECONDS=0
+export MORCA_WATCHDOG_SECONDS=0
 # The scheduler's clock stays where the pipelines were registered, so none
 # of their schedules fires.
-export ORCA_NOW=2024-01-15T00:00Z
-export ORCA_TOY_SLEEP=1 ORCA_FANOUT_SECRET=GITHUB_TOKEN ORCA_FANOUT_SLEEP=0.05
-unset ORCA_SECRET_FETCH ORCA_CONTROL_MAX_RUNS ORCA_CONTROL_MEMORY_MB ORCA_CONTROL_WORKERS
+export MORCA_NOW=2024-01-15T00:00Z
+export MORCA_TOY_SLEEP=1 MORCA_FANOUT_SECRET=GITHUB_TOKEN MORCA_FANOUT_SLEEP=0.05
+unset MORCA_SECRET_FETCH MORCA_CONTROL_MAX_RUNS MORCA_CONTROL_MEMORY_MB MORCA_CONTROL_WORKERS
 python3 tests/fake_ec2.py "$port" "$dir" >> "$log" 2>&1 &
 fake=$!
 i=0
-until curl -s -o /dev/null "$ORCA_EC2_ENDPOINT/"; do
+until curl -s -o /dev/null "$MORCA_EC2_ENDPOINT/"; do
     i=$((i + 1)); [ "$i" -lt 100 ] || fail "the stand-in EC2 didn't start"; sleep 0.1
 done
 
 # The flag, stored with the registration.
 placement() { q "SELECT coalesce(placement, 'null') FROM orca.pipelines WHERE name = '$1'"; }
-if ./build/orca register --placement local ./build/toy >> "$log" 2>&1; then
+if ./build/morca register --placement local ./build/toy >> "$log" 2>&1; then
     fail "registered --placement local"
 fi
-./build/orca register --placement control ./build/toy >> "$log" 2>&1 || fail "register the toy"
+./build/morca register --placement control ./build/toy >> "$log" 2>&1 || fail "register the toy"
 [ "$(placement toy)" = control ] || fail "toy's placement: $(placement toy)"
-./build/orca register ./build/toy >> "$log" 2>&1 || fail "register the toy again"
+./build/morca register ./build/toy >> "$log" 2>&1 || fail "register the toy again"
 [ "$(placement toy)" = control ] || fail "a registration without --placement changed it: $(placement toy)"
-./build/orca register --placement default ./build/toy >> "$log" 2>&1 || fail "register the toy by default"
+./build/morca register --placement default ./build/toy >> "$log" 2>&1 || fail "register the toy by default"
 [ "$(placement toy)" = null ] || fail "--placement default kept $(placement toy)"
-./build/orca register --placement ec2 ./build/toy >> "$log" 2>&1 || fail "register the toy on ec2"
+./build/morca register --placement ec2 ./build/toy >> "$log" 2>&1 || fail "register the toy on ec2"
 [ "$(placement toy)" = ec2 ] || fail "toy's placement: $(placement toy)"
-./build/orca register --placement control ./build/toy >> "$log" 2>&1 || fail "register the toy"
-./build/orca register --image orca:test --placement control --secret GITHUB_TOKEN=orca/github-token ./build/fanout >> "$log" 2>&1 \
+./build/morca register --placement control ./build/toy >> "$log" 2>&1 || fail "register the toy"
+./build/morca register --image morca:test --placement control --secret GITHUB_TOKEN=orca/github-token ./build/fanout >> "$log" 2>&1 \
     || fail "register fanout"
-./build/orca register --image orca:test ./build/daily >> "$log" 2>&1 || fail "register daily"
+./build/morca register --image morca:test ./build/daily >> "$log" 2>&1 || fail "register daily"
 echo "ok   --placement is stored, kept, and reset by default"
 
-ORCA_UI_ADDR="127.0.0.1:$uiport" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$uiport" ./build/morca ui >> "$log" 2>&1 &
 ui=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 json /pipelines/toy | jq -e '.pipeline.placement == "control"' > /dev/null || fail "toy's JSON placement"
 json /pipelines/daily | jq -e '.pipeline.placement == "default"' > /dev/null || fail "daily's JSON placement"
@@ -134,9 +134,9 @@ minute() {
     q "INSERT INTO orca.system_minutes VALUES (date_trunc('minute', now()), 1, now(), 5, 5, $1, $1, $1::int8 * 40000000, 4000000000, $2, $2::int8 * 200000000, 20000000000, '/var/lib/orca/stage', 0, 0)"
 }
 minute 95 10
-./build/orca scheduler >> "$log" 2>&1 &
+./build/morca scheduler >> "$log" 2>&1 &
 sched=$!
-./build/orca backfill toy 2024-01 >> "$log" 2>&1 || fail "backfill the toy"
+./build/morca backfill toy 2024-01 >> "$log" 2>&1 || fail "backfill the toy"
 first=$(q "SELECT max(id) FROM orca.runs")
 until_true "SELECT held LIKE '%memory is 95% used, over 85%' FROM orca.runs WHERE id = $first" 40
 [ "$(q "SELECT status || ' ' || starts FROM orca.runs WHERE id = $first")" = "queued 0" ] || fail "the held run started"
@@ -148,15 +148,15 @@ minute 40 10
 until_true "SELECT status = 'succeeded' FROM orca.runs WHERE id = $first" 120
 [ "$(q "SELECT coalesce(held, 'none') || ' ' || placement FROM orca.runs WHERE id = $first")" = "none control" ] \
     || fail "run $first: $(q "SELECT held, placement FROM orca.runs WHERE id = $first")"
-wait_file "$ORCA_LOGS/toy/$first/driver.log"
-grep -q "^--- start 1$" "$ORCA_LOGS/toy/$first/driver.log" || fail "run $first's driver.log"
-[ -s "$ORCA_LOGS/toy/$first/metrics/control.jsonl" ] || fail "run $first has no samples"
+wait_file "$MORCA_LOGS/toy/$first/driver.log"
+grep -q "^--- start 1$" "$MORCA_LOGS/toy/$first/driver.log" || fail "run $first's driver.log"
+[ -s "$MORCA_LOGS/toy/$first/metrics/control.jsonl" ] || fail "run $first has no samples"
 echo "ok   a control-placed run is held while memory or a disk is over 85%, then runs"
 
 # Three control-placed runs and one on EC2.
-./build/orca backfill toy 2024-02..2024-03 >> "$log" 2>&1 || fail "backfill the toy"
-./build/orca backfill fanout 2024-01 >> "$log" 2>&1 || fail "backfill fanout"
-./build/orca backfill daily 2024-01-01 >> "$log" 2>&1 || fail "backfill daily"
+./build/morca backfill toy 2024-02..2024-03 >> "$log" 2>&1 || fail "backfill the toy"
+./build/morca backfill fanout 2024-01 >> "$log" 2>&1 || fail "backfill fanout"
+./build/morca backfill daily 2024-01-01 >> "$log" 2>&1 || fail "backfill daily"
 most=0
 held=0
 fleet=0
@@ -193,23 +193,23 @@ curl -fsS "$base/runs/$first" | grep -q "on the control host" || fail "run $firs
 echo "ok   control-placed runs start no instance, two at a time, listed on /api/fleet's control host"
 
 fanout=$(q "SELECT id FROM orca.runs WHERE pipeline = 'fanout'")
-wait_file "$ORCA_LOGS/fanout/$fanout/driver.log"
+wait_file "$MORCA_LOGS/fanout/$fanout/driver.log"
 i=0
-while [ -n "$(ls "$ORCA_LOG_STAGE/control" 2> /dev/null)" ]; do
+while [ -n "$(ls "$MORCA_LOG_STAGE/control" 2> /dev/null)" ]; do
     i=$((i + 1)); [ "$i" -lt 80 ] || break; sleep 0.25
 done
 grep -q '"action": "GetSecretValue", "params": {"SecretId": "orca/github-token"}' "$dir/calls.jsonl" \
     || fail "the secret wasn't read from Secrets Manager"
-grep -rq "secret \*\*\* of length ${#value}" "$ORCA_LOGS/fanout/$fanout" || fail "the step didn't see the secret"
-grep -q "^secret \*\*\*$" "$ORCA_LOGS/fanout/$fanout/driver.log" || fail "the tasks didn't see the secret"
-if grep -rq "$value" "$ORCA_LOGS" "$ORCA_LOG_STAGE"; then
-    fail "the secret's value is in $(grep -rl "$value" "$ORCA_LOGS" "$ORCA_LOG_STAGE")"
+grep -rq "secret \*\*\* of length ${#value}" "$MORCA_LOGS/fanout/$fanout" || fail "the step didn't see the secret"
+grep -q "^secret \*\*\*$" "$MORCA_LOGS/fanout/$fanout/driver.log" || fail "the tasks didn't see the secret"
+if grep -rq "$value" "$MORCA_LOGS" "$MORCA_LOG_STAGE"; then
+    fail "the secret's value is in $(grep -rl "$value" "$MORCA_LOGS" "$MORCA_LOG_STAGE")"
 fi
-[ -z "$(ls "$ORCA_LOG_STAGE/control" 2> /dev/null)" ] || fail "staging files are left: $(ls "$ORCA_LOG_STAGE/control")"
+[ -z "$(ls "$MORCA_LOG_STAGE/control" 2> /dev/null)" ] || fail "staging files are left: $(ls "$MORCA_LOG_STAGE/control")"
 echo "ok   a control-placed run's secret reaches its step and tasks, and no log holds it"
 
 # A run whose process is killed mid-step is run again.
-./build/orca backfill toy 2024-04 >> "$log" 2>&1 || fail "backfill the toy"
+./build/morca backfill toy 2024-04 >> "$log" 2>&1 || fail "backfill the toy"
 killed=$(q "SELECT max(id) FROM orca.runs")
 until_true "SELECT count(*) > 0 FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $killed AND a.status = 'running'" 120
 pid=$(q "SELECT split_part(owner, ':', 2) FROM orca.runs WHERE id = $killed")
@@ -222,15 +222,15 @@ echo "ok   a control-placed run whose process was killed is run again"
 stop_sched
 
 # Over its memory cap, and a secret that can't be read.
-ORCA_CONTROL_MEMORY_MB=1 ./build/orca scheduler >> "$log" 2>&1 &
+MORCA_CONTROL_MEMORY_MB=1 ./build/morca scheduler >> "$log" 2>&1 &
 sched=$!
-./build/orca backfill toy 2024-05 >> "$log" 2>&1 || fail "backfill the toy"
+./build/morca backfill toy 2024-05 >> "$log" 2>&1 || fail "backfill the toy"
 big=$(q "SELECT max(id) FROM orca.runs")
-until_true "SELECT EXISTS (SELECT 1 FROM orca.runs WHERE id = $big AND error LIKE '%over the control instance''s cap of 1 MB a run (ORCA_CONTROL_MEMORY_MB)') OR EXISTS (SELECT 1 FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $big AND a.error LIKE 'killed: %over the control instance''s cap of 1 MB%')" 120
+until_true "SELECT EXISTS (SELECT 1 FROM orca.runs WHERE id = $big AND error LIKE '%over the control instance''s cap of 1 MB a run (MORCA_CONTROL_MEMORY_MB)') OR EXISTS (SELECT 1 FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $big AND a.error LIKE 'killed: %over the control instance''s cap of 1 MB%')" 120
 echo "ok   a control-placed run over its memory cap is killed, saying why"
-./build/orca register --image orca:test --placement control --secret GITHUB_TOKEN=orca/missing ./build/fanout >> "$log" 2>&1 \
+./build/morca register --image morca:test --placement control --secret GITHUB_TOKEN=orca/missing ./build/fanout >> "$log" 2>&1 \
     || fail "register fanout"
-./build/orca backfill fanout 2024-02 >> "$log" 2>&1 || fail "backfill fanout"
+./build/morca backfill fanout 2024-02 >> "$log" 2>&1 || fail "backfill fanout"
 nosecret=$(q "SELECT max(id) FROM orca.runs")
 until_true "SELECT status = 'failed' AND error LIKE 'can''t start: can''t read secret orca/missing: 400%' FROM orca.runs WHERE id = $nosecret" 80
 echo "ok   a control-placed run whose secret can't be read doesn't start"

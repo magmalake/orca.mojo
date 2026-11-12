@@ -1,4 +1,4 @@
-"""The Lean model of a retried step (formal/) against `orca.tables.append`:
+"""The Lean model of a retried step (formal/) against `morca.tables.append`:
 every sequence of up to five events in formal/difftest/retry.cases is
 replayed over a local Iceberg table of its own, and the snapshots the table
 then holds are compared with the ones the model's oracle printed
@@ -25,8 +25,8 @@ from iceberg.util import now_ms
 from iceberg.values import Datum
 from parquet import RecordBatch
 
-from orca import Ctx
-from orca.tables import append
+from morca import Ctx
+from morca.tables import append
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -82,7 +82,7 @@ def _render(t: Table) raises -> String:
 
 def _replay(name: String, events: String) raises -> String:
     """Replays `events` over a new table `db.<name>` and renders it."""
-    var root = String(getenv("ORCA_WAREHOUSE"))
+    var root = String(getenv("MORCA_WAREHOUSE"))
     var cat = FilesystemCatalog.local(root)
     _ = cat.create_table("db", name, Schema.parse(SCHEMA))
     var t = cat.load_table("db", name)
@@ -134,6 +134,6 @@ def test_append_agrees_with_the_model() raises:
 
 
 def main() raises:
-    _ = setenv("ORCA_WAREHOUSE", String("build/wh-formal-retry-", now_ms()))
+    _ = setenv("MORCA_WAREHOUSE", String("build/wh-formal-retry-", now_ms()))
     test_append_agrees_with_the_model()
     print("PASS test_append_agrees_with_the_model")

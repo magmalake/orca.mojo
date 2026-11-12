@@ -1,6 +1,6 @@
 # expect: a step follows another step of the same name
 from dista import Seq
-from orca import Ctx, Gather, Mapped, Month, Pipeline, Step
+from morca import Ctx, Gather, Mapped, Month, Pipeline, Step
 
 
 def key(mut ctx: Ctx, m: Month) raises -> Int:

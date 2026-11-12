@@ -1,9 +1,9 @@
-"""The parser and writer of orca.toml (`orca.toml`): what it reads, what it
+"""The parser and writer of morca.toml (`morca.toml`): what it reads, what it
 refuses, and that what it writes reads back."""
 
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
-from orca.toml import (
+from morca.toml import (
     ARRAY,
     BOOLEAN,
     FLOAT,
@@ -37,7 +37,7 @@ def _text(doc: TomlDoc, path: List[String]) raises -> String:
 
 def test_the_issue_example() raises:
     var doc = parse_toml(
-        """# orca.toml
+        """# morca.toml
 [defaults]
 placement = "ec2"            # #144
 head_type = "t4g.medium"
@@ -168,7 +168,7 @@ def test_the_subset_says_what_it_leaves_out() raises:
 
 def test_arrays_of_inline_tables() raises:
     """`[{...}, ...]`: an `ARRAY` of indices, each element a table under
-    its index (orca #267's `machines`)."""
+    its index (morca #267's `machines`)."""
     var doc = parse_toml(
         String(
             "[pools.lab]\n",

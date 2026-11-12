@@ -1,15 +1,15 @@
-"""The summary of a stack dump (orca.crash) of a stack dump, from dumps Mojo 1.2's runtime
+"""The summary of a stack dump (morca.crash) of a stack dump, from dumps Mojo 1.2's runtime
 printed on Linux (in the project image) and macOS."""
 
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
-from orca.crash import crash_summary, crashed_by_signal
+from morca.crash import crash_summary, crashed_by_signal
 
 comptime SEGV = """resuming run 7 with 0 steps done and 0 interrupted
 [measure 2024-02] attempt 1 started
-#0 0x0000ef2a516df820 (/opt/orca/lib/libKGENCompilerRTShared.so+0x10f820)
-#1 0x0000ef2a516dcf00 (/opt/orca/lib/libKGENCompilerRTShared.so+0x10cf00)
-#2 0x0000ef2a516e025c (/opt/orca/lib/libKGENCompilerRTShared.so+0x11025c)
+#0 0x0000ef2a516df820 (/opt/morca/lib/libKGENCompilerRTShared.so+0x10f820)
+#1 0x0000ef2a516dcf00 (/opt/morca/lib/libKGENCompilerRTShared.so+0x10cf00)
+#2 0x0000ef2a516e025c (/opt/morca/lib/libKGENCompilerRTShared.so+0x11025c)
 #3 0x0000ef2a517808f8 (linux-vdso.so.1+0x8f8)
 #4 0x0000ad4423fd1648 boom /src/project/pipelines/crash.mojo:9:11
 #5 0x0000ad4423fd1648 step /src/project/pipelines/crash.mojo:13:9
@@ -38,7 +38,7 @@ Stack dump without symbol names (ensure you have llvm-symbolizer in your PATH or
 2  g0                         0x0000c622abf81648
 """
 
-comptime NO_LINES = """#0 0x0000e648c2f2f820 (/opt/orca/lib/libKGENCompilerRTShared.so+0x10f820)
+comptime NO_LINES = """#0 0x0000e648c2f2f820 (/opt/morca/lib/libKGENCompilerRTShared.so+0x10f820)
 #1 0x0000c622abf81648 main (/out/g0+0x1648)
 #2 0x0000e648c2c97818 __libc_start_main (/lib/aarch64-linux-gnu/libc.so.6+0x27818)
 """
@@ -101,18 +101,18 @@ def test_linkage_names_cut() raises:
     var dump = String(
         "#0 0x0000000100f3a7b8 (/x/libKGENCompilerRTShared.dylib+0xba7b8)\n",
         "#1 0x0000000100d4c5a4 measure /w/examples/toy.mojo:65:14\n",
-        "#2 0x0000000100d4c5a4 orca::step::Step::run[::Bool,LITOrigin[$11]](",
-        "orca::ctx::Ctx),name={ #interp.memref<{[(#interp.memory_handle<16,",
+        "#2 0x0000000100d4c5a4 morca::step::Step::run[::Bool,LITOrigin[$11]](",
+        "morca::ctx::Ctx),name={ #interp.memref<{[(#interp.memory_handle<16,",
         " ~Qmeasure ~Q string>, const_global, [], [])], []}, 0, 0>, 7 }",
-        " src/orca/step.mojo:399:23\n",
-        "#3 0x0000000100d4c5a4 orca_main src/orca/cli.mojo:133:27\n",
+        " src/morca/step.mojo:399:23\n",
+        "#3 0x0000000100d4c5a4 morca_main src/morca/cli.mojo:133:27\n",
     )
     assert_equal(
         crash_summary(dump),
         (
             "crashed; at measure /w/examples/toy.mojo:65:14,"
-            " orca::step::Step::run src/orca/step.mojo:399:23, orca_main"
-            " src/orca/cli.mojo:133:27"
+            " morca::step::Step::run src/morca/step.mojo:399:23, morca_main"
+            " src/morca/cli.mojo:133:27"
         ),
     )
 

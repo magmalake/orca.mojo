@@ -25,12 +25,12 @@ go in the PR.
 ## Migrations
 
 A deploy can be rolled back to an older image without restoring the
-database, because an older orca runs on a newer schema as long as every
+database, because an older morca runs on a newer schema as long as every
 migration it doesn't know is additive (`schema_ahead` in
-`src/orca/migrations.mojo`). Keep new migrations additive:
+`src/morca/migrations.mojo`). Keep new migrations additive:
 
 - add columns only nullable or with a default, never `NOT NULL` without one;
-- add tables and indexes freely; a foreign key onto a table orca deletes
+- add tables and indexes freely; a foreign key onto a table morca deletes
   from needs `ON DELETE CASCADE` or `SET NULL`;
 - don't rename, drop or retype anything, tighten a constraint, change a key
   an `ON CONFLICT` names, write a status or other value older code reads and
@@ -46,7 +46,7 @@ set up in `State.migrate` before them, not as a numbered migration.
 
 ## Writing fast data code
 
-Orca runs pipelines whose stages read Iceberg tables and transform their rows. Before writing or speeding up code that loops over record batches,
+Morca runs pipelines whose stages read Iceberg tables and transform their rows. Before writing or speeding up code that loops over record batches,
 or that filters, groups or aggregates rows, use the
 [`mojo-data-performance`](https://github.com/magmalake/skills/tree/main/mojo-data-performance)
 skill. It explains how to time the decoding apart from the work, without a

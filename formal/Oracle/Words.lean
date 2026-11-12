@@ -1,5 +1,5 @@
 /-! Every sequence of events up to a length, one letter an event. -/
-namespace Orca.Oracle
+namespace Morca.Oracle
 
 /-- Every word one letter longer, by word and then in the letters' order. -/
 def extend (letters : List String) : List String → List String
@@ -16,4 +16,4 @@ def upTo (letters : List String) : Nat → List String
   | 0 => []
   | n + 1 => upTo letters n ++ words letters (n + 1)
 
-end Orca.Oracle
+end Morca.Oracle

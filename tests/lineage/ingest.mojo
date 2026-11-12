@@ -1,7 +1,7 @@
 """Writes three rows a month to lake.raw, as a source would."""
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
-from orca.tables import append
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
+from morca.tables import append
 from rows import dataset, rows
 
 
@@ -15,4 +15,4 @@ comptime Ingest = Pipeline["ingest", Load, partitions=Monthly["2024-01"]]
 
 
 def main() raises:
-    orca_main[Ingest]()
+    morca_main[Ingest]()

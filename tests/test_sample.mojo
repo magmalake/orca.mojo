@@ -1,4 +1,4 @@
-"""The sampler (`orca.sample`): what it makes of Linux's /proc, and a line
+"""The sampler (`morca.sample`): what it makes of Linux's /proc, and a line
 read from the machine the test runs on, Linux or macOS."""
 
 from std.ffi import c_int, external_call
@@ -7,7 +7,7 @@ from std.testing import TestSuite, assert_equal, assert_true
 
 from json import loads
 
-from orca.sample import (
+from morca.sample import (
     Sampler,
     container_ids,
     container_mem,
@@ -95,7 +95,7 @@ def test_pid_stat() raises:
 
 def test_location() raises:
     assert_true(len(default_dirs()) >= 1)
-    # Without ORCA_LOGS there's nowhere to put them.
+    # Without MORCA_LOGS there's nowhere to put them.
     assert_equal(metrics_location("p", 3, "local"), "")
 
 
@@ -147,7 +147,7 @@ def test_container_name() raises:
 def test_container_ids() raises:
     var root = String(
         getenv("TMPDIR", "/tmp"),
-        "/orca-cg-",
+        "/morca-cg-",
         Int(external_call["getpid", c_int]()),
     )
     var id = String(

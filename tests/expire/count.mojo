@@ -1,8 +1,8 @@
 """Reads lake.events and writes its row count to lake.counts, a month at a
 time (tests/expire.sh): its reads pin snapshots of lake.events."""
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
-from orca.tables import append, table
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
+from morca.tables import append, table
 from rows import count, dataset, rows
 
 
@@ -25,4 +25,4 @@ comptime P = Pipeline["count", Count, partitions=Monthly["2024-01"]]
 
 
 def main() raises:
-    orca_main[P]()
+    morca_main[P]()

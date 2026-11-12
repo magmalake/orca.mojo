@@ -7,8 +7,8 @@ from std.os import getenv
 from std.os.path import exists
 from std.time import sleep
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
-from orca.tables import append
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
+from morca.tables import append
 from rows import dataset, rows
 
 
@@ -16,9 +16,9 @@ def load(mut ctx: Ctx, m: Month) raises -> Int64:
     ctx.log(
         String(
             "database: ",
-            "set" if getenv("ORCA_DATABASE_URL") else "none",
+            "set" if getenv("MORCA_DATABASE_URL") else "none",
             ", state: ",
-            getenv("ORCA_STATE_URL"),
+            getenv("MORCA_STATE_URL"),
         )
     )
     var hold = getenv("WK_HOLD")
@@ -33,4 +33,4 @@ comptime Wk = Pipeline["wk", Load, partitions=Monthly["2024-01"]]
 
 
 def main() raises:
-    orca_main[Wk]()
+    morca_main[Wk]()

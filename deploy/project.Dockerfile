@@ -1,42 +1,42 @@
-# The image `orca aws push` builds for a project that added orca with
-# `pixi shelf add orca-mojo`, on orca's runtime image,
-# ghcr.io/morca-dev/morca-runtime:<ORCA_VERSION> (deploy/runtime.Dockerfile).
-# The runtime has orca's own `orca` and `orca_maintain`, git, libcurl, the CA
-# bundles, llvm-symbolizer and the /opt/orca layout and environment; this
+# The image `morca aws push` builds for a project that added morca with
+# `pixi shelf add morca-mojo`, on morca's runtime image,
+# ghcr.io/morca-dev/morca-runtime:<MORCA_VERSION> (deploy/runtime.Dockerfile).
+# The runtime has morca's own `morca` and `morca_maintain`, git, libcurl, the CA
+# bundles, llvm-symbolizer and the /opt/morca layout and environment; this
 # adds only the project's programs:
 #
-# - its apps, every bin/*.mojo, at /opt/orca/bin/<name> (`orca aws app` runs
-#   them). bin/scheduler.mojo, the two lines calling orca.command, becomes
-#   /opt/orca/bin/orca in place of the runtime's, and bin/orca_maintain.mojo
-#   /opt/orca/bin/orca_maintain; a project without them runs the runtime's.
-# - its pipelines, every pipelines/*.mojo, at /opt/orca/pipelines/<name>,
-#   with the source map `orca locate` writes beside each.
-# - the pixi environment's libraries those link or dlopen, in /opt/orca/lib
+# - its apps, every bin/*.mojo, at /opt/morca/bin/<name> (`morca aws app` runs
+#   them). bin/scheduler.mojo, the two lines calling morca.command, becomes
+#   /opt/morca/bin/morca in place of the runtime's, and bin/morca_maintain.mojo
+#   /opt/morca/bin/morca_maintain; a project without them runs the runtime's.
+# - its pipelines, every pipelines/*.mojo, at /opt/morca/pipelines/<name>,
+#   with the source map `morca locate` writes beside each.
+# - the pixi environment's libraries those link or dlopen, in /opt/morca/lib
 #   over the runtime's, so the project's own versions win.
 #
 # `src/` is on the import path if the project has one. A project with a
-# Dockerfile.orca of its own builds that instead, and can start it the same
-# way: `ARG ORCA_VERSION` and `FROM ghcr.io/morca-dev/morca-runtime:${ORCA_VERSION}`.
+# Dockerfile.morca of its own builds that instead, and can start it the same
+# way: `ARG MORCA_VERSION` and `FROM ghcr.io/morca-dev/morca-runtime:${MORCA_VERSION}`.
 #
-# ORCA_VERSION is the orca-mojo the project pins, which `orca aws push`
+# MORCA_VERSION is the morca-mojo the project pins, which `morca aws push`
 # reads from pixi.lock; the runtime and the project's pipelines are then the
-# same orca. By hand:
+# same morca. By hand:
 #
-#     docker build -f project.Dockerfile --build-arg ORCA_VERSION=0.24.0 \
+#     docker build -f project.Dockerfile --build-arg MORCA_VERSION=0.24.0 \
 #         -t ghcr.io/<owner>/<project>:<version> .
 #
 # Name the image after the project (ghcr.io/morca-dev/census, not
-# ghcr.io/morca-dev/morca), and set ORCA_IMAGE in deploy/hetzner's
-# hetzner.env to it. ORCA_RUNTIME names another runtime repository, such as
+# ghcr.io/morca-dev/morca), and set MORCA_IMAGE in deploy/hetzner's
+# hetzner.env to it. MORCA_RUNTIME names another runtime repository, such as
 # one built locally (`docker build -f deploy/runtime.Dockerfile -t
-# orca-runtime:0.24.0 .` in orca.mojo, then --build-arg ORCA_RUNTIME=orca-runtime).
+# morca-runtime:0.24.0 .` in morca, then --build-arg MORCA_RUNTIME=morca-runtime).
 #
-# ORCA_SOURCE and ORCA_COMMIT say what the pipelines were built from, which
-# each run records and orca ui links.
+# MORCA_SOURCE and MORCA_COMMIT say what the pipelines were built from, which
+# each run records and morca ui links.
 #
 # Everything is built with line tables (-g1) and the image has
 # llvm-symbolizer, so a crash's stack dump in a run's driver.log names each
-# frame's function, file and line (orca.crash). The line tables, compressed,
+# frame's function, file and line (morca.crash). The line tables, compressed,
 # make a binary about half as big again (mojo-census's gharchive: 4.2 MB,
 # 6.5 MB with them, 25 MB uncompressed) and leave its speed as it was.
 #
@@ -47,9 +47,9 @@
 # 132). N1 code runs on N2, V1, V2 and Graviton. Build for something else
 # with --build-arg MOJO_TARGET_CPU=<cpu> (x86-64-v3 for linux/amd64).
 # No default version: the error for a build without one names what's missing.
-ARG ORCA_VERSION=needs-build-arg-orca-version
-ARG ORCA_RUNTIME=ghcr.io/morca-dev/morca-runtime
-FROM ${ORCA_RUNTIME}:${ORCA_VERSION} AS runtime
+ARG MORCA_VERSION=needs-build-arg-morca-version
+ARG MORCA_RUNTIME=ghcr.io/morca-dev/morca-runtime
+FROM ${MORCA_RUNTIME}:${MORCA_VERSION} AS runtime
 
 FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
@@ -57,29 +57,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev g
 WORKDIR /src/project
 COPY pixi.toml pixi.lock ./
 RUN pixi install --locked
-# The runtime's orca, for `orca locate` when the project has no bin/scheduler.mojo.
-COPY --from=runtime /opt/orca /opt/orca-runtime
+# The runtime's morca, for `morca locate` when the project has no bin/scheduler.mojo.
+COPY --from=runtime /opt/morca /opt/morca-runtime
 # Declared after `pixi install`: a RUN sees every ARG declared before it, so a
-# new ORCA_COMMIT on each commit would otherwise rerun it.
+# new MORCA_COMMIT on each commit would otherwise rerun it.
 ARG MOJO_TARGET_CPU=neoverse-n1
-ARG ORCA_SOURCE=""
-ARG ORCA_COMMIT=""
+ARG MORCA_SOURCE=""
+ARG MORCA_COMMIT=""
 COPY . .
 RUN mkdir -p /out/bin /out/pipelines \
     && pixi run sh -c 'inc=""; [ -d src ] && inc="-I src"; \
-        for f in bin/*.mojo; do [ -f "$f" ] || continue; n=$(basename "$f" .mojo); [ "$n" = scheduler ] && n=orca; \
+        for f in bin/*.mojo; do [ -f "$f" ] || continue; n=$(basename "$f" .mojo); [ "$n" = scheduler ] && n=morca; \
             mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc "$f" -o "/out/bin/$n" || exit 1; done; \
         for p in pipelines/*.mojo; do [ -f "$p" ] || continue; n=$(basename "$p" .mojo); \
-            mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc -D ORCA_SOURCE='"${ORCA_SOURCE}"' -D ORCA_COMMIT='"${ORCA_COMMIT}"' \
+            mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc -D MORCA_SOURCE='"${MORCA_SOURCE}"' -D MORCA_COMMIT='"${MORCA_COMMIT}"' \
                 "$p" -o "/out/pipelines/$n" || exit 1; done; \
-        orca=/out/bin/orca; [ -x "$orca" ] || orca=/opt/orca-runtime/bin/orca; \
+        morca=/out/bin/morca; [ -x "$morca" ] || morca=/opt/morca-runtime/bin/morca; \
         if ls /out/pipelines/* > /dev/null 2>&1; then \
-            LD_LIBRARY_PATH="$CONDA_PREFIX/lib:/opt/orca-runtime/lib" "$orca" locate /out/pipelines/* --root .; fi'
+            LD_LIBRARY_PATH="$CONDA_PREFIX/lib:/opt/morca-runtime/lib" "$morca" locate /out/pipelines/* --root .; fi'
 # The line tables compressed, which llvm-symbolizer reads as they are.
 RUN for b in /out/bin/* /out/pipelines/*; do [ -x "$b" ] || continue; \
         objcopy --compress-debug-sections=zlib "$b" || exit 1; done
 # Only the pixi environment's libraries the binaries link or dlopen: libpq
-# (postgres), flare's shims (orca ui, apps), and every tin's shim, such as
+# (postgres), flare's shims (morca ui, apps), and every tin's shim, such as
 # objectstore's and the codecs' (zstd, for Iceberg writes). Not conda's
 # libpsl and ICU, which only libcurl links: the runtime has Debian's libpsl5.
 RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib \
@@ -89,6 +89,6 @@ RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib \
     && cp -L -t /out/lib $loaded
 
 FROM runtime
-COPY --from=build /out/lib /opt/orca/lib
-COPY --from=build /out/bin /opt/orca/bin
-COPY --from=build /out/pipelines /opt/orca/pipelines
+COPY --from=build /out/lib /opt/morca/lib
+COPY --from=build /out/bin /opt/morca/bin
+COPY --from=build /out/pipelines /opt/morca/pipelines

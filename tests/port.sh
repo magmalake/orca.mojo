@@ -1,4 +1,4 @@
-# Sourced by the tests that start a server (orca ui, the stand-ins for EC2
+# Sourced by the tests that start a server (morca ui, the stand-ins for EC2
 # and ntfy, a port-forward):
 #
 #   free_port port
@@ -39,7 +39,7 @@ else:
 }
 
 # Sourced too by the tests whose runs reach a dista head on its fixed port
-# (6390, orca.ec2's HEAD_PORT, on 127.0.0.1 with the stand-in clouds) or
+# (6390, morca.ec2's HEAD_PORT, on 127.0.0.1 with the stand-in clouds) or
 # look for workers by name (pgrep): two of them at once on one machine, as
 # on CI's self-hosted runners, find each other's head or workers.
 #

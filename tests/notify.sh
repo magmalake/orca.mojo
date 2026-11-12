@@ -1,10 +1,10 @@
 #!/bin/sh
-# Alerts to a person through ntfy (orca.notify, orca.alerts, #184), against a
+# Alerts to a person through ntfy (morca.notify, orca.alerts, #184), against a
 # stand-in ntfy server (tests/fake_ntfy.py) that records every POST, over toy
 # and daily on the local runner. The topic and the token are read as secrets
-# (ORCA_SECRET_FETCH), so a leak would be in the log or the pages:
+# (MORCA_SECRET_FETCH), so a leak would be in the log or the pages:
 #
-# - `orca notify test` is one POST with the title, a priority and tags, to the
+# - `morca notify test` is one POST with the title, a priority and tags, to the
 #   secret topic, with the token;
 # - a run that failed with no retry left is a POST linking to the run; one that
 #   will be retried is not, and neither is a second tick;
@@ -15,16 +15,16 @@
 #   nothing, inside it one high POST; a fill run finishing resolves it;
 # - the control disk over 85% (seeded samples) and a worker quiet while it
 #   held runs each send once, and the disk resolves;
-# - `orca notify --kind` sends once per kind and subject, `--resolved` ends it;
+# - `morca notify --kind` sends once per kind and subject, `--resolved` ends it;
 # - ntfy down: the tick still succeeds at once, the alert waits in Postgres
 #   and goes when the server is back;
 # - Ops > Control and /api/system say alerts are configured and list them;
 # - Ops > Alerts (/ops/alerts, where /ops goes) has a row per alert sent
 #   (orca.alerts), the trip resolved by its 'resolved', the disk open; its
-#   filters, pages, live fragment and JSON, and orca alerts (and --remote);
+#   filters, pages, live fragment and JSON, and morca alerts (and --remote);
 # - neither the topic nor the token is anywhere in the log or the pages.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-notify starts a throwaway server),
+# Needs MORCA_DATABASE_URL (pixi run test-notify starts a throwaway server),
 # curl, jq and python3.
 set -eu
 cd "$(dirname "$0")/.."
@@ -35,7 +35,7 @@ scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/daily.mojo -o build/daily
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 
 log=build/notify.log
 : > "$log"
@@ -62,7 +62,7 @@ fail() {
     stop
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 start_fake() {
     python3 tests/fake_ntfy.py "$port" "$posts" >> "$log" 2>&1 &
     fake=$!
@@ -76,7 +76,7 @@ last() { tail -n 1 "$posts" | jq -r "$1"; }
 expect_posts() {  # expect_posts N WHAT
     [ "$(count)" -eq "$1" ] || fail "$2: $(count) POSTs, not $1"
 }
-tick() { ./build/orca tick >> "$log" 2>&1 || fail "tick"; }
+tick() { ./build/morca tick >> "$log" 2>&1 || fail "tick"; }
 
 cat > build/notify-fetch.sh << 'EOS'
 #!/bin/sh
@@ -87,38 +87,38 @@ case "$1" in
 esac
 EOS
 chmod +x build/notify-fetch.sh
-export ORCA_SECRET_FETCH=$PWD/build/notify-fetch.sh
-export ORCA_NOTIFY_URL="http://127.0.0.1:$port"
-export ORCA_NOTIFY_SECRET=orca/ntfy-topic
-export ORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token
-export ORCA_UI_URL=https://orca.example.test
-export ORCA_WATCHDOG_SECONDS=0 ORCA_SAMPLE_SECONDS=0 ORCA_LOGS=
-export ORCA_NOTIFY_TIMEOUT_MS=2000
-unset ORCA_NOTIFY_MIN_SECONDS
+export MORCA_SECRET_FETCH=$PWD/build/notify-fetch.sh
+export MORCA_NOTIFY_URL="http://127.0.0.1:$port"
+export MORCA_NOTIFY_SECRET=orca/ntfy-topic
+export MORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token
+export MORCA_UI_URL=https://morca.example.test
+export MORCA_WATCHDOG_SECONDS=0 MORCA_SAMPLE_SECONDS=0 MORCA_LOGS=
+export MORCA_NOTIFY_TIMEOUT_MS=2000
+unset MORCA_NOTIFY_MIN_SECONDS
 
 start_fake
 : > "$posts"
 
-# --- orca notify test -------------------------------------------------------
-out=$(./build/orca notify test 2>&1) || fail "notify test: $out"
+# --- morca notify test -------------------------------------------------------
+out=$(./build/morca notify test 2>&1) || fail "notify test: $out"
 [ "$out" = sent ] || fail "notify test said: $out"
 expect_posts 1 "notify test"
 [ "$(last .path)" = "/t0pic-SECRETVALUE-9f3a" ] || fail "the topic path: $(last .path)"
 [ "$(last '.headers.authorization')" = "Bearer tk_SECRETTOKEN_77" ] || fail "no token"
-[ "$(last '.headers.title')" = "orca: test alert" ] || fail "the title: $(last '.headers.title')"
+[ "$(last '.headers.title')" = "morca: test alert" ] || fail "the title: $(last '.headers.title')"
 [ "$(last '.headers.priority')" = default ] || fail "the priority"
 [ "$(last '.headers.tags')" = white_check_mark ] || fail "the tags"
-echo "ok   orca notify test: one POST to the secret topic, with the token"
+echo "ok   morca notify test: one POST to the secret topic, with the token"
 
-# --- an unconfigured orca sends nothing --------------------------------------
-if env -u ORCA_NOTIFY_URL -u ORCA_NOTIFY_SECRET ./build/orca notify test > /dev/null 2>&1; then
+# --- an unconfigured morca sends nothing --------------------------------------
+if env -u MORCA_NOTIFY_URL -u MORCA_NOTIFY_SECRET ./build/morca notify test > /dev/null 2>&1; then
     fail "notify test succeeded with no URL"
 fi
 expect_posts 1 "notify test with no URL"
-echo "ok   with no ORCA_NOTIFY_URL there are no alerts"
+echo "ok   with no MORCA_NOTIFY_URL there are no alerts"
 
 # --- registered pipelines ----------------------------------------------------
-cat > "$proj/orca.toml" << 'EOS'
+cat > "$proj/morca.toml" << 'EOS'
 [pipelines.daily]
 fills = "all"
 fill_window = "22..6"
@@ -127,12 +127,12 @@ EOS
 T0=2024-01-08T12:00Z
 # toy on the real clock, so it isn't scheduled for the years it missed; daily
 # on the clock of 2024, for its range to fill.
-./build/orca register --no-config ./build/toy >> "$log" 2>&1 || fail "register toy"
-ORCA_NOW="$T0" ./build/orca register --config "$proj/orca.toml" ./build/daily >> "$log" 2>&1 || fail "register daily"
+./build/morca register --no-config ./build/toy >> "$log" 2>&1 || fail "register toy"
+MORCA_NOW="$T0" ./build/morca register --config "$proj/morca.toml" ./build/daily >> "$log" 2>&1 || fail "register daily"
 q "UPDATE orca.pipelines SET paused = true WHERE name = 'daily'" > /dev/null
 
 # --- a failed run -------------------------------------------------------------
-ORCA_TOY_FAIL=2024-01 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 && fail "the toy run didn't fail"
+MORCA_TOY_FAIL=2024-01 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 && fail "the toy run didn't fail"
 run=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
 # One the scheduler will retry (starts 1 of 3): no alert. One with no retry
 # left (starts 99): an alert.
@@ -143,7 +143,7 @@ q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, 
 spent=$(q "SELECT max(id) FROM orca.runs WHERE partitions = '2024-03'")
 tick
 expect_posts 3 "failed runs (the manual run and the one past its retries)"
-tail -n 2 "$posts" | jq -e -s --arg manual "https://orca.example.test/runs/$run" --arg spent "https://orca.example.test/runs/$spent" \
+tail -n 2 "$posts" | jq -e -s --arg manual "https://morca.example.test/runs/$run" --arg spent "https://morca.example.test/runs/$spent" \
     '(map(.headers.click) | sort) == ([$manual, $spent] | sort) and all(.[]; .headers.priority == "default")' > /dev/null \
     || fail "the failed runs' links: $(tail -n 2 "$posts")"
 tail -n 2 "$posts" | jq -e -s 'any(.[]; .body | test("toy 2024-03\nout of retries$")) and all(.[]; .body | test("second line") | not)' > /dev/null \
@@ -168,42 +168,42 @@ unseed() {
     q "DELETE FROM orca.attempts WHERE host = 'seed'; DELETE FROM orca.steps WHERE step LIKE 'seed%'" > /dev/null
 }
 seed
-ORCA_WATCHDOG_SECONDS=1 ./build/orca tick >> "$log" 2>&1 || fail "tick"
+MORCA_WATCHDOG_SECONDS=1 ./build/morca tick >> "$log" 2>&1 || fail "tick"
 expect_posts 4 "the trip"
 [ "$(last '.headers.priority')" = high ] || fail "trip priority: $(last '.headers.priority')"
-[ "$(last '.headers.title')" = "orca watchdog: failing tripped" ] || fail "trip title: $(last '.headers.title')"
+[ "$(last '.headers.title')" = "morca watchdog: failing tripped" ] || fail "trip title: $(last '.headers.title')"
 [ "$(last '.headers.tags')" = "rotating_light,warning" ] || fail "trip tags"
-[ "$(last '.headers.click')" = "https://orca.example.test/ops/control" ] || fail "trip click: $(last '.headers.click')"
+[ "$(last '.headers.click')" = "https://morca.example.test/ops/control" ] || fail "trip click: $(last '.headers.click')"
 last .body | grep -q "Paused: toy" || fail "trip body: $(last .body)"
 last .body | grep -q "limit" || fail "trip body has no limit: $(last .body)"
 echo "ok   a watchdog trip is one high-priority POST with Title, Priority, Tags and Click"
 
 # Unpaused with nothing failing any more: one 'resolved'.
 unseed
-./build/orca unpause toy >> "$log" 2>&1 || fail "unpause"
-ORCA_WATCHDOG_SECONDS=1 ./build/orca tick >> "$log" 2>&1 || fail "tick"
+./build/morca unpause toy >> "$log" 2>&1 || fail "unpause"
+MORCA_WATCHDOG_SECONDS=1 ./build/morca tick >> "$log" 2>&1 || fail "tick"
 expect_posts 5 "the resolved"
 [ "$(last '.headers.priority')" = low ] || fail "resolved priority: $(last '.headers.priority')"
 last '.headers.title' | grep -q "failing resolved" || fail "resolved title: $(last '.headers.title')"
-ORCA_WATCHDOG_SECONDS=1 ./build/orca tick >> "$log" 2>&1 || fail "tick"
+MORCA_WATCHDOG_SECONDS=1 ./build/morca tick >> "$log" 2>&1 || fail "tick"
 expect_posts 5 "a second tick after the resolved"
 echo "ok   unpausing sends one low 'resolved'"
 
 # The same trip again inside the window: recorded and paused, not sent.
 seed
-ORCA_WATCHDOG_SECONDS=1 ./build/orca tick >> "$log" 2>&1 || fail "tick"
+MORCA_WATCHDOG_SECONDS=1 ./build/morca tick >> "$log" 2>&1 || fail "tick"
 [ "$(q "SELECT paused FROM orca.pipelines WHERE name = 'toy'")" = t ] || fail "the second trip didn't pause toy: $(q "SELECT rule, value, detail, snoozed_until FROM orca.watchdog_rules")"
 [ "$(q "SELECT count(*) FROM orca.watchdog_trips WHERE rule = 'failing'")" -eq 2 ] || fail "the second trip wasn't recorded"
 expect_posts 5 "the same trip inside the window"
 unseed
-./build/orca unpause toy >> "$log" 2>&1 || fail "unpause"
-echo "ok   the same alert inside ORCA_NOTIFY_MIN_SECONDS is not sent again"
+./build/morca unpause toy >> "$log" 2>&1 || fail "unpause"
+echo "ok   the same alert inside MORCA_NOTIFY_MIN_SECONDS is not sent again"
 
 # --- a stalled fill ------------------------------------------------------------
 q "UPDATE orca.pipelines SET paused = false WHERE name = 'daily'" > /dev/null
 sleep 2
-export ORCA_NOTIFY_FILL_STALL_HOURS=0.0003
-ORCA_NOW=$T0 ./build/orca tick >> "$log" 2>&1 || fail "tick"
+export MORCA_NOTIFY_FILL_STALL_HOURS=0.0003
+MORCA_NOW=$T0 ./build/morca tick >> "$log" 2>&1 || fail "tick"
 expect_posts 5 "a fill outside its window"
 # That tick started daily's first scheduled run. The next one has to find
 # it ended, or the fill waits behind it ("start first") and no later tick
@@ -213,13 +213,13 @@ while [ "$(q "SELECT count(*) FROM orca.runs WHERE pipeline = 'daily' AND status
     i=$((i + 1)); [ "$i" -lt 600 ] || fail "daily's scheduled run didn't finish"; sleep 0.1
 done
 NOW=2024-01-08T23:00Z
-ORCA_NOW=$NOW ./build/orca tick >> "$log" 2>&1 || fail "tick"
+MORCA_NOW=$NOW ./build/morca tick >> "$log" 2>&1 || fail "tick"
 expect_posts 6 "the stalled fill"
 [ "$(last '.headers.priority')" = high ] || fail "stall priority"
-[ "$(last '.headers.title')" = "orca: fill of daily stalled" ] || fail "stall title: $(last '.headers.title')"
+[ "$(last '.headers.title')" = "morca: fill of daily stalled" ] || fail "stall title: $(last '.headers.title')"
 last .body | grep -q "0 of 7 partitions done" || fail "stall body: $(last .body)"
 last .body | grep -q "no fill run has succeeded" || fail "stall body: $(last .body)"
-[ "$(last '.headers.click')" = "https://orca.example.test/pipelines/daily" ] || fail "stall click"
+[ "$(last '.headers.click')" = "https://morca.example.test/pipelines/daily" ] || fail "stall click"
 echo "ok   a fill that has not finished a run is one high POST inside its window, none outside it"
 
 # A fill run finishing resolves it.
@@ -227,7 +227,7 @@ i=0
 while [ "$(q "SELECT count(*) FROM orca.runs WHERE pipeline = 'daily' AND trigger = 'fill' AND status = 'succeeded'")" -lt 1 ]; do
     i=$((i + 1)); [ "$i" -lt 300 ] || fail "no fill run finished"; sleep 0.1
 done
-ORCA_NOTIFY_FILL_STALL_HOURS=1 ORCA_NOW=2024-01-08T23:01Z ./build/orca tick >> "$log" 2>&1 || fail "tick"
+MORCA_NOTIFY_FILL_STALL_HOURS=1 MORCA_NOW=2024-01-08T23:01Z ./build/morca tick >> "$log" 2>&1 || fail "tick"
 expect_posts 7 "the fill moving again"
 [ "$(last '.headers.priority')" = low ] || fail "fill resolved priority"
 last '.headers.title' | grep -q "moving again" || fail "fill resolved title"
@@ -236,7 +236,7 @@ i=0
 while [ "$(q "SELECT count(*) FROM orca.runs WHERE status IN ('running', 'queued')")" -gt 0 ]; do
     i=$((i + 1)); [ "$i" -lt 600 ] || fail "runs didn't finish"; sleep 0.1
 done
-unset ORCA_NOTIFY_FILL_STALL_HOURS
+unset MORCA_NOTIFY_FILL_STALL_HOURS
 echo "ok   a fill run finishing sends one low 'moving again'"
 
 # --- the control host's disk -------------------------------------------------
@@ -273,24 +273,24 @@ tick
 expect_posts 10 "the lost worker again"
 echo "ok   a worker quiet for 5 minutes while it held runs is one POST, once"
 
-# --- orca notify (the backup's) ------------------------------------------------
-./build/orca notify --kind backup-failed --subject nightly --priority high --tags rotating_light \
-    --title "orca: nightly backup failed" "pg_dump: the dump doesn't read back" >> "$log" 2>&1 || fail "notify --kind"
-expect_posts 11 "orca notify --kind"
+# --- morca notify (the backup's) ------------------------------------------------
+./build/morca notify --kind backup-failed --subject nightly --priority high --tags rotating_light \
+    --title "morca: nightly backup failed" "pg_dump: the dump doesn't read back" >> "$log" 2>&1 || fail "notify --kind"
+expect_posts 11 "morca notify --kind"
 [ "$(last '.headers.priority')" = high ] || fail "backup priority"
-[ "$(last '.headers.title')" = "orca: nightly backup failed" ] || fail "backup title"
+[ "$(last '.headers.title')" = "morca: nightly backup failed" ] || fail "backup title"
 [ "$(last .body)" = "pg_dump: the dump doesn't read back" ] || fail "backup body: $(last .body)"
-out=$(./build/orca notify --kind backup-failed --subject nightly "again" 2>&1) || fail "notify --kind again"
+out=$(./build/morca notify --kind backup-failed --subject nightly "again" 2>&1) || fail "notify --kind again"
 case "$out" in "held back"*) ;; *) fail "the second backup alert: $out" ;; esac
-expect_posts 11 "orca notify --kind again"
-./build/orca notify --kind backup-failed --subject nightly --resolved --title "orca: backup ok" "ok" >> "$log" 2>&1 || fail "notify --resolved"
-expect_posts 12 "orca notify --resolved"
+expect_posts 11 "morca notify --kind again"
+./build/morca notify --kind backup-failed --subject nightly --resolved --title "morca: backup ok" "ok" >> "$log" 2>&1 || fail "notify --resolved"
+expect_posts 12 "morca notify --resolved"
 [ "$(last '.headers.priority')" = low ] || fail "backup resolved priority"
-echo "ok   orca notify --kind sends once per kind and subject; --resolved ends it"
+echo "ok   morca notify --kind sends once per kind and subject; --resolved ends it"
 
 # --- ntfy down ------------------------------------------------------------------
 kill "$fake"; wait "$fake" 2> /dev/null || true; fake=
-if ./build/orca notify --kind probe --subject down "while ntfy is down" > build/notify-down.out 2>&1; then
+if ./build/morca notify --kind probe --subject down "while ntfy is down" > build/notify-down.out 2>&1; then
     fail "notify succeeded with ntfy down"
 fi
 cat build/notify-down.out >> "$log"
@@ -301,7 +301,7 @@ q "DELETE FROM orca.notifications WHERE kind = 'disk'" > /dev/null
 start=$(date +%s)
 tick
 [ $(($(date +%s) - start)) -lt 30 ] || fail "a tick with ntfy down took too long"
-grep -q "orca: notify: .* alert not sent" "$log" || fail "no log line for the unsent alert"
+grep -q "morca: notify: .* alert not sent" "$log" || fail "no log line for the unsent alert"
 [ "$(q "SELECT count(*) FROM orca.notifications WHERE pending")" -eq 2 ] || fail "pending: $(q "SELECT kind FROM orca.notifications WHERE pending")"
 [ "$(q "SELECT attempts >= 1 FROM orca.notifications WHERE kind = 'disk'")" = t ] || fail "the disk alert's attempts"
 before=$(count)
@@ -314,11 +314,11 @@ grep -q "while ntfy is down" "$posts" || fail "the probe wasn't sent"
 echo "ok   ntfy down: ticks succeed, alerts wait in Postgres and go when it is back"
 
 # --- the UI ----------------------------------------------------------------------
-ORCA_UI_ADDR="127.0.0.1:$uport" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$uport" ./build/morca ui >> "$log" 2>&1 &
 ui=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 page=$(curl -fsS "$base/ops/control")
 echo "$page" | grep -q "<h2>Alerts</h2>" || fail "no Alerts on Ops > Control"
@@ -347,7 +347,7 @@ location=$(curl -s -o /dev/null -w '%{redirect_url}' "$base/ops")
 [ "$location" = "$base/ops/alerts" ] || fail "/ops goes to $location"
 apage=$(curl -fsS "$base/ops/alerts")
 echo "$apage" | grep -qF '<a href="/ops/alerts" aria-current="page">Alerts</a><a href="/ops/control">Control</a>' || fail "Alerts isn't first in the Ops menu, current"
-echo "$apage" | grep -qF "orca: toy run $spent failed" || fail "the failed run isn't listed"
+echo "$apage" | grep -qF "morca: toy run $spent failed" || fail "the failed run isn't listed"
 echo "$apage" | grep -qF "<a href=\"/runs/$spent\">run $spent</a>" || fail "no link to the failed run"
 echo "$apage" | grep -qF '<a href="/pipelines/toy">toy</a>' || fail "no link to the pipeline"
 echo "$apage" | grep -qF ">watchdog trip</span>" || fail "the trip isn't listed"
@@ -387,13 +387,13 @@ back=$(curl -fsS -H 'Accept: application/json' "$base$(echo "$second" | jq -r .p
 curl -fsS -D build/notify-live.h "$base/ops/alerts/live" | grep -qF '<table class="alerts">' || fail "the live fragment"
 grep -qi '^x-poll-every: 30' build/notify-live.h || fail "the fragment's X-Poll-Every: $(cat build/notify-live.h)"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/ops/alerts/live?before=$newest")" = 286 ] || fail "an older page's fragment isn't done"
-# orca alerts, over the database and --remote.
-out=$(./build/orca alerts --kind run-failed 2>&1) || fail "orca alerts: $out"
-[ "$(echo "$out" | grep -c "run-failed")" -eq 2 ] || fail "orca alerts --kind run-failed: $out"
-echo "$out" | grep -qF "orca: toy run $spent failed" || fail "orca alerts' title: $out"
-out=$(./build/orca --remote "http://127.0.0.1:$uport" alerts --open --json 2>&1) || fail "orca --remote alerts: $out"
-echo "$out" | jq -e '.open == 1 and (.alerts | length) == 1 and .alerts[0].kind == "disk"' > /dev/null || fail "orca --remote alerts --open --json: $out"
-echo "ok   Ops > Alerts lists each alert sent, with its links, delivery and state; filters, pages, JSON and orca alerts"
+# morca alerts, over the database and --remote.
+out=$(./build/morca alerts --kind run-failed 2>&1) || fail "morca alerts: $out"
+[ "$(echo "$out" | grep -c "run-failed")" -eq 2 ] || fail "morca alerts --kind run-failed: $out"
+echo "$out" | grep -qF "morca: toy run $spent failed" || fail "morca alerts' title: $out"
+out=$(./build/morca --remote "http://127.0.0.1:$uport" alerts --open --json 2>&1) || fail "morca --remote alerts: $out"
+echo "$out" | jq -e '.open == 1 and (.alerts | length) == 1 and .alerts[0].kind == "disk"' > /dev/null || fail "morca --remote alerts --open --json: $out"
+echo "ok   Ops > Alerts lists each alert sent, with its links, delivery and state; filters, pages, JSON and morca alerts"
 
 # --- no secret anywhere --------------------------------------------------------------
 curl -fsS "$base/api/system" > build/notify-api.json

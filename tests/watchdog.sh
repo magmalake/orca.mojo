@@ -1,5 +1,5 @@
 #!/bin/sh
-# The watchdog (orca.watchdog, ORCA_WATCHDOG_SECONDS), over toy and fanout.
+# The watchdog (morca.watchdog, MORCA_WATCHDOG_SECONDS), over toy and fanout.
 #
 # Against the stand-in EC2 API (tests/fake_ec2.py), with a limit of 2
 # launches an hour:
@@ -7,22 +7,22 @@
 # - a run of fanout launches 3 instances, which trips "launches": both
 #   pipelines are paused (the run going on finishes), with audit rows from
 #   `watchdog`, a trip row, a red banner on /, /ops/pools and /ops/control, /watchdog,
-#   /api/watchdog, `orca watchdog status`, and /metrics gauges;
+#   /api/watchdog, `morca watchdog status`, and /metrics gauges;
 # - a run queued for a paused pipeline stays queued;
 # - snoozing the rule (the command, and the UI's form) is audited, and
 #   unpausing then clears the banner and the gauge, and the rule doesn't
 #   trip again while snoozed; a snooze can be ended.
 #
-# Then rows seeded in Postgres, ticked by `orca tick` with the local runner:
+# Then rows seeded in Postgres, ticked by `morca tick` with the local runner:
 #
 # - idle workers pause the pipeline that owns them only;
 # - failing attempts pause the pipeline they belong to only;
 # - a run quiet for 30 minutes on sampled instances pauses its pipeline;
 # - a cost over $3 an hour pauses everything;
 # - a snoozed rule doesn't trip, a pipeline paused already isn't recorded
-#   again, and with ORCA_WATCHDOG_SECONDS=0 nothing is checked.
+#   again, and with MORCA_WATCHDOG_SECONDS=0 nothing is checked.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-watchdog starts a throwaway
+# Needs MORCA_DATABASE_URL (pixi run test-watchdog starts a throwaway
 # server), python3, curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -34,7 +34,7 @@ scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/watchdog.log
 : > "$log"
 dir=$PWD/build/fake-ec2-watchdog
@@ -60,7 +60,7 @@ fail() {
     stop
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 until_true() {
     i=0
     until [ "$(q "$1")" = t ]; do
@@ -68,36 +68,36 @@ until_true() {
     done
 }
 paused() { q "SELECT paused FROM orca.pipelines WHERE name = '$1'"; }
-tripped() { curl -fsS "$base/metrics" | grep "^orca_watchdog_tripped{rule=\"$1\"}" | cut -d' ' -f2; }
-export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
-export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
-export ORCA_STALE_SECONDS=10 ORCA_START_SECONDS=60
-export ORCA_LOGS=$PWD/build/watchdog-logs ORCA_CLUSTER_LOG_SECONDS=1 ORCA_SAMPLE_SECONDS=1
-export ORCA_FANOUT_SLEEP=0.2 ORCA_TOY_SLEEP=0
-export ORCA_RUN_ENV=ORCA_FANOUT_SLEEP,ORCA_TOY_SLEEP
-export ORCA_EC2_POOL_SECONDS=0
-export ORCA_WATCHDOG_SECONDS=1 ORCA_WATCHDOG_LAUNCHES=2
+tripped() { curl -fsS "$base/metrics" | grep "^morca_watchdog_tripped{rule=\"$1\"}" | cut -d' ' -f2; }
+export MORCA_RUNNER=ec2 MORCA_EC2_MODE=direct MORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
+export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test MORCA_EC2_AMI=ami-test
+export MORCA_STALE_SECONDS=10 MORCA_START_SECONDS=60
+export MORCA_LOGS=$PWD/build/watchdog-logs MORCA_CLUSTER_LOG_SECONDS=1 MORCA_SAMPLE_SECONDS=1
+export MORCA_FANOUT_SLEEP=0.2 MORCA_TOY_SLEEP=0
+export MORCA_RUN_ENV=MORCA_FANOUT_SLEEP,MORCA_TOY_SLEEP
+export MORCA_EC2_POOL_SECONDS=0
+export MORCA_WATCHDOG_SECONDS=1 MORCA_WATCHDOG_LAUNCHES=2
 python3 tests/fake_ec2.py "$port" "$dir" >> "$log" 2>&1 &
 fake=$!
 i=0
-until curl -s -o /dev/null "$ORCA_EC2_ENDPOINT/"; do
+until curl -s -o /dev/null "$MORCA_EC2_ENDPOINT/"; do
     i=$((i + 1)); [ "$i" -lt 100 ] || fail "the stand-in EC2 didn't start"; sleep 0.1
 done
-ORCA_UI_ADDR="127.0.0.1:$uport" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$uport" ./build/morca ui >> "$log" 2>&1 &
 ui=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
-./build/orca register --image orca:test ./build/toy >> "$log" 2>&1 || fail "register the toy"
-./build/orca register --image orca:test --workers 2 ./build/fanout >> "$log" 2>&1 || fail "register fanout"
+./build/morca register --image morca:test ./build/toy >> "$log" 2>&1 || fail "register the toy"
+./build/morca register --image morca:test --workers 2 ./build/fanout >> "$log" 2>&1 || fail "register fanout"
 # Nothing yet: the rules are fine and nothing is shown.
 curl -fsS "$base/" | grep -q 'alert--trip' && fail "a banner with nothing tripped"
-./build/orca scheduler >> "$log" 2>&1 &
+./build/morca scheduler >> "$log" 2>&1 &
 sched=$!
 
 # A launch storm.
-./build/orca backfill fanout 2024-01 >> "$log" 2>&1 || fail "backfill fanout"
+./build/morca backfill fanout 2024-01 >> "$log" 2>&1 || fail "backfill fanout"
 r1=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
 until_true "SELECT count(*) = 2 FROM orca.pipelines WHERE paused" 120
 [ "$(q "SELECT count(*) FROM orca.watchdog_trips WHERE rule = 'launches'")" -eq 1 ] || fail "the trip rows"
@@ -108,7 +108,7 @@ echo "ok   a launch storm pauses every pipeline, audited as watchdog"
 # The run going on finishes; a new one stays queued behind the pause.
 until_true "SELECT status IN ('succeeded', 'failed') FROM orca.runs WHERE id = $r1" 240
 [ "$(q "SELECT status FROM orca.runs WHERE id = $r1")" = succeeded ] || fail "run $r1: $(q "SELECT status || ' ' || coalesce(error, '') FROM orca.runs WHERE id = $r1")"
-./build/orca backfill toy 2024-01 >> "$log" 2>&1 || fail "backfill the toy"
+./build/morca backfill toy 2024-01 >> "$log" 2>&1 || fail "backfill the toy"
 sleep 4
 [ "$(q "SELECT status FROM orca.runs WHERE pipeline = 'toy'")" = queued ] || fail "the toy's run isn't queued"
 [ "$(q "SELECT count(*) FROM orca.watchdog_trips")" -eq 1 ] || fail "paused pipelines were recorded again"
@@ -131,28 +131,28 @@ echo "$api" | jq -e '(.rules | map(.rule)) == ["launches", "cost", "idle", "fail
     || fail "/api/watchdog: $api"
 m=$(curl -fsS "$base/metrics")
 [ "$(tripped launches)" = 1 ] && [ "$(tripped cost)" = 0 ] && [ "$(tripped failing)" = 0 ] || fail "the tripped gauges: $(echo "$m" | grep watchdog_tripped)"
-echo "$m" | grep -q '^orca_watchdog_value{rule="launches"} 3' || fail "the value gauge"
-echo "$m" | grep -q '^orca_watchdog_threshold{rule="launches"} 2' || fail "the threshold gauge"
-out=$(./build/orca watchdog status 2>&1) || fail "orca watchdog status: $out"
-echo "$out" | grep -q '^launches .*TRIPPED' || fail "orca watchdog status: $out"
-echo "$out" | grep -q '^trip launches at .*paused fanout toy' || fail "orca watchdog status trips: $out"
-./build/orca --remote "$base" watchdog status | grep -q '^launches .*TRIPPED' || fail "orca --remote watchdog status"
-./build/orca watchdog status --json | jq -e '.trips | length == 1' > /dev/null || fail "orca watchdog status --json"
+echo "$m" | grep -q '^morca_watchdog_value{rule="launches"} 3' || fail "the value gauge"
+echo "$m" | grep -q '^morca_watchdog_threshold{rule="launches"} 2' || fail "the threshold gauge"
+out=$(./build/morca watchdog status 2>&1) || fail "morca watchdog status: $out"
+echo "$out" | grep -q '^launches .*TRIPPED' || fail "morca watchdog status: $out"
+echo "$out" | grep -q '^trip launches at .*paused fanout toy' || fail "morca watchdog status trips: $out"
+./build/morca --remote "$base" watchdog status | grep -q '^launches .*TRIPPED' || fail "morca --remote watchdog status"
+./build/morca watchdog status --json | jq -e '.trips | length == 1' > /dev/null || fail "morca watchdog status --json"
 echo "ok   the banner on /, /ops/pools and /ops/control, /watchdog, /metrics and the status command show the trip"
 
 # Snoozing, and unpausing clears.
-./build/orca watchdog snooze nope 1h > /dev/null 2>&1 && fail "snoozing no rule"
-./build/orca watchdog snooze launches 1x > /dev/null 2>&1 && fail "snoozing for 1x"
-./build/orca watchdog snooze launches 1h >> "$log" 2>&1 || fail "snooze launches"
+./build/morca watchdog snooze nope 1h > /dev/null 2>&1 && fail "snoozing no rule"
+./build/morca watchdog snooze launches 1x > /dev/null 2>&1 && fail "snoozing for 1x"
+./build/morca watchdog snooze launches 1h >> "$log" 2>&1 || fail "snooze launches"
 [ "$(q "SELECT count(*) FROM orca.audit WHERE action = '/watchdog/launches/snooze' AND detail = 'duration=1h' AND source = 'local'")" -eq 1 ] || fail "the snooze isn't audited"
 curl -fsS -o /dev/null -H "Origin: $base" -d duration=30m "$base/watchdog/cost/snooze" || fail "the UI's snooze"
 [ "$(q "SELECT snoozed_until > now() + interval '25 minutes' AND snoozed_until < now() + interval '31 minutes' FROM orca.watchdog_rules WHERE rule = 'cost'")" = t ] || fail "the UI's snooze isn't stored"
 curl -s -o /dev/null -w '%{http_code}' -H "Origin: $base" -d duration=nonsense "$base/watchdog/cost/snooze" | grep -q 409 || fail "a bad duration"
 curl -fsS "$base/api/watchdog" | jq -e '(.rules[] | select(.rule == "launches") | .snoozed_until != null)' > /dev/null || fail "the snooze isn't shown"
-./build/orca watchdog status | grep -q '^cost .*snoozed until' || fail "status shows no snooze"
-./build/orca unpause toy > /dev/null || fail "unpause toy"
+./build/morca watchdog status | grep -q '^cost .*snoozed until' || fail "status shows no snooze"
+./build/morca unpause toy > /dev/null || fail "unpause toy"
 curl -fsS "$base/" | grep -q 'Paused: <a href="/pipelines/fanout">fanout</a>\. ' || fail "toy unpaused: the trip should list only fanout"
-./build/orca unpause fanout > /dev/null || fail "unpause fanout"
+./build/morca unpause fanout > /dev/null || fail "unpause fanout"
 curl -fsS "$base/" | grep -q 'alert--trip' && fail "the banner stays after unpausing"
 curl -fsS "$base/ops/pools" | grep -q 'alert--trip' && fail "the banner stays on /ops/pools"
 [ "$(tripped launches)" = 0 ] || fail "the gauge stays 1"
@@ -165,7 +165,7 @@ until_true "SELECT status IN ('succeeded', 'failed') FROM orca.runs WHERE id = $
 echo "ok   snoozing is audited and stops the rule; unpausing clears the banner and the gauge"
 
 # A snooze ended trips it again (the launches are still in the hour).
-./build/orca watchdog snooze launches off >> "$log" 2>&1 || fail "snooze off"
+./build/morca watchdog snooze launches off >> "$log" 2>&1 || fail "snooze off"
 until_true "SELECT count(*) = 2 FROM orca.pipelines WHERE paused" 60
 curl -fsS "$base/" | grep -q 'alert--trip' || fail "no banner after the snooze ended"
 echo "ok   a snooze that ends lets the rule trip again"
@@ -179,12 +179,12 @@ curl -fsS -o /dev/null -H "Origin: $base" -d '' "$base/watchdog/all/ack" || fail
 curl -fsS "$base/" | grep -q 'alert--trip' && fail "the banner shows an acknowledged trip"
 [ "$(q "SELECT count(*) FROM orca.pipelines WHERE paused")" = "$paused_before" ] || fail "keep paused unpaused something"
 [ "$(q "SELECT acknowledged_by FROM orca.watchdog_trips WHERE id = $trip")" = ui ] || fail "the trip isn't acknowledged"
-./build/orca watchdog status | grep -q '^trip launches .*(acknowledged by ui)' || fail "status doesn't mark the acknowledged trip"
-./build/orca watchdog status --json | jq -e '.trips | map(select(.id == '"$trip"' and .acknowledged_by == "ui")) | length == 1' > /dev/null || fail "status --json"
+./build/morca watchdog status | grep -q '^trip launches .*(acknowledged by ui)' || fail "status doesn't mark the acknowledged trip"
+./build/morca watchdog status --json | jq -e '.trips | map(select(.id == '"$trip"' and .acknowledged_by == "ui")) | length == 1' > /dev/null || fail "status --json"
 again=$(q "INSERT INTO orca.watchdog_trips (rule, value, threshold, detail, pipelines) VALUES ('launches', 3, 2, 'again', 'toy') RETURNING id" | head -1)
 curl -fsS "$base/" | grep -q 'Keep paused' || fail "no Keep paused button on the banner"
-./build/orca watchdog ack nonsense > /dev/null 2>&1 && fail "ack of nonsense"
-./build/orca watchdog ack "$again" >> "$log" 2>&1 || fail "orca watchdog ack"
+./build/morca watchdog ack nonsense > /dev/null 2>&1 && fail "ack of nonsense"
+./build/morca watchdog ack "$again" >> "$log" 2>&1 || fail "morca watchdog ack"
 curl -fsS "$base/" | grep -q 'alert--trip' && fail "the banner shows a trip acknowledged by the command"
 [ "$(q "SELECT count(*) FROM orca.audit WHERE action = '/watchdog/$again/ack' AND source = 'local'")" -eq 1 ] || fail "the ack isn't audited"
 [ "$(q "SELECT count(*) FROM orca.pipelines WHERE paused")" = "$paused_before" ] || fail "ack unpaused something"
@@ -193,19 +193,19 @@ stop
 grep -q "can't check the watchdog" "$log" && fail "the watchdog raised"
 
 # ---- Seeded rows, ticked locally ----------------------------------------
-# ORCA_RUNNER unset is the local runner too, with the cost rule on; set to
+# MORCA_RUNNER unset is the local runner too, with the cost rule on; set to
 # local, the cost rule is off (the last section below).
-unset ORCA_RUNNER
-unset ORCA_EC2_MODE ORCA_EC2_ENDPOINT ORCA_EC2_AMI ORCA_LOGS ORCA_RUN_ENV
-export ORCA_WATCHDOG_LAUNCHES=1000 ORCA_STALE_SECONDS=3600
+unset MORCA_RUNNER
+unset MORCA_EC2_MODE MORCA_EC2_ENDPOINT MORCA_EC2_AMI MORCA_LOGS MORCA_RUN_ENV
+export MORCA_WATCHDOG_LAUNCHES=1000 MORCA_STALE_SECONDS=3600
 reset() {
     q "DELETE FROM orca.fleet_samples; DELETE FROM orca.instances; DELETE FROM orca.attempts WHERE host = 'seed';
        DELETE FROM orca.steps WHERE step LIKE 'seed%'; DELETE FROM orca.runs WHERE trigger = 'seed';
        DELETE FROM orca.watchdog_trips; DELETE FROM orca.watchdog_rules; DELETE FROM orca.audit;
        UPDATE orca.pipelines SET paused = false" > /dev/null
 }
-tick() { ORCA_WATCHDOG_SECONDS=1 ./build/orca tick >> "$log" 2>&1 || fail "tick"; }
-tick_off() { ORCA_WATCHDOG_SECONDS=0 ./build/orca tick >> "$log" 2>&1 || fail "tick"; }
+tick() { MORCA_WATCHDOG_SECONDS=1 ./build/morca tick >> "$log" 2>&1 || fail "tick"; }
+tick_off() { MORCA_WATCHDOG_SECONDS=0 ./build/morca tick >> "$log" 2>&1 || fail "tick"; }
 only() {  # the paused pipelines, comma-separated
     q "SELECT coalesce(string_agg(name, ',' ORDER BY name), '') FROM orca.pipelines WHERE paused"
 }
@@ -222,7 +222,7 @@ tick_off
 [ "$(only)" = "" ] || fail "paused with the watchdog off"
 [ "$(q "SELECT count(*) FROM orca.watchdog_rules")" -eq 0 ] || fail "the watchdog off kept readings"
 [ "$(q "SELECT count(*) FROM orca.audit")" -eq 0 ] || fail "the watchdog off audited"
-echo "ok   ORCA_WATCHDOG_SECONDS=0: nothing checked, nothing paused"
+echo "ok   MORCA_WATCHDOG_SECONDS=0: nothing checked, nothing paused"
 
 # Cost: 8 x $0.58 up for 20 minutes is over $3 an hour, sustained: everything.
 tick
@@ -239,7 +239,7 @@ tick
 reset
 q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched)
    SELECT 'i-seed-' || n, $fanrun, 1, 'worker', 'c7g.4xlarge', 'on-demand', now() - interval '20 minutes' FROM generate_series(1, 8) n" > /dev/null
-./build/orca watchdog snooze cost 1h >> "$log" 2>&1
+./build/morca watchdog snooze cost 1h >> "$log" 2>&1
 tick
 [ "$(only)" = "" ] || fail "a snoozed rule paused: $(only)"
 [ "$(q "SELECT value > 4.6 AND value < 4.7 FROM orca.watchdog_rules WHERE rule = 'cost'")" = t ] || fail "the cost reading"
@@ -330,33 +330,33 @@ tick
 [ "$(q "SELECT count(*) FROM orca.watchdog_trips WHERE rule = 'control' AND detail = 'control instance memory 98.3% (limit 90%)'
         AND checks @> '[{\"name\": \"memory\", \"past\": true}, {\"name\": \"disk\", \"past\": false}]'")" -eq 1 ] \
     || fail "the control trip: $(q "SELECT detail, checks FROM orca.watchdog_trips")"
-out=$(./build/orca watchdog status 2>&1) || fail "orca watchdog status: $out"
+out=$(./build/morca watchdog status 2>&1) || fail "morca watchdog status: $out"
 echo "$out" | grep -q '^control   memory 98.30 % (trips over 90.00, past), disk 10.60 % (trips over 85.00)  TRIPPED on memory$' \
     || fail "status doesn't show both control thresholds: $out"
-./build/orca watchdog status --json | jq -e '.rules[] | select(.rule == "control") | .tripped_on == ["memory"]
+./build/morca watchdog status --json | jq -e '.rules[] | select(.rule == "control") | .tripped_on == ["memory"]
     and (.checks | map(.name)) == ["memory", "disk"] and (.checks | map(.limit)) == [90, 85]' > /dev/null \
-    || fail "status --json: $(./build/orca watchdog status --json)"
-./build/orca watchdog status --json | jq -e '.trips[0].tripped_on == ["memory"]' > /dev/null || fail "the trip's tripped_on"
+    || fail "status --json: $(./build/morca watchdog status --json)"
+./build/morca watchdog status --json | jq -e '.trips[0].tripped_on == ["memory"]' > /dev/null || fail "the trip's tripped_on"
 # Memory back down while the pipelines stay paused: the reading is fine,
 # the trip still says memory.
 q "UPDATE orca.system_minutes SET mem_sum = 10.6, mem_max = 10.6" > /dev/null
 tick
-echo "$(./build/orca watchdog status)" | grep -q '^control   memory 10.60 % (trips over 90.00), disk 10.60 % (trips over 85.00)  TRIPPED on memory$' \
-    || fail "status after memory came down: $(./build/orca watchdog status)"
+echo "$(./build/morca watchdog status)" | grep -q '^control   memory 10.60 % (trips over 90.00), disk 10.60 % (trips over 85.00)  TRIPPED on memory$' \
+    || fail "status after memory came down: $(./build/morca watchdog status)"
 q "DELETE FROM orca.system_minutes" > /dev/null
 echo "ok   control: memory over its limit pauses all; status shows memory and disk and which one tripped"
 
-# ORCA_RUNNER=local: no instances, a fixed price. The cost rule reads "fixed
+# MORCA_RUNNER=local: no instances, a fixed price. The cost rule reads "fixed
 # price" and never trips, with the same seeded instances that tripped it above.
 reset
 q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched)
    SELECT 'i-seed-' || n, $fanrun, 1, 'worker', 'c7g.4xlarge', 'on-demand', now() - interval '20 minutes' FROM generate_series(1, 8) n" > /dev/null
-ORCA_RUNNER=local ORCA_WATCHDOG_SECONDS=1 ./build/orca tick >> "$log" 2>&1 || fail "tick"
+MORCA_RUNNER=local MORCA_WATCHDOG_SECONDS=1 ./build/morca tick >> "$log" 2>&1 || fail "tick"
 [ "$(only)" = "" ] || fail "the cost rule tripped on the local runner: $(only)"
 [ "$(q "SELECT detail FROM orca.watchdog_rules WHERE rule = 'cost'")" = "fixed price" ] || fail "the cost rule's detail"
 [ "$(q "SELECT count(*) FROM orca.watchdog_rules WHERE rule <> 'cost'")" -ge 5 ] || fail "the other rules weren't checked"
-ORCA_RUNNER=local ./build/orca watchdog status 2>&1 | grep -q '^cost .*fixed price' || fail "status doesn't say fixed price"
-echo "ok   ORCA_RUNNER=local: the cost rule reads fixed price and doesn't trip; the others run"
+MORCA_RUNNER=local ./build/morca watchdog status 2>&1 | grep -q '^cost .*fixed price' || fail "status doesn't say fixed price"
+echo "ok   MORCA_RUNNER=local: the cost rule reads fixed price and doesn't trip; the others run"
 
 reset
 grep -q "can't check the watchdog" "$log" && fail "the watchdog raised"

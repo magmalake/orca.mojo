@@ -1,9 +1,9 @@
 """A daily pipeline whose schedule fires every six hours, each fire for the
-day before: four fires per partition, which `orca register` warns of
+day before: four fires per partition, which `morca register` warns of
 (tests/one_run_per_key.sh)."""
 
 from dista import Seq
-from orca import (
+from morca import (
     Cron,
     Ctx,
     Daily,
@@ -12,7 +12,7 @@ from orca import (
     Mapped,
     Pipeline,
     Step,
-    orca_main,
+    morca_main,
 )
 
 
@@ -39,4 +39,4 @@ comptime SixHourly = Pipeline[
 
 
 def main() raises:
-    orca_main[SixHourly]()
+    morca_main[SixHourly]()

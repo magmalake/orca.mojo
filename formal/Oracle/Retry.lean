@@ -1,12 +1,12 @@
-import Orca.Retry.Model
+import Morca.Retry.Model
 import Oracle.Words
 
 /-!
-# `orca-oracle retry`
+# `morca-oracle retry`
 
 For every sequence of up to five events, the snapshots the retry model says
 the table holds afterwards. tests/test_formal_retry.mojo replays the same
-sequences through `orca.tables.append` and compares
+sequences through `morca.tables.append` and compares
 (formal/difftest/retry.cases is this output).
 
 Events, one letter each:
@@ -18,7 +18,7 @@ Events, one letter each:
 A snapshot prints as `m<attempt>.<commit>` (the step's own) or `o<commit>`
 (the other partition's); an empty table as `-`.
 -/
-namespace Orca.Oracle.Retry
+namespace Morca.Oracle.Retry
 
 def me : StepId := StepId.mk "formal_retry" 1 "load" "2024-01"
 
@@ -64,4 +64,4 @@ def run (events : String) : Table :=
 def lines : List String :=
   (upTo ["c", "x", "o"] 5).map fun w => w ++ " " ++ render (run w)
 
-end Orca.Oracle.Retry
+end Morca.Oracle.Retry

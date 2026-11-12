@@ -1,8 +1,8 @@
 #!/bin/sh
-# `<binary> run` against a pipeline `orca register` gave a binary: it never
+# `<binary> run` against a pipeline `morca register` gave a binary: it never
 # changes the registration, which is what the scheduler queues and counts
 # as done, and a binary with other code is refused unless --allow-new-code.
-# Needs ORCA_DATABASE_URL (pixi run test-manual-run starts a throwaway
+# Needs MORCA_DATABASE_URL (pixi run test-manual-run starts a throwaway
 # server).
 set -eu
 cd "$(dirname "$0")/.."
@@ -10,11 +10,11 @@ mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 
 log=build/manual-run.log
 : > "$log"
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 fail() {
     echo "FAIL: $*"
     tail -30 "$log"
@@ -29,7 +29,7 @@ hash=$(./build/toy describe | jq -r .registry_hash)
 
 # Registered, and then the registered build is another one (a fix pushed
 # and registered since this binary was built, or a dev build run by hand).
-ORCA_NOW=2024-01-15T00:00Z ./build/orca register ./build/toy >> "$log" 2>&1 || fail "register"
+MORCA_NOW=2024-01-15T00:00Z ./build/morca register ./build/toy >> "$log" 2>&1 || fail "register"
 q "UPDATE orca.pipelines SET registry_hash = '0xregistered', describe = jsonb_set(describe, '{registry_hash}', '\"0xregistered\"')" > /dev/null
 version=$(q "SELECT version FROM orca.pipelines WHERE name = 'toy'")
 runs=$(q "SELECT count(*) FROM orca.runs")
@@ -58,7 +58,7 @@ run=$(q "SELECT max(id) FROM orca.runs")
 [ "$(q "SELECT v.registry_hash FROM orca.runs r JOIN orca.pipeline_versions v ON v.id = r.version WHERE r.id = $run")" = "$hash" ] \
     || fail "the run's version isn't its own code"
 # And it doesn't make 2024-02 done for the registered code.
-out=$(ORCA_NOW=2024-03-01T00:00Z ./build/orca backfill toy 2024-02) || fail "backfill exited $?"
+out=$(MORCA_NOW=2024-03-01T00:00Z ./build/morca backfill toy 2024-02) || fail "backfill exited $?"
 [ "$out" = "queued 1 runs" ] || fail "the manual run counted as the registered code's: $out"
 
 # The registered code itself runs by hand as before, still without

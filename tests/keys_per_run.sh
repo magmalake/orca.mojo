@@ -1,7 +1,7 @@
 #!/bin/sh
-# keys_per_run for sensors and fills (#240), set in orca.toml over the code's:
+# keys_per_run for sensors and fills (#240), set in morca.toml over the code's:
 #
-# - `orca config show` gives it, from the file; without it in the file, the
+# - `morca config show` gives it, from the file; without it in the file, the
 #   code's (1) again;
 # - a time-partition sensor (tests/sensors' clean, monthly, kept paused so
 #   its runs stay queued) puts a new snapshot's keys in its queued run that
@@ -11,7 +11,7 @@
 # - a fill (examples/daily, fills = "all") takes keys_per_run partitions a
 #   run, in fill_order, fill_max_runs runs at once, and fills its range.
 #
-# Needs ORCA_DATABASE_URL (pixi run -e data test-keys-per-run starts a throwaway
+# Needs MORCA_DATABASE_URL (pixi run -e data test-keys-per-run starts a throwaway
 # server).
 set -eu
 cd "$(dirname "$0")/.."
@@ -26,36 +26,36 @@ done
 scripts/mojo-build.sh -I src $DEP_INC examples/daily.mojo -o build/kpr-daily &
 pids="$pids $!"
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 for pid in $pids $!; do wait "$pid"; done
 log=build/keys-per-run.log
 : > "$log"
 proj=$PWD/build/kpr-project
 rm -rf "$proj" build/kpr-wh build/kpr-logs
 mkdir -p "$proj"
-export ORCA_WAREHOUSE=$PWD/build/kpr-wh ORCA_LOGS=$PWD/build/kpr-logs
-export ORCA_SENSE_SECONDS=0 ORCA_WATCHDOG_SECONDS=0 ORCA_SAMPLE_SECONDS=0
+export MORCA_WAREHOUSE=$PWD/build/kpr-wh MORCA_LOGS=$PWD/build/kpr-logs
+export MORCA_SENSE_SECONDS=0 MORCA_WATCHDOG_SECONDS=0 MORCA_SAMPLE_SECONDS=0
 fail() {
     echo "FAIL: $*"
     tail -30 "$log"
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 sensed() { q "SELECT coalesce(string_agg(partitions, ' ' ORDER BY id), '') FROM orca.runs WHERE pipeline = 'clean' AND trigger = 'sensor'"; }
-source_commit() { ./build/kpr-source "$ORCA_WAREHOUSE" "$@" > /dev/null 2>> "$log" || fail "source $*"; }
-tick() { ORCA_NOW=${1:-2024-12-15T00:00Z} ./build/orca tick >> "$log" 2>&1 || fail "tick exited $?"; }
-reg() { ./build/orca register --config "$proj/orca.toml" "$@" >> "$log" 2>&1 || fail "register $*"; }
+source_commit() { ./build/kpr-source "$MORCA_WAREHOUSE" "$@" > /dev/null 2>> "$log" || fail "source $*"; }
+tick() { MORCA_NOW=${1:-2024-12-15T00:00Z} ./build/morca tick >> "$log" 2>&1 || fail "tick exited $?"; }
+reg() { ./build/morca register --config "$proj/morca.toml" "$@" >> "$log" 2>&1 || fail "register $*"; }
 
 # --- A sensor's runs: topped up, then batched ---
 source_commit 2024-01
-cat > "$proj/orca.toml" << 'EOF'
+cat > "$proj/morca.toml" << 'EOF'
 [pipelines.clean]
 keys_per_run = 3
 EOF
 reg ./build/kpr-clean
-./build/orca config show clean > build/kpr-show.txt 2>&1 || fail "config show"
-grep -q "keys_per_run.*3.*orca.toml" build/kpr-show.txt || fail "config show: $(grep keys_per_run build/kpr-show.txt)"
-./build/orca pause clean >> "$log" 2>&1 || fail "pause"
+./build/morca config show clean > build/kpr-show.txt 2>&1 || fail "config show"
+grep -q "keys_per_run.*3.*morca.toml" build/kpr-show.txt || fail "config show: $(grep keys_per_run build/kpr-show.txt)"
+./build/morca pause clean >> "$log" 2>&1 || fail "pause"
 source_commit 2024-02
 tick
 [ "$(sensed)" = "2024-02" ] || fail "the first sensed run: $(sensed)"
@@ -88,12 +88,12 @@ tick
 # run, as before #240.
 clear_runs() { q "UPDATE orca.sensed SET run = NULL WHERE pipeline = 'clean'; DELETE FROM orca.runs WHERE pipeline = 'clean'" > /dev/null; }
 clear_runs
-cat > "$proj/orca.toml" << 'EOF'
+cat > "$proj/morca.toml" << 'EOF'
 [pipelines.clean]
 max_runs = 1
 EOF
 reg ./build/kpr-clean
-./build/orca config show clean > build/kpr-show.txt 2>&1 || fail "config show"
+./build/morca config show clean > build/kpr-show.txt 2>&1 || fail "config show"
 grep -q "keys_per_run.*1" build/kpr-show.txt || fail "config show without it: $(grep keys_per_run build/kpr-show.txt)"
 clear_runs
 source_commit 2024-02,2024-03
@@ -103,14 +103,14 @@ tick
 [ "$(sensed)" = "2024-02,2024-03 2024-04" ] || fail "keys_per_run 1: $(sensed)"
 
 # --- A fill: keys_per_run partitions a run, newest first ---
-cat > "$proj/orca.toml" << 'EOF'
+cat > "$proj/morca.toml" << 'EOF'
 [pipelines.daily]
 fills = "all"
 fill_order = "newest"
 fill_max_runs = 2
 keys_per_run = 3
 EOF
-ORCA_NOW=2024-01-08T12:00Z ./build/orca register --config "$proj/orca.toml" ./build/kpr-daily >> "$log" 2>&1 \
+MORCA_NOW=2024-01-08T12:00Z ./build/morca register --config "$proj/morca.toml" ./build/kpr-daily >> "$log" 2>&1 \
     || fail "register daily"
 fills() { q "SELECT coalesce(string_agg(partitions, ' ' ORDER BY id), '') FROM orca.runs WHERE pipeline = 'daily' AND trigger = 'fill'"; }
 settle() {

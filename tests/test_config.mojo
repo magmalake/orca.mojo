@@ -1,11 +1,11 @@
-"""What `orca register` reads from orca.toml (`orca.config`): the keys it
+"""What `morca register` reads from morca.toml (`morca.config`): the keys it
 checks, the order values win in, and what a registration records."""
 
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
 from json import loads
 
-from orca.config import (
+from morca.config import (
     FROM_FILE,
     FROM_FLAG,
     ProjectConfig,
@@ -15,7 +15,7 @@ from orca.config import (
     parse_workers,
     resolve,
 )
-from orca.pool_config import NO_WAIT, read_pools
+from morca.pool_config import NO_WAIT, read_pools
 
 comptime EXAMPLE = """[defaults]
 placement = "ec2"
@@ -42,7 +42,7 @@ hostname = "orca.mlake.dev"
 
 def _refused(text: String, why: String) raises:
     try:
-        _ = ProjectConfig(text, "orca.toml")
+        _ = ProjectConfig(text, "morca.toml")
     except e:
         if why not in String(e):
             raise Error("refused ", repr(text), " but said: ", e)
@@ -51,7 +51,7 @@ def _refused(text: String, why: String) raises:
 
 
 def test_the_example_reads() raises:
-    var f = ProjectConfig(EXAMPLE, "orca.toml", "abc123", True)
+    var f = ProjectConfig(EXAMPLE, "morca.toml", "abc123", True)
     assert_equal(f.pipelines(), ["gharchive", "mojo_repos", "bare"])
     assert_true(f.has("bare"))
     assert_false(f.has("census"))
@@ -60,29 +60,29 @@ def test_the_example_reads() raises:
 
 
 def test_entries_say_where() raises:
-    # What `orca config check` checks, each with its file:line and table.
-    var f = ProjectConfig(EXAMPLE, "orca.toml")
+    # What `morca config check` checks, each with its file:line and table.
+    var f = ProjectConfig(EXAMPLE, "morca.toml")
     var heads = f.entries("head_type")
     assert_equal(len(heads), 1)
-    assert_equal(heads[0][0], "orca.toml:3: [defaults] head_type")
+    assert_equal(heads[0][0], "morca.toml:3: [defaults] head_type")
     assert_equal(heads[0][1], "t4g.medium")
     var workers = f.entries("worker_type")
     assert_equal(len(workers), 1)
     assert_equal(
-        workers[0][0], "orca.toml:7: [pipelines.gharchive] worker_type"
+        workers[0][0], "morca.toml:7: [pipelines.gharchive] worker_type"
     )
     var secrets = f.entries("secrets")
     assert_equal(len(secrets), 1)
     assert_equal(
         secrets[0][0],
-        "orca.toml:15: [pipelines.mojo_repos] secrets: GITHUB_TOKEN",
+        "morca.toml:15: [pipelines.mojo_repos] secrets: GITHUB_TOKEN",
     )
     assert_equal(secrets[0][1], "orca/github-token")
     assert_equal(len(f.entries("fills")), 0)
 
 
 def test_pipeline_beats_defaults() raises:
-    var f = ProjectConfig(EXAMPLE, "orca.toml")
+    var f = ProjectConfig(EXAMPLE, "morca.toml")
     var r = resolve("gharchive", RegisterFlags(), f)
     assert_true(r.in_file)
     assert_equal(r.text("placement"), "ec2")
@@ -116,7 +116,7 @@ def test_pipeline_beats_defaults() raises:
 
 
 def test_flags_beat_the_file_and_are_recorded() raises:
-    var f = ProjectConfig(EXAMPLE, "orca.toml", "abc123")
+    var f = ProjectConfig(EXAMPLE, "morca.toml", "abc123")
     var flags = RegisterFlags()
     flags.values["workers"] = canonical_flag("workers", "2..8")
     flags.secrets.append("OTHER=orca/other")
@@ -126,7 +126,7 @@ def test_flags_beat_the_file_and_are_recorded() raises:
     assert_equal(r.values["workers"].detail, "--workers")
     assert_equal(r.secret_specs(), ["OTHER=orca/other"])
     var c = loads(r.config_json(f))
-    assert_equal(c["file"].string_value(), "orca.toml")
+    assert_equal(c["file"].string_value(), "morca.toml")
     assert_equal(c["commit"].string_value(), "abc123")
     assert_equal(c["hash"].string_value(), f.hash)
     assert_equal(c["overrides"]["workers"].string_value(), "2..8")
@@ -164,10 +164,10 @@ def test_values_are_checked() raises:
     _refused('[pipelines.a]\nsecrets = { T = "prod/t" }\n', "under orca/")
     _refused('[pipelines.a]\nsecrets = { t = "orca/t" }\n', "A-Z")
     _refused('[pipelines.a]\nenv = { GITHUB_TOKEN = "v" }\n', "secret")
-    _refused('[pipelines.a]\nenv = { DISTA_ROLE = "x" }\n', "by orca")
+    _refused('[pipelines.a]\nenv = { DISTA_ROLE = "x" }\n', "by morca")
     _refused("[pipelines.a]\nenv = { X = [1] }\n", "a string, a number")
     _refused("[pipelines.a]\nenv = { X = { Y = 1 } }\n", "a string, a number")
-    # The fill keys (orca.fill).
+    # The fill keys (morca.fill).
     _refused('[pipelines.a]\nfills = "some"\n', "since_registration")
     _refused('[defaults]\nfills = ["x"]\n', "fills: is a string")
     _refused('[pipelines.a]\nfill_order = "random"\n', '"oldest" or "newest"')
@@ -184,11 +184,11 @@ def test_values_are_checked() raises:
     try:
         _ = ProjectConfig(
             '[pipelines.a]\nfills = "all"\n\nfill_window = "1..30"\n',
-            "orca.toml",
+            "morca.toml",
         )
     except e:
         assert_true(
-            String(e).startswith("orca.toml:4: [pipelines.a] fill_window:"),
+            String(e).startswith("morca.toml:4: [pipelines.a] fill_window:"),
             String(e),
         )
 
@@ -203,7 +203,7 @@ def test_fill_keys() raises:
             "[pipelines.b]\nfill_lag = 0\n",
             '[pipelines.c]\nfill_lag = "90m"\n',
         ),
-        "orca.toml",
+        "morca.toml",
     )
     var a = resolve("a", RegisterFlags(), f)
     assert_equal(a.text("fills"), "all")
@@ -219,19 +219,19 @@ def test_fill_keys() raises:
     assert_equal(b.text("fill_lag"), "0")
     assert_equal(
         f.where("b", "fills", b.values["fills"].copy()),
-        "orca.toml:2: [defaults]",
+        "morca.toml:2: [defaults]",
     )
 
 
 def test_learned_requests() raises:
-    # `auto` and `auto..MAX` (orca.recommend), and `learn`.
+    # `auto` and `auto..MAX` (morca.recommend), and `learn`.
     var f = ProjectConfig(
         String(
             '[defaults]\nmemory_gb = "auto"\n',
             '[pipelines.a]\ncpus = "auto..8"\n',
             '[pipelines.b]\nmemory_gb = "auto..24.0"\nlearn = false\n',
         ),
-        "orca.toml",
+        "morca.toml",
     )
     var a = resolve("a", RegisterFlags(), f)
     assert_equal(a.text("memory_gb"), "auto")
@@ -258,7 +258,7 @@ def test_auto_max_runs() raises:
             '[pipelines.b]\nmax_runs = "auto..64"\n',
             '[pipelines.c]\nmax_runs = "auto..8"\n',
         ),
-        "orca.toml",
+        "morca.toml",
     )
     assert_equal(resolve("a", RegisterFlags(), f).text("max_runs"), "auto")
     assert_equal(resolve("b", RegisterFlags(), f).text("max_runs"), "auto")
@@ -270,7 +270,7 @@ def test_auto_max_runs() raises:
             "[pipelines.a]\nfill_max_runs ="
             ' "auto"\n[pipelines.b]\nfill_max_runs = "auto..8"\n'
         ),
-        "orca.toml",
+        "morca.toml",
     )
     assert_equal(resolve("a", RegisterFlags(), g).text("fill_max_runs"), "auto")
     assert_equal(
@@ -295,8 +295,8 @@ max_machines = 3
 
 
 def test_pools() raises:
-    # [pools.<name>] (orca.pool_config, #267): checked with the file.
-    var f = ProjectConfig(POOL, "orca.toml")
+    # [pools.<name>] (morca.pool_config, #267): checked with the file.
+    var f = ProjectConfig(POOL, "morca.toml")
     var pools = read_pools(f.doc)
     assert_equal(len(pools), 1)
     ref p = pools[0]
@@ -318,7 +318,7 @@ def test_pools() raises:
         '[pools.lab]\nprovider = "ec2"\nmachines = [{ type = "c7g.large" }]\n'
     )
     assert_equal(
-        read_pools(ProjectConfig(bare, "orca.toml").doc)[0].max_machines, 1
+        read_pools(ProjectConfig(bare, "morca.toml").doc)[0].max_machines, 1
     )
     _refused('[pools.lab]\nmachines = [{ type = "a" }]\n', "needs a provider")
     _refused(
@@ -382,16 +382,16 @@ def test_pools() raises:
 def test_keys_and_tables_are_checked() raises:
     _refused("[pipelines.a]\nworkrs = 4\n", "has no key workrs")
     _refused('[defaults]\nfils = "all"\n', "has no key fils")
-    _refused("[pipeline.a]\n", "isn't a table orca knows")
+    _refused("[pipeline.a]\n", "isn't a table morca knows")
     _refused("x = 1\n", "is a key at the top")
     _refused("[pipelines]\na = 1\n", "isn't a table")
     _refused("[pipelines.a]\nworkers = 4\nworkers = 5\n", "defined twice")
     # A message names the file and the line.
     try:
-        _ = ProjectConfig("\n[pipelines.a]\n\nworkers = 0\n", "p/orca.toml")
+        _ = ProjectConfig("\n[pipelines.a]\n\nworkers = 0\n", "p/morca.toml")
     except e:
         assert_true(
-            String(e).startswith("p/orca.toml:4: [pipelines.a] workers:"),
+            String(e).startswith("p/morca.toml:4: [pipelines.a] workers:"),
             String(e),
         )
 

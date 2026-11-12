@@ -17,7 +17,7 @@ echo "$out" | grep -q '3 months, 2184 hours' || fail "wrong total"
 echo "$out" | grep -q '^run succeeded$' || fail "run didn't succeed"
 
 set +e
-out=$(ORCA_TOY_FAIL=2024-02 ./build/toy run --partitions 2024-01..2024-03)
+out=$(MORCA_TOY_FAIL=2024-02 ./build/toy run --partitions 2024-01..2024-03)
 code=$?
 set -e
 [ "$code" -eq 1 ] || fail "a failed run exited $code, not 1"
@@ -44,9 +44,9 @@ set -e
 out=$(./build/daily fires 2 --after 2024-03-09T12:00Z) || fail "fires exited $?"
 [ "$out" = "2024-03-10T07:00:00Z 2024-03-10T03:00:00 2024-03-09
 2024-03-11T06:30:00Z 2024-03-11T02:30:00 2024-03-10" ] || fail "wrong fires: $out"
-out=$(ORCA_NOW=2024-11-02T12:00Z ./build/daily fires 1) || fail "fires exited $?"
+out=$(MORCA_NOW=2024-11-02T12:00Z ./build/daily fires 1) || fail "fires exited $?"
 [ "$out" = "2024-11-03T07:30:00Z 2024-11-03T02:30:00 2024-11-02" ] \
-    || fail "ORCA_NOW wasn't used: $out"
+    || fail "MORCA_NOW wasn't used: $out"
 ./build/toy fires 1 --after 2024-01-15T00:00Z | grep -q '^2024-02-02T03:00:00Z 2024-02-02T03:00:00 2024-01$' \
     || fail "toy fires"
 

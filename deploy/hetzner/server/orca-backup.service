@@ -1,8 +1,8 @@
 [Unit]
-Description=orca: pg_dump of the database to Object Storage
+Description=morca: pg_dump of the database to Object Storage
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/orca-stack backup
+ExecStart=/usr/local/sbin/morca-stack backup

@@ -1,23 +1,23 @@
 #!/bin/sh
-# The control instance's own health (orca.system): the scheduler rolls the
+# The control instance's own health (morca.system): the scheduler rolls the
 # lines of the control sampler's file into a row a minute in Postgres (a pass
 # again adds nothing, old rows go) and appends them to a file per day under
-# ORCA_LOGS/control; /ops/control, /api/system, /metrics and the warning on / are
+# MORCA_LOGS/control; /ops/control, /api/system, /metrics and the warning on / are
 # drawn from those rows alone (the test deletes both files before fetching).
-# Needs ORCA_DATABASE_URL (pixi run test-system starts a throwaway server),
+# Needs MORCA_DATABASE_URL (pixi run test-system starts a throwaway server),
 # curl, jq and python3.
 set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 mkdir -p build
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 
 log=build/system.log
 : > "$log"
-export ORCA_LOGS=build/system-logs
-rm -rf "$ORCA_LOGS"
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+export MORCA_LOGS=build/system-logs
+rm -rf "$MORCA_LOGS"
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 pid=
 fail() {
     echo "FAIL: $*"
@@ -50,19 +50,19 @@ for k in range(n):
 open(nxt, "w").write(str(start + 5 * n))
 PY
 }
-total_lines() { cat "$ORCA_LOGS"/control/*.jsonl 2> /dev/null | wc -l | tr -d ' '; }
+total_lines() { cat "$MORCA_LOGS"/control/*.jsonl 2> /dev/null | wc -l | tr -d ' '; }
 
 # Runs, for the counts on /metrics.
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
-ORCA_NOW=2024-01-15T00:00Z ./build/orca register ./build/toy >> "$log" 2>&1 || fail "register"
+MORCA_NOW=2024-01-15T00:00Z ./build/morca register ./build/toy >> "$log" 2>&1 || fail "register"
 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 || fail "the first run"
-ORCA_TOY_FAIL=2024-01 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 && fail "the second run didn't fail"
+MORCA_TOY_FAIL=2024-01 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 && fail "the second run didn't fail"
 
 # 25 minutes of a healthy machine, up to a few seconds ago.
 lines 300 50 40
-export ORCA_CONTROL_SAMPLES=$control ORCA_CONTROL_TYPE=t4g.medium
-tick() { ORCA_NOW=2024-01-15T00:00Z ORCA_RUNNER=local ORCA_FLEET_SECONDS=1 ./build/orca tick >> "$log" 2>&1 || fail "tick"; }
+export MORCA_CONTROL_SAMPLES=$control MORCA_CONTROL_TYPE=t4g.medium
+tick() { MORCA_NOW=2024-01-15T00:00Z MORCA_RUNNER=local MORCA_FLEET_SECONDS=1 ./build/morca tick >> "$log" 2>&1 || fail "tick"; }
 tick
 [ "$(q "SELECT sum(n) FROM orca.system_minutes")" -eq 300 ] || fail "samples in the minutes: $(q "SELECT sum(n) FROM orca.system_minutes")"
 rows=$(q "SELECT count(*) FROM orca.system_minutes")
@@ -71,7 +71,7 @@ rows=$(q "SELECT count(*) FROM orca.system_minutes")
 [ "$(q "SELECT max(mem) FROM orca.system_containers WHERE name = 'postgres'")" -eq 600000299 ] || fail "a container's peak in its minute"
 [ "$(q "SELECT round(avg(cpu_sum / n)) FROM orca.system_minutes")" -eq 30 ] || fail "the CPU average"
 [ "$(total_lines)" -eq 300 ] || fail "the day files have $(total_lines) lines"
-for f in "$ORCA_LOGS"/control/*.jsonl; do
+for f in "$MORCA_LOGS"/control/*.jsonl; do
     case "$f" in */????-??-??.jsonl) ;; *) fail "a day file named $f" ;; esac
 done
 # The same pass again adds nothing, to the rows or the files.
@@ -88,25 +88,25 @@ echo "ok   the scheduler keeps the control instance's samples, once, by the minu
 # Old rows go on a pass, and old local day files.
 q "INSERT INTO orca.system_minutes VALUES (now() - interval '15 days', 1, now() - interval '15 days', 1, 1, 1, 1, 1, 1, 1, 1, 1, '/', 1, 1)" > /dev/null
 q "INSERT INTO orca.system_containers VALUES (now() - interval '15 days', 'old', 1)" > /dev/null
-echo '{}' > "$ORCA_LOGS/control/2000-01-01.jsonl"
+echo '{}' > "$MORCA_LOGS/control/2000-01-01.jsonl"
 tick
 [ "$(q "SELECT count(*) FROM orca.system_minutes WHERE minute < now() - interval '14 days'")" -eq 0 ] || fail "old minutes were kept"
 [ "$(q "SELECT count(*) FROM orca.system_containers WHERE minute < now() - interval '14 days'")" -eq 0 ] || fail "old containers were kept"
-[ ! -e "$ORCA_LOGS/control/2000-01-01.jsonl" ] || fail "an old day file was kept"
+[ ! -e "$MORCA_LOGS/control/2000-01-01.jsonl" ] || fail "an old day file was kept"
 echo "ok   rows and day files older than 14 days are dropped"
 
 free_port port
 base="http://127.0.0.1:$port"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 pid=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 html() { curl -fsS "$base$1" || fail "GET $1"; }
 
 # Remove the files: the pages must not read one.
-rm -rf "$ORCA_LOGS" "$control"
+rm -rf "$MORCA_LOGS" "$control"
 
 api=$(curl -fsS "$base/api/system")
 echo "$api" | jq -e '.now | .age_seconds < 600 and (.cpu_pct > 29 and .cpu_pct < 31) and (.mem_pct > 49.9 and .mem_pct < 50.1)
@@ -150,26 +150,26 @@ echo "ok   /ops/control"
 metrics=$(curl -fsS "$base/metrics")
 [ "$(curl -fsS -o /dev/null -w '%{content_type}' "$base/metrics")" = "text/plain; version=0.0.4; charset=utf-8" ] || fail "/metrics' content type"
 want() { echo "$metrics" | grep -qE "$1" || fail "/metrics has no $1: $(echo "$metrics" | head -50)"; }
-want '^# TYPE orca_control_cpu_percent gauge$'
-want '^orca_control_cpu_percent 30\.00$'
-want '^orca_control_memory_used_bytes 2000000000$'
-want '^orca_control_memory_total_bytes 4000000000$'
-want '^orca_control_memory_percent 50\.00$'
-want '^orca_control_disk_used_bytes 8000000000$'
-want '^orca_control_disk_total_bytes 20000000000$'
-want '^orca_control_disk_percent 40\.00$'
-want '^orca_control_network_in_bytes_per_second 2000000$'
-want '^orca_control_network_out_bytes_per_second 500000$'
-want '^orca_control_container_memory_bytes\{container="postgres"\} 6000[0-9]{5}$'
-want '^orca_control_container_memory_bytes\{container="<b>app</b>"\} 90000000$'
-want '^orca_control_sample_age_seconds [0-9]+$'
-want '^orca_runs\{status="running"\} 0$'
-want '^orca_runs\{status="queued"\} 0$'
-want '^orca_fleet_hosts\{role="control"\} 1$'
-want '^orca_fleet_hosts\{role="head"\} 0$'
-want '^orca_runs_started_last_hour 2$'
-want '^orca_errors_last_hour\{kind="runs"\} 1$'
-want '^orca_errors_last_hour\{kind="step_attempts"\} [1-9]'
+want '^# TYPE morca_control_cpu_percent gauge$'
+want '^morca_control_cpu_percent 30\.00$'
+want '^morca_control_memory_used_bytes 2000000000$'
+want '^morca_control_memory_total_bytes 4000000000$'
+want '^morca_control_memory_percent 50\.00$'
+want '^morca_control_disk_used_bytes 8000000000$'
+want '^morca_control_disk_total_bytes 20000000000$'
+want '^morca_control_disk_percent 40\.00$'
+want '^morca_control_network_in_bytes_per_second 2000000$'
+want '^morca_control_network_out_bytes_per_second 500000$'
+want '^morca_control_container_memory_bytes\{container="postgres"\} 6000[0-9]{5}$'
+want '^morca_control_container_memory_bytes\{container="<b>app</b>"\} 90000000$'
+want '^morca_control_sample_age_seconds [0-9]+$'
+want '^morca_runs\{status="running"\} 0$'
+want '^morca_runs\{status="queued"\} 0$'
+want '^morca_fleet_hosts\{role="control"\} 1$'
+want '^morca_fleet_hosts\{role="head"\} 0$'
+want '^morca_runs_started_last_hour 2$'
+want '^morca_errors_last_hour\{kind="runs"\} 1$'
+want '^morca_errors_last_hour\{kind="step_attempts"\} [1-9]'
 # Every sample line is `name{labels} value`, every name has its TYPE.
 echo "$metrics" | grep -v '^#' | grep -vE '^[a-z_][a-z0-9_]*(\{[a-z_]+="[^"]*"\})? -?[0-9.]+$' && fail "a malformed line in /metrics"
 for n in $(echo "$metrics" | grep -v '^#' | sed 's/[{ ].*//' | sort -u); do
@@ -181,7 +181,7 @@ echo "ok   /metrics"
 html / | grep -q 'class="alert"' && fail "a warning on / for a healthy machine"
 curl -fsS -H 'Accept: application/json' "$base/" | jq -e '.warnings == []' > /dev/null || fail "/'s JSON warnings"
 lines 12 50 95
-export ORCA_CONTROL_SAMPLES=$control
+export MORCA_CONTROL_SAMPLES=$control
 tick
 page=$(html /)
 echo "$page" | grep -qF '<div class="alert" role="alert"><div>The control instance&#39;s disk is 95% full (19 GB of 20 GB)' \
@@ -190,7 +190,7 @@ echo "$page" | grep -qF '<a href="/ops/control">Control health</a>' || fail "the
 echo "$page" | grep -qi 'memory is' && fail "a memory warning at 50%"
 curl -fsS -H 'Accept: application/json' "$base/" | jq -e '.warnings | length == 1' > /dev/null || fail "/'s JSON warnings for a full disk"
 html /ops/control | grep -qF 'class="alert"' || fail "no warning on /ops/control"
-curl -fsS "$base/metrics" | grep -qE '^orca_control_disk_percent (8[0-9]|9[0-9])\.' || fail "/metrics' disk gauge after the full disk: $(curl -fsS "$base/metrics" | grep disk_percent)"
+curl -fsS "$base/metrics" | grep -qE '^morca_control_disk_percent (8[0-9]|9[0-9])\.' || fail "/metrics' disk gauge after the full disk: $(curl -fsS "$base/metrics" | grep disk_percent)"
 lines 12 93 95
 tick
 curl -fsS -H 'Accept: application/json' "$base/" | jq -e '.warnings | length == 2 and (.[] | select(test("memory"))) != null' > /dev/null \
@@ -203,8 +203,8 @@ echo "ok   a full disk or memory warns on /, at the thresholds and not below the
 # A sampler that has stopped: no warning for a stale full disk, and no gauges.
 q "UPDATE orca.system_minutes SET disk_max = 99, last_t = now() - interval '20 minutes'" > /dev/null
 html / | grep -q 'class="alert"' && fail "a warning from a stale sample"
-curl -fsS "$base/metrics" | grep -q '^orca_control_' && fail "control gauges from a stale sample"
-curl -fsS "$base/metrics" | grep -q '^orca_runs{status="running"} 0$' || fail "the run counts go with it"
+curl -fsS "$base/metrics" | grep -q '^morca_control_' && fail "control gauges from a stale sample"
+curl -fsS "$base/metrics" | grep -q '^morca_runs{status="running"} 0$' || fail "the run counts go with it"
 html /ops/control | grep -qF 'minutes old: the sampler or the scheduler has stopped' || fail "/ops/control doesn't say its samples are old"
 # And none at all: the page says how to start one.
 q "TRUNCATE orca.system_minutes, orca.system_containers" > /dev/null

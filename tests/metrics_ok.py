@@ -1,4 +1,4 @@
-"""Checks sampler files (orca.sample): every line is a sample with sane
+"""Checks sampler files (morca.sample): every line is a sample with sane
 values. Prints how many lines each file has.
 
     python3 tests/metrics_ok.py [--min N] [--rss] <file.jsonl>...

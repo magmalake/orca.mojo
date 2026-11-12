@@ -1,6 +1,6 @@
 """The state in Postgres: `tests/store_suite.mojo` on `PgStore`, and what
 only Postgres has. Run under scripts/with-postgres.sh, which sets
-ORCA_DATABASE_URL to a throwaway database."""
+MORCA_DATABASE_URL to a throwaway database."""
 
 from std.os import getenv, setenv, unsetenv
 from std.testing import (
@@ -13,11 +13,11 @@ from std.testing import (
 
 from postgres import Connection, Params
 
-from orca import PgStore, RunResult, State, parse_months
-from orca.config import ProjectConfig
-from orca.pool_config import PoolConfig, read_pools, record_pools
-from orca.recommend import LEARN_RUNS, expire_raised
-from orca.migrations import migration_floor, schema_ahead
+from morca import PgStore, RunResult, State, parse_months
+from morca.config import ProjectConfig
+from morca.pool_config import PoolConfig, read_pools, record_pools
+from morca.recommend import LEARN_RUNS, expire_raised
+from morca.migrations import migration_floor, schema_ahead
 from store_suite import (
     Touching,
     check_a_store_that_lost_its_run_stops,
@@ -34,13 +34,13 @@ from store_suite import (
 
 
 def _db() raises -> State:
-    var db = State(getenv("ORCA_DATABASE_URL"))
+    var db = State(getenv("MORCA_DATABASE_URL"))
     db.migrate()
     return db^
 
 
 def _count(sql: String) raises -> Int:
-    var conn = Connection(getenv("ORCA_DATABASE_URL"))
+    var conn = Connection(getenv("MORCA_DATABASE_URL"))
     return Int(conn.query(sql).row(0).int64("n"))
 
 
@@ -112,9 +112,9 @@ def test_the_schema_check() raises:
 def test_an_older_binary_runs_on_additive_migrations() raises:
     _ = _db()
     # A binary that knows 30 migrations: 31..56 are additive.
-    _ = setenv("ORCA_TEST_MIGRATIONS", "30", True)
+    _ = setenv("MORCA_TEST_MIGRATIONS", "30", True)
     try:
-        var old = State(getenv("ORCA_DATABASE_URL"))
+        var old = State(getenv("MORCA_DATABASE_URL"))
         old.migrate()
         # It runs on the schema, and doesn't touch the versions.
         _ = _new_run(old, "a:1")
@@ -122,27 +122,27 @@ def test_an_older_binary_runs_on_additive_migrations() raises:
             _count("SELECT max(version) AS n FROM orca.schema_version"), 56
         )
         # One that knows 23 doesn't: 24 raised the floor.
-        _ = setenv("ORCA_TEST_MIGRATIONS", "23", True)
+        _ = setenv("MORCA_TEST_MIGRATIONS", "23", True)
         with assert_raises(contains="needs a binary that knows at least 24"):
-            var older = State(getenv("ORCA_DATABASE_URL"))
+            var older = State(getenv("MORCA_DATABASE_URL"))
             older.migrate()
     finally:
-        _ = unsetenv("ORCA_TEST_MIGRATIONS")
+        _ = unsetenv("MORCA_TEST_MIGRATIONS")
 
 
 def test_floors_are_filled_in_for_an_older_database() raises:
     _ = _db()
     # As a database the binaries before min_binary migrated left it.
-    var conn = Connection(getenv("ORCA_DATABASE_URL"))
+    var conn = Connection(getenv("MORCA_DATABASE_URL"))
     _ = conn.execute("UPDATE orca.schema_version SET min_binary = NULL")
     # An older binary can't tell what it may run on.
-    _ = setenv("ORCA_TEST_MIGRATIONS", "30", True)
+    _ = setenv("MORCA_TEST_MIGRATIONS", "30", True)
     try:
         with assert_raises(contains="doesn't record"):
-            var older = State(getenv("ORCA_DATABASE_URL"))
+            var older = State(getenv("MORCA_DATABASE_URL"))
             older.migrate()
     finally:
-        _ = unsetenv("ORCA_TEST_MIGRATIONS")
+        _ = unsetenv("MORCA_TEST_MIGRATIONS")
     # This one knows every version's floor and fills them in.
     _ = _db()
     assert_equal(
@@ -202,7 +202,7 @@ def test_an_oom_raise_expires_after_the_learning_window() raises:
 
 
 def test_pools_are_recorded_from_the_file() raises:
-    """`record_pools` (#267): orca.pools is what orca.toml says, a pool the
+    """`record_pools` (#267): orca.pools is what morca.toml says, a pool the
     file no longer has deleted."""
     var db = _db()
     var two = ProjectConfig(
@@ -215,7 +215,7 @@ def test_pools_are_recorded_from_the_file() raises:
             ' wait = 60 }, { type = "cpx32" }]\nlocations = ["hel1"]\n',
             "max_machines = 2\n",
         ),
-        "orca.toml",
+        "morca.toml",
     )
     assert_equal(len(record_pools(db, read_pools(two.doc))), 0)
     assert_equal(_count("SELECT count(*) AS n FROM orca.pools"), 2)
@@ -229,7 +229,7 @@ def test_pools_are_recorded_from_the_file() raises:
     )
     var one = ProjectConfig(
         '[pools.b]\nprovider = "ec2"\nmachines = [{ type = "c7g.large" }]\n',
-        "orca.toml",
+        "morca.toml",
     )
     var gone = record_pools(db, read_pools(one.doc))
     assert_equal(gone, ["a"])
@@ -263,7 +263,7 @@ def test_reads_and_commits_go_through_the_store() raises:
     var db = _db()
     db.register("touching", hex(Touching.registry_hash()), "{}")
     var run = db.create_run("touching", "h", "x", "manual", "a:1")
-    var store = PgStore(db^, getenv("ORCA_DATABASE_URL"), run, "a:1", "h")
+    var store = PgStore(db^, getenv("MORCA_DATABASE_URL"), run, "a:1", "h")
     var res = Touching.execute(store, RunResult(), parse_months("2024-03"), run)
     # The second attempt read the snapshot the first one did.
     assert_equal(res.output[Int]("touch", "2024-03"), 101)
@@ -296,7 +296,7 @@ def test_reads_and_commits_go_through_the_store() raises:
 
 
 def _store() raises -> PgStore:
-    return PgStore(getenv("ORCA_DATABASE_URL"))
+    return PgStore(getenv("MORCA_DATABASE_URL"))
 
 
 def test_pg_claim_needs_a_stale_heartbeat() raises:

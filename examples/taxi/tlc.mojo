@@ -31,7 +31,7 @@ from objectstore.http import HttpClient
 from parquet import ParquetReader, RecordBatch
 from parquet_full import AllCodecs
 
-from orca import Month
+from morca import Month
 
 comptime TLC_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data"
 """Where the TLC publishes the files, one per month."""

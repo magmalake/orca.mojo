@@ -9,19 +9,19 @@
 #   each one's inputs what its own summary's orca.reads says;
 # - forward from that raw snapshot: both clean snapshots, then report's;
 # - nothing was made from the first raw snapshot, which clean never read;
-# - `orca lineage` and the UI's pages say the same.
+# - `morca lineage` and the UI's pages say the same.
 #
-# With ORCA_TEST_S3 set, the warehouse and the attempts' logs are in the
-# bucket ORCA_S3_BUCKET names (pixi run -e data test-lineage-s3 starts a
+# With MORCA_TEST_S3 set, the warehouse and the attempts' logs are in the
+# bucket MORCA_S3_BUCKET names (pixi run -e data test-lineage-s3 starts a
 # throwaway MinIO), and the UI shows an attempt's log read from it.
 #
-# Needs ORCA_DATABASE_URL (pixi run -e data test-lineage starts a throwaway
+# Needs MORCA_DATABASE_URL (pixi run -e data test-lineage starts a throwaway
 # server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 mkdir -p build
-# The pipelines and orca compile at once (scripts/mojo-build.sh).
+# The pipelines and morca compile at once (scripts/mojo-build.sh).
 pids=
 for p in ingest clean report; do
     # shellcheck disable=SC2086
@@ -29,17 +29,17 @@ for p in ingest clean report; do
     pids="$pids $!"
 done
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 for pid in $pids $!; do wait "$pid"; done
 log=build/lineage.log
 : > "$log"
-if [ -n "${ORCA_TEST_S3:-}" ]; then
+if [ -n "${MORCA_TEST_S3:-}" ]; then
     # shellcheck disable=SC2086
     scripts/mojo-build.sh -I src $DEP_INC tests/s3cat.mojo -o build/s3cat
-    export ORCA_WAREHOUSE="$ORCA_S3_BUCKET/lineage-$$" ORCA_LOGS="$ORCA_S3_BUCKET/lineage-logs-$$"
+    export MORCA_WAREHOUSE="$MORCA_S3_BUCKET/lineage-$$" MORCA_LOGS="$MORCA_S3_BUCKET/lineage-logs-$$"
 else
-    export ORCA_WAREHOUSE=build/lineage-wh
-    rm -rf "$ORCA_WAREHOUSE"
+    export MORCA_WAREHOUSE=build/lineage-wh
+    rm -rf "$MORCA_WAREHOUSE"
 fi
 ui=
 fail() {
@@ -48,9 +48,9 @@ fail() {
     [ -z "$ui" ] || kill "$ui" 2> /dev/null || true
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 
-./build/orca register ./build/ln-ingest ./build/ln-clean ./build/ln-report >> "$log" 2>&1 || fail "register"
+./build/morca register ./build/ln-ingest ./build/ln-clean ./build/ln-report >> "$log" 2>&1 || fail "register"
 ./build/ln-ingest run --partitions 2024-01 >> "$log" 2>&1 || fail "ingest 2024-01"
 ./build/ln-ingest run --partitions 2024-02 >> "$log" 2>&1 || fail "ingest 2024-02"
 ./build/ln-clean run --partitions 2024-01..2024-02 >> "$log" 2>&1 || fail "clean"
@@ -58,20 +58,20 @@ q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
 
 # What the tables themselves say: each snapshot's orca.reads, by dataset.
 meta() {
-    case "$ORCA_WAREHOUSE" in
+    case "$MORCA_WAREHOUSE" in
         s3://*)
-            m=$(./build/s3cat ls "$ORCA_WAREHOUSE/lake/$1/metadata/" | grep '\.metadata\.json$' | sort | tail -1)
+            m=$(./build/s3cat ls "$MORCA_WAREHOUSE/lake/$1/metadata/" | grep '\.metadata\.json$' | sort | tail -1)
             ./build/s3cat get "$m" > "build/lineage-meta-$1.json"
             echo "build/lineage-meta-$1.json"
             ;;
-        *) ls "$ORCA_WAREHOUSE/lake/$1/metadata/"*.metadata.json | sort | tail -1 ;;
+        *) ls "$MORCA_WAREHOUSE/lake/$1/metadata/"*.metadata.json | sort | tail -1 ;;
     esac
 }
 current() { jq -r '."current-snapshot-id"' "$(meta "$1")"; }
 # reads_of TABLE SNAPSHOT: its summary's orca.reads as dataset@snapshot, sorted.
 reads_of() {
     jq -r --arg id "$2" '.snapshots[] | select((."snapshot-id" | tostring) == $id) | .summary["orca.reads"]' "$(meta "$1")" \
-        | tr ',' '\n' | sed "s|^$ORCA_WAREHOUSE/||; s|/|.|; s|/*@|@|" | grep . | sort | tr '\n' ' '
+        | tr ',' '\n' | sed "s|^$MORCA_WAREHOUSE/||; s|/|.|; s|/*@|@|" | grep . | sort | tr '\n' ' '
 }
 R=$(current report)
 C=$(reads_of report "$R" | sed -n 's/^lake\.clean@\([0-9-]*\) $/\1/p')
@@ -82,7 +82,7 @@ S1=$(jq -r '.snapshots[0]."snapshot-id"' "$(meta raw)")
 [ "$S1" != "$S" ] || fail "clean read the first raw snapshot"
 
 # The command line, back and forward.
-out=$(./build/orca lineage lake.report) || fail "orca lineage exited $?"
+out=$(./build/morca lineage lake.report) || fail "morca lineage exited $?"
 echo "$out" >> "$log"
 code=$(./build/ln-report describe | jq -r .registry_hash)
 echo "$out" | grep -qF "0 lake.report@$R by report run " || fail "back doesn't start at report's snapshot"
@@ -92,18 +92,18 @@ echo "$out" | grep -qE "1 lake.clean@$C by clean run [0-9]+ clean 2024-0[12] cod
     || fail "the clean snapshot it read"
 echo "$out" | grep -qE "2 lake.raw@$S by ingest run [0-9]+ load 2024-02 code .*[0-9a-f]\$" \
     || fail "the raw snapshot clean read"
-[ "$(./build/orca lineage lake.report "$R")" = "$out" ] || fail "lineage of the latest isn't lineage of $R"
-out=$(./build/orca lineage lake.raw "$S1") || fail "orca lineage of the first raw snapshot"
+[ "$(./build/morca lineage lake.report "$R")" = "$out" ] || fail "lineage of the latest isn't lineage of $R"
+out=$(./build/morca lineage lake.raw "$S1") || fail "morca lineage of the first raw snapshot"
 echo "$out" | sed -n '/made from it:/,$p' | grep -qx "  nothing" || fail "something was made from the first raw snapshot"
 
 # The UI: the same walks as JSON, and their pages.
 free_port port
 base="http://127.0.0.1:$port"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 ui=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 json() { curl -fsS -H 'Accept: application/json' "$base$1" || fail "GET $1"; }
 
@@ -164,14 +164,14 @@ curl -fsS "$base/datasets/lake.report" | grep -qF '<p class="empty">Nothing read
     || fail "lake.report's page doesn't say nothing reads it"
 before=$(q "SELECT (SELECT count(*) FROM orca.runs) || ' ' || (SELECT count(*) FROM orca.rebuilds)")
 p=$(json '/datasets/lake.raw?preview=1&partitions=2024-01..2024-02')
-echo "$p" | jq -e '.preview | .refused == null and .command == "orca rebuild lake.raw 2024-01..2024-02"
+echo "$p" | jq -e '.preview | .refused == null and .command == "morca rebuild lake.raw 2024-01..2024-02"
     and .levels == [[{"pipeline": "clean", "partitions": "2024-01,2024-02"}], [{"pipeline": "report", "partitions": "2024-01,2024-02"}]]' > /dev/null \
     || fail "the rebuild preview: $(echo "$p" | jq -c .preview)"
 page=$(curl -fsS "$base/datasets/lake.raw?preview=1&partitions=2024-01..2024-02")
 echo "$page" | grep -qF '<p data-preview="rebuild">This queues 2 runs in 2 levels, over 2 partitions:</p><ol><li>1 run: clean over 2024-01,2024-02</li><li>1 run: report over 2024-01,2024-02</li></ol>' \
     || fail "the rebuild preview's lines"
-echo "$page" | grep -qF '<code data-cmd="rebuild">orca login &lt;url&gt; &amp;&amp; orca --remote &lt;url&gt; rebuild lake.raw 2024-01..2024-02</code>' || fail "the rebuild's command"
-echo "$page" | grep -qF 'title="orca rebuild lake.raw 2024-01..2024-02">Rebuild downstream</button>' || fail "the rebuild button"
+echo "$page" | grep -qF '<code data-cmd="rebuild">morca login &lt;url&gt; &amp;&amp; morca --remote &lt;url&gt; rebuild lake.raw 2024-01..2024-02</code>' || fail "the rebuild's command"
+echo "$page" | grep -qF 'title="morca rebuild lake.raw 2024-01..2024-02">Rebuild downstream</button>' || fail "the rebuild button"
 json '/datasets/lake.raw?preview=1&partitions=2023-13' | jq -e '.preview.refused != null' > /dev/null \
     || fail "a bad range's rebuild preview wasn't refused"
 [ "$(q "SELECT (SELECT count(*) FROM orca.runs) || ' ' || (SELECT count(*) FROM orca.rebuilds)")" = "$before" ] \
@@ -180,15 +180,15 @@ for path in /datasets/nope "/datasets/lake.raw/snapshots/1" /datasets/lake.raw/s
     code=$(curl -s -o /dev/null -w '%{http_code}' "$base$path")
     [ "$code" = 404 ] || fail "$path answered $code"
 done
-if [ -n "${ORCA_TEST_S3:-}" ]; then
+if [ -n "${MORCA_TEST_S3:-}" ]; then
     # An attempt's log, kept in the bucket and read back by the UI.
     aid=$(json "/runs/$run" | jq -r '.steps[0].attempt_id')
     [ "$(json "/runs/$run/attempts/$aid" | jq -r '.attempt.log')" = \
-        "$ORCA_LOGS/report/$run/report/_run/1.log" ] || fail "the attempt's log location"
+        "$MORCA_LOGS/report/$run/report/_run/1.log" ] || fail "the attempt's log location"
     json "/runs/$run/attempts/$aid" | jq -e '.text | contains("attempt 1 succeeded")' > /dev/null \
         || fail "the attempt's log from the bucket: $(json "/runs/$run/attempts/$aid")"
-    ./build/s3cat get "$ORCA_LOGS/report/$run/report/_run/1.log" | grep -q "attempt 1 succeeded" \
+    ./build/s3cat get "$MORCA_LOGS/report/$run/report/_run/1.log" | grep -q "attempt 1 succeeded" \
         || fail "the log isn't in the bucket"
 fi
 kill "$ui"
-echo "ok   lineage${ORCA_TEST_S3:+ on S3}"
+echo "ok   lineage${MORCA_TEST_S3:+ on S3}"

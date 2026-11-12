@@ -7,7 +7,7 @@ from std.os import getenv
 from std.os.path import exists
 from std.time import sleep
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
 
 
 def load(mut ctx: Ctx, m: Month) raises -> Int:
@@ -23,4 +23,4 @@ comptime Fillwk = Pipeline["fillwk", Load, partitions=Monthly["2024-01"]]
 
 
 def main() raises:
-    orca_main[Fillwk]()
+    morca_main[Fillwk]()

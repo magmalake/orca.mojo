@@ -5,7 +5,7 @@
 #
 # - the settings: $HETZNER_ENV, else hetzner.env next to the scripts
 #   (hetzner.env.example lists every one), then this laptop's own, if it
-#   has them: $HETZNER_LOCAL_ENV, else ~/.config/orca-hetzner/<NAME>.local.env;
+#   has them: $HETZNER_LOCAL_ENV, else ~/.config/morca-hetzner/<NAME>.local.env;
 #   a relative file name in either is read from that file's folder;
 # - --dry-run: every hcloud and ssh command is printed, none is run, and
 #   nothing is created, changed or read from the server;
@@ -58,10 +58,14 @@ load_env() {
     # shellcheck disable=SC1090
     . "$HETZNER_ENV"
     resolve_paths "$(dirname "$HETZNER_ENV")"
+    # Still orca: the stack's servers, Volume and firewall are named after it.
     NAME=${NAME:-orca}
     # This laptop's settings (ADMIN_IP, SSH_PUBLIC_KEY_FILE...), read after
     # the shared file, so they win. Optional, unless HETZNER_LOCAL_ENV names it.
-    LOCAL_ENV=${HETZNER_LOCAL_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/orca-hetzner/$NAME.local.env}
+    LOCAL_ENV=${HETZNER_LOCAL_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/morca-hetzner/$NAME.local.env}
+    old_local=${XDG_CONFIG_HOME:-$HOME/.config}/orca-hetzner/$NAME.local.env
+    [ -n "${HETZNER_LOCAL_ENV:-}" ] || [ -f "$LOCAL_ENV" ] || [ ! -f "$old_local" ] \
+        || die "$old_local is from before the rename to morca (#384): move it to $LOCAL_ENV"
     if [ -f "$LOCAL_ENV" ]; then
         LOCAL_ENV=$(absolute "$LOCAL_ENV")
         shared_name=$NAME
@@ -74,12 +78,19 @@ load_env() {
     else
         LOCAL_ENV=
     fi
+    # The settings were ORCA_* before the rename to morca (#384), and morca
+    # reads only MORCA_*: refuse an old key rather than drop it.
+    for f in "$HETZNER_ENV" ${LOCAL_ENV:+"$LOCAL_ENV"} ${EXTRA_ENV_FILE:+"$EXTRA_ENV_FILE"}; do
+        [ -f "$f" ] || continue
+        old=$(sed -n 's/^[[:space:]]*\(export[[:space:]]*\)\{0,1\}\(ORCA_[A-Za-z0-9_]*\)=.*/\2/p' "$f" | tr '\n' ' ')
+        [ -z "$old" ] || die "$f sets ${old% }: since the rename to morca (#384) these are MORCA_*"
+    done
     LOCATION=${LOCATION:-fsn1}
     SERVER_TYPE_SMALL=${SERVER_TYPE_SMALL:-cax21}
     SERVER_TYPE_BIG=${SERVER_TYPE_BIG:-cax41}
     SERVER_IMAGE=${SERVER_IMAGE:-ubuntu-24.04}
     VOLUME_SIZE_GB=${VOLUME_SIZE_GB:-50}
-    ORCA_IMAGE=${ORCA_IMAGE:-ghcr.io/morca-dev/census}
+    MORCA_IMAGE=${MORCA_IMAGE:-ghcr.io/morca-dev/census}
     CLOUDFLARED_IMAGE=${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.7}
     APPS=${APPS:-console:8080}
     BACKUP_KEEP=${BACKUP_KEEP:-14}
@@ -167,7 +178,7 @@ server_ip() {
     fi
 }
 
-KNOWN_HOSTS=${XDG_STATE_HOME:-$HOME/.local/state}/orca-hetzner/known_hosts
+KNOWN_HOSTS=${XDG_STATE_HOME:-$HOME/.local/state}/morca-hetzner/known_hosts
 
 # remote ARGS...: ssh to the server as root; the arguments are the remote command.
 remote() {
@@ -211,7 +222,7 @@ parse_common() { # sets REST to the arguments not handled here
     done
 }
 
-# check_args: orca-stack check's arguments from hetzner.env: a --canary for
+# check_args: morca-stack check's arguments from hetzner.env: a --canary for
 # each of CANARY's PIPELINE=KEY, and CANARY_TIMEOUT's --timeout.
 check_args() {
     for c in ${CANARY:-}; do
@@ -336,14 +347,14 @@ load_secrets() {
 # sync_file sends a *.sops file: without trailing newlines, then one.
 sync_secret() {
     if [ "$DRY_RUN" = 1 ]; then
-        echo "| ssh root@$IP orca-stack sync $1"
+        echo "| ssh root@$IP morca-stack sync $1"
         return 0
     fi
     plain=$(printf '%s' "$SECRETS_JSON" | jq -j --arg k "$1" '.[$k]') || {
         plain=
         return 1
     }
-    printf '%s\n' "$plain" | remote orca-stack sync "$1"
+    printf '%s\n' "$plain" | remote morca-stack sync "$1"
     st=$?
     plain=
     return "$st"
@@ -363,41 +374,41 @@ write_settings() {
     {
         echo "AWS_REGION=$S3_REGION"
         echo "AWS_ENDPOINT_URL_S3=$S3_ENDPOINT"
-        echo "ORCA_WAREHOUSE=s3://$BUCKET/warehouse"
-        echo "ORCA_PUBLIC_WAREHOUSE=s3://$BUCKET/warehouse"
-        echo "ORCA_LOGS=s3://$BUCKET/logs"
-        echo "ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE"
+        echo "MORCA_WAREHOUSE=s3://$BUCKET/warehouse"
+        echo "MORCA_PUBLIC_WAREHOUSE=s3://$BUCKET/warehouse"
+        echo "MORCA_LOGS=s3://$BUCKET/logs"
+        echo "MORCA_RUN_ENV=MORCA_PUBLIC_WAREHOUSE"
         # Alerts (ntfy): the topic and token are secret files, only their ids are here.
         if has_secret secrets/orca/ntfy-topic; then
-            echo "ORCA_NOTIFY_SECRET=orca/ntfy-topic"
-            [ -z "${NTFY_URL:-}" ] || echo "ORCA_NOTIFY_URL=$NTFY_URL"
-            ! has_secret secrets/orca/ntfy-token || echo "ORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token"
+            echo "MORCA_NOTIFY_SECRET=orca/ntfy-topic"
+            [ -z "${NTFY_URL:-}" ] || echo "MORCA_NOTIFY_URL=$NTFY_URL"
+            ! has_secret secrets/orca/ntfy-token || echo "MORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token"
         fi
         # Where links point, and where pool machines reach the UI.
-        [ -z "${UI_URL:-}" ] || echo "ORCA_UI_URL=$UI_URL"
-        # Worker pools orca grows itself ([pools.<name>], orca #267): the
+        [ -z "${UI_URL:-}" ] || echo "MORCA_UI_URL=$UI_URL"
+        # Worker pools morca grows itself ([pools.<name>], morca #267): the
         # Hetzner token is a secret file, only its id is here; the machines
         # get the stack's firewall and SSH key unless POOL_FIREWALL and
         # POOL_SSH_KEYS say otherwise. The registry login lets a booting
-        # machine pull the image (orca-stack copies ghcr-token among the
+        # machine pull the image (morca-stack copies ghcr-token among the
         # secrets for it).
         if has_secret secrets/orca/hcloud-token; then
-            echo "ORCA_HCLOUD_TOKEN_SECRET=orca/hcloud-token"
-            echo "ORCA_HCLOUD_FIREWALL=${POOL_FIREWALL:-$NAME}"
-            echo "ORCA_HCLOUD_SSH_KEYS=${POOL_SSH_KEYS:-$NAME}"
+            echo "MORCA_HCLOUD_TOKEN_SECRET=orca/hcloud-token"
+            echo "MORCA_HCLOUD_FIREWALL=${POOL_FIREWALL:-$NAME}"
+            echo "MORCA_HCLOUD_SSH_KEYS=${POOL_SSH_KEYS:-$NAME}"
         fi
         if [ -n "${GHCR_USER:-}" ] && has_secret ghcr-token; then
-            echo "ORCA_REGISTRY_USER=$GHCR_USER"
-            echo "ORCA_REGISTRY_TOKEN_SECRET=orca/ghcr-token"
+            echo "MORCA_REGISTRY_USER=$GHCR_USER"
+            echo "MORCA_REGISTRY_TOKEN_SECRET=orca/ghcr-token"
         fi
-        [ -z "${FIXED_COST:-}" ] || echo "ORCA_FIXED_COST=$FIXED_COST"
-        [ -z "${POSTHOG_KEY:-}" ] || echo "ORCA_POSTHOG_KEY=$POSTHOG_KEY"
+        [ -z "${FIXED_COST:-}" ] || echo "MORCA_FIXED_COST=$FIXED_COST"
+        [ -z "${POSTHOG_KEY:-}" ] || echo "MORCA_POSTHOG_KEY=$POSTHOG_KEY"
         if [ -n "${EXTRA_ENV_FILE:-}" ] && [ -r "$EXTRA_ENV_FILE" ]; then cat "$EXTRA_ENV_FILE"; fi
     } > "$1"
 }
 
 # sync_file [--keys] NAME SRC: SRC becomes /etc/orca/NAME (mode 600) if it
-# differs, over ssh's standard input (orca-stack sync, which prints what
+# differs, over ssh's standard input (morca-stack sync, which prints what
 # changed: with --keys the keys, never a value). A SOPS file (is_sops) is
 # decrypted into a variable and piped, never written to a file here.
 sync_file() {
@@ -407,30 +418,30 @@ sync_file() {
         shift
     fi
     if [ "$DRY_RUN" = 1 ] && is_sops "$2"; then
-        echo "+ sops -d $2 | ssh root@$IP orca-stack sync ${k:+$k }$1"
+        echo "+ sops -d $2 | ssh root@$IP morca-stack sync ${k:+$k }$1"
     elif [ "$DRY_RUN" = 1 ]; then
-        echo "+ ssh root@$IP orca-stack sync ${k:+$k }$1 < $2"
+        echo "+ ssh root@$IP morca-stack sync ${k:+$k }$1 < $2"
     elif is_sops "$2"; then
         plain=$(sops -d "$2") || {
             plain=
             echo "sops couldn't decrypt $2" >&2
             return 1
         }
-        printf '%s\n' "$plain" | remote orca-stack sync ${k:+"$k"} "$1"
+        printf '%s\n' "$plain" | remote morca-stack sync ${k:+"$k"} "$1"
         st=$?
         plain=
         return "$st"
     else
-        remote orca-stack sync ${k:+"$k"} "$1" < "$2"
+        remote morca-stack sync ${k:+"$k"} "$1" < "$2"
     fi
 }
 
 # sync_settings DIR: brings the server's settings in line with hetzner.env,
 # as up.sh made them: settings.env, the secret files, the stack settings
-# (orca-stack configure; not ORCA_TAG, which deploy.sh moves) and the apps.
+# (morca-stack configure; not MORCA_TAG, which deploy.sh moves) and the apps.
 # Each prints what it changes, keys and file names only (a stack setting
 # old -> new: none is a secret). DIR is a local temporary directory. The
-# server's orca-stack must be this checkout's (it has sync). Returns
+# server's morca-stack must be this checkout's (it has sync). Returns
 # non-zero at the first step that fails. SECRETS_JSON is cleared after it.
 sync_settings() {
     sync_settings_ "$@"
@@ -460,9 +471,9 @@ sync_settings_() {
         sync_file "$name" "$val" || return 1
     done
     # GHCR_USER= (none in hetzner.env) removes it from stack.conf.
-    remote orca-stack configure ORCA_IMAGE="$ORCA_IMAGE" CLOUDFLARED_IMAGE="$CLOUDFLARED_IMAGE" \
+    remote morca-stack configure MORCA_IMAGE="$MORCA_IMAGE" CLOUDFLARED_IMAGE="$CLOUDFLARED_IMAGE" \
         BUCKET="$BUCKET" BACKUP_KEEP="$BACKUP_KEEP" GHCR_USER="${GHCR_USER:-}" || return 1
     for app in $APPS; do
-        remote orca-stack app "${app%%:*}" "${app#*:}" || return 1
+        remote morca-stack app "${app%%:*}" "${app#*:}" || return 1
     done
 }

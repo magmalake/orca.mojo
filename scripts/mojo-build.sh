@@ -1,7 +1,7 @@
 #!/bin/sh
 # `mojo build`, reusing the binary of an identical earlier build.
 #
-# Many tests build the same binaries: tests/*.sh built build/orca about 20
+# Many tests build the same binaries: tests/*.sh built build/morca about 20
 # times and build/toy 15 times in one `pixi run test`, each a full compile.
 # This keys a build on everything it can read and keeps each result under
 # build/.mojo-build/, so a second build with the same key is a copy:

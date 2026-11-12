@@ -2,7 +2,7 @@
 tests/replace_concurrent.sh, which runs several at once over one month.
 
     writer init            creates lake.w, partitioned by month
-    writer run ...         orca's command line; ids from REPLACE_BASE
+    writer run ...         morca's command line; ids from REPLACE_BASE
     writer check           prints the bases of the ids lake.w holds, and
                            how many ids it has
 
@@ -21,8 +21,8 @@ from iceberg.transforms import PartitionField, PartitionSpec, parse_transform
 from iceberg.values import Datum
 from parquet import RecordBatch
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
-from orca.tables import append, load_dataset, table
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
+from morca.tables import append, load_dataset, table
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -61,7 +61,7 @@ comptime Writer = Pipeline["writer", Load, partitions=Monthly["2024-01"]]
 def main() raises:
     var args = argv()
     if len(args) == 2 and String(args[1]) == "init":
-        _ = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE")).create_table(
+        _ = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE")).create_table(
             "lake",
             "w",
             Schema.parse(SCHEMA),
@@ -89,4 +89,4 @@ def main() raises:
             listed.write(" " if listed else "", e)
         print("bases", listed, "ids", n)
         return
-    orca_main[Writer]()
+    morca_main[Writer]()

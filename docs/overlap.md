@@ -1,40 +1,40 @@
 # Overlapping schedulers: deploys that don't stop runs
 
 Design note for #232. Today every local and control-placed run is a child
-process of `orca scheduler`. In the Hetzner stack the scheduler is a
-container, so restarting it (each deploy, a crash, an `orca-stack apply`)
-kills every run in flight. `orca-stack apply` refuses while runs are going,
+process of `morca scheduler`. In the Hetzner stack the scheduler is a
+container, so restarting it (each deploy, a crash, an `morca-stack apply`)
+kills every run in flight. `morca-stack apply` refuses while runs are going,
 or with `--force` kills them, and their retries start over.
 
 An earlier version of PR #242 moved the runs into a separate long-lived
-`orca runner` container. This version doesn't. Instead a deploy runs two
+`morca runner` container. This version doesn't. Instead a deploy runs two
 schedulers, of the old image and the new one, side by side on one Postgres
 for as long as the old one's runs take:
 
 ```text
       versioned, replaced each deploy                persistent
 ┌──────────────────────────────────────┐   ┌──────────────────────────┐
-│ image N:   UI + orca + pipelines     │   │ Postgres                 │
-│   orca scheduler   (draining)        │──▶│ warehouse                │
+│ image N:   UI + morca + pipelines     │   │ Postgres                 │
+│   morca scheduler   (draining)        │──▶│ warehouse                │
 │     └ its runs, until they end       │   │ logs (object storage)    │
-│ image N+1: UI + orca + pipelines     │   │                          │
-│   orca scheduler   (leading)         │──▶│                          │
+│ image N+1: UI + morca + pipelines     │   │                          │
+│   morca scheduler   (leading)         │──▶│                          │
 │     └ every new run                  │   │                          │
 └──────────────────────────────────────┘   └──────────────────────────┘
 ```
 
-The system is two parts. The **versioned unit** is the image: the UI, orca
+The system is two parts. The **versioned unit** is the image: the UI, morca
 and the user's pipeline binaries, built and replaced together. The
 **persistent tier** is Postgres, the warehouse and the logs in object
 storage. Nothing in the versioned unit has to outlive its image, so no part
-of orca needs a lifetime of its own (the runner did). A run belongs to the
+of morca needs a lifetime of its own (the runner did). A run belongs to the
 image that started it and ends under it.
 
 ## Decisions
 
-### `ORCA_OVERLAP`, off by default
+### `MORCA_OVERLAP`, off by default
 
-`ORCA_OVERLAP=on` makes each `orca scheduler` a scheduler instance. With it
+`MORCA_OVERLAP=on` makes each `morca scheduler` a scheduler instance. With it
 `off`, the default, nothing changes: no instance rows, runs start with no
 instance, and every rule below has nothing to apply to. Deploys keep
 pausing and waiting, as now, until overlap is proven in the stack; then
@@ -42,12 +42,12 @@ the stack turns it on, and later it becomes the default. A flag, rather
 than a version check, because the first deploy that turns it on still
 replaces a scheduler that doesn't know how to drain.
 
-`orca tick` is never an instance: it's one pass, for tests and by hand.
+`morca tick` is never an instance: it's one pass, for tests and by hand.
 
 ### One leader, by a session advisory lock
 
 Each instance has a row in a new table, `orca.schedulers`: host, pid,
-image (`ORCA_IMAGE`), how many migrations its binary knows, `last_seen`,
+image (`MORCA_IMAGE`), how many migrations its binary knows, `last_seen`,
 role (`waiting`, `leading`, `draining`, `ended`), and `running`, the ids of
 the runs whose processes are its children. It keeps the row fresh on every
 tick.
@@ -58,7 +58,7 @@ rule is **the newest live instance leads**:
 - a new instance joins `waiting` and, on each tick, takes the lock if it's
   free;
 - an instance that sees a newer live instance that isn't draining, or that
-  is asked to (`orca scheduler drain <id>`), gives the lock up and drains;
+  is asked to (`morca scheduler drain <id>`), gives the lock up and drains;
   it never leads again;
 - an instance that dies loses the lock with its connection, so the next
   one takes it within a tick. An instance whose connection breaks and
@@ -85,14 +85,14 @@ holder's connection goes.
 
 Each local or control-placed run an instance starts records it
 (`runs.instance`). The rule from the earlier #242, with "held by instance
-X" in place of "held by the runner" (`orca.live.held_sql`, part of
+X" in place of "held by the runner" (`morca.live.held_sql`, part of
 `dead_sql`):
 
 - **held**, so live, while its instance has been seen within the stale
   limit, hasn't ended and lists it in `running`, whatever its heartbeat.
   The leader counts such runs against `max_runs`, `fill_max_runs`, the
   control slots, the grants under the host lock and the memory pressure
-  grace's "none of orca's runs going", and its dead-run paths (`_end_dead`,
+  grace's "none of morca's runs going", and its dead-run paths (`_end_dead`,
   the restart of dead runs, the backfill's live keys) skip them;
 - **dead as before** when its instance is live but no longer lists it: the
   instance reaped it and recorded its exit, so a UI run fails "interrupted"
@@ -123,20 +123,20 @@ claims runs any more.
 
 An instance that drains starts nothing, keeps supervising its children and
 the `keep-log`s their ends started, and once none is left ends its row
-(`role = 'ended'`, `ended` set) and exits 0. After `ORCA_DRAIN_SECONDS`
-(3600, the same as `orca-stack quiesce`'s default timeout) it kills what is
+(`role = 'ended'`, `ended` set) and exits 0. After `MORCA_DRAIN_SECONDS`
+(3600, the same as `morca-stack quiesce`'s default timeout) it kills what is
 left (each control run's process group too), ends its row and exits; the
 leader queues those runs again once their heartbeats are stale. An ended
 instance is gone at once, so nothing waits for its row to go stale.
 
 ### Registering after the handover
 
-`orca register` writes the pipelines' binaries and code. Under an instance
+`morca register` writes the pipelines' binaries and code. Under an instance
 that still leads, the new image's paths and registry hashes would be
 started by the old image. So a deploy registers only once the new instance
-leads: `orca scheduler wait-lead` waits for the newest live instance to
-lead, and `orca register` itself, with `ORCA_OVERLAP=on`, waits for that
-(`ORCA_REGISTER_WAIT_SECONDS`, 120) and refuses after. With no instance
+leads: `morca scheduler wait-lead` waits for the newest live instance to
+lead, and `morca register` itself, with `MORCA_OVERLAP=on`, waits for that
+(`MORCA_REGISTER_WAIT_SECONDS`, 120) and refuses after. With no instance
 live it doesn't wait.
 
 The old instance's runs keep their code. One that fails after the new code
@@ -157,12 +157,12 @@ on a schema newer than it knows, so it uses the same floors:
 
 Two guards make that hold:
 
-- `orca scheduler can-overlap`, run from the new image before it starts
+- `morca scheduler can-overlap`, run from the new image before it starts
   anything, exits 0 (`yes`) when a live instance leads and every live
   instance knows at least this binary's floor (`migration_floor` of the
   migrations it knows), and 1 (`no: <why>`) otherwise: a floor it would
   raise past, or no live leading instance (none going, or one with
-  `ORCA_OVERLAP` off, which keeps no row). It doesn't migrate. `deploy.sh`
+  `MORCA_OVERLAP` off, which keeps no row). It doesn't migrate. `deploy.sh`
   overlaps on `yes` and pauses and waits on `no`;
 - `State.migrate` refuses to apply migrations that raise the floor while a
   live instance (seen within the stale limit, not ended) knows fewer than
@@ -214,26 +214,26 @@ holds nothing.
 
 The Hetzner change is #246, stacked on #244 (stack #245), so this PR
 doesn't touch `deploy/hetzner/`. With `OVERLAP=1` in stack.conf (off by
-default) the containers get `ORCA_OVERLAP=on`, and:
+default) the containers get `MORCA_OVERLAP=on`, and:
 
-- `deploy.sh` asks `orca-stack can-overlap --tag <tag>`, which runs the new
-  image's `orca scheduler can-overlap`; on `no` it quiesces and replaces as
+- `deploy.sh` asks `morca-stack can-overlap --tag <tag>`, which runs the new
+  image's `morca scheduler can-overlap`; on `no` it quiesces and replaces as
   today, saying why;
-- on `yes`, `orca-stack apply --overlap` starts the new scheduler as
+- on `yes`, `morca-stack apply --overlap` starts the new scheduler as
   `scheduler-next` beside the old one, sets the old one's restart policy to
   `no` (a restart after its drain would be the newest instance and take
   the lead back), renames it `scheduler-old` and the new one `scheduler`,
-  and waits for `orca scheduler wait-lead`;
-- the deploy registers the pipelines, then `orca-stack drain-old` asks the
+  and waits for `morca scheduler wait-lead`;
+- the deploy registers the pipelines, then `morca-stack drain-old` asks the
   old instance to drain, waits for its container to exit (bounded by the
   deploy's `--timeout`, then stopped), and removes it;
 - a `scheduler-old` or `scheduler-next` left behind that isn't running any
   more (one that exited when `drain-old` didn't follow) holds no runs: the
-  next `orca-stack apply` removes it first, naming its image and how long
+  next `morca-stack apply` removes it first, naming its image and how long
   ago it exited, and `can-overlap` doesn't count it (#352). A running one
-  stays until `drain-old`, and `can-overlap` says no and `orca-stack check`
+  stays until `drain-old`, and `can-overlap` says no and `morca-stack check`
   fails while it's there;
-- `orca-stack status` lists the instances (`orca scheduler status`).
+- `morca-stack status` lists the instances (`morca scheduler status`).
 
 Each container stages its own runs' output in the shared stage volume
 under names of their own (run and start), so nothing collides.
@@ -241,10 +241,10 @@ under names of their own (run and start), so nothing collides.
 ## Status (PR #242)
 
 Built: migration 42, `orca.instances` (join, the lead, the drain, status,
-`can-overlap`, `wait-lead`), `ORCA_OVERLAP`, `ORCA_DRAIN_SECONDS`, the
+`can-overlap`, `wait-lead`), `MORCA_OVERLAP`, `MORCA_DRAIN_SECONDS`, the
 adoption rule (`held_sql`, `stale_sql`, `_requeue_orphans`), the stale-kill
 pass, `register`'s wait and `migrate`'s floor guard. Removed from the
-earlier #242: `orca runner`, `ORCA_LOCAL_RUNNER`, the assignment and its
+earlier #242: `morca runner`, `MORCA_LOCAL_RUNNER`, the assignment and its
 claim, the hold while no runner is seen, and the reserved pool. Tested by
 `tests/adopt.sh` (the rule over made-up rows) and `tests/overlap.sh` (three
 real instances on one Postgres: a drain with runs in flight, `max_runs`
@@ -252,4 +252,4 @@ across both, no double start or requeue of the draining one's runs, a
 drain that runs out and its requeue, register's wait, and the floor cases).
 
 Next: the stack (#246, above), the instances on Ops' System page, and making
-`ORCA_OVERLAP=on` the default once proven.
+`MORCA_OVERLAP=on` the default once proven.

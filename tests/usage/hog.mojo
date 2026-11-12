@@ -1,5 +1,5 @@
 """The pipeline of tests/usage.sh: one step that holds a known amount of
-memory and keeps two cores busy, so the test can check what orca recorded.
+memory and keeps two cores busy, so the test can check what morca recorded.
 
 For any month, its step starts a copy of this binary (with `HOG_CHILD`
 set), which holds `HOG_CHILD_MB` (100) MiB and burns a core for
@@ -15,8 +15,8 @@ from std.os import getenv
 from std.sys import argv
 from std.time import perf_counter_ns
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
-from orca.proc import absolute, spawn
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
+from morca.proc import absolute, spawn
 
 
 def _hold(mb: Int, seconds: Float64) -> Int:
@@ -58,4 +58,4 @@ def main() raises:
             Int(_env("HOG_CHILD_MB", "100")), Float64(_env("HOG_SECONDS", "4"))
         )
         return
-    orca_main[Hogs]()
+    morca_main[Hogs]()

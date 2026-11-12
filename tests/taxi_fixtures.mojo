@@ -19,7 +19,7 @@ from iceberg.write import codec_value
 from parquet import ParquetReader, ParquetWriter, RecordBatch, WriterOptions
 from parquet_full import AllCodecs
 
-from orca import Month
+from morca import Month
 from tlc import file_name, month_bounds, pickup_column
 
 comptime KEEP_FIRST = 500

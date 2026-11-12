@@ -1,4 +1,4 @@
-"""The NYC yellow-taxi load as an orca pipeline: download each month's TLC
+"""The NYC yellow-taxi load as a morca pipeline: download each month's TLC
 file, load it into a month-partitioned Iceberg table, then compact the months
 the run loaded to one file each.
 
@@ -7,23 +7,23 @@ the run loaded to one file each.
 
 That's phase 1's gate: 2023-2024 loads to 79,478,796 rows, as taxibench's
 table does, and a run killed during the load resumes at the month it was on.
-With ORCA_DATABASE_URL set the run is recorded, so `taxi resume <run>` can
+With MORCA_DATABASE_URL set the run is recorded, so `taxi resume <run>` can
 finish it.
 
 Phase 2's gate schedules it. The partitions are the months from 2011-01, the
 first the TLC publishes in this form, and it fires at 06:00 UTC on the 2nd
 for the month before, four runs at most at once:
 
-    pixi run -e data orca
-    ./build/orca register ./build/taxi
-    ./build/orca backfill taxi 2011-01..2024-12
-    ./build/orca scheduler
+    pixi run -e data morca
+    ./build/morca register ./build/taxi
+    ./build/morca backfill taxi 2011-01..2024-12
+    ./build/morca scheduler
 
 The TLC publishes a month about two months after it ends, so a fire for the
 month just ended fails its download, is retried with backoff and then fails;
 a backfill of the month once it's out loads it.
 
-- `ORCA_WAREHOUSE` (default `build/taxi-data/warehouse`): the warehouse that
+- `MORCA_WAREHOUSE` (default `build/taxi-data/warehouse`): the warehouse that
   holds the dataset `taxi.trips`, created by the first load. `load` declares
   it in `writes=`, and `compact`, which rewrites it, in `reads=` and
   `writes=`.
@@ -50,7 +50,7 @@ from iceberg.scan import FileScanTask, TableScan
 from iceberg.write import WriteOptions, write_data_files
 from parquet import RecordBatch
 
-from orca import (
+from morca import (
     Cron,
     Ctx,
     Gather,
@@ -59,9 +59,9 @@ from orca import (
     Monthly,
     Pipeline,
     Step,
-    orca_main,
+    morca_main,
 )
-from orca.tables import append, commit, ensure_table, find_commit, scan
+from morca.tables import append, commit, ensure_table, find_commit, scan
 from tlc import TLC_URL, download, read_month, schema, spec
 
 
@@ -252,6 +252,6 @@ comptime Taxi = Pipeline[
 
 
 def main() raises:
-    if not getenv("ORCA_WAREHOUSE"):
-        _ = setenv("ORCA_WAREHOUSE", "build/taxi-data/warehouse")
-    orca_main[Taxi]()
+    if not getenv("MORCA_WAREHOUSE"):
+        _ = setenv("MORCA_WAREHOUSE", "build/taxi-data/warehouse")
+    morca_main[Taxi]()

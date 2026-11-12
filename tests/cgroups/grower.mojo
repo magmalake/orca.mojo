@@ -5,7 +5,7 @@ is killed by the kernel and its retry, with a bigger limit, isn't."""
 from std.os import getenv
 from std.time import perf_counter_ns
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
 
 
 def grow(mut ctx: Ctx, m: Month) raises -> Int:
@@ -27,4 +27,4 @@ comptime Grower = Pipeline["grower", Grow, partitions=Monthly["2024-01"]]
 
 
 def main() raises:
-    orca_main[Grower]()
+    morca_main[Grower]()

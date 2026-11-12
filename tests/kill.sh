@@ -1,6 +1,6 @@
 #!/bin/sh
 # A run killed at a random point, then resumed, finishes with every step
-# succeeded exactly once. Needs ORCA_DATABASE_URL (pixi run test-kill starts
+# succeeded exactly once. Needs MORCA_DATABASE_URL (pixi run test-kill starts
 # a throwaway server). KILL_RUNS sets how many runs (default 8), KILL_SEED the
 # first seed.
 set -eu
@@ -11,8 +11,8 @@ scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 
 runs=${KILL_RUNS:-8}
 seed=${KILL_SEED:-$$}
-export ORCA_STALE_SECONDS=1
-export ORCA_TOY_SLEEP=0.05
+export MORCA_STALE_SECONDS=1
+export MORCA_TOY_SLEEP=0.05
 months=2024-01..2024-06 # 6 days + 6 measure + 1 total = 13 steps, ~0.7 s
 log=build/kill.log
 
@@ -21,7 +21,7 @@ fail() {
     cat "$log"
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 
 i=0
 killed=0
@@ -65,7 +65,7 @@ done
 [ "$killed" -gt 0 ] || fail "no run was killed mid-way"
 
 # Resuming with different code is refused unless asked for.
-ORCA_TOY_FAIL=2024-02 ./build/toy run --partitions "$months" > "$log" 2>&1 && fail "the failing run succeeded"
+MORCA_TOY_FAIL=2024-02 ./build/toy run --partitions "$months" > "$log" 2>&1 && fail "the failing run succeeded"
 run=$(sed -n 's/^run \([0-9][0-9]*\)$/\1/p' "$log" | head -1)
 q "UPDATE orca.runs SET registry_hash = '0xdead' WHERE id = $run" > /dev/null
 set +e

@@ -1,5 +1,5 @@
 #!/bin/sh
-# The ec2 runner's warm pool (orca.ec2, orca.pool, ORCA_EC2_POOL_SECONDS),
+# The ec2 runner's warm pool (morca.ec2, morca.pool, MORCA_EC2_POOL_SECONDS),
 # against the stand-in EC2 API (tests/fake_ec2.py), where each instance is a
 # local process running its user data. With the scheduler running:
 #
@@ -9,7 +9,7 @@
 # - /api/fleet and /ops/pools show the idle instances as "idle (pooled)", with their idle
 #   time;
 # - a toy run beside them gets an instance of its own (another pipeline);
-# - the idle instances shut down after ORCA_EC2_POOL_SECONDS;
+# - the idle instances shut down after MORCA_EC2_POOL_SECONDS;
 # - a new registration (--worker-procs 2) doesn't reuse them; with 2 worker
 #   processes per instance, a run on 1 worker, then one on 3 takes the
 #   pooled head and worker and launches 2 more; then a run on 1 leaves the
@@ -19,10 +19,10 @@
 #   head;
 # - a pooled head handed a run that doesn't take it up (stopped) is
 #   replaced by a new one, and the run succeeds;
-# - with ORCA_EC2_POOL_SECONDS=0 each run gets instances of its own, which
+# - with MORCA_EC2_POOL_SECONDS=0 each run gets instances of its own, which
 #   shut themselves down, as before (tests/ec2.sh is all of that).
 #
-# Needs ORCA_DATABASE_URL (pixi run test-pool starts a throwaway server),
+# Needs MORCA_DATABASE_URL (pixi run test-pool starts a throwaway server),
 # python3, curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -34,7 +34,7 @@ scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/pool.log
 : > "$log"
 dir=$PWD/build/fake-ec2-pool
@@ -59,21 +59,21 @@ fail() {
     exit 1
 }
 . "$PWD/tests/wait_log.sh"
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
-export ORCA_RUNNER=ec2 ORCA_EC2_MODE=direct ORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
-export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test ORCA_EC2_AMI=ami-test
-export ORCA_STALE_SECONDS=10 ORCA_START_SECONDS=60
-export ORCA_LOGS=$PWD/build/pool-logs ORCA_CLUSTER_LOG_SECONDS=1 ORCA_SAMPLE_SECONDS=1
-export ORCA_FANOUT_SHOW_HOST=1 ORCA_FANOUT_SLEEP=0.2 ORCA_TOY_SLEEP=0
-export ORCA_RUN_ENV=ORCA_FANOUT_SHOW_HOST,ORCA_FANOUT_SLEEP,ORCA_TOY_SLEEP
-export ORCA_EC2_POOL_SECONDS=25
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
+export MORCA_RUNNER=ec2 MORCA_EC2_MODE=direct MORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
+export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test MORCA_EC2_AMI=ami-test
+export MORCA_STALE_SECONDS=10 MORCA_START_SECONDS=60
+export MORCA_LOGS=$PWD/build/pool-logs MORCA_CLUSTER_LOG_SECONDS=1 MORCA_SAMPLE_SECONDS=1
+export MORCA_FANOUT_SHOW_HOST=1 MORCA_FANOUT_SLEEP=0.2 MORCA_TOY_SLEEP=0
+export MORCA_RUN_ENV=MORCA_FANOUT_SHOW_HOST,MORCA_FANOUT_SLEEP,MORCA_TOY_SLEEP
+export MORCA_EC2_POOL_SECONDS=25
 python3 tests/fake_ec2.py "$port" "$dir" >> "$log" 2>&1 &
 fake=$!
 i=0
-until curl -s -o /dev/null "$ORCA_EC2_ENDPOINT/"; do
+until curl -s -o /dev/null "$MORCA_EC2_ENDPOINT/"; do
     i=$((i + 1)); [ "$i" -lt 100 ] || fail "the stand-in EC2 didn't start"; sleep 0.1
 done
-ec2() { a=$1; shift; curl -s -d "Action=$a$(printf '&%s' "$@")" "$ORCA_EC2_ENDPOINT/"; }
+ec2() { a=$1; shift; curl -s -d "Action=$a$(printf '&%s' "$@")" "$MORCA_EC2_ENDPOINT/"; }
 until_true() {
     i=0
     until [ "$(q "$1")" = t ]; do
@@ -82,7 +82,7 @@ until_true() {
 }
 scheduler() {
     [ -z "$sched" ] || { kill "$sched"; wait "$sched" 2> /dev/null || true; }
-    ./build/orca scheduler >> "$log" 2>&1 &
+    ./build/morca scheduler >> "$log" 2>&1 &
     sched=$!
 }
 launches() { grep -c '"RunInstances"' "$dir/calls.jsonl" || true; }
@@ -106,15 +106,15 @@ idle_ok() {  # waits for the instances run $1 ended on to be idle in the pool
     until_true "SELECT count(*) > 0 AND bool_and(idle IS NOT NULL) FROM orca.instances WHERE run = $1 AND ended IS NULL" 120
 }
 trips_of() {  # the tasks run $1 ran on its workers, from its workers' logs
-    cat "$ORCA_LOGS/$2/$1/cluster/"worker-*.log 2> /dev/null | grep -c "^trips on" || true
+    cat "$MORCA_LOGS/$2/$1/cluster/"worker-*.log 2> /dev/null | grep -c "^trips on" || true
 }
 
-./build/orca register --image orca:test ./build/toy >> "$log" 2>&1 || fail "register the toy"
-./build/orca register --image orca:test --workers 2 ./build/fanout >> "$log" 2>&1 || fail "register fanout"
+./build/morca register --image morca:test ./build/toy >> "$log" 2>&1 || fail "register the toy"
+./build/morca register --image morca:test --workers 2 ./build/fanout >> "$log" 2>&1 || fail "register fanout"
 scheduler
 
 # Three runs, one after another, on the instances the first launched.
-./build/orca backfill fanout 2024-01..2024-03 >> "$log" 2>&1 || fail "backfill fanout"
+./build/morca backfill fanout 2024-01..2024-03 >> "$log" 2>&1 || fail "backfill fanout"
 r1=$(q "SELECT min(id) FROM orca.runs WHERE pipeline = 'fanout'")
 r2=$((r1 + 1))
 r3=$((r1 + 2))
@@ -139,22 +139,22 @@ idle_ok "$r3"
 for x in "$r1 31" "$r2 29" "$r3 31"; do
     set -- $x
     [ "$(trips_of "$1" fanout)" -eq "$2" ] || fail "run $1's worker logs have $(trips_of "$1" fanout) tasks, not $2"
-    wait_log "$ORCA_LOGS/fanout/$1/driver.log" "^run succeeded" || fail "run $1's driver log"
-    [ "$(grep -c "^--- start" "$ORCA_LOGS/fanout/$1/driver.log")" -eq 1 ] || fail "run $1's driver log has more than its start"
-    wait_log "$ORCA_LOGS/fanout/$1/cluster/head-$head.log" || fail "run $1's head log"
+    wait_log "$MORCA_LOGS/fanout/$1/driver.log" "^run succeeded" || fail "run $1's driver log"
+    [ "$(grep -c "^--- start" "$MORCA_LOGS/fanout/$1/driver.log")" -eq 1 ] || fail "run $1's driver log has more than its start"
+    wait_log "$MORCA_LOGS/fanout/$1/cluster/head-$head.log" || fail "run $1's head log"
     for i in "head-$head" $(echo "$workers" | tr ',' '\n' | sed 's/^/worker-/'); do
-        python3 tests/metrics_ok.py "$ORCA_LOGS/fanout/$1/metrics/$i.jsonl" > /dev/null || fail "run $1's metrics of $i"
+        python3 tests/metrics_ok.py "$MORCA_LOGS/fanout/$1/metrics/$i.jsonl" > /dev/null || fail "run $1's metrics of $i"
     done
 done
 echo "ok   3 runs of fanout on one head and 2 workers, launched once, each run's logs its own"
 
 # Idle in the pool, on the fleet page.
 free_port uport
-ORCA_UI_ADDR="127.0.0.1:$uport" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$uport" ./build/morca ui >> "$log" 2>&1 &
 ui=$!
 i=0
 until curl -fs "http://127.0.0.1:$uport/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 curl -fsS "http://127.0.0.1:$uport/api/fleet" | jq -e '[.hosts[] | select(.state == "idle (pooled)" and .idle_seconds >= 0)] | length == 3' > /dev/null \
     || fail "/api/fleet: $(curl -fsS "http://127.0.0.1:$uport/api/fleet" | jq -c '[.hosts[] | {id, state, idle_seconds}]')"
@@ -165,7 +165,7 @@ echo "ok   /api/fleet and /ops/pools show the idle instances as idle (pooled)"
 
 # Another pipeline: a toy run gets a head of its own.
 before=$(launches)
-./build/orca backfill toy 2024-01 >> "$log" 2>&1 || fail "backfill the toy"
+./build/morca backfill toy 2024-01 >> "$log" 2>&1 || fail "backfill the toy"
 t1=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
 done_ok "$t1"
 [ "$(launched_for "$t1")" = "head 1" ] || fail "the toy's launches: $(launched_for "$t1")"
@@ -182,21 +182,21 @@ until_true "SELECT bool_and(ended IS NOT NULL) FROM orca.instances WHERE run = $
 for i in $head $(echo "$workers" | tr ',' ' '); do
     ec2 DescribeInstances Filter.1.Name=instance-id "Filter.1.Value.1=$i" | grep -q "<name>terminated</name>" || fail "$i is still up"
 done
-echo "ok   idle instances shut down after ORCA_EC2_POOL_SECONDS"
+echo "ok   idle instances shut down after MORCA_EC2_POOL_SECONDS"
 
 # A new registration (2 worker processes each) doesn't reuse; scaling up
 # from 1 pooled worker to 3; then down to 1, the other 2 left pooled.
-./build/orca register --image orca:test --workers 1 --worker-procs 2 ./build/fanout >> "$log" 2>&1 \
+./build/morca register --image morca:test --workers 1 --worker-procs 2 ./build/fanout >> "$log" 2>&1 \
     || fail "register fanout with 2 processes a worker"
-./build/orca backfill fanout 2024-04 >> "$log" 2>&1 || fail "backfill 2024-04"
+./build/morca backfill fanout 2024-04 >> "$log" 2>&1 || fail "backfill 2024-04"
 r4=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
 done_ok "$r4"
 [ "$(launched_for "$r4")" = "head 1
 worker 1" ] || fail "run $r4's launches: $(launched_for "$r4")"
 idle_ok "$r4"
 [ "$(trips_of "$r4" fanout)" -eq 30 ] || fail "run $r4's worker logs have $(trips_of "$r4" fanout) tasks"
-./build/orca register --image orca:test --workers 3 ./build/fanout >> "$log" 2>&1 || fail "register fanout on 3"
-./build/orca backfill fanout 2024-05 >> "$log" 2>&1 || fail "backfill 2024-05"
+./build/morca register --image morca:test --workers 3 ./build/fanout >> "$log" 2>&1 || fail "register fanout on 3"
+./build/morca backfill fanout 2024-05 >> "$log" 2>&1 || fail "backfill 2024-05"
 r5=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
 done_ok "$r5"
 [ "$(launched_for "$r5")" = "worker 2" ] || fail "run $r5's launches: $(launched_for "$r5")"
@@ -207,11 +207,11 @@ echo ",$(ids "$r5" worker)," | grep -q ",$w4," || fail "run $r5's workers $(ids 
     || fail "run $r5's workers' processes"
 idle_ok "$r5"
 [ "$(trips_of "$r5" fanout)" -eq 31 ] || fail "run $r5's worker logs have $(trips_of "$r5" fanout) tasks"
-grep -q "^== orca-$r5-1-worker-$w4.log.p2 ==" "$ORCA_LOGS/fanout/$r5/cluster/worker-$w4.log" \
-    || fail "run $r5's log of $w4: $(head -3 "$ORCA_LOGS/fanout/$r5/cluster/worker-$w4.log")"
-./build/orca register --image orca:test --workers 1 ./build/fanout >> "$log" 2>&1 || fail "register fanout on 1"
+grep -q "^== morca-$r5-1-worker-$w4.log.p2 ==" "$MORCA_LOGS/fanout/$r5/cluster/worker-$w4.log" \
+    || fail "run $r5's log of $w4: $(head -3 "$MORCA_LOGS/fanout/$r5/cluster/worker-$w4.log")"
+./build/morca register --image morca:test --workers 1 ./build/fanout >> "$log" 2>&1 || fail "register fanout on 1"
 before=$(launches)
-./build/orca backfill fanout 2024-06 >> "$log" 2>&1 || fail "backfill 2024-06"
+./build/morca backfill fanout 2024-06 >> "$log" 2>&1 || fail "backfill 2024-06"
 r6=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
 done_ok "$r6"
 [ "$(launches)" -eq "$before" ] || fail "run $r6 launched: $(launched_for "$r6")"
@@ -225,7 +225,7 @@ idle_ok "$r6"
 killed=$(q "SELECT string_agg(id, ',') FROM orca.instances WHERE ended IS NULL AND role = 'worker' AND idle IS NOT NULL")
 [ -n "$killed" ] || fail "no idle worker to kill"
 for k in $(echo "$killed" | tr ',' ' '); do ec2 TerminateInstances "InstanceId.1=$k" > /dev/null; done
-./build/orca backfill fanout 2024-07 >> "$log" 2>&1 || fail "backfill 2024-07"
+./build/morca backfill fanout 2024-07 >> "$log" 2>&1 || fail "backfill 2024-07"
 r7=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
 done_ok "$r7"
 [ "$(launched_for "$r7")" = "worker 1" ] || fail "run $r7's launches: $(launched_for "$r7")"
@@ -238,13 +238,13 @@ echo "ok   a pooled worker killed while idle isn't handed out; a new one is laun
 # Two toy runs at once, one pooled head between them. The toy's sleep is
 # in its instances' environment, so it's set before the run that fills the
 # pool: a run with another environment wouldn't take its head.
-export ORCA_TOY_SLEEP=2
+export MORCA_TOY_SLEEP=2
 scheduler
-./build/orca backfill toy 2024-02 >> "$log" 2>&1 || fail "backfill the toy's 2024-02"
+./build/morca backfill toy 2024-02 >> "$log" 2>&1 || fail "backfill the toy's 2024-02"
 t2=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
 done_ok "$t2"
 idle_ok "$t2"
-./build/orca backfill toy 2024-03..2024-04 >> "$log" 2>&1 || fail "backfill the toy's 2024-03..04"
+./build/morca backfill toy 2024-03..2024-04 >> "$log" 2>&1 || fail "backfill the toy's 2024-03..04"
 t4=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
 t3=$((t4 - 1))
 done_ok "$t3"
@@ -262,7 +262,7 @@ echo "ok   two runs starting at once don't share a pooled instance"
 # A pooled head that doesn't take its run up (stopped) is replaced.
 idle_ok "$t3"
 idle_ok "$t4"
-export ORCA_EC2_POOL_LIVE_SECONDS=600 ORCA_EC2_POOL_JOIN_SECONDS=4
+export MORCA_EC2_POOL_LIVE_SECONDS=600 MORCA_EC2_POOL_JOIN_SECONDS=4
 scheduler
 for h in $h3 $h4; do
     pid=$(pgrep -f "$dir/$h.sh" | head -1)
@@ -270,7 +270,7 @@ for h in $h3 $h4; do
     # The instance's whole process group (dash's kill takes no group).
     python3 -c 'import os, signal, sys; os.killpg(os.getpgid(int(sys.argv[1])), signal.SIGSTOP)' "$pid"
 done
-./build/orca backfill toy 2024-05 >> "$log" 2>&1 || fail "backfill the toy's 2024-05"
+./build/morca backfill toy 2024-05 >> "$log" 2>&1 || fail "backfill the toy's 2024-05"
 t5=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
 done_ok "$t5"
 q "SELECT why FROM orca.instances WHERE run = $t5 AND pooled" | grep -q "^pooled: never took the run up$" \
@@ -280,13 +280,13 @@ q "SELECT why FROM orca.instances WHERE run = $t5 AND pooled" | grep -q "^pooled
 echo "ok   a pooled head that never took its run up is replaced by a new one"
 
 # The pool off: each run on its own instance, which shuts itself down.
-export ORCA_EC2_POOL_SECONDS=0
-unset ORCA_EC2_POOL_LIVE_SECONDS ORCA_EC2_POOL_JOIN_SECONDS
+export MORCA_EC2_POOL_SECONDS=0
+unset MORCA_EC2_POOL_LIVE_SECONDS MORCA_EC2_POOL_JOIN_SECONDS
 scheduler
-./build/orca backfill toy 2024-06 >> "$log" 2>&1 || fail "backfill the toy's 2024-06"
+./build/morca backfill toy 2024-06 >> "$log" 2>&1 || fail "backfill the toy's 2024-06"
 t6=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
 done_ok "$t6"
-./build/orca backfill toy 2024-07 >> "$log" 2>&1 || fail "backfill the toy's 2024-07"
+./build/morca backfill toy 2024-07 >> "$log" 2>&1 || fail "backfill the toy's 2024-07"
 t7=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
 done_ok "$t7"
 until_true "SELECT bool_and(ended IS NOT NULL) FROM orca.instances WHERE run IN ($t6, $t7)" 60

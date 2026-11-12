@@ -9,7 +9,7 @@ snapshot means nothing known of one.
 
 from harness import bytes_of, check, only_findings, run_harness, save_last
 
-from orca.warehouse import current_of
+from morca.warehouse import current_of
 
 
 def target(data: List[UInt8]) raises:
@@ -20,7 +20,7 @@ def target(data: List[UInt8]) raises:
         if c.snapshot < 0:
             check(c.snapshot == -1, "a snapshot below -1")
             check(
-                not c.by_orca and not c.partitions, "a summary of no snapshot"
+                not c.by_morca and not c.partitions, "a summary of no snapshot"
             )
     except e:
         only_findings(e)

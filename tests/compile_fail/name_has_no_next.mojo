@@ -1,5 +1,5 @@
 # expect: 'Name' value has no attribute 'next'
-from orca import Name
+from morca import Name
 
 
 def main() raises:

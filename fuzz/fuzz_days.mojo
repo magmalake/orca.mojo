@@ -9,7 +9,7 @@ written back out it must parse to the same list.
 
 from harness import bytes_of, check, only_findings, run_harness, save_last
 
-from orca import Daily, Day, days_in, parse_partitions
+from morca import Daily, Day, days_in, parse_partitions
 
 
 def target(data: List[UInt8]) raises:

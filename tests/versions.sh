@@ -1,8 +1,8 @@
 #!/bin/sh
-# Pipeline versions (orca.source): the toy built from two commits and once
+# Pipeline versions (morca.source): the toy built from two commits and once
 # without a source. Each registration and each run records the version it
 # is, the pipeline page lists all three with their runs, and each run's page
-# links its own commit. Needs ORCA_DATABASE_URL (pixi run test-versions
+# links its own commit. Needs MORCA_DATABASE_URL (pixi run test-versions
 # starts a throwaway server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -12,18 +12,18 @@ repo=https://github.com/morca-dev/morca
 c1=1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
 c2=2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC -D ORCA_SOURCE=$repo.git -D ORCA_COMMIT=$c1 examples/toy.mojo -o build/toy-c1
+scripts/mojo-build.sh -I src $DEP_INC -D MORCA_SOURCE=$repo.git -D MORCA_COMMIT=$c1 examples/toy.mojo -o build/toy-c1
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC -D ORCA_SOURCE=git@github.com:morca-dev/morca.git -D ORCA_COMMIT=$c2 \
-    -D ORCA_DIRTY=1 examples/toy.mojo -o build/toy-c2
+scripts/mojo-build.sh -I src $DEP_INC -D MORCA_SOURCE=git@github.com:morca-dev/morca.git -D MORCA_COMMIT=$c2 \
+    -D MORCA_DIRTY=1 examples/toy.mojo -o build/toy-c2
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 
 log=build/versions.log
 : > "$log"
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 pid=
 fail() {
     echo "FAIL: $*"
@@ -39,11 +39,11 @@ fail() {
 [ "$(./build/toy-c1 describe | jq -r .registry_hash)" = "$(./build/toy describe | jq -r .registry_hash)" ] \
     || fail "the source changed the registry hash"
 
-./build/orca locate ./build/toy-c1 --root . >> "$log" 2>&1 || fail "locate c1"
-./build/orca register --image orca:c1 ./build/toy-c1 >> "$log" 2>&1 || fail "register c1"
-ORCA_IMAGE=orca:c1 ./build/toy-c1 run --partitions 2024-01 >> "$log" 2>&1 || fail "run c1"
-./build/orca register ./build/toy-c2 >> "$log" 2>&1 || fail "register c2"
-ORCA_IMAGE=orca:c1 ./build/toy-c2 run --partitions 2024-02 >> "$log" 2>&1 || fail "run c2"
+./build/morca locate ./build/toy-c1 --root . >> "$log" 2>&1 || fail "locate c1"
+./build/morca register --image morca:c1 ./build/toy-c1 >> "$log" 2>&1 || fail "register c1"
+MORCA_IMAGE=morca:c1 ./build/toy-c1 run --partitions 2024-01 >> "$log" 2>&1 || fail "run c1"
+./build/morca register ./build/toy-c2 >> "$log" 2>&1 || fail "register c2"
+MORCA_IMAGE=morca:c1 ./build/toy-c2 run --partitions 2024-02 >> "$log" 2>&1 || fail "run c2"
 ./build/toy run --partitions 2024-03 >> "$log" 2>&1 || fail "run without a source"
 r1=$(q "SELECT min(id) FROM orca.runs")
 r3=$(q "SELECT max(id) FROM orca.runs")
@@ -56,7 +56,7 @@ r2=$(q "SELECT id FROM orca.runs WHERE id > $r1 AND id < $r3")
     || fail "the pipeline's version isn't the last registered binary's"
 # A resume records the version that resumed it.
 q "UPDATE orca.runs SET status = 'failed', heartbeat = NULL WHERE id = $r3" > /dev/null
-ORCA_IMAGE=orca:c1 ./build/toy-c1 resume "$r3" >> "$log" 2>&1 || fail "resume with c1"
+MORCA_IMAGE=morca:c1 ./build/toy-c1 resume "$r3" >> "$log" 2>&1 || fail "resume with c1"
 [ "$(q "SELECT v.commit_sha FROM orca.runs r JOIN orca.pipeline_versions v ON v.id = r.version WHERE r.id = $r3")" = $c1 ] \
     || fail "the resumed run's version"
 q "UPDATE orca.runs SET status = 'failed', heartbeat = NULL WHERE id = $r3" > /dev/null
@@ -64,16 +64,16 @@ q "UPDATE orca.runs SET status = 'failed', heartbeat = NULL WHERE id = $r3" > /d
 
 free_port port
 base="http://127.0.0.1:$port"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 pid=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 json() { curl -fsS -H 'Accept: application/json' "$base$1" || fail "GET $1 as JSON"; }
 html() { curl -fsS "$base$1" || fail "GET $1"; }
 
-json "/runs/$r1" | jq -e ".version.commit == \"$c1\" and .version.image == \"orca:c1\" and .version.commit_url == \"$repo/tree/$c1\" and (.version.dirty | not)" > /dev/null \
+json "/runs/$r1" | jq -e ".version.commit == \"$c1\" and .version.image == \"morca:c1\" and .version.commit_url == \"$repo/tree/$c1\" and (.version.dirty | not)" > /dev/null \
     || fail "run $r1's version: $(json "/runs/$r1" | jq -c .version)"
 json "/runs/$r2" | jq -e ".version.commit_url == \"$repo/tree/$c2\" and .version.dirty" > /dev/null \
     || fail "run $r2's version: $(json "/runs/$r2" | jq -c .version)"
@@ -83,10 +83,10 @@ html "/runs/$r1" | grep -qF "<a class=\"src\" href=\"$repo/tree/$c1\" target=\"_
     || fail "run $r1's page links its commit"
 html "/runs/$r2" | grep -q "plus uncommitted changes" || fail "run $r2's page says it was dirty"
 html "/runs/$r3" | grep -q "not recorded" || fail "run $r3's page says it has no source"
-# The steps' code, at the commit, for the version orca locate mapped.
+# The steps' code, at the commit, for the version morca locate mapped.
 line=$(grep -n '^def days(' examples/toy.mojo | cut -d: -f1)
 # A code link: the icon, out of the screen reader's way, the file and line
-# in monospace, and an arrow out, in a new tab; unlike orca's own links.
+# in monospace, and an arrow out, in a new tab; unlike morca's own links.
 icon='<svg class="src__icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">'
 code_link() { # url, commit
     printf '<a class="src" href="%s" target="_blank" rel="noopener" title="View source on GitHub at %.7s">%s' "$1" "$2" "$icon"
@@ -95,14 +95,14 @@ code_at() { printf '<span class="src__at">%s</span><span class="src__out" aria-h
 page=$(html "/runs/$r1")
 echo "$page" | grep -qF "tabindex=\"0\">days</span> $(code_link "$repo/blob/$c1/examples/toy.mojo#L$line" $c1)" \
     || fail "run $r1's page links its steps' code"
-# The step's card (orca.ui.step_cards) has its code at the run's commit too.
+# The step's card (morca.ui.step_cards) has its code at the run's commit too.
 got=$(echo "$page" | sed -n 's/.*<script type="application\/json" class="step-cards">\([^<]*\)<\/script>.*/\1/p' | jq -r '.steps.days | [.src, .at, .commit] | join(" ")')
 [ "$got" = "$repo/blob/$c1/examples/toy.mojo#L$line examples/toy.mojo:$line 1a1a1a1" ] || fail "days' card's code: $got"
 echo "$page" | grep -qF "$(code_at "examples/toy.mojo:$line")" || fail "the code link doesn't show the file and line"
 echo "$page" | grep -qF '<a class="src" href="/' && fail "an internal link took the code link's look"
 echo "$page" | grep -o '<a class="src"[^>]*>' | grep -vq 'target="_blank" rel="noopener" title="View source' \
     && fail "a code link without its target or title"
-curl -fsS "$base/static/orca.css" | grep -q '^a.src {' || fail "the stylesheet has no code link style"
+curl -fsS "$base/static/morca.css" | grep -q '^a.src {' || fail "the stylesheet has no code link style"
 att=$(json "/runs/$r1" | jq -r '.steps[0].attempt_id')
 html "/runs/$r1/attempts/$att" | grep -qF "<dt>Code</dt><dd>$(code_link "$repo/blob/$c1/examples/toy.mojo#L$line" $c1)" \
     || fail "the attempt's page doesn't link its step's code"
@@ -112,7 +112,7 @@ json "/runs/$r1" | jq -e '.version.locations["toy::measure"] | startswith("examp
 # Newest first: the bare binary, then c2 (registered without --image, so
 # with the image the pipeline has), then c1.
 got=$(json /pipelines/toy | jq -c '[.versions[] | [.commit[0:1], .image, .runs]]')
-[ "$got" = '[["","",1],["2","orca:c1",1],["1","orca:c1",1]]' ] || fail "the pipeline's versions: $got"
+[ "$got" = '[["","",1],["2","morca:c1",1],["1","morca:c1",1]]' ] || fail "the pipeline's versions: $got"
 html '/pipelines/toy?tab=runs' | grep -q "<h2>Versions" || fail "the pipeline page's versions"
 
 # A dataset's page links the steps that write and read it to their lines:
@@ -123,13 +123,13 @@ for c in 1 2; do
     src=$repo.git
     [ "$c" = 2 ] && src=git@github.com:morca-dev/morca.git
     # shellcheck disable=SC2086
-    scripts/mojo-build.sh -I src $DEP_INC -D ORCA_SOURCE=$src -D ORCA_COMMIT="$sha" tests/datasets/first.mojo -o "build/ds-first-c$c"
-    ./build/orca locate "./build/ds-first-c$c" --root . >> "$log" 2>&1 || fail "locate first c$c"
+    scripts/mojo-build.sh -I src $DEP_INC -D MORCA_SOURCE=$src -D MORCA_COMMIT="$sha" tests/datasets/first.mojo -o "build/ds-first-c$c"
+    ./build/morca locate "./build/ds-first-c$c" --root . >> "$log" 2>&1 || fail "locate first c$c"
 done
-./build/orca register ./build/ds-first-c1 >> "$log" 2>&1 || fail "register first c1"
+./build/morca register ./build/ds-first-c1 >> "$log" 2>&1 || fail "register first c1"
 ./build/ds-first-c1 run --partitions 2024-01 >> "$log" 2>&1 || fail "run first c1"
 q "INSERT INTO orca.commits (attempt, table_name, snapshot_id, dataset) SELECT a.id, 'a', 7, 'lake.a' FROM orca.attempts a JOIN orca.steps s ON s.id = a.step JOIN orca.runs r ON r.id = s.run WHERE r.pipeline = 'first'" > /dev/null
-./build/orca register ./build/ds-first-c2 >> "$log" 2>&1 || fail "register first c2"
+./build/morca register ./build/ds-first-c2 >> "$log" 2>&1 || fail "register first c2"
 fline=$(grep -n '^def step(' tests/datasets/first.mojo | cut -d: -f1)
 # The pipeline page's Code card: each function by its name, where it is in
 # the title, at the commit registered now (c2).
@@ -175,9 +175,9 @@ done
     || fail "the timeline's row has no code: $(json /api/gantt | jq -c '.rows')"
 page=$(html /runs)
 echo "$page" | grep -qF 't.closest("a.src, a[data-src]")' || fail "the peek doesn't take data-src links"
-echo "$page" | grep -qF 'document.addEventListener("orca:swap", () => { if (cur && !cur.isConnected) hide(0); });' \
+echo "$page" | grep -qF 'document.addEventListener("morca:swap", () => { if (cur && !cur.isConnected) hide(0); });' \
     || fail "the peek doesn't follow a refresh"
-echo "$page" | grep -qF 'function orcaLead(doc)' || fail "the cards have no lead sentence"
+echo "$page" | grep -qF 'function morcaLead(doc)' || fail "the cards have no lead sentence"
 echo "$page" | grep -qF 'const doc = own || (isDef ? null : moduleDoc(src.lines));' || fail "a pipeline's card doesn't fall back to its module's docstring"
 kill "$pid"
 echo "ok   versions: a run links the commit it ran, the pipeline lists its versions"

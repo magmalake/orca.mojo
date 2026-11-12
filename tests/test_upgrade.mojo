@@ -6,7 +6,7 @@ from std.testing import (
     assert_true,
 )
 
-from orca.upgrade import (
+from morca.upgrade import (
     UpgradeStep,
     parse_upgrade,
     select_steps,
@@ -26,14 +26,14 @@ manual = "Allow outbound HTTPS to huggingface.co."
 
 [[version.step]]
 id = "1.1.0-embed"
-run = "orca backfill mojo_embed 2026-11-10"
+run = "morca backfill mojo_embed 2026-11-10"
 
 [[version]]
 version = "1.2.0"
 
 [[version.step]]
 id = "1.2.0-retool"
-run = "orca backfill --rerun mojo_retool @all"
+run = "morca backfill --rerun mojo_retool @all"
 
 [[version]]
 version = "1.3.0"
@@ -41,7 +41,7 @@ version = "1.3.0"
 [[version.step]]
 id = "1.3.0-check"
 when = "before"
-manual = "Needs orca 0.23."
+manual = "Needs morca 0.23."
 """
 
 
@@ -73,12 +73,12 @@ def test_range() raises:
     assert_equal(len(c), 2)
     assert_equal(
         step_line(c[1]),
-        "step\t1.1.0-embed\tafter\trun\torca backfill mojo_embed 2026-11-10",
+        "step\t1.1.0-embed\tafter\trun\tmorca backfill mojo_embed 2026-11-10",
     )
 
 
 def test_refused() raises:
-    with assert_raises(contains="only orca commands"):
+    with assert_raises(contains="only morca commands"):
         _ = parse_upgrade(
             '[[version]]\nversion = "1.0.0"\n[[version.step]]\nid = "x"\nrun ='
             ' "rm -rf /"\n'
@@ -86,7 +86,7 @@ def test_refused() raises:
     with assert_raises(contains="only"):
         _ = parse_upgrade(
             '[[version]]\nversion = "1.0.0"\n[[version.step]]\nid = "x"\nrun ='
-            ' "orca backfill a;b"\n'
+            ' "morca backfill a;b"\n'
         )
     with assert_raises(contains="one of run and manual"):
         _ = parse_upgrade(

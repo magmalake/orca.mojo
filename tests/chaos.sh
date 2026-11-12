@@ -7,7 +7,7 @@
 #   - kill -9 of the process running it, at a random moment, which takes its
 #     dista head and workers with it;
 #   - a restart of the Postgres server under it (pg_ctl -m immediate), or,
-#     with ORCA_DATABASE_URL=sqlite:<path>, another writer holding the
+#     with MORCA_DATABASE_URL=sqlite:<path>, another writer holding the
 #     file's lock for up to 1.9 s, past the store's one-second busy timeout,
 #     so the run's writes fail and are retried on the file opened again;
 #   - two `resume`s started at once, racing to claim the run;
@@ -20,8 +20,8 @@
 # no process of the pipeline left behind. With CHAOS_CHECK=1 the binary's own
 # `check <run>` also runs (chaos_tables.mojo checks its Iceberg table).
 #
-# Needs ORCA_DATABASE_URL and ORCA_PGDATA (pixi run test-chaos starts a
-# throwaway server), or ORCA_DATABASE_URL=sqlite:<path>, a file it starts
+# Needs MORCA_DATABASE_URL and MORCA_PGDATA (pixi run test-chaos starts a
+# throwaway server), or MORCA_DATABASE_URL=sqlite:<path>, a file it starts
 # afresh (pixi run test-chaos-sqlite). CHAOS_TIMEOUT (default 120) seconds
 # per seed.
 set -euo pipefail
@@ -34,25 +34,25 @@ bin=$PWD/build/$(basename "$src" .mojo)
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC "$src" -o "$bin"
 
-export ORCA_STALE_SECONDS=1
-export ORCA_WORKERS=2
+export MORCA_STALE_SECONDS=1
+export MORCA_WORKERS=2
 export CHAOS_NAP=${CHAOS_NAP:-0.05}
 export CHAOS_FLAKY=${CHAOS_FLAKY:-30}
 months=${CHAOS_MONTHS:-2024-01..2024-12}
-case $ORCA_DATABASE_URL in
+case $MORCA_DATABASE_URL in
 sqlite:*)
-    # The same queries, on Postgres's tables without the orca schema.
-    db=${ORCA_DATABASE_URL#sqlite:}
+    # The same queries, on Postgres's tables without the morca schema.
+    db=${MORCA_DATABASE_URL#sqlite:}
     db=${db#//}
     rm -f "$db" "$db-wal" "$db-shm"
     what="lock holds"
     # Past the stale limit, so a write the lock held up past the busy
     # timeout is retried on the file opened again, not given up on.
-    export ORCA_DB_RETRY_SECONDS=${ORCA_DB_RETRY_SECONDS:-5}
+    export MORCA_DB_RETRY_SECONDS=${MORCA_DB_RETRY_SECONDS:-5}
     q() { sqlite3 -cmd '.timeout 5000' "$db" "$(echo "$1" | sed 's/orca\.//g')"; }
     ;;
 *)
-    q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+    q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
     what="postgres restarts"
     ;;
 esac
@@ -67,7 +67,7 @@ fresh_warehouse() {
 
 # What an uninterrupted run gives: its total and its number of steps.
 [ "${CHAOS_CHECK:-0}" = 1 ] && fresh_warehouse ref
-ref=$(env -u ORCA_DATABASE_URL CHAOS_FLAKY=0 CHAOS_NAP= "$bin" run --partitions "$months" 2>&1)
+ref=$(env -u MORCA_DATABASE_URL CHAOS_FLAKY=0 CHAOS_NAP= "$bin" run --partitions "$months" 2>&1)
 want=$(echo "$ref" | sed -n 's/.*TOTAL //p')
 steps=$(echo "$ref" | grep ' succeeded$' | grep -vc '^run ')
 [ -n "$want" ] || { echo "FAIL: the reference run printed no total"; echo "$ref"; exit 1; }
@@ -153,7 +153,7 @@ for seed in ${CHAOS_SEEDS:-1 2 3}; do
                     | sqlite3 -cmd '.timeout 5000' "$db" > /dev/null \
                     || fail "couldn't lock the file"
             else
-                pg_ctl -D "$ORCA_PGDATA" -m immediate -w restart > /dev/null 2>&1 \
+                pg_ctl -D "$MORCA_PGDATA" -m immediate -w restart > /dev/null 2>&1 \
                     || fail "postgres didn't restart"
             fi
             restarts=$((restarts + 1))

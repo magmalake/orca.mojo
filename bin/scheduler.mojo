@@ -1,14 +1,14 @@
-"""`orca`: the scheduler, a binary that links no pipeline.
+"""`morca`: the scheduler, a binary that links no pipeline.
 
-    pixi run orca
-    ./build/orca register ./build/taxi [...]
+    pixi run morca
+    ./build/morca register ./build/taxi [...]
 
-The command is `orca.command`, which a project's own binary calls the same
+The command is `morca.command`, which a project's own binary calls the same
 way.
 """
 
-from orca.command import orca_command
+from morca.command import morca_command
 
 
 def main() raises:
-    orca_command()
+    morca_command()
