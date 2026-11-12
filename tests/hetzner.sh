@@ -582,8 +582,8 @@ deploy kkk1111 || fail "deploy.sh kkk1111"
 has "ui: replaced (image eee5555 -> kkk1111), without downtime"
 has "scheduler: replaced (image eee5555 -> kkk1111)"
 has "console: unchanged"
-order=$(grep -oE 'run -d --name ui-next|probe ui-next|network disconnect morca ui-next|network connect --alias ui morca ui-next|stop -t 10 ui$|rm -f ui$|rename ui-next ui$' "$FAKE/docker.log" | tr '\n' ,)
-[ "$order" = "run -d --name ui-next,probe ui-next,network disconnect morca ui-next,network connect --alias ui morca ui-next,probe ui-next,stop -t 10 ui,rm -f ui,rename ui-next ui," ] \
+order=$(grep -oE 'run -d --name ui-next|probe ui-next|network disconnect orca ui-next|network connect --alias ui orca ui-next|stop -t 10 ui$|rm -f ui$|rename ui-next ui$' "$FAKE/docker.log" | tr '\n' ,)
+[ "$order" = "run -d --name ui-next,probe ui-next,network disconnect orca ui-next,network connect --alias ui orca ui-next,probe ui-next,stop -t 10 ui,rm -f ui,rename ui-next ui," ] \
     || fail "the UI's replacement order: $order"
 grep -q 'run -d --name ui-next.*--network-alias' "$FAKE/docker.log" && fail "ui-next had the alias ui before it was healthy"
 grep -q '^probe ui-next 8270 /healthz$' "$FAKE/docker.log" || fail "the UI's probe isn't /healthz on 8270"
@@ -1052,6 +1052,29 @@ has "hcloud server create"
 has "deploy.sh: stack morca, settings $pkg/hetzner.env, scripts 9.8.7"
 has "/usr/local/sbin/morca-stack < $pkg/server/morca-stack"
 has "systemctl daemon-reload && rm -f /usr/local/sbin/orca-stack"
+
+# The server's docker network is orca, as on the stacks made before the
+# rename to morca (#384): every network command and --network names it
+# (or host, for the containers that share the server's).
+[ -s "$FAKE/networks" ] || fail "no docker network was named"
+grep -qx orca "$FAKE/networks" || fail "no docker command named the orca network"
+! grep -vxE 'orca|host' "$FAKE/networks" > /dev/null || fail "a docker network other than orca (or host): $(sort -u "$FAKE/networks" | tr '\n' ' ')"
+# The secrets a worker pool's machine reads are under secrets/orca (login
+# copies ghcr-token there while GHCR_USER is set).
+[ ! -e "$MORCA_CONF/secrets/morca" ] || fail "a secrets/morca directory"
+
+# A scheduler from before the rename has orca's command, not morca's: the
+# first deploy's quiesce and resume use it.
+echo /opt/morca/bin/morca >> "$FAKE/no-binary"
+n=$(wc -l < "$FAKE/docker.log")
+stack quiesce --timeout 5 > "$FAKE/out" 2>&1 || fail "quiesce of a pre-rename scheduler"
+stack resume > "$FAKE/out" 2>&1 || fail "resume of a pre-rename scheduler"
+tail -n +"$((n + 1))" "$FAKE/docker.log" > "$FAKE/old-sched.log"
+grep -q 'exec scheduler orca pause' "$FAKE/old-sched.log" || fail "quiesce didn't use orca's command: $(cat "$FAKE/old-sched.log")"
+grep -q 'exec scheduler orca unpause' "$FAKE/old-sched.log" || fail "resume didn't use orca's command"
+! grep -q 'exec scheduler morca ' "$FAKE/old-sched.log" || fail "ran morca in a pre-rename scheduler"
+grep -vx /opt/morca/bin/morca "$FAKE/no-binary" > "$FAKE/no-binary.new" || true
+mv "$FAKE/no-binary.new" "$FAKE/no-binary"
 
 # deploy.sh with an image from before the rename (#384): refused by the
 # plan, before it pauses or stops anything.

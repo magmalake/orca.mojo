@@ -71,7 +71,7 @@ morca worker-token create --pool gharchive --label hetzner
 morca worker-token create --pool gharchive --label bgent
 
 # On each machine, its own token in worker.env (below), one run at a time:
-docker run -d --name morca-worker --restart always --env-file worker.env \
+docker run -d --name orca-worker --restart always --env-file worker.env \
     -v "$PWD/secrets:/etc/orca/secrets:ro" -v "$PWD/secret-fetch:/etc/orca/secret-fetch:ro" \
     ghcr.io/<owner>/<image>:<tag> worker --pool gharchive --max-runs 1 \
     --name hetzner --remote https://morca.example.com    # --name bgent on the Mac
@@ -232,7 +232,7 @@ MORCA_SECRET_FETCH=sh /etc/orca/secret-fetch
 Then:
 
 ```sh
-docker run -d --name morca-worker --restart always --env-file worker.env \
+docker run -d --name orca-worker --restart always --env-file worker.env \
     -v "$PWD/secrets:/etc/orca/secrets:ro" -v "$PWD/secret-fetch:/etc/orca/secret-fetch:ro" \
     ghcr.io/<owner>/<image>:<tag> worker --pool bgent --remote https://morca.example.com
 ```
@@ -244,12 +244,12 @@ docker run -d --name morca-worker --restart always --env-file worker.env \
 - Pass `--image` (or `MORCA_IMAGE`) only if the pipelines were registered
   with `--image`, and then the same value: [Versions](#failures).
 - The worker needs only outbound HTTPS, to the UI and to the bucket.
-- `docker logs morca-worker` shows each run it starts and how it exited;
+- `docker logs orca-worker` shows each run it starts and how it exited;
   Ops > Pools shows its heartbeat.
 
 **Deploying.** The worker runs the code of its own image, so keep it on
 the server's tag: deploy the server first (`deploy.sh <tag>`), then
-restart the worker on the same tag (`docker rm -f morca-worker`, then the
+restart the worker on the same tag (`docker rm -f orca-worker`, then the
 `docker run` above with the new tag). In between, a worker on the old tag
 runs the old code, unless the pipelines are registered with `--image`: then
 it is given nothing until it matches.

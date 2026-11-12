@@ -10,7 +10,7 @@ printf "%s\n" "aws $*" >> "$FAKE_AWS_LOG"
 state=$FAKE_AWS_STATE
 active() { if [ -f "$state/active" ]; then cat "$state/active"; else echo blue; fi; }
 outputs() {
-    printf '[{"OutputKey": "Repository", "OutputValue": "123456789012.dkr.ecr.us-east-2.amazonaws.com/morca"},\n'
+    printf '[{"OutputKey": "Repository", "OutputValue": "123456789012.dkr.ecr.us-east-2.amazonaws.com/orca"},\n'
     if [ "$(active)" = green ]; then id=i-0green; else id=i-0control; fi
     printf ' {"OutputKey": "ControlInstance", "OutputValue": "%s"},\n' "$id"
     if [ ! -f "$state/preslot" ]; then

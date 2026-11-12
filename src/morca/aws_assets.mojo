@@ -129,7 +129,7 @@ Resources:
       CidrBlock: 10.42.0.0/16
       EnableDnsHostnames: true
       EnableDnsSupport: true
-      Tags: [{Key: Name, Value: morca}]
+      Tags: [{Key: Name, Value: orca}]
   Subnet:
     Type: AWS::EC2::Subnet
     Properties:
@@ -137,7 +137,7 @@ Resources:
       CidrBlock: 10.42.0.0/20
       AvailabilityZone: !Ref AvailabilityZone
       MapPublicIpOnLaunch: true
-      Tags: [{Key: Name, Value: morca}]
+      Tags: [{Key: Name, Value: orca}]
   Gateway:
     Type: AWS::EC2::InternetGateway
   GatewayAttachment:
@@ -165,7 +165,7 @@ Resources:
   Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub morca-${AWS::AccountId}-${AWS::Region}
+      BucketName: !Sub orca-${AWS::AccountId}-${AWS::Region}
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -218,7 +218,7 @@ Resources:
   Repository:
     Type: AWS::ECR::Repository
     Properties:
-      RepositoryName: morca
+      RepositoryName: orca
       ImageScanningConfiguration: {ScanOnPush: true}
       LifecyclePolicy:
         LifecyclePolicyText: |
@@ -229,7 +229,7 @@ Resources:
   RunGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: morca run instances, which talk to each other only
+      GroupDescription: orca run instances, which talk to each other only
       VpcId: !Ref Vpc
   RunGroupSelf:
     Type: AWS::EC2::SecurityGroupIngress
@@ -251,7 +251,7 @@ Resources:
   ControlGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: morca control instance, public for HTTPS only
+      GroupDescription: orca control instance, public for HTTPS only
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0}
@@ -401,11 +401,11 @@ Resources:
               hosts="$sslip"
               [ -z "${Hostname}" ] || hosts="${Hostname}, $sslip"
               registry=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
-              image=$registry/morca:${ImageTag}
+              image=$registry/orca:${ImageTag}
               login="command -v aws >/dev/null || dnf install -y awscli; systemctl disable --now ecs || true; aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin $registry"
               # The image is pushed after the stack is made, so wait for it.
               until sh -c "$login" && docker pull $image; do sleep 30; done
-              docker network create morca || true
+              docker network create orca || true
               mkdir -p /var/lib/orca/pg /var/lib/orca/caddy /var/lib/orca/stage
               docker run -d --name postgres --restart always --network orca -p 5432:5432 \\
                 -e POSTGRES_USER=orca -e POSTGRES_DB=orca -e POSTGRES_PASSWORD='${DbPassword}' \\
@@ -467,7 +467,7 @@ Resources:
               # orca-refresh [TAG]: pull the morca image at TAG (else the last
               # one) and run the scheduler and the UI from it again.
               set -eu
-              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/morca
+              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
               [ $# -gt 0 ] && echo "$1" > /var/lib/orca/tag
               tag=$(cat /var/lib/orca/tag)
               aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
@@ -500,7 +500,7 @@ Resources:
               host=$2
               port=8080
               [ $# -gt 2 ] && port=$3
-              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/morca
+              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
               tag=$(cat /var/lib/orca/tag)
               aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
               docker pull -q "$repo:$tag"
@@ -561,7 +561,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs: {VolumeSize: 40, VolumeType: gp3, Encrypted: true}
-      Tags: [{Key: Name, Value: morca-control}, {Key: orca.slot, Value: blue}]
+      Tags: [{Key: Name, Value: orca-control}, {Key: orca.slot, Value: blue}]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -588,7 +588,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs: {VolumeSize: 40, VolumeType: gp3, Encrypted: true}
-      Tags: [{Key: Name, Value: morca-control}, {Key: orca.slot, Value: green}]
+      Tags: [{Key: Name, Value: orca-control}, {Key: orca.slot, Value: green}]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -612,7 +612,7 @@ Resources:
     Type: AWS::Budgets::Budget
     Properties:
       Budget:
-        BudgetName: morca
+        BudgetName: orca
         BudgetType: COST
         TimeUnit: MONTHLY
         BudgetLimit: {Amount: !Ref BudgetDollars, Unit: USD}
@@ -628,7 +628,7 @@ Outputs:
       - https://${Dashed}.sslip.io
       - Dashed: !Join ["-", !Split [".", !Ref ControlAddress]]
   Repository:
-    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/morca
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
   Bucket:
     Value: !Ref Bucket
   PublicBucket:
