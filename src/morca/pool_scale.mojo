@@ -76,7 +76,7 @@ def stack_id(mut db: State) raises -> String:
     """This stack's id, made once (`orca.stack_identity`): the label that
     marks its machines as its own."""
     _ = db.conn.execute(
-        "INSERT INTO orca.stack_identity (id) SELECT morca.uuidv7()::text WHERE"
+        "INSERT INTO orca.stack_identity (id) SELECT orca.uuidv7()::text WHERE"
         " NOT EXISTS (SELECT 1 FROM orca.stack_identity)"
     )
     return (
@@ -599,7 +599,7 @@ struct PoolScaler(Movable):
         """Makes one machine: (made, what it came to, out of stock, refused
         for quota)."""
         var id = Int(
-            db.conn.query("SELECT nextval('morca.pool_machines_id_seq') AS id")
+            db.conn.query("SELECT nextval('orca.pool_machines_id_seq') AS id")
             .row(0)
             .int64("id")
         )

@@ -38,7 +38,7 @@ storage (`morca.logs`), attempts log there, the run's dista timeline is
 written beside them, and `status <run>` shows each step's latest log.
 
 `sense` prints a line per dataset the pipeline reads and doesn't write,
-`<dataset> <snapshot> <morca|other> <partitions|->`: its table's current
+`<dataset> <snapshot> <orca|other> <partitions|->`: its table's current
 snapshot in `MORCA_WAREHOUSE` (-1 for none), whether a morca step made it,
 and the partition keys its summary says it holds. The scheduler polls it for
 a sensor pipeline (`morca.sensors`).

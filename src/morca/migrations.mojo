@@ -719,14 +719,14 @@ def _migrations() -> List[List[String]]:
         # its own (`Ctx.made`). A UUID version 7: its first 48 bits are the
         # milliseconds since 1970 it was made at, the rest random.
         # Postgres has `uuidv7()` from 18 on and morca runs on 16 and 17 too
-        # (its deployments are on 17), so `morca.uuidv7()` makes one from a
+        # (its deployments are on 17), so `orca.uuidv7()` makes one from a
         # random UUID: the time over its first six bytes, and the version's
         # 4 turned into a 7. Additive: the default gives a token to the runs
         # an older binary creates, which neither reads nor writes it; the
         # runs there already are have none, and are told by their number.
         [
             (
-                "CREATE OR REPLACE FUNCTION morca.uuidv7() RETURNS uuid"
+                "CREATE OR REPLACE FUNCTION orca.uuidv7() RETURNS uuid"
                 " LANGUAGE sql VOLATILE AS $$ SELECT"
                 " encode(set_bit(set_bit(overlay(uuid_send(gen_random_uuid())"
                 " placing substring(int8send(floor(extract(epoch FROM"
@@ -736,7 +736,7 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.runs ADD COLUMN token uuid",
             (
                 "ALTER TABLE orca.runs ALTER COLUMN token SET DEFAULT"
-                " morca.uuidv7()"
+                " orca.uuidv7()"
             ),
         ],
         # The start of a failed run whose failure isn't retried (#287: killed

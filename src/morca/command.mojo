@@ -988,7 +988,7 @@ def _register(url: String, args: List[String]) raises -> Int:
 
 
 def _without_morca(e: String) -> String:
-    return String(e[byte=6:]) if e.startswith("morca: ") else e
+    return String(e[byte=7:]) if e.startswith("morca: ") else e
 
 
 def _config_check(args: List[String]) raises -> Int:

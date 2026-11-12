@@ -561,7 +561,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs: {VolumeSize: 40, VolumeType: gp3, Encrypted: true}
-      Tags: [{Key: Name, Value: morca-control}, {Key: morca.slot, Value: blue}]
+      Tags: [{Key: Name, Value: morca-control}, {Key: orca.slot, Value: blue}]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -588,7 +588,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs: {VolumeSize: 40, VolumeType: gp3, Encrypted: true}
-      Tags: [{Key: Name, Value: morca-control}, {Key: morca.slot, Value: green}]
+      Tags: [{Key: Name, Value: morca-control}, {Key: orca.slot, Value: green}]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash

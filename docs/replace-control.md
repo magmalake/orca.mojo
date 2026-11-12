@@ -9,8 +9,8 @@ hand, for when it can't be used, and what to check either way. DESIGN.md,
 
 ## Before you start
 
-- **Rehearse on a dev stack first**: `morca aws up --stack morca-dev --email
-  ...`, `morca aws push --stack morca-dev`, `morca aws register --stack morca-dev
+- **Rehearse on a dev stack first**: `morca aws up --stack orca-dev --email
+  ...`, `morca aws push --stack orca-dev`, `morca aws register --stack orca-dev
   <a pipeline>`, run something, then `morca aws replace-control --stack
   morca-dev` (and `--rollback`, and once more to the end).
 - **What it costs**: a second control instance (t4g.large, about $0.07 an
@@ -38,12 +38,12 @@ census.mlake.dev --env 'MORCA_UI_LINKS=Census ↗=https://census.mlake.dev'
 ## With the command
 
 ```sh
-morca aws replace-control --stack morca --plan          # the steps, nothing done
+morca aws replace-control --stack orca --plan          # the steps, nothing done
 morca --remote https://orca.mlake.dev pause <pipeline> # each one
-morca aws replace-control --stack morca --wait [--smoke <pipeline>=<key>] [--hostname ...] [--env ...]
+morca aws replace-control --stack orca --wait [--smoke <pipeline>=<key>] [--hostname ...] [--env ...]
 # ... check the UI, then unpause the pipelines
-morca aws replace-control --stack morca --resume        # after 24h: terminates the old instance
-morca aws replace-control --stack morca --rollback      # instead, to go back
+morca aws replace-control --stack orca --resume        # after 24h: terminates the old instance
+morca aws replace-control --stack orca --rollback      # instead, to go back
 ```
 
 It writes `build/morca-aws/replace-<stack>.state` and `.log` in the

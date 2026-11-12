@@ -120,7 +120,7 @@ def test_current_snapshot_files() raises:
 
 def test_parse_sense() raises:
     var got = parse_sense(
-        "a.b 12 other 2024-01\n\nc.d -1 other -\ne.f 5 morca 2024-02,2024-03\n"
+        "a.b 12 other 2024-01\n\nc.d -1 other -\ne.f 5 orca 2024-02,2024-03\n"
     )
     assert_equal(len(got), 3)
     assert_equal(got[0].dataset, "a.b")

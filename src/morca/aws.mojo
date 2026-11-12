@@ -1,7 +1,7 @@
 """`morca aws`: a project's morca on AWS, with the `aws` and `docker` commands
 its user already has (`aws login`, or `AWS_PROFILE` for a named profile).
 
-    morca aws up --email you@example.com [--stack morca] [--hostname H]
+    morca aws up --email you@example.com [--stack orca] [--hostname H]
                 [--console-hostname H] [--budget 100] [--zone us-east-2a]
                 [--public-data true|false] [--env KEY=VALUE ...]
     morca aws push [--tag T]                     # the project's image, to ECR
@@ -37,7 +37,7 @@ slot's AMI is pinned to the one its instance has. `replace-control`
 the old one's database, and moves the Elastic IP to it. `down` deletes the
 stack, which fails while its buckets hold objects.
 
-Files go to `build/morca-aws/`. `--stack` (default `morca`) and `--region`
+Files go to `build/morca-aws/`. `--stack` (default `orca`, the name of the stack made before the rename) and `--region`
 (default `AWS_REGION`, else the `aws` command's own) go anywhere.
 """
 
@@ -66,7 +66,7 @@ comptime AWS_USAGE = """usage:
   morca aws replace-control [--plan] [--wait] [--keep-old 24h] [--smoke P=KEY]
                            [--env KEY=VALUE ...] | --resume | --rollback
   morca aws down --yes
-  (each takes --stack NAME, default morca, and --region R)"""
+  (each takes --stack NAME, default orca, and --region R)"""
 
 comptime _VALUED = [
     "--stack",
@@ -183,7 +183,9 @@ struct _Opts(Movable):
     """The arguments that aren't `morca aws`'s own options, in order."""
 
     def __init__(out self, args: List[String], start: Int) raises:
-        self.stack = String("morca")
+        self.stack = String(
+            "orca"
+        )  # the stack made before the rename keeps its name
         self.region = getenv("AWS_REGION")
         self.tag = String()
         self.email = String()

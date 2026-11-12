@@ -221,19 +221,19 @@ work:
   `SECRETS_FILE=secrets.sops.yaml` works wherever the repository is cloned.
 - **A file of each laptop's own.** `ADMIN_IP` (the firewall's ssh source)
   and `SSH_PUBLIC_KEY_FILE` belong to a laptop, not the stack. Put them in
-  `~/.config/morca-hetzner/<NAME>.local.env` (`morca.local.env`; or the file
+  `~/.config/morca-hetzner/<NAME>.local.env` (`orca.local.env`; or the file
   `HETZNER_LOCAL_ENV` names, which must then exist). It's read after the
   shared file, so whatever it sets wins, and its own relative names are read
   from its folder. It can't set `NAME`, which picks it.
 
 ```sh
-# ~/.config/morca-hetzner/morca.local.env
+# ~/.config/morca-hetzner/orca.local.env
 ADMIN_IP=203.0.113.7/32
 SSH_PUBLIC_KEY_FILE=$HOME/.ssh/id_ed25519.pub
 ```
 
 The scripts' first line names both files: `deploy.sh: stack morca, settings
-.../ops-secrets/prod/hetzner.env and ~/.config/morca-hetzner/morca.local.env`.
+.../ops-secrets/prod/hetzner.env and ~/.config/morca-hetzner/orca.local.env`.
 Two laptops share the stack's firewall, which lets in one `ADMIN_IP`: the
 last `up.sh` sets it.
 

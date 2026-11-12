@@ -76,7 +76,7 @@ def sqlite_path(url: String) -> String:
 
 # SQL for a new UUID version 7, as text: the milliseconds since 1970 in its
 # first 48 bits, then the version, the variant and random bits. A run's
-# token, as Postgres's `morca.uuidv7()` makes it.
+# token, as Postgres's `orca.uuidv7()` makes it.
 comptime _UUID7 = (
     "(SELECT lower(substr(t.ms, 1, 8) || '-' || substr(t.ms, 9, 4) || '-7' ||"
     " substr(hex(randomblob(2)), 2, 3) || '-' || substr('89ab', 1 + (random()"
