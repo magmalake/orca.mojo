@@ -518,31 +518,55 @@ raise the schema's floor past it. On yes, nothing is paused or killed:
 
 - the apply starts the new scheduler as `scheduler-next` beside the old
   one, sets the old one's restart policy to `no` (once it has drained it
-  must not come back as the newest instance), renames it `scheduler-old`
-  and the new one `scheduler`, and waits until the new one leads (`morca
-  scheduler wait-lead`, `HEALTH_TIMEOUT`). The old one drains as soon as it
-  sees the new one: it starts nothing, and its runs go on, under its image;
+  must not come back as the newest instance), renames it
+  `scheduler-old-<UTC time>` (say `scheduler-old-20261112T101500Z`) and the
+  new one `scheduler`, and waits until the new one leads (`morca scheduler
+  wait-lead`, `HEALTH_TIMEOUT`). The old one drains as soon as it sees the
+  new one: it starts nothing, and its runs go on, under its image;
 - the pipelines are registered from the new scheduler, which now alone
   starts runs;
-- `morca-stack drain-old --timeout <--timeout>` asks the old one to drain,
-  waits for it to exit once its runs have ended, and removes it. After the
-  timeout it is stopped instead: its runs are killed, and the new
-  scheduler queues them again.
+- `morca-stack drain-old` asks the old one to drain and returns: the deploy
+  doesn't wait for its runs. A run may go on for months (a training run,
+  say), and morca never stops it for a deploy: it sees that it's outdated
+  (`morca.outdated()`, [docs/overlap.md](overlap.md#outdated-runs)) and
+  ends when its code decides. Once its last run has ended the old
+  scheduler exits, and a reaper `drain-old` left in the background
+  (`morca-stack reap-old`, its log in `/var/lib/orca/reap-<name>.log`)
+  removes its container.
 
-A `scheduler-old` (or `scheduler-next`) that a deploy before left behind
-and that isn't running any more, say one that drained and exited when
-`drain-old` didn't follow, holds no runs: every `morca-stack apply` first
-removes it, with a line naming its image and how long ago it exited, and
-`can-overlap` doesn't count it. A running one is left alone until `ssh
-root@<ip> morca-stack drain-old`: only that may end a scheduler that may
-still hold runs.
+While an old scheduler drains, `morca-stack status` and the check say so,
+as `scheduler-old-<time>: draining 2 run(s) (outdated)`, which isn't a
+failure, and the run pages and `morca status <pipeline>` mark its runs
+`outdated (newer version <commit> is leading)`. The next deploy overlaps
+again: the scheduler it replaces drains under a name of its own beside the
+first, so several can drain at once and none is renamed over another, and
+`drain-old` asks each to drain. `can-overlap` still checks the new binary's
+floor against every live instance, the draining ones included: a
+migration that raises the floor past an old one pauses and waits for its
+runs too.
 
-On no (overlap off, a migration that raises the floor, no scheduler going,
-or a running `scheduler-old` still draining from a deploy before), the deploy
-pauses and waits as above, and says why. So does the deploy that turns
-`OVERLAP` on: the scheduler it replaces has overlap off. A rollback,
-`--force` and a dry run don't overlap. `morca-stack status` lists the
-scheduler instances (`morca scheduler status`) when `OVERLAP=1`.
+To wait for the old schedulers anyway, `ssh root@<ip> morca-stack drain-old
+--wait`; with `--timeout <seconds>` one still running after that is
+stopped, its runs killed and queued again by the new scheduler. The
+required drain limit of #390 isn't built yet: until then nothing stops a
+draining scheduler but this.
+
+An old scheduler or a `scheduler-next` that a deploy before left behind
+and that isn't running any more (its reaper gone, say after a reboot)
+holds no runs: every `morca-stack apply` first removes it, with a line
+naming its image and how long ago it exited. A `scheduler-old` from before
+this release (no time in its name) is treated as one of them.
+
+On no (overlap off, a migration that raises the floor, no scheduler
+going), the deploy pauses and waits as above, and says why. So does the
+deploy that turns `OVERLAP` on: the scheduler it replaces has overlap off.
+A rollback, `--force` and a dry run don't overlap. That path still waits
+for the running runs, the old schedulers' included: it replaces the
+scheduler by stopping it, and every local run is a child process of its
+container, so not waiting would kill them; and a migration that raises the
+floor can't run while an older binary's runs go on over the schema. Only
+overlapping avoids the wait. `morca-stack status` lists the scheduler
+instances (`morca scheduler status`) when `OVERLAP=1`.
 
 ### The check after each deploy
 
@@ -554,9 +578,10 @@ way back. It checks:
 - Postgres answers, and each container (scheduler, ui, sampler, the apps,
   cloudflared) is running the image `stack.conf` says, the UI and the apps
   healthy as apply probes them;
-- one scheduler: no `scheduler-next` or `scheduler-old` is left (an
-  exited one the apply has removed; a running one fails, until `morca-stack
-  drain-old`), and with `OVERLAP=1` exactly one instance leads;
+- one scheduler: no `scheduler-next` is left (an exited one the apply has
+  removed), and with `OVERLAP=1` exactly one instance leads. An old
+  scheduler still draining is an `info` line, not a failure:
+  `scheduler-old-<time>: draining N run(s) (outdated)`;
 - the pipelines: at least one registered, and each one's binary is in the
   scheduler's image (`morca-stack register` fixes a stale one); the paused
   ones are listed;
@@ -1265,8 +1290,10 @@ gharchive=2026-11-08"`) and steps 2, 3 and 5, and step 4 inside the server (not 
 6. A deploy with a run in flight: start a long run, `./deploy.sh <tag>
    --all`, and see it pause, wait and resume. Then with overlapping
    schedulers: `ssh root@<ip> morca-stack configure OVERLAP=1`, deploy once
-   to turn it on, start a run, deploy again: nothing paused, the run ends
-   under `scheduler-old`, which is then removed.
+   to turn it on, start a run, deploy again: nothing paused, the deploy
+   returns while the run goes on under `scheduler-old-<time>` (the check
+   says it's draining, its page says it's outdated), and once it ends the
+   old scheduler is removed.
 7. `./deploy.sh --rollback` (back to the tag before, registered again), then
    `./deploy.sh --rollback` again to go forward; `morca-stack status` shows
    `<tag>` deployed.

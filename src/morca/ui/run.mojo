@@ -384,6 +384,26 @@ def _status_card(mut h: Html, r: RunRow, defs: List[StepDef]):
     elif r.cancel_requested and live_status(r.status):
         fact_item(h, "Cancel", "run-cancel", _CANCEL_HELP)
         h.raw("asked for; the run stops before its next attempt</dd>")
+    if r.code_version or r.outdated:
+        fact_item(
+            h,
+            "Version",
+            "run-outdated",
+            (
+                "The version this run runs. Outdated: a newer version leads"
+                " (registered, or its scheduler drains). Morca doesn't stop"
+                " it; its code can ask morca.outdated() and end when it"
+                " likes."
+            ),
+            "versions",
+        )
+        h.raw("<code>")
+        h.text(r.code_version if r.code_version else String("unknown"))
+        h.raw("</code>")
+        if r.outdated:
+            h.raw(" <strong>outdated</strong> ")
+            h.text("(", r.outdated, ")")
+        h.raw("</dd>")
     h.raw("</dl>")
     _run_actions(h, r, defs)
     h.raw("</section>")

@@ -156,6 +156,14 @@ def json_run(mut out: String, r: RunRow):
         quote(r.held) if r.held and r.status == "queued" else String("null"),
         ', "usage": ',
         usage_json(r.usage),
+        ', "code_version": ',
+        quote(r.code_version) if r.code_version else String("null"),
+        ', "desired_code_version": ',
+        quote(r.desired_code_version) if r.desired_code_version else String(
+            "null"
+        ),
+        ', "outdated": ',
+        quote(r.outdated) if r.outdated else String("null"),
         ", ",
         r.resources.json(),
         ", ",

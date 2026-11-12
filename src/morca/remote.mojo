@@ -747,6 +747,8 @@ def print_status(json: String, one: Bool) raises:
             and r["status"].string_value() == "running"
         ):
             line.write(" (cancelling)")
+        if String("outdated") in r and r["outdated"].is_string():
+            line.write(" (outdated: ", r["outdated"].string_value(), ")")
         if String("usage") in r:
             var used = usage_text(usage_of(r["usage"]))
             if used:

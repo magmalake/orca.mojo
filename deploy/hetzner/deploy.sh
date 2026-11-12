@@ -30,16 +30,22 @@
 #   Pipelines that were already paused (by hand or by the watchdog) stay
 #   paused. On a timeout, a failed deploy or a failed registration the
 #   pipelines stay paused, and the message says how to undo it. --force
-#   skips the pause and kills the running runs.
+#   skips the pause and kills the running runs. Only this path waits for
+#   runs: it's taken when the schedulers can't overlap (OVERLAP off, a
+#   migration that raises the floor past the old binary, a rollback), and
+#   then the old scheduler's restart would kill them (docs/overlap.md).
 # - The scheduler is replaced and the stack overlaps schedulers (OVERLAP=1
 #   in stack.conf, docs/overlap.md), and morca-stack can-overlap says the new
 #   image's scheduler may start beside the old one (no migration of it
 #   raises the floor past the old binary): nothing is paused and runs go
 #   on. The apply starts the new scheduler beside the old one and waits
-#   until it leads; it registers the pipelines from the new image, then
-#   waits (up to --timeout) for the old scheduler to drain its runs and
-#   exit, and removes it (morca-stack drain-old). A rollback, --force and a
-#   dry run don't overlap.
+#   until it leads; it registers the pipelines from the new image, asks the
+#   old scheduler to drain (morca-stack drain-old) and returns: it doesn't
+#   wait for the old scheduler's runs, which may go on for months. They
+#   see that they're outdated (morca.outdated()) and end when their code
+#   decides; the old scheduler then exits and is removed. Another deploy
+#   meanwhile overlaps again, each old scheduler draining under its own
+#   name (docs/overlap.md). A rollback, --force and a dry run don't overlap.
 # - The scheduler keeps running (an app's tag only, say the census
 #   console's): nothing is paused and runs go on; it backs up and applies,
 #   and nothing needs registering (the pipelines are in the scheduler's
@@ -352,10 +358,12 @@ else
     else
         log "the scheduler wasn't replaced: the pipelines stay registered as they are"
     fi
+    # The old scheduler drains in the background, for as long as its runs
+    # take: not waited for (#397).
     if [ "$overlap" = 1 ] && echo "$applied" | grep -q '^scheduler: replaced'; then
-        log "waiting for the old scheduler to drain its runs (up to ${timeout}s)"
-        remote morca-stack drain-old --timeout "$timeout" \
-            || die "$tag is deployed and registered, but the old scheduler didn't go (ssh root@$IP morca-stack drain-old)"
+        log "the old scheduler drains its runs in the background; not waiting for them"
+        remote morca-stack drain-old \
+            || die "$tag is deployed and registered, but asking the old scheduler to drain failed (ssh root@$IP morca-stack drain-old)"
     fi
     [ "$failed" = 0 ] || finish_failed "$applied" "the deploy failed"
 fi

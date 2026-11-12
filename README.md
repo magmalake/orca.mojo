@@ -289,4 +289,31 @@ code fills nothing again. With `since_registration`, regenerate its history
 with `morca backfill <pipeline> <range>` or `morca rebuild <dataset> <range>`
 (which also reruns what reads it). `morca register` says which applies.
 
+## Long runs across deploys
+
+A run may last as long as it needs: a deploy doesn't wait for it, and
+morca never stops it for one. With overlapping schedulers the old
+scheduler keeps the run going under the old image while the new one
+starts everything else. The run can tell that a newer version leads and
+decide for itself when to end, between units of work. By default it
+ignores it:
+
+```mojo
+from morca import Ctx, Name, outdated, outdated_why
+
+def follow(mut ctx: Ctx, key: Name) raises -> Int:
+    var polls = 0
+    while not outdated():     # cheap: the heartbeat keeps the answer
+        poll_once(key)        # one unit of work, saved before the next
+        polls += 1
+    ctx.log(String("handing over: ", outdated_why()))
+    return polls
+```
+
+`outdated()` turns true once the pipeline is registered with other code
+(another commit, or registry hash) or the run's scheduler drains;
+`code_version()` and `desired_code_version()` say which versions. The
+run's page, its JSON and `morca status <pipeline>` mark it outdated. See
+[docs/overlap.md](docs/overlap.md#outdated-runs).
+
 Part of [magmalake](https://magmalake.dev).

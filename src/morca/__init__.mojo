@@ -35,6 +35,12 @@ from morca.day import Day
 from morca.hour import Hour
 from morca.key import Key, TimeKey, parse_keys
 from morca.month import Month, days_in, parse_months
+from morca.handover import (
+    code_version,
+    desired_code_version,
+    outdated,
+    outdated_why,
+)
 from morca.name import Name, parse_names
 from morca.partitions import (
     Daily,

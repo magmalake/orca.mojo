@@ -36,6 +36,7 @@ from morca.migrations import (
     schema_ahead,
 )
 from morca.live import stale_limit
+from morca.handover import run_outdated, set_outdated
 from morca.store import (
     CANCELLED,
     DEFERRED,
@@ -657,7 +658,8 @@ def beat_run(
 
 
 struct PgBeat(Beater):
-    """Refreshes a run's heartbeat in Postgres, on a connection of its own."""
+    """Refreshes a run's heartbeat in Postgres, on a connection of its own,
+    and asks whether the run is outdated (`morca.outdated`)."""
 
     var url: String
     var run: Int
@@ -684,6 +686,13 @@ struct PgBeat(Beater):
         if why:
             print("run", self.run, why, flush=True)
             external_call["_exit", NoneType](Int32(1))
+        # Whether a newer version leads, for `morca.outdated()` (#397). Not
+        # knowing leaves the last answer; it never stops the beat.
+        try:
+            var o = run_outdated(self._conn.value(), self.run)
+            set_outdated(o.outdated, o.mine, o.desired, o.why)
+        except:
+            pass
 
     def reset(mut self):
         self._conn = None

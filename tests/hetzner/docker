@@ -24,8 +24,9 @@
 # $FAKE/can-overlap (exit 0 if it says yes; "no: ..." without the file);
 # `morca scheduler wait-lead` fails while $FAKE/no-lead exists; a
 # container's hostname is h-<the name it was started with>; the instances
-# of a hostname are $FAKE/instances; `morca scheduler drain` makes
-# scheduler-old exit unless $FAKE/old-stays exists.
+# of a hostname are $FAKE/instances; `morca scheduler drain` makes every
+# old scheduler (scheduler-old, scheduler-old-<time>) exit unless
+# $FAKE/old-stays exists; the runs one holds are $FAKE/old-running.
 #
 # morca-stack check: the registrations are toy and manual1, binaries
 # /opt/morca/pipelines/<name>, paused as $FAKE/paused says; $FAKE/unregistered
@@ -64,6 +65,9 @@ case "$all" in
     "run --rm --entrypoint test "*" -x /opt/morca/bin/morca")
         ref=${all#run --rm --entrypoint test }
         ! grep -qxF "${ref%% *}" "$FAKE/pre-rename" 2> /dev/null || exit 1
+        ;;
+    *"count(*) FROM orca.runs r JOIN orca.schedulers s ON s.id = r.instance WHERE r.status = 'running'"*)
+        cat "$FAKE/old-running" 2> /dev/null || echo 0
         ;;
     *"count(*) FROM orca.runs WHERE status = 'running' AND coalesce(placement, '') NOT LIKE 'worker:%'"*)
         cat "$FAKE/running" 2> /dev/null || echo 0
@@ -154,7 +158,9 @@ case "$all" in
         ;;
     "exec scheduler morca scheduler wait-lead "*) [ ! -f "$FAKE/no-lead" ] || exit 1 ;;
     "exec scheduler morca scheduler drain "*)
-        [ -f "$FAKE/old-stays" ] || [ ! -d "$C/scheduler-old" ] || echo exited > "$C/scheduler-old/status"
+        [ -f "$FAKE/old-stays" ] || for d in "$C"/scheduler-old "$C"/scheduler-old-*; do
+            [ ! -d "$d" ] || echo exited > "$d/status"
+        done
         ;;
     "exec scheduler morca scheduler status") echo "9 h:1 leading image= migrations=42 runs=0 seen=0s ago" ;;
     "inspect -f {{.Config.Hostname}} "*)
@@ -284,6 +290,7 @@ case "$all" in
         echo " $4" >> "$C/$6/aliases"
         ;;
     "logs "*) echo "fake log of ${all##* }" ;;
+    "ps -a --format {{.Names}}") for d in "$C"/*; do [ ! -d "$d" ] || echo "${d##*/}"; done ;;
     "ps "*) for d in "$C"/*; do [ ! -d "$d" ] || echo "${d##*/} $(cat "$d/status") $(cat "$d/image")"; done ;;
 esac
 exit 0

@@ -21,7 +21,8 @@ half the stale limit refuses the commit, as over Postgres.
 
 **The heartbeat** is a `POST .../beat` from a thread every beat, which the UI
 answers with why the run must stop now, if the watchdog says so
-(`morca.state.beat_run`); the process then exits, as over Postgres. With
+(`morca.state.beat_run`); the process then exits, as over Postgres. The
+answer also says whether the run is outdated (`morca.outdated`). With
 `MORCA_WORKER_PID` set, the beat also checks that the worker that started
 this process is still its parent: if it isn't (the worker was killed), the
 process exits rather than go on beating, so the server sees the run's
@@ -40,6 +41,7 @@ from objectstore.http import Header, HttpClient, Response
 
 from morca.heartbeat import Beater, Heartbeat
 from morca.json import quote
+from morca.handover import set_outdated
 from morca.store import (
     FINAL,
     Backoff,
@@ -446,6 +448,14 @@ struct HttpBeat(Beater):
         var why = _text(got, "stop")
         if why:
             _exit_now(self.run, why)
+        # A UI from before #397 doesn't say: the run is never outdated.
+        if String("outdated") in got:
+            set_outdated(
+                got["outdated"].bool_value(),
+                _text(got, "code_version"),
+                _text(got, "desired_code_version"),
+                _text(got, "outdated_why"),
+            )
 
     def reset(mut self):
         pass
