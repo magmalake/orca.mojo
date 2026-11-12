@@ -224,6 +224,18 @@ grep -q "skipping toy (enabled = false)" reg.out || fail "register's skip: $(cat
 grep -q "names no \[pipelines.<name>\] to register" reg.out || fail "register with none enabled: $(cat reg.out)"
 [ "$(check --overlay off.toml 2>&1)" = "morca.toml with off.toml: ok, 1 pipeline (1 not enabled)" ] || fail "config check of one not enabled"
 echo "ok   a stack's overlay is laid on morca.toml for check, show --file and register; enabled = false skips"
+# morca config apps (#331): none in this file; an app's facts, a line each,
+# the overlay laid on them; no database.
+apps() { env -u MORCA_DATABASE_URL "$morca" config apps "$@"; }
+[ -z "$(apps 2>&1)" ] || fail "config apps of a file with none: $(apps 2>&1)"
+printf '[apps.console]\nport = 8080\nsecrets = { POSTHOG_KEY = "orca/posthog-key" }\n' > apps.toml
+printf '[apps.console]\nenv = { A = "1" }\n' > apps-ov.toml
+apps apps.toml --overlay apps-ov.toml > apps.out 2>&1 || fail "config apps: $(cat apps.out)"
+[ "$(cat apps.out)" = "$(printf 'console port 8080\nconsole check /\nconsole lake false\nconsole memory_mb 0\nconsole env A=1\nconsole secret POSTHOG_KEY orca/posthog-key')" ] \
+    || fail "config apps' lines: $(cat apps.out)"
+[ "$(check apps.toml 2>&1)" = "apps.toml: ok, 0 pipelines, 1 app" ] || fail "config check of an app: $(check apps.toml 2>&1)"
+(cd "$root/build" && [ -z "$(env -u MORCA_DATABASE_URL -u MORCA_CONFIG "$morca" config apps 2>&1)" ]) || fail "config apps without a file"
+echo "ok   config apps prints each app's facts, with no database"
 
 # The env reaches the toy's runs on the local runner: 2024-02 fails as asked,
 # 2024-01 doesn't; daily's runs don't get it.

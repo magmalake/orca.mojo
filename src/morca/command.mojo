@@ -70,6 +70,7 @@ from morca.remote import (
 )
 from morca.sample import sample_main
 from morca.upgrade import upgrade_command
+from morca.apps_config import apps_text
 from morca.config import (
     ProjectConfig,
     RegisterFlags,
@@ -157,6 +158,9 @@ comptime USAGE = """usage:
   morca config show --file [<morca.toml>] [--overlay <file>]
                 (the file as register reads it, the overlay laid on it, with
                 no database; each value the overlay set says so)
+  morca config apps [<morca.toml>] [--overlay <file>]
+                (its [apps.<name>] tables, a line per fact, as the stack's
+                script reads them; secrets by ID; no database)
   morca config check [<morca.toml>] [--overlay <file>] [--secrets]
                 (checks a file as register does, and its instance types,
                 with no database; --secrets reads each secret too)
@@ -420,6 +424,9 @@ def _command(args: List[String], target: String) raises -> Int:
         and args[3] == "--file"
     ):
         return _config_check(args, show=True)
+    if args[1] == "config" and len(args) >= 3 and args[2] == "apps":
+        # What a stack builds an app's environment from (morca-stack).
+        return _config_check(args, apps=True)
     var url = getenv("MORCA_DATABASE_URL")
     if not url:
         _usage("morca needs MORCA_DATABASE_URL")
@@ -1014,19 +1021,22 @@ def _without_morca(e: String) -> String:
     return String(e[byte=7:]) if e.startswith("morca: ") else e
 
 
-def _config_check(args: List[String], show: Bool = False) raises -> Int:
+def _config_check(
+    args: List[String], show: Bool = False, apps: Bool = False
+) raises -> Int:
     """`morca config check [<file>] [--overlay <file>] [--secrets]`: `file`
     (`$MORCA_CONFIG`, else ./morca.toml), with the overlay (else
     `$MORCA_CONFIG_OVERLAY`) laid on it, as registering checks it, and each
     instance type sized; with `--secrets`, each secret read. 1 if anything
     is wrong. With `show` (`morca config show --file`), prints the file as
-    register reads it instead."""
+    register reads it instead; with `apps` (`morca config apps`), its
+    `[apps.<name>]` tables, `morca.apps_config.apps_text`'s lines."""
     var path = String()
     var overlay = getenv("MORCA_CONFIG_OVERLAY")
     var read_secrets = False
     var k = 4 if show else 3
     while k < len(args):
-        if args[k] == "--secrets" and not show:
+        if args[k] == "--secrets" and not show and not apps:
             read_secrets = True
         elif args[k] == "--overlay" and k + 1 < len(args):
             overlay = args[k + 1]
@@ -1040,6 +1050,9 @@ def _config_check(args: List[String], show: Bool = False) raises -> Int:
         if not getenv("MORCA_CONFIG"):
             refuse_orca_toml()
         path = getenv("MORCA_CONFIG", "morca.toml")
+        if apps and not exists(path):
+            # A project with no file has no apps declared.
+            return 0
     var file: ProjectConfig
     try:
         file = ProjectConfig.load(path, overlay)
@@ -1048,6 +1061,9 @@ def _config_check(args: List[String], show: Bool = False) raises -> Int:
         return 1
     if show:
         print(file.shown(), end="")
+        return 0
+    if apps:
+        print(apps_text(file.apps()), end="")
         return 0
     var problems = 0
     for key in ["head_type", "worker_type"]:
@@ -1096,6 +1112,9 @@ def _config_check(args: List[String], show: Bool = False) raises -> Int:
             off += 1
     if off > 0:
         line.write(" (", off, " not enabled)")
+    var napps = len(file.doc.tables(["apps"]))
+    if napps > 0:
+        line.write(", ", napps, " app", "" if napps == 1 else "s")
     if read_secrets:
         line.write(", ", len(secrets), " secret(s) readable")
     print(line)

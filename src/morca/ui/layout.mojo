@@ -632,16 +632,46 @@ comptime _ICON = (
 from the census's amber bar chart."""
 
 
+def posthog_host(v: String) -> String:
+    """`MORCA_POSTHOG_HOST` as the snippet's host: a path on the UI's own
+    origin (`/ph`, a first-party proxy) or an `https://` origin, with no
+    trailing `/`; PostHog's own (US) when it's empty; empty when it's
+    neither, which leaves the snippet out."""
+    if not v:
+        return "https://us.i.posthog.com"
+    var t = String(v.rstrip("/"))
+    var rest = t
+    if t.startswith("https://"):
+        rest = String(t[byte=8:])
+    elif not t.startswith("/") or t.byte_length() < 2:
+        return ""
+    for byte in rest.as_bytes():
+        var b = Int(byte)
+        if not (
+            (b >= ord("a") and b <= ord("z"))
+            or (b >= ord("A") and b <= ord("Z"))
+            or (b >= ord("0") and b <= ord("9"))
+            or b == ord("/")
+            or b == ord("_")
+            or b == ord("-")
+            or b == ord(".")
+            or b == ord(":")
+        ):
+            return ""
+    return t
+
+
 def _posthog(mut h: Html):
     """PostHog product analytics in the page head when `MORCA_POSTHOG_KEY` is
     a project key (`phc_` and letters, digits, `_` or `-`), nothing otherwise.
 
-    The same snippet as the magmalake.org website: PostHog's `array.js` and
-    its API go through `/ph` on the UI's own origin, a first-party proxy
-    (the mojourney-ph Worker in magmalake/magmalake.org; the UI itself
-    doesn't serve it), so ad-blockers keep it. `persistence: 'memory'` sets
-    no cookie and writes no `localStorage`, so there is nothing to consent
-    to. `site: "morca"` tells its events apart in a shared PostHog project.
+    `array.js` and the events go to `MORCA_POSTHOG_HOST` (`posthog_host`):
+    PostHog's own when it isn't set, or a first-party proxy such as `/ph` on
+    the UI's own origin (the mojourney-ph Worker in magmalake/magmalake.org,
+    which the UI itself doesn't serve), so ad-blockers keep it.
+    `persistence: 'memory'` sets no cookie and writes no `localStorage`, so
+    there is nothing to consent to. `site: "morca"` tells its events apart
+    in a shared PostHog project.
     """
     var key = getenv("MORCA_POSTHOG_KEY")
     if not key.startswith("phc_"):
@@ -656,12 +686,26 @@ def _posthog(mut h: Html):
             or b == ord("-")
         ):
             return
+    var host = posthog_host(getenv("MORCA_POSTHOG_HOST"))
+    if not host:
+        return
+    # PostHog's own host serves array.js from its assets host.
+    var script = String(host, "/static/array.js")
+    var api = String("'", host, "'")
+    if host.startswith("/"):
+        api = String("location.origin+'", host, "'")
+    elif host == "https://us.i.posthog.com":
+        script = "https://us-assets.i.posthog.com/static/array.js"
     h.raw(
-        '<script defer src="/ph/static/array.js"></script>',
+        '<script defer src="',
+        script,
+        '"></script>',
         '<script>window.addEventListener("DOMContentLoaded",function(){',
         'if(window.posthog){posthog.init("',
         key,
-        "\",{api_host:location.origin+'/ph',",
+        '",{api_host:',
+        api,
+        ",",
         "ui_host:'https://us.posthog.com',defaults:'2025-05-24',",
         "persistence:'memory',capture_exceptions:true});",
         "posthog.register({site:'morca'});}});</script>",

@@ -10,9 +10,12 @@
 #                                              added, removed or changed (names only,
 #                                              never values)
 #   sync --remove NAME                         removes $CONF/NAME (the overlay), saying so
-#   app NAME PORT [CHECK]                      an app beside the UI (the census console);
-#                                              CHECK: the path that answers 200 once it's
-#                                              ready (default /)
+#   app NAME [PORT [CHECK]]                    an app beside the UI (the census console);
+#                                              what it gets is its [apps.NAME] in the
+#                                              image's morca.toml (app_env); PORT and
+#                                              CHECK only for an app with none there
+#                                              (CHECK: the path that answers 200 once
+#                                              it's ready, default /)
 #   apply [--db-only] [--force] [--all | --only NAME] [--tag T] [--app NAME=T]...
 #         [--health-timeout SECONDS]
 #                                              pull the images, start again the containers
@@ -90,6 +93,16 @@
 # running any more, say when drain-old didn't follow, holds no runs: the
 # next apply removes it first, naming its image and when it exited. A
 # running one stays until drain-old: can-overlap says no, and check fails.
+#
+# An app's environment (#331, docs/hetzner.md#apps) is what its
+# [apps.NAME] in the image's morca.toml asks for, read with the image's
+# `morca config apps` (the overlay laid on it) after the pull: its env, the
+# lake (the warehouse settings and s3.env) with lake = true, each of its
+# secrets from $CONF/secrets/<id>, and PORT; its port, check and
+# memory_gb (docker --memory) from there too. An app the file doesn't
+# declare, or an image whose morca has no `config apps` (before 0.25),
+# gets the fixed env of before: the lake and the UI's PostHog key as
+# POSTHOG_KEY. Each app has its own env file, app-NAME.env (mode 600).
 #
 # The stack's overlay (#332, docs/hetzner.md#a-stacks-overlay): deploy.sh
 # sends hetzner.env's CONFIG_OVERLAY_FILE as $CONF/overlay/morca.overlay.toml
@@ -304,7 +317,10 @@ cmd_sync() {
     [ $# -eq 1 ] || die "usage: sync [--keys] NAME < FILE"
     case " $SYNC_FILES " in
         *" $1 "*) ;;
-        *) die "sync: $1 isn't one of: $SYNC_FILES" ;;
+        *)
+            # An app's secret (#331): any secrets/orca/<id>, as secret-fetch reads them.
+            secret_path_ok "$1" || die "sync: $1 isn't one of: $SYNC_FILES, or secrets/orca/<id>"
+            ;;
     esac
     f=$CONF/$1
     mkdir -p "$(dirname "$f")"
@@ -328,13 +344,29 @@ cmd_sync() {
     echo "morca-stack: $1: $what"
 }
 
-# /etc/orca/apps: "name port tag check"; a tag of - is the morca tag, and
-# check the path that answers 200 once the app is ready (/ if there's
-# none: lines from before had three fields).
+# secret_path_ok NAME: NAME is secrets/orca/<id>, an id secret-fetch reads
+# (letters, digits, /_+=.@-; no .., no //).
+secret_path_ok() {
+    case "$1" in
+        secrets/orca/?*) ;;
+        *) return 1 ;;
+    esac
+    case "${1#secrets/}" in
+        *..* | *//* | */ | *[!A-Za-z0-9/_+=.@-]*) return 1 ;;
+    esac
+    return 0
+}
+
+# /etc/orca/apps: "name port tag check"; a tag of - is the morca tag, a
+# port of - its [apps.NAME] port, and check the path that answers 200 once
+# the app is ready (/ if there's none: lines from before had three fields).
 cmd_app() {
-    [ $# -eq 2 ] || [ $# -eq 3 ] || die "usage: app NAME PORT [CHECK]"
+    [ $# -ge 1 ] && [ $# -le 3 ] || die "usage: app NAME [PORT [CHECK]]"
     safe "$1"
-    safe "$2"
+    port=${2:--}
+    [ "$port" = - ] || safe "$port"
+    case "$port" in - | [1-9] | [1-9]*[0-9]) ;; *) die "app: PORT is a number" ;; esac
+    case "$port" in *[!0-9-]*) die "app: PORT is a number" ;; esac
     check=${3:-}
     if [ -n "$check" ]; then
         safe "$check"
@@ -342,9 +374,22 @@ cmd_app() {
     fi
     touch "$CONF/apps"
     if ! grep -q "^$1 " "$CONF/apps"; then
-        echo "$1 $2 - ${check:-/}" >> "$CONF/apps"
-        echo "morca-stack: app $1 added (port $2)"
-    elif [ -n "$check" ] && [ "$(awk -v n="$1" '$1 == n { print $4 }' "$CONF/apps")" != "$check" ]; then
+        echo "$1 $port - ${check:-/}" >> "$CONF/apps"
+        if [ "$port" = - ]; then
+            echo "morca-stack: app $1 added (its port from morca.toml)"
+        else
+            echo "morca-stack: app $1 added (port $port)"
+        fi
+        return 0
+    fi
+    old=$(awk -v n="$1" '$1 == n { print $2 }' "$CONF/apps")
+    if [ "$old" != "$port" ]; then
+        # APPS=NAME (no port) leaves the port to morca.toml.
+        echo "morca-stack: app $1: port $old -> $([ "$port" = - ] && echo "morca.toml's" || echo "$port")"
+        awk -v n="$1" -v p="$port" '$1 == n { $2 = p } { print }' "$CONF/apps" > "$CONF/apps.new"
+        mv "$CONF/apps.new" "$CONF/apps"
+    fi
+    if [ -n "$check" ] && [ "$(awk -v n="$1" '$1 == n { print $4 }' "$CONF/apps")" != "$check" ]; then
         # Set up already (up.sh and deploy.sh run this each time): only a
         # CHECK given changes it.
         echo "morca-stack: app $1: check $(awk -v n="$1" '$1 == n { print $4 }' "$CONF/apps") -> $check"
@@ -353,7 +398,7 @@ cmd_app() {
     fi
 }
 
-write_env() { # DIR: the containers' env files, pg.env, morca.env and app.env, in DIR
+write_env() { # DIR: the containers' env files, pg.env and morca.env, in DIR (the apps': write_app_envs)
     umask 077
     if [ ! -s "$CONF/db-password" ]; then
         openssl rand -hex 24 > "$CONF/db-password"
@@ -379,13 +424,107 @@ EOS
         # Off unless OVERLAP=1: the old way, one scheduler at a time.
         [ "$(conf_get OVERLAP)" != 1 ] || echo MORCA_OVERLAP=on
     } > "$1/morca.env"
-    # An app reads the lake, not morca's database: no password. It gets the
-    # UI's PostHog key as POSTHOG_KEY (the census console's analytics).
-    {
-        grep -E '^(AWS_REGION|AWS_ENDPOINT_URL_S3|MORCA_WAREHOUSE|MORCA_PUBLIC_WAREHOUSE)=' "$CONF/settings.env" || true
-        sed -n 's/^MORCA_POSTHOG_KEY=/POSTHOG_KEY=/p' "$CONF/settings.env" | tail -n 1
-        cat "$CONF/s3.env"
-    } > "$1/app.env"
+}
+
+# lake_env: what lake = true gives an app: the warehouse settings and the
+# stack's S3 keys. Never morca's database.
+lake_env() {
+    grep -E '^(AWS_REGION|AWS_ENDPOINT_URL_S3|MORCA_WAREHOUSE|MORCA_PUBLIC_WAREHOUSE)=' "$CONF/settings.env" || true
+    cat "$CONF/s3.env"
+}
+
+# overlay_mount: docker run's mount of the overlay, if the stack has one.
+overlay_mount() {
+    [ -z "$(setting MORCA_CONFIG_OVERLAY)" ] || echo "-v $CONF/overlay:/etc/orca/overlay:ro"
+}
+
+# fetch_decls IMAGE: IMAGE's `morca config apps` (its morca.toml's
+# [apps.<name>], the overlay laid on it), kept in $ENVDIR/decl.<hash> for
+# app_decl; "-" for an image whose morca has none (exit 2, before 0.25).
+# Fatal if it fails otherwise (a morca.toml that doesn't check).
+fetch_decls() {
+    d_f=$ENVDIR/decl.$(printf %s "$1" | digest)
+    [ ! -f "$d_f" ] || return 0
+    d_rc=0
+    # shellcheck disable=SC2046
+    d_out=$(docker run --rm --env-file "$CONF/settings.env" $(overlay_mount) "$1" config apps 2>&1 < /dev/null) || d_rc=$?
+    case "$d_rc" in
+        0) printf '%s\n' "$d_out" > "$d_f" ;;
+        2) echo "-" > "$d_f" ;;
+        *) die "$1: morca config apps failed: $(echo "$d_out" | tail -n 3)" ;;
+    esac
+}
+
+# app_decl NAME IMAGE: the app's [apps.NAME] (fetch_decls first) without
+# the name, a line a fact ("port 8080", "env A=1", "secret K orca/id"...);
+# returns 1 if it has none.
+app_decl() {
+    d_f=$ENVDIR/decl.$(printf %s "$2" | digest)
+    [ "$(cat "$d_f")" != - ] || return 1
+    grep -q "^$1 " "$d_f" || return 1
+    sed -n "s/^$1 //p" "$d_f"
+}
+
+# write_app_envs: each app's env file, $ENVDIR/app-NAME.env, from its
+# declaration (app_decl), and $ENVDIR/apps.run, what containers starts:
+# "name port tag check memory_mb" a line. Needs the images pulled. Says
+# which apps aren't declared; never prints a secret's value.
+write_app_envs() {
+    umask 077
+    : > "$ENVDIR/apps.run"
+    rm -f "$ENVDIR"/decl.*
+    nl='
+'
+    while read -r name port atag check _; do
+        [ -n "$name" ] || continue
+        [ "$atag" != - ] || atag=$tag
+        f=$ENVDIR/app-$name.env
+        mb=0
+        fetch_decls "$image:$atag"
+        if ! decl=$(app_decl "$name" "$image:$atag" < /dev/null); then
+            echo "morca-stack: app $name isn't declared in $image:$atag's morca.toml ([apps.$name], docs/hetzner.md#apps): it gets the fixed env of before" >&2
+            [ "$port" != - ] || die "app $name has no port: give [apps.$name] port in morca.toml, or APPS=$name:<port> in hetzner.env"
+            {
+                lake_env
+                sed -n 's/^MORCA_POSTHOG_KEY=/POSTHOG_KEY=/p' "$CONF/settings.env" | tail -n 1
+            } > "$f"
+            echo "$name $port $atag ${check:-/} 0" >> "$ENVDIR/apps.run"
+            continue
+        fi
+        dport=$(echo "$decl" | sed -n 's/^port //p')
+        dcheck=$(echo "$decl" | sed -n 's/^check //p')
+        mb=$(echo "$decl" | sed -n 's/^memory_mb //p')
+        if [ "${dport:-0}" = 0 ]; then
+            [ "$port" != - ] || die "app $name has no port: give [apps.$name] port in morca.toml, or APPS=$name:<port> in hetzner.env"
+            dport=$port
+        elif [ "$port" != - ] && [ "$port" != "$dport" ]; then
+            die "app $name: hetzner.env's APPS says port $port, $image:$atag's morca.toml port $dport: take the port out of APPS ($name)"
+        fi
+        # A check set here (morca-stack app NAME PORT CHECK) beats the file's default.
+        [ "${dcheck:-/}" != / ] || [ -z "$check" ] || [ "$check" = - ] || dcheck=$check
+        {
+            ! echo "$decl" | grep -qx 'lake true' || lake_env
+            echo "$decl" | sed -n 's/^env //p'
+        } > "$f"
+        echo "$decl" | sed -n 's/^secret //p' > "$ENVDIR/app-$name.secrets"
+        while read -r sname sid; do
+            [ -n "$sname" ] || continue
+            case "$sname" in "" | [!A-Z_]* | *[!A-Z0-9_]*) die "app $name: $sname isn't a variable's name" ;; esac
+            secret_path_ok "secrets/$sid" || die "app $name: $sid isn't a secret's id (orca/...)"
+            [ -f "$CONF/secrets/$sid" ] || die "app $name needs the secret $sid, and $CONF/secrets/$sid is missing (a key secrets/$sid in hetzner.env's SECRETS_FILE)"
+            sv=$(cat "$CONF/secrets/$sid")
+            case "$sv" in *"$nl"*)
+                sv=
+                die "app $name: the secret $sid is more than one line"
+                ;;
+            esac
+            printf '%s=%s\n' "$sname" "$sv" >> "$f"
+            sv=
+        done < "$ENVDIR/app-$name.secrets"
+        rm -f "$ENVDIR/app-$name.secrets"
+        echo "$name $dport $atag ${dcheck:-/} ${mb:-0}" >> "$ENVDIR/apps.run"
+    done < "$APPS"
+    rm -f "$ENVDIR"/decl.*
 }
 
 pull() { # IMAGE: fatal on failure (a trial run may use an image it has)
@@ -589,12 +728,23 @@ containers() {
         -v /sys/fs/cgroup:/host/cgroup:ro -v /var/lib/docker/containers:/host/containers:ro "$image:$tag" \
         sample --out /var/lib/orca/stage/control.jsonl --dirs /var/lib/orca/stage --keep 720 \
         --cgroup /host/cgroup --names /host/containers
-    while read -r name port atag check _; do
+    # The apps, as write_app_envs resolved them (a stack applied before it:
+    # as the apps file says).
+    runs=$ENVDIR/apps.run
+    if [ ! -f "$runs" ]; then
+        runs=$ENVDIR/apps.run.old
+        awk '{ print $1, $2, $3, ($4 == "" ? "/" : $4), 0 }' "$APPS" > "$runs"
+    fi
+    while read -r name port atag check mb _; do
         [ -n "$name" ] || continue
         [ "$atag" != - ] || atag=$tag
-        $cb "$name" "$ENVDIR/app.env" "$port:${check:-/}:200" "$image:$atag" --network orca --env-file "$CONF/app.env" -e "PORT=$port" \
-            --entrypoint "/opt/morca/bin/$name" "$image:$atag" < /dev/null
-    done < "$APPS"
+        mem=
+        [ "${mb:-0}" = 0 ] || mem="--memory ${mb}m"
+        # shellcheck disable=SC2086
+        $cb "$name" "$ENVDIR/app-$name.env" "$port:${check:-/}:200" "$image:$atag" --network orca --env-file "$CONF/app-$name.env" -e "PORT=$port" \
+            $mem --entrypoint "/opt/morca/bin/$name" "$image:$atag" < /dev/null
+    done < "$runs"
+    rm -f "$ENVDIR/apps.run.old"
     # The tunnel: Cloudflare's routes point at http://ui:8270 and
     # http://<app>:<port> on this network. Nothing listens on the host.
     if [ -s "$CONF/tunnel.env" ]; then
@@ -833,6 +983,7 @@ cmd_plan() {
     write_env "$ENVDIR"
     login
     pull_all
+    write_app_envs
     PLAN=$ENVDIR/plan
     : > "$PLAN"
     containers plan_one
@@ -917,6 +1068,7 @@ cmd_apply() {
     if [ "$dbonly" = 0 ]; then
         pull_all
         ENVDIR=$CONF
+        write_app_envs
         PLAN=$CONF/plan
         : > "$PLAN"
         containers plan_one
@@ -953,6 +1105,8 @@ cmd_apply() {
     fi
     mv "$CONF/deployed.new" "$CONF/deployed"
     rm -f "$CONF/renamed"
+    # The one env file all apps had before each had its own (#331).
+    rm -f "$CONF/app.env"
     echo "morca-stack: applied $image:$tag"
 }
 
