@@ -235,6 +235,8 @@ def runs_filters_json(mut j: String, p: RunsPage):
         String(p.q.run) if p.q.run > 0 else String("null"),
         ', "key": ',
         quote(p.q.key) if p.q.key else String("null"),
+        ', "batch": ',
+        String(p.q.batch) if p.q.batch > 0 else String("null"),
         '}, "counts": {',
     )
     for i in range(len(p.counts)):
@@ -256,6 +258,10 @@ def run_json(v: RunView) -> String:
         "true" if v.current_code else "false",
         ', "rebuild": ',
         String(v.rebuild) if v.rebuild else String("null"),
+        ', "batch": ',
+        String(v.batch) if v.batch else String("null"),
+        ', "batch_runs": ',
+        String(v.batch_runs) if v.batch else String("null"),
         ', "cpu_millis": ',
         String(cpu) if cpu else String("null"),
         ', "cpu_seconds": ',

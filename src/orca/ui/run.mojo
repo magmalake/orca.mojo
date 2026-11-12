@@ -391,12 +391,18 @@ def _status_card(mut h: Html, r: RunRow, defs: List[StepDef]):
 
 def _trigger_card(mut h: Html, mut db: State, r: RunRow) raises:
     """The Partitions & trigger card: what the run does and what started
-    it, with the rebuild or the snapshots a sensor saw."""
+    it, with the rebuild or the snapshots a sensor saw, and the batch it
+    was queued in (`orca.batches`) with how many runs that has."""
     var row = db.conn.query(
-        "SELECT coalesce(rebuild, 0) AS rebuild FROM orca.runs WHERE id = $1",
+        (
+            "SELECT coalesce(rebuild, 0) AS rebuild, coalesce(batch, 0) AS"
+            " batch, (SELECT count(*) FROM orca.runs b WHERE b.batch ="
+            " r.batch) AS batch_runs FROM orca.runs r WHERE id = $1"
+        ),
         Params().int64(Int64(r.id)),
     ).row(0)
     var rebuild = Int(row.int64("rebuild"))
+    var batch = Int(row.int64("batch"))
     var sensed = List[SnapshotRef]()
     for x in db.conn.query(
         (
@@ -447,6 +453,12 @@ def _trigger_card(mut h: Html, mut db: State, r: RunRow) raises:
             if i:
                 h.raw(", ")
             h.link(snapshot_href(sensed[i]), String(sensed[i]))
+    if batch:
+        h.raw(' <span class="muted">part of</span> ')
+        h.link(String("/runs?batch=", batch), String(r.trigger, " ", batch))
+        h.raw(' <span class="muted">(')
+        h.text(row.int64("batch_runs"), " runs)")
+        h.raw("</span>")
     h.raw("</dd></dl></section>")
 
 

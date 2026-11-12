@@ -141,6 +141,9 @@ quiet
 tick 2024-01-08T12:01Z
 [ "$(fills daily)" = "2024-01-07,2024-01-06" ] || fail "the first fill runs: $(fills daily)"
 [ "$(running daily)" -eq 3 ] || fail "$(running daily) running, not a backfill run and 2 fill runs"
+# Each pass's fill runs, and the backfill's, are a batch (#354).
+[ "$(q "SELECT count(DISTINCT batch) || ' ' || count(*) FILTER (WHERE batch = (SELECT min(id) FROM orca.runs WHERE pipeline = 'daily' AND trigger = 'fill')) FROM orca.runs WHERE pipeline = 'daily' AND trigger IN ('fill', 'backfill')")" = "2 2" ] \
+    || fail "the fill and backfill batches: $(q "SELECT string_agg(id || ':' || trigger || ':' || coalesce(batch::text, '-'), ' ' ORDER BY id) FROM orca.runs WHERE pipeline = 'daily'")"
 tick 2024-01-08T12:02Z
 [ "$(fills daily)" = "2024-01-07,2024-01-06" ] || fail "more than fill_max_runs: $(fills daily)"
 idle_has daily "at fill_max_runs: 2 of 2"

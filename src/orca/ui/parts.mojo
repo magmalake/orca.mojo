@@ -47,7 +47,7 @@ def _two(n: Int) -> String:
     return String("0", n) if n < 10 else String(n)
 
 
-def _when_cell(mut h: Html, utc: String):
+def when_cell(mut h: Html, utc: String):
     """A `YYYY-MM-DDTHH:MM:SSZ` time as a table cell that the page's script
     shows as how long ago it was, the full local time on hover."""
     h.raw('<td class="mono"><time class="rel" datetime="')
@@ -273,6 +273,14 @@ def runs_table_html(
     if len(runs) == 0:
         h.raw('<p class="empty">No runs.</p>')
         return
+    runs_table_head(h, show_pipeline, pick)
+    for r in runs:
+        run_row_html(h, r, show_pipeline, pick, code.get(r.id))
+    h.raw("</tbody></table></div>")
+
+
+def runs_table_head(mut h: Html, show_pipeline: Bool, pick: Bool = False):
+    """A table of runs' opening and header row (`runs_table_html`)."""
     h.raw('<div class="scroll"><table><thead><tr>')
     if pick:
         h.raw(
@@ -296,62 +304,69 @@ def runs_table_html(
         _PEAK,
         '">Peak</abbr></th></tr></thead><tbody>',
     )
-    for r in runs:
-        h.raw("<tr>")
-        if pick:
-            h.raw(
-                '<td class="pick act__need"><input type="checkbox" name="pick"',
-                ' form="bulk-runs" value="',
-                r.id,
-                '" aria-label="Tick run ',
-                r.id,
-                '"></td>',
-            )
-        h.raw("<td>")
-        h.chip(String("/runs/", r.id), String(r.id))
-        h.raw("</td>")
-        var rc = code.get(r.id)
-        if show_pipeline:
-            h.raw('<td><a href="')
-            h.text(String("/pipelines/", url_encode(r.pipeline)))
+
+
+def run_row_html(
+    mut h: Html,
+    r: RunRow,
+    show_pipeline: Bool,
+    pick: Bool = False,
+    rc: Optional[RunCode] = None,
+):
+    """A run's row in a table of runs (`runs_table_html`)."""
+    h.raw("<tr>")
+    if pick:
+        h.raw(
+            '<td class="pick act__need"><input type="checkbox" name="pick"',
+            ' form="bulk-runs" value="',
+            r.id,
+            '" aria-label="Tick run ',
+            r.id,
+            '"></td>',
+        )
+    h.raw("<td>")
+    h.chip(String("/runs/", r.id), String(r.id))
+    h.raw("</td>")
+    if show_pipeline:
+        h.raw('<td><a href="')
+        h.text(String("/pipelines/", url_encode(r.pipeline)))
+        h.raw('"')
+        if rc and rc.value().pipeline:
+            h.raw(' data-src="')
+            h.text(rc.value().pipeline.url)
             h.raw('"')
-            if rc and rc.value().pipeline:
-                h.raw(' data-src="')
-                h.text(rc.value().pipeline.url)
-                h.raw('"')
-            h.raw(">")
-            h.text(r.pipeline)
-            h.raw("</a></td>")
-        _when_cell(h, r.created)
-        h.num(took_text(r.seconds))
-        _partitions_cell(h, r.partitions)
-        h.raw("<td>")
-        h.term("trigger", r.trigger)
-        h.raw("</td>")
-        h.raw("<td>")
-        h.status(r.status)
-        if r.waiting_until:
-            h.raw(' <span class="muted">until ')
-            h.text(r.waiting_until)
-            h.raw("</span>")
-        if rc and rc.value().failed and r.status == "failed":
-            h.raw(' <span class="muted">in</span> ')
-            if rc.value().step:
-                named_code_link(h, rc.value().failed, rc.value().step)
-            else:
-                h.raw('<span class="mono">')
-                h.text(rc.value().failed)
-                h.raw("</span>")
-        row_actions(h, r)
-        h.raw("</td>")
-        # Empty for 0 and 1, so a run that took more draws the eye.
-        if r.starts > 1:
-            h.num(r.starts)
+        h.raw(">")
+        h.text(r.pipeline)
+        h.raw("</a></td>")
+    when_cell(h, r.created)
+    h.num(took_text(r.seconds))
+    _partitions_cell(h, r.partitions)
+    h.raw("<td>")
+    h.term("trigger", r.trigger)
+    h.raw("</td>")
+    h.raw("<td>")
+    h.status(r.status)
+    if r.waiting_until:
+        h.raw(' <span class="muted">until ')
+        h.text(r.waiting_until)
+        h.raw("</span>")
+    if rc and rc.value().failed and r.status == "failed":
+        h.raw(' <span class="muted">in</span> ')
+        if rc.value().step:
+            named_code_link(h, rc.value().failed, rc.value().step)
         else:
-            h.raw('<td class="num"></td>')
-        usage_cell(h, r.usage)
-        h.raw("</tr>")
-    h.raw("</tbody></table></div>")
+            h.raw('<span class="mono">')
+            h.text(rc.value().failed)
+            h.raw("</span>")
+    row_actions(h, r)
+    h.raw("</td>")
+    # Empty for 0 and 1, so a run that took more draws the eye.
+    if r.starts > 1:
+        h.num(r.starts)
+    else:
+        h.raw('<td class="num"></td>')
+    usage_cell(h, r.usage)
+    h.raw("</tr>")
 
 
 comptime _PEAK = (

@@ -947,6 +947,61 @@ beat() { curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Beare
 kill "$wpid"
 echo "ok   the worker API on ORCA_WORKER_ADDR"
 
+# Recent runs by batch (#354): a 60-run backfill is one row with its
+# counts, after a running run and a run that failed; runs with no batch
+# are a row each. Older failures and what's still going from the tests
+# above are put out of the way first.
+q "UPDATE orca.runs SET status = 'cancelled', ended = now() - interval '2 days' WHERE status IN ('queued', 'running', 'deferred')" > /dev/null
+q "UPDATE orca.runs SET ended = now() - interval '2 days' WHERE status = 'failed'" > /dev/null
+./build/orca backfill toy 2090-01..2094-12 >> "$log" 2>&1 || fail "the 60-run backfill"
+bf=$(q "SELECT min(id) FROM orca.runs WHERE trigger = 'backfill' AND partitions >= '2090-01'")
+[ "$(q "SELECT count(*) FROM orca.runs WHERE batch = $bf")" -eq 60 ] || fail "the backfill's runs aren't one batch"
+[ "$(q "SELECT count(*) FROM orca.runs WHERE batch IS NOT NULL AND batch <> $bf AND partitions >= '2090-01'")" -eq 0 ] \
+    || fail "a backfill run in another batch"
+q "UPDATE orca.runs SET status = 'succeeded', started = now() - interval '5 minutes', ended = now() WHERE id IN ($bf, $bf + 1)" > /dev/null
+q "UPDATE orca.runs SET status = 'cancelled', ended = now() WHERE id = $bf + 2" > /dev/null
+ORCA_TOY_FAIL=2095-01 ./build/toy run --partitions 2095-01 >> "$log" 2>&1 && fail "the run to fail didn't"
+failed=$(q "SELECT max(id) FROM orca.runs")
+running=$(q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status, started, heartbeat)
+    SELECT name, registry_hash, '2095-02', 'manual', 'running', now(), now() FROM orca.pipelines WHERE name = 'toy' RETURNING id" | head -n 1)
+hj=$(json /)
+echo "$hj" | jq -e --argjson r "$running" --argjson f "$failed" --argjson b "$bf" '
+    (.recent | length) == 10
+    and .recent[0].first == $r and .recent[0].batch == null and .recent[0].counts.running == 1
+    and .recent[1].first == $f and .recent[1].counts.failed == 1
+    and .recent[2].batch == $b and .recent[2].runs == 60 and .recent[2].trigger == "backfill"
+    and .recent[2].counts == {"running": 0, "queued": 57, "succeeded": 2, "failed": 0, "cancelled": 1}
+    and ([.recent[3:][] | select(.batch == null and .runs == 1)] | length) == 7
+    and (.runs | length) == 10' > /dev/null || fail "the home page's recent runs: $(echo "$hj" | jq -c .recent)"
+[ "$(frag "/runs/table?view=home&limit=10")" = 200 ] || fail "the recent runs' fragment"
+[ "$(grep -o '<tr><td><a class="chip"' "$log.frag" | wc -l)" -eq 10 ] || fail "the recent runs' fragment hasn't 10 rows"
+grep -qF "<tr><td><a class=\"chip\" href=\"/runs/$running\">$running</a></td>" "$log.frag" || fail "the running run's row"
+grep -qF "<tr><td><a class=\"chip\" href=\"/runs?batch=$bf\">60 runs</a></td>" "$log.frag" || fail "the backfill's row"
+grep -qF '<span class="status status--queued">57 queued</span> <span class="status status--succeeded">2 succeeded</span> <span class="status status--cancelled">1 cancelled</span>' "$log.frag" \
+    || fail "the backfill's counts"
+grep -qF '<span class="sr">3 of 60 ended</span>' "$log.frag" || fail "the backfill's bar"
+grep -qF '2090-01 … 2094-12' "$log.frag" || fail "the backfill's partitions"
+first=$(sed 's|</tr>|\n|g' "$log.frag" | grep -n "/runs/$running\"" | cut -d: -f1)
+second=$(sed 's|</tr>|\n|g' "$log.frag" | grep -n "/runs/$failed\"" | cut -d: -f1)
+third=$(sed 's|</tr>|\n|g' "$log.frag" | grep -n "/runs?batch=$bf\"" | cut -d: -f1)
+[ "$first" -lt "$second" ] && [ "$second" -lt "$third" ] || fail "the rows' order: $first $second $third"
+grep -qi '^X-Poll-Every: 5' "$log.h" || fail "the recent runs don't refresh every 5 s with a run going on"
+html / | grep -qF '<div data-poll="/runs/table?view=home&amp;limit=10" data-poll-every="5">' || fail "the home page's recent runs don't refresh"
+# /runs?batch= lists the batch, keeps it in the filters, and clears it.
+bj=$(json "/runs?batch=$bf&limit=100")
+echo "$bj" | jq -e --argjson b "$bf" '.total == 60 and .filters.batch == $b and (.runs | length) == 60
+    and .counts.queued == 57' > /dev/null || fail "/runs?batch=: $(echo "$bj" | jq -c '[.total, .filters]')"
+page=$(html "/runs?batch=$bf")
+echo "$page" | grep -qF "<input type=\"hidden\" name=\"batch\" value=\"$bf\">" || fail "the filters don't keep batch"
+echo "$page" | grep -qF '<a class="filters__clear" href="/runs">Clear filters</a>' || fail "batch= isn't cleared"
+echo "$page" | grep -qF "<a rel=\"next\" href=\"/runs?batch=$bf&amp;before=" || fail "batch= isn't kept by the pager"
+# A run's page says which batch it's part of; a run with none says nothing.
+html "/runs/$((bf + 5))" | grep -qF "<span class=\"muted\">part of</span> <a href=\"/runs?batch=$bf\">backfill $bf</a> <span class=\"muted\">(60 runs)</span>" \
+    || fail "the run page's batch line"
+json "/runs/$((bf + 5))" | jq -e --argjson b "$bf" '.batch == $b and .batch_runs == 60' > /dev/null || fail "the run's JSON batch"
+html "/runs/$failed" | grep -qF 'part of' && fail "a run with no batch is part of one"
+[ "$(json "/runs/$failed" | jq .batch)" = null ] || fail "a run with no batch has one in its JSON"
+echo "ok   recent runs by batch"
 
 # A dataset read by eight pipelines: the Datasets page's Read by cell wraps
 # between names (class names: white-space normal, a nowrap link each), so the

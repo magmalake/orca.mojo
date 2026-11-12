@@ -830,6 +830,17 @@ def _migrations() -> List[List[String]]:
         # max_runs = "auto" does. Additive: an older binary runs up to the
         # ceiling.
         ["ALTER TABLE orca.pipelines ADD COLUMN fill_max_runs_auto boolean"],
+        # The batch a run was queued in (#354): one id, its first run's, for
+        # the runs one backfill, fill pass or sensor pass queued, so the
+        # home page shows them as one row. Additive: older binaries leave
+        # it null, which reads as a run of its own.
+        [
+            "ALTER TABLE orca.runs ADD COLUMN batch bigint",
+            (
+                "CREATE INDEX runs_batch ON orca.runs (batch) WHERE batch IS"
+                " NOT NULL"
+            ),
+        ],
     ]
 
 
