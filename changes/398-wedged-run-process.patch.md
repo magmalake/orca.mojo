@@ -1,0 +1,1 @@
+- **A wedged run keeps no process:** the scheduler fails, cancels or restarts a run whose heartbeat went stale only after it has killed and reaped the run's process, and its attempt says it was stopped for the stale heartbeat. (#398)

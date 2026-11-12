@@ -10,8 +10,11 @@ is <dir>/<id>.tmp (the script's /tmp/morca-* files are moved there), and its
 environment has HOSTNAME set to its ID, so a test can tell instances apart.
 All instances share 127.0.0.1 as their private address. A process that
 exits is an instance that terminated, as `InstanceInitiatedShutdownBehavior
-=terminate` makes one; TerminateInstances kills its process group. A
-terminated instance's state reason says which, as EC2's does. While the file
+=terminate` makes one; TerminateInstances kills its process group, and so
+does the instance's end however it comes, as a machine's would: nothing
+its script started, such as a dista head or worker, outlives it to reach
+the next test's head (#403). A terminated instance's state reason says
+which, as EC2's does. While the file
 <dir>/no-workers exists, the instances tagged `orca.role=worker` that are
 launched only sleep, so never join their run's head (tests/no_workers.sh).
 Requests aren't checked for a signature.
@@ -41,6 +44,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 
 PORT = int(sys.argv[1])
@@ -170,16 +174,36 @@ def _types(p):
     )
 
 
+def _kill_group(i):
+    """Kills what's left of instance `i`'s processes, once: its script's
+    process group (its own session)."""
+    if i.get("gone"):
+        return
+    i["gone"] = True
+    try:
+        os.killpg(i["proc"].pid, signal.SIGKILL)
+    except OSError:
+        pass  # gone; macOS says EPERM for a group of only a zombie
+
+
+def _reap():
+    """An instance whose script exited has terminated: what it left running
+    goes with it."""
+    while True:
+        with LOCK:
+            for i in INSTANCES.values():
+                if not i.get("gone") and i["proc"].poll() is not None:
+                    _kill_group(i)
+        time.sleep(0.2)
+
+
 def _terminate(p):
     n = 1
     while f"InstanceId.{n}" in p:
         i = INSTANCES.get(p[f"InstanceId.{n}"])
         if i and i["proc"].poll() is None:
             i["killed"] = True
-            try:
-                os.killpg(i["proc"].pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            _kill_group(i)
         n += 1
     return "<TerminateInstancesResponse><return>true</return></TerminateInstancesResponse>"
 
@@ -243,14 +267,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def _stop(*_):
-    for i in INSTANCES.values():
-        if i["proc"].poll() is None:
-            try:
-                os.killpg(i["proc"].pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+    for i in list(INSTANCES.values()):
+        _kill_group(i)
     sys.exit(0)
 
 
 signal.signal(signal.SIGTERM, _stop)
+threading.Thread(target=_reap, daemon=True).start()
 http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
