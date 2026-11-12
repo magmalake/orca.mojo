@@ -28,7 +28,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p build
 src=${CHAOS_SRC:-tests/chaos_pipeline.mojo}
-bin=build/$(basename "$src" .mojo)
+# By its full path, so the check for processes left behind (pgrep) sees
+# only this checkout's, not another job's on the same machine.
+bin=$PWD/build/$(basename "$src" .mojo)
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC "$src" -o "$bin"
 

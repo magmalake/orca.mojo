@@ -132,6 +132,8 @@ td code { font-size: 0.8125rem; }
 .covpct__bar { display: block; height: 3px; border-radius: 2px; overflow: hidden;
   background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); }
 .covpct__bar > span { display: block; height: 100%; background: var(--ok); }
+/* A batch of runs on the home page: how many have ended, under its counts. */
+.batch__bar { max-width: 12rem; margin-top: 3px; }
 
 /* A run's number, a count, a status. */
 .chip { display: inline-block; font-family: var(--mono); font-size: 0.75rem; line-height: 1.5;

@@ -9,6 +9,7 @@ from postgres import (
 )
 from orca.civil import Civil
 from orca.cron import CronExpr
+from orca.batches import mark_batch
 from orca.live import is_live_sql, live_runs
 from orca.schedule import Schedule
 from orca.sensors import (
@@ -328,6 +329,7 @@ def _queue_sensed(
         return (id, String("run ", id, " for ", join_keys(keys)))
     var first = Int64(-1)
     var log = String()
+    var made = List[Int64]()
     var i = 0
     for r in tx.query(
         (
@@ -384,7 +386,10 @@ def _queue_sensed(
         )
         if first < 0:
             first = id
+        made.append(id)
         log.write("; " if log else "", "run ", id, " for ", join_keys(batch))
+    # The new runs are one batch; those topped up keep theirs.
+    mark_batch(tx, made)
     return (first, log^)
 
 
