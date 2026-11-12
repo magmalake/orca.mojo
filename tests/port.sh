@@ -37,3 +37,19 @@ else:
     _free_ports="${_free_ports:-} $_p"
     eval "$1=\$_p"
 }
+
+# Sourced too by the tests whose runs reach a dista head on its fixed port
+# (6390, orca.ec2's HEAD_PORT, on 127.0.0.1 with the stand-in clouds) or
+# look for workers by name (pgrep): two of them at once on one machine, as
+# on CI's self-hosted runners, find each other's head or workers.
+#
+#   one_cluster_test
+#
+# waits, up to 20 minutes, for the others on this machine to end, and holds
+# the lock (/tmp/orca-cluster-tests.lock) until this shell and what it
+# started have exited. Without flock (macOS) it does nothing.
+one_cluster_test() {
+    command -v flock > /dev/null 2>&1 || return 0
+    exec 9>> /tmp/orca-cluster-tests.lock
+    flock -w 1200 9 || { echo "one_cluster_test: another test held the lock for 20 minutes" >&2; return 1; }
+}
