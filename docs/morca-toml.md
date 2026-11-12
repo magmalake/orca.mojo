@@ -68,10 +68,11 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 | `keys_per_run` | integer from 1 to 10000 | the code's `Pipeline[..., keys_per_run=]`, else 1 | none | Keys a run takes: a backfill's runs, a sensor's runs above 1, and fill runs. See [Keys per run](#keys-per-run). |
 | `fill_budget_per_day` | number from 0 to 100000, US dollars | none | none | Estimated spend of fill runs a UTC day. Fill runs on EC2 or Kubernetes don't start without it. |
 | `fill_window` | string `"A..B"`, UTC hours: A from 0 to 23, B from 1 to 24 | `"0..24"`, all day | none | Fill runs start from hour A up to hour B. `"22..6"` wraps past midnight. |
+| `enabled` | boolean | `true` | none | `false`: `morca register` without binaries skips the pipeline (it prints `skipping <name>`); one already registered stays as it is. For a pipeline only some stacks run, turned on by [a stack's overlay](#a-stacks-overlay). |
 | `fill_lag` | string, a duration: a whole number of `s`, `m`, `h` or `d`, up to `31d`; or `0` | `0`, none | none | How long after its end a partition is filled. See [The lag](#the-lag). |
 
-`image` (`--image`) and `--spot` stay flags only. The `fill*` keys and
-`learn` are the file's only: no flag sets them.
+`image` (`--image`) and `--spot` stay flags only. The `fill*` keys,
+`learn` and `enabled` are the file's only: no flag sets them.
 
 ### What is refused
 
@@ -133,9 +134,63 @@ Each value comes from the first of these that sets it, highest first:
 | neither | `./morca.toml`, if it exists |
 | `--no-config` | none |
 
+### A stack's overlay
+
+A project ships one `morca.toml`. What differs between the stacks that run it
+(a dev stack that never fills, a lab stack that runs one pipeline) is a fact
+about each stack, kept with that stack's settings, not in the project: an
+overlay, a small file in the same format laid on `morca.toml` before
+anything reads it.
+
+```toml
+# ops/dev/morca.overlay.toml: the dev stack's
+[pipelines.gharchive]
+fills = "since_registration"     # never the backfill from 2023
+
+[pipelines.mojo_history]
+placement = "control"            # no worker pool here
+
+[pipelines.ballast]
+enabled = true                   # in morca.toml with enabled = false
+```
+
+| How | Overlay |
+|---|---|
+| `--overlay F` (`register`, `config check`, `config show --file`) | `F` |
+| `MORCA_CONFIG_OVERLAY=F` | `F` |
+| neither | none |
+
+It is laid on whichever file is read ([above](#which-file-is-read)); `--no-config`
+and `morca aws register` read none.
+
+- **Merging.** A key in the overlay replaces the file's value at that path,
+  whatever it was (a table or an array included). A table is merged key by
+  key: what the overlay leaves out keeps the file's value. So `env = { A =
+  "1" }` in an overlay changes `A` and keeps the file's other names, and
+  `[defaults]` in an overlay doesn't beat a pipeline's own key in the file:
+  set it in `[pipelines.<name>]`. An overlay can't remove a key; set it to
+  its default (`fills = "since_registration"`, `placement = "default"`).
+- **Pipelines.** An overlay can change the file's pipelines, not add one:
+  a `[pipelines.<name>]` the file hasn't is refused, so a misspelt name
+  fails instead of adding a pipeline. A pipeline only one stack runs is in
+  `morca.toml` with `enabled = false` and enabled by that stack's overlay;
+  `[defaults] enabled = false` and `enabled = true` on the one it wants turn
+  off all the others.
+- **Checking.** The result is checked as a file is: a bad value in the
+  overlay is refused with the overlay's `file:line`. `morca config check
+  --overlay F` checks the two together, and `morca config show --file
+  --overlay F` prints the result, each value the overlay set marked
+  `# overlay F:line`.
+- **Recorded.** A registration records the overlay's path and SHA-256 beside
+  the file's, and `morca config show` names it and gives each value it set
+  as `morca.toml [pipelines.x], overlay F:line`.
+
+On Hetzner, deploy.sh sends a stack's overlay and morca-stack checks it in
+the image before a deploy changes anything: [hetzner.md](hetzner.md#a-stacks-overlay).
+
 ### Registering without paths
 
-`morca register` with no pipeline binaries registers every `[pipelines.<name>]` the file names, each as `<dir>/<name>`. `<dir>` is `MORCA_PIPELINES_DIR` if it is set, else the directory `pipelines/` next to the file if it exists; with neither, `morca register` refuses and says so. A table whose binary doesn't exist is an error naming it, and nothing is registered. Binaries given on the command line work as before (and a pipeline in the file that you leave out isn't touched).
+`morca register` with no pipeline binaries registers every `[pipelines.<name>]` the file names (but those with `enabled = false`), each as `<dir>/<name>`. `<dir>` is `MORCA_PIPELINES_DIR` if it is set, else the directory `pipelines/` next to the file if it exists; with neither, `morca register` refuses and says so. A table whose binary doesn't exist is an error naming it, and nothing is registered. Binaries given on the command line work as before (and a pipeline in the file that you leave out isn't touched).
 
 A project's image sets `MORCA_CONFIG`, `MORCA_PIPELINES_DIR`, `MORCA_COMMIT` and `MORCA_SOURCE`, so `morca register` alone registers the whole file.
 
@@ -418,12 +473,18 @@ The UI's pipeline page has the same under **Configuration** (`/pipelines/<name>#
 ```text
 $ morca config check                    # ./morca.toml, or $MORCA_CONFIG
 morca.toml: ok, 3 pipelines
+$ morca config check --overlay ../ops/dev/morca.overlay.toml
+morca.toml with ../ops/dev/morca.overlay.toml: ok, 3 pipelines (1 not enabled)
 $ morca config check ci/morca.toml --secrets
 ci/morca.toml:9: [pipelines.mojo_repos] secrets: GITHUB_TOKEN: can't read secret orca/github-token: exit 254
 morca: ci/morca.toml has 1 problem(s)
 ```
 
 It checks a file for a project's CI and needs no database. It refuses what `morca register` would refuse, with the same `file:line: [table] key: why`. It also checks that morca can size each `head_type` and `worker_type` (the vCPUs `worker_procs = "auto"` and the fleet use; `MORCA_EC2_VCPUS` adds types), and warns about a type that isn't in morca's price table, which Ops > Pools' cost tile and the watchdog's cost rule count as $0 an hour. `--secrets` also reads each secret the way the scheduler does (`MORCA_SECRET_FETCH`, else Secrets Manager with the `AWS_*` credentials or the instance role) and never prints a value. It exits 1 if anything is wrong.
+
+`morca config show --file [<file>] [--overlay F]` prints the file as
+`morca register` would read it, with the overlay (or `MORCA_CONFIG_OVERLAY`)
+laid on it, and needs no database.
 
 ## morca config export
 

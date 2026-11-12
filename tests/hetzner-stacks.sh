@@ -10,6 +10,8 @@
 #   (Hetzner takes a public key once per project), and nothing for another;
 # - up.sh writes the settings with lib.sh's sync_settings (deploy.sh's too),
 #   then MORCA_TAG only if the server has none;
+# - the settings file's CONFIG_OVERLAY_FILE, relative to it, is sent as the
+#   stack's overlay (#332), and settings.env names it;
 # - an MORCA_CONFIG in the settings (EXTRA_ENV_FILE's lines end up in
 #   settings.env) is in the scheduler's env file, which `morca register`
 #   runs with.
@@ -40,8 +42,10 @@ SSH_PUBLIC_KEY_FILE=$FAKE/k.pub
 S3_CREDENTIALS_FILE=$FAKE/s3.env
 TUNNEL_TOKEN_FILE=$FAKE/tunnel.env
 EXTRA_ENV_FILE=$FAKE/extra.env
+CONFIG_OVERLAY_FILE=dev.overlay.toml
 EOS
 echo MORCA_CONFIG=/opt/morca/morca.dev.toml > "$FAKE/extra.env"
+printf '[defaults]\nenabled = false\n' > "$FAKE/dev.overlay.toml"
 
 # up.sh: every Hetzner resource is morca-dev's.
 HETZNER_ENV="$FAKE/dev.env" sh deploy/hetzner/up.sh --dry-run > "$FAKE/out" 2>&1 || fail "up.sh --dry-run"
@@ -55,9 +59,11 @@ grep '^+ hcloud' "$FAKE/out" | grep -E '(^| )morca( |$)|[ ]morca-data( |$)' && f
 # the tag only if the server has none.
 has "+ ssh root@<server-ip> morca-stack sync --keys settings.env < "
 has "+ ssh root@<server-ip> morca-stack sync tunnel.env < $FAKE/tunnel.env"
+# The stack's overlay, named relative to its settings file (#332).
+has "+ ssh root@<server-ip> morca-stack sync overlay/morca.overlay.toml < $FAKE/dev.overlay.toml"
 has "+ ssh root@<server-ip> morca-stack configure MORCA_IMAGE=ghcr.io/morca-dev/census .*BUCKET=morca-dev-bkt BACKUP_KEEP=14 GHCR_USER=$"
 has "+ ssh root@<server-ip> morca-stack configure --keep-existing MORCA_TAG=latest"
-has "# settings.env from $FAKE/dev.env: AWS_REGION .* MORCA_CONFIG"
+has "# settings.env from $FAKE/dev.env: AWS_REGION .* MORCA_CONFIG_OVERLAY MORCA_CONFIG "
 # down.sh --all: the same.
 HETZNER_ENV="$FAKE/dev.env" sh deploy/hetzner/down.sh --dry-run --all > "$FAKE/out" 2>&1 || fail "down.sh --dry-run --all"
 has "+ hcloud server delete morca-dev$"

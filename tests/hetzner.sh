@@ -55,6 +55,11 @@
 #   the deploy that turns OVERLAP on pauses and waits as before; a
 #   scheduler-old or scheduler-next that isn't running is removed by the
 #   next apply, saying so, and a deploy overlaps over it;
+# - a stack's overlay (CONFIG_OVERLAY_FILE, #332) is sent beside
+#   settings.env, which names it, checked by the image's morca before
+#   anything changes (an image whose morca doesn't read overlays refused),
+#   mounted in the scheduler only, whose replacement a change to it causes,
+#   and removed when hetzner.env drops it;
 # - package.sh's release tarball unpacks to morca-hetzner-<version>/ with
 #   every script, server/ and the example settings, and its up.sh and
 #   deploy.sh run from there (hetzner.env next to them), printing the
@@ -326,6 +331,63 @@ deploy eee5555 console=hhh8888 || fail "a deploy with the settings in line"
 has "names only, never values):"
 has "^  unchanged$"
 has "nothing to replace: not backing up"
+# The stack's overlay (#332): CONFIG_OVERLAY_FILE (relative to hetzner.env)
+# is sent as overlay/morca.overlay.toml, settings.env names it, the image's
+# morca checks it before anything changes, and the scheduler gets it
+# mounted and is replaced, so it registers with it.
+mkdir -p "$FAKE/dev"
+printf '[pipelines.toy]\nfills = "since_registration"\n' > "$FAKE/dev/morca.overlay.toml"
+echo CONFIG_OVERLAY_FILE=dev/morca.overlay.toml >> "$FAKE/hetzner.env"
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 || fail "a deploy that adds the overlay"
+has "  morca-stack: overlay/morca.overlay.toml: new"
+has "  morca-stack: settings.env: added MORCA_CONFIG_OVERLAY"
+has "morca-stack: the overlay: /opt/morca/morca.toml with /etc/orca/overlay/morca.overlay.toml: ok"
+cmp -s "$FAKE/dev/morca.overlay.toml" "$MORCA_CONF/overlay/morca.overlay.toml" || fail "the overlay on the server differs"
+grep -qx 'MORCA_CONFIG_OVERLAY=/etc/orca/overlay/morca.overlay.toml' "$MORCA_CONF/morca.env" || fail "no MORCA_CONFIG_OVERLAY in morca.env"
+grep -q "^config-check run --rm --env-file $MORCA_CONF/settings.env -v $MORCA_CONF/overlay:/etc/orca/overlay:ro img:eee5555 config check" "$FAKE/docker.log" \
+    || fail "the overlay wasn't checked in the image"
+grep -q "run -d --name scheduler .*-v $MORCA_CONF/overlay:/etc/orca/overlay:ro" "$FAKE/docker.log" || fail "the scheduler hasn't the overlay"
+grep -q "run -d --name ui-next .*/etc/orca/overlay" "$FAKE/docker.log" && fail "the UI has the overlay"
+grep -q 'exec scheduler morca register' "$FAKE/docker.log" || fail "not registered with the overlay"
+# Only the overlay changes: the scheduler is replaced, and registers.
+printf '[pipelines.toy]\nfills = "all"\n' > "$FAKE/dev/morca.overlay.toml"
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 || fail "a deploy that changes the overlay"
+has "  morca-stack: overlay/morca.overlay.toml: changed"
+has "  scheduler replace settings: its env file or the overlay changed"
+has "  ui keep unchanged"
+has "  console keep unchanged"
+grep -q 'exec scheduler morca register' "$FAKE/docker.log" || fail "not registered after the overlay changed"
+deploy eee5555 console=hhh8888 || fail "a deploy with the overlay in line"
+has "nothing to replace: not backing up"
+# One the image's morca refuses, or an image whose morca doesn't read
+# overlays: the deploy stops at the plan, before anything is paused.
+touch "$FAKE/overlay-bad"
+printf '[pipelines.toyy]\nfills = "all"\n' > "$FAKE/dev/morca.overlay.toml"
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 && fail "deployed with an overlay that doesn't check"
+has "morca.toml with the stack's overlay doesn't check: .*isn't a pipeline of"
+grep -q 'morca pause\|run -d' "$FAKE/docker.log" && fail "a refused overlay paused or started something"
+rm "$FAKE/overlay-bad"
+printf '[pipelines.toy]\nfills = "all"\n' > "$FAKE/dev/morca.overlay.toml"
+touch "$FAKE/no-overlays"
+deploy eee5555 console=hhh8888 && fail "deployed an image whose morca doesn't read overlays"
+has "img:eee5555's morca doesn't read overlays"
+rm "$FAKE/no-overlays"
+# Taken out of hetzner.env: removed from the server, and the scheduler
+# replaced without it.
+sed -i.bak '/^CONFIG_OVERLAY_FILE=/d' "$FAKE/hetzner.env"
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 || fail "a deploy that removes the overlay"
+has "  morca-stack: overlay/morca.overlay.toml: removed"
+has "  morca-stack: settings.env: removed MORCA_CONFIG_OVERLAY"
+[ ! -f "$MORCA_CONF/overlay/morca.overlay.toml" ] || fail "the overlay is still on the server"
+grep -q "run -d --name scheduler .*/etc/orca/overlay" "$FAKE/docker.log" && fail "the scheduler still has the overlay"
+grep -q 'config-check' "$FAKE/docker.log" && fail "checked an overlay there is none of"
+deploy eee5555 console=hhh8888 || fail "a deploy with no overlay"
+has "nothing to replace: not backing up"
+echo "ok   a stack's overlay is sent, checked in the image, mounted in the scheduler and removed"
 # A dry run shows the sync and the keys, and writes nothing.
 sed -i.bak '/^POSTHOG_KEY=/d' "$FAKE/hetzner.env"
 printf 'POSTHOG_KEY=\nFIXED_COST=8/month\nBACKUP_KEEP=7\nS3_REGION=nbg1\n' >> "$FAKE/hetzner.env"

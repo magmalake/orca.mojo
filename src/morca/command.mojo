@@ -122,12 +122,14 @@ comptime USAGE = """usage:
                 [--secret NAME=ID ...]
                 [--placement control|ec2|worker:<pool>|default]
                 [--max-runs N|auto] [--cpus N|MIN..MAX] [--memory-gb N|MIN..MAX]
-                [--config <morca.toml>|--no-config]
+                [--config <morca.toml>|--no-config] [--overlay <file>]
                 [<pipeline binary> ...]
-                (no binaries: every [pipelines.<name>] of the file, in
+                (no binaries: every [pipelines.<name>] of the file not
+                enabled = false, in
                 MORCA_PIPELINES_DIR or pipelines/ next to it; how its runs run comes from morca.toml, ./morca.toml or
-                MORCA_CONFIG unless --config names another, flags over it;
-                morca config show)
+                MORCA_CONFIG unless --config names another, with the stack's
+                overlay laid on it, --overlay or MORCA_CONFIG_OVERLAY;
+                flags over it; morca config show)
                 (--worker-procs: dista worker processes per EC2 worker
                 instance, auto = one per vCPU; default 1. --placement
                 control: runs on the scheduler's own host, morca.control;
@@ -152,7 +154,10 @@ comptime USAGE = """usage:
                 default, morca.toml, flag, environment)
   morca config export [--out <path>|-] [--force]
                 (a morca.toml from what's registered; default ./morca.toml)
-  morca config check [<morca.toml>] [--secrets]
+  morca config show --file [<morca.toml>] [--overlay <file>]
+                (the file as register reads it, the overlay laid on it, with
+                no database; each value the overlay set says so)
+  morca config check [<morca.toml>] [--overlay <file>] [--secrets]
                 (checks a file as register does, and its instance types,
                 with no database; --secrets reads each secret too)
   morca watchdog status [--json]     (rules, each threshold and value, trips)
@@ -408,6 +413,13 @@ def _command(args: List[String], target: String) raises -> Int:
     if args[1] == "config" and len(args) >= 3 and args[2] == "check":
         # A file only, for a project's CI: no database.
         return _config_check(args)
+    if (
+        args[1] == "config"
+        and len(args) >= 4
+        and args[2] == "show"
+        and args[3] == "--file"
+    ):
+        return _config_check(args, show=True)
     var url = getenv("MORCA_DATABASE_URL")
     if not url:
         _usage("morca needs MORCA_DATABASE_URL")
@@ -778,9 +790,16 @@ def _config_binaries(file: ProjectConfig) raises -> List[String]:
     MORCA_PIPELINES_DIR, else `pipelines/` next to the file. Raises, before
     anything is registered, if there is no such directory or a binary is
     missing."""
-    var names = file.pipelines()
+    var names = List[String]()
+    for n in file.pipelines():
+        if file.enabled(n):
+            names.append(n)
+        else:
+            print("morca: skipping", n, "(enabled = false)", file=stderr)
     if len(names) == 0:
-        raise Error("morca: ", file.path, " names no [pipelines.<name>]")
+        raise Error(
+            "morca: ", file.path, " names no [pipelines.<name>] to register"
+        )
     var dir = getenv("MORCA_PIPELINES_DIR")
     if not dir:
         var full = absolute(file.path)
@@ -873,6 +892,7 @@ def _register(url: String, args: List[String]) raises -> Int:
     var commit = String()
     var dirty = False
     var name = String("morca.toml")
+    var overlay = getenv("MORCA_CONFIG_OVERLAY")
     var i = 2
     while i < len(args) and args[i].startswith("--"):
         var a = args[i]
@@ -911,6 +931,8 @@ def _register(url: String, args: List[String]) raises -> Int:
             flags.secrets.append(v)
         elif a == "--config":
             config_path = v
+        elif a == "--overlay":
+            overlay = v
         elif a == "--config-b64":
             # The file itself, from `morca aws register` on another machine.
             b64 = v
@@ -928,11 +950,11 @@ def _register(url: String, args: List[String]) raises -> Int:
     elif no_config:
         file = ProjectConfig()
     elif config_path:
-        file = ProjectConfig.load(config_path)
+        file = ProjectConfig.load(config_path, overlay)
     elif getenv("MORCA_CONFIG"):
-        file = ProjectConfig.load(getenv("MORCA_CONFIG"))
+        file = ProjectConfig.load(getenv("MORCA_CONFIG"), overlay)
     elif exists("morca.toml"):
-        file = ProjectConfig.load("morca.toml")
+        file = ProjectConfig.load("morca.toml", overlay)
     else:
         refuse_orca_toml()
         file = ProjectConfig()
@@ -941,6 +963,7 @@ def _register(url: String, args: List[String]) raises -> Int:
             "morca: registering with",
             file.path,
             "(sha256 " + String(file.hash[byte=:12]) + ")",
+            String("and the overlay ", file.overlay) if file.overlay else "",
             file=stderr,
         )
     var paths = List[String]()
@@ -991,29 +1014,41 @@ def _without_morca(e: String) -> String:
     return String(e[byte=7:]) if e.startswith("morca: ") else e
 
 
-def _config_check(args: List[String]) raises -> Int:
-    """`morca config check [<file>] [--secrets]`: `file` (`$MORCA_CONFIG`,
-    else ./morca.toml) as registering checks it, and each instance type
-    sized; with `--secrets`, each secret read. 1 if anything is wrong."""
+def _config_check(args: List[String], show: Bool = False) raises -> Int:
+    """`morca config check [<file>] [--overlay <file>] [--secrets]`: `file`
+    (`$MORCA_CONFIG`, else ./morca.toml), with the overlay (else
+    `$MORCA_CONFIG_OVERLAY`) laid on it, as registering checks it, and each
+    instance type sized; with `--secrets`, each secret read. 1 if anything
+    is wrong. With `show` (`morca config show --file`), prints the file as
+    register reads it instead."""
     var path = String()
+    var overlay = getenv("MORCA_CONFIG_OVERLAY")
     var read_secrets = False
-    for k in range(3, len(args)):
-        if args[k] == "--secrets":
+    var k = 4 if show else 3
+    while k < len(args):
+        if args[k] == "--secrets" and not show:
             read_secrets = True
+        elif args[k] == "--overlay" and k + 1 < len(args):
+            overlay = args[k + 1]
+            k += 1
         elif not path and not args[k].startswith("--"):
             path = args[k]
         else:
             _usage(String("unknown argument: ", args[k]))
+        k += 1
     if not path:
         if not getenv("MORCA_CONFIG"):
             refuse_orca_toml()
         path = getenv("MORCA_CONFIG", "morca.toml")
     var file: ProjectConfig
     try:
-        file = ProjectConfig.load(path)
+        file = ProjectConfig.load(path, overlay)
     except e:
         print(e, file=stderr)
         return 1
+    if show:
+        print(file.shown(), end="")
+        return 0
     var problems = 0
     for key in ["head_type", "worker_type"]:
         for e in file.entries(String(key)):
@@ -1051,7 +1086,16 @@ def _config_check(args: List[String]) raises -> Int:
         print("morca:", path, "has", problems, "problem(s)", file=stderr)
         return 1
     var n = len(file.pipelines())
-    var line = String(path, ": ok, ", n, " pipeline", "" if n == 1 else "s")
+    var line = String(path)
+    if file.overlay:
+        line.write(" with ", file.overlay)
+    line.write(": ok, ", n, " pipeline", "" if n == 1 else "s")
+    var off = 0
+    for p in file.pipelines():
+        if not file.enabled(p):
+            off += 1
+    if off > 0:
+        line.write(" (", off, " not enabled)")
     if read_secrets:
         line.write(", ", len(secrets), " secret(s) readable")
     print(line)

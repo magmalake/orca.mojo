@@ -1077,6 +1077,41 @@ that). Cloudflare Tunnel is free. A stopped server is still billed; delete it
 (`down.sh`) to stop the charge. Nothing here launches instances, so the bill
 cannot grow by itself except for storage and traffic.
 
+## A stack's overlay
+
+A project ships one `morca.toml`; what one stack runs differently (no
+fills on a dev stack, one pipeline on a lab stack) goes in that stack's
+overlay, a file kept beside its `hetzner.env`, as in a secrets
+repository's `dev/morca.overlay.toml`
+([morca-toml.md](morca-toml.md#a-stacks-overlay) has the format and how
+it's merged). In `hetzner.env`:
+
+```sh
+CONFIG_OVERLAY_FILE=morca.overlay.toml    # relative to this file's folder
+```
+
+Each `up.sh` and `deploy.sh` then:
+
+- sends it to the server as `/etc/orca/overlay/morca.overlay.toml` (`morca-stack
+  sync`, saying `new`, `changed` or nothing), and `settings.env` gets
+  `MORCA_CONFIG_OVERLAY=/etc/orca/overlay/morca.overlay.toml`; taken out of
+  `hetzner.env`, both are removed;
+- has the new image's morca check `morca.toml` with it (`morca config
+  check`, in `morca-stack plan` and `apply`) before anything is paused or
+  replaced. A bad overlay, or an image whose morca doesn't read overlays
+  (before 0.25, which would register without it), stops the deploy there;
+- mounts `/etc/orca/overlay` in the scheduler only. The overlay is one of
+  the scheduler's files: a change to it replaces the scheduler (`scheduler
+  replace settings: its env file or the overlay changed`), so the deploy
+  quiesces and registers again, now with it.
+
+To see what a stack registers, before a deploy:
+
+```sh
+docker run --rm -v "$PWD/dev:/o" --entrypoint /opt/morca/bin/morca \
+    ghcr.io/morca-dev/census:<tag> config show --file --overlay /o/morca.overlay.toml
+```
+
 ## A dev stack
 
 A second, smaller stack to try a release, a deploy or a deploy-script change
@@ -1117,26 +1152,32 @@ MORCA_TAG=<short sha>                    # the tag the first up.sh starts
 GHCR_USER=...                           # as production's, for the private package
 GHCR_TOKEN_FILE=...
 GITHUB_TOKEN_FILE=$HOME/.config/morca-hetzner/github-token     # or mojo_repos's and mojo_stats's runs fail
-EXTRA_ENV_FILE=$HOME/.config/morca-hetzner/dev-extra.env
+CONFIG_OVERLAY_FILE=$HOME/.config/morca-hetzner/dev.overlay.toml
 # No NTFY_TOPIC_FILE: no alerts. Or a topic of its own, never production's.
 # No POSTHOG_KEY: the dev pages stay out of the analytics.
 ```
 
-with `dev-extra.env` holding
+with `dev.overlay.toml` the [stack's overlay](#a-stacks-overlay) on the
+census's `morca.toml`: no fills and no worker pool's placement, so a dev
+stack never backfills from 2023, and the pipelines only it runs enabled:
 
-```sh
-MORCA_CONFIG=/opt/morca/morca.dev.toml
+```toml
+[pipelines.gharchive]
+fills = "since_registration"
+
+[pipelines.ballast]
+enabled = true
 ```
 
-The scheduler and the UI get it (`settings.env`, then `morca.env`, ahead of
-the image's own `MORCA_CONFIG`), so `morca register` there reads the census's
-`morca.dev.toml`: the same pipelines as `morca.toml`, without fills and
-without a worker pool's placement, so a dev stack never backfills from
-2023. morca has no "fill the last N days" setting. For some history, backfill
-a recent range by hand once, e.g. `docker exec scheduler morca backfill
-gharchive 2026-10-09..2026-11-07`. Only census images built with
-`morca.dev.toml` have the file (mojo-census#87 on): `morca register` fails on an
-older one, so don't roll the dev stack back past it.
+morca has no "fill the last N days" setting. For some history, backfill a
+recent range by hand once, e.g. `docker exec scheduler morca backfill
+gharchive 2026-10-09..2026-11-07`.
+
+Before overlays (morca 0.25), a stack chose a whole file of the image's
+instead, with `MORCA_CONFIG=/opt/morca/morca.dev.toml` in its
+`EXTRA_ENV_FILE`. That still works (`settings.env`, then `morca.env`, ahead
+of the image's own `MORCA_CONFIG`), and an overlay is laid on whichever
+file that names.
 
 The tunnel's public hostnames, Proxied as for production: the census's dev
 stack has `orca-beta.mojourney.dev` to `http://ui:8270` and
@@ -1158,7 +1199,7 @@ export HETZNER_ENV=~/.config/morca-hetzner/dev.env   # in this shell only
 ./up.sh --dry-run                       # every command names morca-dev
 ./up.sh
 ssh root@<ip> docker exec -it scheduler morca user add <you>
-ssh root@<ip> morca-stack register       # morca.dev.toml's pipelines
+ssh root@<ip> morca-stack register       # morca.toml's, with the overlay
 ./deploy.sh <tag>                       # later deploys
 ./down.sh                               # when it's not needed: the Volume stays, up.sh brings it back
 ```
@@ -1173,7 +1214,7 @@ gharchive=2026-11-08"`) and steps 2, 3 and 5, and step 4 inside the server (not 
 2. `ssh root@<ip> morca-stack status`: every container up, `deployed: <tag>`
    and `before:` the tag before.
 3. The pipelines registered: `docker exec scheduler morca status` lists
-   each of `morca.dev.toml`'s, from `<tag>`, and the ones paused before are
+   each the overlay leaves enabled, from `<tag>`, and the ones paused before are
    still paused.
 4. `curl -s -o /dev/null -w '%{http_code}\n' https://orca-beta.mojourney.dev/healthz`
    says 200, and the console (`https://beta.mojourney.dev`) answers.

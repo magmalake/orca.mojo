@@ -200,6 +200,30 @@ printf '[pipelines.toy]\nsecrets = { A = "orca/github-token" }\n' > sec.toml
 [ "$(MORCA_SECRET_FETCH=$root/tests/fake_secret.sh check sec.toml --secrets 2>&1)" = "sec.toml: ok, 1 pipeline, 1 secret(s) readable" ] \
     || fail "config check --secrets: $(MORCA_SECRET_FETCH=$root/tests/fake_secret.sh check sec.toml --secrets 2>&1)"
 echo "ok   config check checks a file, its instance types and secrets, with no database"
+# A stack's overlay (#332), laid on morca.toml: by --overlay or
+# MORCA_CONFIG_OVERLAY, for check, show --file and register.
+printf '[pipelines.toy]\nworker_type = "c7g.2xlarge"\n' > ov.toml
+[ "$(check --overlay ov.toml 2>&1)" = "morca.toml with ov.toml: ok, 1 pipeline" ] || fail "config check --overlay: $(check --overlay ov.toml 2>&1)"
+[ "$(MORCA_CONFIG_OVERLAY=ov.toml check 2>&1)" = "morca.toml with ov.toml: ok, 1 pipeline" ] || fail "config check with MORCA_CONFIG_OVERLAY"
+env -u MORCA_DATABASE_URL "$morca" config show --file --overlay ov.toml > shown.out 2>&1 || fail "config show --file: $(cat shown.out)"
+grep -qx 'worker_type = "c7g.2xlarge"  # overlay ov.toml:2' shown.out || fail "show --file's overlaid value: $(cat shown.out)"
+grep -qx 'head_type = "t4g.medium"' shown.out || fail "show --file's own value: $(cat shown.out)"
+printf '[pipelines.toyy]\nmax_runs = 2\n' > bad-ov.toml
+if check --overlay bad-ov.toml > bad.out 2>&1; then fail "an overlay with a pipeline the file hasn't passed"; fi
+grep -q "bad-ov.toml:1: \[pipelines.toyy\] isn't a pipeline of morca.toml" bad.out || fail "the overlay's message: $(cat bad.out)"
+MORCA_CONFIG_OVERLAY=ov.toml "$morca" register "$root/build/toy" > reg.out 2>&1 || fail "register with the overlay: $(cat reg.out)"
+grep -q "registering with morca.toml (sha256 .*) and the overlay ov.toml" reg.out || fail "register's line: $(cat reg.out)"
+[ "$(row toy)" = "- t4g.medium c7g.2xlarge 0 4 1 1" ] || fail "the toy with the overlay: $(row toy)"
+[ "$(q "SELECT config->>'overlay' FROM orca.pipelines WHERE name = 'toy'")" = ov.toml ] || fail "the overlay isn't recorded"
+"$morca" register "$root/build/toy" >> "$log" 2>&1 || fail "register without the overlay"
+[ "$(row toy)" = "- t4g.medium c7g.xlarge 0 4 1 1" ] || fail "the toy without the overlay: $(row toy)"
+# enabled = false: register with no binaries skips it.
+printf '[pipelines.toy]\nenabled = false\n' > off.toml
+if MORCA_PIPELINES_DIR=$root/build "$morca" register --overlay off.toml > reg.out 2>&1; then fail "registered a pipeline not enabled"; fi
+grep -q "skipping toy (enabled = false)" reg.out || fail "register's skip: $(cat reg.out)"
+grep -q "names no \[pipelines.<name>\] to register" reg.out || fail "register with none enabled: $(cat reg.out)"
+[ "$(check --overlay off.toml 2>&1)" = "morca.toml with off.toml: ok, 1 pipeline (1 not enabled)" ] || fail "config check of one not enabled"
+echo "ok   a stack's overlay is laid on morca.toml for check, show --file and register; enabled = false skips"
 
 # The env reaches the toy's runs on the local runner: 2024-02 fails as asked,
 # 2024-01 doesn't; daily's runs don't get it.

@@ -12,6 +12,7 @@ from morca.toml import (
     TABLE,
     TomlDoc,
     parse_toml,
+    path_key,
     toml_key,
     toml_string,
 )
@@ -265,6 +266,78 @@ def test_dump_reads_back() raises:
     assert_equal(toml_key("a.b"), '"a.b"')
     assert_equal(toml_key(""), '""')
     assert_equal(toml_string('a"b\\c\x7f'), '"a\\"b\\\\c\\u007F"')
+
+
+def test_an_overlay_merges() raises:
+    # A stack's overlay (TomlDoc.merge): a value replaces the one at its
+    # path, a table is merged key by key, an array is replaced whole.
+    var doc = parse_toml(
+        """[defaults]
+max_runs = 1
+[pipelines.a]
+fills = "all"
+env = { X = "1", Y = "2" }
+machines = [{ type = "cax31" }, { type = "cax41" }]
+[pipelines.b]
+limit = 3
+"""
+    )
+    var over = parse_toml(
+        """[pipelines.a]
+fills = "since_registration"
+env = { Y = "3", Z = "4" }
+machines = [{ type = "cx22" }]
+[pipelines.b]
+limit = { soft = 1 }
+[pipelines.c]
+new = true
+"""
+    )
+    var set = doc.merge(over)
+    assert_equal(_text(doc, ["defaults", "max_runs"]), "1")
+    assert_equal(_text(doc, ["pipelines", "a", "fills"]), "since_registration")
+    assert_equal(_text(doc, ["pipelines", "a", "env", "X"]), "1")
+    assert_equal(_text(doc, ["pipelines", "a", "env", "Y"]), "3")
+    assert_equal(_text(doc, ["pipelines", "a", "env", "Z"]), "4")
+    assert_equal(len(doc.get(["pipelines", "a", "machines"]).value().items), 1)
+    assert_equal(
+        _text(doc, ["pipelines", "a", "machines", "0", "type"]), "cx22"
+    )
+    assert_false(doc.get(["pipelines", "a", "machines", "1"]))
+    assert_false(doc.get(["pipelines", "a", "machines", "1", "type"]))
+    # A value becomes a table, with what's under it.
+    assert_true(doc.has_table(["pipelines", "b", "limit"]))
+    assert_equal(_text(doc, ["pipelines", "b", "limit", "soft"]), "1")
+    assert_true(doc.get(["pipelines", "c", "new"]))
+    # The order the file had is kept; a key new here goes last.
+    assert_equal(doc.keys(["pipelines", "a"]), ["fills", "env", "machines"])
+    assert_equal(doc.tables(["pipelines"]), ["a", "b", "c"])
+    # What it set: values and new tables, not the tables it merged into.
+    var keys = List[String]()
+    for p in set:
+        keys.append(path_key(p))
+    assert_true(path_key(["pipelines", "a", "fills"]) in keys)
+    assert_true(path_key(["pipelines", "a", "env", "Z"]) in keys)
+    assert_true(path_key(["pipelines", "c"]) in keys)
+    assert_false(path_key(["pipelines", "a"]) in keys)
+    assert_false(path_key(["pipelines", "a", "env", "X"]) in keys)
+    # pretty reads back to the same values, with the notes as comments.
+    var notes = Dict[String, String]()
+    notes[path_key(["pipelines", "a", "env", "Z"])] = "overlay"
+    var text = doc.pretty(notes)
+    assert_true('env = { X = "1", Y = "3", Z = "4" }  # overlay\n' in text)
+    assert_true("[pipelines.a]\n" in text)
+    assert_true("[defaults]\nmax_runs = 1\n" in text)
+    var back = parse_toml(text)
+    assert_equal(_text(back, ["pipelines", "a", "env", "Z"]), "4")
+    assert_equal(
+        _text(back, ["pipelines", "a", "machines", "0", "type"]), "cx22"
+    )
+    assert_equal(_text(back, ["pipelines", "b", "limit", "soft"]), "1")
+    assert_equal(len(back.entries), len(doc.entries))
+    # An empty table keeps its header.
+    var e = parse_toml("[pipelines.bare]\n")
+    assert_equal(e.pretty(Dict[String, String]()), "[pipelines.bare]\n")
 
 
 def main() raises:

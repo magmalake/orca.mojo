@@ -415,5 +415,140 @@ def test_no_file() raises:
     assert_false(resolve("x", RegisterFlags(), none).in_file)
 
 
+def _write(path: String, text: String) raises:
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def _load_refused(overlay: String, why: String) raises:
+    _write("build/test-config-overlay.toml", overlay)
+    try:
+        _ = ProjectConfig.load(
+            "build/test-config.toml", "build/test-config-overlay.toml"
+        )
+    except e:
+        if why not in String(e):
+            raise Error("refused ", repr(overlay), " but said: ", e)
+        return
+    raise Error("accepted: ", repr(overlay))
+
+
+def test_a_stack_overlay() raises:
+    # morca.toml with a stack's overlay laid on it (#332): a key replaces
+    # the file's, a table is merged key by key, and where each value came
+    # from says so.
+    _write(
+        "build/test-config.toml",
+        """[defaults]
+max_runs = 1
+
+[pipelines.gharchive]
+fills = "all"
+fill_lag = "2h"
+env = { SLOTS = "2", EVENTS = "off" }
+
+[pipelines.mojo_repos]
+placement = "worker:big"
+
+[pipelines.ballast]
+enabled = false
+""",
+    )
+    _write(
+        "build/test-config-overlay.toml",
+        """[pipelines.gharchive]
+fills = "since_registration"
+env = { SLOTS = "1" }
+
+[pipelines.mojo_repos]
+placement = "control"
+
+[pipelines.ballast]
+enabled = true
+""",
+    )
+    var f = ProjectConfig.load(
+        "build/test-config.toml", "build/test-config-overlay.toml"
+    )
+    assert_equal(f.overlay, "build/test-config-overlay.toml")
+    assert_equal(f.overlay_hash.byte_length(), 64)
+    assert_true(f.enabled("ballast"))
+    assert_true(f.enabled("gharchive"))
+    var g = resolve("gharchive", RegisterFlags(), f)
+    assert_equal(g.text("fills"), "since_registration")
+    assert_equal(
+        g.values["fills"].detail,
+        "[pipelines.gharchive], overlay build/test-config-overlay.toml:2",
+    )
+    assert_equal(g.values["fills"].line, 0)
+    assert_equal(g.text("fill_lag"), "2h")
+    assert_equal(g.values["fill_lag"].detail, "[pipelines.gharchive]")
+    assert_equal(g.values["fill_lag"].line, 6)
+    assert_equal(g.text("max_runs"), "1")
+    for kv in g.env_pairs():
+        if kv[0] == "SLOTS":
+            assert_equal(kv[1], "1")
+        if kv[0] == "EVENTS":
+            assert_equal(kv[1], "off")
+    assert_equal(len(g.env_pairs()), 2)
+    var m = resolve("mojo_repos", RegisterFlags(), f)
+    assert_equal(m.text("placement"), "control")
+    var locs = f.entries("placement")
+    assert_equal(
+        locs[0][0],
+        "build/test-config-overlay.toml:6: [pipelines.mojo_repos] placement",
+    )
+    assert_true(
+        '"overlay": "build/test-config-overlay.toml"' in g.config_json(f)
+    )
+    var shown = f.shown()
+    assert_true(
+        'fills = "since_registration"  # overlay'
+        " build/test-config-overlay.toml:2"
+        in shown
+    )
+    assert_true('fill_lag = "2h"\n' in shown)
+    # Without it, the file alone.
+    var plain = ProjectConfig.load("build/test-config.toml")
+    assert_false(plain.enabled("ballast"))
+    assert_equal(
+        resolve("gharchive", RegisterFlags(), plain).text("fills"), "all"
+    )
+    # [defaults] enabled = false turns off all but those that say true.
+    _write(
+        "build/test-config-overlay.toml",
+        "[defaults]\nenabled = false\n[pipelines.ballast]\nenabled = true\n",
+    )
+    var lab = ProjectConfig.load(
+        "build/test-config.toml", "build/test-config-overlay.toml"
+    )
+    assert_false(lab.enabled("gharchive"))
+    assert_false(lab.enabled("mojo_repos"))
+    assert_true(lab.enabled("ballast"))
+    # A pipeline the file hasn't, a bad value (at the overlay's line) and a
+    # file that isn't TOML are refused.
+    _load_refused(
+        '[pipelines.gharchiv]\nfills = "all"\n',
+        (
+            "build/test-config-overlay.toml:1: [pipelines.gharchiv] isn't a"
+            " pipeline of build/test-config.toml"
+        ),
+    )
+    _load_refused(
+        '\n[pipelines.gharchive]\nfills = "some"\n',
+        "build/test-config-overlay.toml:3: [pipelines.gharchive] fills: is",
+    )
+    _load_refused(
+        "[defaults]\nenabled = 1\n",
+        "build/test-config-overlay.toml:2: [defaults] enabled is true or false",
+    )
+    _load_refused("[defaults\n", "build/test-config-overlay.toml:1")
+    try:
+        _ = ProjectConfig.load("build/test-config.toml", "build/no-such.toml")
+        raise Error("accepted a missing overlay")
+    except e:
+        assert_true("no build/no-such.toml" in String(e))
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

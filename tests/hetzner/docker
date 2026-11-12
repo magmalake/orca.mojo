@@ -189,6 +189,18 @@ case "$all" in
         if [ "$(cat "$d/status")" = running ]; then echo true; else echo false; fi
         ;;
     "inspect "*) [ -d "$C/${all##* }" ] || exit 1 ;;
+    # morca config check with the stack's overlay (morca-stack's
+    # check_overlay): fails while $FAKE/overlay-bad exists; $FAKE/no-overlays
+    # is an image whose morca doesn't read overlays.
+    "run --rm --env-file "*" config check")
+        echo "config-check $all" >> "$FAKE/docker.log"
+        [ ! -f "$FAKE/overlay-bad" ] || { echo "/etc/orca/overlay/morca.overlay.toml:1: [pipelines.toyy] isn't a pipeline of /opt/morca/morca.toml" >&2; exit 1; }
+        if [ -f "$FAKE/no-overlays" ]; then
+            echo "/opt/morca/morca.toml: ok, 2 pipelines"
+        else
+            echo "/opt/morca/morca.toml with /etc/orca/overlay/morca.overlay.toml: ok, 2 pipelines"
+        fi
+        ;;
     "run -d "*)
         shift 2
         name=""

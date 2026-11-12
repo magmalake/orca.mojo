@@ -4,10 +4,12 @@
 #
 #   configure [--keep-existing] KEY=VALUE...   stack settings (/etc/orca/stack.conf);
 #                                              prints each one it changes, old -> new
-#   sync [--keys] NAME < FILE                  FILE becomes $CONF/NAME (settings.env or a
-#                                              secret file, mode 600) if it differs; says
-#                                              so, with --keys the keys added, removed or
-#                                              changed (names only, never values)
+#   sync [--keys] NAME < FILE                  FILE becomes $CONF/NAME (settings.env, the
+#                                              overlay or a secret file, mode 600) if it
+#                                              differs; says so, with --keys the keys
+#                                              added, removed or changed (names only,
+#                                              never values)
+#   sync --remove NAME                         removes $CONF/NAME (the overlay), saying so
 #   app NAME PORT [CHECK]                      an app beside the UI (the census console);
 #                                              CHECK: the path that answers 200 once it's
 #                                              ready (default /)
@@ -89,6 +91,15 @@
 # next apply removes it first, naming its image and when it exited. A
 # running one stays until drain-old: can-overlap says no, and check fails.
 #
+# The stack's overlay (#332, docs/hetzner.md#a-stacks-overlay): deploy.sh
+# sends hetzner.env's CONFIG_OVERLAY_FILE as $CONF/overlay/morca.overlay.toml
+# and settings.env's MORCA_CONFIG_OVERLAY names it as the scheduler sees it,
+# $OVERLAY. Only then is $CONF/overlay mounted in the scheduler, which lays
+# it on the image's morca.toml when it registers. plan and apply first have
+# the image's morca check the two (check_overlay), and refuse an image whose
+# morca doesn't read overlays. The overlay is one of the scheduler's files:
+# a change replaces it, so deploy.sh registers again.
+#
 # Each apply that changes a tag keeps what was deployed before it:
 # $CONF/deployed has the tags the last apply started ("morca TAG", then "app
 # NAME TAG" for each app, its own tag or the morca tag), $CONF/deployed.prev
@@ -106,6 +117,8 @@ CONF=${MORCA_CONF:-/etc/orca}
 DATA=${MORCA_DATA:-/mnt/orca-data}
 STATE=${MORCA_STATE:-/var/lib/orca}
 PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# The overlay inside the scheduler, as settings.env's MORCA_CONFIG_OVERLAY says.
+OVERLAY=/etc/orca/overlay/morca.overlay.toml
 
 die() {
     echo "morca-stack: $*" >&2
@@ -236,7 +249,7 @@ cmd_configure() {
 
 # The files sync may write (in $CONF): settings.env and the secret files
 # up.sh and deploy.sh send.
-SYNC_FILES="settings.env s3.env tunnel.env ghcr-token secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token secrets/orca/hcloud-token"
+SYNC_FILES="settings.env overlay/morca.overlay.toml s3.env tunnel.env ghcr-token secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token secrets/orca/hcloud-token"
 
 # key_changes OLD NEW: "added A, B; removed C; changed D" between two
 # KEY=VALUE files (the last line of a key counts, as docker's --env-file
@@ -265,6 +278,13 @@ key_changes() {
 # "morca-stack: NAME: new", "NAME: changed" or, with --keys, the keys that
 # differ; nothing if it's the same. Its contents are never printed.
 cmd_sync() {
+    if [ "${1:-}" = --remove ]; then
+        [ $# -eq 2 ] && [ "$2" = overlay/morca.overlay.toml ] || die "usage: sync --remove overlay/morca.overlay.toml"
+        [ -f "$CONF/$2" ] || return 0
+        rm -f "$CONF/$2"
+        echo "morca-stack: $2: removed"
+        return 0
+    fi
     keys=0
     if [ "${1:-}" = --keys ]; then
         keys=1
@@ -376,6 +396,24 @@ login() {
 # A short hash of standard input.
 digest() {
     if command -v sha256sum > /dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -c1-16
+}
+
+# check_overlay IMAGE: with an overlay (settings.env's MORCA_CONFIG_OVERLAY),
+# IMAGE's morca checks its morca.toml with the overlay laid on it, before
+# anything changes; an image whose morca doesn't read overlays (before
+# 0.25) would register without it, and is refused. Says what it checked.
+check_overlay() {
+    ov=$(setting MORCA_CONFIG_OVERLAY)
+    [ -n "$ov" ] || return 0
+    [ "$ov" = "$OVERLAY" ] || die "settings.env's MORCA_CONFIG_OVERLAY is $ov, not $OVERLAY, where the scheduler has the overlay"
+    [ -f "$CONF/overlay/morca.overlay.toml" ] || die "settings.env names an overlay, but $CONF/overlay/morca.overlay.toml is missing (deploy.sh sends hetzner.env's CONFIG_OVERLAY_FILE)"
+    out=$(docker run --rm --env-file "$CONF/settings.env" -v "$CONF/overlay:/etc/orca/overlay:ro" "$1" config check 2>&1) \
+        || die "$1: morca.toml with the stack's overlay doesn't check: $(echo "$out" | tail -n 3)"
+    case "$out" in
+        *" with $OVERLAY: ok"*) ;;
+        *) die "$1's morca doesn't read overlays (morca 0.25 does): it said '$(echo "$out" | tail -n 1)'; take CONFIG_OVERLAY_FILE out of hetzner.env to deploy it" ;;
+    esac
+    echo "morca-stack: the overlay: $(echo "$out" | tail -n 1)" >&2
 }
 
 # The tags the stack is set to run: "morca TAG", then "app NAME TAG".
@@ -493,6 +531,14 @@ pull_all() {
 containers() {
     cb=$1
     files="$ENVDIR/morca.env $CONF/secret-fetch"
+    # The overlay (check_overlay), the scheduler's only: a change to it
+    # replaces the scheduler, which deploy.sh then registers.
+    sfiles=$files
+    ovmount=
+    if [ -n "$(setting MORCA_CONFIG_OVERLAY)" ]; then
+        sfiles="$files $CONF/overlay/morca.overlay.toml"
+        ovmount="-v $CONF/overlay:/etc/orca/overlay:ro"
+    fi
     # The UI's port is write_env's MORCA_UI_ADDR; the worker API's, settings.env's.
     # An image before morca 0.18 has no /healthz: its UI answers 404 there,
     # which says it is up as well.
@@ -507,15 +553,17 @@ containers() {
     # it starts, gets it. Its own cgroup is the container's: it can't
     # touch any other container's or the host's.
     if [ "$(conf_get CGROUPS)" = 1 ]; then
-        $cb scheduler "$files" - "$image:$tag" --network orca --env-file "$CONF/morca.env" \
-            -v "$STATE/stage:/var/lib/orca/stage" \
+        # shellcheck disable=SC2086
+        $cb scheduler "$sfiles" - "$image:$tag" --network orca --env-file "$CONF/morca.env" \
+            -v "$STATE/stage:/var/lib/orca/stage" $ovmount \
             -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
             --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
             --entrypoint /bin/sh "$image:$tag" -c \
             'mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/morca/bin/morca scheduler'
     else
-        $cb scheduler "$files" - "$image:$tag" --network orca --env-file "$CONF/morca.env" \
-            -v "$STATE/stage:/var/lib/orca/stage" \
+        # shellcheck disable=SC2086
+        $cb scheduler "$sfiles" - "$image:$tag" --network orca --env-file "$CONF/morca.env" \
+            -v "$STATE/stage:/var/lib/orca/stage" $ovmount \
             -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
             "$image:$tag" scheduler
     fi
@@ -595,6 +643,7 @@ EOF
             p_why="no orca.stack.spec label: started by an older morca-stack"
         elif [ "$c_files" != "$p_fh" ]; then
             p_why="settings: its env file changed"
+            [ "$p_name" != scheduler ] || [ -z "$(setting MORCA_CONFIG_OVERLAY)" ] || p_why="settings: its env file or the overlay changed"
         elif [ "$c_args" != "$p_args" ]; then
             p_why="options: its flags, mounts or CGROUPS changed"
         elif [ "$c_spec" != "$p_spec" ]; then
@@ -765,6 +814,7 @@ cmd_plan() {
     apply_args "$@"
     [ "$dbonly" = 0 ] || die "plan: --db-only starts only Postgres"
     need_morca_image "$(conf_get MORCA_IMAGE):${newtag:-$(conf_get MORCA_TAG)}"
+    check_overlay "$(conf_get MORCA_IMAGE):${newtag:-$(conf_get MORCA_TAG)}"
     desired
     ENVDIR=$CONF/plan.d
     rm -rf "$ENVDIR"
@@ -822,6 +872,7 @@ cmd_apply() {
     # a server from before the rename migrated (once).
     if [ "$dbonly" = 0 ]; then
         need_morca_image "$(conf_get MORCA_IMAGE):${newtag:-$(conf_get MORCA_TAG)}"
+        check_overlay "$(conf_get MORCA_IMAGE):${newtag:-$(conf_get MORCA_TAG)}"
         migrate_orca
     fi
     # A stack applied before deployed was kept: what it runs is its conf.

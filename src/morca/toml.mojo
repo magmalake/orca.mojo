@@ -219,6 +219,123 @@ struct TomlDoc(Movable):
         out.write(" }" if not first else "}")
         return out^
 
+    def is_inline(self, path: List[String]) -> Bool:
+        """Whether the table at `path` was written inline, `{ ... }`."""
+        var i = self.find(path)
+        return i >= 0 and self.entries[i].how == _INLINE
+
+    def merge(mut self, over: TomlDoc) -> List[List[String]]:
+        """`over` laid on this document, as a stack's overlay on a project's
+        file: a value of `over` replaces the one at its path (and a table
+        or an array there, with all under it), and a table is merged key by
+        key, so what `over` leaves out keeps its value. Returns the paths
+        `over` set: its values, and its tables this document hadn't."""
+        var set = List[List[String]]()
+        for e in over.entries:
+            var i = self.find(e.path)
+            if (
+                i >= 0
+                and e.value.kind == TABLE
+                and self.entries[i].value.kind == TABLE
+            ):
+                continue
+            if i >= 0:
+                self._drop_under(e.path)
+                self.entries[self.find(e.path)] = e.copy()
+            else:
+                self._add(e.path.copy(), e.value.copy(), e.how)
+            set.append(e.path.copy())
+        return set^
+
+    def _drop_under(mut self, path: List[String]):
+        """Removes every entry under `path` (not `path`'s own)."""
+        var kept = List[TomlEntry]()
+        for e in self.entries:
+            if not _within(e.path, path):
+                kept.append(e.copy())
+        self.entries = kept^
+        self._index = Dict[String, Int]()
+        for i in range(len(self.entries)):
+            self._index[_join(self.entries[i].path)] = i
+
+    def pretty(self, notes: Dict[String, String]) -> String:
+        """The document as a person writes it: a `[table]` header for each
+        table with values (or with nothing in it), each value under its own
+        key, inline tables and arrays inline. A value whose path
+        (`path_key`), or one under it, is in `notes` ends in `# <note>`."""
+        var out = String()
+        # Depth first, in the file's order: a stack of the tables to write.
+        var todo = List[List[String]]()
+        todo.append(List[String]())
+        while len(todo) > 0:
+            var path = todo.pop()
+            var keys = self.keys(path)
+            var header = len(path) > 0 and len(keys) == 0
+            if header:
+                out.write(
+                    "\n" if out.byte_length() > 0 else "",
+                    "[",
+                    _dotted(path),
+                    "]\n",
+                )
+            var tables = List[String]()
+            for k in keys:
+                var p = path.copy()
+                p.append(k)
+                var v = self.get(p)
+                if not v:
+                    continue
+                if v.value().kind == TABLE and not self.is_inline(p):
+                    tables.append(k)
+                    continue
+                if len(path) > 0 and not header:
+                    out.write(
+                        "\n" if out.byte_length() > 0 else "",
+                        "[",
+                        _dotted(path),
+                        "]\n",
+                    )
+                    header = True
+                out.write(toml_key(k), " = ", self._value(p, v.value()))
+                var note = _note(p, notes)
+                if note:
+                    out.write("  # ", note)
+                out.write("\n")
+            for j in range(len(tables) - 1, -1, -1):
+                var p = path.copy()
+                p.append(tables[j])
+                todo.append(p^)
+        return out^
+
+
+def path_key(path: List[String]) -> String:
+    """`path` as one string, a key for a `Dict` of paths (`TomlDoc.pretty`'s
+    notes)."""
+    return _join(path)
+
+
+def _within(path: List[String], prefix: List[String]) -> Bool:
+    """Whether `path` is under `prefix`, and not `prefix` itself."""
+    if len(path) <= len(prefix):
+        return False
+    for i in range(len(prefix)):
+        if path[i] != prefix[i]:
+            return False
+    return True
+
+
+def _note(path: List[String], notes: Dict[String, String]) -> String:
+    """`notes`' note for `path`, or for the first path under it; empty if
+    none."""
+    var k = _join(path)
+    var got = notes.get(k)
+    if got:
+        return got.value()
+    for e in notes.items():
+        if e.key.startswith(String(k, _SEP)):
+            return e.value
+    return ""
+
 
 def toml_key(k: String) -> String:
     """`k` as a TOML key: bare if it can be, else a basic string."""
