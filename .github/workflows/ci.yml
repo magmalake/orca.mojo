@@ -515,6 +515,80 @@ jobs:
             orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
+  # The tests that apply on macOS, on the Mac mini runner (m4-mini, an isolated
+  # `ci` user; no Docker, no sudo), for the repo's own code only: a fork's
+  # code is arbitrary, and this runner is ours. It runs for information
+  # first and isn't in `ci`'s needs; the gate decision comes after a week of
+  # runs (#342). The workspace persists between jobs on a self-hosted runner,
+  # so checkout cleans it and build/ goes before the tests.
+  #
+  # Left out: what needs Linux (test-cgroups and test-usage read
+  # /sys/fs/cgroup, test-pressure and test-sample read /proc, test-kind needs
+  # docker), and everything of the data environment (it runs a local
+  # warehouse and MinIO, and local mode over an S3 warehouse crashes forked
+  # workers on macOS, orca #135). The nightly leg's macos-latest runs the two
+  # halves of `test` in full.
+  #
+  # Also left out, to keep the job near 20 minutes (the cold build of the
+  # shared binaries is 7 of them): test-compile-fail, test-config, test-fill,
+  # test-chaos-sqlite, test-crash, test-versions, test-ec2, test-hetzner,
+  # test-pool-scale, test-pool-scale-ec2 and test-placement, which pass on a
+  # Mac, and test-ui, whose run can end before the test asks for its live
+  # attempt's facts (the 286 "stop polling" answer) on the slower runner.
+  macos:
+    name: macOS (m4)
+    needs: [changes, release]
+    if: ${{ !cancelled() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
+    runs-on: [self-hosted, m4]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: orca.mojo
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: orca.mojo
+          clean: true
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/dista.mojo, ref: df018565d71a8f7061350deeeb02f31555526429, path: dista.mojo, clean: true, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/k8s.mojo, ref: 6cb83ce08e02234873f2d09c7501208eedb5589f, path: k8s.mojo, clean: true, persist-credentials: false}
+
+      - name: Start from an empty build/
+        run: rm -rf build
+
+      # pixi 0.78.0 is installed for the runner's `ci` user, as the lock
+      # needs, but the runner service's PATH doesn't have it: add its usual
+      # homes, and say what is found.
+      - name: Find pixi
+        run: |
+          for d in "$HOME/.pixi/bin" /opt/homebrew/bin /usr/local/bin; do
+            [ -x "$d/pixi" ] && echo "$d" >> "$GITHUB_PATH" && PATH="$d:$PATH" && break
+          done
+          echo "user: $(id -un), HOME: $HOME, PATH: $PATH"
+          pixi --version
+      - name: Install the environment
+        run: pixi install --locked -e default
+
+      - name: Tests
+        run: |
+          set -e
+          pixi run -e default build-shared
+          for t in \
+            test-steps test-cron test-warehouse test-toml test-upgrade test-source \
+            test-highlight test-step-cards test-graph test-locate test-timeline \
+            test-metrics test-tasks test-store test-formal-pins test-resources \
+            test-recommend test-worker-api test-state test-formal-migrate \
+            test-formal-fence test-cli test-logs test-remote test-kill \
+            test-scheduler test-chaos test-hcloud test-aws test-worker-procs; do
+            echo "::group::$t"
+            pixi run -e default "$t"
+            echo "::endgroup::"
+          done
+
   # The one check to require: every Linux job above passed, or, for a
   # prose-only PR, was skipped. (macOS runs only on the nightly, which this
   # gate doesn't cover.)
