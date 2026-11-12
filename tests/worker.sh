@@ -72,7 +72,7 @@ pids="$pids $ui"
 until_ 10 "morca ui didn't start" curl -fs "$base/" -o /dev/null
 
 tok=$(./build/morca worker-token create --pool t --label laptop 2>> "$log") || fail "worker-token create"
-case "$tok" in morca_*) ;; *) fail "not a token: $tok" ;; esac
+case "$tok" in orca_*) ;; *) fail "not a token: $tok" ;; esac
 is "SELECT count(*) FROM orca.workers WHERE token_hash = '$tok'" 0 || fail "the token is kept as it is"
 other=$(./build/morca worker-token create --pool other 2>> "$log") || fail "another pool's token"
 gone=$(./build/morca worker-token create --pool t --label gone 2>> "$log") || fail "a third token"

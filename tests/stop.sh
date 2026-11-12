@@ -56,7 +56,7 @@ run=$(q "SELECT max(id) FROM orca.runs")
     || fail "run $run: $(q "SELECT status, error FROM orca.runs WHERE id = $run")"
 [ "$(q "SELECT a.status || ' ' || s.status FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $run")" = "failed failed" ] \
     || fail "slow's attempt: $(q "SELECT a.status, a.error FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $run")"
-[ "$(q "SELECT count(*) FROM orca.audit WHERE run = $run AND username = 'morca' AND action = 'stop' AND detail LIKE '%timed out after 2 s%'")" -eq 1 ] \
+[ "$(q "SELECT count(*) FROM orca.audit WHERE run = $run AND username = 'orca' AND action = 'stop' AND detail LIKE '%timed out after 2 s%'")" -eq 1 ] \
     || fail "no audit row for the timeout"
 
 # A cancel: wait has no timeout, and is stopped a second after the cancel.

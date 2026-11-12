@@ -6,7 +6,7 @@ morca user tokens alice          her tokens: label, created, last used, expires
 morca user revoke alice 3        or @all
 ```
 
-A token is `morca_` and 64 hex digits, 32 random bytes from the system's
+A token is `orca_` and 64 hex digits, 32 random bytes from the system's
 generator; the prefix lets a secret scanner recognise one that leaked. The
 UI gives it out once, to `POST /api/login` with the right password, and
 keeps only its SHA-256 digest in `orca.api_tokens`, with its user, a label
@@ -27,7 +27,7 @@ from postgres import Params
 
 from morca.state import State
 
-comptime TOKEN_PREFIX = "morca_"
+comptime TOKEN_PREFIX = "orca_"  # tokens issued before the rename stay valid
 comptime TOKEN_BYTES = 32
 """256 bits: as many as a session's."""
 comptime DEFAULT_TOKEN_DAYS = 30
@@ -44,7 +44,7 @@ def _hex(b: List[UInt8]) -> String:
 
 
 def new_token() raises -> String:
-    """A new token: `morca_` and `TOKEN_BYTES` random bytes in hex."""
+    """A new token: `orca_` and `TOKEN_BYTES` random bytes in hex."""
     return String(TOKEN_PREFIX, _hex(random_bytes(TOKEN_BYTES)))
 
 

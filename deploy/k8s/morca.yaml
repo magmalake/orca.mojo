@@ -53,8 +53,8 @@ spec:
           image: postgres:17-bookworm
           args: ["-c", "synchronous_commit=on"]
           env:
-            - {name: POSTGRES_USER, value: morca}
-            - {name: POSTGRES_DB, value: morca}
+            - {name: POSTGRES_USER, value: orca}
+            - {name: POSTGRES_DB, value: orca}
             - name: POSTGRES_PASSWORD
               valueFrom: {secretKeyRef: {name: morca-db, key: password}}
             - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}

@@ -34,7 +34,7 @@ def test_tokens_are_random_and_well_formed() raises:
     var a = new_token()
     var b = new_token()
     assert_true(a.startswith(TOKEN_PREFIX))
-    # morca_ and 32 bytes in hex: 256 bits.
+    # orca_ and 32 bytes in hex: 256 bits.
     assert_equal(a.byte_length(), 5 + 64)
     assert_true(is_token(a))
     assert_true(a != b)

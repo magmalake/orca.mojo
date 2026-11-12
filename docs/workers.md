@@ -141,7 +141,7 @@ morca worker-token list                                # id, pool, label, state,
 morca worker-token revoke 3
 ```
 
-A worker token is an API token, `morca_` and 64 hex digits, like `morca
+A worker token is an API token, `orca_` and 64 hex digits, like `morca
 login`'s. The server keeps only its SHA-256, in `orca.workers`. It is scoped
 to one pool. It can claim that pool's runs and make the state calls of the
 runs it claimed. It can do nothing else, and a user's token gets nothing
@@ -153,7 +153,7 @@ the worker using it is refused and exits. Each claim is a row of
 ## Running a worker
 
 ```sh
-MORCA_WORKER_TOKEN=morca_... MORCA_IMAGE=ghcr.io/morca-dev/census:0.11.0 \
+MORCA_WORKER_TOKEN=orca_... MORCA_IMAGE=ghcr.io/morca-dev/census:0.11.0 \
 MORCA_WAREHOUSE=s3://... MORCA_LOGS=s3://... MORCA_SECRET_FETCH=/etc/orca/fetch-secret \
   morca worker --pool bgent --remote https://orca.mlake.dev
 ```
@@ -219,7 +219,7 @@ On the worker, `worker.env` (mode 600) holds the token, the bucket and
 where secrets come from:
 
 ```sh
-MORCA_WORKER_TOKEN=morca_...
+MORCA_WORKER_TOKEN=orca_...
 MORCA_WAREHOUSE=s3://<bucket>/warehouse
 MORCA_LOGS=s3://<bucket>/logs
 AWS_ACCESS_KEY_ID=...

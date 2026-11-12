@@ -164,7 +164,7 @@ kind: Pod
 metadata:
   name: morca-999-1-worker-0
   namespace: morca-runs
-  labels: {morca.run: "999", morca.start: "1", morca.role: worker}
+  labels: {orca.run: "999", orca.start: "1", orca.role: worker}
 spec:
   restartPolicy: Never
   containers:

@@ -372,11 +372,11 @@ struct KubeRunner(Movable):
         crashed has the attempts it left running failed with the crash's
         first frames (`morca.crash`), if the run is still at that start."""
         try:
-            var run = Int(job.at("/metadata/labels/morca.run").string_value())
+            var run = Int(job.at("/metadata/labels/orca.run").string_value())
             var pipeline = job.at(
-                "/metadata/labels/morca.pipeline"
+                "/metadata/labels/orca.pipeline"
             ).string_value()
-            var start = job.at("/metadata/labels/morca.start").string_value()
+            var start = job.at("/metadata/labels/orca.start").string_value()
             var at = run_dir(pipeline, run)
             if not at:
                 return
@@ -392,7 +392,7 @@ struct KubeRunner(Movable):
                         metrics_location(pipeline, run, name),
                         got[1].as_bytes(),
                     )
-                var role = pod.try_at("/metadata/labels/morca.role")
+                var role = pod.try_at("/metadata/labels/orca.role")
                 if role and role.value().string_value() == "driver":
                     text.write(got[0])
             if not text:
@@ -490,8 +490,8 @@ def _name_of(o: Value) raises -> String:
 
 def _key(o: Value) raises -> String:
     """`<run>-<start>` from an object's labels."""
-    var run = o.try_at("/metadata/labels/morca.run")
-    var start = o.try_at("/metadata/labels/morca.start")
+    var run = o.try_at("/metadata/labels/orca.run")
+    var start = o.try_at("/metadata/labels/orca.start")
     if not run or not start:
         return ""
     return String(run.value().string_value(), "-", start.value().string_value())

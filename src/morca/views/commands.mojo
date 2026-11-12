@@ -65,11 +65,11 @@ def backfill_cmd(name: String, keys: String, rerun: Bool) -> String:
 
 
 def remote_cmd(cmd: String, url: String = "<url>") -> String:
-    """`cmd`, an `morca ...` line, against the UI at `url` from anywhere:
+    """`cmd`, a `morca ...` line, against the UI at `url` from anywhere:
     `morca login <url> && morca --remote <url> ...`. The pages show `<url>`,
     which their script makes the address the page was loaded from."""
     return String(
-        "morca login ", url, " && morca --remote ", url, String(cmd[byte=4:])
+        "morca login ", url, " && morca --remote ", url, String(cmd[byte=5:])
     )
 
 

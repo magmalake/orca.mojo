@@ -73,7 +73,7 @@ out | grep -q "^logged in to $base as alice until 20" || fail "login said: $(out
 [ "$(mode "$MORCA_CREDENTIALS")" = 600 ] || fail "credentials mode $(mode "$MORCA_CREDENTIALS")"
 [ "$(mode "$home/morca")" = 700 ] || fail "credentials' directory mode $(mode "$home/morca")"
 token=$(grep -v '^#' "$MORCA_CREDENTIALS" | cut -f4)
-case "$token" in morca_*) ;; *) fail "not a token: $token" ;; esac
+case "$token" in orca_*) ;; *) fail "not a token: $token" ;; esac
 [ "${#token}" -eq 69 ] || fail "a token of ${#token} characters"
 [ "$(q "SELECT count(*) FROM orca.api_tokens WHERE token_hash = '$token'")" -eq 0 ] \
     || fail "the token is kept as it is"
@@ -167,11 +167,11 @@ p() {
 }
 jar=build/remote-cookies.txt
 curl -s -o /dev/null -c "$jar" -H "Origin: $base" -d 'name=alice&password=correct+horse+battery' "$base/login"
-p 401 -H "Authorization: Bearer morca_$(printf '%064d' 0)"
+p 401 -H "Authorization: Bearer orca_$(printf '%064d' 0)"
 grep -q 'expired or revoked' build/remote-body.txt || fail "a refused token's answer"
 p 401 -H "Authorization: Bearer not-a-token"
 p 401 -H "Authorization: Basic YWxpY2U6eA=="
-p 401 -H "Authorization: Bearer morca_$(printf '%064d' 0)" -b "$jar"
+p 401 -H "Authorization: Bearer orca_$(printf '%064d' 0)" -b "$jar"
 p 403 -H "$auth" -H "Origin: http://evil.example"
 p 403 -b "$jar"
 [ "$(q "SELECT paused FROM orca.pipelines")" = f ] || fail "a refused token paused"

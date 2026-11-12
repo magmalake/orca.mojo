@@ -114,7 +114,7 @@ pixi run test-ec2              # MORCA_RUNNER=ec2 against a stand-in EC2: a head
 pixi run test-placement        # that, within the control instance's limits, beside runs on the stand-in EC2
 ./build/morca register --placement worker:bgent ./build/toy   # its runs on a remote worker of pool bgent (docs/workers.md)
 ./build/morca worker-token create --pool bgent   # that pool's token; then on the worker, with no database:
-MORCA_WORKER_TOKEN=morca_... ./build/morca worker --pool bgent --remote https://morca.example.com
+MORCA_WORKER_TOKEN=orca_... ./build/morca worker --pool bgent --remote https://morca.example.com
 pixi run -e data test-worker   # morca ui, the scheduler and a worker: claims, a killed worker's runs requeued, tokens, versions
 ./build/morca register ./build/toy   # with ./morca.toml if there is one: how each pipeline runs, checked in (below)
 ./build/morca config show toy   # its effective settings and where each came from (--json for scripts)

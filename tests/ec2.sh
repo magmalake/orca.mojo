@@ -199,8 +199,8 @@ python3 tests/metrics_ok.py "$MORCA_LOGS/toy/$toy/metrics/"head-*.jsonl > /dev/n
     || fail "the toy ran beside a fanout run over the budget"
 ud=$(printf '#!/bin/sh\nsleep 600\n' | base64 | tr -d '\n')
 ec2 RunInstances MaxCount=1 InstanceType=t4g.nano "UserData=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$ud")" \
-    TagSpecification.1.Tag.1.Key=morca.run TagSpecification.1.Tag.1.Value=999 \
-    TagSpecification.1.Tag.2.Key=morca.start TagSpecification.1.Tag.2.Value=1 > /dev/null
+    TagSpecification.1.Tag.1.Key=orca.run TagSpecification.1.Tag.1.Value=999 \
+    TagSpecification.1.Tag.2.Key=orca.start TagSpecification.1.Tag.2.Value=1 > /dev/null
 i=0
 while [ "$(running_of 999)" -gt 0 ]; do
     i=$((i + 1)); [ "$i" -lt 60 ] || fail "the instance of no run is still running"; sleep 0.5

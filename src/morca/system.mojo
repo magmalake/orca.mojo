@@ -444,7 +444,7 @@ def trim(mut db: State) raises:
     for t in ["system_minutes", "system_containers"]:
         _ = db.conn.execute(
             String(
-                "DELETE FROM morca.",
+                "DELETE FROM orca.",
                 t,
                 " WHERE minute < now() - make_interval(days => $1::int)",
             ),

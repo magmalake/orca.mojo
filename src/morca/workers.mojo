@@ -19,7 +19,7 @@ pipeline with `fills = "all"` has its fill runs queued the same way, held
 for a worker, at most `fill_max_runs` of them queued or running across the
 pool (`morca.fill`).
 
-**Tokens.** A worker token is an API token (`morca.tokens`: `morca_` and 64
+**Tokens.** A worker token is an API token (`morca.tokens`: `orca_` and 64
 hex digits, kept only as its SHA-256), in `orca.workers` rather than
 `orca.api_tokens`, scoped to one pool: it can claim that pool's runs and
 make the store calls of the runs it claimed, and nothing else; a user's

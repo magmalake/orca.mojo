@@ -109,7 +109,7 @@ def rebuild_preview(
     except e:
         var why = String(e)
         if why.startswith("morca: "):
-            var rest = String(why[byte=6:])
+            var rest = String(why[byte=7:])
             why = rest^
         return RebuildPreview(why^, List[String](), levels^)
 

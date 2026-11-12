@@ -321,7 +321,7 @@ Resources:
                 Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
                 Condition:
                   StringEquals: {ec2:InstanceType: !Ref AllowedRunTypes}
-                  "Null": {"aws:RequestTag/morca.run": "false"}
+                  "Null": {"aws:RequestTag/orca.run": "false"}
               - Effect: Allow
                 Action: ec2:RunInstances
                 Resource:
@@ -340,7 +340,7 @@ Resources:
                 Action: ec2:TerminateInstances
                 Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
                 Condition:
-                  "Null": {"aws:ResourceTag/morca.run": "false"}
+                  "Null": {"aws:ResourceTag/orca.run": "false"}
               # Its instances, and the boot script it runs (ControlBoot).
               - Effect: Allow
                 Action: [ec2:DescribeInstances, ec2:DescribeLaunchTemplateVersions]

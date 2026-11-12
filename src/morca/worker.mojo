@@ -2,7 +2,7 @@
 `morca ui`'s API.
 
 ```
-MORCA_WORKER_TOKEN=morca_... morca worker --pool bgent --remote https://orca.mlake.dev
+MORCA_WORKER_TOKEN=orca_... morca worker --pool bgent --remote https://orca.mlake.dev
 ```
 
 Every `--poll-seconds` (2) the worker posts its heartbeat to

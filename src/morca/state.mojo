@@ -991,7 +991,7 @@ struct PgStore(Movable, RunStore):
             try:
                 _ = self.db.conn.execute(
                     String(
-                        "INSERT INTO morca.",
+                        "INSERT INTO orca.",
                         "commits" if commit else "reads",
                         " (attempt, table_name, snapshot_id, dataset) VALUES",
                         " ($1, $2, $3, nullif($4, ''))",
