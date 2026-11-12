@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.25.0 - 2026-11-12
+
+- **Breaking: orca is now morca.** The package `morca` (tin morca-mojo), the `morca` command, `morca.toml` and every `MORCA_*` variable replace their orca names, with no fallback. Upgrading means renaming them in a project; deploy/hetzner's `morca-stack` renames a server's keys on its first run. (#384)
+
+- **Images moved to morca-dev:** the runtime image is now `ghcr.io/morca-dev/morca-runtime`, and the repository is `morca-dev/morca`. (#384)
+
+- **Recent runs by batch**: the home page shows each backfill, fill pass or sensor pass as one row, running and failed runs first. (#359)
+
+- **An exited scheduler-old no longer fails the deploy:** `morca-stack apply` first removes a `scheduler-old` or `scheduler-next` left behind that isn't running, saying so, so the overlap and the check go ahead; a running one still waits for `morca-stack drain-old`. (#391)
+
+- **Long Read by lists wrap**: the Written by and Read by cells on Datasets (and the other pipeline lists) wrap between names within a maximum width. (#358)
+
+- **No race in tests/crash.sh**: it waits for the step's error as well as the attempt's. (#386)
+
 ## 0.24.0 - 2026-11-11
 
 - **One run over several workers of a pool**: `workers = N` on a pool pipeline lets a run's dista cluster spread over N more machines, guarded by a token. (#325)
