@@ -98,7 +98,7 @@ jobs:
       # dista compiles from source next door, at the revision orca builds on.
       - uses: actions/checkout@v4
         with:
-          repository: magmalake/dista.mojo
+          repository: morca-dev/dista
           ref: 3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
           path: dista.mojo
       # So does k8s, the scheduler's Kubernetes client.
@@ -238,7 +238,7 @@ jobs:
       project: arm64
 
   # On main: the same, with the project on both architectures, then pushed
-  # as ghcr.io/magmalake/orca-runtime:<sha>. A release tags that image
+  # as ghcr.io/morca-dev/morca-runtime:<sha>. A release tags that image
   # <version> (release.yml), so a release PR's merge commit needs it too.
   # The only job here that can push a package.
   runtime-image-main:
@@ -282,7 +282,7 @@ jobs:
     permissions:
       contents: read
     with:
-      image: ghcr.io/magmalake/orca-example-project
+      image: ghcr.io/morca-dev/morca-example-project
       prepare: sh tests/example-project.sh build/example-project
       context: build/example-project
       configs: build/example-project/orca.toml
@@ -311,7 +311,7 @@ jobs:
     with:
       # A released version's section, which CHANGELOG.md keeps.
       version: "0.23.0"
-      image: ghcr.io/magmalake/orca-example-project
+      image: ghcr.io/morca-dev/morca-example-project
       dry-run: true
 
   # Every fuzz harness under fuzz/, for a short session each, with all bounds
@@ -329,7 +329,7 @@ jobs:
           path: orca.mojo
       - uses: actions/checkout@v4
         with:
-          repository: magmalake/dista.mojo
+          repository: morca-dev/dista
           ref: 3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
           path: dista.mojo
       # Off before setup-pixi restores rattler's git cache: git's
@@ -433,7 +433,7 @@ jobs:
         with:
           path: orca.mojo
       - uses: actions/checkout@v4
-        with: {repository: magmalake/dista.mojo, ref: 3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30, path: dista.mojo}
+        with: {repository: morca-dev/dista, ref: 3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30, path: dista.mojo}
       - uses: actions/checkout@v4
         with: {repository: magmalake/k8s.mojo, ref: 6cb83ce08e02234873f2d09c7501208eedb5589f, path: k8s.mojo}
       - uses: actions/checkout@v4

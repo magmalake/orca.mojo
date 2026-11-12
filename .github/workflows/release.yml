@@ -104,7 +104,7 @@ jobs:
             gh release create "v$VERSION" "$@" --target "$SHA" --title "orca-mojo $VERSION" --notes-file "$notes"
           fi
 
-  # The version's runtime image, ghcr.io/magmalake/orca-runtime:<version>,
+  # The version's runtime image, ghcr.io/morca-dev/morca-runtime:<version>,
   # which project images build FROM: the released commit's image from CI on
   # main, orca-runtime:<sha>, tagged <version>. Nothing is built here, and a
   # commit with no image fails the job rather than getting one built.
@@ -127,7 +127,7 @@ jobs:
       packages: write
     env:
       GH_TOKEN: ${{ github.token }}
-      GHCR_IMAGE: ghcr.io/magmalake/orca-runtime
+      GHCR_IMAGE: ghcr.io/morca-dev/morca-runtime
       SHA: ${{ needs.release.outputs.sha }}
       VERSION: ${{ needs.release.outputs.version }}
     steps:

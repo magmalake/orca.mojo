@@ -55,7 +55,7 @@ grep '^+ hcloud' "$FAKE/out" | grep -E '(^| )orca( |$)|[ ]orca-data( |$)' && fai
 # the tag only if the server has none.
 has "+ ssh root@<server-ip> orca-stack sync --keys settings.env < "
 has "+ ssh root@<server-ip> orca-stack sync tunnel.env < $FAKE/tunnel.env"
-has "+ ssh root@<server-ip> orca-stack configure ORCA_IMAGE=ghcr.io/magmalake/orca .*BUCKET=orca-dev-bkt BACKUP_KEEP=14 GHCR_USER=$"
+has "+ ssh root@<server-ip> orca-stack configure ORCA_IMAGE=ghcr.io/morca-dev/census .*BUCKET=orca-dev-bkt BACKUP_KEEP=14 GHCR_USER=$"
 has "+ ssh root@<server-ip> orca-stack configure --keep-existing ORCA_TAG=latest"
 has "# settings.env from $FAKE/dev.env: AWS_REGION .* ORCA_CONFIG"
 # down.sh --all: the same.

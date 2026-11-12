@@ -2,7 +2,7 @@
 #
 #     jobs:
 #       test:
-#         uses: magmalake/orca.mojo/.github/workflows/project-test.yml@v0.24.0
+#         uses: morca-dev/morca/.github/workflows/project-test.yml@v0.24.0
 #         with: { tasks: "build test" }
 #
 # On each runner (arm64 and amd64 by default): pixi as orca's CI sets it up,

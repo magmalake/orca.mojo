@@ -1,0 +1,1 @@
+- **Images moved to morca-dev:** the runtime image is now `ghcr.io/morca-dev/morca-runtime`, and the repository is `morca-dev/morca`. (#384)

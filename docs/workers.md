@@ -153,7 +153,7 @@ the worker using it is refused and exits. Each claim is a row of
 ## Running a worker
 
 ```sh
-ORCA_WORKER_TOKEN=orca_... ORCA_IMAGE=ghcr.io/magmalake/orca:0.11.0 \
+ORCA_WORKER_TOKEN=orca_... ORCA_IMAGE=ghcr.io/morca-dev/census:0.11.0 \
 ORCA_WAREHOUSE=s3://... ORCA_LOGS=s3://... ORCA_SECRET_FETCH=/etc/orca/fetch-secret \
   orca worker --pool bgent --remote https://orca.mlake.dev
 ```
