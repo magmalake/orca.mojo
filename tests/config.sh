@@ -31,6 +31,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
+one_cluster_test
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy

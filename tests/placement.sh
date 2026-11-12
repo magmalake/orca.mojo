@@ -24,6 +24,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
+one_cluster_test
 mkdir -p build
 for b in toy fanout daily; do
     # shellcheck disable=SC2086

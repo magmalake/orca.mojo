@@ -6,6 +6,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
+one_cluster_test
 mkdir -p build
 dir=$PWD/build/hcloud
 rm -rf "$dir"
