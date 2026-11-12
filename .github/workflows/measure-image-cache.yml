@@ -92,7 +92,7 @@ jobs:
           VARIANT: ${{ matrix.variant }}
           RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}
         run: |
-          set -eu
+          set -eu +o pipefail  # shell: bash runs with -o pipefail
           B="measure-$RUN_KEY"
           echo "B=$B" >> "$GITHUB_ENV"
           docker buildx create --name "$B" --driver docker-container > /dev/null
@@ -177,7 +177,7 @@ jobs:
         env:
           RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}-conc-${{ matrix.leg }}
         run: |
-          set -eu
+          set -eu +o pipefail  # shell: bash runs with -o pipefail
           cp -a census census-src
           echo '# measure-image-cache: a census-only change' >> census-src/src/activity.mojo
           B="measure-$RUN_KEY"
