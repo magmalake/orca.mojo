@@ -9,7 +9,7 @@
 # - both leave an orca.audit row saying so;
 # - a local process the scheduler started whose heartbeat went stale (here
 #   stopped with SIGSTOP) is killed by the scheduler, not left beside its
-#   run's next start.
+#   run's next start, and its run is failed only once it's gone.
 #
 # Needs MORCA_DATABASE_URL (pixi run test-stop starts a throwaway server).
 set -eu
@@ -86,13 +86,16 @@ step_running wait
 run=$(q "SELECT max(id) FROM orca.runs")
 pid=$(q "SELECT split_part(owner, ':', 2) FROM orca.runs WHERE id = $run")
 kill -STOP "$pid"
+# Its run is failed as dead only once the process is gone, killed and
+# reaped (#398): a run failed first, as one beat late under load used to
+# be, kept its process, which nothing killed after. Until it's reaped, a
+# killed process is still there to kill -0, as a zombie.
 until_true "SELECT status = 'failed' FROM orca.runs WHERE id = $run" 300
-i=0
-while kill -0 "$pid" 2> /dev/null; do
-    i=$((i + 1)); [ "$i" -lt 50 ] || fail "pid $pid of run $run is still there"; sleep 0.1
-done
+! kill -0 "$pid" 2> /dev/null || fail "run $run was failed with its pid $pid still there"
 pid=
 grep -q "killed pid [0-9]* of stopping run $run (its heartbeat went stale)" "$log" || fail "the kill wasn't said"
+[ "$(q "SELECT count(*) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $run AND a.error LIKE 'killed: its heartbeat went stale (MORCA_STALE_SECONDS, 2 s)%'")" -eq 1 ] \
+    || fail "the wedged attempt: $(q "SELECT a.status || ' ' || coalesce(a.error, '') FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $run")"
 kill "$sched"
 sched=
 
