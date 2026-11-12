@@ -49,7 +49,7 @@ sqlite:*)
     # Past the stale limit, so a write the lock held up past the busy
     # timeout is retried on the file opened again, not given up on.
     export MORCA_DB_RETRY_SECONDS=${MORCA_DB_RETRY_SECONDS:-5}
-    q() { sqlite3 -cmd '.timeout 5000' "$db" "$(echo "$1" | sed 's/morca\.//g')"; }
+    q() { sqlite3 -cmd '.timeout 5000' "$db" "$(echo "$1" | sed 's/orca\.//g')"; }
     ;;
 *)
     q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }

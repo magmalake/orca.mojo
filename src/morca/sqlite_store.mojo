@@ -8,7 +8,7 @@ operate. A run killed anywhere is resumed from the file as from Postgres,
 by the same `RunStore` code path. The scheduler, the UI and morca's other
 commands stay on Postgres (`morca.state.State` refuses a SQLite URL).
 
-The tables are Postgres's, under the same names without the `morca.` schema,
+The tables are Postgres's, under the same names without the `orca.` schema,
 holding what a pipeline binary writes: steps' inputs and outputs are hex
 text, times are Unix seconds (`julianday` based, to the millisecond).
 

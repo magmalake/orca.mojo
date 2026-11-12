@@ -32,7 +32,7 @@ grep -q "needs --email" ../up.out || fail "up's message: $(cat ../up.out)"
 calls > /dev/null
 "$morca" aws up --email ops@example.com --console-hostname libs.example.dev --zone us-east-2b > ../up.out 2>&1 || fail "up: $(cat ../up.out)"
 got=$(calls)
-echo "$got" | grep -q "aws --region us-east-2 cloudformation deploy --stack-name morca --template-file build/morca-aws/morca.yaml --capabilities CAPABILITY_IAM" \
+echo "$got" | grep -q "aws --region us-east-2 cloudformation deploy --stack-name orca --template-file build/morca-aws/morca.yaml --capabilities CAPABILITY_IAM" \
     || fail "up's deploy: $got"
 echo "$got" | grep -q "DbPassword=[0-9a-f]\{36\} BudgetEmail=ops@example.com ConsoleHostname=libs.example.dev AvailabilityZone=us-east-2b" || fail "up's parameters: $got"
 grep -q "PublicBucket" ../up.out || fail "up didn't print the outputs"
@@ -130,6 +130,6 @@ echo "ok   app"
 if "$morca" aws down > ../down.out 2>&1; then fail "down without --yes"; fi
 if calls | grep -q delete-stack; then fail "down deleted without --yes"; fi
 "$morca" aws down --yes > /dev/null 2>&1 || fail "down --yes"
-calls | grep -q "cloudformation delete-stack --stack-name morca" || fail "down's delete"
+calls | grep -q "cloudformation delete-stack --stack-name orca" || fail "down's delete"
 echo "ok   down"
 echo "ok   aws"

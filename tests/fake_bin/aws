@@ -19,7 +19,7 @@ outputs() {
         [ ! -f "$state/green" ] || printf ' {"OutputKey": "GreenInstance", "OutputValue": "i-0green"},\n'
     fi
     printf ' {"OutputKey": "AddressAllocation", "OutputValue": "eipalloc-0orca"},\n'
-    printf ' {"OutputKey": "Bucket", "OutputValue": "morca-123456789012-us-east-2"},\n'
+    printf ' {"OutputKey": "Bucket", "OutputValue": "orca-123456789012-us-east-2"},\n'
     printf ' {"OutputKey": "SslipUrl", "OutputValue": "https://3-14-15-92.sslip.io"},\n'
     printf ' {"OutputKey": "ConsoleHostname", "OutputValue": "libs.mlake.dev"},\n'
     printf ' {"OutputKey": "PublicBucket", "OutputValue": "mlake-public-123456789012"}]\n'

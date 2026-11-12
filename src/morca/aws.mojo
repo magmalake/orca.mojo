@@ -346,9 +346,10 @@ def lock_morca_version(lock: String) -> String:
         var line = String(raw)
         if line.startswith("- "):
             in_morca = line.startswith("- conda_source: morca-mojo[")
-            var at = line.find("/morca-mojo-")
+            var name = "/morca-mojo-"
+            var at = line.find(name)
             if line.startswith("- conda: ") and at >= 0:
-                var rest = String(line[byte = at + 11 :])
+                var rest = String(line[byte = at + name.byte_length() :])
                 var dash = rest.find("-")
                 if dash > 0:
                     return String(rest[byte=:dash])

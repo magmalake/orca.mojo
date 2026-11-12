@@ -76,7 +76,7 @@ wait_file() {
     done
 }
 json() { curl -fsS -H 'Accept: application/json' "$base$1" || fail "GET $1"; }
-value=s3cr3t-morca-github-token-value
+value=s3cr3t-orca-github-token-value
 export MORCA_RUNNER=ec2 MORCA_EC2_MODE=direct MORCA_EC2_ENDPOINT="http://127.0.0.1:$port"
 export MORCA_SECRETS_ENDPOINT="$MORCA_EC2_ENDPOINT"
 export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test MORCA_EC2_AMI=ami-test

@@ -82,7 +82,7 @@ grep -qF "replace i-0control (slot blue) with a new instance in slot green" ../p
 grep -qF "GreenSlot=true" ../plan.out && grep -qF "ActiveControl=green" ../plan.out && grep -qF "BlueSlot=false" ../plan.out || fail "the plan's deploys"
 grep -qF "a smoke run, daily=2024-01-01" ../plan.out || fail "the plan's smoke run"
 echo "$got" | grep -qE "send-command|cloudformation deploy|stop-instances" && fail "--plan did something: $got"
-[ ! -f build/morca-aws/replace-morca.state ] || fail "--plan wrote a state file"
+[ ! -f build/morca-aws/replace-orca.state ] || fail "--plan wrote a state file"
 echo "ok   plan"
 
 # Refused while a run is live, and while a pipeline isn't paused; nothing
@@ -112,8 +112,8 @@ got=$(calls)
 backup=$(echo "$got" | grep -F '# morca-replace backup')
 echo "$backup" | grep -qF 'pg_dump -U orca -d orca -n orca -Fc' || fail "no pg_dump: $backup"
 echo "$backup" | grep -qF 'pg_restore -U orca -d morca_verify' || fail "the dump isn't verified: $backup"
-echo "$backup" | grep -qE "s3://morca-123456789012-us-east-2/backups/morca/[0-9]{8}T[0-9]{6}Z" || fail "the backup's place: $backup"
-echo "$backup" | grep -qF 's3://morca-123456789012-us-east-2/backups/morca/restore-green' || fail "no pointer for green: $backup"
+echo "$backup" | grep -qE "s3://orca-123456789012-us-east-2/backups/orca/[0-9]{8}T[0-9]{6}Z" || fail "the backup's place: $backup"
+echo "$backup" | grep -qF 's3://orca-123456789012-us-east-2/backups/orca/restore-green' || fail "no pointer for green: $backup"
 echo "$backup" | grep -qF "console census.example.dev 8080" || fail "the console isn't carried over: $backup"
 launch=$(echo "$got" | grep -F 'cloudformation deploy' | head -1)
 for p in GreenSlot=true BlueSlot=true ActiveControl=blue GreenAmi=ami-0new BlueAmi=ami-0old ControlEnv=DISTA_WORKER_SLOTS=4 \
@@ -128,11 +128,11 @@ for c in "replaced.sites" "/var/lib/orca/restored" "orca.schema_version" "http:/
 done
 in_order "$got" "# morca-replace quiet" "# morca-replace freeze" "# morca-replace backup" " GreenSlot=true" \
     "# morca-replace boot" "# morca-replace check" " ActiveControl=green" "ec2 describe-addresses" \
-    "ec2 stop-instances --instance-ids i-0control" "s3 rm --only-show-errors s3://morca-123456789012-us-east-2/backups/morca/restore-green" \
+    "ec2 stop-instances --instance-ids i-0control" "s3 rm --only-show-errors s3://orca-123456789012-us-east-2/backups/orca/restore-green" \
     "curl -fsS -o /dev/null --max-time 10 https://3-14-15-92.sslip.io"
 echo "$got" | grep -qF "BlueSlot=false" && fail "retired the old instance at once"
 grep -q "kept until" ../rc.out || fail "no rollback window: $(cat ../rc.out)"
-grep -q "^20[0-9-]*T.* switch: done" build/morca-aws/replace-morca.log || fail "the log has no switch"
+grep -q "^20[0-9-]*T.* switch: done" build/morca-aws/replace-orca.log || fail "the log has no switch"
 echo "ok   replace"
 
 # Within the window --resume retires nothing.
@@ -148,10 +148,10 @@ in_order "$got" "# morca-replace rollback-quiet" "# morca-replace rollback-freez
 echo "$got" | grep -F '# morca-replace rollback-freeze' | grep -qF "i-0green" || fail "froze the wrong instance"
 restore=$(echo "$got" | grep -F '# morca-replace rollback-restore')
 echo "$restore" | grep -qF "i-0control" || fail "restored on the wrong instance"
-echo "$restore" | grep -qE "backups/morca/[0-9]{8}T[0-9]{6}Z-back'?\.dump" || fail "the rollback's restore: $restore"
+echo "$restore" | grep -qE "backups/orca/[0-9]{8}T[0-9]{6}Z-back'?\.dump" || fail "the rollback's restore: $restore"
 echo "$restore" | grep -qF "orca-refresh" || fail "the rollback doesn't start the scheduler"
 [ "$(cat "$FAKE_AWS_STATE/active")" = blue ] && [ ! -f "$FAKE_AWS_STATE/green" ] || fail "the stack after the rollback"
-[ ! -f build/morca-aws/replace-morca.state ] || fail "the state file is left after the rollback"
+[ ! -f build/morca-aws/replace-orca.state ] || fail "the state file is left after the rollback"
 echo "ok   rollback after the switch"
 
 # Again, then retire once the window has passed (MORCA_NOW, far ahead).
@@ -161,7 +161,7 @@ MORCA_NOW=4102444800 "$morca" aws replace-control --resume > ../rc.out 2>&1 || f
 got=$(calls)
 echo "$got" | grep -F "cloudformation deploy" | grep -qF " BlueSlot=false" || fail "didn't retire blue: $got"
 [ -f "$FAKE_AWS_STATE/blue-off" ] && [ "$(cat "$FAKE_AWS_STATE/active")" = green ] || fail "the stack after retiring"
-ls build/morca-aws/replace-morca.state.done-* > /dev/null || fail "the state file isn't kept as done"
+ls build/morca-aws/replace-orca.state.done-* > /dev/null || fail "the state file isn't kept as done"
 echo "ok   retire"
 
 # From green back to blue, a check that fails, and a rollback before the
