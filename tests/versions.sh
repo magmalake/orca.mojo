@@ -36,6 +36,15 @@ fail() {
     || fail "describe's source: $(./build/toy-c1 describe | jq -c .source)"
 ./build/toy describe | jq -e '.source == {"repo": "", "commit": "", "dirty": false}' > /dev/null \
     || fail "describe without a source"
+# Built without the defines, a binary reads them from its environment (an
+# image's ENV); a define still wins, and a commit that isn't hex is dropped.
+MORCA_SOURCE=$repo MORCA_COMMIT=$c2 ./build/toy describe \
+    | jq -e ".source == {\"repo\": \"$repo\", \"commit\": \"$c2\", \"dirty\": false}" > /dev/null \
+    || fail "describe's source from the environment: $(MORCA_SOURCE=$repo MORCA_COMMIT=$c2 ./build/toy describe | jq -c .source)"
+MORCA_SOURCE=elsewhere MORCA_COMMIT=$c2 ./build/toy-c1 describe | jq -e ".source.commit == \"$c1\" and .source.repo == \"$repo.git\"" > /dev/null \
+    || fail "the environment overrode the defines"
+MORCA_COMMIT=not-a-sha ./build/toy describe | jq -e '.source.commit == ""' > /dev/null \
+    || fail "a commit that isn't hex from the environment"
 [ "$(./build/toy-c1 describe | jq -r .registry_hash)" = "$(./build/toy describe | jq -r .registry_hash)" ] \
     || fail "the source changed the registry hash"
 

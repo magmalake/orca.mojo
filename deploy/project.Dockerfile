@@ -32,7 +32,8 @@
 # morca-runtime:0.24.0 .` in morca, then --build-arg MORCA_RUNTIME=morca-runtime).
 #
 # MORCA_SOURCE and MORCA_COMMIT say what the pipelines were built from, which
-# each run records and morca ui links.
+# each run records and morca ui links. They're set in the image's environment,
+# not compiled in.
 #
 # Everything is built with line tables (-g1) and the image has
 # llvm-symbolizer, so a crash's stack dump in a run's driver.log names each
@@ -59,18 +60,14 @@ COPY pixi.toml pixi.lock ./
 RUN pixi install --locked
 # The runtime's morca, for `morca locate` when the project has no bin/scheduler.mojo.
 COPY --from=runtime /opt/morca /opt/morca-runtime
-# Declared after `pixi install`: a RUN sees every ARG declared before it, so a
-# new MORCA_COMMIT on each commit would otherwise rerun it.
 ARG MOJO_TARGET_CPU=neoverse-n1
-ARG MORCA_SOURCE=""
-ARG MORCA_COMMIT=""
 COPY . .
 RUN mkdir -p /out/bin /out/pipelines \
     && pixi run sh -c 'inc=""; [ -d src ] && inc="-I src"; \
         for f in bin/*.mojo; do [ -f "$f" ] || continue; n=$(basename "$f" .mojo); [ "$n" = scheduler ] && n=morca; \
             mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc "$f" -o "/out/bin/$n" || exit 1; done; \
         for p in pipelines/*.mojo; do [ -f "$p" ] || continue; n=$(basename "$p" .mojo); \
-            mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc -D MORCA_SOURCE='"${MORCA_SOURCE}"' -D MORCA_COMMIT='"${MORCA_COMMIT}"' \
+            mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc \
                 "$p" -o "/out/pipelines/$n" || exit 1; done; \
         morca=/out/bin/morca; [ -x "$morca" ] || morca=/opt/morca-runtime/bin/morca; \
         if ls /out/pipelines/* > /dev/null 2>&1; then \
@@ -92,3 +89,9 @@ FROM runtime
 COPY --from=build /out/lib /opt/morca/lib
 COPY --from=build /out/bin /opt/morca/bin
 COPY --from=build /out/pipelines /opt/morca/pipelines
+# What the pipelines were built from, read at run time (morca.source), not
+# compiled in: a new commit then changes no program, and the build above
+# stays cacheable. Declared last, so a new commit reruns only this layer.
+ARG MORCA_SOURCE=""
+ARG MORCA_COMMIT=""
+ENV MORCA_SOURCE=${MORCA_SOURCE} MORCA_COMMIT=${MORCA_COMMIT}

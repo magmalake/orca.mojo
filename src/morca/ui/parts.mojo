@@ -164,7 +164,7 @@ def source_html(mut h: Html, v: VersionRow):
     """The commit, linked to its tree where the host is known."""
     if not v.commit:
         h.raw('<span class="muted">not recorded (built without')
-        h.raw(" <code>-D MORCA_COMMIT</code>)</span>")
+        h.raw(" <code>-D MORCA_COMMIT</code> or <code>MORCA_COMMIT</code>)</span>")
         return
     var url = commit_url(v.source, v.commit)
     var short = String(v.commit[byte = : min(12, v.commit.byte_length())])

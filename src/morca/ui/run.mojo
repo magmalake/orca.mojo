@@ -537,7 +537,8 @@ def _run_code_card(mut h: Html, mut db: State, r: RunRow) raises:
             "Source",
             "run-source",
             (
-                "The commit its binary was built from (-D MORCA_COMMIT), in"
+                "The commit its binary was built from (-D MORCA_COMMIT, or the"
+                " image's MORCA_COMMIT), in"
                 " which repository, and the image it ran in, if any."
             ),
             "versions",
