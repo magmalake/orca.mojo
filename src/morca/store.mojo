@@ -139,7 +139,9 @@ def db_retry_seconds() -> Float64:
     over anyway."""
     try:
         return Float64(
-            getenv("MORCA_DB_RETRY_SECONDS", getenv("MORCA_STALE_SECONDS", "30"))
+            getenv(
+                "MORCA_DB_RETRY_SECONDS", getenv("MORCA_STALE_SECONDS", "30")
+            )
         )
     except:
         return 30.0

@@ -503,7 +503,8 @@ def grant_facts(mut h: Html, r: RunResources):
 
 
 def usage_facts(mut h: Html, u: Usage, live: Bool):
-    """A run's or an attempt's Peak memory and CPU used facts (`morca.usage`)."""
+    """A run's or an attempt's Peak memory and CPU used facts (`morca.usage`).
+    """
     var none = String(
         "recorded when its process ends" if live else "not measured"
     )

@@ -617,7 +617,11 @@ struct PoolScaler(Movable):
             .int64("id")
         )
         var script = boot_script(
-            remote, pool, name, issued.token, getenv("MORCA_POOL_WORKER_COMMAND")
+            remote,
+            pool,
+            name,
+            issued.token,
+            getenv("MORCA_POOL_WORKER_COMMAND"),
         )
         var arch = String()
         try:

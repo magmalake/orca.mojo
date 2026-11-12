@@ -490,7 +490,8 @@ def _value(key: String) -> StaticString:
         return "The fill: the scheduler working through the range by itself."
     if key == "placement:default":
         return (
-            "On the scheduler's runner (MORCA_RUNNER: local, kubernetes or ec2)."
+            "On the scheduler's runner (MORCA_RUNNER: local, kubernetes or"
+            " ec2)."
         )
     if key == "placement:local":
         return "Beside the scheduler, on its machine."
@@ -506,7 +507,9 @@ def _value(key: String) -> StaticString:
     if key == "placement:worker":
         return "On a remote worker of that pool, which claims the run."
     if key == "from:code default":
-        return "Nothing set it: the pipeline's code, or morca, has this default."
+        return (
+            "Nothing set it: the pipeline's code, or morca, has this default."
+        )
     if key == "from:morca.toml":
         return "Set in morca.toml, in the table shown."
     if key == "from:flag":

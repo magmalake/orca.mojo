@@ -93,7 +93,7 @@ def test_remote_url_https() raises:
     assert_equal(
         remote_url("https://orca.mlake.dev/"), "https://orca.mlake.dev"
     )
-    assert_equal(remote_url("HTTPS://Morca.Mlake.Dev"), "https://orca.mlake.dev")
+    assert_equal(remote_url("HTTPS://Orca.Mlake.Dev"), "https://orca.mlake.dev")
     assert_equal(
         remote_url("https://orca.mlake.dev:443"), "https://orca.mlake.dev"
     )

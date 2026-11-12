@@ -789,7 +789,10 @@ def _config_binaries(file: ProjectConfig) raises -> List[String]:
         dir = String(beside, "/pipelines")
         if not exists(dir):
             raise Error(
-                "morca: no pipeline binaries: set MORCA_PIPELINES_DIR, put them",
+                (
+                    "morca: no pipeline binaries: set MORCA_PIPELINES_DIR, put"
+                    " them"
+                ),
                 " in ",
                 dir,
                 ", or name them: morca register <binary>...",

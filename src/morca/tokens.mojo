@@ -84,7 +84,10 @@ def token_days(asked: Int = 0) raises -> Int:
         raise Error("morca: MORCA_API_TOKEN_DAYS isn't a count of days")
     if most < 1 or most > MAX_TOKEN_DAYS:
         raise Error(
-            "morca: MORCA_API_TOKEN_DAYS is 1 to ", MAX_TOKEN_DAYS, ", not ", most
+            "morca: MORCA_API_TOKEN_DAYS is 1 to ",
+            MAX_TOKEN_DAYS,
+            ", not ",
+            most,
         )
     if asked >= 1 and asked < most:
         return asked

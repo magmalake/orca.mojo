@@ -152,7 +152,9 @@ def config() raises -> Config:
         _number("MORCA_WATCHDOG_IDLE_WORKERS", Float64(c.idle_workers))
     )
     c.failed = Int(_number("MORCA_WATCHDOG_FAILED", Float64(c.failed)))
-    c.failed_percent = _number("MORCA_WATCHDOG_FAILED_PERCENT", c.failed_percent)
+    c.failed_percent = _number(
+        "MORCA_WATCHDOG_FAILED_PERCENT", c.failed_percent
+    )
     c.failed_min = Int(
         _number("MORCA_WATCHDOG_FAILED_MIN", Float64(c.failed_min))
     )

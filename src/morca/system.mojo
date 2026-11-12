@@ -300,7 +300,9 @@ struct Archive(Movable):
         self.dirty = List[String]()
         self.next = 0
         try:
-            self.seconds = Float64(getenv("MORCA_CONTROL_UPLOAD_SECONDS", "300"))
+            self.seconds = Float64(
+                getenv("MORCA_CONTROL_UPLOAD_SECONDS", "300")
+            )
         except:
             self.seconds = 300.0
 

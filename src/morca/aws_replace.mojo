@@ -464,8 +464,8 @@ def _check(prefix: String, smoke: String) -> List[String]:
             ' last 10 minutes"'
         ),
         (
-            "docker exec scheduler morca status > /dev/null || bad 'morca status"
-            " fails'"
+            "docker exec scheduler morca status > /dev/null || bad 'morca"
+            " status fails'"
         ),
         String(_SAFE_ENV, " > /var/lib/orca/new.env"),
         "missing=$(comm -23 /var/lib/orca/replaced.env /var/lib/orca/new.env)",
@@ -958,8 +958,8 @@ def _retire(o: _Opts, mut st: _State) raises -> Int:
                 " is kept until ",
                 _when(until),
                 (
-                    "; then morca aws replace-control --resume terminates it, or"
-                    " --rollback goes back to it"
+                    "; then morca aws replace-control --resume terminates it,"
+                    " or --rollback goes back to it"
                 ),
             )
         )
@@ -1077,7 +1077,9 @@ def replace_control(args: List[String]) raises -> Int:
                 or c == ord("-")
                 or c == ord(".")
             ):
-                print("morca aws replace-control: not a pipeline name:", o.smoke)
+                print(
+                    "morca aws replace-control: not a pipeline name:", o.smoke
+                )
                 return 2
     var st = _State(o.stack)
     if o.plan:

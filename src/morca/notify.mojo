@@ -643,7 +643,10 @@ def notify_html(mut h: Html, on: Bool, sent: List[Sent]):
     h.raw("<h2>Alerts</h2>")
     if not on:
         h.raw(
-            '<p class="muted">Not configured: set <code>MORCA_NOTIFY_URL</code>',
+            (
+                '<p class="muted">Not configured: set'
+                " <code>MORCA_NOTIFY_URL</code>"
+            ),
             " (an ntfy topic URL) to get a push when the watchdog trips, a",
             " run fails, a fill stalls, the disk fills or a worker is lost;",
             " <code>morca notify test</code> sends a test message.</p>",

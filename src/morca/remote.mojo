@@ -190,7 +190,9 @@ def credentials_path() raises -> String:
     if not config:
         var home = getenv("HOME")
         if not home:
-            raise Error("morca: no HOME for the credentials (MORCA_CREDENTIALS)")
+            raise Error(
+                "morca: no HOME for the credentials (MORCA_CREDENTIALS)"
+            )
         config = String(home, "/.config")
     return String(config, "/morca/credentials")
 
@@ -496,7 +498,9 @@ def login_command(args: List[String], target: String) raises -> Int:
         else:
             raise Error("morca: unknown argument to login: ", a)
     if not url:
-        raise Error("morca: login needs the UI's URL: morca login https://<host>")
+        raise Error(
+            "morca: login needs the UI's URL: morca login https://<host>"
+        )
     var path = credentials_path()
     var creds = read_credentials(path)
     if not user:

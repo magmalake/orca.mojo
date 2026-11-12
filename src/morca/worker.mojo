@@ -267,7 +267,9 @@ struct Worker(Movable):
             env.append(String("MORCA_IMAGE=", self.image))
         env.append(String("MORCA_STATE_URL=", self.api.url))
         env.append(String("MORCA_STATE_TOKEN=", self.token))
-        env.append(String("MORCA_WORKER_PID=", external_call["getpid", c_int]()))
+        env.append(
+            String("MORCA_WORKER_PID=", external_call["getpid", c_int]())
+        )
         env.append(String("MORCA_RUN=", spec.run))
         makedirs(self.dir, exist_ok=True)
         var stage = String(

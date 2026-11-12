@@ -233,7 +233,10 @@ def config_html(
         h.raw("</code>.")
     else:
         h.raw(
-            "Not registered from morca.toml: from <code>morca register</code>'s",
+            (
+                "Not registered from morca.toml: from <code>morca"
+                " register</code>'s"
+            ),
             " flags, each left out keeping what was registered.",
         )
     h.raw("</p>")
@@ -605,7 +608,10 @@ def export_toml(mut db: State) raises -> String:
     each registered pipeline holding what's registered for it beyond the
     defaults, which registering from it again gives back."""
     var out = String(
-        "# morca.toml, written by `morca config export` from the registrations\n",
+        (
+            "# morca.toml, written by `morca config export` from the"
+            " registrations\n"
+        ),
         "# in morca's database. `morca register` reads it (morca.config).\n",
     )
     for r in db.conn.query(_SHOWN_SQL, Params().text("")):

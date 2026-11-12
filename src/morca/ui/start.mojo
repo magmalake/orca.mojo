@@ -7,7 +7,12 @@ from morca.html import Html, url_encode
 from morca.ui.layout import cmd_box, docs_link
 from morca.views.commands import backfill_cmd, remote_cmd, shell_quote
 from morca.views.pipelines import PipelineRow
-from morca.views.start import StartPreview, one_run_line, preview_line, unit_word
+from morca.views.start import (
+    StartPreview,
+    one_run_line,
+    preview_line,
+    unit_word,
+)
 from morca.timekeys import example_of
 
 

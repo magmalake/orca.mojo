@@ -449,7 +449,9 @@ struct KubeRunner(Movable):
                 "SELECT id || '-' || starts AS k FROM orca.runs WHERE status <>"
                 " 'running' AND ended > now() - make_interval(secs => $1)"
             ),
-            Params().float64(Float64(getenv("MORCA_KUBE_SETTLE_SECONDS", "30"))),
+            Params().float64(
+                Float64(getenv("MORCA_KUBE_SETTLE_SECONDS", "30"))
+            ),
         ):
             settling[r.text("k")] = True
         var n = 0
