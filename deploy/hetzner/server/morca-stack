@@ -121,7 +121,26 @@ safe() {
 
 conf_get() { # KEY: its value in stack.conf, or empty
     [ -f "$CONF/stack.conf" ] || return 0
-    sed -n "s/^$1=//p" "$CONF/stack.conf" | tail -n 1
+    _cv=$(sed -n "s/^$1=//p" "$CONF/stack.conf" | tail -n 1)
+    # A server not migrated yet (orca_conf) still has MORCA_X as ORCA_X.
+    if [ -z "$_cv" ] && orca_conf; then
+        case "$1" in MORCA_*) _cv=$(sed -n "s/^ORCA_${1#MORCA_}=//p" "$CONF/stack.conf" | tail -n 1) ;; esac
+    fi
+    [ -z "$_cv" ] || printf '%s\n' "$_cv"
+}
+
+orca_conf() { # stack.conf still has orca's ORCA_* keys: migrate_orca hasn't run
+    [ -f "$CONF/stack.conf" ] && grep -q '^ORCA_' "$CONF/stack.conf"
+}
+
+# need_morca_image IMAGE:TAG: refuses an image from before the rename to
+# morca (#384), whose scheduler isn't /opt/morca/bin/morca, before anything
+# changes: started, it would leave the stack with no scheduler.
+need_morca_image() {
+    login
+    pull "$1"
+    docker run --rm --entrypoint test "$1" -x /opt/morca/bin/morca > /dev/null 2>&1 \
+        || die "$1 predates the morca rename (#384): it has no /opt/morca/bin/morca; deploy it with orca-hetzner 0.24.x"
 }
 
 conf_set() { # KEY VALUE
@@ -205,7 +224,13 @@ cmd_configure() {
         fi
         [ "$old" != "$v" ] || continue
         echo "morca-stack: $k ${old:-(unset)} -> ${v:-(unset)}"
-        if [ -z "$v" ]; then conf_unset "$k"; else conf_set "$k" "$v"; fi
+        # Until apply migrates the server (migrate_orca), its keys keep
+        # orca's names, so orca-hetzner 0.24.x can still deploy there.
+        sk=$k
+        if orca_conf; then
+            case "$k" in MORCA_*) sk=ORCA_${k#MORCA_} ;; esac
+        fi
+        if [ -z "$v" ]; then conf_unset "$sk"; else conf_set "$sk" "$v"; fi
     done
 }
 
@@ -365,7 +390,7 @@ tags_now() {
 }
 
 tags_line() { # FILE: its tags on one line: "T" if the apps run the morca tag, else "morca T, console U"
-    awk '$1 == "morca" { o = $2 } $1 == "app" { a = a ", " $2 " " $3; if ($3 != o) d = 1 } END { print d ? "morca " o a : o }' "$1"
+    awk '$1 == "morca" || $1 == "orca" { o = $2 } $1 == "app" { a = a ", " $2 " " $3; if ($3 != o) d = 1 } END { print d ? "morca " o a : o }' "$1"
 }
 
 cmd_tags() {
@@ -739,6 +764,7 @@ cmd_plan() {
     fi
     apply_args "$@"
     [ "$dbonly" = 0 ] || die "plan: --db-only starts only Postgres"
+    need_morca_image "$(conf_get MORCA_IMAGE):${newtag:-$(conf_get MORCA_TAG)}"
     desired
     ENVDIR=$CONF/plan.d
     rm -rf "$ENVDIR"
@@ -791,12 +817,18 @@ EOF
 }
 
 cmd_apply() {
+    apply_args "$@"
+    # Nothing changes before the image is known to be morca's; only then is
+    # a server from before the rename migrated (once).
+    if [ "$dbonly" = 0 ]; then
+        need_morca_image "$(conf_get MORCA_IMAGE):${newtag:-$(conf_get MORCA_TAG)}"
+        migrate_orca
+    fi
     # A stack applied before deployed was kept: what it runs is its conf.
     # Not after the rename (migrate_orca): those tags can't be rolled back to.
     if [ ! -f "$CONF/deployed" ] && [ ! -f "$CONF/renamed" ] && [ -f "$STATE/applied" ] && [ -n "$(conf_get MORCA_TAG)" ]; then
         tags_now > "$CONF/deployed"
     fi
-    apply_args "$@"
     [ "${MORCA_STACK_TEST:-}" = 1 ] || mountpoint -q "$DATA" || die "$DATA (the Volume) isn't mounted; Postgres must not start on the root disk"
     # Before the overlap's check for a scheduler-old still draining.
     remove_exited
@@ -983,7 +1015,7 @@ cmd_can_overlap() {
     fi
     safe "$t"
     [ "$(conf_get OVERLAP)" = 1 ] || { echo "no: OVERLAP isn't 1 in stack.conf"; return 1; }
-    [ ! -f "$CONF/renamed" ] || { echo "no: the first deploy after the orca -> morca rename (#384) replaces the scheduler"; return 1; }
+    ! orca_conf && [ ! -f "$CONF/renamed" ] || { echo "no: the first deploy after the orca -> morca rename (#384) replaces the scheduler"; return 1; }
     [ "$(docker inspect -f '{{.State.Running}}' scheduler 2> /dev/null)" = true ] \
         || { echo "no: no scheduler is running"; return 1; }
     # One that has exited holds no runs, and apply removes it first.
@@ -1396,7 +1428,8 @@ cmd_checked() {
     cat "$STATE/checked"
 }
 
-# Once, on the first run after the orca -> morca rename (#384): stack.conf's
+# Once, on the first apply after the orca -> morca rename (#384), and only
+# once need_morca_image has passed: stack.conf's
 # and settings.env's ORCA_* keys become MORCA_* (each file as it was is kept
 # as NAME.orca). The tags deployed before can't be rolled back to, since
 # their images read ORCA_*, so deployed and deployed.prev are set aside as
@@ -1420,8 +1453,6 @@ migrate_orca() {
         done
     fi
 }
-migrate_orca
-
 sub=${1:-}
 [ $# -eq 0 ] || shift
 case "$sub" in

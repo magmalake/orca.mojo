@@ -29,7 +29,9 @@
 #
 # morca-stack check: the registrations are toy and manual1, binaries
 # /opt/morca/pipelines/<name>, paused as $FAKE/paused says; $FAKE/unregistered
-# makes there be none; `exec scheduler test -x PATH` fails for a path listed
+# makes there be none; an image listed in $FAKE/pre-rename has no
+# /opt/morca/bin/morca (from before the rename, #384);
+# `exec scheduler test -x PATH` fails for a path listed
 # in $FAKE/no-binary; `morca start P K` queues run 70N (N counts them, in
 # $FAKE/canary.log), whose status is $FAKE/canary-status/<P> or succeeded.
 echo "docker $*" >> "$FAKE/docker.log"
@@ -45,6 +47,10 @@ C=$FAKE/containers
 all="$*"
 case "$all" in
     *"pg_isready"*) exit 0 ;;
+    "run --rm --entrypoint test "*" -x /opt/morca/bin/morca")
+        ref=${all#run --rm --entrypoint test }
+        ! grep -qxF "${ref%% *}" "$FAKE/pre-rename" 2> /dev/null || exit 1
+        ;;
     *"count(*) FROM orca.runs WHERE status = 'running' AND coalesce(placement, '') NOT LIKE 'worker:%'"*)
         cat "$FAKE/running" 2> /dev/null || echo 0
         ;;

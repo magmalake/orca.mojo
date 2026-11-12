@@ -625,6 +625,23 @@ rollback and a deploy forward again run them again. A dry run prints the
 reach the server. An image whose morca has no `morca upgrade` (before 0.23)
 has no steps.
 
+### The first deploy after the rename to morca
+
+A server set up with orca-hetzner (0.24.x and before) has `ORCA_*` keys and
+runs images whose scheduler is `/opt/orca/bin/orca`. With these scripts:
+
+- `morca-stack plan` and `apply` refuse an image with no
+  `/opt/morca/bin/morca` before anything changes, so deploy.sh stops before
+  it pauses anything. Deploy such an image with orca-hetzner 0.24.x.
+- The first `apply` of a morca image renames `stack.conf`'s and
+  `settings.env`'s `ORCA_*` keys to `MORCA_*` (keeping each file as
+  `NAME.orca`), and replaces the scheduler after a quiesce, without an
+  overlap. Until then `configure` keeps writing orca's key names, and
+  `status`, `plan` and `tags` change nothing.
+- The orca deploy before can't be rolled back to: its images read `ORCA_*`.
+  Its tags are in `/etc/orca/deployed.prev.orca`.
+- `hetzner.env` needs `MORCA_*` names; deploy.sh refuses `ORCA_*` ones.
+
 ## Rolling back
 
 **What is kept.** Each apply that changes a tag records the tags it

@@ -991,32 +991,72 @@ has "deploy.sh: stack morca, settings $pkg/hetzner.env, scripts 9.8.7"
 has "/usr/local/sbin/morca-stack < $pkg/server/morca-stack"
 has "systemctl daemon-reload && rm -f /usr/local/sbin/orca-stack"
 
-# A server from before the rename to morca (#384): its ORCA_* keys become
-# MORCA_* once, the files as they were are kept, and the orca tags deployed
-# before can't be rolled back to.
+# deploy.sh with an image from before the rename (#384): refused by the
+# plan, before it pauses or stops anything.
+echo "img:pre4444" > "$FAKE/pre-rename"
+cp "$MORCA_CONF/stack.conf" "$FAKE/stack.conf.before"
+n=$(wc -l < "$FAKE/docker.log")
+deploy pre4444 && fail "deployed an image from before the rename"
+has "img:pre4444 predates the morca rename (#384)"
+! tail -n +"$((n + 1))" "$FAKE/docker.log" | grep -qE 'morca pause|stop|rm -f' || fail "the refused deploy paused or stopped something: $(tail -n +"$((n + 1))" "$FAKE/docker.log")"
+cmp -s "$MORCA_CONF/stack.conf" "$FAKE/stack.conf.before" || fail "the refused deploy changed stack.conf"
+rm -f "$FAKE/pre-rename"
+
+# A server from before the rename to morca (#384): its stack.conf and
+# settings.env with orca's ORCA_* keys, its tags as orca lines. Looking at it
+# changes nothing; an image from before the rename is refused before
+# anything changes; configure keeps orca's key names; the first apply of a
+# morca image renames the keys once, keeps the files as they were, and the
+# orca deploy before can't be rolled back to.
 old="$FAKE/old-conf"
-mkdir -p "$old"
-printf 'ORCA_IMAGE=img\nORCA_TAG=old1111\nORCA_PREV_TAG=old0000\nOVERLAP=1\n' > "$old/stack.conf"
-printf 'MORCA_UNTOUCHED=1\nORCA_LOGS=s3://bkt/logs\nAWS_REGION=fsn1\n' > "$old/settings.env"
+rm -rf "$old"
+cp -Rp "$MORCA_CONF" "$old"
+for f in stack.conf settings.env; do sed 's/^MORCA_/ORCA_/' "$MORCA_CONF/$f" > "$old/$f"; done
+grep -v '^ORCA_TAG=' "$old/stack.conf" > "$old/stack.conf.new"
+printf 'ORCA_TAG=old1111\nORCA_PREV_TAG=old0000\n' >> "$old/stack.conf.new"
+mv "$old/stack.conf.new" "$old/stack.conf"
+rm -f "$old/renamed" "$old"/*.orca
 echo "orca old1111" > "$old/deployed"
 echo "orca old0000" > "$old/deployed.prev"
-MORCA_CONF="$old" stack tags > "$FAKE/out" 2>&1 || fail "morca-stack tags on an orca server"
-has "stack.conf: renamed its ORCA_\* keys to MORCA_\*"
-grep -qx MORCA_TAG=old1111 "$old/stack.conf" || fail "stack.conf: $(cat "$old/stack.conf")"
-grep -qx OVERLAP=1 "$old/stack.conf" || fail "stack.conf lost OVERLAP"
+os() { MORCA_CONF="$old" stack "$@"; }
+snap() { rm -rf "$FAKE/old-snap"; cp -Rp "$old" "$FAKE/old-snap"; }
+same() { diff -r "$FAKE/old-snap" "$old" > "$FAKE/old.diff" 2>&1 || fail "$1 changed the orca server: $(cat "$FAKE/old.diff")"; }
+snap
+os tags > "$FAKE/out" 2>&1 || fail "morca-stack tags on an orca server"
+has "old1111"
+same "tags"
+os status > "$FAKE/out" 2>&1 || true
+same "status"
+echo "img:old2222" > "$FAKE/pre-rename"
+os plan --tag old2222 > "$FAKE/out" 2>&1 && fail "planned an image from before the rename"
+has "img:old2222 predates the morca rename (#384)"
+same "a refused plan"
+os apply --tag old2222 > "$FAKE/out" 2>&1 && fail "applied an image from before the rename"
+has "img:old2222 predates the morca rename (#384): it has no /opt/morca/bin/morca; deploy it with orca-hetzner 0.24.x"
+same "a refused apply"
+os configure HEALTH_TIMEOUT=0 OVERLAP=1 MORCA_IMAGE=img2 > /dev/null || fail "configure on an orca server"
+os can-overlap --tag new3333 > "$FAKE/out" 2>&1 && fail "overlapped the first deploy after the rename"
+has "the first deploy after the orca -> morca rename"
+grep -qx ORCA_IMAGE=img2 "$old/stack.conf" || fail "configure didn't keep orca's key name: $(cat "$old/stack.conf")"
+! grep -q '^MORCA_' "$old/stack.conf" || fail "configure wrote a MORCA_ key before the migration"
+os configure OVERLAP=0 MORCA_IMAGE=img > /dev/null || fail "configure on an orca server again"
+[ ! -f "$old/renamed" ] && [ ! -f "$old/stack.conf.orca" ] || fail "configure migrated the server"
+os apply --tag new3333 > "$FAKE/out" 2>&1 || fail "the first apply of a morca image on an orca server"
+has "stack.conf: renamed its ORCA_\\* keys to MORCA_\\*"
+has "applied img:new3333"
+grep -qx MORCA_TAG=new3333 "$old/stack.conf" || fail "stack.conf: $(cat "$old/stack.conf")"
 ! grep -q PREV_TAG "$old/stack.conf" || fail "stack.conf kept a PREV_TAG"
-grep -qx MORCA_LOGS=s3://bkt/logs "$old/settings.env" || fail "settings.env: $(cat "$old/settings.env")"
-grep -qx MORCA_UNTOUCHED=1 "$old/settings.env" || fail "settings.env lost MORCA_UNTOUCHED"
 ! grep -q '^ORCA_' "$old/stack.conf" "$old/settings.env" || fail "ORCA_ keys left"
 grep -qx ORCA_TAG=old1111 "$old/stack.conf.orca" || fail "no stack.conf.orca"
-[ -f "$old/deployed.prev.orca" ] && [ ! -f "$old/deployed.prev" ] && [ -f "$old/renamed" ] || fail "deployed.prev wasn't set aside"
-MORCA_CONF="$old" stack rollback > "$FAKE/out" 2>&1 && fail "rolled back to an orca deploy"
+[ -f "$old/settings.env.orca" ] || fail "no settings.env.orca"
+[ -f "$old/deployed.prev.orca" ] && [ ! -f "$old/deployed.prev" ] && [ ! -f "$old/renamed" ] || fail "deployed.prev wasn't set aside"
+os rollback > "$FAKE/out" 2>&1 && fail "rolled back to an orca deploy"
 has "the deploy before was orca's"
-MORCA_CONF="$old" stack can-overlap > "$FAKE/out" 2>&1 && fail "overlapped the first deploy after the rename"
-has "the first deploy after the orca -> morca rename"
-cp "$old/stack.conf" "$FAKE/stack.conf.once"
-MORCA_CONF="$old" stack tags > "$FAKE/out" 2>&1 || fail "morca-stack tags again"
+snap
+os tags > "$FAKE/out" 2>&1 || fail "morca-stack tags after the migration"
+has "new3333"
 ! grep -q renamed "$FAKE/out" || fail "renamed the keys twice"
-cmp -s "$old/stack.conf" "$FAKE/stack.conf.once" || fail "stack.conf changed again"
+same "tags after the migration"
+rm -f "$FAKE/pre-rename"
 
 echo "ok   hetzner"
