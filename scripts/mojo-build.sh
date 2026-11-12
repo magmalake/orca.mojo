@@ -11,7 +11,10 @@
 #   each one's version and build);
 # - the name and contents of every .mojo, .mojoc and .mojopkg file under the
 #   -I directories and under each source's directory, .git, .pixi and build
-#   left out.
+#   left out;
+# - the CPU: mojo compiles for the host's, so a binary built on one runner
+#   can die with "Illegal instruction" on another (GitHub's runners differ).
+#   On Linux its model name and feature flags, on macOS its brand string.
 #
 # A build that fails keeps nothing. Entries unused for two days are removed;
 # rm -rf build/.mojo-build clears them all. MOJO_BUILD_CACHE=0 always builds.
@@ -60,6 +63,13 @@ key=$({
             printf '%s\n' "$a"
         fi
     done
+    uname -m
+    if [ -r /proc/cpuinfo ]; then
+        grep -m1 '^model name' /proc/cpuinfo || true
+        grep -m1 -E '^(flags|Features)' /proc/cpuinfo || true
+    else
+        sysctl -n machdep.cpu.brand_string 2> /dev/null || true
+    fi
     ls "${CONDA_PREFIX:-}/conda-meta" 2> /dev/null || true
     cat "${CONDA_PREFIX:-}/conda-meta/.pixi-environment-fingerprint" 2> /dev/null || true
     cat "$list"
