@@ -383,7 +383,7 @@ it back in `hetzner.env` and deploy (or roll back): the next one applies it.
 **Only what changed starts again.** `morca-stack apply` compares what each
 container would be started with against what it runs, and leaves it
 running when nothing differs: the image (the tag, and the image's id, so a
-tag pushed again counts), the env file it reads (`morca.env`, `app.env`,
+tag pushed again counts), the env file it reads (`morca.env`, `app-<name>.env`,
 `tunnel.env`, and `secret-fetch`), and its flags and mounts (`CGROUPS`'s
 among them). A hash of those is the container's `orca.stack.spec` label.
 It prints a line for each:
@@ -941,6 +941,41 @@ alert is sent at most once every 30 minutes (`MORCA_NOTIFY_MIN_SECONDS`), and
 one that could not be sent (ntfy down) waits in Postgres and goes later. The
 nightly backup runs `morca notify --kind backup-failed` on failure.
 
+## Apps
+
+An app beside the UI (the census console) is a binary of the image,
+`/opt/morca/bin/<name>`, on the stack's network, served through the
+tunnel. `APPS=console` in `hetzner.env` names the apps a stack runs, and
+the image's `morca.toml` says what each one gets (#331):
+
+```toml
+[apps.console]
+port = 8080                       # $PORT, where the tunnel's route points
+check = "/healthz"                # answers 200 once it's ready (default /)
+env = { CONSOLE_SEMANTIC = "1" }
+lake = true                       # the warehouse settings and the stack's S3 keys
+secrets = { POSTHOG_KEY = "orca/posthog-key" }
+memory_gb = 1                     # docker --memory (no limit without it)
+```
+
+`morca-stack plan` and `apply` read it from the app's own image (`morca
+config apps`, the [overlay](#a-stacks-overlay) laid on it) and write the
+app's env file, `/etc/orca/app-<name>.env` (mode 600), from it: its `env`,
+the lake with `lake = true` (`AWS_REGION`, `AWS_ENDPOINT_URL_S3`,
+`MORCA_WAREHOUSE`, `MORCA_PUBLIC_WAREHOUSE` and `s3.env`; never morca's
+database), each secret's value from `/etc/orca/secrets/<id>`, and `PORT`.
+A secret is a key `secrets/orca/<id>` in `SECRETS_FILE`, sent as the
+others are; one the server hasn't stops the deploy at the plan, before
+anything is paused. Values are never printed, and a change to one replaces
+the app (without downtime).
+
+`APPS=console:8080` still works: the port is then the one for an app
+whose `[apps.console]` gives none, and one that differs from it is
+refused. An app the image's `morca.toml` doesn't declare, or an image
+whose morca has no `config apps` (before 0.25), gets the fixed env of
+before (the lake, and `MORCA_POSTHOG_KEY` as `POSTHOG_KEY`), and the plan
+says so.
+
 ## Analytics (PostHog)
 
 The UI and the census console can load PostHog the way the magmalake.org
@@ -949,22 +984,29 @@ origin, memory-only persistence (no cookies, no `localStorage`, so no consent
 banner), and a `site` property on every event (`morca` or `mojourney`) so one
 PostHog project can hold both. Once:
 
-1. Deploy the `/ph` proxy, a Cloudflare Worker on the mojourney.dev zone's
+1. Optionally, a first-party proxy, so ad-blockers keep the events: the
+   census's is `/ph`, a Cloudflare Worker on the mojourney.dev zone's
    `mojourney.dev/ph/*` and `orca.mojourney.dev/ph/*` routes. It lives in
    magmalake/magmalake.org: `npx wrangler deploy -c worker/mojourney-ph/wrangler.jsonc`.
    The tunnel serves everything else; nothing on the server serves `/ph`.
+   Set `POSTHOG_HOST=/ph` in `hetzner.env` (`MORCA_POSTHOG_HOST`: a path on
+   the UI's origin or an `https://` origin). Without it the UI talks to
+   PostHog's own US hosts.
 2. Put the project key (`phc_...`, public, the website's `POSTHOG_KEY` in its
    `src/data/site.ts`) in `hetzner.env` as `POSTHOG_KEY`. `up.sh` writes it
-   to `settings.env` as `MORCA_POSTHOG_KEY`, which the UI reads, and
-   `morca-stack apply` passes it to the apps as `POSTHOG_KEY`, which the
-   census console reads. On a server set up before, the next `./deploy.sh`
-   (the tag that runs will do) writes it and replaces the UI and the
-   console ([Settings](#settings-from-hetznerenv)).
-3. Open https://orca.mojourney.dev and https://mojourney.dev: each page's
+   to `settings.env` as `MORCA_POSTHOG_KEY`, which the UI reads. On a
+   server set up before, the next `./deploy.sh` (the tag that runs will do)
+   writes it and replaces the UI ([Settings](#settings-from-hetznerenv)).
+3. An app gets the key only if it asks: `secrets = { POSTHOG_KEY =
+   "orca/posthog-key" }` in its `[apps.<name>]` ([Apps](#apps)), and the
+   key in `SECRETS_FILE` as `secrets/orca/posthog-key`. (An app morca.toml
+   doesn't declare still gets `MORCA_POSTHOG_KEY` as `POSTHOG_KEY`, as
+   before.)
+4. Open https://orca.mojourney.dev and https://mojourney.dev: each page's
    head has `/ph/static/array.js`, and PostHog's Activity shows `$pageview`
    events with `site` set.
 
-Leave `POSTHOG_KEY` empty and nothing is added to either site's pages.
+Leave `POSTHOG_KEY` empty and nothing is added to the UI's pages.
 
 ## Teardown
 
@@ -1102,6 +1144,41 @@ that). Cloudflare Tunnel is free. A stopped server is still billed; delete it
 (`down.sh`) to stop the charge. Nothing here launches instances, so the bill
 cannot grow by itself except for storage and traffic.
 
+## A stack's overlay
+
+A project ships one `morca.toml`; what one stack runs differently (no
+fills on a dev stack, one pipeline on a lab stack) goes in that stack's
+overlay, a file kept beside its `hetzner.env`, as in a secrets
+repository's `dev/morca.overlay.toml`
+([morca-toml.md](morca-toml.md#a-stacks-overlay) has the format and how
+it's merged). In `hetzner.env`:
+
+```sh
+CONFIG_OVERLAY_FILE=morca.overlay.toml    # relative to this file's folder
+```
+
+Each `up.sh` and `deploy.sh` then:
+
+- sends it to the server as `/etc/orca/overlay/morca.overlay.toml` (`morca-stack
+  sync`, saying `new`, `changed` or nothing), and `settings.env` gets
+  `MORCA_CONFIG_OVERLAY=/etc/orca/overlay/morca.overlay.toml`; taken out of
+  `hetzner.env`, both are removed;
+- has the new image's morca check `morca.toml` with it (`morca config
+  check`, in `morca-stack plan` and `apply`) before anything is paused or
+  replaced. A bad overlay, or an image whose morca doesn't read overlays
+  (before 0.25, which would register without it), stops the deploy there;
+- mounts `/etc/orca/overlay` in the scheduler only. The overlay is one of
+  the scheduler's files: a change to it replaces the scheduler (`scheduler
+  replace settings: its env file or the overlay changed`), so the deploy
+  quiesces and registers again, now with it.
+
+To see what a stack registers, before a deploy:
+
+```sh
+docker run --rm -v "$PWD/dev:/o" --entrypoint /opt/morca/bin/morca \
+    ghcr.io/morca-dev/census:<tag> config show --file --overlay /o/morca.overlay.toml
+```
+
 ## A dev stack
 
 A second, smaller stack to try a release, a deploy or a deploy-script change
@@ -1142,26 +1219,32 @@ MORCA_TAG=<short sha>                    # the tag the first up.sh starts
 GHCR_USER=...                           # as production's, for the private package
 GHCR_TOKEN_FILE=...
 GITHUB_TOKEN_FILE=$HOME/.config/morca-hetzner/github-token     # or mojo_repos's and mojo_stats's runs fail
-EXTRA_ENV_FILE=$HOME/.config/morca-hetzner/dev-extra.env
+CONFIG_OVERLAY_FILE=$HOME/.config/morca-hetzner/dev.overlay.toml
 # No NTFY_TOPIC_FILE: no alerts. Or a topic of its own, never production's.
 # No POSTHOG_KEY: the dev pages stay out of the analytics.
 ```
 
-with `dev-extra.env` holding
+with `dev.overlay.toml` the [stack's overlay](#a-stacks-overlay) on the
+census's `morca.toml`: no fills and no worker pool's placement, so a dev
+stack never backfills from 2023, and the pipelines only it runs enabled:
 
-```sh
-MORCA_CONFIG=/opt/morca/morca.dev.toml
+```toml
+[pipelines.gharchive]
+fills = "since_registration"
+
+[pipelines.ballast]
+enabled = true
 ```
 
-The scheduler and the UI get it (`settings.env`, then `morca.env`, ahead of
-the image's own `MORCA_CONFIG`), so `morca register` there reads the census's
-`morca.dev.toml`: the same pipelines as `morca.toml`, without fills and
-without a worker pool's placement, so a dev stack never backfills from
-2023. morca has no "fill the last N days" setting. For some history, backfill
-a recent range by hand once, e.g. `docker exec scheduler morca backfill
-gharchive 2026-10-09..2026-11-07`. Only census images built with
-`morca.dev.toml` have the file (mojo-census#87 on): `morca register` fails on an
-older one, so don't roll the dev stack back past it.
+morca has no "fill the last N days" setting. For some history, backfill a
+recent range by hand once, e.g. `docker exec scheduler morca backfill
+gharchive 2026-10-09..2026-11-07`.
+
+Before overlays (morca 0.25), a stack chose a whole file of the image's
+instead, with `MORCA_CONFIG=/opt/morca/morca.dev.toml` in its
+`EXTRA_ENV_FILE`. That still works (`settings.env`, then `morca.env`, ahead
+of the image's own `MORCA_CONFIG`), and an overlay is laid on whichever
+file that names.
 
 The tunnel's public hostnames, Proxied as for production: the census's dev
 stack has `orca-beta.mojourney.dev` to `http://ui:8270` and
@@ -1183,7 +1266,7 @@ export HETZNER_ENV=~/.config/morca-hetzner/dev.env   # in this shell only
 ./up.sh --dry-run                       # every command names morca-dev
 ./up.sh
 ssh root@<ip> docker exec -it scheduler morca user add <you>
-ssh root@<ip> morca-stack register       # morca.dev.toml's pipelines
+ssh root@<ip> morca-stack register       # morca.toml's, with the overlay
 ./deploy.sh <tag>                       # later deploys
 ./down.sh                               # when it's not needed: the Volume stays, up.sh brings it back
 ```
@@ -1198,7 +1281,7 @@ gharchive=2026-11-08"`) and steps 2, 3 and 5, and step 4 inside the server (not 
 2. `ssh root@<ip> morca-stack status`: every container up, `deployed: <tag>`
    and `before:` the tag before.
 3. The pipelines registered: `docker exec scheduler morca status` lists
-   each of `morca.dev.toml`'s, from `<tag>`, and the ones paused before are
+   each the overlay leaves enabled, from `<tag>`, and the ones paused before are
    still paused.
 4. `curl -s -o /dev/null -w '%{http_code}\n' https://orca-beta.mojourney.dev/healthz`
    says 200, and the console (`https://beta.mojourney.dev`) answers.

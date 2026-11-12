@@ -6,7 +6,9 @@
 #
 # PIPELINES are the Mojo files to build into /opt/morca/pipelines/, each
 # named after its file. MORCA_SOURCE and MORCA_COMMIT say what they were built
-# from, which each run records and morca ui links (morca.source):
+# from, which each run records and morca ui links (morca.source). They're set
+# in the image's environment, not compiled in, so a new commit changes no
+# program:
 #
 #     docker build --build-arg MORCA_SOURCE=$(git remote get-url origin) \
 #         --build-arg MORCA_COMMIT=$(git rev-parse HEAD) ...
@@ -23,8 +25,6 @@ FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS build
 ARG DISTA_REV=27e6e88df1b79fdc424314386a835d1d08b0db2a
 ARG K8S_REV=6cb83ce08e02234873f2d09c7501208eedb5589f
 ARG PIPELINES="examples/toy.mojo examples/fanout.mojo"
-ARG MORCA_SOURCE=""
-ARG MORCA_COMMIT=""
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone -q https://github.com/morca-dev/dista /src/dista.mojo \
@@ -40,7 +40,7 @@ COPY examples examples
 RUN mkdir -p /out/bin /out/pipelines \
     && pixi run -e default sh -c 'mojo build -g1 -I src $DEP_INC bin/scheduler.mojo -o /out/bin/morca \
         && for p in '"${PIPELINES}"'; do n=$(basename "$p" .mojo); \
-            mojo build -g1 -I src $DEP_INC -D MORCA_SOURCE='"${MORCA_SOURCE}"' -D MORCA_COMMIT='"${MORCA_COMMIT}"' \
+            mojo build -g1 -I src $DEP_INC \
                 "$p" -o "/out/pipelines/$n" || exit 1; done \
         && /out/bin/morca locate /out/pipelines/* --root .'
 # The line tables compressed, which llvm-symbolizer reads as they are.
@@ -66,6 +66,9 @@ COPY --from=build /out/lib /opt/morca/lib
 COPY --from=build /out/bin /opt/morca/bin
 COPY --from=build /out/pipelines /opt/morca/pipelines
 COPY --from=build /out/libexec /opt/morca/libexec
+ARG MORCA_SOURCE=""
+ARG MORCA_COMMIT=""
+ENV MORCA_SOURCE=${MORCA_SOURCE} MORCA_COMMIT=${MORCA_COMMIT}
 # postgres.mojo and flare find what they dlopen under $CONDA_PREFIX/lib.
 ENV CONDA_PREFIX=/opt/morca LD_LIBRARY_PATH=/opt/morca/lib PATH=/opt/morca/bin:/opt/morca/pipelines:/usr/bin:/bin \
     LLVM_SYMBOLIZER_PATH=/opt/morca/libexec/llvm-symbolizer

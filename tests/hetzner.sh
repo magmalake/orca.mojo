@@ -59,6 +59,17 @@
 #   before; an old scheduler or scheduler-next that isn't running (a
 #   scheduler-old from before #397 too) is removed by the next apply,
 #   saying so, and a deploy overlaps over it;
+# - a stack's overlay (CONFIG_OVERLAY_FILE, #332) is sent beside
+#   settings.env, which names it, checked by the image's morca before
+#   anything changes (an image whose morca doesn't read overlays refused),
+#   mounted in the scheduler only, whose replacement a change to it causes,
+#   and removed when hetzner.env drops it;
+# - an app's env file is what its [apps.NAME] in its image's morca.toml
+#   asks for (#331): its env, the lake with lake = true, each secret from
+#   secrets/orca/<id> (SECRETS_FILE may have any such key; never printed),
+#   its port, check and memory; one missing secret, or APPS giving another
+#   port, stops the deploy at the plan; an app not declared, or an image
+#   without `morca config apps`, gets the fixed env of before;
 # - package.sh's release tarball unpacks to morca-hetzner-<version>/ with
 #   every script, server/ and the example settings, and its up.sh and
 #   deploy.sh run from there (hetzner.env next to them), printing the
@@ -315,7 +326,7 @@ has "  morca-stack: settings.env: added MORCA_POSTHOG_KEY$"
 grep -q phc_notavalue42 "$FAKE/out" && fail "a setting's value was printed"
 grep -qx 'MORCA_POSTHOG_KEY=phc_notavalue42' "$MORCA_CONF/settings.env" || fail "no MORCA_POSTHOG_KEY in settings.env"
 [ "$(mode "$MORCA_CONF/settings.env")" = -rw------- ] || fail "settings.env is $(mode "$MORCA_CONF/settings.env")"
-grep -qx 'POSTHOG_KEY=phc_notavalue42' "$MORCA_CONF/app.env" || fail "no POSTHOG_KEY in app.env"
+grep -qx 'POSTHOG_KEY=phc_notavalue42' "$MORCA_CONF/app-console.env" || fail "no POSTHOG_KEY in app-console.env"
 has "  scheduler replace settings: its env file changed"
 has "  ui replace settings: its env file changed"
 has "  console replace settings: its env file changed"
@@ -330,6 +341,63 @@ deploy eee5555 console=hhh8888 || fail "a deploy with the settings in line"
 has "names only, never values):"
 has "^  unchanged$"
 has "nothing to replace: not backing up"
+# The stack's overlay (#332): CONFIG_OVERLAY_FILE (relative to hetzner.env)
+# is sent as overlay/morca.overlay.toml, settings.env names it, the image's
+# morca checks it before anything changes, and the scheduler gets it
+# mounted and is replaced, so it registers with it.
+mkdir -p "$FAKE/dev"
+printf '[pipelines.toy]\nfills = "since_registration"\n' > "$FAKE/dev/morca.overlay.toml"
+echo CONFIG_OVERLAY_FILE=dev/morca.overlay.toml >> "$FAKE/hetzner.env"
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 || fail "a deploy that adds the overlay"
+has "  morca-stack: overlay/morca.overlay.toml: new"
+has "  morca-stack: settings.env: added MORCA_CONFIG_OVERLAY"
+has "morca-stack: the overlay: /opt/morca/morca.toml with /etc/orca/overlay/morca.overlay.toml: ok"
+cmp -s "$FAKE/dev/morca.overlay.toml" "$MORCA_CONF/overlay/morca.overlay.toml" || fail "the overlay on the server differs"
+grep -qx 'MORCA_CONFIG_OVERLAY=/etc/orca/overlay/morca.overlay.toml' "$MORCA_CONF/morca.env" || fail "no MORCA_CONFIG_OVERLAY in morca.env"
+grep -q "^config-check run --rm --env-file $MORCA_CONF/settings.env -v $MORCA_CONF/overlay:/etc/orca/overlay:ro img:eee5555 config check" "$FAKE/docker.log" \
+    || fail "the overlay wasn't checked in the image"
+grep -q "run -d --name scheduler .*-v $MORCA_CONF/overlay:/etc/orca/overlay:ro" "$FAKE/docker.log" || fail "the scheduler hasn't the overlay"
+grep -q "run -d --name ui-next .*/etc/orca/overlay" "$FAKE/docker.log" && fail "the UI has the overlay"
+grep -q 'exec scheduler morca register' "$FAKE/docker.log" || fail "not registered with the overlay"
+# Only the overlay changes: the scheduler is replaced, and registers.
+printf '[pipelines.toy]\nfills = "all"\n' > "$FAKE/dev/morca.overlay.toml"
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 || fail "a deploy that changes the overlay"
+has "  morca-stack: overlay/morca.overlay.toml: changed"
+has "  scheduler replace settings: its env file or the overlay changed"
+has "  ui keep unchanged"
+has "  console keep unchanged"
+grep -q 'exec scheduler morca register' "$FAKE/docker.log" || fail "not registered after the overlay changed"
+deploy eee5555 console=hhh8888 || fail "a deploy with the overlay in line"
+has "nothing to replace: not backing up"
+# One the image's morca refuses, or an image whose morca doesn't read
+# overlays: the deploy stops at the plan, before anything is paused.
+touch "$FAKE/overlay-bad"
+printf '[pipelines.toyy]\nfills = "all"\n' > "$FAKE/dev/morca.overlay.toml"
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 && fail "deployed with an overlay that doesn't check"
+has "morca.toml with the stack's overlay doesn't check: .*isn't a pipeline of"
+grep -q 'morca pause\|run -d' "$FAKE/docker.log" && fail "a refused overlay paused or started something"
+rm "$FAKE/overlay-bad"
+printf '[pipelines.toy]\nfills = "all"\n' > "$FAKE/dev/morca.overlay.toml"
+touch "$FAKE/no-overlays"
+deploy eee5555 console=hhh8888 && fail "deployed an image whose morca doesn't read overlays"
+has "img:eee5555's morca doesn't read overlays"
+rm "$FAKE/no-overlays"
+# Taken out of hetzner.env: removed from the server, and the scheduler
+# replaced without it.
+sed -i.bak '/^CONFIG_OVERLAY_FILE=/d' "$FAKE/hetzner.env"
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 || fail "a deploy that removes the overlay"
+has "  morca-stack: overlay/morca.overlay.toml: removed"
+has "  morca-stack: settings.env: removed MORCA_CONFIG_OVERLAY"
+[ ! -f "$MORCA_CONF/overlay/morca.overlay.toml" ] || fail "the overlay is still on the server"
+grep -q "run -d --name scheduler .*/etc/orca/overlay" "$FAKE/docker.log" && fail "the scheduler still has the overlay"
+grep -q 'config-check' "$FAKE/docker.log" && fail "checked an overlay there is none of"
+deploy eee5555 console=hhh8888 || fail "a deploy with no overlay"
+has "nothing to replace: not backing up"
+echo "ok   a stack's overlay is sent, checked in the image, mounted in the scheduler and removed"
 # A dry run shows the sync and the keys, and writes nothing.
 sed -i.bak '/^POSTHOG_KEY=/d' "$FAKE/hetzner.env"
 printf 'POSTHOG_KEY=\nFIXED_COST=8/month\nBACKUP_KEEP=7\nS3_REGION=nbg1\n' >> "$FAKE/hetzner.env"
@@ -353,7 +421,7 @@ has "  morca-stack: s3.env: changed$"
 has "  morca-stack: BACKUP_KEEP 14 -> 7$"
 grep -q 'notasecret99\|8/month\|phc_' "$FAKE/out" && fail "a value was printed"
 grep -q MORCA_POSTHOG_KEY "$MORCA_CONF/settings.env" && fail "MORCA_POSTHOG_KEY wasn't removed"
-grep -q POSTHOG_KEY "$MORCA_CONF/app.env" && fail "POSTHOG_KEY is still in app.env"
+grep -q POSTHOG_KEY "$MORCA_CONF/app-console.env" && fail "POSTHOG_KEY is still in app-console.env"
 grep -qx 'AWS_REGION=nbg1' "$MORCA_CONF/settings.env" || fail "AWS_REGION wasn't changed"
 grep -qx 'AWS_SECRET_ACCESS_KEY=notasecret99' "$MORCA_CONF/s3.env" || fail "s3.env wasn't written"
 [ "$(mode "$MORCA_CONF/s3.env")" = -rw------- ] || fail "s3.env is $(mode "$MORCA_CONF/s3.env")"
@@ -392,12 +460,13 @@ all_secrets='{"s3.env": "AWS_ACCESS_KEY_ID=x4\nAWS_SECRET_ACCESS_KEY=onefile55\n
  "secrets/orca/ntfy-topic": "topic88",
  "secrets/orca/ntfy-token": "tk_ntfy99",
  "ghcr-token": "ghcr11",
- "secrets/orca/hcloud-token": "hc_pool12"}'
+ "secrets/orca/hcloud-token": "hc_pool12",
+ "secrets/orca/posthog-key": "phc_app13"}'
 secrets_file "$all_secrets"
 sed -i.bak '/^S3_CREDENTIALS_FILE=/d; /^TUNNEL_TOKEN_FILE=/d' "$FAKE/hetzner.env"
 echo "SECRETS_FILE=$FAKE/secrets.sops.yaml" >> "$FAKE/hetzner.env"
 secret_files() { cat "$MORCA_CONF/settings.env" "$MORCA_CONF/s3.env" "$MORCA_CONF/tunnel.env" 2> /dev/null | cksum; }
-values='onefile55\|tunnel66\|ghp_gh77\|topic88\|tk_ntfy99\|ghcr11\|hc_pool12'
+values='onefile55\|tunnel66\|ghp_gh77\|topic88\|tk_ntfy99\|ghcr11\|hc_pool12\|phc_app13'
 : > "$FAKE/sops.calls"
 before=$(secret_files)
 sh deploy/hetzner/deploy.sh --dry-run eee5555 > "$FAKE/out" 2>&1 || fail "a dry run with SECRETS_FILE"
@@ -417,6 +486,8 @@ has "  morca-stack: s3.env: changed$"
 has "  morca-stack: secrets/orca/ntfy-topic: new$"
 has "  morca-stack: ghcr-token: new$"
 has "  morca-stack: secrets/orca/hcloud-token: new$"
+# An app's secret (#331): any secrets/orca/<id> key, sent the same way.
+has "  morca-stack: secrets/orca/posthog-key: new$"
 # Worker pools (morca #267): the Hetzner token's id, the stack's firewall and
 # key, and the registry login's id, in settings.env; the worker image in
 # morca.env; ghcr-token among the secrets for morca.
@@ -433,6 +504,7 @@ same secrets/orca/github-token ghp_gh77
 same secrets/orca/ntfy-topic topic88
 same secrets/orca/ntfy-token tk_ntfy99
 same ghcr-token ghcr11
+same secrets/orca/posthog-key phc_app13
 grep -qx 'MORCA_NOTIFY_SECRET=orca/ntfy-topic' "$MORCA_CONF/settings.env" || fail "no MORCA_NOTIFY_SECRET from SECRETS_FILE"
 grep -qx 'MORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token' "$MORCA_CONF/settings.env" || fail "no MORCA_NOTIFY_TOKEN_SECRET from SECRETS_FILE"
 stack resume > /dev/null
@@ -450,11 +522,13 @@ refused() { # WHY MESSAGE
     grep -q 'morca-stack' "$FAKE/out" && fail "the server was changed ($1)"
     [ "$(secret_files)" = "$before" ] || fail "$1 changed the server's files"
 }
-secrets_file '{"s3.env": "AWS_SECRET_ACCESS_KEY=onefile55", "../s3.env": "x", "notes.txt": "x", "/etc/passwd": "x", "ghcr-token": 11}'
+secrets_file '{"s3.env": "AWS_SECRET_ACCESS_KEY=onefile55", "../s3.env": "x", "notes.txt": "x", "/etc/passwd": "x", "ghcr-token": 11, "secrets/orca/a b": "x", "secrets/orca/x/../../s3.env": "x"}'
 refused "bad keys" '"\.\./s3\.env": a name has no leading / and no \.\.'
 has '"notes.txt" is not one of: s3.env tunnel.env'
 has '"/etc/passwd": a name has no leading / and no \.\.'
 has '"ghcr-token": the value is a number, not a string'
+has '"secrets/orca/a b" is not one of: .*, or secrets/orca/<id>'
+has '"secrets/orca/x/\.\./\.\./s3\.env": a name has no leading / and no \.\.'
 secrets_file "$all_secrets"
 echo "S3_CREDENTIALS_FILE=$FAKE/s3.env" >> "$FAKE/hetzner.env"
 refused "SECRETS_FILE and S3_CREDENTIALS_FILE" "S3_CREDENTIALS_FILE and SECRETS_FILE both give s3.env: set only one"
@@ -472,6 +546,69 @@ rm -f "$MORCA_CONF/secrets/orca/ntfy-topic" "$MORCA_CONF/secrets/orca/ntfy-token
 deploy eee5555 console=hhh8888 || fail "a deploy back on the plain files"
 grep -q MORCA_NOTIFY "$MORCA_CONF/settings.env" && fail "MORCA_NOTIFY_SECRET without SECRETS_FILE"
 stack resume > /dev/null
+
+# An app declared in morca.toml (#331): its env file is what [apps.console]
+# asks for (`morca config apps` in its image): its env, the lake, its secret
+# from secrets/orca/<id> (never printed), and its port, check and memory.
+cat > "$FAKE/apps-decl" << 'EOS'
+console port 8080
+console check /healthz
+console lake true
+console memory_mb 1024
+console env CONSOLE_SEMANTIC=1
+console env GREETING=hello world
+console secret POSTHOG_KEY orca/posthog-key
+other port 9090
+EOS
+appenv=$MORCA_CONF/app-console.env
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 || fail "a deploy with the console declared"
+grep -q "^config-apps run --rm --env-file $MORCA_CONF/settings.env img:hhh8888 config apps" "$FAKE/docker.log" || fail "the console's image wasn't asked for its apps"
+grep -qx 'CONSOLE_SEMANTIC=1' "$appenv" && grep -qx 'GREETING=hello world' "$appenv" || fail "the console's env: $(sed 's/=.*//' "$appenv" | tr '\n' ' ')"
+grep -qx 'POSTHOG_KEY=phc_app13' "$appenv" || fail "the console hasn't its secret"
+grep -qx 'MORCA_WAREHOUSE=s3://bkt/warehouse' "$appenv" && grep -q '^AWS_SECRET_ACCESS_KEY=' "$appenv" || fail "lake = true didn't give the lake"
+grep -q 'MORCA_DATABASE_URL' "$appenv" && fail "the console has morca's database"
+[ "$(mode "$appenv")" = -rw------- ] || fail "app-console.env is $(mode "$appenv")"
+[ ! -f "$MORCA_CONF/app.env" ] || fail "the old app.env is left"
+grep -q phc_app13 "$FAKE/out" && fail "the app's secret was printed"
+has "  console replace "
+grep -q "run -d --name console-next .*--env-file $MORCA_CONF/app-console.env -e PORT=8080 --memory 1024m --entrypoint /opt/morca/bin/console img:hhh8888" "$FAKE/docker.log" \
+    || fail "the console's run: $(grep 'name console' "$FAKE/docker.log")"
+grep -q "probe console-next 8080 /healthz" "$FAKE/docker.log" || fail "the console wasn't probed on its declared check"
+grep -q "isn't declared" "$FAKE/out" && fail "a declared app was said not to be"
+deploy eee5555 console=hhh8888 || fail "a deploy with the console in line"
+has "nothing to replace: not backing up"
+# An image whose morca has no `config apps`: the fixed env of before.
+touch "$FAKE/no-config-apps"
+deploy eee5555 console=hhh8888 || fail "a deploy of an image without config apps"
+has "app console isn't declared in img:hhh8888's morca.toml"
+grep -q 'POSTHOG_KEY\|CONSOLE_SEMANTIC' "$appenv" && fail "the fixed env has the declared app's"
+grep -qx 'MORCA_WAREHOUSE=s3://bkt/warehouse' "$appenv" || fail "the fixed env hasn't the lake"
+rm "$FAKE/no-config-apps"
+# A secret it names that the server hasn't: refused at the plan, before
+# anything is paused.
+mv "$MORCA_CONF/secrets/orca/posthog-key" "$FAKE/posthog-key"
+: > "$FAKE/docker.log"
+deploy eee5555 console=hhh8888 && fail "deployed an app without its secret"
+has "app console needs the secret orca/posthog-key, and $MORCA_CONF/secrets/orca/posthog-key is missing"
+grep -q 'morca pause\|run -d' "$FAKE/docker.log" && fail "a missing app secret paused or started something"
+mv "$FAKE/posthog-key" "$MORCA_CONF/secrets/orca/posthog-key"
+# APPS names the app; a port there that isn't morca.toml's is refused, and
+# APPS=console leaves the port to morca.toml.
+echo "APPS=console:8081" >> "$FAKE/hetzner.env"
+deploy eee5555 console=hhh8888 && fail "deployed with APPS's port against morca.toml's"
+has "app console: hetzner.env's APPS says port 8081, img:hhh8888's morca.toml port 8080"
+sed -i.bak 's/^APPS=console:8081$/APPS=console/' "$FAKE/hetzner.env"
+deploy eee5555 console=hhh8888 || fail "a deploy with APPS=console"
+has "app console: port 8081 -> morca.toml's"
+grep -q '^console - ' "$MORCA_CONF/apps" || fail "the apps file: $(cat "$MORCA_CONF/apps")"
+# Back to an app the image doesn't declare, its port from APPS.
+rm "$FAKE/apps-decl"
+sed -i.bak '/^APPS=/d' "$FAKE/hetzner.env"
+deploy eee5555 console=hhh8888 || fail "a deploy back on the undeclared console"
+grep -q '^console 8080 ' "$MORCA_CONF/apps" || fail "the apps file after: $(cat "$MORCA_CONF/apps")"
+stack resume > /dev/null
+echo "ok   an app's env, secrets, port, check and memory come from its [apps.NAME]; one not declared gets the fixed env"
 
 # A setting only morca.env has: the scheduler and the UI; CGROUPS: the
 # scheduler only; a tag pushed again: what runs it.

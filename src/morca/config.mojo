@@ -18,6 +18,7 @@ runs (#145), read by `morca register` and `morca aws register`.
     secrets = { GITHUB_TOKEN = "orca/github-token" }   # Secrets Manager IDs
     fills = "all"                # fill the range by itself (morca.fill)
     fill_budget_per_day = 5.0    # and the rest of the fill* keys
+    enabled = false              # `morca register` skips it (a stack's overlay)
 
     [stack]                      # for `morca aws up`; not read yet
 
@@ -35,6 +36,11 @@ file names is registered with exactly what it and its flags say: a key
 taken out of the file goes back to its default. `[defaults]` applies only to
 the pipelines the file names; one it doesn't name is registered as before,
 each flag left out keeping what was registered.
+
+A stack's overlay (`MORCA_CONFIG_OVERLAY`, `--overlay`; docs/morca-toml.md)
+is laid on the file before anything is read (`TomlDoc.merge`): its values
+replace the file's, its tables are merged key by key, and a pipeline it
+names must be in the file. A value it set says so where it's shown.
 
 The registration keeps the file's SHA-256 and its git commit (and whether
 it had changes not committed) in `orca.pipelines.config`, with where each
@@ -79,6 +85,7 @@ from morca.secrets import (
     parse_secrets,
     secret_problem,
 )
+from morca.apps_config import AppConfig, apps_problem, read_apps
 from morca.pool_config import read_pools
 from morca.toml import (
     BOOLEAN,
@@ -89,6 +96,7 @@ from morca.toml import (
     TomlDoc,
     TomlValue,
     parse_toml,
+    path_key,
     toml_key,
 )
 
@@ -441,6 +449,11 @@ struct ProjectConfig(Movable):
     var repo_path: String
     """Its path in its checkout (`git ls-files --full-name`), for a link to
     its lines at the commit; empty outside a checkout."""
+    var overlay: String
+    """The stack's overlay laid on it (`apply_overlay`), or empty."""
+    var overlay_hash: String
+    var _overlaid: Dict[String, Int]
+    """The paths the overlay set (`path_key`), to their lines in it."""
     var doc: TomlDoc
 
     def __init__(out self):
@@ -451,6 +464,9 @@ struct ProjectConfig(Movable):
         self.dirty = False
         self.source = String()
         self.repo_path = String()
+        self.overlay = String()
+        self.overlay_hash = String()
+        self._overlaid = Dict[String, Int]()
         self.doc = TomlDoc()
 
     def __init__(
@@ -468,6 +484,9 @@ struct ProjectConfig(Movable):
         self.commit = commit
         self.dirty = dirty
         self.source = String()
+        self.overlay = String()
+        self.overlay_hash = String()
+        self._overlaid = Dict[String, Int]()
         try:
             self.doc = parse_toml(text)
         except e:
@@ -475,8 +494,9 @@ struct ProjectConfig(Movable):
         self._check()
 
     @staticmethod
-    def load(path: String) raises -> ProjectConfig:
-        """The file at `path`, with its checkout's commit."""
+    def load(path: String, overlay: String = "") raises -> ProjectConfig:
+        """The file at `path`, with its checkout's commit, and `overlay`
+        laid on it if given."""
         if not exists(path):
             raise Error("morca: no ", path)
         var text: String
@@ -535,7 +555,90 @@ struct ProjectConfig(Movable):
         var cfg = ProjectConfig(text, path, commit, dirty)
         cfg.source = source
         cfg.repo_path = repo_path
+        if overlay:
+            cfg.apply_overlay(overlay)
         return cfg^
+
+    def apply_overlay(mut self, path: String) raises:
+        """The stack's overlay at `path` laid on the file (`TomlDoc.merge`),
+        and the result checked again. A pipeline the overlay names must be
+        in the file: a misspelt name would otherwise add one."""
+        if not exists(path):
+            raise Error("morca: no ", path, " (the overlay)")
+        var text: String
+        with open(path, "r") as f:
+            text = f.read()
+        var over: TomlDoc
+        try:
+            over = parse_toml(text)
+        except e:
+            raise Error(path, ":", e)
+        for top in ["pipelines", "apps"]:
+            for name in over.tables([String(top)]):
+                if not self.doc.has_table([String(top), name]):
+                    raise Error(
+                        path,
+                        ":",
+                        over.get([String(top), name]).value().line,
+                        ": [",
+                        top,
+                        ".",
+                        toml_key(name),
+                        "] isn't ",
+                        "a pipeline" if top == "pipelines" else "an app",
+                        " of ",
+                        self.path,
+                        ": an overlay changes the file's, it can't add one",
+                    )
+        for p in self.doc.merge(over):
+            self._overlaid[path_key(p)] = over.get(p).value().line
+        self.overlay = path
+        self.overlay_hash = sha256_hex(text)
+        self._check()
+
+    def _loc(self, path: List[String]) -> String:
+        """`file:line` of the value at `path`: the overlay's if it set it."""
+        var o = self._overlaid.get(path_key(path))
+        if o:
+            return String(self.overlay, ":", o.value())
+        return String(self.path, ":", self._line(path))
+
+    def setting(
+        self, value: String, path: List[String], label: String
+    ) -> Setting:
+        """`value`, from the file's `path` in the table `label`, with its
+        line; one the overlay set names it and its line in the detail."""
+        var o = self._overlaid.get(path_key(path))
+        if o:
+            return Setting(
+                value,
+                FROM_FILE,
+                String(label, ", overlay ", self.overlay, ":", o.value()),
+            )
+        return Setting(value, FROM_FILE, label, self._line(path))
+
+    def shown(self) -> String:
+        """The file as register reads it (`morca config show --file`), each
+        value the overlay set marked with its line there."""
+        var notes = Dict[String, String]()
+        for e in self._overlaid.items():
+            notes[e.key] = String("overlay ", self.overlay, ":", e.value)
+        var head = String("# ", self.path)
+        if self.overlay:
+            head.write(", with the overlay ", self.overlay, " laid on it")
+        return String(head, "\n\n", self.doc.pretty(notes))
+
+    def apps(self) raises -> List[AppConfig]:
+        """Its `[apps.<name>]` tables (`morca config apps`)."""
+        return read_apps(self.doc)
+
+    def enabled(self, pipeline: String) -> Bool:
+        """Whether `morca register` with no binaries registers `pipeline`:
+        its `enabled`, else `[defaults]`'s, else true."""
+        var v = self.doc.get(["pipelines", pipeline, "enabled"])
+        if not v:
+            v = self.doc.get(["defaults", "enabled"])
+        return not v or v.value().text == "true"
 
     @staticmethod
     def from_b64(
@@ -563,7 +666,7 @@ struct ProjectConfig(Movable):
         var p: List[String] = ["defaults", key]
         if s.detail != "[defaults]":
             p = ["pipelines", pipeline, key]
-        return String(self.path, ":", self._line(p), ": ", s.detail)
+        return String(self._loc(p), ": ", s.detail)
 
     def entries(self, key: String) -> List[Tuple[String, String]]:
         """Each value of `key` in `[defaults]` and the `[pipelines.<name>]`
@@ -592,9 +695,7 @@ struct ProjectConfig(Movable):
                     out.append(
                         (
                             String(
-                                self.path,
-                                ":",
-                                item.line,
+                                self._loc(q),
                                 ": ",
                                 labels[t],
                                 " ",
@@ -609,9 +710,7 @@ struct ProjectConfig(Movable):
                 out.append(
                     (
                         String(
-                            self.path,
-                            ":",
-                            v.value().line,
+                            self._loc(p),
                             ": ",
                             labels[t],
                             " ",
@@ -622,8 +721,8 @@ struct ProjectConfig(Movable):
                 )
         return out^
 
-    def _fail(self, line: Int, table: String, msg: String) raises:
-        raise Error(self.path, ":", line, ": ", table, " ", msg)
+    def _fail(self, path: List[String], table: String, msg: String) raises:
+        raise Error(self._loc(path), ": ", table, " ", msg)
 
     def _line(self, path: List[String]) -> Int:
         var v = self.doc.get(path)
@@ -634,11 +733,12 @@ struct ProjectConfig(Movable):
             var p: List[String] = [top]
             if not self.doc.has_table(p):
                 self._fail(
-                    self._line(p),
+                    p,
                     top,
                     (
                         "is a key at the top; the file has [defaults],"
-                        " [pipelines.<name>], [pools.<name>] and [stack]"
+                        " [pipelines.<name>], [pools.<name>], [apps.<name>]"
+                        " and [stack]"
                     ),
                 )
             if top == "defaults":
@@ -648,7 +748,7 @@ struct ProjectConfig(Movable):
                     var q: List[String] = ["pipelines", name]
                     if not self.doc.has_table(q):
                         self._fail(
-                            self._line(q),
+                            q,
                             String("pipelines.", toml_key(name)),
                             (
                                 "isn't a table: a pipeline's settings are"
@@ -663,15 +763,24 @@ struct ProjectConfig(Movable):
                 try:
                     _ = read_pools(self.doc)
                 except e:
+                    if self.overlay:
+                        raise Error(self.path, " with ", self.overlay, ":", e)
                     raise Error(self.path, ":", e)
+            elif top == "apps":
+                # Apps beside the UI (morca.apps_config).
+                var why = apps_problem(self.doc)
+                if why:
+                    var w = why.value().copy()
+                    self._fail(w.path, w.table, w.msg)
             elif top != "stack":
                 # [stack] is for `morca aws up`, which doesn't read it yet.
                 self._fail(
-                    self._line(p),
+                    p,
                     String("[", toml_key(top), "]"),
                     (
                         "isn't a table morca knows: [defaults],"
-                        " [pipelines.<name>], [pools.<name>] or [stack]"
+                        " [pipelines.<name>], [pools.<name>], [apps.<name>]"
+                        " or [stack]"
                     ),
                 )
 
@@ -680,17 +789,20 @@ struct ProjectConfig(Movable):
             var p = path.copy()
             p.append(key)
             var v = self.doc.get(p).value().copy()
-            if is_scalar_key(key):
+            if key == "enabled":
+                if v.kind != BOOLEAN:
+                    self._fail(p, table, "enabled is true or false")
+            elif is_scalar_key(key):
                 if v.kind == TABLE:
-                    self._fail(v.line, table, String(key, " is a table"))
+                    self._fail(p, table, String(key, " is a table"))
                 try:
                     _ = _canonical_toml(key, v)
                 except e:
-                    self._fail(v.line, table, String(key, ": ", e))
+                    self._fail(p, table, String(key, ": ", e))
             elif is_map_key(key):
                 if v.kind != TABLE:
                     self._fail(
-                        v.line,
+                        p,
                         table,
                         String(key, ' is a table, { NAME = "..." }'),
                     )
@@ -700,14 +812,14 @@ struct ProjectConfig(Movable):
                     var item = self.doc.get(q).value().copy()
                     var why = self._item_problem(key, name, item)
                     if why:
-                        self._fail(item.line, table, String(key, ": ", why))
+                        self._fail(q, table, String(key, ": ", why))
             else:
                 var known = String()
                 for k in materialize[SCALAR_KEYS]():
                     known.write(k, ", ")
-                known.write("secrets and env")
+                known.write("enabled, secrets and env")
                 self._fail(
-                    v.line,
+                    p,
                     table,
                     String(
                         "has no key ", toml_key(key), " (it has ", known, ")"
@@ -847,6 +959,13 @@ struct Resolved(Movable):
                 out.write(', "source": ', quote(file.source))
             if file.repo_path:
                 out.write(', "repo_path": ', quote(file.repo_path))
+            if file.overlay:
+                out.write(
+                    ', "overlay": ',
+                    quote(file.overlay),
+                    ', "overlay_hash": ',
+                    quote(file.overlay_hash),
+                )
             out.write(', "overrides": {')
             for i in range(len(self.overrides)):
                 out.write(
@@ -915,18 +1034,15 @@ def resolve(
                 p.append(String(key))
                 var v = file.doc.get(p)
                 if v:
-                    r.values[String(key)] = Setting(
-                        _canonical_toml(String(key), v.value()),
-                        FROM_FILE,
-                        labels[t],
-                        v.value().line,
+                    r.values[String(key)] = file.setting(
+                        _canonical_toml(String(key), v.value()), p, labels[t]
                     )
             for m in ["secrets", "env"]:
                 for kv in file._map(tables[t], m):
                     var p = tables[t].copy()
                     p.append(String(m))
                     p.append(kv[0])
-                    var st = Setting(kv[1], FROM_FILE, labels[t], file._line(p))
+                    var st = file.setting(kv[1], p, labels[t])
                     if m == "secrets":
                         _set(r.secrets, kv[0], st^)
                     else:
