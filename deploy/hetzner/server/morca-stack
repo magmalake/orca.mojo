@@ -366,7 +366,7 @@ cmd_app() {
     port=${2:--}
     [ "$port" = - ] || safe "$port"
     case "$port" in - | [1-9] | [1-9]*[0-9]) ;; *) die "app: PORT is a number" ;; esac
-    case "$port" in *[!0-9-]*) die "app: PORT is a number" ;; esac
+    [ "$port" = - ] || case "$port" in *[!0-9]*) die "app: PORT is a number" ;; esac
     check=${3:-}
     if [ -n "$check" ]; then
         safe "$check"
