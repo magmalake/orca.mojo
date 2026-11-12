@@ -2,7 +2,7 @@
 makes a machine only of a type the worker image runs on.
 
     var r = Registry.from_env()
-    r.arches("ghcr.io/magmalake/orca:e82807b")   # ["amd64", "arm64"]
+    r.arches("ghcr.io/morca-dev/census:e82807b")   # ["amd64", "arm64"]
 
 An image's tag names a manifest; a multi-architecture image's is an index
 (OCI) or a manifest list (Docker), whose entries each name a platform, and
@@ -40,7 +40,7 @@ struct ImageRef(Copyable, Movable):
 
     @staticmethod
     def parse(image: String) raises -> ImageRef:
-        """`ghcr.io/magmalake/orca:tag` (a tag is needed; a host too)."""
+        """`ghcr.io/morca-dev/census:tag` (a tag is needed; a host too)."""
         var slash = image.find("/")
         if slash <= 0:
             raise Error("orca: not an image with its registry: ", image)

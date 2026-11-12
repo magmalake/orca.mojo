@@ -1,0 +1,351 @@
+# A project's image, for an orca project's own CI to call (docs/project-ci.md):
+#
+#     jobs:
+#       image:
+#         uses: morca-dev/morca/.github/workflows/project-image.yml@v0.24.0
+#         with: { image: ghcr.io/mojourney/census, configs: orca.toml }
+#
+# One job per architecture, each on a runner of its own (no emulation) and
+# built for a baseline CPU (MOJO_TARGET_CPU): neoverse-n1 on arm64, which
+# Hetzner's CAX servers are (a binary built for the N2 runner's SVE2 dies
+# there with SIGILL), and x86-64-v3 on amd64. Each builds the image from
+# deploy/project.Dockerfile, on orca's runtime image, or from the project's
+# own Dockerfile; runs `orca config check` on its orca.toml files; tests it;
+# and, with `push`, pushes it as <tag>-<arch>. `manifest` then joins the
+# architectures under each <tag>: the commit's short sha, the version for a
+# tag (or `version`), and `extra-tags`.
+#
+# Pushing needs `packages: write` in the calling job; a pull request never
+# pushes, whatever `push` says.
+name: project image
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: "The image's repository, such as ghcr.io/mojourney/census"
+        type: string
+        required: true
+      dockerfile:
+        description: "The project's Dockerfile; empty builds orca's deploy/project.Dockerfile"
+        type: string
+        default: ""
+      context:
+        description: "The build's context, in the project's checkout"
+        type: string
+        default: "."
+      configs:
+        description: "The orca.toml files `orca config check` checks, in the checkout, separated by spaces"
+        type: string
+        default: "orca.toml"
+      version:
+        description: "The project's version (1.2.0); empty is a tag's name without its v, else none"
+        type: string
+        default: ""
+      version-arg:
+        description: "The build arg the version is passed as"
+        type: string
+        default: "PROJECT_VERSION"
+      build-args:
+        description: "More build args, KEY=VALUE, one a line"
+        type: string
+        default: ""
+      push:
+        description: "Push the image (never on a pull request)"
+        type: boolean
+        default: false
+      extra-tags:
+        description: "Tags to push it under besides the short sha and the version, separated by spaces (dev)"
+        type: string
+        default: ""
+      platforms:
+        description: "The architectures, separated by spaces: arm64, amd64 or both"
+        type: string
+        default: "arm64 amd64"
+      arm64-runner:
+        type: string
+        default: "ubuntu-24.04-arm"
+      arm64-cpu:
+        description: "MOJO_TARGET_CPU on arm64 (Hetzner's CAX: neoverse-n1)"
+        type: string
+        default: "neoverse-n1"
+      amd64-runner:
+        type: string
+        default: "ubuntu-24.04"
+      amd64-cpu:
+        description: "MOJO_TARGET_CPU on amd64"
+        type: string
+        default: "x86-64-v3"
+      orca-version:
+        description: "The orca-mojo the project pins, which names the runtime image (orca-runtime:<version>); empty reads it from pixi.lock"
+        type: string
+        default: ""
+      runtime:
+        description: "The runtime image's repository"
+        type: string
+        default: "ghcr.io/morca-dev/morca-runtime"
+      orca-repository:
+        description: "Where orca's deploy/project.Dockerfile (and, with build-runtime, the runtime) come from"
+        type: string
+        default: "morca-dev/morca"
+      orca-ref:
+        description: "The commit of orca-repository to take them from; empty is v<orca-version>"
+        type: string
+        default: ""
+      build-runtime:
+        description: "Build the runtime from orca-ref on the runner instead of pulling it (orca's own CI, or a runtime not pushed yet)"
+        type: boolean
+        default: false
+      prepare:
+        description: "A shell command run in the checkout before the build"
+        type: string
+        default: ""
+      smoke:
+        description: "A shell command run in the checkout after the built-in tests, with the image in $IMAGE"
+        type: string
+        default: ""
+      timeout-minutes:
+        type: number
+        default: 90
+    outputs:
+      tags:
+        description: "The tags, separated by spaces (pushed only with push)"
+        value: ${{ jobs.plan.outputs.tags }}
+      version:
+        description: "The project's version, or empty"
+        value: ${{ jobs.plan.outputs.version }}
+      pushed:
+        description: "true if the image was pushed"
+        value: ${{ jobs.plan.outputs.push }}
+
+jobs:
+  # The architectures, the tags, and whether to push.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      tags: ${{ steps.plan.outputs.tags }}
+      version: ${{ steps.plan.outputs.version }}
+      push: ${{ steps.plan.outputs.push }}
+    steps:
+      - id: plan
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+          ARM64_RUNNER: ${{ inputs.arm64-runner }}
+          ARM64_CPU: ${{ inputs.arm64-cpu }}
+          AMD64_RUNNER: ${{ inputs.amd64-runner }}
+          AMD64_CPU: ${{ inputs.amd64-cpu }}
+          VERSION: ${{ inputs.version }}
+          EXTRA_TAGS: ${{ inputs.extra-tags }}
+          PUSH: ${{ inputs.push }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+          env = os.environ
+          include = []
+          for arch in env["PLATFORMS"].split():
+              if arch not in ("arm64", "amd64"):
+                  sys.exit(f"::error::platforms: {arch} is neither arm64 nor amd64")
+              up = arch.upper()
+              include.append({"arch": arch, "runner": env[f"{up}_RUNNER"], "cpu": env[f"{up}_CPU"]})
+          if not include:
+              sys.exit("::error::platforms names no architecture")
+          version = env["VERSION"]
+          if not version and env["GITHUB_REF_TYPE"] == "tag":
+              version = env["GITHUB_REF_NAME"]
+          version = version.removeprefix("v")
+          tags = [env["GITHUB_SHA"][:7]] + ([version] if version else []) + env["EXTRA_TAGS"].split()
+          for t in tags:
+              if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", t):
+                  sys.exit(f"::error::{t!r} isn't a docker tag")
+          push = env["PUSH"] == "true" and not env["EVENT"].startswith("pull_request")
+          if env["PUSH"] == "true" and not push:
+              print("::notice::a pull request builds and tests the image but never pushes it")
+          with open(env["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"matrix={json.dumps({'include': include})}\n")
+              out.write(f"tags={' '.join(dict.fromkeys(tags))}\n")
+              out.write(f"version={version}\n")
+              out.write(f"push={'true' if push else 'false'}\n")
+          print("tags:", *tags, "push:", push)
+          PY
+
+  image:
+    name: image (${{ matrix.arch }}, ${{ matrix.cpu }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    env:
+      IMAGE: project-image:ci
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAGS: ${{ needs.plan.outputs.tags }}
+    defaults:
+      run:
+        working-directory: project
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: project
+      # pixi, for `prepare` and `smoke`. Git maintenance is off before
+      # setup-pixi restores rattler's git cache: in a cached repo it races
+      # its `git clone --local` (mojo-census#135).
+      - run: git config --global maintenance.auto false && git config --global gc.auto 0
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: v0.78.0
+          run-install: false
+      - name: Prepare
+        if: inputs.prepare != ''
+        run: ${{ inputs.prepare }}
+
+      # The orca-mojo pixi.lock resolved, as `orca aws push` reads it
+      # (orca.aws.lock_orca_version): a source package's `version:` line or
+      # a channel package's file name.
+      - name: The orca version
+        id: orca
+        env:
+          ORCA_VERSION: ${{ inputs.orca-version }}
+          ORCA_REF: ${{ inputs.orca-ref }}
+          CONTEXT: ${{ inputs.context }}
+          TEMPLATE: ${{ inputs.dockerfile == '' }}
+          BUILD_RUNTIME: ${{ inputs.build-runtime }}
+        run: |
+          v=$ORCA_VERSION
+          if [ -z "$v" ] && [ -f "$CONTEXT/pixi.lock" ]; then
+            v=$(awk '
+              /^- / { inorca = index($0, "- conda_source: orca-mojo[") == 1
+                      if (index($0, "- conda: ") == 1 && (at = index($0, "/orca-mojo-")) > 0) {
+                        rest = substr($0, at + 11); print substr(rest, 1, index(rest, "-") - 1); exit }
+                      next }
+              inorca { t = $0; sub(/^[ \t]+/, "", t)
+                       if (index(t, "version: ") == 1) { print substr(t, 10); exit } }' "$CONTEXT/pixi.lock")
+          fi
+          v=${v#v}
+          if [ -z "$v" ] && { [ "$TEMPLATE" = true ] || [ "$BUILD_RUNTIME" = true ]; }; then
+            echo "::error::$CONTEXT/pixi.lock pins no orca-mojo: add it (pixi shelf add orca-mojo) or set orca-version"
+            exit 1
+          fi
+          echo "orca-mojo: ${v:-none}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "ref=${ORCA_REF:-${v:+v$v}}" >> "$GITHUB_OUTPUT"
+      - if: inputs.dockerfile == '' || inputs.build-runtime
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.orca-repository }}
+          ref: ${{ steps.orca.outputs.ref }}
+          path: orca
+      - name: Build the runtime from ${{ inputs.orca-repository }}@${{ steps.orca.outputs.ref }}
+        if: inputs.build-runtime
+        working-directory: orca
+        env:
+          ORCA_VERSION: ${{ steps.orca.outputs.version }}
+        run: |
+          docker build -f deploy/runtime.Dockerfile \
+            --build-arg MOJO_TARGET_CPU=${{ matrix.cpu }} --build-arg ORCA_VERSION="$ORCA_VERSION" \
+            -t "orca-runtime:$ORCA_VERSION" .
+
+      - name: Build the image
+        env:
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          CONTEXT: ${{ inputs.context }}
+          VERSION_ARG: ${{ inputs.version-arg }}
+          BUILD_ARGS: ${{ inputs.build-args }}
+          ORCA_VERSION: ${{ steps.orca.outputs.version }}
+          ORCA_RUNTIME: ${{ inputs.build-runtime && 'orca-runtime' || inputs.runtime }}
+        run: |
+          file=${DOCKERFILE:-$GITHUB_WORKSPACE/orca/deploy/project.Dockerfile}
+          set -- --build-arg MOJO_TARGET_CPU=${{ matrix.cpu }} \
+            --build-arg ORCA_SOURCE="https://github.com/$GITHUB_REPOSITORY" \
+            --build-arg ORCA_COMMIT="$GITHUB_SHA" \
+            --build-arg "$VERSION_ARG=$VERSION"
+          if [ -n "$ORCA_VERSION" ]; then
+            set -- "$@" --build-arg ORCA_VERSION="$ORCA_VERSION" --build-arg ORCA_RUNTIME="$ORCA_RUNTIME"
+          fi
+          while IFS= read -r a; do
+            [ -n "$a" ] && set -- "$@" --build-arg "$a"
+          done <<EOF
+          $BUILD_ARGS
+          EOF
+          docker build -f "$file" "$@" \
+            --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            ${VERSION:+--label org.opencontainers.image.version="$VERSION"} \
+            -t "$IMAGE" "$CONTEXT"
+          docker image ls "$IMAGE" --format 'size: {{.Size}}'
+
+      # Each file as `orca register` checks it, by the image's own orca.
+      - name: orca config check ${{ inputs.configs }}
+        if: inputs.configs != ''
+        env:
+          CONFIGS: ${{ inputs.configs }}
+        run: |
+          for f in $CONFIGS; do
+            echo "== $f"
+            docker run --rm -v "$PWD:/work:ro" -w /work "$IMAGE" config check "$f"
+          done
+
+      # What every orca image needs: its orca runs, every binary and library
+      # finds what it links, and every pipeline describes itself.
+      - name: Test the image
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          [ "$(docker image inspect -f '{{.Config.Entrypoint}}' "$IMAGE")" = "[/opt/orca/bin/orca]" ] \
+            || fail "the entrypoint isn't /opt/orca/bin/orca"
+          docker run --rm "$IMAGE" 2>&1 | grep -q "orca config check" || fail "orca's usage"
+          missing=$(docker run --rm --entrypoint sh "$IMAGE" -c \
+            'for f in /opt/orca/bin/* /opt/orca/pipelines/* /opt/orca/lib/*.so*; do
+                [ -f "$f" ] && [ "${f%.json}" = "$f" ] && ldd "$f" 2>/dev/null | grep "not found" | sed "s|^|$f: |"; done; true')
+          [ -z "$missing" ] || fail "libraries not found: $missing"
+          for p in $(docker run --rm --entrypoint sh "$IMAGE" -c 'cd /opt/orca/pipelines && for f in *; do [ -x "$f" ] && [ -f "$f" ] && echo "$f"; done; true'); do
+            docker run --rm --entrypoint "$p" "$IMAGE" describe > /dev/null || fail "$p describe"
+            echo "ok   $p describe"
+          done
+      - name: Smoke test
+        if: inputs.smoke != ''
+        run: ${{ inputs.smoke }}
+
+      - name: Log in to GHCR
+        if: needs.plan.outputs.push == 'true' && startsWith(inputs.image, 'ghcr.io/')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push ${{ needs.plan.outputs.tags }} (-${{ matrix.arch }})
+        if: needs.plan.outputs.push == 'true'
+        env:
+          TARGET: ${{ inputs.image }}
+        run: |
+          for t in $TAGS; do
+            docker tag "$IMAGE" "$TARGET:$t-${{ matrix.arch }}"
+            docker push "$TARGET:$t-${{ matrix.arch }}"
+          done
+
+  # Each tag as one image for every architecture, so each host pulls its own.
+  manifest:
+    needs: [plan, image]
+    if: needs.plan.outputs.push == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TARGET: ${{ inputs.image }}
+      TAGS: ${{ needs.plan.outputs.tags }}
+      PLATFORMS: ${{ inputs.platforms }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - if: startsWith(inputs.image, 'ghcr.io/')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Join the architectures
+        run: |
+          for t in $TAGS; do
+            set --
+            for a in $PLATFORMS; do set -- "$@" "$TARGET:$t-$a"; done
+            docker buildx imagetools create -t "$TARGET:$t" "$@"
+            docker buildx imagetools inspect "$TARGET:$t" | grep -E 'Platform: +linux/'
+          done

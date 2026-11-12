@@ -17,6 +17,7 @@ from orca.config import (
 from orca.fill import (
     fill_refusal,
     parse_fill_budget,
+    fill_max_runs_auto,
     parse_fill_max_runs,
 )
 from orca.proc import (
@@ -118,8 +119,10 @@ def register_pipeline(
     if r.text("keys_per_run"):
         keys_per_run = parse_keys_per_run(r.text("keys_per_run"))
     var fill_max_runs = -1
+    var fill_auto = False
     if r.text("fill_max_runs"):
         fill_max_runs = parse_fill_max_runs(r.text("fill_max_runs"))
+        fill_auto = fill_max_runs_auto(r.text("fill_max_runs"))
     var fill_budget = -1.0
     if r.text("fill_budget_per_day"):
         fill_budget = parse_fill_budget(r.text("fill_budget_per_day"))
@@ -147,7 +150,8 @@ def register_pipeline(
             " worker_type, ec2_workers, spot, ec2_min_workers, secrets,"
             " worker_procs, placement, max_runs, env, config, fills,"
             " fill_order, fill_max_runs, fill_budget_per_day, fill_window,"
-            " cpus, memory_gb, fill_lag, learn, max_runs_auto, keys_per_run)"
+            " cpus, memory_gb, fill_lag, learn, max_runs_auto, keys_per_run,"
+            " fill_max_runs_auto)"
             " SELECT"
             " d->>'pipeline',"
             " d->>'registry_hash',"
@@ -159,7 +163,8 @@ def register_pipeline(
             " nullif($19, ''), nullif($20, -1), nullif($21, -1::float8),"
             " nullif($22, ''), nullif($23, ''), nullif($24, ''),"
             " nullif($25, ''), nullif($26, '')::boolean, CASE WHEN $15 > 0"
-            " THEN $27 END, nullif($28, -1) FROM"
+            " THEN $27 END, nullif($28, -1), CASE WHEN $20 > 0 THEN $29 END"
+            " FROM"
             " (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO UPDATE SET"
             " registry_hash = EXCLUDED.registry_hash, describe ="
             " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
@@ -196,6 +201,9 @@ def register_pipeline(
             " CASE WHEN $14 THEN EXCLUDED.fill_order ELSE"
             " orca.pipelines.fill_order END, fill_max_runs = CASE WHEN $14"
             " THEN EXCLUDED.fill_max_runs ELSE orca.pipelines.fill_max_runs"
+            " END, fill_max_runs_auto = CASE WHEN $14 THEN"
+            " EXCLUDED.fill_max_runs_auto ELSE"
+            " orca.pipelines.fill_max_runs_auto"
             " END, fill_budget_per_day = CASE WHEN $14 THEN"
             " EXCLUDED.fill_budget_per_day ELSE"
             " orca.pipelines.fill_budget_per_day END, fill_window = CASE"
@@ -245,7 +253,8 @@ def register_pipeline(
         .text(r.text("fill_lag"))
         .text(r.text("learn"))
         .bool(auto_runs)
-        .int64(Int64(keys_per_run)),
+        .int64(Int64(keys_per_run))
+        .bool(fill_auto),
     )
     var name = res.row(0).text("name")
     var version = self.db.version(

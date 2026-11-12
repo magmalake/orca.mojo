@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.24.0 - 2026-11-11
+
+- **One run over several workers of a pool**: `workers = N` on a pool pipeline lets a run's dista cluster spread over N more machines, guarded by a token. (#325)
+
+- **Kubernetes runs keep their pods' last lines and samples**: a finished run's Job is kept until its pods finish. (#328)
+
+- **Runs spread over machines a pool grows**: pool machines join a private network, and a run that wants more members grows the pool. (#334)
+
+- **A runtime image per release:** each release pushes `ghcr.io/magmalake/orca-runtime:<version>`, which the project image `orca aws push` builds now starts `FROM`. (#336)
+
+- **Pools lists live machines** Machines gone for over an hour are behind a "show all" link (`?gone=1`), and `/api/pools?gone=0` matches. (#338)
+
+- **A snapshot sensed during a live run is queued behind it**: when that run read an older snapshot, its keys run again after it ends (#339)
+
+- **Image build stages on Debian**: they start from `pixi:0.78.0-bookworm`, the same release as the runtime stage, instead of pixi's Ubuntu default. (#340)
+
+- **Reusable CI for projects**: a project's CI can call orca's `project-image.yml`, `project-test.yml` and `project-release.yml`, pinned to an orca tag. (#344)
+
+- **Runtime image locked and promoted:** it installs from a committed lock, and a release tags main's tested image instead of rebuilding it. (#345)
+
+- **A run's Cluster card**: a run spread over pool workers shows its head and members on its page and in its JSON. (#346)
+
+- **Ops › Pools shows the pools orca grows**: each one's types, live machines and last try; pool machines are named `orca-pool-<pool>-<n>`. (#347)
+
+- **Pools fall back on a quota refusal**: a type the project's quota refuses moves the pool on to its next type at once. (#348)
+
+- **`fill_max_runs = "auto"`**: fill runs go as many at once as the host has room for, up to a ceiling. (#350)
+
+- **A gone worker's fill runs are audited**: a pool's fill run whose worker died is always queued again with why, in the audit log too. (#351)
+
 ## 0.23.0 - 2026-11-11
 
 - **Hosts over time counts self-hosted workers**: Ops › Pools' chart shows them beside EC2 and the control host. (#305)

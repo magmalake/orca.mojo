@@ -264,6 +264,19 @@ def test_auto_max_runs() raises:
     assert_equal(resolve("b", RegisterFlags(), f).text("max_runs"), "auto")
     assert_equal(resolve("c", RegisterFlags(), f).text("max_runs"), "auto..8")
     assert_equal(canonical_flag("max_runs", "auto..3"), "auto..3")
+    # fill_max_runs too (#322).
+    var g = ProjectConfig(
+        (
+            "[pipelines.a]\nfill_max_runs ="
+            ' "auto"\n[pipelines.b]\nfill_max_runs = "auto..8"\n'
+        ),
+        "orca.toml",
+    )
+    assert_equal(resolve("a", RegisterFlags(), g).text("fill_max_runs"), "auto")
+    assert_equal(
+        resolve("b", RegisterFlags(), g).text("fill_max_runs"), "auto..8"
+    )
+    _refused('[pipelines.a]\nfill_max_runs = "lots"\n', "auto..N")
     assert_equal(canonical_flag("max_runs", "3"), "3")
     _refused('[pipelines.a]\nmax_runs = "auto.."\n', "auto..N")
     _refused('[pipelines.a]\nmax_runs = "auto..0"\n', "auto..N")

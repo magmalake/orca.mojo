@@ -79,7 +79,7 @@ load_env() {
     SERVER_TYPE_BIG=${SERVER_TYPE_BIG:-cax41}
     SERVER_IMAGE=${SERVER_IMAGE:-ubuntu-24.04}
     VOLUME_SIZE_GB=${VOLUME_SIZE_GB:-50}
-    ORCA_IMAGE=${ORCA_IMAGE:-ghcr.io/magmalake/orca}
+    ORCA_IMAGE=${ORCA_IMAGE:-ghcr.io/morca-dev/census}
     CLOUDFLARED_IMAGE=${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.7}
     APPS=${APPS:-console:8080}
     BACKUP_KEEP=${BACKUP_KEEP:-14}

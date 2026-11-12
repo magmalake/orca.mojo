@@ -1,29 +1,30 @@
-# The runtime image, ghcr.io/magmalake/orca-runtime (deploy/runtime.Dockerfile),
-# which project images build FROM (deploy/project.Dockerfile). Called by CI
-# on pull requests and main, to build and test it, and by the release
-# workflow for each release, to push it as orca-runtime:<version>. Pushing a
-# v<version> tag by hand pushes that version too (the release workflow's
-# own tag, made with its token, starts no workflow, so it calls this).
+# The runtime image, ghcr.io/morca-dev/morca-runtime (deploy/runtime.Dockerfile),
+# which project images build FROM (deploy/project.Dockerfile). Called by CI:
+# on pull requests to build and test it, and on main to build, test and push
+# it as orca-runtime:<sha>. A release builds nothing: it tags the image of
+# the commit it releases <version> (release.yml).
 #
 # One image per architecture, each on its own runner (no emulation), built
-# for a baseline CPU (MOJO_TARGET_CPU) and tested with tests/runtime-image.sh,
-# which also builds a scratch project's image on it. A push sends each as
-# <version>-<arch>, and `manifest` joins them under <version>.
+# for a baseline CPU (MOJO_TARGET_CPU) from deploy/runtime/pixi.lock and
+# tested with tests/runtime-image.sh, which on the architectures in
+# `project` also builds a scratch project's image on it. A push sends each
+# as <sha>-<arch>, and `manifest` joins them under <sha>.
+#
+# The jobs ask for no permissions of their own: they get the caller's, so
+# only CI's main job, which pushes, has packages: write.
 name: runtime image
 
 on:
   workflow_call:
     inputs:
-      ref:
-        description: "The commit to build (default: the caller's)"
+      push:
+        description: "Push the image as orca-runtime:<sha> (main only)"
+        type: boolean
+        default: false
+      project:
+        description: "The architectures to build and run the scratch project on"
         type: string
-        default: ""
-      version:
-        description: "The version to push it as (0.24.0); empty pushes nothing"
-        type: string
-        default: ""
-  push:
-    tags: ['v*']
+        default: "arm64 amd64"
 
 jobs:
   image:
@@ -40,64 +41,56 @@ jobs:
             cpu: x86-64-v3
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
-    permissions:
-      contents: read
-      packages: write
     env:
-      GHCR_IMAGE: ghcr.io/magmalake/orca-runtime
-      VERSION: ${{ inputs.version || (github.ref_type == 'tag' && github.ref_name) || '' }}
+      GHCR_IMAGE: ghcr.io/morca-dev/morca-runtime
+      SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
-      - name: The version
-        run: |
-          v=${VERSION#v}
-          if [ -n "$v" ]; then
-            have=$(sed -n 's/^version = "\(.*\)"$/\1/p' shelf.toml)
-            [ "$have" = "$v" ] || { echo "::error::shelf.toml says $have, not $v"; exit 1; }
-          fi
-          echo "VERSION=$v" >> "$GITHUB_ENV"
       # pixi, for the scratch project's lock (tests/runtime-image.sh).
       - run: git config --global maintenance.auto false && git config --global gc.auto 0
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           pixi-version: v0.78.0
           run-install: false
+      # No version label: main's image isn't a release yet. The release adds
+      # the version to the joined image's index as an annotation.
       - name: Build the runtime image
         run: |
           docker build -f deploy/runtime.Dockerfile \
-            --build-arg MOJO_TARGET_CPU=${{ matrix.cpu }} --build-arg ORCA_VERSION="$VERSION" \
+            --build-arg MOJO_TARGET_CPU=${{ matrix.cpu }} \
             --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
-            --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
+            --label org.opencontainers.image.revision="$SHA" \
             -t orca-runtime:ci .
           docker image ls orca-runtime:ci --format 'size: {{.Size}}'
-      - name: Test it, and a project's image on it
-        run: sh tests/runtime-image.sh orca-runtime:ci --project ${{ matrix.cpu }}
+      - name: Test it${{ contains(inputs.project, matrix.arch) && ', and a project''s image on it' || '' }}
+        run: |
+          if ${{ contains(inputs.project, matrix.arch) }}; then
+            sh tests/runtime-image.sh orca-runtime:ci --project ${{ matrix.cpu }}
+          else
+            sh tests/runtime-image.sh orca-runtime:ci
+          fi
       - name: Log in to GHCR
-        if: env.VERSION != ''
+        if: inputs.push
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Push ${{ env.VERSION }}-${{ matrix.arch }}
-        if: env.VERSION != ''
+      - name: Push <sha>-${{ matrix.arch }}
+        if: inputs.push
         run: |
-          docker tag orca-runtime:ci "$GHCR_IMAGE:$VERSION-${{ matrix.arch }}"
-          docker push "$GHCR_IMAGE:$VERSION-${{ matrix.arch }}"
+          docker tag orca-runtime:ci "$GHCR_IMAGE:$SHA-${{ matrix.arch }}"
+          docker push "$GHCR_IMAGE:$SHA-${{ matrix.arch }}"
 
-  # The version as one image for both architectures, so each host pulls its own.
+  # The commit's image as one for both architectures, so each host pulls its
+  # own. Only after both pushed: a <sha> tag is an image tested on both.
   manifest:
     needs: image
-    if: inputs.version != '' || github.ref_type == 'tag'
+    if: inputs.push
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     env:
-      GHCR_IMAGE: ghcr.io/magmalake/orca-runtime
-      VERSION: ${{ inputs.version || github.ref_name }}
+      GHCR_IMAGE: ghcr.io/morca-dev/morca-runtime
+      SHA: ${{ github.sha }}
     steps:
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -107,6 +100,5 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Join the architectures
         run: |
-          v=${VERSION#v}
-          docker buildx imagetools create -t "$GHCR_IMAGE:$v" "$GHCR_IMAGE:$v-arm64" "$GHCR_IMAGE:$v-amd64"
-          docker buildx imagetools inspect "$GHCR_IMAGE:$v" | grep -E 'Platform: +linux/(arm64|amd64)'
+          docker buildx imagetools create -t "$GHCR_IMAGE:$SHA" "$GHCR_IMAGE:$SHA-arm64" "$GHCR_IMAGE:$SHA-amd64"
+          docker buildx imagetools inspect "$GHCR_IMAGE:$SHA" | grep -E 'Platform: +linux/(arm64|amd64)'

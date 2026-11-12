@@ -78,6 +78,16 @@ struct Created(Copyable, Movable):
     var address: String
     var why: String
 
+    def quota(self) -> Bool:
+        """Whether it was refused for the project's quota (Hetzner's
+        `resource_limit_exceeded`, EC2's `VcpuLimitExceeded` or
+        `InstanceLimitExceeded`): a smaller type may still fit."""
+        return (
+            "resource_limit_exceeded" in self.why
+            or "VcpuLimitExceeded" in self.why
+            or "InstanceLimitExceeded" in self.why
+        )
+
 
 @fieldwise_init
 struct Server(Copyable, Movable):

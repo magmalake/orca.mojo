@@ -33,7 +33,11 @@ ORCA_NOW=2024-01-15T00:00Z ORCA_TOY_CRASH=2024-02 ./build/orca scheduler >> "$lo
 sched=$!
 
 i=0
-until [ "$(q "SELECT count(*) FROM orca.attempts WHERE error LIKE 'crashed%'")" -gt 0 ]; do
+# Wait for the step's row too: the scheduler records the crashed attempt
+# before it copies the error onto the step, and killing it in between left
+# the step without its error (a race a fast, warm machine hits).
+until [ "$(q "SELECT count(*) FROM orca.attempts WHERE error LIKE 'crashed%'")" -gt 0 ] \
+    && [ "$(q "SELECT count(*) FROM orca.steps WHERE step = 'measure' AND partition = '2024-02' AND error LIKE 'crashed%'")" -gt 0 ]; do
     i=$((i + 1)); [ "$i" -lt 300 ] || fail "no attempt failed with the crash"; sleep 0.1
 done
 kill "$sched"
@@ -44,8 +48,9 @@ run=$(q "SELECT max(id) FROM orca.runs")
 err=$(q "SELECT a.error FROM orca.attempts a JOIN orca.steps s ON a.step = s.id WHERE a.error LIKE 'crashed%' ORDER BY a.id LIMIT 1")
 echo "$err" | grep -q "^crashed: .*crashing 2024-02 as asked; at measure .*toy.mojo:[0-9]" \
     || fail "the attempt's error: $err"
-[ "$(q "SELECT error FROM orca.steps WHERE run = $run AND step = 'measure' AND partition = '2024-02'")" = "$err" ] \
-    || fail "the step's error isn't the attempt's"
+step_err=$(q "SELECT error FROM orca.steps WHERE run = $run AND step = 'measure' AND partition = '2024-02'")
+[ "$step_err" = "$err" ] \
+    || fail "the step's error isn't the attempt's: step has [$step_err], attempt has [$err], attempts: $(q "SELECT string_agg(a.id || ':' || coalesce(a.error, '-'), ' | ' ORDER BY a.id) FROM orca.attempts a")"
 grep -q "^--- start 1" "$ORCA_LOGS/toy/$run/driver.log" || fail "no start line in the driver log"
 grep -q "^ *#[0-9]* 0x[0-9a-f]* measure .*toy.mojo:" "$ORCA_LOGS/toy/$run/driver.log" \
     || fail "no symbolized frame in the driver log"

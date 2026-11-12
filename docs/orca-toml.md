@@ -64,7 +64,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 | `env` | table of `NAME = "value"` (numbers and booleans become text) | none | none (it replaces `ORCA_RUN_ENV` for pipeline settings) | See [env](#env-orca_run_env-and-the-warm-pool) below. |
 | `fills` | string: `"all"` or `"since_registration"` | `since_registration` | none | `all`: the scheduler fills the pipeline's whole range by itself. See [Fills](#fills). |
 | `fill_order` | string: `"oldest"` or `"newest"` | `oldest` | none | Which end of the range fills first. |
-| `fill_max_runs` | integer from 1 to 10000 | 1 | none | Fill runs at once, on top of `max_runs`. |
+| `fill_max_runs` | integer from 1 to 10000, or string `"auto"` or `"auto..N"` | 1 | none | Fill runs at once, on top of `max_runs`. `auto`: as many as the host has room for, up to 64 (or N), as [`max_runs = "auto"`](#how-many-at-once) does. |
 | `keys_per_run` | integer from 1 to 10000 | the code's `Pipeline[..., keys_per_run=]`, else 1 | none | Keys a run takes: a backfill's runs, a sensor's runs above 1, and fill runs. See [Keys per run](#keys-per-run). |
 | `fill_budget_per_day` | number from 0 to 100000, US dollars | none | none | Estimated spend of fill runs a UTC day. Fill runs on EC2 or Kubernetes don't start without it. |
 | `fill_window` | string `"A..B"`, UTC hours: A from 0 to 23, B from 1 to 24 | `"0..24"`, all day | none | Fill runs start from hour A up to hour B. `"22..6"` wraps past midnight. |
@@ -296,8 +296,8 @@ run at a time, and its queued runs say so: `waiting: max_runs = "auto"
 starts one run at a time until its runs have a request to weigh`. On EC2,
 Kubernetes and remote workers, where there is no host's room to weigh, the
 ceiling is the limit (a worker still admits what it takes against its own
-host). `fill_max_runs` is still a count. An older orca reads `"auto"` as
-its ceiling.
+host). `fill_max_runs = "auto"` works the same way for fill runs. An older
+orca reads `"auto"` as its ceiling.
 
 ### Memory pressure
 

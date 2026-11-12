@@ -38,7 +38,7 @@ base="http://127.0.0.1:$uport"
 export AWS_REGION=us-east-2 AWS_ACCESS_KEY_ID=AKIDTEST AWS_SECRET_ACCESS_KEY=test-secret
 export ORCA_EC2_ENDPOINT="http://127.0.0.1:$eport" ORCA_SSM_ENDPOINT="http://127.0.0.1:$eport"
 export ORCA_REGISTRY_ENDPOINT="http://127.0.0.1:$rport"
-export ORCA_WORKER_IMAGE="ghcr.io/magmalake/orca:t1"
+export ORCA_WORKER_IMAGE="ghcr.io/morca-dev/census:t1"
 export ORCA_POOL_EC2_SECURITY_GROUP=sg-pool ORCA_POOL_EC2_PROFILE=orca-pool-worker
 pids=
 cleanup() { for p in $pids; do kill "$p" 2> /dev/null || true; done; }
@@ -99,7 +99,7 @@ echo arm64 > "$dir/reg/arches"
 echo "m7i.large subnet-a" > "$dir/ec2/pool-stock"
 ./build/orca backfill plain 2024-01..2024-03 >> "$log" 2>&1 || fail "backfill"
 until_ 20 "no waiting status: $(status)" has_status "waiting: no c7g.large in subnet-a, subnet-b yet"
-has_status "m7i.large skipped: ghcr.io/magmalake/orca:t1 has no linux/amd64" || fail "the skip: $(status)"
+has_status "m7i.large skipped: ghcr.io/morca-dev/census:t1 has no linux/amd64" || fail "the skip: $(status)"
 [ -z "$(live)" ] || fail "an instance runs: $(live)"
 echo "ok   an x86 type the image can't run is skipped; no capacity is waited on"
 

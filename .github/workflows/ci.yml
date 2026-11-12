@@ -98,8 +98,8 @@ jobs:
       # dista compiles from source next door, at the revision orca builds on.
       - uses: actions/checkout@v4
         with:
-          repository: magmalake/dista.mojo
-          ref: df018565d71a8f7061350deeeb02f31555526429
+          repository: morca-dev/dista
+          ref: 3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
           path: dista.mojo
       # So does k8s, the scheduler's Kubernetes client.
       - uses: actions/checkout@v4
@@ -186,10 +186,16 @@ jobs:
       # empty in every job. Restored from main's last run, it makes builds of
       # code main has built already 4-6x faster. It's content-addressed, so a
       # stale entry is never used. Saved by main and the nightly, like the
-      # environment.
+      # environment. build/.mojo-build goes with it: scripts/mojo-build.sh
+      # keys every binary on its sources and packages and copies an
+      # identical earlier build instead of compiling it (tens of MB; it
+      # prunes entries unused for two days itself). Keeping it halved
+      # test-executor on a warm runner (#342).
       - uses: actions/cache/restore@v4
         with:
-          path: orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
           restore-keys: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
 
@@ -206,7 +212,9 @@ jobs:
       - if: always() && github.event_name != 'pull_request'
         uses: actions/cache/save@v4
         with:
-          path: orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   # orca on a kind cluster (deploy/): the image, built with pixi inside
@@ -224,16 +232,95 @@ jobs:
         run: tests/kind.sh
 
   # The runtime image projects build FROM (deploy/runtime.Dockerfile), and a
-  # scratch project's image on it, for arm64 and amd64: built and tested,
-  # never pushed here. The release workflow pushes each release's.
+  # scratch project's image on it. On pull requests it's built and tested
+  # for arm64 and amd64, with the project on arm64 only, the servers'
+  # architecture: the project build is the same Dockerfile on both, and
+  # main runs it on both before anything is pushed. Never pushed here.
   runtime-image:
     needs: [changes, release]
-    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
+    if: ${{ !cancelled() && github.event_name != 'schedule' && github.event_name != 'push' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
     uses: ./.github/workflows/runtime-image.yml
     permissions:
       contents: read
-      # The called workflow's push steps, which only a release runs.
+    with:
+      project: arm64
+
+  # On main: the same, with the project on both architectures, then pushed
+  # as ghcr.io/morca-dev/morca-runtime:<sha>. A release tags that image
+  # <version> (release.yml), so a release PR's merge commit needs it too.
+  # The only job here that can push a package.
+  runtime-image-main:
+    needs: [changes]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/runtime-image.yml
+    permissions:
+      contents: read
       packages: write
+    with:
+      push: true
+      project: arm64 amd64
+
+  # deploy/runtime/pixi.lock against what orca-mojo depends on now. Fast,
+  # and run on release PRs too (which skip runtime-image), so a release that
+  # moves a tin's revision can't merge with a lock main's image can't build
+  # from. A stale lock: `sh deploy/runtime/lock.sh` and commit it.
+  runtime-lock:
+    needs: [changes]
+    if: ${{ github.event_name != 'schedule' && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global maintenance.auto false && git config --global gc.auto 0
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: v0.78.0
+          run-install: false
+      - run: sh deploy/runtime/lock.sh --check
+
+  # orca's reusable workflows for a project's CI (docs/project-ci.md), each
+  # called as a project calls it, on a scratch project that adds this commit
+  # of orca-mojo (tests/example-project.sh). Nothing is pushed or released:
+  # the image is built on a runtime built from this commit, and the release
+  # only writes its notes.
+  project-image:
+    needs: [changes, release]
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
+    uses: ./.github/workflows/project-image.yml
+    permissions:
+      contents: read
+    with:
+      image: ghcr.io/morca-dev/morca-example-project
+      prepare: sh tests/example-project.sh build/example-project
+      context: build/example-project
+      configs: build/example-project/orca.toml
+      orca-repository: ${{ github.repository }}
+      orca-ref: ${{ github.sha }}
+      build-runtime: true
+      smoke: docker run --rm --entrypoint toy "$IMAGE" run --partitions 2024-01
+
+  project-test:
+    needs: [changes, release]
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
+    uses: ./.github/workflows/project-test.yml
+    permissions:
+      contents: read
+    with:
+      prepare: sh tests/example-project.sh build/example-project
+      manifest-path: build/example-project/pixi.toml
+      runners: '["ubuntu-24.04"]'
+
+  project-release:
+    needs: [changes, release]
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
+    uses: ./.github/workflows/project-release.yml
+    permissions:
+      contents: read
+    with:
+      # A released version's section, which CHANGELOG.md keeps.
+      version: "0.23.0"
+      image: ghcr.io/morca-dev/morca-example-project
+      dry-run: true
 
   # Every fuzz harness under fuzz/, for a short session each, with all bounds
   # checks on. Longer sessions are a FUZZ_RUNS away locally.
@@ -250,8 +337,8 @@ jobs:
           path: orca.mojo
       - uses: actions/checkout@v4
         with:
-          repository: magmalake/dista.mojo
-          ref: df018565d71a8f7061350deeeb02f31555526429
+          repository: morca-dev/dista
+          ref: 3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
           path: dista.mojo
       # Off before setup-pixi restores rattler's git cache: git's
       # background maintenance in a cached repo races its
@@ -266,7 +353,9 @@ jobs:
           cache-write: ${{ github.event_name != 'pull_request' }}
       - uses: actions/cache/restore@v4
         with:
-          path: orca.mojo/.pixi/envs/fuzz/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/fuzz/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
           restore-keys: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-
       - name: Fuzz
@@ -282,7 +371,9 @@ jobs:
       - if: always() && github.event_name != 'pull_request'
         uses: actions/cache/save@v4
         with:
-          path: orca.mojo/.pixi/envs/fuzz/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/fuzz/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   format:
@@ -354,7 +445,7 @@ jobs:
         with:
           path: orca.mojo
       - uses: actions/checkout@v4
-        with: {repository: magmalake/dista.mojo, ref: df018565d71a8f7061350deeeb02f31555526429, path: dista.mojo}
+        with: {repository: morca-dev/dista, ref: 3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30, path: dista.mojo}
       - uses: actions/checkout@v4
         with: {repository: magmalake/k8s.mojo, ref: 6cb83ce08e02234873f2d09c7501208eedb5589f, path: k8s.mojo}
       - uses: actions/checkout@v4
@@ -406,7 +497,9 @@ jobs:
           cache-write: ${{ github.event_name != 'pull_request' }}
       - uses: actions/cache/restore@v4
         with:
-          path: orca.mojo/.pixi/envs/data/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/data/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
           restore-keys: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
       - name: The ${{ matrix.group }} tests
@@ -417,7 +510,9 @@ jobs:
       - if: always() && github.event_name != 'pull_request'
         uses: actions/cache/save@v4
         with:
-          path: orca.mojo/.pixi/envs/data/share/max/cache
+          path: |
+            orca.mojo/.pixi/envs/data/share/max/cache
+            orca.mojo/build/.mojo-build
           key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
 
   # The tests that apply on macOS, on the Mac mini runner (m4-mini, an isolated
@@ -499,17 +594,21 @@ jobs:
   # gate doesn't cover.)
   ci:
     if: ${{ always() && github.event_name != 'schedule' }}
-    needs: [release, release-check, changes, test, kind, runtime-image, fuzz, format, formal, data]
+    needs: [release, release-check, changes, test, kind, runtime-image, runtime-image-main, runtime-lock, project-image, project-test, project-release, fuzz, format, formal, data]
     runs-on: ubuntu-latest
     steps:
       - env:
           NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
         run: |
           python3 - <<'PY'
           import json, os, sys
           needs = json.loads(os.environ["NEEDS"])
           release = needs.pop("release")
           build = needs.pop("release-check")
+          # One of the runtime image's jobs runs: main's on a push, the
+          # other otherwise.
+          needs.pop("runtime-image" if os.environ["EVENT"] == "push" else "runtime-image-main")
           release_only = release["outputs"].get("release_only") == "true"
           prose_only = needs["changes"]["outputs"].get("code") == "false"
           ok = {"success", "skipped"} if release_only or prose_only else {"success"}

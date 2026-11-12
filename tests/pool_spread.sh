@@ -36,7 +36,7 @@ free_port hport
 free_port uport
 base="http://127.0.0.1:$uport"
 export ORCA_HCLOUD_ENDPOINT="http://127.0.0.1:$hport/v1" ORCA_HCLOUD_TOKEN=test-token
-export ORCA_REGISTRY_ENDPOINT="http://127.0.0.1:$hport" ORCA_WORKER_IMAGE="ghcr.io/magmalake/orca:t1"
+export ORCA_REGISTRY_ENDPOINT="http://127.0.0.1:$hport" ORCA_WORKER_IMAGE="ghcr.io/morca-dev/census:t1"
 pids=
 cleanup() { for p in $pids; do kill "$p" 2> /dev/null || true; done; }
 trap cleanup EXIT
@@ -99,7 +99,7 @@ echo "ok   the run's want of a member grows a second machine, on the same privat
 
 until_ 120 "the run didn't succeed: $(q "SELECT status, error FROM orca.runs WHERE id = $run")" \
     is "SELECT status FROM orca.runs WHERE id = $run" succeeded
-ran_on=$(cat "$dir"/boot-*/stage/fanout-"$run"-*.log 2> /dev/null | grep -o "trips on orca-t-[0-9]*" | sort -u | wc -l | tr -d ' ')
+ran_on=$(cat "$dir"/boot-*/stage/fanout-"$run"-*.log 2> /dev/null | grep -o "trips on orca-pool-t-[0-9]*" | sort -u | wc -l | tr -d ' ')
 [ "$ran_on" = 2 ] || fail "tasks ran on $ran_on machines"
 # The driver's log is kept once its process has ended, a moment after.
 logged() { grep -q "trips in 1 months" "$ORCA_LOGS/fanout/$run/driver.log" 2> /dev/null; }

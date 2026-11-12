@@ -2,7 +2,7 @@
 
 Orchestration for data pipelines written in Mojo: DAGs declared in Mojo and
 checked by the compiler, schedules in cron syntax, and a web UI for runs,
-reruns and backfills. Steps run on [dista](https://github.com/magmalake/dista.mojo)
+reruns and backfills. Steps run on [dista](https://github.com/morca-dev/dista)
 clusters over Iceberg tables in object storage.
 
 Early days: steps and pipelines are declared and checked at compile time, and
@@ -236,7 +236,7 @@ commits `.github/workflows/ci.yml` pins. [Develop
 locally](https://mlake.dev/getting-started/develop) has the whole layout, a
 loop that clones it from the workflow, the examples, a local Postgres,
 scheduler and UI, the test suites and their timings, and how to try a change
-inside [mojo-census](https://github.com/magmalake/mojo-census) before it is
+inside [mojo-census](https://github.com/morca-dev/census) before it is
 released. `pixi run -e default test` is the whole default suite (`pixi run
 test` stops with "the task 'build-shared' is ambiguous"), about 12 minutes.
 
