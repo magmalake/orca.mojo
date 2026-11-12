@@ -1,0 +1,219 @@
+# Temporary (census #117): how long the census image takes to build on sai,
+# the self-hosted runner, with a build cache that stays on its disk, against
+# GitHub's runners, where every build is cold (10-13 minutes for amd64).
+#
+# Each `sequence` leg builds morca-dev/census's amd64 image from its
+# Dockerfile.orca, at a fixed commit, four times on a builder of its own,
+# created empty for the job and removed after it:
+#
+#   cold  the empty builder
+#   warm  again, the same commit
+#   src   a line added to a file in src/ (a census-only commit)
+#   pin   orca-mojo's pin moved to another morca commit, pixi.lock relocked
+#         (#117's case: the `env` stage and everything after it)
+#
+# `stock` is Dockerfile.orca as it is; `cache-mounts` adds BuildKit cache
+# mounts for pixi's package cache and Mojo's compile cache. `concurrent`
+# then runs two stock builds at once, on two of sai's runners.
+#
+# On pushes to this branch only (not pull_request): a push is always this
+# repository's own branch, never a fork's, and the PR's own CI doesn't run
+# it again. No secrets, and the token can only read. Nothing is pushed.
+name: Measure image cache
+
+on:
+  push:
+    branches: [image-cache-sai]
+    paths: [.github/workflows/measure-image-cache.yml]
+
+permissions:
+  contents: read
+
+env:
+  CENSUS_SHA: 713fbe08c877d442411608daac8167693afe26e0
+  # orca-mojo's pin at that commit is 480d2b4 (orca 0.24.0); 736569c is a
+  # later morca commit (#354, a src/ change) with the same dista pin.
+  PIN_TO: 736569c61d362975763725f378cf925ca1c37a87
+
+jobs:
+  sequence:
+    if: github.repository == 'morca-dev/morca'
+    name: sequence (${{ matrix.variant }})
+    runs-on: [self-hosted, sai]
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      # One after the other, so neither shares sai with the other.
+      max-parallel: 1
+      matrix:
+        variant: [stock, cache-mounts]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: morca-dev/census
+          ref: ${{ env.CENSUS_SHA }}
+          path: census
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: v0.78.0
+          run-install: false
+          cache: false
+          manifest-path: census/pixi.toml
+          pixi-bin-path: ${{ runner.temp }}/pixi/bin/pixi
+      - name: Prepare the variant and the src and pin copies
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -eux
+          docker version --format 'client {{.Client.Version}} server {{.Server.Version}}'
+          docker buildx version
+          lscpu | grep -E 'Model name|^CPU\(s\)'
+          if [ "$VARIANT" = cache-mounts ]; then
+            # pixi's package cache (conda packages, git checkouts) for
+            # `pixi install`, and Mojo's compile cache for the build.
+            sed -i \
+              -e 's|^RUN pixi install --locked$|RUN --mount=type=cache,id=census-pixi,target=/root/.cache pixi install --locked|' \
+              -e 's|^RUN mkdir -p /out/bin /out/pipelines \\$|RUN --mount=type=cache,id=census-max,target=/src/project/.pixi/envs/default/share/max/cache mkdir -p /out/bin /out/pipelines \\|' \
+              census/Dockerfile.orca
+            grep -n -- '--mount' census/Dockerfile.orca
+            [ "$(grep -c -- '--mount' census/Dockerfile.orca)" = 2 ]
+          fi
+          cp -a census census-src
+          echo '# measure-image-cache: a census-only change' >> census-src/src/activity.mojo
+          cp -a census census-pin
+          cd census-pin
+          sed -i "s|morca-dev/morca.git\", rev = \"[0-9a-f]*\"|morca-dev/morca.git\", rev = \"$PIN_TO\"|" pixi.toml
+          grep -n 'orca-mojo' pixi.toml
+          pixi lock
+          git diff --stat
+      - name: Builds
+        shell: bash
+        env:
+          VARIANT: ${{ matrix.variant }}
+          RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          B="measure-$RUN_KEY"
+          echo "B=$B" >> "$GITHUB_ENV"
+          docker buildx create --name "$B" --driver docker-container > /dev/null
+          docker buildx inspect --bootstrap "$B" | grep -E 'Driver|Status|Buildkit' || true
+          root=$(docker info -f '{{.DockerRootDir}}')
+          echo "docker root: $root"
+          summary() { echo "$*" >> "$GITHUB_STEP_SUMMARY"; }
+          summary "### $VARIANT on $RUNNER_NAME"
+          summary ""
+          summary "| build | seconds | pixi install | mojo build (apps / pipelines) | git | load before → after | builder cache |"
+          summary "|---|---|---|---|---|---|---|"
+          build() { # NAME DIR COMMIT
+            name=$1 dir=$2 commit=$3
+            load0=$(cut -d' ' -f1-3 /proc/loadavg)
+            t=$(date +%s)
+            docker buildx build --builder "$B" --load --progress=plain \
+              -f "$dir/Dockerfile.orca" -t "census-measure:$RUN_KEY-$name" \
+              --build-arg ORCA_SOURCE=https://github.com/morca-dev/census \
+              --build-arg ORCA_COMMIT="$commit" \
+              --build-arg MOJO_TARGET_CPU=x86-64-v3 \
+              "$dir" > "build-$name.log" 2>&1 || { tail -80 "build-$name.log"; exit 1; }
+            s=$(($(date +%s) - t))
+            load1=$(cut -d' ' -f1-3 /proc/loadavg)
+            # The step numbers of `pixi install` and the git build, and how
+            # long each took (CACHED when it was).
+            step_time() { # PATTERN
+              n=$(grep -m1 -E "^#[0-9]+ \[.*$1" "build-$name.log" | sed -E 's/^#([0-9]+).*/\1/')
+              [ -n "$n" ] || { echo "-"; return; }
+              grep -m1 -E "^#$n (DONE [0-9.]+s|CACHED)" "build-$name.log" | sed -E "s/^#$n //" || echo "?"
+            }
+            pixi_t=$(step_time 'RUN .*pixi install')
+            git_t=$(step_time 'git 4/4')
+            mojo_t=$(grep -E 'build.sh: multicall-(apps|pipelines) in' "build-$name.log" | sed -E 's/.*multicall-([a-z]+) in ([0-9]+) s/\2/' | paste -sd/ -)
+            [ -n "$mojo_t" ] || mojo_t=CACHED
+            du=$(docker buildx du --builder "$B" 2>/dev/null | awk '/^Total:/ {print $2}')
+            echo "== $name: $s s (pixi install $pixi_t, mojo $mojo_t, git $git_t), load $load0 -> $load1, cache $du"
+            grep -E 'build.sh:|peak memory' "build-$name.log" || true
+            summary "| $name | $s | $pixi_t | $mojo_t | $git_t | $load0 → $load1 | $du |"
+          }
+          df -h "$HOME" | tail -1
+          build cold census "$CENSUS_SHA"
+          build warm census "$CENSUS_SHA"
+          build src census-src "${CENSUS_SHA:0:20}00000000000000000001"
+          build pin census-pin "${CENSUS_SHA:0:20}00000000000000000002"
+          docker image ls "census-measure" --format '{{.Tag}} {{.Size}}'
+          docker buildx du --builder "$B" | tail -25
+          df -h "$HOME" | tail -1
+      - name: Remove the builder and the images
+        if: always()
+        shell: bash
+        run: |
+          [ -n "${B:-}" ] && docker buildx rm "$B" || true
+          docker image ls census-measure --format '{{.Repository}}:{{.Tag}}' | xargs -r docker image rm > /dev/null || true
+          df -h "$HOME" | tail -1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs-${{ matrix.variant }}
+          path: build-*.log
+          retention-days: 7
+
+  # Two cold builds at once, then two warm ones (the src change), on two of
+  # sai's runners: what a second build costs the first.
+  concurrent:
+    if: github.repository == 'morca-dev/morca'
+    needs: sequence
+    name: concurrent (${{ matrix.leg }})
+    runs-on: [self-hosted, sai]
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: morca-dev/census
+          ref: ${{ env.CENSUS_SHA }}
+          path: census
+      - name: Builds
+        shell: bash
+        env:
+          RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}-conc-${{ matrix.leg }}
+        run: |
+          set -euo pipefail
+          cp -a census census-src
+          echo '# measure-image-cache: a census-only change' >> census-src/src/activity.mojo
+          B="measure-$RUN_KEY"
+          echo "B=$B" >> "$GITHUB_ENV"
+          docker buildx create --name "$B" --driver docker-container > /dev/null
+          docker buildx inspect --bootstrap "$B" > /dev/null
+          summary() { echo "$*" >> "$GITHUB_STEP_SUMMARY"; }
+          summary "### concurrent leg ${{ matrix.leg }} on $RUNNER_NAME"
+          summary ""
+          summary "| build | started | seconds | mojo build (apps / pipelines) | load before → after |"
+          summary "|---|---|---|---|---|"
+          build() { # NAME DIR COMMIT
+            name=$1 dir=$2 commit=$3
+            load0=$(cut -d' ' -f1-3 /proc/loadavg)
+            start=$(date -u +%H:%M:%S)
+            t=$(date +%s)
+            docker buildx build --builder "$B" --load --progress=plain \
+              -f "$dir/Dockerfile.orca" -t "census-measure:$RUN_KEY-$name" \
+              --build-arg ORCA_SOURCE=https://github.com/morca-dev/census \
+              --build-arg ORCA_COMMIT="$commit" \
+              --build-arg MOJO_TARGET_CPU=x86-64-v3 \
+              "$dir" > "build-$name.log" 2>&1 || { tail -80 "build-$name.log"; exit 1; }
+            s=$(($(date +%s) - t))
+            load1=$(cut -d' ' -f1-3 /proc/loadavg)
+            mojo_t=$(grep -E 'build.sh: multicall-(apps|pipelines) in' "build-$name.log" | sed -E 's/.*multicall-([a-z]+) in ([0-9]+) s/\2/' | paste -sd/ -)
+            echo "== $name: started $start, $s s, mojo $mojo_t, load $load0 -> $load1"
+            summary "| $name | $start | $s | $mojo_t | $load0 → $load1 |"
+          }
+          build cold census "$CENSUS_SHA"
+          build src census-src "${CENSUS_SHA:0:20}00000000000000000001"
+          docker buildx du --builder "$B" | tail -1
+          df -h "$HOME" | tail -1
+      - name: Remove the builder and the images
+        if: always()
+        shell: bash
+        run: |
+          [ -n "${B:-}" ] && docker buildx rm "$B" || true
+          docker image ls census-measure --format '{{.Repository}}:{{.Tag}}' | xargs -r docker image rm > /dev/null || true
+          df -h "$HOME" | tail -1
