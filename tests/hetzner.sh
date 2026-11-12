@@ -51,8 +51,10 @@
 #   the old one is set not to restart and renamed scheduler-old, the new one
 #   leads and registers, then the old one is asked to drain, waited for
 #   (stopped after --timeout) and removed; can-overlap says no with OVERLAP
-#   off, or with a scheduler-old still draining, and the deploy that turns
-#   OVERLAP on pauses and waits as before;
+#   off, or with a scheduler-old still draining (which apply leaves), and
+#   the deploy that turns OVERLAP on pauses and waits as before; a
+#   scheduler-old or scheduler-next that isn't running is removed by the
+#   next apply, saying so, and a deploy overlaps over it;
 # - package.sh's release tarball unpacks to orca-hetzner-<version>/ with
 #   every script, server/ and the example settings, and its up.sh and
 #   deploy.sh run from there (hetzner.env next to them), printing the
@@ -63,7 +65,8 @@
 #   line names both; a missing HETZNER_LOCAL_ENV, or one that sets NAME,
 #   is refused;
 # - orca-stack check: ok on a healthy stack, and FAIL naming what's wrong (a
-#   stopped container, an unhealthy UI, a scheduler-old left, a pipeline
+#   stopped container, an unhealthy UI, a running scheduler-old left (an
+#   exited one apply removes), a pipeline
 #   whose binary isn't in the image, none registered, a canary run that
 #   failed or didn't end in time); checked keeps the result, kind and tags;
 #   deploy.sh ends with it (hetzner.env's CANARY as --canary) and fails
@@ -708,12 +711,33 @@ has "scheduler-old still runs after 0s: stopping it"
 grep -q 'stop -t 30 scheduler-old' "$FAKE/docker.log" || fail "scheduler-old wasn't stopped"
 [ ! -d "$FAKE/containers/scheduler-old" ] || fail "scheduler-old is left"
 rm "$FAKE/old-stays"
-# One still draining from before: no overlap.
+# One still draining from before: no overlap, and apply leaves it.
 mkdir "$FAKE/containers/scheduler-old"
 echo running > "$FAKE/containers/scheduler-old/status"
+echo img:f3516e2 > "$FAKE/containers/scheduler-old/image"
 stack can-overlap > "$FAKE/out" 2>&1 && fail "can-overlap with scheduler-old still there"
 has "no: scheduler-old is still draining"
-rm -r "$FAKE/containers/scheduler-old"
+stack apply > "$FAKE/out" 2>&1 || fail "an apply beside a running scheduler-old"
+grep -q 'removed scheduler-old' "$FAKE/out" && fail "apply removed a running scheduler-old"
+[ -d "$FAKE/containers/scheduler-old" ] || fail "apply removed a running scheduler-old"
+# One that has exited (drain-old didn't follow), and a scheduler-next that
+# never ran: can-overlap says yes, the apply removes both first, naming
+# their images and when they exited, and the deploy overlaps.
+echo exited > "$FAKE/containers/scheduler-old/status"
+echo 2026-01-01T00:00:00.123456789Z > "$FAKE/containers/scheduler-old/finished"
+mkdir "$FAKE/containers/scheduler-next"
+echo created > "$FAKE/containers/scheduler-next/status"
+echo img:f3516e2 > "$FAKE/containers/scheduler-next/image"
+stack can-overlap > "$FAKE/out" 2>&1 || fail "can-overlap with an exited scheduler-old"
+: > "$FAKE/docker.log"
+deploy uuu1212 || fail "an overlapping deploy over an exited scheduler-old"
+grep -q 'removed scheduler-old, left by a deploy before (img:f3516e2, exited, exited [0-9]*d [0-9]*h ago)$' "$FAKE/out" \
+    || fail "no line naming the exited scheduler-old"
+has "removed scheduler-next, left by a deploy before (img:f3516e2, created, never ran)"
+has "scheduler: replaced (image rrr8888 -> uuu1212), overlapping: scheduler-old drains its runs"
+has "scheduler-old drained and removed"
+has "check: all ok"
+[ ! -d "$FAKE/containers/scheduler-old" ] || fail "scheduler-old is left"
 # A new scheduler that doesn't lead: apply fails, and deploy.sh says so.
 touch "$FAKE/no-lead"
 stack apply --tag sss9999 --overlap > "$FAKE/out" 2>&1 && fail "an overlap whose new scheduler doesn't lead"
@@ -805,7 +829,16 @@ mkdir "$FAKE/containers/scheduler-old"
 echo running > "$FAKE/containers/scheduler-old/status"
 why_="FAIL  scheduler-old is still there"
 check_fails
-rm -r "$FAKE/containers/scheduler-old"
+# One that has exited: apply removes it, saying how long ago it exited, and
+# the check passes.
+echo exited > "$FAKE/containers/scheduler-old/status"
+echo img:f3516e2 > "$FAKE/containers/scheduler-old/image"
+date -u +%Y-%m-%dT%H:%M:%S.000000000Z > "$FAKE/containers/scheduler-old/finished"
+stack apply > "$FAKE/out" 2>&1 || fail "an apply over an exited scheduler-old"
+grep -q 'removed scheduler-old, left by a deploy before (img:f3516e2, exited, exited [0-9]*s ago)$' "$FAKE/out" \
+    || fail "no line naming the exited scheduler-old"
+[ ! -d "$FAKE/containers/scheduler-old" ] || fail "apply left an exited scheduler-old"
+stack check > "$FAKE/out" 2>&1 || fail "check after apply removed an exited scheduler-old"
 echo /opt/orca/pipelines/toy > "$FAKE/no-binary"
 why_="FAIL  pipelines: not in the scheduler's image: toy (/opt/orca/pipelines/toy)"
 check_fails
