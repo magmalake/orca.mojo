@@ -399,6 +399,9 @@ struct Scheduler(Movable):
     """Contained runs' processes killed while held at their memory limit,
     for a stale heartbeat or by `_kill_held`: out of memory, as a kill at
     memory.max is."""
+    var _wedged: Dict[Int, Bool]
+    """Processes `_kill_wedged` killed for their run's stale heartbeat, until
+    they're reaped: what their attempts are failed with says so."""
     var _held: HeldWatch
     """Since when contained runs have been held at their memory limit."""
     var _cgroups_next: Int
@@ -484,6 +487,7 @@ struct Scheduler(Movable):
         self._contained = Dict[Int, Contained]()
         self._unswept = List[String]()
         self._stalled = Dict[Int, Bool]()
+        self._wedged = Dict[Int, Bool]()
         self._held = HeldWatch()
         self._cgroups_next = 0
         self.instance = 0
@@ -609,8 +613,10 @@ struct Scheduler(Movable):
     def _kill_wedged(mut self) raises:
         """Kills each process of ours whose run's heartbeat went stale: it's
         wedged, or stopped, rather than gone (it would have been reaped),
-        and mustn't go on beside its run's next start. Once reaped, its run
-        is cancelled, failed or started again as a dead one."""
+        and mustn't go on beside its run's next start. Until it's reaped its
+        run isn't dead (`_dead`), so nothing ends or starts it again while
+        the process may still be there (#398); once reaped, its run is
+        cancelled, failed or started again as a dead one."""
         if len(self._spawned) == 0:
             return
         var ids = String()
@@ -646,6 +652,9 @@ struct Scheduler(Movable):
                 # Its own process group: its forked workers too.
                 _ = external_call["kill", c_int](c_int(-pid), c_int(9))
             _ = external_call["kill", c_int](c_int(pid), c_int(9))
+            if pid in self._wedged:
+                continue  # killed already, not reaped yet
+            self._wedged[pid] = True
             print(
                 "killed pid",
                 pid,
@@ -1235,8 +1244,20 @@ struct Scheduler(Movable):
     def _dead(self, stale_param: StaticString) -> String:
         """SQL true for a running run whose process died: its heartbeat is
         older than the stale limit, the parameter `stale_param`, or it has
-        none and was started longer ago than the start grace."""
-        return dead_sql(String(stale_param), self.start_grace)
+        none and was started longer ago than the start grace, and it isn't
+        one whose process this scheduler started and hasn't reaped. That
+        process may be wedged rather than gone: `_kill_wedged` kills it,
+        and only once it's reaped is the run dead, so it's never failed,
+        cancelled or started again with its process still there (#398)."""
+        var dead = dead_sql(String(stale_param), self.start_grace)
+        if len(self._spawned) == 0:
+            return dead
+        var ids = String()
+        for e in self._spawned.items():
+            if ids:
+                ids.write(",")
+            ids.write(e.value[0])
+        return String("(", dead, " AND orca.runs.id NOT IN (", ids, "))")
 
     def _end_dead(
         mut self, mut tx: Transaction, p: Registered, dead: String
