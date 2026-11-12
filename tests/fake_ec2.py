@@ -182,8 +182,8 @@ def _kill_group(i):
     i["gone"] = True
     try:
         os.killpg(i["proc"].pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    except OSError:
+        pass  # gone; macOS says EPERM for a group of only a zombie
 
 
 def _reap():
