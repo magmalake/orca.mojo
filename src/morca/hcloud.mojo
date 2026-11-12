@@ -1,5 +1,5 @@
 """Hetzner Cloud's API, as the pool autoscaler needs it (#267,
-`orca.pool_scale`): make a server, list a pool's, delete one, and the
+`morca.pool_scale`): make a server, list a pool's, delete one, and the
 architecture of a server type.
 
     var h = HCloud.from_env()        # raises without a token
@@ -8,12 +8,12 @@ architecture of a server type.
     _ = h.delete(s.id)               # True if it's gone, already or now
     h.arch("cax31")                  # "arm"
 
-The token is `ORCA_HCLOUD_TOKEN`, or the secret `ORCA_HCLOUD_TOKEN_SECRET`
-names (`orca.control.fetch_secret`: `ORCA_SECRET_FETCH` on a Hetzner
+The token is `MORCA_HCLOUD_TOKEN`, or the secret `MORCA_HCLOUD_TOKEN_SECRET`
+names (`morca.control.fetch_secret`: `MORCA_SECRET_FETCH` on a Hetzner
 stack); it's sent as a bearer token and never put in an error. A call
 isn't retried and times out after 10 s: the scheduler calls these from its
 tick and tries again on the next.
-`ORCA_HCLOUD_ENDPOINT` (`https://api.hetzner.cloud/v1`) is for tests'
+`MORCA_HCLOUD_ENDPOINT` (`https://api.hetzner.cloud/v1`) is for tests'
 fake. Hetzner says a type can't be had in a location now with
 `resource_unavailable` or `placement_error`, or `server_type_unavailable`
 for one it doesn't offer there: `Created.no_stock`, which the autoscaler
@@ -25,13 +25,13 @@ from std.os import getenv
 from json import Value, loads
 from objectstore.http import Header, HttpClient, RetryPolicy
 
-from orca.control import fetch_secret
-from orca.json import quote
+from morca.control import fetch_secret
+from morca.json import quote
 
 comptime DEFAULT_ENDPOINT = "https://api.hetzner.cloud/v1"
-comptime TOKEN = "ORCA_HCLOUD_TOKEN"
-comptime TOKEN_SECRET = "ORCA_HCLOUD_TOKEN_SECRET"
-comptime ENDPOINT = "ORCA_HCLOUD_ENDPOINT"
+comptime TOKEN = "MORCA_HCLOUD_TOKEN"
+comptime TOKEN_SECRET = "MORCA_HCLOUD_TOKEN_SECRET"
+comptime ENDPOINT = "MORCA_HCLOUD_ENDPOINT"
 comptime NO_STOCK = [
     "resource_unavailable",
     "placement_error",
@@ -199,18 +199,18 @@ struct HCloud(Movable):
 
     @staticmethod
     def from_env() raises -> HCloud:
-        """From `ORCA_HCLOUD_TOKEN` (or the secret `ORCA_HCLOUD_TOKEN_SECRET`
-        names) and `ORCA_HCLOUD_ENDPOINT`."""
+        """From `MORCA_HCLOUD_TOKEN` (or the secret `MORCA_HCLOUD_TOKEN_SECRET`
+        names) and `MORCA_HCLOUD_ENDPOINT`."""
         var token = getenv(TOKEN)
         if not token:
             var id = getenv(TOKEN_SECRET)
             if not id:
                 raise Error(
-                    "orca: no Hetzner token: set ", TOKEN, " or ", TOKEN_SECRET
+                    "morca: no Hetzner token: set ", TOKEN, " or ", TOKEN_SECRET
                 )
             token = fetch_secret(id)
         if not token:
-            raise Error("orca: the Hetzner token is empty")
+            raise Error("morca: the Hetzner token is empty")
         return HCloud(getenv(ENDPOINT, DEFAULT_ENDPOINT), token)
 
     def _call(
@@ -221,7 +221,7 @@ struct HCloud(Movable):
         without the token."""
         var h: List[Header] = [
             Header("Authorization", String("Bearer ", self._token)),
-            Header("User-Agent", "orca"),
+            Header("User-Agent", "morca"),
         ]
         if body:
             h.append(Header("Content-Type", "application/json"))
@@ -238,12 +238,12 @@ struct HCloud(Movable):
             )
             return (Int(r.status), String(from_utf8_lossy=Span(r.body)))
         except:
-            raise Error("orca: can't reach Hetzner's API at ", self.endpoint)
+            raise Error("morca: can't reach Hetzner's API at ", self.endpoint)
 
     def _refused(self, what: String, got: Tuple[Int, String]) raises:
         var e = error_of(got[1])
         raise Error(
-            "orca: Hetzner refused ",
+            "morca: Hetzner refused ",
             what,
             ": HTTP ",
             got[0],
@@ -263,7 +263,7 @@ struct HCloud(Movable):
         for t in v["server_types"].array_items():
             if _text(t, "name") == server_type:
                 return _text(t, "architecture")
-        raise Error("orca: Hetzner has no server type ", server_type)
+        raise Error("morca: Hetzner has no server type ", server_type)
 
     def firewall_id(self, name: String) raises -> String:
         """The id of the firewall named `name`; raises for none."""
@@ -274,7 +274,7 @@ struct HCloud(Movable):
         for f in v["firewalls"].array_items():
             if _text(f, "name") == name:
                 return _text(f, "id")
-        raise Error("orca: Hetzner has no firewall named ", name)
+        raise Error("morca: Hetzner has no firewall named ", name)
 
     def network_id(
         self, name: String, zone: String, ip_range: String

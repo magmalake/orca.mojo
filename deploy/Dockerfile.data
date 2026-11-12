@@ -1,10 +1,10 @@
-# The image with orca's pipelines over Iceberg tables (the `data` pixi
-# environment): the taxi pipeline, beside the toy and fanout, and the `orca`
+# The image with morca's pipelines over Iceberg tables (the `data` pixi
+# environment): the taxi pipeline, beside the toy and fanout, and the `morca`
 # binary. Its dependencies compile from source, at the revisions CI's data
 # job pins (deploy/clone-data-deps.sh reads them from the workflow). Build it
 # from the repository root:
 #
-#     docker build -f deploy/Dockerfile.data -t orca:data .
+#     docker build -f deploy/Dockerfile.data -t morca:data .
 FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS build
 ARG PIPELINES="examples/toy.mojo examples/fanout.mojo examples/taxi/taxi.mojo"
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
@@ -12,32 +12,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev g
 COPY .github/workflows/ci.yml /tmp/ci.yml
 COPY deploy/clone-data-deps.sh /tmp/clone-data-deps.sh
 RUN sh /tmp/clone-data-deps.sh /tmp/ci.yml /src
-WORKDIR /src/orca.mojo
+WORKDIR /src/morca
 COPY pixi.toml pixi.lock ./
 RUN pixi install --locked -e data
 COPY src src
 COPY bin bin
 COPY examples examples
 RUN mkdir -p /out/bin /out/pipelines \
-    && pixi run -e data sh -c 'mojo build -I src $DEP_INC bin/scheduler.mojo -o /out/bin/orca \
+    && pixi run -e data sh -c 'mojo build -I src $DEP_INC bin/scheduler.mojo -o /out/bin/morca \
         && for p in '"${PIPELINES}"'; do n=$(basename "$p" .mojo); \
             mojo build -I src -I "$(dirname "$p")" $DEP_INC "$p" -o "/out/pipelines/$n" || exit 1; done'
 # What the binaries link, and what they and their tins dlopen from
 # $CONDA_PREFIX/lib (libpq, flare's and objectstore's shims, the codecs,
 # sqlite), with what those link: only the pixi environment's libraries.
-RUN env=/src/orca.mojo/.pixi/envs/data && mkdir -p /out/lib \
+RUN env=/src/morca/.pixi/envs/data && mkdir -p /out/lib \
     && loaded=$(ls $env/lib/libpq.so* $env/lib/libflare_*.so $env/lib/libobjectstoremojo.so \
         $env/lib/libzstd.so* $env/lib/liblz4.so* $env/lib/libbrotli*.so* $env/lib/libsnappy.so* \
         $env/lib/libdeflate.so* $env/lib/libz.so* $env/lib/libsqlite3.so* $env/lib/libcurl.so* 2>/dev/null || true) \
-    && ldd /out/bin/orca /out/pipelines/* $loaded | awk -v e="$env" '$3 ~ "^"e {print $3}' \
+    && ldd /out/bin/morca /out/pipelines/* $loaded | awk -v e="$env" '$3 ~ "^"e {print $3}' \
         | sort -u | xargs -r cp -L -t /out/lib \
     && cp -L -t /out/lib $loaded
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=build /out/lib /opt/orca/lib
-COPY --from=build /out/bin /opt/orca/bin
-COPY --from=build /out/pipelines /opt/orca/pipelines
-ENV CONDA_PREFIX=/opt/orca LD_LIBRARY_PATH=/opt/orca/lib PATH=/opt/orca/bin:/opt/orca/pipelines:/usr/bin:/bin
-ENTRYPOINT ["/opt/orca/bin/orca"]
+COPY --from=build /out/lib /opt/morca/lib
+COPY --from=build /out/bin /opt/morca/bin
+COPY --from=build /out/pipelines /opt/morca/pipelines
+ENV CONDA_PREFIX=/opt/morca LD_LIBRARY_PATH=/opt/morca/lib PATH=/opt/morca/bin:/opt/morca/pipelines:/usr/bin:/bin
+ENTRYPOINT ["/opt/morca/bin/morca"]

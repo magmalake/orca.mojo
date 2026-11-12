@@ -1,4 +1,4 @@
-"""Fires and sensors (`orca.scheduler`): a schedule's fires, and a sensor's
+"""Fires and sensors (`morca.scheduler`): a schedule's fires, and a sensor's
 snapshots, keyed or by partition.
 """
 
@@ -7,24 +7,24 @@ from postgres import (
     Params,
     Transaction,
 )
-from orca.civil import Civil
-from orca.cron import CronExpr
-from orca.batches import mark_batch
-from orca.live import is_live_sql, live_runs
-from orca.schedule import Schedule
-from orca.sensors import (
+from morca.civil import Civil
+from morca.cron import CronExpr
+from morca.batches import mark_batch
+from morca.live import is_live_sql, live_runs
+from morca.schedule import Schedule
+from morca.sensors import (
     join_keys,
     map_keys,
     parse_sense,
     split_keys,
 )
-from orca.tz import Zone
-from orca.scheduler import Scheduler
-from orca.registered import (
+from morca.tz import Zone
+from morca.scheduler import Scheduler
+from morca.registered import (
     Registered,
     fill_key,
 )
-from orca.queueing import (
+from morca.queueing import (
     _queue,
     keep_keys,
     parse_keys_output,
@@ -35,7 +35,7 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
     """Queues a run for the snapshots of `p`'s datasets it hasn't seen:
     those other pipelines' succeeded runs committed since it became a
     sensor, and, when its binary is due to be asked, the current ones
-    something other than orca committed. A snapshot with no partitions
+    something other than morca committed. A snapshot with no partitions
     stands for the one `p` would fill now."""
     var datasets = List[String]()
     var snapshots = List[Int64]()
@@ -87,7 +87,7 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
             polled = self._ask(job, "sense", [p.binary, "sense"])
     if polled:
         for c in parse_sense(polled.value()):
-            if c.snapshot >= 0 and not c.by_orca:
+            if c.snapshot >= 0 and not c.by_morca:
                 datasets.append(c.dataset)
                 snapshots.append(c.snapshot)
                 keys.append(c.partitions)
@@ -252,7 +252,7 @@ def _live_for(
     it, which the key is left to; and, for the others, the first live run
     that did, which a run queued for the key waits behind. A run
     read an older snapshot when a step over the key (or over all the
-    run's keys) read the dataset at another one, unless orca committed
+    run's keys) read the dataset at another one, unless morca committed
     both and that one later. One that hasn't read it yet will read the
     new one."""
     var left = Dict[String, Int]()
@@ -421,7 +421,7 @@ def _sensed(mut self: Scheduler, p: Registered, error: String) raises:
         Params().text(p.name).text(error),
     )
     if len(changed) > 0:
-        print("orca: pipeline", p.name, "can't sense:", error)
+        print("morca: pipeline", p.name, "can't sense:", error)
 
 
 def _keys_for(
@@ -442,7 +442,7 @@ def _keys_for(
         return have.value().copy()
     var out = self._ask(
         String("keys ", p.name),
-        String("orca: ", p.binary, " keys"),
+        String("morca: ", p.binary, " keys"),
         [p.binary, "keys"],
     )
     if not out:

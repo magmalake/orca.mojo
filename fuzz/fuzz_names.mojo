@@ -10,7 +10,7 @@ they must read back to the same list.
 
 from harness import bytes_of, check, only_findings, run_harness, save_last
 
-from orca import Name, parse_names
+from morca import Name, parse_names
 
 
 def target(data: List[UInt8]) raises:

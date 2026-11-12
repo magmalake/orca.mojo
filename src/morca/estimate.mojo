@@ -10,8 +10,8 @@ its size; one run over them all takes them one after another.
 
 from postgres import Params
 
-from orca.fill import eta_text
-from orca.state import State
+from morca.fill import eta_text
+from morca.state import State
 
 
 comptime SAMPLE = 20

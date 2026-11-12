@@ -16,7 +16,7 @@ from std.time import sleep
 
 from dista import ObjectRef, Seq, Task
 from dista.task import fnv1a64
-from orca import Ctx, Gather, Mapped, Month, Pipeline, Step, Tasks, orca_main
+from morca import Ctx, Gather, Mapped, Month, Pipeline, Step, Tasks, morca_main
 
 
 def _nap() raises:
@@ -93,4 +93,4 @@ comptime Chaos = Pipeline["chaos", Days, Fan, Flaky, Total, tasks=ChaosTasks]
 
 
 def main() raises:
-    orca_main[Chaos]()
+    morca_main[Chaos]()

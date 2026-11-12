@@ -10,7 +10,7 @@ refused; one that parses answers `offset_at` within a day.
 
 from harness import bytes_of, check, only_findings, run_harness, save_last
 
-from orca import PosixTZ, Zone, utc
+from morca import PosixTZ, Zone, utc
 
 
 def target(data: List[UInt8]) raises:

@@ -2,9 +2,9 @@
 pipeline tests/keyed/repos.mojo writes: a day isn't a name, so registering
 it must still be refused."""
 
-from orca import Ctx, Mapped, Name, Pipeline, Step, orca_main
-from orca.keyed import Keyed
-from orca.tables import table
+from morca import Ctx, Mapped, Name, Pipeline, Step, morca_main
+from morca.keyed import Keyed
+from morca.tables import table
 from repo_rows import repo_count
 
 
@@ -19,4 +19,4 @@ comptime DaysReader = Pipeline[
 
 
 def main() raises:
-    orca_main[DaysReader]()
+    morca_main[DaysReader]()

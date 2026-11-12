@@ -1,4 +1,4 @@
-"""The Lean model of fencing (formal/Orca/Fence) against `PgStore`: every
+"""The Lean model of fencing (formal/Morca/Fence) against `PgStore`: every
 sequence of up to four events in formal/difftest/fence.cases is replayed on
 a run of its own, and which claims and fence checks passed is compared with
 what the model's oracle printed (formal/Oracle/Fence.lean; the `formal` CI
@@ -24,8 +24,8 @@ from std.testing import assert_equal
 
 from postgres import Connection, Params
 
-from orca import PgStore
-from orca.state import beat_run
+from morca import PgStore
+from morca.state import beat_run
 
 comptime CASES = "formal/difftest/fence.cases"
 comptime PIPELINE = "formal_fence"
@@ -96,11 +96,11 @@ def _replay(
 
 
 def test_fencing_agrees_with_the_model() raises:
-    _ = setenv("ORCA_STALE_SECONDS", "1000", True)
-    var s = PgStore(getenv("ORCA_DATABASE_URL"))
+    _ = setenv("MORCA_STALE_SECONDS", "1000", True)
+    var s = PgStore(getenv("MORCA_DATABASE_URL"))
     s.migrate()
     s.register(PIPELINE, "h", "{}")
-    var conn = Connection(getenv("ORCA_DATABASE_URL"))
+    var conn = Connection(getenv("MORCA_DATABASE_URL"))
     var text: String
     with open(CASES, "r") as f:
         text = f.read()

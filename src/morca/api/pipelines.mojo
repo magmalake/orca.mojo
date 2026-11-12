@@ -2,29 +2,29 @@
 counts and Start runs' preview.
 """
 
-from orca.api.runs import (
+from morca.api.runs import (
     json_runs,
     json_runs_page,
     json_version,
     runs_filters_json,
 )
-from orca.calendar import calendar, calendar_json
-from orca.coverage import Coverage, coverage_json
-from orca.fill import status_json
-from orca.follow import follow_json
-from orca.json import quote
-from orca.state import State
-from orca.ui.layout import bad_request, not_found
-from orca.views.commands import backfill_cmd, run_cmd
-from orca.views.pipelines import (
+from morca.calendar import calendar, calendar_json
+from morca.coverage import Coverage, coverage_json
+from morca.fill import status_json
+from morca.follow import follow_json
+from morca.json import quote
+from morca.state import State
+from morca.ui.layout import bad_request, not_found
+from morca.views.commands import backfill_cmd, run_cmd
+from morca.views.pipelines import (
     KeyCounts,
     PipelineAsk,
     PipelineRow,
     PipelineView,
     pipeline_rows,
 )
-from orca.views.start import StartPreview, preview_line
-from orca.web.page import Page
+from morca.views.start import StartPreview, preview_line
+from morca.web.page import Page
 
 
 def json_strings(mut out: String, names: List[String]):
@@ -37,7 +37,7 @@ def json_strings(mut out: String, names: List[String]):
 def json_pipeline(
     mut out: String, p: PipelineRow, cov: Optional[Coverage] = None
 ):
-    """`p` as JSON, with its coverage (`orca.coverage`; null for none)."""
+    """`p` as JSON, with its coverage (`morca.coverage`; null for none)."""
     out.write(
         '{"name": ',
         quote(p.name),

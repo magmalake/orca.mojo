@@ -1,15 +1,15 @@
-# A project's tests, for an orca project's own CI to call (docs/project-ci.md):
+# A project's tests, for a morca project's own CI to call (docs/project-ci.md):
 #
 #     jobs:
 #       test:
 #         uses: morca-dev/morca/.github/workflows/project-test.yml@v0.24.0
 #         with: { tasks: "build test" }
 #
-# On each runner (arm64 and amd64 by default): pixi as orca's CI sets it up,
+# On each runner (arm64 and amd64 by default): pixi as morca's CI sets it up,
 # then each of the project's pixi tasks in turn. The setup carries the known
 # workarounds: git maintenance off before setup-pixi restores rattler's git
 # cache, since in a cached repo it races its `git clone --local`
-# (mojo-census#135, orca.mojo#326), and pixi pinned to the version that wrote
+# (mojo-census#135, morca#326), and pixi pinned to the version that wrote
 # the lock. Pull requests read the cache but don't write it.
 name: project test
 

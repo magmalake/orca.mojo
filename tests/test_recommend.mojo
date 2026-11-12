@@ -1,10 +1,10 @@
-"""Requests learned from the measured peaks (orca.recommend): the
+"""Requests learned from the measured peaks (morca.recommend): the
 percentiles, the margin and its rounding, too few runs, the floor an
 out-of-memory raised, and the clamp to the declared range."""
 
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
-from orca.recommend import (
+from morca.recommend import (
     DECLARED,
     DEFAULT,
     LEARNED,
@@ -16,7 +16,7 @@ from orca.recommend import (
     recommend,
     resolve_request,
 )
-from orca.resources import Request
+from morca.resources import Request
 
 comptime MB = 1048576.0
 

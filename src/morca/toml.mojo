@@ -1,4 +1,4 @@
-"""The TOML that `orca.toml` is written in (`orca.config`): a parser and a
+"""The TOML that `morca.toml` is written in (`morca.config`): a parser and a
 writer for the subset a configuration file needs.
 
     var doc = parse_toml(text)          # raises "<line>: <why>" on bad input
@@ -24,7 +24,7 @@ file has them, each with its whole key path, so a reader looks values up by
 path and a new key needs no new type. An array of tables is an `ARRAY`
 entry whose items are its elements' indices, of kind `TABLE`, and each
 element a table at the array's path and its index: `machines.0.type`. mojoshelf's `mojo-toml` is built for
-Mojo before 1.0, which is why orca has its own.
+Mojo before 1.0, which is why morca has its own.
 """
 
 comptime STRING = "string"

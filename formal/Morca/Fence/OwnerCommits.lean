@@ -1,5 +1,5 @@
-import Orca.Core.Assumptions
-import Orca.Fence.Model
+import Morca.Core.Assumptions
+import Morca.Fence.Model
 
 /-!
 # Only the run's owner commits
@@ -8,11 +8,11 @@ import Orca.Fence.Model
 its fence check lands while its process still owns the run. So a process
 that lost its run to another (a paused VM, an unreachable database) commits
 nothing after the other took over, and the attempts of a step follow each
-other: what `Orca/Retry` and `Orca/Pins` take for granted.
+other: what `Morca/Retry` and `Morca/Pins` take for granted.
 -/
-namespace Orca.Fence
+namespace Morca.Fence
 
-open Orca.Assumptions
+open Morca.Assumptions
 
 theorem setF_same (f : Nat → Option Nat) (p : Nat) (v : Option Nat) :
     setF f p v p = v := by
@@ -120,4 +120,4 @@ theorem commit_only_by_owner (stale half : Nat)
   · have hlate := i.2.2 ho
     exact absurd hle (by omega)
 
-end Orca.Fence
+end Morca.Fence

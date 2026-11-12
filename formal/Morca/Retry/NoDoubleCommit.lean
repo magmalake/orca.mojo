@@ -1,5 +1,5 @@
-import Orca.Core.Assumptions
-import Orca.Retry.Model
+import Morca.Core.Assumptions
+import Morca.Retry.Model
 
 /-!
 # A retried step never double-commits
@@ -11,9 +11,9 @@ snapshots that are the step's commit number `n`.
 a snapshot in the table that is the step's commit of that number, so an
 attempt that finds an earlier attempt's commit records that one.
 -/
-namespace Orca
+namespace Morca
 
-open Orca.Assumptions
+open Morca.Assumptions
 
 /-! ## `made`, `findCommit` and `countMade` -/
 
@@ -292,4 +292,4 @@ theorem retry_records_its_own_commit (env : Env) (me : StepId)
   obtain ⟨x, hx, hid, hm⟩ := (Reachable.inv hI hP hC h).recorded r hr
   exact ⟨x, hx, hid, (made_iff me r.commit x.summary).mp hm⟩
 
-end Orca
+end Morca

@@ -1,5 +1,5 @@
-"""The fleet: every machine orca is paying for, as Ops' Pools shows the
-EC2 ones (`/ops/pools?kind=ec2`, `orca.ui.pools`) and `/api/fleet` has them
+"""The fleet: every machine morca is paying for, as Ops' Pools shows the
+EC2 ones (`/ops/pools?kind=ec2`, `morca.ui.pools`) and `/api/fleet` has them
 as JSON.
 
 What the page shows comes from three places, none of which reads the
@@ -11,22 +11,22 @@ samplers' files when a page is viewed:
 - `orca.fleet_hourly` holds, per hour and role, what the 7-day charts add up
   (CPU seconds used and available, bytes in and out), kept 8 days.
 
-The scheduler fills both tables (`ingest`, every `ORCA_FLEET_SECONDS`, 30; 0
+The scheduler fills both tables (`ingest`, every `MORCA_FLEET_SECONDS`, 30; 0
 turns it off). Run instances upload their samples to the run's `metrics/`
-folder (`orca.sample`) every `ORCA_CLUSTER_LOG_SECONDS`, so `ingest` reads
+folder (`morca.sample`) every `MORCA_CLUSTER_LOG_SECONDS`, so `ingest` reads
 the last lines of each live instance's file from there, a few hundred bytes
 of it per instance per pass in effect, and keeps those it hasn't got. The
-control instance's sampler (`orca sample --out <file> --keep N`, started by
-the stack's user data) writes a file `ORCA_CONTROL_SAMPLES` names, and
-`ORCA_CONTROL_TYPE` says what the instance is. Without them the control
-instance has no row, unless runs placed on it (`orca register --placement
-control`, orca.control) are running, which its row lists; without
-`ORCA_LOGS` no instance has one.
+control instance's sampler (`morca sample --out <file> --keep N`, started by
+the stack's user data) writes a file `MORCA_CONTROL_SAMPLES` names, and
+`MORCA_CONTROL_TYPE` says what the instance is. Without them the control
+instance has no row, unless runs placed on it (`morca register --placement
+control`, morca.control) are running, which its row lists; without
+`MORCA_LOGS` no instance has one.
 
-Prices are a small table of us-east-2 on-demand rates for the types orca
+Prices are a small table of us-east-2 on-demand rates for the types morca
 runs on: an estimate (Spot hosts cost less, and a stopped-and-started clock
-isn't modelled). With `ORCA_RUNNER=local` no instance is launched, so the
-cost tile says "fixed price" instead and shows `ORCA_FIXED_COST` (free text,
+isn't modelled). With `MORCA_RUNNER=local` no instance is launched, so the
+cost tile says "fixed price" instead and shows `MORCA_FIXED_COST` (free text,
 such as `€8.49/month`; "Fixed" when unset), with no region.
 """
 
@@ -35,13 +35,13 @@ from std.os import getenv
 from json import Value, loads
 from postgres import Params
 
-from orca.html import Html, escape, url_encode
-from orca.json import quote
-from orca.live import dead_sql, stale_limit, start_grace
-from orca.logs import read_location
-from orca.metrics import bytes_text
-from orca.sample import metrics_location
-from orca.state import State
+from morca.html import Html, escape, url_encode
+from morca.json import quote
+from morca.live import dead_sql, stale_limit, start_grace
+from morca.logs import read_location
+from morca.metrics import bytes_text
+from morca.sample import metrics_location
+from morca.state import State
 
 comptime SAMPLE_KEEP_MINUTES = 30
 """How long a host's samples are kept in `orca.fleet_samples`."""
@@ -63,7 +63,7 @@ comptime _AXIS = 18
 
 def hourly_price(instance_type: String) -> Float64:
     """The us-east-2 on-demand price per hour in US dollars of an instance
-    type orca runs on, or -1 for any other."""
+    type morca runs on, or -1 for any other."""
     if instance_type == "c7g.large":
         return 0.0725
     if instance_type == "c7g.xlarge":
@@ -273,7 +273,7 @@ def ingest(mut db: State) raises -> Int:
         except:
             continue
         added += _keep(db, row.text("id"), role, text)
-    var control = getenv("ORCA_CONTROL_SAMPLES")
+    var control = getenv("MORCA_CONTROL_SAMPLES")
     if control:
         try:
             var text = String(from_utf8_lossy=Span(read_location(control)))
@@ -331,12 +331,12 @@ struct Host(Copyable, Movable):
     """Seconds it has been idle in the pool; 0 when it isn't."""
     var runs: List[Int]
     """The runs it serves: its `run`, or for the control instance the
-    control-placed runs running there (`orca register --placement
+    control-placed runs running there (`morca register --placement
     control`)."""
 
 
 def _control_type() -> String:
-    return getenv("ORCA_CONTROL_TYPE")
+    return getenv("MORCA_CONTROL_TYPE")
 
 
 def fleet_hosts(mut db: State) raises -> List[Host]:
@@ -687,7 +687,7 @@ def fleet_charts(mut db: State, hours: Int) raises -> Charts:
             " 'worker' AND i.launched < hrs.h + interval '1 hour' AND"
             " coalesce(i.ended, now()) > hrs.h)::float8 AS workers, CASE WHEN"
             " coalesce(fl.ctl, false) THEN 1.0 ELSE 0.0 END AS control,"
-            # A self-hosted worker (`orca worker`, a token per machine) that
+            # A self-hosted worker (`morca worker`, a token per machine) that
             # ran a run that hour, or was seen in it.
             " (SELECT count(*) FROM orca.workers w WHERE (w.last_seen >="
             " hrs.h AND w.last_seen < hrs.h + interval '1 hour') OR EXISTS"
@@ -1036,14 +1036,14 @@ def summary_html(mut h: Html, s: Summary, compact: Bool):
         h.text(_type_text(s.types))
     h.raw("</span></a>")
     # Cost.
-    if getenv("ORCA_RUNNER") == "local":
+    if getenv("MORCA_RUNNER") == "local":
         # The local runner launches no instances: the server's price is fixed.
         h.raw(
             '<a class="stat" href="/ops/pools?kind=ec2#machines"><span'
             ' class="stat__k">Cost'
         )
         h.raw('</span><span class="stat__v">')
-        h.text(getenv("ORCA_FIXED_COST", "Fixed"))
+        h.text(getenv("MORCA_FIXED_COST", "Fixed"))
         h.raw('</span><span class="stat__s">fixed price: the local runner')
         h.raw(" launches no instances</span></a>")
     else:
@@ -1164,7 +1164,7 @@ def charts_html(mut h: Html, c: Charts, range: String, base: String):
         (
             '<p class="muted">Hosts that ran during each hour, by role: EC2'
             " heads and workers, the control host, and self-hosted workers"
-            " (orca worker) that ran a run or were seen that hour.</p>"
+            " (morca worker) that ran a run or were seen that hour.</p>"
         ),
         _chart(
             "Hosts over time",
@@ -1250,7 +1250,7 @@ def summary_json(s: Summary) -> String:
         '], "cost_per_hour": ',
         _f(s.cost, 4),
         ', "cost_is_estimate": ',
-        "false" if getenv("ORCA_RUNNER") == "local" else "true",
+        "false" if getenv("MORCA_RUNNER") == "local" else "true",
         ', "unpriced_hosts": ',
         s.unpriced,
         ', "runs_running": ',

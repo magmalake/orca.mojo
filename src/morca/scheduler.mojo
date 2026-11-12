@@ -2,12 +2,12 @@
 rebuilds, and starts runs.
 
 ```
-orca register ./build/taxi             runs `taxi describe`, records the binary
-orca backfill taxi 2011-01..2024-12    a run per partition that isn't done
-orca backfill labels @all              keyed: runs of keys_per_run undone keys
-orca rebuild taxi.trips 2024-01        the pipelines downstream, in order
-orca tick                              one pass, then exits
-orca scheduler                         a pass every second
+morca register ./build/taxi             runs `taxi describe`, records the binary
+morca backfill taxi 2011-01..2024-12    a run per partition that isn't done
+morca backfill labels @all              keyed: runs of keys_per_run undone keys
+morca rebuild taxi.trips 2024-01        the pipelines downstream, in order
+morca tick                              one pass, then exits
+morca scheduler                         a pass every second
 ```
 
 The scheduler links no pipeline. It knows one by the `describe` it printed,
@@ -23,37 +23,37 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   A fire whose partition is before the pipeline's first is recorded without
   a run.
 - **One live run per partition.** Every way a run is queued checks, under
-  a lock on the pipeline's row, for a live run (`orca.live`) of the same
+  a lock on the pipeline's row, for a live run (`morca.live`) of the same
   keys: a fire whose partition a live run has records that run as its own,
   a sensor leaves such keys to it (the snapshot's run, if it left nothing
   else), a rebuild's level waits for it, the UI refuses to start one, and a
   backfill skips the key. A partition that's done is run again by a fire,
-  sensor, rebuild or start, and its steps append again; `orca register`
+  sensor, rebuild or start, and its steps append again; `morca register`
   warns of a schedule that fires more than once for one partition.
 - **Starting a run is `resume`.** A queued run has nothing done, or what a
-  resume or rerun from `orca ui` left it, which is what `<binary> resume
+  resume or rerun from `morca ui` left it, which is what `<binary> resume
   <run>` takes (with `--allow-new-code` when the resume said so). The scheduler marks the run `running`,
   with no heartbeat and itself as owner, and execs the binary, which claims
   it. It doesn't wait: the run records its own progress.
 - **`max_runs`.** Under a lock on the pipeline's row, the runs that are live
   (a fresh heartbeat, or started by the scheduler less than the stale limit
   ago) are counted, and only that many fewer than `max_runs` are started.
-- **Memory pressure** (`orca.pressure`, `orca.admission`). On the local
+- **Memory pressure** (`orca.pressure`, `morca.admission`). On the local
   runner and for control-placed runs, none starts while this host's PSI
-  `some avg10` is over `ORCA_ADMIT_MEMORY_PRESSURE` (10%), each queued run
+  `some avg10` is over `MORCA_ADMIT_MEMORY_PRESSURE` (10%), each queued run
   `held` saying so; then the grants of a pipeline with a request
-  (`orca.resources`).
+  (`morca.resources`).
 - **Backfills queue what isn't done.** A key is done when every mapped
   step has succeeded for it in a run of the pipeline's current code
   (`DONE_SQL`). A backfill drops the keys that are done or in a live run
   (queued, or running with its process alive: `live_sql`), sorts the rest
-  and queues a run per `keys_per_run` of them; `orca backfill` says on
+  and queues a run per `keys_per_run` of them; `morca backfill` says on
   stderr which keys it dropped and why.
-- **Where runs run.** `ORCA_RUNNER` is `local` (a process here, the
-  default), `kubernetes` (a dista cluster of pods per run, `orca.kube`) or
-  `ec2` (a head instance and worker instances per run, `orca.ec2`).
+- **Where runs run.** `MORCA_RUNNER` is `local` (a process here, the
+  default), `kubernetes` (a dista cluster of pods per run, `morca.kube`) or
+  `ec2` (a head instance and worker instances per run, `morca.ec2`).
   A pipeline registered with `--placement control` runs here whatever the
-  runner, within the control instance's limits (`orca.control`); one with
+  runner, within the control instance's limits (`morca.control`); one with
   `--placement ec2` waits on a scheduler whose runner isn't `ec2`. One with
   `--placement worker:<pool>` is never started here: a remote worker of the
   pool claims its queued runs over the UI's API (`orca.workers`), and the
@@ -61,19 +61,19 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   fill runs too (held for a worker, `fill_max_runs` across the pool), and
   a run whose worker is gone whatever its trigger.
 - **Overlapping instances** (`orca.instances`, docs/overlap.md). With
-  `ORCA_OVERLAP=on` a deploy starts the new image's scheduler beside the
+  `MORCA_OVERLAP=on` a deploy starts the new image's scheduler beside the
   old one: the newest live instance leads and alone decides, and an older
   one starts nothing more, supervises its runs until they end (or kills
-  them after `ORCA_DRAIN_SECONDS`) and exits. A local or control-placed
+  them after `MORCA_DRAIN_SECONDS`) and exits. A local or control-placed
   run records the instance that started it; while that instance lists it
-  the run is live (`orca.live.held_sql`), counted against `max_runs`, the
+  the run is live (`morca.live.held_sql`), counted against `max_runs`, the
   control slots and the grants, and left alone. Once the instance is gone
   and the run's heartbeat stale, it's queued again whatever its trigger,
   audited.
-- **Sensors and rebuilds** (`orca.sensors`). A sensor pipeline's pass
+- **Sensors and rebuilds** (`morca.sensors`). A sensor pipeline's pass
   looks for snapshots of the datasets it reads, in `orca.commits` on every
-  tick and from `<binary> sense` every `ORCA_SENSE_SECONDS` (asked in a
-  child the next ticks check on, killed after `ORCA_BINARY_SECONDS`), and
+  tick and from `<binary> sense` every `MORCA_SENSE_SECONDS` (asked in a
+  child the next ticks check on, killed after `MORCA_BINARY_SECONDS`), and
   queues a
   run, trigger `sensor`, for those it hasn't seen; with `keys_per_run`
   above 1 the keys go first to its queued sensor runs that haven't
@@ -85,16 +85,16 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   partitions of the sensor's kind (a week in `orca.partitions`, or names
   for a dated sensor) is recorded in `orca.sensed` with no run and why, and
   the others the tick saw are run. A pass that fails, such as a `sense` that
-  exits non-zero, is kept as the pipeline's `sense_error`, which `orca ui`
+  exits non-zero, is kept as the pipeline's `sense_error`, which `morca ui`
   shows, and printed once rather than on every tick.
-- **Fills** (`orca.fill`). A pipeline registered with `fills = "all"` in
-  orca.toml has a second pass after its other runs': runs with trigger
+- **Fills** (`morca.fill`). A pipeline registered with `fills = "all"` in
+  morca.toml has a second pass after its other runs': runs with trigger
   `fill`, `keys_per_run` partitions each, over the partitions of its range no run has
   taken (`fill_status`), up to `fill_max_runs` beside `max_runs`, none
   while its other runs are queued, it's paused, outside `fill_window` or
   over `fill_budget_per_day`.
 - **Retries.** A scheduled, backfilled, sensed or fill run that failed is started again
-  after the pipeline's `retry_seconds` (else `ORCA_RETRY_SECONDS`, default
+  after the pipeline's `retry_seconds` (else `MORCA_RETRY_SECONDS`, default
   60) doubling with each start, at most its `max_retry_seconds` if set,
   plus up to a tenth more as jitter, up to `run_retries` times. One whose process
   died (its heartbeat went stale) is started again at once, within the same
@@ -105,7 +105,7 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   asked for, and is started again then, whatever its trigger; those starts
   (`deferrals`) don't count against `run_retries`. A run asked to cancel
   whose process died ends `cancelled`.
-- **New code.** `orca register` of a new build moves the queued runs to it,
+- **New code.** `morca register` of a new build moves the queued runs to it,
   and the failed ones waiting for a retry that have no step done. A retry
   of a run with steps done by other code would be refused by the binary's
   `resume`, so the scheduler fails it at once instead of starting it, with
@@ -113,21 +113,21 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   local run whose process exits before claiming its run fails with the
   exit code and the last line of its driver log as its error; one whose
   process crashes after (a segfault, `abort`) has the attempts it left
-  running failed with the crash's first frames (`orca.crash`).
+  running failed with the crash's first frames (`morca.crash`).
 
-The scheduler's clock is `orca.civil.now`, which `ORCA_NOW` fixes; fire
+The scheduler's clock is `morca.civil.now`, which `MORCA_NOW` fixes; fire
 times and retry times are on it. Heartbeats are on the database's clock.
-A run's output goes to `<ORCA_LOGS>/<pipeline>/<run>/driver.log` when
-`ORCA_LOGS` is set: written there by a local run, published there when the
-process is reaped if `ORCA_LOGS` is in object storage, or kept from the
-driver pod's log on Kubernetes (`orca.kube`). Beside a local run's process
-the scheduler starts `<binary> sample` (`orca.sample`), which writes the
+A run's output goes to `<MORCA_LOGS>/<pipeline>/<run>/driver.log` when
+`MORCA_LOGS` is set: written there by a local run, published there when the
+process is reaped if `MORCA_LOGS` is in object storage, or kept from the
+driver pod's log on Kubernetes (`morca.kube`). Beside a local run's process
+the scheduler starts `<binary> sample` (`morca.sample`), which writes the
 machine's metrics to `.../<run>/metrics/local.jsonl` until the process ends;
-`ORCA_SAMPLE_SECONDS=0` turns it off, on every runner. Apart from that, each
+`MORCA_SAMPLE_SECONDS=0` turns it off, on every runner. Apart from that, each
 tick reads each local and control-placed run's process tree in /proc, and
 once the process is reaped its attempts get their peak memory and CPU
-(`orca.usage`). `orca scheduler` gives each local and control-placed run a
-cgroup of its own where it can (`orca.cgroup`): a memory limit at its
+(`morca.usage`). `morca scheduler` gives each local and control-placed run a
+cgroup of its own where it can (`morca.cgroup`): a memory limit at its
 grant, an out-of-memory kill that fails its attempts saying so, and a retry
 that asks for more.
 """
@@ -146,13 +146,13 @@ from postgres import (
     Params,
     Transaction,
 )
-from orca.pool_scale import PoolScaler
-from orca.expiry import (
+from morca.pool_scale import PoolScaler
+from morca.expiry import (
     expirable,
     expire_argv,
     maintain_binary,
 )
-from orca.cgroup import (
+from morca.cgroup import (
     Cgroups,
     Contained,
     MemoryKnobs,
@@ -166,34 +166,34 @@ from orca.cgroup import (
     raised_mb,
     start_limit_mb,
 )
-from orca.control import ControlLimits
-from orca.crash import (
+from morca.control import ControlLimits
+from morca.crash import (
     crash_summary,
     crashed_by_signal,
 )
-from orca.alerts import (
+from morca.alerts import (
     disk as alert_disk,
     fill as alert_fill,
     lost_workers,
     watchdog_recovered,
 )
-from orca.notify import (
+from morca.notify import (
     configured as notify_configured,
     flush as flush_notify,
 )
-from orca.fill import fill_status
-from orca.ec2 import Ec2Runner
-from orca.fleet import ingest
-from orca.system import (
+from morca.fill import fill_status
+from morca.ec2 import Ec2Runner
+from morca.fleet import ingest
+from morca.system import (
     Archive,
     keep as keep_system,
     trim as trim_system,
 )
-from orca.kube import (
+from morca.kube import (
     KubeRunner,
     cpu_millis,
 )
-from orca.instances import (
+from morca.instances import (
     beat,
     end as end_instance,
     join as join_instance,
@@ -202,70 +202,70 @@ from orca.instances import (
     step_down,
     try_lead,
 )
-from orca.live import (
+from morca.live import (
     dead_sql,
     stale_limit,
     stale_sql,
     start_grace,
 )
-from orca.logs import read_location
-from orca.proc import (
+from morca.logs import read_location
+from morca.proc import (
     Capture,
     binary_seconds,
     spawn,
 )
-from orca.sample import (
+from morca.sample import (
     tree_rss,
     tree_usage,
 )
-from orca.resources import (
+from morca.resources import (
     Grant,
     Room,
     host_room,
 )
-from orca.admission import (
+from morca.admission import (
     SCHEDULER_HOST,
     Report,
     alert_stuck,
     record as record_pressure,
     resolve_stuck,
 )
-from orca.pressure import (
+from morca.pressure import (
     Admission,
     Source,
     find_source,
     pct_text,
     read_psi,
 )
-from orca.recommend import learned
-from orca.state import State
-from orca.watchdog import (
+from morca.recommend import learned
+from morca.state import State
+from morca.watchdog import (
     check as check_watchdog,
     config as watchdog_config,
 )
-from orca.usage import Meter
-from orca.registered import (
+from morca.usage import Meter
+from morca.registered import (
     Registered,
     fill_pipeline,
     placed_of,
     registered,
 )
-from orca.queueing import (
+from morca.queueing import (
     Queued,
     _last_line,
     backfill,
 )
 
 comptime _BUDGET_LOCK = 0x6F726362  # "orcb"
-"""Held while a start is weighed against `ORCA_VCPU_BUDGET`."""
+"""Held while a start is weighed against `MORCA_VCPU_BUDGET`."""
 
 comptime _CONTROL_LOCK = 0x6F726363  # "orcc"
 """Held while a control-placed start is weighed against
-`ORCA_CONTROL_MAX_RUNS`."""
+`MORCA_CONTROL_MAX_RUNS`."""
 
 comptime _HOST_LOCK = 0x6F726364  # "orcd"
 """Held while a start is weighed against what this host's running runs
-weren't granted (`orca.resources`)."""
+weren't granted (`morca.resources`)."""
 
 comptime AUTO_ONE_AT_A_TIME = (
     'waiting: max_runs = "auto" starts one run at a time until its runs'
@@ -280,7 +280,7 @@ comptime _WORKER_OWNER = "worker"
 comptime _RETRIED = "trigger IN ('schedule', 'backfill', 'sensor', 'fill')"
 """The runs the scheduler retries."""
 comptime RETRIED_SQL = _RETRIED
-"""`_RETRIED`, for `orca.actions`."""
+"""`_RETRIED`, for `morca.actions`."""
 
 
 @fieldwise_init
@@ -290,7 +290,7 @@ struct _ControlProc(Copyable, Movable):
     var run: Int
     var binary: String
     var stage: String
-    """Where its output goes, or empty without `ORCA_LOGS`."""
+    """Where its output goes, or empty without `MORCA_LOGS`."""
     var location: String
     """The run's `driver.log`, which `keep-log` appends `stage` to."""
     var start: Int
@@ -309,13 +309,13 @@ struct Scheduler(Movable):
     var start_grace: Float64
     """How long a run the scheduler started may go without a heartbeat."""
     var budget: Int
-    """`ORCA_VCPU_BUDGET` in thousandths of a vCPU; 0 for none."""
+    """`MORCA_VCPU_BUDGET` in thousandths of a vCPU; 0 for none."""
     var runner: Optional[KubeRunner]
-    """Set with `ORCA_RUNNER=kubernetes`."""
+    """Set with `MORCA_RUNNER=kubernetes`."""
     var ec2: Optional[Ec2Runner]
-    """Set with `ORCA_RUNNER=ec2`; with neither, runs are local processes."""
+    """Set with `MORCA_RUNNER=ec2`; with neither, runs are local processes."""
     var pools: PoolScaler
-    """The pool autoscaler's state between passes (`orca.pool_scale`)."""
+    """The pool autoscaler's state between passes (`morca.pool_scale`)."""
     var logs: String
     var _polled: Dict[String, Int]
     """When each sensor's binary was last asked to `sense`, on the monotonic
@@ -335,37 +335,37 @@ struct Scheduler(Movable):
     var _keys: Dict[String, Tuple[Int64, List[String]]]
     """Each keyed sensor's keys as last read, by pipeline."""
     var wait_for_binaries: Bool
-    """Whether a tick waits for the binaries it asks (`orca tick`, which
+    """Whether a tick waits for the binaries it asks (`morca tick`, which
     has no later tick to collect them), rather than checking next tick."""
     var expire_seconds: Float64
     """How often every dataset is expired by its own policy
-    (`ORCA_EXPIRE_HOURS`, 24; 0 turns it off)."""
+    (`MORCA_EXPIRE_HOURS`, 24; 0 turns it off)."""
     var maintain: String
-    """The `orca_maintain` binary that expires, or empty for none."""
+    """The `morca_maintain` binary that expires, or empty for none."""
     var _expire_next: Int
     """When the next expiry sweep starts, on the monotonic clock."""
     var _expiring: List[String]
     """The datasets this sweep has still to expire, the first one going."""
     var fleet_seconds: Float64
     """How often the fleet page's samples are read from the instances'
-    files (`ORCA_FLEET_SECONDS`, 30; 0 turns it off)."""
+    files (`MORCA_FLEET_SECONDS`, 30; 0 turns it off)."""
     var _fleet_next: Int
     """When the next pass starts, on the monotonic clock."""
     var _archive: Archive
-    """The control instance's day files between passes (`orca.system`)."""
+    """The control instance's day files between passes (`morca.system`)."""
     var watchdog_seconds: Float64
     """How often the watchdog's rules are checked
-    (`ORCA_WATCHDOG_SECONDS`, 60; 0 turns it off): `orca.watchdog`."""
+    (`MORCA_WATCHDOG_SECONDS`, 60; 0 turns it off): `morca.watchdog`."""
     var _watchdog_next: Int
     """When the next check starts, on the monotonic clock."""
     var _notify_next: Int
     """When the alerts' checks (`orca.alerts`) run next, on the monotonic
-    clock; they are every `ORCA_NOTIFY_CHECK_SECONDS` (10)."""
+    clock; they are every `MORCA_NOTIFY_CHECK_SECONDS` (10)."""
     var limits: ControlLimits
-    """What a control-placed run may use (`orca.control`)."""
+    """What a control-placed run may use (`morca.control`)."""
     var room: Room
     """What this host can grant the runs of pipelines with a request
-    (`orca.resources`): its capacity less its reserve."""
+    (`morca.resources`): its capacity less its reserve."""
     var _control: Dict[Int, _ControlProc]
     """A control-placed run's process to what its end needs."""
     var _kept: Dict[Int, _ControlProc]
@@ -376,7 +376,7 @@ struct Scheduler(Movable):
     it has ended."""
     var _meters: Dict[Int, Meter]
     """A local or control-placed run's process to its samples, recorded on
-    its attempts when it's reaped (`orca.usage`)."""
+    its attempts when it's reaped (`morca.usage`)."""
     var psi: Source
     """Where this host's memory pressure is read from (`orca.pressure`),
     found once; none on macOS or without PSI."""
@@ -389,7 +389,7 @@ struct Scheduler(Movable):
     var _pressure_unread: Bool
     """The file was found but last couldn't be read (said once)."""
     var cgroups: Cgroups
-    """Where its runs' cgroups go (`orca.cgroup`); off until `contain`."""
+    """Where its runs' cgroups go (`morca.cgroup`); off until `contain`."""
     var _contained: Dict[Int, Contained]
     """A local or control-placed run's process to its cgroup."""
     var _unswept: List[String]
@@ -405,31 +405,31 @@ struct Scheduler(Movable):
     clock."""
     var instance: Int
     """This scheduler's row of `orca.schedulers` (`orca.instances`), or 0
-    when it isn't an instance: `ORCA_OVERLAP` off, or `orca tick`."""
+    when it isn't an instance: `MORCA_OVERLAP` off, or `morca tick`."""
     var leading: Bool
     """Whether this instance holds the lead (always, for no instance)."""
     var draining: Bool
     """Whether this instance drains: it starts nothing, and exits once the
     processes it started have ended."""
     var drain_seconds: Float64
-    """`ORCA_DRAIN_SECONDS` (3600): how long a drain waits for its runs
+    """`MORCA_DRAIN_SECONDS` (3600): how long a drain waits for its runs
     before it kills what's left."""
     var _drain_start: Int
     """When the drain began, on the monotonic clock."""
     var finished: Bool
-    """Whether a drained instance has ended: `orca scheduler` exits."""
+    """Whether a drained instance has ended: `morca scheduler` exits."""
     var _going: Int
     """For an instance, the local and control-placed runs going on this
     host across every instance, as this tick counted them: memory
-    pressure's "none of orca's runs going"."""
+    pressure's "none of morca's runs going"."""
 
     def __init__(out self, url: String) raises:
         self.db = State(url)
         self.db.migrate()
         self.stale = stale_limit()
-        self.retry_seconds = Int64(Int(getenv("ORCA_RETRY_SECONDS", "60")))
-        self.sense_seconds = Float64(getenv("ORCA_SENSE_SECONDS", "60"))
-        var runner = getenv("ORCA_RUNNER", "local")
+        self.retry_seconds = Int64(Int(getenv("MORCA_RETRY_SECONDS", "60")))
+        self.sense_seconds = Float64(getenv("MORCA_SENSE_SECONDS", "60"))
+        var runner = getenv("MORCA_RUNNER", "local")
         self.runner = None
         self.ec2 = None
         self.pools = PoolScaler()
@@ -439,13 +439,13 @@ struct Scheduler(Movable):
             self.ec2 = Ec2Runner()
         elif runner != "local":
             raise Error(
-                "orca: ORCA_RUNNER is local, kubernetes or ec2, not ", runner
+                "morca: MORCA_RUNNER is local, kubernetes or ec2, not ", runner
             )
         # A pod can take minutes to be scheduled and pull its image.
         self.start_grace = start_grace(self.stale)
-        var budget = getenv("ORCA_VCPU_BUDGET")
+        var budget = getenv("MORCA_VCPU_BUDGET")
         self.budget = cpu_millis(budget) if budget else 0
-        self.logs = getenv("ORCA_LOGS")
+        self.logs = getenv("MORCA_LOGS")
         self._polled = Dict[String, Int]()
         self._asked = Dict[String, Capture]()
         self._unsensed = Dict[String, String]()
@@ -453,19 +453,19 @@ struct Scheduler(Movable):
         self.wait_for_binaries = False
         self._driver_logs = Dict[Int, String]()
         self._spawned = Dict[Int, Tuple[Int, Int, String]]()
-        self.expire_seconds = Float64(getenv("ORCA_EXPIRE_HOURS", "24")) * 3600
+        self.expire_seconds = Float64(getenv("MORCA_EXPIRE_HOURS", "24")) * 3600
         self.maintain = maintain_binary() if self.expire_seconds > 0 else ""
         # The first sweep a few minutes after starting
-        # (`ORCA_EXPIRE_DELAY_SECONDS`, 300), not at once: a scheduler
+        # (`MORCA_EXPIRE_DELAY_SECONDS`, 300), not at once: a scheduler
         # restarted in a loop shouldn't expire on every start.
         self._expire_next = Int(perf_counter_ns()) + Int(
-            Float64(getenv("ORCA_EXPIRE_DELAY_SECONDS", "300")) * 1e9
+            Float64(getenv("MORCA_EXPIRE_DELAY_SECONDS", "300")) * 1e9
         )
         self._expiring = List[String]()
-        self.fleet_seconds = Float64(getenv("ORCA_FLEET_SECONDS", "30"))
+        self.fleet_seconds = Float64(getenv("MORCA_FLEET_SECONDS", "30"))
         self._fleet_next = 0
         self._archive = Archive()
-        self.watchdog_seconds = Float64(getenv("ORCA_WATCHDOG_SECONDS", "60"))
+        self.watchdog_seconds = Float64(getenv("MORCA_WATCHDOG_SECONDS", "60"))
         self._watchdog_next = 0
         self._notify_next = 0
         self.limits = ControlLimits.from_env()
@@ -487,19 +487,19 @@ struct Scheduler(Movable):
         self.instance = 0
         self.leading = True
         self.draining = False
-        self.drain_seconds = Float64(getenv("ORCA_DRAIN_SECONDS", "3600"))
+        self.drain_seconds = Float64(getenv("MORCA_DRAIN_SECONDS", "3600"))
         self._drain_start = 0
         self.finished = False
         self._going = 0
 
     def join(mut self) raises:
-        """With `ORCA_OVERLAP=on`, makes this scheduler an instance
+        """With `MORCA_OVERLAP=on`, makes this scheduler an instance
         (`orca.instances`): it leads only once it holds the lead."""
         if not overlap_on():
             return
         self.instance = join_instance(self.db)
         self.leading = False
-        print("orca: scheduler instance", self.instance, "joined")
+        print("morca: scheduler instance", self.instance, "joined")
 
     def reconnect(mut self, url: String) raises:
         """A new connection after a tick failed, keeping what this instance
@@ -510,7 +510,7 @@ struct Scheduler(Movable):
         self.leading = False
 
     def _idle(self) -> Bool:
-        """Whether none of orca's runs is going on this host: none of its
+        """Whether none of morca's runs is going on this host: none of its
         own children, or for an instance none of any instance's."""
         if self.instance > 0:
             return self._going == 0
@@ -538,7 +538,7 @@ struct Scheduler(Movable):
                     String("asked to")
                 )
                 print(
-                    String("orca: scheduler instance ", self.instance),
+                    String("morca: scheduler instance ", self.instance),
                     String(" drains (", why, "): "),
                     len(self._spawned),
                     " runs going",
@@ -546,13 +546,13 @@ struct Scheduler(Movable):
                 )
             elif not self.leading and try_lead(self.db, self.instance):
                 self.leading = True
-                print("orca: scheduler instance", self.instance, "leads")
+                print("morca: scheduler instance", self.instance, "leads")
         if not self.draining:
             return
         if len(self._spawned) == 0 and len(self._keeping) == 0:
             end_instance(self.db, self.instance)
             self.finished = True
-            print("orca: scheduler instance", self.instance, "drained")
+            print("morca: scheduler instance", self.instance, "drained")
             return
         var waited = Float64(Int(perf_counter_ns()) - self._drain_start) / 1e9
         if waited < self.drain_seconds:
@@ -573,14 +573,14 @@ struct Scheduler(Movable):
         end_instance(self.db, self.instance)
         self.finished = True
         print(
-            "orca: scheduler instance",
+            "morca: scheduler instance",
             self.instance,
             "ended its drain; the leader queues its runs again",
         )
 
     def _kill_held(mut self):
         """Kills each contained run held at its memory limit (`held`) for
-        `ORCA_RUN_MEMORY_HELD_SECONDS` in a row: throttled at memory.high,
+        `MORCA_RUN_MEMORY_HELD_SECONDS` in a row: throttled at memory.high,
         it may never reach memory.max, and its heartbeat, kept on another
         thread, stays fresh. Reaped, it's out of memory (`_uncontain`)."""
         var held_s = self.cgroups.knobs.held_s
@@ -654,41 +654,41 @@ struct Scheduler(Movable):
             )
 
     def say_pressure(self):
-        """Says once, for `orca scheduler`, where this host's memory
+        """Says once, for `morca scheduler`, where this host's memory
         pressure is read from and what it holds (`orca.pressure`)."""
         if not self.psi:
             print(
-                "orca: no memory pressure to read here (no PSI: macOS, or a",
+                "morca: no memory pressure to read here (no PSI: macOS, or a",
                 " kernel without it); runs start on counts and grants alone",
                 sep="",
             )
         elif self.admission.limit <= 0:
             print(
-                "orca: memory pressure from",
+                "morca: memory pressure from",
                 self.psi.describe(),
-                "- admission by it is off (ORCA_ADMIT_MEMORY_PRESSURE=0)",
+                "- admission by it is off (MORCA_ADMIT_MEMORY_PRESSURE=0)",
             )
         else:
             print(
-                "orca: memory pressure from",
+                "morca: memory pressure from",
                 self.psi.describe(),
                 "- no new runs start here while some avg10 is over",
                 String(pct_text(self.admission.limit), "%"),
             )
 
     def contain(mut self) raises:
-        """Turns on a cgroup per run (`orca.cgroup`) where this host lets
-        orca make them, saying once which, and picks up the empty cgroups
-        an earlier scheduler left. `orca scheduler` does this; `orca tick`
+        """Turns on a cgroup per run (`morca.cgroup`) where this host lets
+        morca make them, saying once which, and picks up the empty cgroups
+        an earlier scheduler left. `morca scheduler` does this; `morca tick`
         and the other commands don't, as they don't reap what they
         start."""
         self.cgroups = Cgroups.setup(MemoryKnobs.from_env())
-        print("orca: run cgroups", self.cgroups.why)
+        print("morca: run cgroups", self.cgroups.why)
         if not self.cgroups.on():
             print(
-                "orca: runs are contained as before: first to go if memory",
+                "morca: runs are contained as before: first to go if memory",
                 "runs out, and control-placed runs killed over",
-                "ORCA_CONTROL_MEMORY_MB",
+                "MORCA_CONTROL_MEMORY_MB",
             )
         self._unswept = self.cgroups.stale()
         self._sweep_cgroups()
@@ -709,7 +709,7 @@ struct Scheduler(Movable):
         grant: Grant,
         control: Bool,
     ) -> Contained:
-        """Makes a start's cgroup at its limit (`orca.cgroup`) and records
+        """Makes a start's cgroup at its limit (`morca.cgroup`) and records
         the limit on the run; with cgroups off, or if it can't, one with no
         path, and the run starts as before."""
         var c = Contained(run, start, p.name, "", 0, 0, 0, grant.memory_mb)
@@ -748,7 +748,7 @@ struct Scheduler(Movable):
                 .int64(Int64(c.kill_mb)),
             )
         except e:
-            print("orca: run", run, "starts without a cgroup:", e)
+            print("morca: run", run, "starts without a cgroup:", e)
             if c.path and not Cgroups.remove(c.path):
                 self._unswept.append(c.path)
             c.path = ""
@@ -798,7 +798,7 @@ struct Scheduler(Movable):
                     .int64(Int64(c.run)),
                 )
             except e:
-                print("orca: can't raise", c.pipeline, "memory:", e)
+                print("morca: can't raise", c.pipeline, "memory:", e)
         var stall = Cgroups.stall_ms(c.path)
         try:
             _ = self.db.conn.execute(
@@ -825,7 +825,7 @@ struct Scheduler(Movable):
                 Params().int64(Int64(c.run)).int64(Int64(c.start)),
             )
         except e:
-            print("orca: can't record run", c.run, "memory limit:", e)
+            print("morca: can't record run", c.run, "memory limit:", e)
         # The run is over: what it left running goes with it.
         _ = put_cgroup(String(c.path, "/cgroup.kill"), "1")
         if not Cgroups.remove(c.path):
@@ -864,14 +864,14 @@ struct Scheduler(Movable):
     def _pressure(mut self) raises:
         """Reads this host's memory pressure (`orca.pressure`) for this
         tick's starts, says when a hold starts and ends, alerts once when
-        one has nothing of orca's to wait for, and keeps the reading in
+        one has nothing of morca's to wait for, and keeps the reading in
         `orca.pressure` every 5 s and on each change of hold (with no
         reading where there's no PSI, so Ops says so)."""
         var t = Int(perf_counter_ns())
         var psi = read_psi(self.psi.path)
         if self.psi and not psi and not self._pressure_unread:
             print(
-                "orca: can't read memory pressure from",
+                "morca: can't read memory pressure from",
                 self.psi.path,
                 "- nothing is held until it reads",
             )
@@ -884,10 +884,10 @@ struct Scheduler(Movable):
         ref a = self.admission
         var r = Report.of(self.psi, a, now)
         if a.held() and not was:
-            print("orca:", a.hold, "- no new runs start on this host")
+            print("morca:", a.hold, "- no new runs start on this host")
         if a.released:
             print(
-                "orca: memory pressure",
+                "morca: memory pressure",
                 String(pct_text(r.some10), "%"),
                 "- runs start on this host again",
             )
@@ -911,8 +911,8 @@ struct Scheduler(Movable):
         was given. Its error is the exit code and the last line its process
         printed, such as `resume`'s refusal. A process that claimed it and
         crashed has the attempts it left running failed with the crash's
-        summary (`orca.crash`), or with `over` if the scheduler killed it
-        for its memory (`orca.control`)."""
+        summary (`morca.crash`), or with `over` if the scheduler killed it
+        for its memory (`morca.control`)."""
         var why = String(
             "its process (pid ", pid, ") exited ", code, " before claiming it"
         )
@@ -984,7 +984,7 @@ struct Scheduler(Movable):
                 with open(spawned[2], "r") as f:
                     why = crash_summary(f.read())
             except e:
-                print("orca: can't read", spawned[2], ":", e)
+                print("morca: can't read", spawned[2], ":", e)
         if not why:
             why = String(
                 "crashed: killed by signal ",
@@ -1008,11 +1008,11 @@ struct Scheduler(Movable):
             )
             self._keeping[pid] = c.stage
         except e:
-            print("orca: can't keep run", c.run, "driver log:", e)
+            print("morca: can't keep run", c.run, "driver log:", e)
 
     def _sample(mut self) -> Dict[Int, Tuple[Int, Float64]]:
         """Samples each local and control-placed run's process tree, in one
-        pass over /proc (`orca.usage`); the readings, by pid, are empty on
+        pass over /proc (`morca.usage`); the readings, by pid, are empty on
         macOS."""
         var pids = List[Int]()
         for e in self._meters.items():
@@ -1029,7 +1029,7 @@ struct Scheduler(Movable):
         mut self, readings: Dict[Int, Tuple[Int, Float64]]
     ) raises:
         """Kills each control-placed run's processes once they hold more
-        than `ORCA_CONTROL_MEMORY_MB` resident; the reap fails its attempts
+        than `MORCA_CONTROL_MEMORY_MB` resident; the reap fails its attempts
         saying so. The tick's `readings` say what they hold, or on macOS
         `tree_rss`."""
         if len(self._control) == 0:
@@ -1037,7 +1037,7 @@ struct Scheduler(Movable):
         var cap = self.limits.memory_mb * 1024 * 1024
         var pids = List[Int]()
         for e in self._control.items():
-            # A run in a cgroup has its limit there (orca.cgroup).
+            # A run in a cgroup has its limit there (morca.cgroup).
             if not e.value.over and e.key not in self._contained:
                 pids.append(e.key)
         for pid in pids:
@@ -1050,7 +1050,7 @@ struct Scheduler(Movable):
                 rss // (1024 * 1024),
                 " MB, over the control instance's cap of ",
                 self.limits.memory_mb,
-                " MB a run (ORCA_CONTROL_MEMORY_MB)",
+                " MB a run (MORCA_CONTROL_MEMORY_MB)",
             )
             _ = external_call["kill", c_int](c_int(-pid), c_int(9))
             _ = external_call["kill", c_int](c_int(pid), c_int(9))
@@ -1060,9 +1060,9 @@ struct Scheduler(Movable):
     def _fleet(mut self) raises:
         """Every `fleet_seconds`, keeps the new samples of the live
         instances and the control instance for the fleet page
-        (`orca.fleet`)."""
+        (`morca.fleet`)."""
         if self.fleet_seconds <= 0 or not (
-            self.ec2 or getenv("ORCA_CONTROL_SAMPLES")
+            self.ec2 or getenv("MORCA_CONTROL_SAMPLES")
         ):
             return
         var t = Int(perf_counter_ns())
@@ -1070,7 +1070,7 @@ struct Scheduler(Movable):
             return
         self._fleet_next = t + Int(self.fleet_seconds * 1e9)
         _ = ingest(self.db)
-        var control = getenv("ORCA_CONTROL_SAMPLES")
+        var control = getenv("MORCA_CONTROL_SAMPLES")
         if control:
             # The same file the fleet read, for the system page's history.
             var text = String()
@@ -1084,7 +1084,7 @@ struct Scheduler(Movable):
 
     def _watchdog(mut self) raises:
         """Every `watchdog_seconds`, checks the watchdog's rules and pauses
-        the pipelines of those over their limits (`orca.watchdog`)."""
+        the pipelines of those over their limits (`morca.watchdog`)."""
         if self.watchdog_seconds <= 0:
             return
         var t = Int(perf_counter_ns())
@@ -1094,8 +1094,8 @@ struct Scheduler(Movable):
         _ = check_watchdog(self.db, watchdog_config())
 
     def _notify(mut self, now: Int64) raises:
-        """Alerts to a person (`orca.notify`): sends what is pending and
-        due, and every `ORCA_NOTIFY_CHECK_SECONDS` (10) checks what the
+        """Alerts to a person (`morca.notify`): sends what is pending and
+        due, and every `MORCA_NOTIFY_CHECK_SECONDS` (10) checks what the
         alerts of `orca.alerts` are about that the scheduler's other steps
         don't decide: a watchdog trip that ended, the control host's disk,
         workers that went quiet, and fills that stalled. A failure to send
@@ -1106,7 +1106,7 @@ struct Scheduler(Movable):
         var t = Int(perf_counter_ns())
         if t < self._notify_next:
             return
-        var every = Float64(getenv("ORCA_NOTIFY_CHECK_SECONDS", "10"))
+        var every = Float64(getenv("MORCA_NOTIFY_CHECK_SECONDS", "10"))
         self._notify_next = t + Int(every * 1e9)
         watchdog_recovered(self.db)
         alert_disk(self.db)
@@ -1139,7 +1139,7 @@ struct Scheduler(Movable):
         `job` is asked for, and checked on by later calls, which get None
         while it's going (unless `wait_for_binaries`). One that exits
         non-zero raises `<what> exited <code>: <output>`; one going longer
-        than `ORCA_BINARY_SECONDS` is killed, and raises saying so."""
+        than `MORCA_BINARY_SECONDS` is killed, and raises saying so."""
         if job not in self._asked:
             self._asked[job] = Capture.start(argv)
         var limit = binary_seconds()
@@ -1159,10 +1159,10 @@ struct Scheduler(Movable):
             sleep(0.01)
 
     def _expire(mut self) raises:
-        """Every `expire_seconds`, expires each dataset orca commits to by
+        """Every `expire_seconds`, expires each dataset morca commits to by
         the table's own `history.expire.*` properties, one at a time in the
-        background (`orca_maintain expire --if-policy`), with the snapshots
-        live runs need retained (`orca.expiry.retained`). `orca tick` waits
+        background (`morca_maintain expire --if-policy`), with the snapshots
+        live runs need retained (`morca.expiry.retained`). `morca tick` waits
         for the whole sweep."""
         if self.expire_seconds <= 0 or not self.maintain:
             return
@@ -1182,7 +1182,7 @@ struct Scheduler(Movable):
                 argv = expire_argv(self.db, self.maintain, ds)
             var out: Optional[String]
             try:
-                out = self._ask(job, String("orca: expire ", ds), argv)
+                out = self._ask(job, String("morca: expire ", ds), argv)
             except e:
                 _ = self._expiring.pop(0)
                 raise e
@@ -1197,7 +1197,7 @@ struct Scheduler(Movable):
 
     def _schedule_retries(mut self, p: Registered, now: Int64) raises:
         """Gives each failed run that may be retried its time to start:
-        the pipeline's `retry_seconds` (or `ORCA_RETRY_SECONDS`) doubling
+        the pipeline's `retry_seconds` (or `MORCA_RETRY_SECONDS`) doubling
         with each start that wasn't after a deferral, up to its
         `max_retry_seconds`, plus up to a tenth as jitter. Not one whose
         failure at this start isn't retried (`unretried_start`)."""
@@ -1264,7 +1264,7 @@ struct Scheduler(Movable):
                 " coalesce(ended, now()), heartbeat = NULL, retry_at = NULL,",
                 " error = 'not started: its code is ' || registry_hash || ',",
                 " and the pipeline''s binary is now ' || $4 || '; resume it",
-                " with the new code from orca ui, or with <binary> resume",
+                " with the new code from morca ui, or with <binary> resume",
                 " ' || id || ' --allow-new-code' WHERE pipeline = $1 AND",
                 " registry_hash <> $4 AND NOT allow_new_code AND error IS NULL",
                 " AND (status IN ('queued', 'deferred') OR (status = 'failed'",
@@ -1319,7 +1319,7 @@ struct Scheduler(Movable):
             )
             if n > 0:
                 print(
-                    "orca: paused",
+                    "morca: paused",
                     p.name,
                     "has",
                     n,
@@ -1337,5 +1337,5 @@ struct Scheduler(Movable):
         `backfill`."""
         var ps = registered(self.db, pipeline)
         if len(ps) == 0:
-            raise Error("orca: pipeline ", pipeline, " isn't registered")
+            raise Error("morca: pipeline ", pipeline, " isn't registered")
         return backfill(self.db, ps[0], keys, rerun, allow_append)

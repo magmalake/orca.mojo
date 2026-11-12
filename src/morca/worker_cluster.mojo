@@ -1,10 +1,10 @@
 """The processes of one run's dista cluster on a remote worker (#268,
-`orca.run_cluster`): the head and a dista worker beside the run's driver
+`morca.run_cluster`): the head and a dista worker beside the run's driver
 on the worker that starts it, and a dista worker on each one that joins.
 
 Every one of them gets the run's cluster token as `DISTA_TOKEN` (dista
 refuses a connection without it) and its address as `DISTA_ADVERTISE`, the
-one `orca worker --advertise` says the pool's machines reach it at. A
+one `morca worker --advertise` says the pool's machines reach it at. A
 member's dista worker gives up on a head that's gone after
 `DISTA_CONNECT_TIMEOUT` (10 s), as well as being stopped when its run ends.
 """
@@ -13,7 +13,7 @@ from std.ffi import c_int, external_call
 
 from dista.socket import Listener
 
-from orca.proc import spawn
+from morca.proc import spawn
 
 comptime MEMBER_CONNECT_SECONDS = "10"
 

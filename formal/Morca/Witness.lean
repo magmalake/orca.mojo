@@ -1,5 +1,5 @@
-import Orca.Core.Assumptions
-import Orca.Retry.Model
+import Morca.Core.Assumptions
+import Morca.Retry.Model
 
 /-!
 # The assumptions can be met
@@ -9,9 +9,9 @@ crash starts the next attempt. It meets all three assumptions, so the
 theorems don't hold only because nothing could satisfy their hypotheses, and
 it can crash from every state.
 -/
-namespace Orca
+namespace Morca
 
-open Orca.Assumptions
+open Morca.Assumptions
 
 /-- The next attempt after a crash. -/
 def restart (s : State) : State :=
@@ -46,4 +46,4 @@ theorem idealEnv_crash_anywhere (me : StepId) (s : State) :
   have h : idealEnv.crash s (restart s) := rfl
   exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h))))
 
-end Orca
+end Morca

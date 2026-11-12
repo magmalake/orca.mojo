@@ -1,12 +1,12 @@
 """Where a pipeline binary's code came from: its git repository and commit,
 given at build time.
 
-    mojo build -D ORCA_SOURCE=https://github.com/me/lake \\
-        -D ORCA_COMMIT=$(git rev-parse HEAD) \\
-        -D ORCA_DIRTY=$(git diff --quiet HEAD && echo 0 || echo 1) ...
+    mojo build -D MORCA_SOURCE=https://github.com/me/lake \\
+        -D MORCA_COMMIT=$(git rev-parse HEAD) \\
+        -D MORCA_DIRTY=$(git diff --quiet HEAD && echo 0 || echo 1) ...
 
-`describe` reports them, `orca register` and each run record them as a
-version of the pipeline (`orca.pipeline_versions`), and `orca ui` links a
+`describe` reports them, `morca register` and each run record them as a
+version of the pipeline (`orca.pipeline_versions`), and `morca ui` links a
 run to the commit it ran. A binary built without them has an empty source
 and is shown as such.
 """
@@ -15,14 +15,14 @@ from std.sys import get_defined_string
 
 
 def source_repo() -> String:
-    return String(get_defined_string["ORCA_SOURCE", ""]())
+    return String(get_defined_string["MORCA_SOURCE", ""]())
 
 
 def source_commit() -> String:
     """The commit, or "" if what was defined isn't hex. `mojo build -D`
     reads a value of digits alone as a number, which a real SHA, with 40
     characters, practically never is."""
-    var c = String(get_defined_string["ORCA_COMMIT", ""]())
+    var c = String(get_defined_string["MORCA_COMMIT", ""]())
     return c if is_hex(c) else String()
 
 
@@ -36,7 +36,7 @@ def is_hex(s: String) -> Bool:
 
 def source_dirty() -> Bool:
     """Whether the tree it was built from had changes the commit lacks."""
-    comptime d = get_defined_string["ORCA_DIRTY", "0"]()
+    comptime d = get_defined_string["MORCA_DIRTY", "0"]()
     return d != "0" and d != "" and d != "false"
 
 

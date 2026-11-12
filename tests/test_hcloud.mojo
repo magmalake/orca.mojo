@@ -1,5 +1,5 @@
-"""orca.hcloud against tests/fake_hcloud.py: run by tests/hcloud.sh, which
-starts the fake and sets ORCA_HCLOUD_ENDPOINT, ORCA_HCLOUD_TOKEN and
+"""morca.hcloud against tests/fake_hcloud.py: run by tests/hcloud.sh, which
+starts the fake and sets MORCA_HCLOUD_ENDPOINT, MORCA_HCLOUD_TOKEN and
 HCLOUD_DIR (the fake's directory)."""
 
 from std.os import getenv, remove
@@ -13,8 +13,8 @@ from std.testing import (
     assert_true,
 )
 
-from orca.hcloud import Created, HCloud, ServerSpec, error_of, is_no_stock
-from orca.machines import MachineSpec, Provider, docker_arch
+from morca.hcloud import Created, HCloud, ServerSpec, error_of, is_no_stock
+from morca.machines import MachineSpec, Provider, docker_arch
 
 
 def _dir() -> String:
@@ -35,9 +35,9 @@ def _spec(
         loc,
         "ubuntu-24.04",
         data,
-        [("orca-pool", "lab"), ("orca", "true")],
-        ["orca-lab"],
-        "orca-lab",
+        [("orca-pool", "lab"), ("morca", "true")],
+        ["morca-lab"],
+        "morca-lab",
         "",
     )
 
@@ -48,7 +48,7 @@ def test_types_and_firewalls() raises:
     assert_equal(h.arch("cpx32"), "x86")
     with assert_raises(contains="no server type nope"):
         _ = h.arch("nope")
-    assert_equal(h.firewall_id("orca-lab"), "42")
+    assert_equal(h.firewall_id("morca-lab"), "42")
     with assert_raises(contains="no firewall named other"):
         _ = h.firewall_id("other")
 
@@ -56,35 +56,35 @@ def test_types_and_firewalls() raises:
 def test_create_list_delete() raises:
     var h = HCloud.from_env()
     _write("stock", "")
-    var got = h.create(_spec("orca-lab-1", "cax31", "hel1"))
+    var got = h.create(_spec("morca-lab-1", "cax31", "hel1"))
     assert_false(got.ok)
     assert_true(got.no_stock)
     assert_true("resource_unavailable" in got.why)
     _write("stock", "cax31 hel1\n")
     got = h.create(
-        _spec("orca-lab-1", "cax31", "hel1", "echo ran > $SERVER_NAME.ran\n")
+        _spec("morca-lab-1", "cax31", "hel1", "echo ran > $SERVER_NAME.ran\n")
     )
     assert_true(got.ok, got.why)
     assert_equal(got.address, "127.0.0.1")
     var id = got.id
     # The same name again: refused, and not for stock.
-    var again = h.create(_spec("orca-lab-1", "cax31", "hel1"))
+    var again = h.create(_spec("morca-lab-1", "cax31", "hel1"))
     assert_false(again.ok)
     assert_false(again.no_stock)
     assert_true("uniqueness_error" in again.why, again.why)
     # A type or location it doesn't have is no stock's opposite: a mistake.
-    var bad = h.create(_spec("orca-lab-2", "cax99", "hel1"))
+    var bad = h.create(_spec("morca-lab-2", "cax99", "hel1"))
     assert_false(bad.no_stock)
     var listed = h.servers("orca-pool=lab")
     assert_equal(len(listed), 1)
     assert_equal(listed[0].id, id)
-    assert_equal(listed[0].name, "orca-lab-1")
+    assert_equal(listed[0].name, "morca-lab-1")
     assert_equal(listed[0].server_type, "cax31")
     assert_equal(listed[0].location, "hel1")
     assert_equal(listed[0].pool, "lab")
     assert_equal(len(h.servers("orca-pool=other")), 0)
     # Its user data ran, with SERVER_NAME its name.
-    var ran = String(_dir(), "/orca-lab-1.ran")
+    var ran = String(_dir(), "/morca-lab-1.ran")
     for _ in range(100):
         if exists(ran):
             break
@@ -109,7 +109,7 @@ def test_every_page() raises:
 
 
 def test_errors_keep_the_token_out() raises:
-    var h = HCloud(getenv("ORCA_HCLOUD_ENDPOINT"), "not-the-token")
+    var h = HCloud(getenv("MORCA_HCLOUD_ENDPOINT"), "not-the-token")
     try:
         _ = h.servers("orca-pool=lab")
         raise Error("accepted a bad token")
@@ -123,14 +123,14 @@ def test_errors_keep_the_token_out() raises:
 
 
 def test_the_provider() raises:
-    """orca.machines over Hetzner: Docker's architecture names, a pool's
+    """morca.machines over Hetzner: Docker's architecture names, a pool's
     machines by label, and EC2 needing its region."""
     var p = Provider.of("hetzner")
     assert_equal(p.arch("cax21"), "arm64")
     assert_equal(p.arch("cx33"), "amd64")
     assert_equal(docker_arch("x86_64"), "amd64")
     _write("stock", "cpx32 fsn1\n")
-    var got = p.create(MachineSpec("orca-p-1", "cpx32", "fsn1", "", "p"))
+    var got = p.create(MachineSpec("morca-p-1", "cpx32", "fsn1", "", "p"))
     assert_true(got.ok, got.why)
     var ms = p.machines("p")
     assert_equal(len(ms), 1)

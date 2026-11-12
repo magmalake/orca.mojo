@@ -4,8 +4,8 @@ A day is written `YYYY-MM-DD`, and a range of them `2024-01-01..2024-01-31`,
 both ends included.
 """
 
-from orca.key import TimeKey
-from orca.month import Month, days_in
+from morca.key import TimeKey
+from morca.month import Month, days_in
 
 
 @fieldwise_init

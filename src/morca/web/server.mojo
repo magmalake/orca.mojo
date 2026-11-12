@@ -1,9 +1,9 @@
-"""`orca ui`'s server: one handler that looks each request up in the route
-table (`orca.web.routes`), checks who it's from (`orca.web.auth`) and
+"""`morca ui`'s server: one handler that looks each request up in the route
+table (`morca.web.routes`), checks who it's from (`morca.web.auth`) and
 answers it as its route's kind says.
 
 ```
-ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui     # 127.0.0.1:8270
+MORCA_DATABASE_URL=postgresql:///morca ./build/morca ui     # 127.0.0.1:8270
 ```
 
 A request goes through, in order:
@@ -11,27 +11,27 @@ A request goes through, in order:
 1. The stylesheet, `/healthz` (200 once the database answers, without a
    login: what a deploy waits for before it retires the old UI; 503
    `draining` once a drain has started), and the
-   worker API (`POST /api/worker/...`, `orca.api.worker`, its own token),
+   worker API (`POST /api/worker/...`, `morca.api.worker`, its own token),
    answered before anything else.
 2. The route. A `POST` that's no action, or another method than `GET`,
    `HEAD` or `POST`, is 405.
 3. A `POST` whose `Origin` (or `Referer`) isn't the UI's own is refused
-   (403), unless it's a script's with no `Origin` (`orca.web.auth`).
+   (403), unless it's a script's with no `Origin` (`morca.web.auth`).
 4. The database, per request; `/api/login` is answered here, before any
    token is looked at.
 5. Who it's from: an API token or a session. A token that's no use is 401.
-6. By the route's kind (`orca.web.router`): logging in or out as the
+6. By the route's kind (`morca.web.router`): logging in or out as the
    handler says; a page with who's logged in (or a way to log in) in its
    header; an action, once login is on only with a session, audited as its
    user's.
 
 The UI holds no state: its actions are rows the scheduler acts on, and it
 can run beside the scheduler or anywhere else that reaches the database.
-`ORCA_UI_ADDR` (`host:port`) moves it; it binds to localhost unless told
-otherwise. `ORCA_WORKER_ADDR` serves the worker API on a listener of its
-own as well (`orca.api.worker`). SIGTERM or SIGINT drains it: no new
+`MORCA_UI_ADDR` (`host:port`) moves it; it binds to localhost unless told
+otherwise. `MORCA_WORKER_ADDR` serves the worker API on a listener of its
+own as well (`morca.api.worker`). SIGTERM or SIGINT drains it: no new
 connections, `/healthz` 503, the requests in flight answered, then exit 0 within
-`ORCA_UI_DRAIN_SECONDS` (8; `orca.web.drain`).
+`MORCA_UI_DRAIN_SECONDS` (8; `morca.web.drain`).
 """
 
 from flare.http import Handler, HttpServer, Request, Response, ServerConfig
@@ -39,13 +39,13 @@ from flare.net import SocketAddr
 from postgres import Params
 from threads import AtomicFlag
 
-from orca.api import worker as worker_api
-from orca.auth import audit, login_required
-from orca.html import Html, query_param, url_encode
-from orca.json import quote
-from orca.state import State
-from orca.ui.coverage import COVERAGE_STYLE
-from orca.ui.layout import (
+from morca.api import worker as worker_api
+from morca.auth import audit, login_required
+from morca.html import Html, query_param, url_encode
+from morca.json import quote
+from morca.state import State
+from morca.ui.coverage import COVERAGE_STYLE
+from morca.ui.layout import (
     AUTH_SLOT,
     HERE_SLOT,
     USER_SLOT,
@@ -53,9 +53,9 @@ from orca.ui.layout import (
     not_found,
     page_html,
 )
-from orca.ui.style import STYLE
-from orca.ui.viz import VIZ_STYLE
-from orca.web.auth import (
+from morca.ui.style import STYLE
+from morca.ui.viz import VIZ_STYLE
+from morca.web.auth import (
     API_LOGIN,
     client,
     content_type,
@@ -68,13 +68,13 @@ from orca.web.auth import (
     sign_in,
     token_refused,
 )
-from orca.web.drain import Drain
-from orca.web.page import Page, respond
-from orca.web.router import ACTION, AUTH, Call, PAGE, Route, answer, find
-from orca.web.routes import routes
+from morca.web.drain import Drain
+from morca.web.page import Page, respond
+from morca.web.router import ACTION, AUTH, Call, PAGE, Route, answer, find
+from morca.web.routes import routes
 
 comptime DEFAULT_ADDR = "127.0.0.1:8270"
-comptime STYLESHEET = "/static/orca.css"
+comptime STYLESHEET = "/static/morca.css"
 comptime HEALTHZ = "/healthz"
 
 
@@ -155,7 +155,7 @@ def _error(e: Error, json: Bool) -> Response:
 
 
 def _stylesheet() raises -> Response:
-    """`/static/orca.css`: the pages' rules and the views'."""
+    """`/static/morca.css`: the pages' rules and the views'."""
     var resp = Response(
         status=200,
         reason="OK",
@@ -168,9 +168,9 @@ def _stylesheet() raises -> Response:
 def _healthz(url: String, draining: Bool) -> Response:
     """`/healthz`: 200 `ok` once the database answers a query, 503 if it
     doesn't, and 503 `draining` without asking it once SIGTERM or SIGINT
-    has started a drain (`orca.web.drain`), so a checker or proxy on a
+    has started a drain (`morca.web.drain`), so a checker or proxy on a
     kept-alive connection stops sending requests here. No login, and
-    nothing else in it: `orca-stack apply` waits for it before it stops the
+    nothing else in it: `morca-stack apply` waits for it before it stops the
     old UI (docs/hetzner.md#deploying-code)."""
     var status = 200
     var reason = String("OK")
@@ -184,7 +184,7 @@ def _healthz(url: String, draining: Bool) -> Response:
             var db = State(url)
             _ = db.conn.query("SELECT 1 AS ok", Params())
     except e:
-        print("orca ui: /healthz: the database doesn't answer:", e)
+        print("morca ui: /healthz: the database doesn't answer:", e)
         status = 503
         reason = String("Service Unavailable")
         body = String("the database doesn't answer\n")
@@ -205,7 +205,7 @@ struct Ui(Copyable, Handler):
     var url: String
     var table: List[Route]
     var draining: AtomicFlag
-    """Set once a drain has started (`orca.web.drain.Drain.draining`)."""
+    """Set once a drain has started (`morca.web.drain.Drain.draining`)."""
 
     def __init__(out self, url: String, draining: AtomicFlag):
         self.url = url
@@ -298,15 +298,15 @@ struct Ui(Copyable, Handler):
 
 
 def read_page(mut db: State, url: String) raises -> Page:
-    """What `GET url` answers, for `orca` commands that print a page's JSON
-    over the database (`orca.remote`)."""
+    """What `GET url` answers, for `morca` commands that print a page's JSON
+    over the database (`morca.remote`)."""
     var got = answer(routes(), db, Call(url, _path_of(url)), PAGE)
     return got.take()
 
 
 def act(mut db: State, path: String, form: String) raises -> Optional[Page]:
     """The action `path` with the fields of `form`, as the UI's button does
-    it, or None if `path` names none (`orca.remote`). Not audited: the
+    it, or None if `path` names none (`morca.remote`). Not audited: the
     command acts as whoever can reach the database."""
     var call = Call(path, path)
     call.form = form
@@ -316,17 +316,17 @@ def act(mut db: State, path: String, form: String) raises -> Optional[Page]:
 
 def serve_ui(url: String, addr: String, worker_addr: String = "") raises:
     """Serves the pages on `addr` until SIGTERM or SIGINT drains them
-    (`orca.web.drain`), and the worker API on `worker_addr` too, if one is
-    given (`orca.api.worker`), until the process ends."""
+    (`morca.web.drain`), and the worker API on `worker_addr` too, if one is
+    given (`morca.api.worker`), until the process ends."""
     var cfg = ServerConfig()
     cfg.idle_timeout_ms = 30_000
     cfg.write_timeout_ms = 30_000
     var server = HttpServer.bind(SocketAddr.parse(addr), cfg^)
     if worker_addr:
         worker_api.listen(url, worker_addr)
-        print("orca ui: the worker API on http://", worker_addr, sep="")
+        print("morca ui: the worker API on http://", worker_addr, sep="")
     var drain = Drain(server)
-    print("orca ui on http://", addr, sep="")
+    print("morca ui on http://", addr, sep="")
     server.serve(drain.counting(Ui(url, drain.draining())))
     _ = drain^
-    print("orca ui: stopped")
+    print("morca ui: stopped")

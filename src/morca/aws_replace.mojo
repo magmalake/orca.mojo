@@ -1,23 +1,23 @@
-"""`orca aws replace-control`: a blue/green replacement of the stack's
+"""`morca aws replace-control`: a blue/green replacement of the stack's
 control instance by a new one booted from the current template, with the
 old one's database (DESIGN.md, "Replacing the control instance").
 
-    orca aws replace-control [--stack S] [--plan] [--wait] [--keep-old 24h]
+    morca aws replace-control [--stack S] [--plan] [--wait] [--keep-old 24h]
                              [--smoke PIPELINE=KEY] [--env KEY=VALUE ...]
-    orca aws replace-control --resume      # after a failure, or to retire
-    orca aws replace-control --rollback    # back to the old instance
+    morca aws replace-control --resume      # after a failure, or to retire
+    morca aws replace-control --rollback    # back to the old instance
 
 The control instance is in one of two slots, blue and green
-(deploy/aws/orca.yaml); the Elastic IP is on the active one. The steps,
-each logged to `build/orca-aws/replace-<stack>.log` and recorded in
-`build/orca-aws/replace-<stack>.state` once done, so `--resume` goes on
+(deploy/aws/morca.yaml); the Elastic IP is on the active one. The steps,
+each logged to `build/morca-aws/replace-<stack>.log` and recorded in
+`build/morca-aws/replace-<stack>.state` once done, so `--resume` goes on
 from the first one that isn't:
 
 1. **quiet**: every pipeline paused and no run running, else it refuses,
    printing which; `--wait` waits for the runs (it pauses nothing).
 2. **freeze**: the old instance's scheduler and UI stop (and won't restart
    with it), so nothing writes to its database; the UI is down from here.
-3. **backup**: `pg_dump -Fc` of orca's schema to
+3. **backup**: `pg_dump -Fc` of morca's schema to
    `s3://<bucket>/backups/<stack>/<UTC time>.dump`, verified by restoring it
    into a scratch database and comparing pipelines, runs, the last run and
    the schema version; beside it the image tag, Caddy's data (its
@@ -32,7 +32,7 @@ from the first one that isn't:
 6. **check**: on the new instance, over SSM: restored from this backup, the
    same pipelines, runs and last run, a schema version no older, every
    pipeline still paused, the containers running, the UI and each app
-   answering, `/system` samples in the last 10 minutes, `orca status`, and
+   answering, `/system` samples in the last 10 minutes, `morca status`, and
    the old instance's settings all there. `--smoke P=KEY` also unpauses P,
    starts a run of KEY, waits for it to succeed and pauses P again.
 7. **switch**: `cloudformation deploy` with `ActiveControl` the new slot,
@@ -53,7 +53,7 @@ from std.os import getenv, remove
 from std.os.path import exists
 from std.time import sleep
 
-from orca.aws import (
+from morca.aws import (
     _DIR,
     _Opts,
     _out,
@@ -66,12 +66,12 @@ from orca.aws import (
     slot_pins,
     ssm_run,
 )
-from orca.civil import Civil, now
+from morca.civil import Civil, now
 
 comptime _CORE = "postgres|scheduler|ui|caddy|sampler"
 """The control instance's own containers; any other is an app."""
 comptime _SAFE_ENV = (
-    "grep -vE '^(ORCA_DATABASE_URL|ORCA_EC2_DATABASE_URL|ORCA_EC2_AMI)='"
+    "grep -vE '^(MORCA_DATABASE_URL|MORCA_EC2_DATABASE_URL|MORCA_EC2_AMI)='"
     " /etc/orca.env | grep -viE 'PASSWORD|SECRET|TOKEN' | sort"
 )
 """The settings a manifest keeps: none with a password, nor the AMI and
@@ -120,7 +120,7 @@ def _seconds(text: String) raises -> Int:
     try:
         n = Int(text[byte = : text.byte_length() - 1])
     except:
-        raise Error("orca aws: --keep-old is like 24h, 30m or 2d: ", text)
+        raise Error("morca aws: --keep-old is like 24h, 30m or 2d: ", text)
     if units == "s":
         return n
     if units == "m":
@@ -129,7 +129,7 @@ def _seconds(text: String) raises -> Int:
         return n * 3600
     if units == "d":
         return n * 86400
-    raise Error("orca aws: --keep-old is like 24h, 30m or 2d: ", text)
+    raise Error("morca aws: --keep-old is like 24h, 30m or 2d: ", text)
 
 
 def _keep(o: _Opts) -> String:
@@ -148,8 +148,8 @@ def _when(t: Int64) -> String:
 
 
 def _poll() -> Float64:
-    """Seconds between checks (`ORCA_REPLACE_POLL`, 30; the tests' 0)."""
-    var v = getenv("ORCA_REPLACE_POLL")
+    """Seconds between checks (`MORCA_REPLACE_POLL`, 30; the tests' 0)."""
+    var v = getenv("MORCA_REPLACE_POLL")
     if v:
         try:
             return Float64(Int(v))
@@ -240,7 +240,7 @@ def _on(
     """Runs `body` on `instance` over SSM, as step `step`."""
     st.note(String(step, ": on ", instance))
     var lines: List[String] = [
-        String("# orca-replace ", step),
+        String("# morca-replace ", step),
         String("export AWS_DEFAULT_REGION=", _q(_region(o))),
         'q() { docker exec postgres psql -U orca -d orca -Atc "$1"; }',
     ]
@@ -308,10 +308,10 @@ def _backup(
         "docker exec postgres pg_dump -U orca -d orca -n orca -Fc > $b/b.dump",
         # Verified before anything depends on it: restored into a scratch
         # database, which has to match.
-        "docker exec postgres dropdb -U orca --if-exists orca_verify",
-        "docker exec postgres createdb -U orca orca_verify",
+        "docker exec postgres dropdb -U orca --if-exists morca_verify",
+        "docker exec postgres createdb -U orca morca_verify",
         (
-            "docker exec -i postgres pg_restore -U orca -d orca_verify"
+            "docker exec -i postgres pg_restore -U orca -d morca_verify"
             " --no-owner --exit-on-error < $b/b.dump"
         ),
         String(
@@ -319,9 +319,9 @@ def _backup(
             _q(_COUNTS),
             "; }",
         ),
-        "have=$(counts orca)",
-        "got=$(counts orca_verify)",
-        "docker exec postgres dropdb -U orca orca_verify",
+        "have=$(counts morca)",
+        "got=$(counts morca_verify)",
+        "docker exec postgres dropdb -U orca morca_verify",
         (
             '[ "$have" = "$got" ] || { echo "the dump restores as $got, not'
             ' $have"; exit 1; }'
@@ -347,7 +347,7 @@ def _backup(
             "for c in $(docker ps --format '{{.Names}}' | grep -vxE '",
             _CORE,
             '\'); do grep -q "^$c " $b/b.apps || echo "not carried over: the',
-            ' container $c (run orca aws app $c --host H after)"; done',
+            ' container $c (run morca aws app $c --host H after)"; done',
         )
     )
     out.append(String(_SAFE_ENV, " > $b/b.env"))
@@ -464,14 +464,14 @@ def _check(prefix: String, smoke: String) -> List[String]:
             ' last 10 minutes"'
         ),
         (
-            "docker exec scheduler orca status > /dev/null || bad 'orca status"
+            "docker exec scheduler morca status > /dev/null || bad 'morca status"
             " fails'"
         ),
         String(_SAFE_ENV, " > /var/lib/orca/new.env"),
         "missing=$(comm -23 /var/lib/orca/replaced.env /var/lib/orca/new.env)",
         (
             '[ -z "$missing" ] || { bad "settings the old instance had that'
-            " this one hasn't (give them with --env, or orca aws up --env):\";"
+            " this one hasn't (give them with --env, or morca aws up --env):\";"
             ' echo "$missing"; }'
         ),
         String(_SITES, " > /var/lib/orca/new.sites"),
@@ -494,10 +494,10 @@ def _check(prefix: String, smoke: String) -> List[String]:
             "'\"",
         )
         out.append(String("before=$(", last, ")"))
-        out.append(String("docker exec scheduler orca unpause ", _q(pipeline)))
+        out.append(String("docker exec scheduler morca unpause ", _q(pipeline)))
         out.append(
             String(
-                "docker exec scheduler orca start ",
+                "docker exec scheduler morca start ",
                 _q(pipeline),
                 " ",
                 _q(key),
@@ -512,7 +512,7 @@ def _check(prefix: String, smoke: String) -> List[String]:
                 " sleep 10;; none) sleep 10;; *) break;; esac; done",
             )
         )
-        out.append(String("docker exec scheduler orca pause ", _q(pipeline)))
+        out.append(String("docker exec scheduler morca pause ", _q(pipeline)))
         out.append(
             String(
                 '[ "$status" = succeeded ] || bad "the smoke run of ',
@@ -541,9 +541,9 @@ def _restore_here(prefix: String) -> List[String]:
         ),
         (
             "docker exec postgres dropdb -U orca --maintenance-db=postgres"
-            " --force orca"
+            " --force morca"
         ),
-        "docker exec postgres createdb -U orca --maintenance-db=postgres orca",
+        "docker exec postgres createdb -U orca --maintenance-db=postgres morca",
         (
             "docker exec -i postgres pg_restore -U orca -d orca --no-owner"
             " --exit-on-error < /var/lib/orca/restore.dump"
@@ -602,7 +602,7 @@ def _plan(o: _Opts, st: _State) raises -> Int:
     if not new_id:
         new_id = String("the new instance")
     print(
-        "orca aws replace-control --stack ",
+        "morca aws replace-control --stack ",
         o.stack,
         ": replace ",
         old_id,
@@ -642,7 +642,7 @@ def _plan(o: _Opts, st: _State) raises -> Int:
             ": the UI is down from here to the switch",
         ),
         String(
-            "backup  pg_dump -Fc of orca to ",
+            "backup  pg_dump -Fc of morca to ",
             prefix,
             ".dump, verified by a restore into a scratch database; the tag,",
             " Caddy's data, the apps, the settings and a manifest beside it;",
@@ -681,7 +681,7 @@ def _plan(o: _Opts, st: _State) raises -> Int:
             (
                 ": the restore, pipelines, runs, schema version, all paused,"
                 " the containers, the UI and apps answering, /system samples,"
-                " orca status, the old settings"
+                " morca status, the old settings"
             ),
             smoke,
         ),
@@ -725,13 +725,13 @@ def _wait_reachable(
 ) raises -> Bool:
     """Polls `instance` over SSM until `probe` succeeds there."""
     var tries = 60
-    var t = getenv("ORCA_REPLACE_TRIES")
+    var t = getenv("MORCA_REPLACE_TRIES")
     if t:
         tries = Int(t)
     for i in range(tries):
         try:
             var got = ssm_run(
-                o, instance, [String("# orca-replace ", step), probe]
+                o, instance, [String("# morca-replace ", step), probe]
             )
             if got[0] == 0:
                 return True
@@ -760,7 +760,7 @@ def _forward(o: _Opts, mut st: _State) raises -> Int:
                 break
             if "not paused:" in got[1] or not o.wait:
                 st.note(
-                    "quiet: refused; pause every pipeline (orca --remote <ui>"
+                    "quiet: refused; pause every pipeline (morca --remote <ui>"
                     " pause <pipeline>) and let its runs finish, or --wait"
                     " for them"
                 )
@@ -832,7 +832,7 @@ def _forward(o: _Opts, mut st: _State) raises -> Int:
         _deploy(o, st, "launch", params^)
         var new_id = _instance_of(_outputs(o), new)
         if not new_id:
-            raise Error("orca aws: the stack has no instance in slot ", new)
+            raise Error("morca aws: the stack has no instance in slot ", new)
         st.set("new_instance", new_id)
         st.mark("launch")
     var new_id = st.get("new_instance")
@@ -936,7 +936,7 @@ def _forward(o: _Opts, mut st: _State) raises -> Int:
             String(
                 (
                     "switch: done; the pipelines are still paused, unpause them"
-                    " (orca --remote <ui> unpause <pipeline>). "
+                    " (morca --remote <ui> unpause <pipeline>). "
                 ),
                 old_id,
                 " is kept, stopped, until ",
@@ -958,7 +958,7 @@ def _retire(o: _Opts, mut st: _State) raises -> Int:
                 " is kept until ",
                 _when(until),
                 (
-                    "; then orca aws replace-control --resume terminates it, or"
+                    "; then morca aws replace-control --resume terminates it, or"
                     " --rollback goes back to it"
                 ),
             )
@@ -980,7 +980,7 @@ def _rollback(o: _Opts, mut st: _State) raises -> Int:
         "s3://", bucket, "/backups/", o.stack, "/restore-", new
     )
     if st.done("retire"):
-        print("orca aws replace-control: the old instance is gone")
+        print("morca aws replace-control: the old instance is gone")
         return 2
     if not st.done("switch"):
         st.note("rollback: before the switch")
@@ -1056,16 +1056,16 @@ def _rollback(o: _Opts, mut st: _State) raises -> Int:
 
 
 def replace_control(args: List[String]) raises -> Int:
-    """`orca aws replace-control ...`: `args` is the whole command line."""
+    """`morca aws replace-control ...`: `args` is the whole command line."""
     var o = _Opts(args, 3)
     if len(o.rest) > 0:
-        print("orca aws replace-control: unknown arguments:", o.rest[0])
+        print("morca aws replace-control: unknown arguments:", o.rest[0])
         return 2
     _ = _seconds(_keep(o))
     if o.smoke:
         var eq = o.smoke.find("=")
         if eq <= 0 or eq + 1 >= o.smoke.byte_length():
-            print("orca aws replace-control: --smoke is PIPELINE=KEY")
+            print("morca aws replace-control: --smoke is PIPELINE=KEY")
             return 2
         for b in String(o.smoke[byte=:eq]).as_bytes():
             var c = Int(b)
@@ -1077,7 +1077,7 @@ def replace_control(args: List[String]) raises -> Int:
                 or c == ord("-")
                 or c == ord(".")
             ):
-                print("orca aws replace-control: not a pipeline name:", o.smoke)
+                print("morca aws replace-control: not a pipeline name:", o.smoke)
                 return 2
     var st = _State(o.stack)
     if o.plan:
@@ -1085,7 +1085,7 @@ def replace_control(args: List[String]) raises -> Int:
     if o.rollback:
         if not st.started():
             print(
-                "orca aws replace-control: no replacement of",
+                "morca aws replace-control: no replacement of",
                 o.stack,
                 "is in progress (",
                 st.path,
@@ -1095,7 +1095,7 @@ def replace_control(args: List[String]) raises -> Int:
         return _rollback(o, st)
     if st.started() and not o.resume:
         print(
-            "orca aws replace-control: a replacement of",
+            "morca aws replace-control: a replacement of",
             o.stack,
             "is in progress since",
             st.get("started"),
@@ -1106,19 +1106,19 @@ def replace_control(args: List[String]) raises -> Int:
         return 2
     if not st.started():
         if o.resume:
-            print("orca aws replace-control: nothing to resume")
+            print("morca aws replace-control: nothing to resume")
             return 2
         var outs = _outputs(o)
         var old = outs.get("ActiveControl", "blue")
         var new = _other(old)
         var old_id = _instance_of(outs, old)
         if not old_id:
-            raise Error("orca aws: the stack has no control instance")
+            raise Error("morca aws: the stack has no control instance")
         var other = _instance_of(outs, new)
         if other:
             print(
                 String(
-                    "orca aws replace-control: slot ",
+                    "morca aws replace-control: slot ",
                     new,
                     " has an instance already, ",
                     other,

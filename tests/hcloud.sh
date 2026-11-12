@@ -1,5 +1,5 @@
 #!/bin/sh
-# orca.hcloud (the pool autoscaler's Hetzner client, #267) against
+# morca.hcloud (the pool autoscaler's Hetzner client, #267) against
 # tests/fake_hcloud.py: types, firewalls, create with and without stock,
 # list by label over pages, delete, a server's user data run, and errors that
 # keep the token out.
@@ -14,10 +14,10 @@ free_port port
 python3 tests/fake_hcloud.py "$port" "$dir" &
 fake=$!
 trap 'kill $fake 2> /dev/null || true' EXIT
-export ORCA_HCLOUD_ENDPOINT="http://127.0.0.1:$port/v1" ORCA_HCLOUD_TOKEN=test-token HCLOUD_DIR="$dir"
+export MORCA_HCLOUD_ENDPOINT="http://127.0.0.1:$port/v1" MORCA_HCLOUD_TOKEN=test-token HCLOUD_DIR="$dir"
 unset AWS_REGION AWS_DEFAULT_REGION
 i=0
-until curl -s -o /dev/null "$ORCA_HCLOUD_ENDPOINT/server_types"; do
+until curl -s -o /dev/null "$MORCA_HCLOUD_ENDPOINT/server_types"; do
     i=$((i + 1)); [ "$i" -lt 100 ] || { echo "FAIL: the fake didn't start"; exit 1; }
     sleep 0.1
 done

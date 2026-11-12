@@ -1,7 +1,7 @@
-"""Remote workers' encoding (orca.http_store, orca.workers): what a run's
-store calls send and get back over `orca ui`'s API, the spec a worker is
+"""Remote workers' encoding (morca.http_store, orca.workers): what a run's
+store calls send and get back over `morca ui`'s API, the spec a worker is
 given, and the checks made on both sides. tests/worker.sh runs it all
-against orca ui, the scheduler and a worker."""
+against morca ui, the scheduler and a worker."""
 
 from std.testing import (
     TestSuite,
@@ -13,9 +13,9 @@ from std.testing import (
 
 from json import loads
 
-from orca.control import pool_of, pool_problem
-from orca.resources import Grant
-from orca.http_store import (
+from morca.control import pool_of, pool_problem
+from morca.resources import Grant
+from morca.http_store import (
     Body,
     bytes_of_hex,
     check_state_url,
@@ -30,7 +30,7 @@ from orca.http_store import (
     steps_json,
     steps_of,
 )
-from orca.store import (
+from morca.store import (
     RunInfo,
     RunResult,
     StepInfo,
@@ -38,8 +38,8 @@ from orca.store import (
     SUCCEEDED,
     Usage,
 )
-from orca.sample import machine_name
-from orca.workers import (
+from morca.sample import machine_name
+from morca.workers import (
     WorkerRun,
     version_refusal,
     worker_run_json,
@@ -160,7 +160,7 @@ def test_worker_run() raises:
         "deadbeef",
         "2024-01",
         True,
-        "ghcr.io/x/orca:0.11.0",
+        "ghcr.io/x/morca:0.11.0",
         env^,
         secrets^,
         Grant(3, 2048),
@@ -175,7 +175,7 @@ def test_worker_run() raises:
     assert_equal(got.binary, "/app/bin/toy")
     assert_equal(got.registry_hash, "deadbeef")
     assert_true(got.allow_new_code)
-    assert_equal(got.image, "ghcr.io/x/orca:0.11.0")
+    assert_equal(got.image, "ghcr.io/x/morca:0.11.0")
     assert_equal(len(got.env), 2)
     assert_equal(got.env[1][0], "B")
     assert_equal(got.env[1][1], "x=y")
@@ -184,11 +184,11 @@ def test_worker_run() raises:
 
 
 def test_versions() raises:
-    assert_equal(version_refusal("orca:1", "orca:1"), "")
+    assert_equal(version_refusal("morca:1", "morca:1"), "")
     assert_equal(version_refusal("", ""), "")
-    assert_true("needs image orca:2" in version_refusal("orca:2", "orca:1"))
-    assert_true("ORCA_IMAGE isn't set" in version_refusal("orca:2", ""))
-    assert_true("needs image (none)" in version_refusal("", "orca:1"))
+    assert_true("needs image morca:2" in version_refusal("morca:2", "morca:1"))
+    assert_true("MORCA_IMAGE isn't set" in version_refusal("morca:2", ""))
+    assert_true("needs image (none)" in version_refusal("", "morca:1"))
 
 
 def test_pools() raises:
@@ -219,7 +219,7 @@ def test_machine_name() raises:
 
 
 def test_refusal() raises:
-    assert_equal(refusal('{"error": "orca: lost run 3"}'), "orca: lost run 3")
+    assert_equal(refusal('{"error": "morca: lost run 3"}'), "morca: lost run 3")
     assert_equal(refusal("<html>bad gateway</html>"), "")
     assert_equal(refusal('{"ok": true}'), "")
 

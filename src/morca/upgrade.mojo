@@ -9,7 +9,7 @@ version = "1.2.0"
 [[version.step]]
 id = "1.2.0-retool"      # unique and stable
 when = "after"           # before | after (the default)
-run = "orca backfill --rerun mojo_retool @all"   # an orca command
+run = "morca backfill --rerun mojo_retool @all"   # a morca command
 
 [[version.step]]
 id = "1.1.0-egress-hf"
@@ -17,7 +17,7 @@ when = "before"
 manual = "The console downloads its model from huggingface.co: allow outbound HTTPS."
 ```
 
-`orca upgrade --from <deployed> --to <new>` prints the steps of every
+`morca upgrade --from <deployed> --to <new>` prints the steps of every
 version after `--from` up to `--to`, a line each:
 
     step<TAB><id><TAB><before|after><TAB><run|manual><TAB><command or text>
@@ -31,9 +31,9 @@ only `--to`'s steps.
 from std.os import getenv
 from std.os.path import exists
 
-from orca.toml import ARRAY, STRING, TomlDoc, parse_toml
+from morca.toml import ARRAY, STRING, TomlDoc, parse_toml
 
-comptime DEFAULT_FILE = "/opt/orca/upgrade.toml"
+comptime DEFAULT_FILE = "/opt/morca/upgrade.toml"
 
 
 @fieldwise_init
@@ -45,7 +45,7 @@ struct UpgradeStep(Copyable, Movable):
     var kind: String
     """`run` or `manual`."""
     var text: String
-    """The command (`orca ...`) or the instructions."""
+    """The command (`morca ...`) or the instructions."""
 
 
 def version_parts(v: String) -> List[Int]:
@@ -97,7 +97,7 @@ def parse_upgrade(text: String) raises -> List[UpgradeStep]:
     """The steps of an `upgrade.toml`, in the file's order. Raises for a
     version that isn't one, a step without an id, with both or neither of
     `run` and `manual`, a `when` that isn't `before` or `after`, a `run`
-    that isn't an `orca` command, or an id used twice."""
+    that isn't an `morca` command, or an id used twice."""
     var doc = parse_toml(text)
     var out = List[UpgradeStep]()
     var versions = doc.get(["version"])
@@ -157,15 +157,15 @@ def parse_upgrade(text: String) raises -> List[UpgradeStep]:
                     "upgrade: the step ", id, " needs one of run and manual"
                 )
             if run.byte_length() > 0:
-                if not run.startswith("orca "):
+                if not run.startswith("morca "):
                     raise Error(
                         "upgrade: the step ",
                         id,
                         " runs '",
                         run,
-                        "': only orca commands run",
+                        "': only morca commands run",
                     )
-                # What orca-stack upgrade-run passes on: words of these, no quoting.
+                # What morca-stack upgrade-run passes on: words of these, no quoting.
                 for b in run.as_bytes():
                     var ok = (
                         (b >= UInt8(ord("a")) and b <= UInt8(ord("z")))
@@ -248,8 +248,8 @@ def step_line(s: UpgradeStep) -> String:
 
 
 def upgrade_command(args: List[String]) raises -> Int:
-    """`orca upgrade [--file F] [--from V] --to V [--when before|after]`."""
-    var file = getenv("ORCA_UPGRADE", DEFAULT_FILE)
+    """`morca upgrade [--file F] [--from V] --to V [--when before|after]`."""
+    var file = getenv("MORCA_UPGRADE", DEFAULT_FILE)
     var from_v = String()
     var to_v = String()
     var when = String()
@@ -257,7 +257,7 @@ def upgrade_command(args: List[String]) raises -> Int:
     while i < len(args):
         var a = args[i]
         if i + 1 >= len(args):
-            print("orca upgrade:", a, "needs a value")
+            print("morca upgrade:", a, "needs a value")
             return 2
         if a == "--file":
             file = args[i + 1]
@@ -268,14 +268,14 @@ def upgrade_command(args: List[String]) raises -> Int:
         elif a == "--when":
             when = args[i + 1]
             if when != "before" and when != "after":
-                print("orca upgrade: --when is before or after")
+                print("morca upgrade: --when is before or after")
                 return 2
         else:
-            print("orca upgrade: unknown argument", a)
+            print("morca upgrade: unknown argument", a)
             return 2
         i += 2
     if to_v.byte_length() == 0:
-        print("orca upgrade needs --to <version>")
+        print("morca upgrade needs --to <version>")
         return 2
     if not exists(file):
         return 0

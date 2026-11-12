@@ -1,7 +1,7 @@
 """A sensor over a dataset nothing writes: raw.other to lake.other."""
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
-from orca.tables import append, table
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
+from morca.tables import append, table
 from rows import count, dataset, rows
 
 
@@ -24,4 +24,4 @@ comptime P = Pipeline["other", Other, sensor=True]
 
 
 def main() raises:
-    orca_main[P]()
+    morca_main[P]()

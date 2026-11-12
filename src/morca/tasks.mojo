@@ -13,11 +13,11 @@ def load(mut ctx: Ctx, raw: RawFile) raises -> Loaded:
 
 A run of a pipeline with tasks starts one dista `Runtime` before its first
 step and keeps it until the run ends: in local mode it forks a head and
-`ORCA_WORKERS` workers (default 4); with `DISTA_HEAD` set it joins that
+`MORCA_WORKERS` workers (default 4); with `DISTA_HEAD` set it joins that
 cluster instead. The same binary is dista's worker: run with `DISTA_ROLE`
-set, `orca_main` hands the process to dista before reading its arguments.
+set, `morca_main` hands the process to dista before reading its arguments.
 
-The runtime starts before orca opens a database connection or its heartbeat
+The runtime starts before morca opens a database connection or its heartbeat
 thread, so the forked head and workers inherit neither.
 
 A driver or worker given `DISTA_HEAD` first waits until the head accepts a
@@ -98,14 +98,14 @@ def wait_for_head(addr: String, timeout_s: Float64) raises:
     raises after `timeout_s` seconds."""
     var colon = addr.rfind(":")
     if colon <= 0:
-        raise Error("orca: DISTA_HEAD is host:port, not ", addr)
+        raise Error("morca: DISTA_HEAD is host:port, not ", addr)
     var host = String(addr[byte=:colon])
     var port = Int(addr[byte = colon + 1 :])
     var deadline = Int(perf_counter_ns()) + Int(timeout_s * 1e9)
     while not _accepts(host, port):
         if Int(perf_counter_ns()) >= deadline:
             raise Error(
-                "orca: the dista head at ",
+                "morca: the dista head at ",
                 addr,
                 " accepted no connection in ",
                 timeout_s,
@@ -150,7 +150,7 @@ struct Tasks[*Ts: TaskLike](TaskSet):
         if head and getenv("DISTA_ROLE") != "head":
             # A head pod may wait for a node and its image.
             wait_for_head(
-                head, Float64(getenv("ORCA_HEAD_WAIT_SECONDS", "300"))
+                head, Float64(getenv("MORCA_HEAD_WAIT_SECONDS", "300"))
             )
         return Self.RT(workers=workers)
 
@@ -194,12 +194,12 @@ def task_list[T: TaskSet]() -> String:
 
 
 def workers() raises -> Int:
-    """`ORCA_WORKERS`, the local workers a run forks (default 4)."""
-    var s = getenv("ORCA_WORKERS", "4")
+    """`MORCA_WORKERS`, the local workers a run forks (default 4)."""
+    var s = getenv("MORCA_WORKERS", "4")
     try:
         var n = Int(s)
         if n >= 1:
             return n
     except:
         pass
-    raise Error("orca: ORCA_WORKERS must be a positive number, got ", s)
+    raise Error("morca: MORCA_WORKERS must be a positive number, got ", s)

@@ -1,16 +1,16 @@
 #!/bin/sh
 # deploy/hetzner's deploys and rollbacks, against a fake server: ssh,
-# hcloud and docker are tests/hetzner's fakes, and orca-stack runs here in
-# its trial mode (ORCA_STACK_TEST=1) on directories of its own.
+# hcloud and docker are tests/hetzner's fakes, and morca-stack runs here in
+# its trial mode (MORCA_STACK_TEST=1) on directories of its own.
 #
-# - each apply that changes a tag keeps the tags before it (orca-stack tags
-#   --previous, ORCA_PREV_TAG), including on a stack applied before it kept
+# - each apply that changes a tag keeps the tags before it (morca-stack tags
+#   --previous, MORCA_PREV_TAG), including on a stack applied before it kept
 #   them; applying the same tags again keeps the earlier ones;
 # - deploy.sh backs up before it applies, says the previous and the new tag
 #   and where the backup is, and stops before applying (unpausing what it
 #   paused) when the backup fails, unless --no-backup;
-# - deploy.sh --rollback (orca-stack rollback) applies the tags before
-#   again, an app that followed the orca tag following it again, registers
+# - deploy.sh --rollback (morca-stack rollback) applies the tags before
+#   again, an app that followed the morca tag following it again, registers
 #   the pipelines, and refuses with runs running unless --force; a second
 #   rollback goes forward again;
 # - a deploy registers the pipelines after the apply and before it unpauses,
@@ -35,7 +35,7 @@
 #   goes on over running runs and registers nothing;
 # - the UI and the apps are replaced without downtime: the new one starts as
 #   NAME-next, is probed until healthy (the UI's /healthz, its worker
-#   listener if ORCA_WORKER_ADDR is set, an app's check path), only then
+#   listener if MORCA_WORKER_ADDR is set, an app's check path), only then
 #   gets the alias NAME and is probed again, and only then is the old one
 #   stopped, removed and the new one renamed; a new one that isn't healthy (or exits) is removed and the
 #   old one kept, apply goes on with the others and exits non-zero, and an
@@ -55,7 +55,7 @@
 #   the deploy that turns OVERLAP on pauses and waits as before; a
 #   scheduler-old or scheduler-next that isn't running is removed by the
 #   next apply, saying so, and a deploy overlaps over it;
-# - package.sh's release tarball unpacks to orca-hetzner-<version>/ with
+# - package.sh's release tarball unpacks to morca-hetzner-<version>/ with
 #   every script, server/ and the example settings, and its up.sh and
 #   deploy.sh run from there (hetzner.env next to them), printing the
 #   version and sending the tarball's own server files;
@@ -64,7 +64,7 @@
 #   is read after it, its relative names from its own folder; the first
 #   line names both; a missing HETZNER_LOCAL_ENV, or one that sets NAME,
 #   is refused;
-# - orca-stack check: ok on a healthy stack, and FAIL naming what's wrong (a
+# - morca-stack check: ok on a healthy stack, and FAIL naming what's wrong (a
 #   stopped container, an unhealthy UI, a running scheduler-old left (an
 #   exited one apply removes), a pipeline
 #   whose binary isn't in the image, none registered, a canary run that
@@ -76,40 +76,40 @@
 #   when --from is the target's own settings.
 set -eu
 cd "$(dirname "$0")/.."
-FAKE=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/orca-hetzner.XXXXXX")" && pwd)
+FAKE=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/morca-hetzner.XXXXXX")" && pwd)
 export FAKE
 trap 'rm -rf "$FAKE"' EXIT INT TERM
 export PATH="$PWD/tests/hetzner:$PATH"
-export ORCA_STACK_TEST=1 ORCA_STACK_REGISTER_TRIES=1 ORCA_CONF="$FAKE/conf" ORCA_DATA="$FAKE/data" ORCA_STATE="$FAKE/state"
-mkdir -p "$ORCA_CONF"
+export MORCA_STACK_TEST=1 MORCA_STACK_REGISTER_TRIES=1 MORCA_CONF="$FAKE/conf" MORCA_DATA="$FAKE/data" MORCA_STATE="$FAKE/state"
+mkdir -p "$MORCA_CONF"
 # The server's settings as up.sh writes them from hetzner.env (deploy.sh
 # brings them in line with it; no tunnel: an empty tunnel.env).
-cat > "$ORCA_CONF/settings.env" << 'EOS'
+cat > "$MORCA_CONF/settings.env" << 'EOS'
 AWS_REGION=fsn1
 AWS_ENDPOINT_URL_S3=https://example.invalid
-ORCA_WAREHOUSE=s3://bkt/warehouse
-ORCA_PUBLIC_WAREHOUSE=s3://bkt/warehouse
-ORCA_LOGS=s3://bkt/logs
-ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE
+MORCA_WAREHOUSE=s3://bkt/warehouse
+MORCA_PUBLIC_WAREHOUSE=s3://bkt/warehouse
+MORCA_LOGS=s3://bkt/logs
+MORCA_RUN_ENV=MORCA_PUBLIC_WAREHOUSE
 EOS
 printf 'AWS_ACCESS_KEY_ID=x\nAWS_SECRET_ACCESS_KEY=y\n' > "$FAKE/s3.env"
-cp "$FAKE/s3.env" "$ORCA_CONF/s3.env"
+cp "$FAKE/s3.env" "$MORCA_CONF/s3.env"
 : > "$FAKE/tunnel.env"
 cat > "$FAKE/hetzner.env" << EOS
-NAME=orca
+NAME=morca
 BUCKET=bkt
 S3_ENDPOINT=https://example.invalid
 S3_REGION=fsn1
 S3_CREDENTIALS_FILE=$FAKE/s3.env
 TUNNEL_TOKEN_FILE=$FAKE/tunnel.env
-ORCA_IMAGE=img
+MORCA_IMAGE=img
 EXTRA_ENV_FILE=$FAKE/extra.env
 SSH_PRIVATE_KEY_FILE=
 EOS
 : > "$FAKE/extra.env"
 export HETZNER_ENV="$FAKE/hetzner.env"
 XDG_STATE_HOME="$FAKE/xdg"
-# No laptop's own settings (~/.config/orca-hetzner/<NAME>.local.env) but the tests'.
+# No laptop's own settings (~/.config/morca-hetzner/<NAME>.local.env) but the tests'.
 XDG_CONFIG_HOME="$FAKE/config"
 export XDG_STATE_HOME XDG_CONFIG_HOME
 
@@ -118,21 +118,21 @@ fail() {
     [ ! -f "$FAKE/out" ] || tail -20 "$FAKE/out"
     exit 1
 }
-stack() { sh deploy/hetzner/server/orca-stack "$@"; }
+stack() { sh deploy/hetzner/server/morca-stack "$@"; }
 deploy() { sh deploy/hetzner/deploy.sh "$@" > "$FAKE/out" 2>&1; }
 has() { grep -q -- "$1" "$FAKE/out" || fail "no '$1' in the output"; }
 # add_setting KEY=VALUE: a line of hetzner.env's EXTRA_ENV_FILE, and the
-# server's settings.env as a deploy would write it (for orca-stack apply).
+# server's settings.env as a deploy would write it (for morca-stack apply).
 add_setting() {
     echo "$1" >> "$FAKE/extra.env"
-    echo "$1" >> "$ORCA_CONF/settings.env"
+    echo "$1" >> "$MORCA_CONF/settings.env"
 }
 
 # A stack that ran before tags were kept: its conf says what runs.
-stack configure ORCA_IMAGE=img ORCA_TAG=aaa1111 BUCKET=bkt
+stack configure MORCA_IMAGE=img MORCA_TAG=aaa1111 BUCKET=bkt
 stack app console 8080
 stack apply > /dev/null
-rm "$ORCA_CONF/deployed"
+rm "$MORCA_CONF/deployed"
 [ "$(stack tags)" = aaa1111 ] || fail "tags from the conf: $(stack tags)"
 [ -z "$(stack tags --previous)" ] || fail "a previous deploy before any"
 stack rollback > "$FAKE/out" 2>&1 && fail "a rollback with nothing before"
@@ -148,11 +148,11 @@ grep -q 'pg_dump' "$FAKE/docker.log" || fail "no pg_dump"
     || fail "the backup wasn't before the apply"
 [ "$(stack tags)" = bbb2222 ] || fail "tags after the deploy: $(stack tags)"
 [ "$(stack tags --previous)" = aaa1111 ] || fail "previous: $(stack tags --previous)"
-grep -q '^ORCA_PREV_TAG=aaa1111$' "$ORCA_CONF/stack.conf" || fail "no ORCA_PREV_TAG"
+grep -q '^MORCA_PREV_TAG=aaa1111$' "$MORCA_CONF/stack.conf" || fail "no MORCA_PREV_TAG"
 grep -q 'unpause toy' "$FAKE/docker.log" || fail "the pipelines weren't unpaused"
 grep -q 'unpause manual1' "$FAKE/docker.log" && fail "unpaused a pipeline paused by hand"
-order=$(grep -o 'run -d --name scheduler\|exec scheduler orca register\|orca unpause toy' "$FAKE/docker.log" | tr '\n' ,)
-[ "$order" = "run -d --name scheduler,exec scheduler orca register,orca unpause toy," ] \
+order=$(grep -o 'run -d --name scheduler\|exec scheduler morca register\|morca unpause toy' "$FAKE/docker.log" | tr '\n' ,)
+[ "$order" = "run -d --name scheduler,exec scheduler morca register,morca unpause toy," ] \
     || fail "not apply, register, unpause: $order"
 has "registering the pipelines from bbb2222"
 # Its backup's paused state: manual1 by hand, toy by the deploy.
@@ -189,8 +189,8 @@ deploy bbb2222 && fail "a deploy whose register failed"
 has "bbb2222 is deployed, but registering failed; the pipelines stay paused"
 grep -qx toy "$FAKE/paused" || fail "toy unpaused after a failed register"
 rm "$FAKE/register-fails"
-stack register > /dev/null || fail "orca-stack register"
-stack resume > /dev/null || fail "orca-stack resume"
+stack register > /dev/null || fail "morca-stack register"
+stack resume > /dev/null || fail "morca-stack resume"
 [ "$(cat "$FAKE/paused")" = manual1 ] || fail "paused after resume: $(cat "$FAKE/paused")"
 
 # The same tags again keep the ones before.
@@ -206,30 +206,30 @@ grep -q 'run -d --name scheduler' "$FAKE/docker.log" && fail "applied after a fa
 grep -q 'unpause toy' "$FAKE/docker.log" || fail "left paused after a failed backup"
 [ "$(stack tags)" = bbb2222 ] || fail "tags after a failed backup: $(stack tags)"
 deploy --no-backup ccc3333 console=ddd4444 || fail "deploy.sh --no-backup"
-has "no-backup: not backing up; previous tag bbb2222, new tag orca ccc3333, console ddd4444"
+has "no-backup: not backing up; previous tag bbb2222, new tag morca ccc3333, console ddd4444"
 rm "$FAKE/backup-fails"
-[ "$(stack tags)" = "orca ccc3333, console ddd4444" ] || fail "tags: $(stack tags)"
+[ "$(stack tags)" = "morca ccc3333, console ddd4444" ] || fail "tags: $(stack tags)"
 
 # Rolling back: refused with runs running, then the tags before, registered.
 echo 2 > "$FAKE/running"
 stack rollback > "$FAKE/out" 2>&1 && fail "rolled back over running runs"
 has "2 run(s) running"
-[ "$(stack tags)" = "orca ccc3333, console ddd4444" ] || fail "a refused rollback changed the tags"
+[ "$(stack tags)" = "morca ccc3333, console ddd4444" ] || fail "a refused rollback changed the tags"
 echo 0 > "$FAKE/running"
 : > "$FAKE/docker.log"
 deploy --rollback || fail "deploy.sh --rollback"
-has "previous tag orca ccc3333, console ddd4444, new tag bbb2222; backup s3://bkt/backups/pg/"
-has "orca-stack: registered toy"
+has "previous tag morca ccc3333, console ddd4444, new tag bbb2222; backup s3://bkt/backups/pg/"
+has "morca-stack: registered toy"
 [ "$(stack tags)" = bbb2222 ] || fail "tags after the rollback: $(stack tags)"
-grep -q '^console 8080 - /$' "$ORCA_CONF/apps" || fail "the console doesn't follow the orca tag: $(cat "$ORCA_CONF/apps")"
-grep -q 'exec scheduler orca register' "$FAKE/docker.log" || fail "not registered"
-[ "$(grep -n 'exec scheduler orca register\|unpause toy' "$FAKE/docker.log" | head -1 | grep -c register)" = 1 ] \
+grep -q '^console 8080 - /$' "$MORCA_CONF/apps" || fail "the console doesn't follow the morca tag: $(cat "$MORCA_CONF/apps")"
+grep -q 'exec scheduler morca register' "$FAKE/docker.log" || fail "not registered"
+[ "$(grep -n 'exec scheduler morca register\|unpause toy' "$FAKE/docker.log" | head -1 | grep -c register)" = 1 ] \
     || fail "unpaused before registering"
 
 # Again goes forward; --force over running runs.
 echo 1 > "$FAKE/running"
-stack rollback --force > "$FAKE/out" 2>&1 || fail "orca-stack rollback --force"
-[ "$(stack tags)" = "orca ccc3333, console ddd4444" ] || fail "tags after rolling forward: $(stack tags)"
+stack rollback --force > "$FAKE/out" 2>&1 || fail "morca-stack rollback --force"
+[ "$(stack tags)" = "morca ccc3333, console ddd4444" ] || fail "tags after rolling forward: $(stack tags)"
 echo 0 > "$FAKE/running"
 
 # A failed registration fails the rollback, which says so.
@@ -241,8 +241,8 @@ rm "$FAKE/register-fails"
 # A dry run runs nothing on the server.
 : > "$FAKE/docker.log"
 sh deploy/hetzner/deploy.sh --dry-run --rollback > "$FAKE/out" 2>&1 || fail "a dry run"
-has "+ ssh root@<server-ip> orca-stack rollback"
-has "+ ssh root@<server-ip> orca-stack sync --keys settings.env"
+has "+ ssh root@<server-ip> morca-stack rollback"
+has "+ ssh root@<server-ip> morca-stack sync --keys settings.env"
 [ ! -s "$FAKE/docker.log" ] || fail "a dry run ran docker"
 
 # Only what changed starts again: each container has its spec as a label,
@@ -265,17 +265,17 @@ has "scheduler: unchanged"
 grep -q 'run -d --name \(scheduler\|ui\|sampler\)' "$FAKE/docker.log" && fail "a console-only apply replaced more"
 stack apply --tag ggg7777 > "$FAKE/out" 2>&1 && fail "replaced the scheduler over running runs"
 has "2 run(s) running; restarting the scheduler (image eee5555 -> ggg7777) kills them"
-[ "$(stack tags)" = "orca eee5555, console fff6666" ] || fail "a refused apply changed the tags: $(stack tags)"
-grep -q '^ORCA_TAG=eee5555$' "$ORCA_CONF/stack.conf" || fail "a refused apply changed ORCA_TAG"
+[ "$(stack tags)" = "morca eee5555, console fff6666" ] || fail "a refused apply changed the tags: $(stack tags)"
+grep -q '^MORCA_TAG=eee5555$' "$MORCA_CONF/stack.conf" || fail "a refused apply changed MORCA_TAG"
 echo 0 > "$FAKE/running"
 
 # plan says what apply would do, and changes nothing.
 : > "$FAKE/docker.log"
-stack plan --tag ggg7777 > "$FAKE/out" 2>&1 || fail "orca-stack plan"
+stack plan --tag ggg7777 > "$FAKE/out" 2>&1 || fail "morca-stack plan"
 has "^scheduler replace image eee5555 -> ggg7777$"
 has "^console keep unchanged$"
 grep -q 'run -d\|rm -f' "$FAKE/docker.log" && fail "plan started or removed a container"
-[ "$(stack tags)" = "orca eee5555, console fff6666" ] || fail "plan changed the tags"
+[ "$(stack tags)" = "morca eee5555, console fff6666" ] || fail "plan changed the tags"
 
 # A census-only deploy: no pause, a backup, the console replaced and
 # nothing else, nothing registered.
@@ -283,21 +283,21 @@ grep -q 'run -d\|rm -f' "$FAKE/docker.log" && fail "plan started or removed a co
 deploy eee5555 console=hhh8888 || fail "a console-only deploy"
 has "  console replace image fff6666 -> hhh8888"
 has "the scheduler keeps running: not pausing anything"
-grep -q 'orca pause' "$FAKE/docker.log" && fail "a console-only deploy paused the pipelines"
+grep -q 'morca pause' "$FAKE/docker.log" && fail "a console-only deploy paused the pipelines"
 grep -q pg_dump "$FAKE/docker.log" || fail "a console-only deploy didn't back up"
 [ "$(grep -n 'pg_dump\|run -d --name console' "$FAKE/docker.log" | head -1 | grep -c pg_dump)" = 1 ] \
     || fail "the backup wasn't before the console's start"
 grep -q 'run -d --name console' "$FAKE/docker.log" || fail "the console wasn't replaced"
 grep -q 'run -d --name \(scheduler\|ui\|sampler\)' "$FAKE/docker.log" && fail "a console-only deploy replaced more"
-grep -q 'orca register' "$FAKE/docker.log" && fail "a console-only deploy registered"
+grep -q 'morca register' "$FAKE/docker.log" && fail "a console-only deploy registered"
 has "the scheduler wasn't replaced: the pipelines stay registered as they are"
-[ "$(stack tags)" = "orca eee5555, console hhh8888" ] || fail "tags after a console deploy: $(stack tags)"
+[ "$(stack tags)" = "morca eee5555, console hhh8888" ] || fail "tags after a console deploy: $(stack tags)"
 
 # A deploy of what runs: nothing replaced, no backup, no pause.
 : > "$FAKE/docker.log"
 deploy eee5555 console=hhh8888 || fail "a deploy of what runs"
 has "nothing to replace: not backing up"
-grep -q 'pg_dump\|run -d\|orca pause' "$FAKE/docker.log" && fail "a deploy of what runs did something"
+grep -q 'pg_dump\|run -d\|morca pause' "$FAKE/docker.log" && fail "a deploy of what runs did something"
 
 # deploy.sh brings the server's settings in line with hetzner.env before
 # it plans: a key added there (POSTHOG_KEY) reaches settings.env, by name
@@ -307,20 +307,20 @@ mode() { ls -l "$1" | cut -c1-10; }
 echo POSTHOG_KEY=phc_notavalue42 >> "$FAKE/hetzner.env"
 : > "$FAKE/docker.log"
 deploy eee5555 console=hhh8888 || fail "a deploy that adds POSTHOG_KEY"
-has "  orca-stack: settings.env: added ORCA_POSTHOG_KEY$"
+has "  morca-stack: settings.env: added MORCA_POSTHOG_KEY$"
 grep -q phc_notavalue42 "$FAKE/out" && fail "a setting's value was printed"
-grep -qx 'ORCA_POSTHOG_KEY=phc_notavalue42' "$ORCA_CONF/settings.env" || fail "no ORCA_POSTHOG_KEY in settings.env"
-[ "$(mode "$ORCA_CONF/settings.env")" = -rw------- ] || fail "settings.env is $(mode "$ORCA_CONF/settings.env")"
-grep -qx 'POSTHOG_KEY=phc_notavalue42' "$ORCA_CONF/app.env" || fail "no POSTHOG_KEY in app.env"
+grep -qx 'MORCA_POSTHOG_KEY=phc_notavalue42' "$MORCA_CONF/settings.env" || fail "no MORCA_POSTHOG_KEY in settings.env"
+[ "$(mode "$MORCA_CONF/settings.env")" = -rw------- ] || fail "settings.env is $(mode "$MORCA_CONF/settings.env")"
+grep -qx 'POSTHOG_KEY=phc_notavalue42' "$MORCA_CONF/app.env" || fail "no POSTHOG_KEY in app.env"
 has "  scheduler replace settings: its env file changed"
 has "  ui replace settings: its env file changed"
 has "  console replace settings: its env file changed"
 has "  sampler keep unchanged"
 has "the scheduler is replaced: pausing the pipelines"
-grep -q 'exec scheduler orca pause' "$FAKE/docker.log" || fail "a settings change to the scheduler didn't quiesce"
-grep -q 'exec scheduler orca register' "$FAKE/docker.log" || fail "not registered after a settings change"
+grep -q 'exec scheduler morca pause' "$FAKE/docker.log" || fail "a settings change to the scheduler didn't quiesce"
+grep -q 'exec scheduler morca register' "$FAKE/docker.log" || fail "not registered after a settings change"
 grep -q 'unpause toy' "$FAKE/docker.log" || fail "not unpaused after a settings change"
-[ "$(stack tags)" = "orca eee5555, console hhh8888" ] || fail "a settings change moved the tags: $(stack tags)"
+[ "$(stack tags)" = "morca eee5555, console hhh8888" ] || fail "a settings change moved the tags: $(stack tags)"
 # Nothing differs: nothing changes, nothing is replaced.
 deploy eee5555 console=hhh8888 || fail "a deploy with the settings in line"
 has "names only, never values):"
@@ -330,31 +330,31 @@ has "nothing to replace: not backing up"
 sed -i.bak '/^POSTHOG_KEY=/d' "$FAKE/hetzner.env"
 printf 'POSTHOG_KEY=\nFIXED_COST=8/month\nBACKUP_KEEP=7\nS3_REGION=nbg1\n' >> "$FAKE/hetzner.env"
 printf 'AWS_ACCESS_KEY_ID=x2\nAWS_SECRET_ACCESS_KEY=notasecret99\n' > "$FAKE/s3.env"
-before=$(cat "$ORCA_CONF/settings.env" "$ORCA_CONF/s3.env" "$ORCA_CONF/stack.conf" | cksum)
+before=$(cat "$MORCA_CONF/settings.env" "$MORCA_CONF/s3.env" "$MORCA_CONF/stack.conf" | cksum)
 : > "$FAKE/docker.log"
 sh deploy/hetzner/deploy.sh --dry-run eee5555 > "$FAKE/out" 2>&1 || fail "a dry run with settings changed"
-has "+ ssh root@<server-ip> orca-stack sync --keys settings.env < "
-has "+ ssh root@<server-ip> orca-stack sync s3.env < $FAKE/s3.env"
-has "+ ssh root@<server-ip> orca-stack configure ORCA_IMAGE=img .*BACKUP_KEEP=7 GHCR_USER=$"
-has "# settings.env from $FAKE/hetzner.env: AWS_REGION .*ORCA_FIXED_COST"
-grep -q 'ORCA_POSTHOG_KEY\|notasecret99\|nbg1 ' "$FAKE/out" && fail "the dry run: $(grep 'POSTHOG\|notasecret99' "$FAKE/out")"
-[ "$(cat "$ORCA_CONF/settings.env" "$ORCA_CONF/s3.env" "$ORCA_CONF/stack.conf" | cksum)" = "$before" ] \
+has "+ ssh root@<server-ip> morca-stack sync --keys settings.env < "
+has "+ ssh root@<server-ip> morca-stack sync s3.env < $FAKE/s3.env"
+has "+ ssh root@<server-ip> morca-stack configure MORCA_IMAGE=img .*BACKUP_KEEP=7 GHCR_USER=$"
+has "# settings.env from $FAKE/hetzner.env: AWS_REGION .*MORCA_FIXED_COST"
+grep -q 'MORCA_POSTHOG_KEY\|notasecret99\|nbg1 ' "$FAKE/out" && fail "the dry run: $(grep 'POSTHOG\|notasecret99' "$FAKE/out")"
+[ "$(cat "$MORCA_CONF/settings.env" "$MORCA_CONF/s3.env" "$MORCA_CONF/stack.conf" | cksum)" = "$before" ] \
     || fail "a dry run changed the server's settings"
 [ ! -s "$FAKE/docker.log" ] || fail "a dry run ran docker"
 # A key emptied in hetzner.env is removed; a changed one and a stack
 # setting are named; a secret file only said to have changed.
 deploy eee5555 console=hhh8888 || fail "a deploy that removes POSTHOG_KEY"
-has "  orca-stack: settings.env: added ORCA_FIXED_COST; removed ORCA_POSTHOG_KEY; changed AWS_REGION$"
-has "  orca-stack: s3.env: changed$"
-has "  orca-stack: BACKUP_KEEP 14 -> 7$"
+has "  morca-stack: settings.env: added MORCA_FIXED_COST; removed MORCA_POSTHOG_KEY; changed AWS_REGION$"
+has "  morca-stack: s3.env: changed$"
+has "  morca-stack: BACKUP_KEEP 14 -> 7$"
 grep -q 'notasecret99\|8/month\|phc_' "$FAKE/out" && fail "a value was printed"
-grep -q ORCA_POSTHOG_KEY "$ORCA_CONF/settings.env" && fail "ORCA_POSTHOG_KEY wasn't removed"
-grep -q POSTHOG_KEY "$ORCA_CONF/app.env" && fail "POSTHOG_KEY is still in app.env"
-grep -qx 'AWS_REGION=nbg1' "$ORCA_CONF/settings.env" || fail "AWS_REGION wasn't changed"
-grep -qx 'AWS_SECRET_ACCESS_KEY=notasecret99' "$ORCA_CONF/s3.env" || fail "s3.env wasn't written"
-[ "$(mode "$ORCA_CONF/s3.env")" = -rw------- ] || fail "s3.env is $(mode "$ORCA_CONF/s3.env")"
-grep -qx 'BACKUP_KEEP=7' "$ORCA_CONF/stack.conf" || fail "BACKUP_KEEP wasn't configured"
-grep -qx 'ORCA_TAG=eee5555' "$ORCA_CONF/stack.conf" || fail "the sync touched ORCA_TAG"
+grep -q MORCA_POSTHOG_KEY "$MORCA_CONF/settings.env" && fail "MORCA_POSTHOG_KEY wasn't removed"
+grep -q POSTHOG_KEY "$MORCA_CONF/app.env" && fail "POSTHOG_KEY is still in app.env"
+grep -qx 'AWS_REGION=nbg1' "$MORCA_CONF/settings.env" || fail "AWS_REGION wasn't changed"
+grep -qx 'AWS_SECRET_ACCESS_KEY=notasecret99' "$MORCA_CONF/s3.env" || fail "s3.env wasn't written"
+[ "$(mode "$MORCA_CONF/s3.env")" = -rw------- ] || fail "s3.env is $(mode "$MORCA_CONF/s3.env")"
+grep -qx 'BACKUP_KEEP=7' "$MORCA_CONF/stack.conf" || fail "BACKUP_KEEP wasn't configured"
+grep -qx 'MORCA_TAG=eee5555' "$MORCA_CONF/stack.conf" || fail "the sync touched MORCA_TAG"
 has "  scheduler replace settings: its env file changed"
 has "  console replace settings: its env file changed"
 stack resume > /dev/null
@@ -363,15 +363,15 @@ stack resume > /dev/null
 printf 'ENC:AWS_ACCESS_KEY_ID=x3\nENC:AWS_SECRET_ACCESS_KEY=sopssecret77\n' > "$FAKE/s3.sops.env"
 sed -i.bak "s|^S3_CREDENTIALS_FILE=.*|S3_CREDENTIALS_FILE=$FAKE/s3.sops.env|" "$FAKE/hetzner.env"
 sh deploy/hetzner/deploy.sh --dry-run eee5555 > "$FAKE/out" 2>&1 || fail "a dry run with a SOPS file"
-has "+ sops -d $FAKE/s3.sops.env | ssh root@<server-ip> orca-stack sync s3.env$"
+has "+ sops -d $FAKE/s3.sops.env | ssh root@<server-ip> morca-stack sync s3.env$"
 deploy eee5555 console=hhh8888 || fail "a deploy with a SOPS file"
-has "  orca-stack: s3.env: changed$"
+has "  morca-stack: s3.env: changed$"
 grep -q 'sopssecret77' "$FAKE/out" && fail "a SOPS value was printed"
-grep -qx 'AWS_SECRET_ACCESS_KEY=sopssecret77' "$ORCA_CONF/s3.env" || fail "s3.env wasn't decrypted: $(sed 's/=.*//' "$ORCA_CONF/s3.env")"
+grep -qx 'AWS_SECRET_ACCESS_KEY=sopssecret77' "$MORCA_CONF/s3.env" || fail "s3.env wasn't decrypted: $(sed 's/=.*//' "$MORCA_CONF/s3.env")"
 printf 'garbage\n' > "$FAKE/s3.sops.env"
 deploy eee5555 console=hhh8888 && fail "a deploy with a SOPS file that doesn't decrypt"
 has "sops couldn't decrypt $FAKE/s3.sops.env"
-grep -qx 'AWS_SECRET_ACCESS_KEY=sopssecret77' "$ORCA_CONF/s3.env" || fail "a failed decrypt changed s3.env"
+grep -qx 'AWS_SECRET_ACCESS_KEY=sopssecret77' "$MORCA_CONF/s3.env" || fail "a failed decrypt changed s3.env"
 sed -i.bak "s|^S3_CREDENTIALS_FILE=.*|S3_CREDENTIALS_FILE=$FAKE/s3.env|" "$FAKE/hetzner.env"
 deploy eee5555 console=hhh8888 || fail "a deploy back on the plain s3.env"
 stack resume > /dev/null
@@ -392,7 +392,7 @@ all_secrets='{"s3.env": "AWS_ACCESS_KEY_ID=x4\nAWS_SECRET_ACCESS_KEY=onefile55\n
 secrets_file "$all_secrets"
 sed -i.bak '/^S3_CREDENTIALS_FILE=/d; /^TUNNEL_TOKEN_FILE=/d' "$FAKE/hetzner.env"
 echo "SECRETS_FILE=$FAKE/secrets.sops.yaml" >> "$FAKE/hetzner.env"
-secret_files() { cat "$ORCA_CONF/settings.env" "$ORCA_CONF/s3.env" "$ORCA_CONF/tunnel.env" 2> /dev/null | cksum; }
+secret_files() { cat "$MORCA_CONF/settings.env" "$MORCA_CONF/s3.env" "$MORCA_CONF/tunnel.env" 2> /dev/null | cksum; }
 values='onefile55\|tunnel66\|ghp_gh77\|topic88\|tk_ntfy99\|ghcr11\|hc_pool12'
 : > "$FAKE/sops.calls"
 before=$(secret_files)
@@ -400,28 +400,28 @@ sh deploy/hetzner/deploy.sh --dry-run eee5555 > "$FAKE/out" 2>&1 || fail "a dry 
 has "# a dry run doesn't decrypt $FAKE/secrets.sops.yaml: it assumes it has s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token secrets/orca/hcloud-token$"
 has "^  + sops -d $FAKE/secrets.sops.yaml (once)$"
 for n in s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token secrets/orca/hcloud-token; do
-    has "^  | ssh root@<server-ip> orca-stack sync $n$"
+    has "^  | ssh root@<server-ip> morca-stack sync $n$"
 done
-has "# settings.env from .*ORCA_NOTIFY_SECRET ORCA_NOTIFY_TOKEN_SECRET"
+has "# settings.env from .*MORCA_NOTIFY_SECRET MORCA_NOTIFY_TOKEN_SECRET"
 [ ! -s "$FAKE/sops.calls" ] || fail "a dry run ran sops: $(cat "$FAKE/sops.calls")"
 [ "$(secret_files)" = "$before" ] || fail "a dry run with SECRETS_FILE changed the server's files"
 deploy eee5555 console=hhh8888 || fail "a deploy with SECRETS_FILE"
 [ "$(cat "$FAKE/sops.calls")" = "-d --output-type json $FAKE/secrets.sops.yaml" ] \
     || fail "not one decrypt per deploy: $(cat "$FAKE/sops.calls")"
 grep -q "$values" "$FAKE/out" && fail "a SECRETS_FILE value was printed"
-has "  orca-stack: s3.env: changed$"
-has "  orca-stack: secrets/orca/ntfy-topic: new$"
-has "  orca-stack: ghcr-token: new$"
-has "  orca-stack: secrets/orca/hcloud-token: new$"
-# Worker pools (orca #267): the Hetzner token's id, the stack's firewall and
+has "  morca-stack: s3.env: changed$"
+has "  morca-stack: secrets/orca/ntfy-topic: new$"
+has "  morca-stack: ghcr-token: new$"
+has "  morca-stack: secrets/orca/hcloud-token: new$"
+# Worker pools (morca #267): the Hetzner token's id, the stack's firewall and
 # key, and the registry login's id, in settings.env; the worker image in
-# orca.env; ghcr-token among the secrets for orca.
-grep -qx "ORCA_HCLOUD_TOKEN_SECRET=orca/hcloud-token" "$ORCA_CONF/settings.env" || fail "no ORCA_HCLOUD_TOKEN_SECRET"
-grep -q "^ORCA_HCLOUD_FIREWALL=." "$ORCA_CONF/settings.env" || fail "no ORCA_HCLOUD_FIREWALL"
-grep -q "^ORCA_HCLOUD_SSH_KEYS=." "$ORCA_CONF/settings.env" || fail "no ORCA_HCLOUD_SSH_KEYS"
+# morca.env; ghcr-token among the secrets for morca.
+grep -qx "MORCA_HCLOUD_TOKEN_SECRET=orca/hcloud-token" "$MORCA_CONF/settings.env" || fail "no MORCA_HCLOUD_TOKEN_SECRET"
+grep -q "^MORCA_HCLOUD_FIREWALL=." "$MORCA_CONF/settings.env" || fail "no MORCA_HCLOUD_FIREWALL"
+grep -q "^MORCA_HCLOUD_SSH_KEYS=." "$MORCA_CONF/settings.env" || fail "no MORCA_HCLOUD_SSH_KEYS"
 same() { # NAME CONTENT
-    printf '%s\n' "$2" | cmp -s - "$ORCA_CONF/$1" || fail "/etc/orca/$1 isn't SECRETS_FILE's value"
-    [ "$(mode "$ORCA_CONF/$1")" = -rw------- ] || fail "$1 is $(mode "$ORCA_CONF/$1")"
+    printf '%s\n' "$2" | cmp -s - "$MORCA_CONF/$1" || fail "/etc/orca/$1 isn't SECRETS_FILE's value"
+    [ "$(mode "$MORCA_CONF/$1")" = -rw------- ] || fail "$1 is $(mode "$MORCA_CONF/$1")"
 }
 same s3.env "$(printf 'AWS_ACCESS_KEY_ID=x4\nAWS_SECRET_ACCESS_KEY=onefile55')"
 same tunnel.env TUNNEL_TOKEN=tunnel66
@@ -429,8 +429,8 @@ same secrets/orca/github-token ghp_gh77
 same secrets/orca/ntfy-topic topic88
 same secrets/orca/ntfy-token tk_ntfy99
 same ghcr-token ghcr11
-grep -qx 'ORCA_NOTIFY_SECRET=orca/ntfy-topic' "$ORCA_CONF/settings.env" || fail "no ORCA_NOTIFY_SECRET from SECRETS_FILE"
-grep -qx 'ORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token' "$ORCA_CONF/settings.env" || fail "no ORCA_NOTIFY_TOKEN_SECRET from SECRETS_FILE"
+grep -qx 'MORCA_NOTIFY_SECRET=orca/ntfy-topic' "$MORCA_CONF/settings.env" || fail "no MORCA_NOTIFY_SECRET from SECRETS_FILE"
+grep -qx 'MORCA_NOTIFY_TOKEN_SECRET=orca/ntfy-token' "$MORCA_CONF/settings.env" || fail "no MORCA_NOTIFY_TOKEN_SECRET from SECRETS_FILE"
 stack resume > /dev/null
 # Again: unchanged, still one decrypt.
 : > "$FAKE/sops.calls"
@@ -443,7 +443,7 @@ refused() { # WHY MESSAGE
     deploy eee5555 console=hhh8888 && fail "a deploy with $1"
     has "$2"
     grep -q "$values" "$FAKE/out" && fail "a value was printed ($1)"
-    grep -q 'orca-stack' "$FAKE/out" && fail "the server was changed ($1)"
+    grep -q 'morca-stack' "$FAKE/out" && fail "the server was changed ($1)"
     [ "$(secret_files)" = "$before" ] || fail "$1 changed the server's files"
 }
 secrets_file '{"s3.env": "AWS_SECRET_ACCESS_KEY=onefile55", "../s3.env": "x", "notes.txt": "x", "/etc/passwd": "x", "ghcr-token": 11}'
@@ -464,14 +464,14 @@ refused "a SECRETS_FILE that doesn't decrypt" "sops couldn't decrypt $FAKE/secre
 # Back on the plain files.
 sed -i.bak '/^SECRETS_FILE=/d' "$FAKE/hetzner.env"
 printf 'S3_CREDENTIALS_FILE=%s\nTUNNEL_TOKEN_FILE=%s\n' "$FAKE/s3.env" "$FAKE/tunnel.env" >> "$FAKE/hetzner.env"
-rm -f "$ORCA_CONF/secrets/orca/ntfy-topic" "$ORCA_CONF/secrets/orca/ntfy-token"
+rm -f "$MORCA_CONF/secrets/orca/ntfy-topic" "$MORCA_CONF/secrets/orca/ntfy-token"
 deploy eee5555 console=hhh8888 || fail "a deploy back on the plain files"
-grep -q ORCA_NOTIFY "$ORCA_CONF/settings.env" && fail "ORCA_NOTIFY_SECRET without SECRETS_FILE"
+grep -q MORCA_NOTIFY "$MORCA_CONF/settings.env" && fail "MORCA_NOTIFY_SECRET without SECRETS_FILE"
 stack resume > /dev/null
 
-# A setting only orca.env has: the scheduler and the UI; CGROUPS: the
+# A setting only morca.env has: the scheduler and the UI; CGROUPS: the
 # scheduler only; a tag pushed again: what runs it.
-add_setting ORCA_TEST_SETTING=1
+add_setting MORCA_TEST_SETTING=1
 stack apply > "$FAKE/out" 2>&1 || fail "apply after a setting"
 has "scheduler: replaced (settings: its env file changed)"
 has "ui: replaced (settings: its env file changed)"
@@ -498,7 +498,7 @@ grep -q 'run -d --name \(scheduler\|ui\|sampler\)' "$FAKE/docker.log" && fail "-
 stack apply --only ui --tag jjj0000 > "$FAKE/out" 2>&1 && fail "--only with a new --tag"
 has "would leave the other containers on the old one"
 stack apply --only ui --app console=jjj0000 > "$FAKE/out" 2>&1 && fail "--only ui with --app console"
-[ "$(stack tags)" = "orca eee5555, console iii9999" ] || fail "tags after --only: $(stack tags)"
+[ "$(stack tags)" = "morca eee5555, console iii9999" ] || fail "tags after --only: $(stack tags)"
 
 # Rolling back an app only goes on over running runs and registers nothing.
 echo 1 > "$FAKE/running"
@@ -508,8 +508,8 @@ has "  console replace image iii9999 -> hhh8888"
 has "the scheduler keeps running: not pausing anything"
 has "console: replaced (image iii9999 -> hhh8888)"
 has "the scheduler kept running, so the pipelines stay registered as they are"
-grep -q 'orca register\|orca pause\|run -d --name scheduler' "$FAKE/docker.log" && fail "an app-only rollback touched the scheduler"
-[ "$(stack tags)" = "orca eee5555, console hhh8888" ] || fail "tags after an app-only rollback: $(stack tags)"
+grep -q 'morca register\|morca pause\|run -d --name scheduler' "$FAKE/docker.log" && fail "an app-only rollback touched the scheduler"
+[ "$(stack tags)" = "morca eee5555, console hhh8888" ] || fail "tags after an app-only rollback: $(stack tags)"
 echo 0 > "$FAKE/running"
 
 # Without downtime: the UI's and the apps' new container starts beside the
@@ -520,8 +520,8 @@ deploy kkk1111 || fail "deploy.sh kkk1111"
 has "ui: replaced (image eee5555 -> kkk1111), without downtime"
 has "scheduler: replaced (image eee5555 -> kkk1111)"
 has "console: unchanged"
-order=$(grep -oE 'run -d --name ui-next|probe ui-next|network disconnect orca ui-next|network connect --alias ui orca ui-next|stop -t 10 ui$|rm -f ui$|rename ui-next ui$' "$FAKE/docker.log" | tr '\n' ,)
-[ "$order" = "run -d --name ui-next,probe ui-next,network disconnect orca ui-next,network connect --alias ui orca ui-next,probe ui-next,stop -t 10 ui,rm -f ui,rename ui-next ui," ] \
+order=$(grep -oE 'run -d --name ui-next|probe ui-next|network disconnect morca ui-next|network connect --alias ui morca ui-next|stop -t 10 ui$|rm -f ui$|rename ui-next ui$' "$FAKE/docker.log" | tr '\n' ,)
+[ "$order" = "run -d --name ui-next,probe ui-next,network disconnect morca ui-next,network connect --alias ui morca ui-next,probe ui-next,stop -t 10 ui,rm -f ui,rename ui-next ui," ] \
     || fail "the UI's replacement order: $order"
 grep -q 'run -d --name ui-next.*--network-alias' "$FAKE/docker.log" && fail "ui-next had the alias ui before it was healthy"
 grep -q '^probe ui-next 8270 /healthz$' "$FAKE/docker.log" || fail "the UI's probe isn't /healthz on 8270"
@@ -532,7 +532,7 @@ grep -qw ui "$FAKE/containers/ui/aliases" || fail "the new ui has no alias ui"
 # An app, by its check path.
 stack app console 8080 /ready
 stack app console 8080
-grep -q '^console 8080 [^ ]* /ready$' "$ORCA_CONF/apps" || fail "app without a CHECK reset it: $(cat "$ORCA_CONF/apps")"
+grep -q '^console 8080 [^ ]* /ready$' "$MORCA_CONF/apps" || fail "app without a CHECK reset it: $(cat "$MORCA_CONF/apps")"
 : > "$FAKE/docker.log"
 stack apply --app console=lll2222 > "$FAKE/out" 2>&1 || fail "the console's apply"
 has "console: replaced (image hhh8888 -> lll2222), without downtime"
@@ -544,7 +544,7 @@ grep -q '^probe console-next 8080 /ready$' "$FAKE/docker.log" || fail "the conso
 # one keeps serving, the others are applied, and apply fails saying why.
 mkdir -p "$FAKE/health" "$FAKE/exits"
 echo 503 > "$FAKE/health/console"
-add_setting ORCA_TEST_SETTING=2
+add_setting MORCA_TEST_SETTING=2
 : > "$FAKE/docker.log"
 stack apply --app console=mmm3333 --health-timeout 0 > "$FAKE/out" 2>&1 && fail "an apply whose console wasn't healthy"
 has "console: not replaced: the new container answered 503 on :8080/ready (wants 200) after 0s; the old one keeps serving"
@@ -568,11 +568,11 @@ has "console: not replaced: the new container stopped (exited, exit code 1)"
 rm "$FAKE/exits/console"
 stack apply --app console=mmm3333 > /dev/null 2>&1 || fail "back to mmm3333"
 
-# The worker API's listener (ORCA_WORKER_ADDR) moves with the UI and is
+# The worker API's listener (MORCA_WORKER_ADDR) moves with the UI and is
 # probed too.
-add_setting ORCA_WORKER_ADDR=0.0.0.0:8271
+add_setting MORCA_WORKER_ADDR=0.0.0.0:8271
 : > "$FAKE/docker.log"
-stack apply > "$FAKE/out" 2>&1 || fail "apply with ORCA_WORKER_ADDR"
+stack apply > "$FAKE/out" 2>&1 || fail "apply with MORCA_WORKER_ADDR"
 grep -q '^probe ui-next 8271 /$' "$FAKE/docker.log" || fail "the worker listener wasn't probed"
 has "ui: replaced (settings: its env file changed), without downtime"
 
@@ -587,22 +587,22 @@ deploy ooo5555 && fail "a deploy whose UI wasn't healthy"
 rm "$FAKE/health/ui"
 stack configure HEALTH_TIMEOUT=300
 has "registering the pipelines from ooo5555"
-grep -q 'exec scheduler orca register' "$FAKE/docker.log" || fail "a replaced scheduler wasn't registered"
+grep -q 'exec scheduler morca register' "$FAKE/docker.log" || fail "a replaced scheduler wasn't registered"
 has "unpausing the pipelines it paused"
 grep -qx toy "$FAKE/paused" && fail "toy left paused after only the UI failed"
 grep -qx manual1 "$FAKE/paused" || fail "unpaused manual1, paused by hand"
-order=$(grep -o 'exec scheduler orca register\|orca unpause toy' "$FAKE/docker.log" | tr '\n' ,)
-[ "$order" = "exec scheduler orca register,orca unpause toy," ] || fail "not register, then unpause: $order"
+order=$(grep -o 'exec scheduler morca register\|morca unpause toy' "$FAKE/docker.log" | tr '\n' ,)
+[ "$order" = "exec scheduler morca register,morca unpause toy," ] || fail "not register, then unpause: $order"
 has "running runs: "
 has "not replaced: ui, whose new container wasn't healthy (above): the old one keeps serving"
-has "ssh root@192.0.2.1 orca-stack apply"
+has "ssh root@192.0.2.1 morca-stack apply"
 grep -q 'stay paused' "$FAKE/out" && fail "said the pipelines stay paused"
 [ "$(cat "$FAKE/containers/ui/image")" = img:kkk1111 ] || fail "the old UI wasn't kept: $(cat "$FAKE/containers/ui/image")"
 [ "$(cat "$FAKE/containers/scheduler/image")" = img:ooo5555 ] || fail "the scheduler wasn't replaced"
 stack apply > "$FAKE/out" 2>&1 || fail "the UI's retry"
 has "ui: replaced (image kkk1111 -> ooo5555), without downtime"
 has "scheduler: unchanged"
-[ ! -f "$ORCA_STATE/paused-by-quiesce" ] || fail "quiesce's list is left"
+[ ! -f "$MORCA_STATE/paused-by-quiesce" ] || fail "quiesce's list is left"
 
 # The same through a rollback: registered, unpaused, failing on the UI.
 echo 503 > "$FAKE/health/ui"
@@ -610,7 +610,7 @@ stack configure HEALTH_TIMEOUT=0
 deploy --rollback && fail "a rollback whose UI wasn't healthy"
 rm "$FAKE/health/ui"
 stack configure HEALTH_TIMEOUT=300
-has "orca-stack: registered toy"
+has "morca-stack: registered toy"
 has "not replaced: ui, whose new container wasn't healthy"
 grep -qx toy "$FAKE/paused" && fail "toy left paused after only the UI failed a rollback"
 stack apply > /dev/null 2>&1 || fail "the UI's retry after the rollback"
@@ -624,7 +624,7 @@ touch "$FAKE/run-fails/scheduler"
 deploy ooo6666 && fail "a deploy whose scheduler didn't start"
 rm "$FAKE/run-fails/scheduler"
 has "the deploy failed; the pipelines stay paused"
-grep -q 'orca register' "$FAKE/docker.log" && fail "registered a scheduler that didn't start"
+grep -q 'morca register' "$FAKE/docker.log" && fail "registered a scheduler that didn't start"
 grep -q 'unpause' "$FAKE/docker.log" && fail "unpaused after the scheduler failed"
 grep -qx toy "$FAKE/paused" || fail "toy unpaused after the scheduler failed"
 stack apply > /dev/null 2>&1 || fail "the scheduler's retry"
@@ -639,7 +639,7 @@ deploy --timeout 0 ooo7777 || fail "a deploy with runs only on workers"
 has "pausing the pipelines"
 has "2 run(s) left running on workers"
 has "  run 91 mojo_history 2026-11-07 on bgent"
-has "orca-stack: quiet; paused: toy"
+has "morca-stack: quiet; paused: toy"
 grep -q 'unpause toy' "$FAKE/docker.log" || fail "not unpaused after a deploy over worker runs"
 has "running runs: 0 here, 2 on remote workers"
 # Runs of its own are waited for, and the worker runs listed beside them.
@@ -658,11 +658,11 @@ stack quiesce --workers --timeout 0 > "$FAKE/out" 2>&1 && fail "quiesce --worker
 has "and for 2 on remote workers (--workers)"
 has "  run 92 mojo_history"
 has "2 run(s) still running after 0s"
-grep -q -- 'orca-stack quiesce --workers' deploy/hetzner/rescale.sh || fail "rescale.sh doesn't wait for the workers' runs"
+grep -q -- 'morca-stack quiesce --workers' deploy/hetzner/rescale.sh || fail "rescale.sh doesn't wait for the workers' runs"
 stack resume > /dev/null
 rm "$FAKE/worker-running"
 
-# An image before orca 0.18 has no /healthz: its UI's 404 there counts as up.
+# An image before morca 0.18 has no /healthz: its UI's 404 there counts as up.
 echo 404 > "$FAKE/health/ui"
 stack configure HEALTH_TIMEOUT=0
 stack apply --tag ppp6666 > "$FAKE/out" 2>&1 || { cat "$FAKE/out"; fail "a UI answering 404 on /healthz wasn't taken as up"; }
@@ -670,9 +670,9 @@ rm "$FAKE/health/ui"
 stack configure HEALTH_TIMEOUT=300
 [ "$(cat "$FAKE/containers/ui/image")" = img:ppp6666 ] || fail "the older UI wasn't swapped in: $(cat "$FAKE/containers/ui/image")"
 
-# Overlapping schedulers (OVERLAP=1, docs/overlap.md). Off: orca.env has
-# no ORCA_OVERLAP and can-overlap says no without asking the image.
-grep -q ORCA_OVERLAP "$ORCA_CONF/orca.env" && fail "ORCA_OVERLAP with OVERLAP unset"
+# Overlapping schedulers (OVERLAP=1, docs/overlap.md). Off: morca.env has
+# no MORCA_OVERLAP and can-overlap says no without asking the image.
+grep -q MORCA_OVERLAP "$MORCA_CONF/morca.env" && fail "MORCA_OVERLAP with OVERLAP unset"
 stack can-overlap > "$FAKE/out" 2>&1 && fail "can-overlap with OVERLAP off"
 has "no: OVERLAP isn't 1 in stack.conf"
 # Turning it on changes the scheduler's env file: that deploy can't overlap
@@ -680,7 +680,7 @@ has "no: OVERLAP isn't 1 in stack.conf"
 stack configure OVERLAP=1
 : > "$FAKE/docker.log"
 deploy ppp6666 || fail "the deploy that turns OVERLAP on"
-grep -q '^ORCA_OVERLAP=on$' "$ORCA_CONF/orca.env" || fail "no ORCA_OVERLAP=on in orca.env"
+grep -q '^MORCA_OVERLAP=on$' "$MORCA_CONF/morca.env" || fail "no MORCA_OVERLAP=on in morca.env"
 has "not overlapping the schedulers: no live scheduler instance leads"
 has "pausing the pipelines"
 grep -q 'run -d --name scheduler-next' "$FAKE/docker.log" && fail "overlapped when can-overlap said no"
@@ -696,9 +696,9 @@ has "the new scheduler starts beside the old one, which drains its runs: not pau
 has "scheduler: replaced (image ppp6666 -> qqq7777), overlapping: scheduler-old drains its runs"
 has "asked scheduler instance 7 (scheduler-old) to drain"
 has "scheduler-old drained and removed"
-grep -q 'exec scheduler orca pause' "$FAKE/docker.log" && fail "an overlapping deploy paused a pipeline"
-order=$(grep -oE 'run -d --name scheduler-next|update --restart no scheduler$|rename scheduler scheduler-old|rename scheduler-next scheduler|orca scheduler wait-lead|exec scheduler orca register|orca scheduler drain 7|rm -f scheduler-old' "$FAKE/docker.log" | tr '\n' ,)
-[ "$order" = "run -d --name scheduler-next,update --restart no scheduler,rename scheduler scheduler-old,rename scheduler-next scheduler,orca scheduler wait-lead,exec scheduler orca register,orca scheduler drain 7,rm -f scheduler-old," ] \
+grep -q 'exec scheduler morca pause' "$FAKE/docker.log" && fail "an overlapping deploy paused a pipeline"
+order=$(grep -oE 'run -d --name scheduler-next|update --restart no scheduler$|rename scheduler scheduler-old|rename scheduler-next scheduler|morca scheduler wait-lead|exec scheduler morca register|morca scheduler drain 7|rm -f scheduler-old' "$FAKE/docker.log" | tr '\n' ,)
+[ "$order" = "run -d --name scheduler-next,update --restart no scheduler,rename scheduler scheduler-old,rename scheduler-next scheduler,morca scheduler wait-lead,exec scheduler morca register,morca scheduler drain 7,rm -f scheduler-old," ] \
     || fail "the overlap's order: $order"
 grep -q 'stop .*scheduler' "$FAKE/docker.log" && fail "the old scheduler was stopped"
 [ "$(cat "$FAKE/containers/scheduler/image")" = img:qqq7777 ] || fail "scheduler runs $(cat "$FAKE/containers/scheduler/image")"
@@ -756,38 +756,38 @@ grep -q '\(stop\|rm\).* postgres$' "$FAKE/docker.all" && fail "Postgres was stop
 
 # One hetzner.env for every laptop: in a secrets repository, its file names
 # relative to its folder, and each laptop's ADMIN_IP and ssh key in
-# <XDG_CONFIG_HOME>/orca-hetzner/<NAME>.local.env, read after it (its own
+# <XDG_CONFIG_HOME>/morca-hetzner/<NAME>.local.env, read after it (its own
 # relative names from its folder). The first line names both files.
 shared=$FAKE/ops-secrets/prod
-mkdir -p "$shared/creds" "$XDG_CONFIG_HOME/orca-hetzner/keys"
+mkdir -p "$shared/creds" "$XDG_CONFIG_HOME/morca-hetzner/keys"
 cp "$FAKE/s3.env" "$shared/creds/s3.env"
 : > "$shared/tunnel.env"
-: > "$XDG_CONFIG_HOME/orca-hetzner/keys/laptop.pub"
+: > "$XDG_CONFIG_HOME/morca-hetzner/keys/laptop.pub"
 cat > "$shared/hetzner.env" << 'EOS'
-NAME=orca
+NAME=morca
 BUCKET=bkt
 S3_ENDPOINT=https://example.invalid
 S3_REGION=fsn1
 S3_CREDENTIALS_FILE=creds/s3.env
 TUNNEL_TOKEN_FILE=./tunnel.env
-ORCA_IMAGE=img
+MORCA_IMAGE=img
 ADMIN_IP=192.0.2.1/32
 SSH_PUBLIC_KEY_FILE=/nowhere/id.pub
 EOS
-local_env=$XDG_CONFIG_HOME/orca-hetzner/orca.local.env
+local_env=$XDG_CONFIG_HOME/morca-hetzner/morca.local.env
 printf 'ADMIN_IP=198.51.100.9/32\nSSH_PUBLIC_KEY_FILE=keys/laptop.pub\n' > "$local_env"
 (cd "$FAKE" && HETZNER_ENV=ops-secrets/prod/hetzner.env sh "$OLDPWD/deploy/hetzner/up.sh" --dry-run) > "$FAKE/out" 2>&1 \
     || fail "up.sh --dry-run with a shared hetzner.env"
 real=$(cd "$shared" && pwd) # HETZNER_ENV was relative: from the folder it was given in
-has "up.sh: stack orca, settings $real/hetzner.env and $local_env"
-has "orca-stack sync s3.env < $real/creds/s3.env"
-has "orca-stack sync tunnel.env < $real/./tunnel.env"
-has "public-key-from-file $XDG_CONFIG_HOME/orca-hetzner/keys/laptop.pub"
+has "up.sh: stack morca, settings $real/hetzner.env and $local_env"
+has "morca-stack sync s3.env < $real/creds/s3.env"
+has "morca-stack sync tunnel.env < $real/./tunnel.env"
+has "public-key-from-file $XDG_CONFIG_HOME/morca-hetzner/keys/laptop.pub"
 # Without the local file, the shared file's own settings.
 rm "$local_env"
 HETZNER_ENV=$shared/hetzner.env sh deploy/hetzner/deploy.sh --dry-run ttt0000 > "$FAKE/out" 2>&1 \
     || fail "deploy.sh --dry-run with no local file"
-has "deploy.sh: stack orca, settings $shared/hetzner.env$"
+has "deploy.sh: stack morca, settings $shared/hetzner.env$"
 # HETZNER_LOCAL_ENV names another; one that's missing, or that sets NAME, is refused.
 echo "ADMIN_IP=198.51.100.10/32" > "$FAKE/other.local.env"
 HETZNER_ENV=$shared/hetzner.env HETZNER_LOCAL_ENV=$FAKE/other.local.env sh deploy/hetzner/deploy.sh --dry-run ttt0000 > "$FAKE/out" 2>&1 \
@@ -796,12 +796,12 @@ has "settings $shared/hetzner.env and $FAKE/other.local.env"
 HETZNER_ENV=$shared/hetzner.env HETZNER_LOCAL_ENV=$FAKE/none.env sh deploy/hetzner/deploy.sh --dry-run ttt0000 > "$FAKE/out" 2>&1 \
     && fail "a missing HETZNER_LOCAL_ENV"
 has "no $FAKE/none.env (HETZNER_LOCAL_ENV)"
-echo NAME=orca-dev >> "$FAKE/other.local.env"
+echo NAME=morca-dev >> "$FAKE/other.local.env"
 HETZNER_ENV=$shared/hetzner.env HETZNER_LOCAL_ENV=$FAKE/other.local.env sh deploy/hetzner/deploy.sh --dry-run ttt0000 > "$FAKE/out" 2>&1 \
     && fail "a local file that sets NAME"
 has "sets NAME: the stack's name belongs in $shared/hetzner.env"
-# orca-stack check: the smoke check deploy.sh ends with.
-export ORCA_STACK_CHECK_SECONDS=0
+# morca-stack check: the smoke check deploy.sh ends with.
+export MORCA_STACK_CHECK_SECONDS=0
 tags=$(stack tags)
 stack check > "$FAKE/out" 2>&1 || fail "check on a healthy stack"
 has "check: ok    postgres: ready"
@@ -839,8 +839,8 @@ grep -q 'removed scheduler-old, left by a deploy before (img:f3516e2, exited, ex
     || fail "no line naming the exited scheduler-old"
 [ ! -d "$FAKE/containers/scheduler-old" ] || fail "apply left an exited scheduler-old"
 stack check > "$FAKE/out" 2>&1 || fail "check after apply removed an exited scheduler-old"
-echo /opt/orca/pipelines/toy > "$FAKE/no-binary"
-why_="FAIL  pipelines: not in the scheduler's image: toy (/opt/orca/pipelines/toy)"
+echo /opt/morca/pipelines/toy > "$FAKE/no-binary"
+why_="FAIL  pipelines: not in the scheduler's image: toy (/opt/morca/pipelines/toy)"
 check_fails
 rm "$FAKE/no-binary"
 touch "$FAKE/unregistered"
@@ -869,12 +869,12 @@ has "needs PIPELINE=KEY"
 echo 'CANARY="toy=2024-02 manual1=y"' >> "$FAKE/hetzner.env"
 echo CANARY_TIMEOUT=60 >> "$FAKE/hetzner.env"
 sh deploy/hetzner/deploy.sh --dry-run uuu1111 > "$FAKE/out" 2>&1 || fail "a dry run with CANARY"
-has "+ ssh root@<server-ip> orca-stack check --canary toy=2024-02 --canary manual1=y --timeout 60"
+has "+ ssh root@<server-ip> morca-stack check --canary toy=2024-02 --canary manual1=y --timeout 60"
 deploy uuu1111 || fail "a deploy with canaries"
 has "checking the stack (canary runs: toy=2024-02 manual1=y)"
 has "check: ok    canary manual1 y"
 has "check: all ok"
-echo /opt/orca/pipelines/manual1 > "$FAKE/no-binary"
+echo /opt/morca/pipelines/manual1 > "$FAKE/no-binary"
 deploy --all uuu1111 && fail "a deploy whose check fails"
 has "uuu1111 is deployed, but the check failed (above)"
 rm "$FAKE/no-binary"
@@ -883,22 +883,22 @@ stack check --canary toy=2024-03 > /dev/null 2>&1 || fail "a check with a canary
 
 # promote.sh: the tags the dev stack checked go to production (the fake
 # server is both stacks' here).
-sed 's/^NAME=orca$/NAME=orca-dev/' "$FAKE/hetzner.env" > "$FAKE/dev.env"
+sed 's/^NAME=morca$/NAME=morca-dev/' "$FAKE/hetzner.env" > "$FAKE/dev.env"
 promote() { sh deploy/hetzner/promote.sh "$@" > "$FAKE/out" 2>&1; }
 promote --from "$FAKE/dev.env" --dry-run || fail "promote --dry-run"
 has "deploy.sh --dry-run <dev-tag>"
 promote --from "$FAKE/dev.env" --no-backup || fail "promote"
-has "promote.sh: stack orca-dev"
-has "promote.sh: dev checked orca uuu1111, console mmm3333 at .* (canary)"
+has "promote.sh: stack morca-dev"
+has "promote.sh: dev checked morca uuu1111, console mmm3333 at .* (canary)"
 has "promote.sh: deploy.sh --no-backup uuu1111 console=mmm3333 (settings $FAKE/hetzner.env)"
-has "deploy.sh: stack orca, settings $FAKE/hetzner.env"
-has "deploy.sh .*done: orca uuu1111, console mmm3333"
+has "deploy.sh: stack morca, settings $FAKE/hetzner.env"
+has "deploy.sh .*done: morca uuu1111, console mmm3333"
 # An app on its own tag goes along as app=tag.
 deploy uuu1111 console=vvv2222 || fail "a deploy of the console's own tag"
 promote --from "$FAKE/dev.env" || fail "promote with an app's own tag"
 has "deploy.sh uuu1111 console=vvv2222"
 # Refused: a failed check, a check of other tags, the target's own settings.
-echo /opt/orca/pipelines/toy > "$FAKE/no-binary"
+echo /opt/morca/pipelines/toy > "$FAKE/no-binary"
 stack check > /dev/null 2>&1 || true
 rm "$FAKE/no-binary"
 promote --from "$FAKE/dev.env" && fail "promote after a failed check"
@@ -906,20 +906,20 @@ has "the dev stack's last check failed"
 stack check > /dev/null 2>&1 || fail "check again"
 stack apply --tag www3333 > /dev/null 2>&1 || fail "an apply after the check"
 promote --from "$FAKE/dev.env" && fail "promote of tags dev hasn't checked"
-has "the dev stack runs orca www3333, console vvv2222, but its last check was of orca uuu1111, console vvv2222"
+has "the dev stack runs morca www3333, console vvv2222, but its last check was of morca uuu1111, console vvv2222"
 promote --from "$FAKE/hetzner.env" && fail "promote from the target itself"
 has "promote goes from dev to another stack"
 promote --from "$FAKE/dev.env" uuu1111 && fail "promote with a tag"
 has "promote takes no tags"
 stack register > /dev/null 2>&1
 deploy uuu1111 > /dev/null 2>&1 || fail "back to uuu1111"
-unset ORCA_STACK_CHECK_SECONDS
+unset MORCA_STACK_CHECK_SECONDS
 
-# Upgrade steps (orca#323): from the new image's upgrade.toml (orca upgrade).
+# Upgrade steps (morca#323): from the new image's upgrade.toml (morca upgrade).
 # A before step that isn't confirmed stops a --yes deploy before anything
 # changes; with --confirmed it goes on, and the after steps run (a command)
 # or are printed (an instruction).
-printf 'step\tb1\tbefore\tmanual\tAllow egress to example.org.\nstep\ta1\tafter\trun\torca backfill --rerun toy @all\nstep\ta2\tafter\tmanual\tCheck /live.\n' > "$FAKE/steps"
+printf 'step\tb1\tbefore\tmanual\tAllow egress to example.org.\nstep\ta1\tafter\trun\tmorca backfill --rerun toy @all\nstep\ta2\tafter\tmanual\tCheck /live.\n' > "$FAKE/steps"
 : > "$FAKE/docker.log"
 deploy --yes 1.1.0 && fail "a deploy with an unconfirmed before step"
 has "\[b1\] Allow egress to example.org."
@@ -929,10 +929,10 @@ grep -q "step exec" "$FAKE/docker.log" && fail "an after step ran though the dep
 deploy --yes --confirmed b1 1.1.0 || fail "deploy.sh --confirmed b1 1.1.0"
 has "\[b1\] confirmed"
 has "\[a2\] to do: Check /live."
-grep -q "step exec scheduler orca backfill --rerun toy @all" "$FAKE/docker.log" || fail "the after step a1 didn't run"
+grep -q "step exec scheduler morca backfill --rerun toy @all" "$FAKE/docker.log" || fail "the after step a1 didn't run"
 grep -q "upgrade run --rm img:1.1.0 upgrade --from .* --to 1.1.0 --when before" "$FAKE/docker.log" \
     || fail "the before steps weren't read from the new image"
-# The same orca tag again: no steps.
+# The same morca tag again: no steps.
 : > "$FAKE/docker.log"
 deploy --yes --all 1.1.0 || fail "deploy.sh --all 1.1.0"
 grep -q "^upgrade " "$FAKE/docker.log" && fail "steps read for the tag already deployed"
@@ -948,33 +948,33 @@ rm "$FAKE/step-fails"
 : > "$FAKE/docker.log"
 deploy --yes --rollback || fail "deploy.sh --rollback"
 grep -q "^upgrade \|^step " "$FAKE/docker.log" && fail "a rollback read or ran upgrade steps"
-# An image whose orca has no `orca upgrade`: no steps.
+# An image whose morca has no `morca upgrade`: no steps.
 touch "$FAKE/no-upgrade"
-deploy --yes 1.3.0 || fail "deploy.sh 1.3.0 of an image without orca upgrade"
+deploy --yes 1.3.0 || fail "deploy.sh 1.3.0 of an image without morca upgrade"
 rm "$FAKE/no-upgrade" "$FAKE/steps"
 # A dry run lists nothing and needs no confirmation.
 deploy --dry-run 1.4.0 || fail "deploy.sh --dry-run 1.4.0"
-has "orca-stack upgrade-steps --tag 1.4.0 --from <deployed> --when before"
-has "orca-stack upgrade-steps --tag 1.4.0 --from <deployed> --when after"
-# orca-stack upgrade-run refuses what isn't an orca command.
+has "morca-stack upgrade-steps --tag 1.4.0 --from <deployed> --when before"
+has "morca-stack upgrade-steps --tag 1.4.0 --from <deployed> --when after"
+# morca-stack upgrade-run refuses what isn't a morca command.
 stack upgrade-run rm -rf / > "$FAKE/out" 2>&1 && fail "upgrade-run ran rm"
-has "orca commands only"
-stack upgrade-run orca backfill 'a;b' > "$FAKE/out" 2>&1 && fail "upgrade-run took a ;"
+has "morca commands only"
+stack upgrade-run morca backfill 'a;b' > "$FAKE/out" 2>&1 && fail "upgrade-run took a ;"
 has "refusing the argument"
 
 # The release tarball (deploy/hetzner/package.sh), run from where it's unpacked.
 sh deploy/hetzner/package.sh 9.8.7 "$FAKE/pkg" > "$FAKE/out" 2>&1 || fail "package.sh"
-cmp -s "$FAKE/pkg/orca-hetzner-9.8.7.tar.gz" "$FAKE/pkg/orca-hetzner.tar.gz" || fail "the two tarballs differ"
+cmp -s "$FAKE/pkg/morca-hetzner-9.8.7.tar.gz" "$FAKE/pkg/morca-hetzner.tar.gz" || fail "the two tarballs differ"
 mkdir "$FAKE/unpacked"
-(cd "$FAKE/unpacked" && gzip -dc "$FAKE/pkg/orca-hetzner.tar.gz" | tar -xf -) || fail "unpacking"
-pkg=$FAKE/unpacked/orca-hetzner-9.8.7
+(cd "$FAKE/unpacked" && gzip -dc "$FAKE/pkg/morca-hetzner.tar.gz" | tar -xf -) || fail "unpacking"
+pkg=$FAKE/unpacked/morca-hetzner-9.8.7
 for f in up.sh deploy.sh promote.sh down.sh rescale.sh backup.sh lib.sh cloud-init.yaml hetzner.env.example \
-    README.md VERSION server/orca-stack server/secret-fetch server/orca-backup.service server/orca-backup.timer; do
+    README.md VERSION server/morca-stack server/secret-fetch server/orca-backup.service server/orca-backup.timer; do
     [ -f "$pkg/$f" ] || fail "no $f in the tarball"
 done
-[ "$(ls "$FAKE/unpacked")" = orca-hetzner-9.8.7 ] || fail "the tarball unpacks to $(ls "$FAKE/unpacked")"
+[ "$(ls "$FAKE/unpacked")" = morca-hetzner-9.8.7 ] || fail "the tarball unpacks to $(ls "$FAKE/unpacked")"
 [ "$(cat "$pkg/VERSION")" = 9.8.7 ] || fail "VERSION is $(cat "$pkg/VERSION")"
-[ -x "$pkg/up.sh" ] && [ -x "$pkg/server/orca-stack" ] || fail "the scripts aren't executable"
+[ -x "$pkg/up.sh" ] && [ -x "$pkg/server/morca-stack" ] || fail "the scripts aren't executable"
 {
     cat "$FAKE/hetzner.env"
     echo ADMIN_IP=203.0.113.7/32
@@ -982,12 +982,41 @@ done
 } > "$pkg/hetzner.env"
 : > "$FAKE/k.pub"
 (cd "$pkg" && unset HETZNER_ENV && ./up.sh --dry-run) > "$FAKE/out" 2>&1 || fail "the tarball's up.sh --dry-run"
-has "up.sh: stack orca, settings $pkg/hetzner.env, scripts 9.8.7"
-has "install -D -m 755 /dev/stdin /usr/local/sbin/orca-stack < $pkg/server/orca-stack"
+has "up.sh: stack morca, settings $pkg/hetzner.env, scripts 9.8.7"
+has "install -D -m 755 /dev/stdin /usr/local/sbin/morca-stack < $pkg/server/morca-stack"
 has "install -D -m 644 /dev/stdin /etc/systemd/system/orca-backup.timer < $pkg/server/orca-backup.timer"
 has "hcloud server create"
 (cd "$pkg" && unset HETZNER_ENV && ./deploy.sh --dry-run ttt0000) > "$FAKE/out" 2>&1 || fail "the tarball's deploy.sh --dry-run"
-has "deploy.sh: stack orca, settings $pkg/hetzner.env, scripts 9.8.7"
-has "/usr/local/sbin/orca-stack < $pkg/server/orca-stack"
+has "deploy.sh: stack morca, settings $pkg/hetzner.env, scripts 9.8.7"
+has "/usr/local/sbin/morca-stack < $pkg/server/morca-stack"
+has "systemctl daemon-reload && rm -f /usr/local/sbin/orca-stack"
+
+# A server from before the rename to morca (#384): its ORCA_* keys become
+# MORCA_* once, the files as they were are kept, and the orca tags deployed
+# before can't be rolled back to.
+old="$FAKE/old-conf"
+mkdir -p "$old"
+printf 'ORCA_IMAGE=img\nORCA_TAG=old1111\nORCA_PREV_TAG=old0000\nOVERLAP=1\n' > "$old/stack.conf"
+printf 'MORCA_UNTOUCHED=1\nORCA_LOGS=s3://bkt/logs\nAWS_REGION=fsn1\n' > "$old/settings.env"
+echo "orca old1111" > "$old/deployed"
+echo "orca old0000" > "$old/deployed.prev"
+MORCA_CONF="$old" stack tags > "$FAKE/out" 2>&1 || fail "morca-stack tags on an orca server"
+has "stack.conf: renamed its ORCA_\* keys to MORCA_\*"
+grep -qx MORCA_TAG=old1111 "$old/stack.conf" || fail "stack.conf: $(cat "$old/stack.conf")"
+grep -qx OVERLAP=1 "$old/stack.conf" || fail "stack.conf lost OVERLAP"
+! grep -q PREV_TAG "$old/stack.conf" || fail "stack.conf kept a PREV_TAG"
+grep -qx MORCA_LOGS=s3://bkt/logs "$old/settings.env" || fail "settings.env: $(cat "$old/settings.env")"
+grep -qx MORCA_UNTOUCHED=1 "$old/settings.env" || fail "settings.env lost MORCA_UNTOUCHED"
+! grep -q '^ORCA_' "$old/stack.conf" "$old/settings.env" || fail "ORCA_ keys left"
+grep -qx ORCA_TAG=old1111 "$old/stack.conf.orca" || fail "no stack.conf.orca"
+[ -f "$old/deployed.prev.orca" ] && [ ! -f "$old/deployed.prev" ] && [ -f "$old/renamed" ] || fail "deployed.prev wasn't set aside"
+MORCA_CONF="$old" stack rollback > "$FAKE/out" 2>&1 && fail "rolled back to an orca deploy"
+has "the deploy before was orca's"
+MORCA_CONF="$old" stack can-overlap > "$FAKE/out" 2>&1 && fail "overlapped the first deploy after the rename"
+has "the first deploy after the orca -> morca rename"
+cp "$old/stack.conf" "$FAKE/stack.conf.once"
+MORCA_CONF="$old" stack tags > "$FAKE/out" 2>&1 || fail "morca-stack tags again"
+! grep -q renamed "$FAKE/out" || fail "renamed the keys twice"
+cmp -s "$old/stack.conf" "$FAKE/stack.conf.once" || fail "stack.conf changed again"
 
 echo "ok   hetzner"

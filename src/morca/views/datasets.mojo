@@ -4,11 +4,11 @@ and what a rebuild of it would queue (`RebuildPreview`).
 
 from postgres import Params
 
-from orca.html import Html, url_encode
-from orca.sensors import plan_rebuild
-from orca.state import State
-from orca.ui.parts import code_link
-from orca.views.code import CodeLinks, code_of
+from morca.html import Html, url_encode
+from morca.sensors import plan_rebuild
+from morca.state import State
+from morca.ui.parts import code_link
+from morca.views.code import CodeLinks, code_of
 
 
 @fieldwise_init
@@ -108,7 +108,7 @@ def rebuild_preview(
         return RebuildPreview("", got[0].copy(), levels^)
     except e:
         var why = String(e)
-        if why.startswith("orca: "):
+        if why.startswith("morca: "):
             var rest = String(why[byte=6:])
             why = rest^
         return RebuildPreview(why^, List[String](), levels^)

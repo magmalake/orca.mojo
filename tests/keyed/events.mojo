@@ -1,9 +1,9 @@
 """A keyed pipeline writing raw.events, which tests/sensors' monthly
 sensor clean reads: registering both must be refused."""
 
-from orca import Ctx, Mapped, Name, Pipeline, Step, orca_main
-from orca.keyed import Keyed
-from orca.tables import append
+from morca import Ctx, Mapped, Name, Pipeline, Step, morca_main
+from morca.keyed import Keyed
+from morca.tables import append
 from rows import dataset, rows
 
 
@@ -21,4 +21,4 @@ comptime Events = Pipeline[
 
 
 def main() raises:
-    orca_main[Events]()
+    morca_main[Events]()

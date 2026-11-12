@@ -1,7 +1,7 @@
 """Admission by memory pressure, where it shows (#202): each host's newest
 reading in `orca.pressure`, for Ops › Control, `/api/workers`, `/metrics`,
-`orca status` and the home and runs pages, and the alert when a hold has
-nothing of orca's to wait for.
+`morca status` and the home and runs pages, and the alert when a hold has
+nothing of morca's to wait for.
 
 The scheduler records its own host (`scheduler`) every few seconds and on
 each change of hold; the UI records a worker's (`worker:<token id>`) from
@@ -16,12 +16,12 @@ worker that stopped isn't holding anything.
 from json import Value
 from postgres import Params
 
-from orca.html import Html
-from orca.http_store import Body
-from orca.json import quote
-from orca.notify import alert, configured, is_firing, resolve, ui_link
-from orca.pressure import Admission, Source, pct_text
-from orca.state import State
+from morca.html import Html
+from morca.http_store import Body
+from morca.json import quote
+from morca.notify import alert, configured, is_firing, resolve, ui_link
+from morca.pressure import Admission, Source, pct_text
+from morca.state import State
 
 comptime SCHEDULER_HOST = "scheduler"
 """`orca.pressure.host` of the scheduler's own host."""
@@ -49,12 +49,12 @@ struct Report(Copyable, Movable):
     var full60: Float64
     var full300: Float64
     var limit: Float64
-    """`ORCA_ADMIT_MEMORY_PRESSURE`; 0 for off."""
+    """`MORCA_ADMIT_MEMORY_PRESSURE`; 0 for off."""
     var held: String
     """The reason runs wait (`waiting: memory pressure ...`), or empty."""
     var held_seconds: Float64
     var stuck: Bool
-    """Held past its grace with nothing of orca's going: one at a time
+    """Held past its grace with nothing of morca's going: one at a time
     starts (`Admission.escape`)."""
 
     @staticmethod
@@ -203,15 +203,15 @@ def record(mut db: State, host: String, r: Report) raises:
 
 def alert_stuck(mut db: State, subject: String, r: Report) raises:
     """'memory-pressure': `subject` has held starts past its grace with
-    nothing of orca's running, so its pressure is someone else's; runs now
+    nothing of morca's running, so its pressure is someone else's; runs now
     start there one at a time."""
     print(
         String(
-            "orca: ",
+            "morca: ",
             subject,
             " has held runs for ",
             Int(r.held_seconds),
-            " s with none of orca's going (",
+            " s with none of morca's going (",
             r.held,
             "): starting them one at a time",
         )
@@ -224,7 +224,7 @@ def alert_stuck(mut db: State, subject: String, r: Report) raises:
         subject,
         "high",
         "warning,hourglass",
-        String("orca: memory pressure on ", subject),
+        String("morca: memory pressure on ", subject),
         String(
             "Memory pressure (PSI some avg10) on ",
             subject,
@@ -234,7 +234,7 @@ def alert_stuck(mut db: State, subject: String, r: Report) raises:
             pct_text(r.limit),
             "%, for ",
             Int(r.held_seconds) // 60,
-            " min with none of orca's runs going there: something else is",
+            " min with none of morca's runs going there: something else is",
             " using the memory. Runs now start one at a time.",
         ),
         ui_link("/ops/control"),
@@ -249,7 +249,7 @@ def resolve_stuck(mut db: State, subject: String, r: Report) raises:
         db,
         ALERT_KIND,
         subject,
-        String("orca: memory pressure on ", subject, " has eased"),
+        String("morca: memory pressure on ", subject, " has eased"),
         String(
             "Memory pressure on ", subject, " is ", pct_text(r.some10), "%."
         ),
@@ -349,7 +349,7 @@ def state_text(r: Report) -> String:
             return String(r.held, ", one at a time with nothing else going")
         return r.held
     if r.limit <= 0.0:
-        return "admission by pressure is off (ORCA_ADMIT_MEMORY_PRESSURE=0)"
+        return "admission by pressure is off (MORCA_ADMIT_MEMORY_PRESSURE=0)"
     return String("starting runs (limit ", pct_text(r.limit), "%)")
 
 
@@ -443,7 +443,7 @@ def pressure_html(mut h: Html, row: Optional[PressureRow]):
         r.held.byte_length() > 0,
         (
             "Whether the scheduler starts new runs on this host. While Stalled"
-            " (some) avg10 is over the limit (ORCA_ADMIT_MEMORY_PRESSURE, 10%"
+            " (some) avg10 is over the limit (MORCA_ADMIT_MEMORY_PRESSURE, 10%"
             " by default) it holds them, and runs already going go on; it"
             " starts them again under half the limit, or after 30 s at or"
             " under it."
@@ -467,7 +467,7 @@ def _kind_text(kind: String) -> String:
     if kind == "host":
         return "the host's"
     if kind == "file":
-        return "ORCA_MEMORY_PRESSURE_FILE"
+        return "MORCA_MEMORY_PRESSURE_FILE"
     if kind == "cgroup-unlimited":
         return "the scheduler's cgroup, with no limit"
     return kind
@@ -514,13 +514,13 @@ def pressure_prometheus(rows: List[PressureRow]) -> String:
     if len(fresh) == 0:
         return out^
     comptime names: List[String] = [
-        "orca_memory_pressure_some_avg10",
-        "orca_memory_pressure_some_avg60",
-        "orca_memory_pressure_some_avg300",
-        "orca_memory_pressure_full_avg10",
-        "orca_memory_pressure_full_avg60",
-        "orca_memory_pressure_full_avg300",
-        "orca_admission_memory_pressure_held",
+        "morca_memory_pressure_some_avg10",
+        "morca_memory_pressure_some_avg60",
+        "morca_memory_pressure_some_avg300",
+        "morca_memory_pressure_full_avg10",
+        "morca_memory_pressure_full_avg60",
+        "morca_memory_pressure_full_avg300",
+        "morca_admission_memory_pressure_held",
     ]
     comptime helps: List[String] = [
         "Percent of the last 10 s some task stalled on memory (PSI).",

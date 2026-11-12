@@ -3,17 +3,17 @@
 The step's identity (pipeline, run, step, partition, attempt, the code's
 registry hash), a logger, and what makes reruns safe: the table snapshots
 the step's first attempt read, which every later attempt reads again, and
-the record of what each attempt read and committed. `orca.tables` reads and
+the record of what each attempt read and committed. `morca.tables` reads and
 commits Iceberg tables through it, and checks the datasets a step touches
 against the ones it declared (`reads=` and `writes=` on its `Step`). `runtime` is the run's dista runtime, for a
 pipeline with `tasks=`.
 
-`log` writes to stdout and, when `ORCA_LOGS` is set, appends to the attempt's
-log file as well (`orca.logs.attempt_log`).
+`log` writes to stdout and, when `MORCA_LOGS` is set, appends to the attempt's
+log file as well (`morca.logs.attempt_log`).
 
 **Commits are fenced.** A process whose heartbeat went stale while it was
 alive (the database unreachable for a while, a paused VM) may have lost its
-run to another process, which reruns the step. `orca.tables` calls `fence`
+run to another process, which reruns the step. `morca.tables` calls `fence`
 right before each commit to Iceberg: it goes ahead only if this process
 still owns the run and its heartbeat is younger than half the stale limit,
 so no other process can have claimed the run, nor claim it during the
@@ -22,9 +22,9 @@ without committing.
 """
 
 
-from orca.logs import mask, utc_now
-from orca.store import Recorder, TableSnapshot
-from orca.tasks import TaskSet, task_list
+from morca.logs import mask, utc_now
+from morca.store import Recorder, TableSnapshot
+from morca.tasks import TaskSet, task_list
 
 
 struct Ctx(Movable):
@@ -46,7 +46,7 @@ struct Ctx(Movable):
     """The datasets it declared it writes, in `writes=` or `replaces=`."""
     var declared_replaces: List[String]
     """The datasets whose partitions a new run of it replaces (`replaces=`):
-    `orca.tables.append` and `append_files` replace rather than append."""
+    `morca.tables.append` and `append_files` replace rather than append."""
     var attempt: Int
     var code: String
     """The pipeline's registry hash, in hex."""
@@ -129,16 +129,16 @@ struct Ctx(Movable):
             with open(self.log_path, "a") as f:
                 f.write(utc_now(), " ", tag, mask(msg), "\n")
         except e:
-            print("orca: can't write ", self.log_path, ": ", e, sep="")
+            print("morca: can't write ", self.log_path, ": ", e, sep="")
 
     def runtime[T: TaskSet](self) raises -> ref[MutAnyOrigin] T.RT:
         """The run's dista runtime, for a pipeline declared with `tasks=T`."""
         if self._runtime == 0:
-            raise Error("orca: this run has no dista runtime (no tasks=)")
+            raise Error("morca: this run has no dista runtime (no tasks=)")
         var asked = task_list[T]()
         if self._runtime_tasks != asked:
             raise Error(
-                "orca: the run's runtime has tasks\n",
+                "morca: the run's runtime has tasks\n",
                 self._runtime_tasks,
                 "not\n",
                 asked,
@@ -161,7 +161,7 @@ struct Ctx(Movable):
 
     def fence(mut self) raises:
         """Raises unless this process may still commit for its run (see
-        the module's doc); `orca.tables` calls it before each commit."""
+        the module's doc); `morca.tables` calls it before each commit."""
         self.recorder.fence()
 
     def committed(
@@ -189,7 +189,7 @@ struct Ctx(Movable):
         if dataset in (self.declared_writes if write else self.declared_reads):
             return
         raise Error(
-            "orca: step ",
+            "morca: step ",
             self.step,
             " of ",
             self.pipeline,
@@ -247,7 +247,7 @@ struct Ctx(Movable):
         such as a gather step's partition (found by fuzz/fuzz_summary.mojo).
 
         And not by another run that had this run's number: one a restore of
-        orca's database lost, or one of another database over the same
+        morca's database lost, or one of another database over the same
         tables (#292). A snapshot that carries a run token (`orca.run-token`)
         is this run's only if the token is this run's; a snapshot without
         one, or a run without one, is told by the number alone, as before

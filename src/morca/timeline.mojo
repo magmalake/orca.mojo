@@ -14,7 +14,7 @@ step per instance started or ended.
 
 from json import Value, loads
 
-from orca.html import escape
+from morca.html import escape
 
 comptime _LABEL = 150
 comptime _WIDTH = 760

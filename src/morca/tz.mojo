@@ -12,16 +12,16 @@ transition. "Slim" files, which some systems install, list transitions only
 up to when the current rule began and rely on that string for every year
 since; "fat" ones list them to 2037. `Zone` reads both, and a version 1 file,
 which has only 32-bit times and no rule. Leap-second records are skipped:
-orca's times are POSIX times, as the `right/` zones' aren't.
+morca's times are POSIX times, as the `right/` zones' aren't.
 
-Files are read from `ORCA_ZONEINFO`, default `/usr/share/zoneinfo`. `UTC`
+Files are read from `MORCA_ZONEINFO`, default `/usr/share/zoneinfo`. `UTC`
 needs no file.
 """
 
 from std.os import getenv
 
-from orca.civil import Civil, days_from_civil
-from orca.month import days_in
+from morca.civil import Civil, days_from_civil
+from morca.month import days_in
 
 
 def _digits(s: String, mut i: Int, max: Int) -> Int:
@@ -258,12 +258,12 @@ struct Zone(Copyable, Movable):
     @staticmethod
     def load(name: String) raises -> Zone:
         """The zone `name`, such as `America/New_York`, from the TZif file
-        under `ORCA_ZONEINFO` (default `/usr/share/zoneinfo`)."""
+        under `MORCA_ZONEINFO` (default `/usr/share/zoneinfo`)."""
         if name == "UTC" or name == "Etc/UTC":
             return Zone(name)
         if not name or name.startswith("/") or ".." in name or "\\" in name:
             raise Error("tz: not a zone name: '", name, "'")
-        var dir = getenv("ORCA_ZONEINFO", "/usr/share/zoneinfo")
+        var dir = getenv("MORCA_ZONEINFO", "/usr/share/zoneinfo")
         var data: List[UInt8]
         try:
             with open(String(dir, "/", name), "r") as f:

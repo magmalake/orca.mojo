@@ -1,4 +1,4 @@
-"""The stylesheet `orca ui` serves at `/static/orca.css`: magmalake.dev's
+"""The stylesheet `morca ui` serves at `/static/morca.css`: magmalake.dev's
 colours and type, light and dark, and system fonts (nothing is fetched)."""
 
 comptime STYLE = """:root {
@@ -172,14 +172,14 @@ td code { font-size: 0.8125rem; }
 .status--cancelled, .status--deferred { color: var(--muted); background: var(--surface-2); border-color: var(--border-strong); }
 .status--skipped, .status--not-done { color: var(--faint); background: transparent;
   border-style: dashed; }
-/* A machine's state on Pools (orca.ui.pools): live, draining, gone. */
+/* A machine's state on Pools (morca.ui.pools): live, draining, gone. */
 .status--live { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent);
   border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
 .status--draining { color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent);
   border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
 .status--gone { color: var(--faint); background: transparent; border-style: dashed; }
 tr.pools__gone td { color: var(--muted); }
-/* Ops › Alerts (orca.ui.alerts): an open alert's row, the message under its title. */
+/* Ops › Alerts (morca.ui.alerts): an open alert's row, the message under its title. */
 tr.alerts__open td { background: color-mix(in srgb, var(--bad) 6%, transparent); }
 tr.alerts__open td:first-child { box-shadow: inset 3px 0 0 var(--bad); }
 td.alerts__msg { white-space: normal; min-width: 16rem; max-width: 34rem; }
@@ -313,7 +313,7 @@ th .help { margin-left: 0.25rem; vertical-align: 0; }
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 .peek__lead + pre, .peek__more + pre { margin-top: 0.35rem; border-top: 1px solid var(--border); }
 .peek__msg { margin: 0; padding: 0.6rem 0.75rem; color: var(--muted); font-size: 0.8125rem; }
-/* A step's card (orca.ui.step_cards), on hovering, focusing or tapping a step
+/* A step's card (morca.ui.step_cards), on hovering, focusing or tapping a step
    in the steps views: its signature, kind, types, datasets and recent
    runs, or on a run's page the attempt's. */
 [data-step] { cursor: help; }
@@ -334,7 +334,7 @@ th .help { margin-left: 0.25rem; vertical-align: 0; }
 .scard__facts dt { color: var(--muted); }
 .scard__facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .help__tip.tip { z-index: 40; }  /* a kind's meaning, over the card */
-/* Its colours (orca.highlight), from the theme's tokens. */
+/* Its colours (morca.highlight), from the theme's tokens. */
 .hl--kw { color: var(--ember); }
 .hl--fn { color: var(--live); font-weight: 600; }
 .hl--str { color: var(--ok); }
@@ -470,7 +470,7 @@ pre.error { color: var(--bad); background: var(--surface); border: 1px solid var
 .dag__name { font-size: 13px; font-weight: 600; fill: var(--text); }
 .dag__kind { font-size: 11px; fill: var(--muted); }
 .dag a:hover rect { stroke: var(--lake); }
-/* A link to source code on its host, unlike a link inside orca: an icon, the
+/* A link to source code on its host, unlike a link inside morca: an icon, the
    file and line in monospace, and an arrow out. */
 a.src { font-family: var(--mono); font-size: 0.78rem; font-weight: 400; color: var(--muted);
   text-decoration: none; white-space: nowrap; }
@@ -514,7 +514,7 @@ a.src:hover .src__out { color: inherit; }
 .tl g:hover .runs--ok { fill: var(--lake-soft); }
 .tl g:hover .runs--none { fill: color-mix(in srgb, var(--text) 4%, transparent); }
 
-/* A run's machines (orca.metrics). */
+/* A run's machines (morca.metrics). */
 .mx__name { font-size: 12px; font-weight: 600; fill: var(--text); }
 .mx__strip { fill: var(--surface-2); }
 .mx__cpu { fill: color-mix(in srgb, var(--lake) 55%, transparent); }
@@ -532,7 +532,7 @@ a.src:hover .src__out { color: inherit; }
 .mx__key--disk { background: #7a5af8; } .mx__key--io { background: #b54708; }
 .mx__key--net { background: var(--lake); }
 .mx__key--warn { background: color-mix(in srgb, var(--bad) 14%, transparent); border: 1px solid var(--bad); }
-/* The fleet page (orca.fleet): summary cards, the hosts table and charts. */
+/* The fleet page (morca.fleet): summary cards, the hosts table and charts. */
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr)); gap: 0.75rem;
   margin: 0 0 1.25rem; }
 .stat { display: grid; gap: 0.15rem; align-content: start; background: var(--surface);
@@ -566,7 +566,7 @@ svg.fl { display: block; width: 100%; min-width: 34rem; height: auto; font-famil
 .fl__line.fl--2 { stroke: #7a5af8; } .fl__line.fl--live { stroke: var(--live); }
 .fl__line.fl--3 { stroke: #d4a72c; }
 .fl__line.fl--bad { stroke: var(--bad); }
-/* A warning on the home and system pages (orca.system). */
+/* A warning on the home and system pages (morca.system). */
 .alert { margin: 0 0 1.25rem; padding: 0.6rem 0.9rem; border-radius: var(--radius); font-size: 0.9rem;
   color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); }

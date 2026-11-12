@@ -1,8 +1,8 @@
-import Orca.Fence.Model
+import Morca.Fence.Model
 import Oracle.Words
 
 /-!
-# `orca-oracle fence`
+# `morca-oracle fence`
 
 For every sequence of up to four events, which claims and fence checks the
 fence model lets through. tests/test_formal_fence.mojo replays the same
@@ -19,9 +19,9 @@ limit is 1000 s. Events, one letter each:
 An outcome is `o` (the claim or the check passes), `x` (it is refused) or
 `-` (a beat, or time).
 -/
-namespace Orca.Oracle.Fence
+namespace Morca.Oracle.Fence
 
-open Orca.Fence
+open Morca.Fence
 
 def stale : Nat := 1000
 
@@ -69,4 +69,4 @@ def lines : List String :=
   (upTo ["P", "Q", "p", "q", "b", "c", "t", "T"] 4).map fun w =>
     w ++ " " ++ (w.toList.foldl step start).outcomes
 
-end Orca.Oracle.Fence
+end Morca.Oracle.Fence

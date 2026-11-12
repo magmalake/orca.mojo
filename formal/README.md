@@ -1,6 +1,6 @@
-# orca/formal
+# morca/formal
 
-Lean 4 models of orca properties, and tests that hold the models to the
+Lean 4 models of morca properties, and tests that hold the models to the
 Mojo code. The layout and conventions follow
 [flare's `formal/`](https://github.com/ehsanmok/flare/tree/main/formal):
 core Lean only (no Mathlib), and what the environment is trusted to do is
@@ -8,22 +8,22 @@ written as `Prop` hypotheses, not `axiom`s.
 
 ## The properties
 
-**A retried step never double-commits** (`Orca/Retry`). A step's attempt
+**A retried step never double-commits** (`Morca/Retry`). A step's attempt
 looks through the table's snapshots for its own commit before committing
-(`orca.tables.find_commit`, by `Ctx.made`), so an attempt that committed and
+(`morca.tables.find_commit`, by `Ctx.made`), so an attempt that committed and
 was killed before Postgres heard of it is recognised by its retry.
 
-**A retry reads what the first attempt read** (`Orca/Pins`). The first time
+**A retry reads what the first attempt read** (`Morca/Pins`). The first time
 an attempt reads a table, `Ctx.pin` takes the snapshot an earlier attempt
 read, or else the current one, and records it before answering; a new
 attempt starts from the store's `pinned_reads`.
 
-**Only the run's owner commits** (`Orca/Fence`). Another process takes a
+**Only the run's owner commits** (`Morca/Fence`). Another process takes a
 run over only once its heartbeat is older than the stale limit (`claim`),
 and a process commits only right after checking that it still owns the run
 and that its heartbeat is younger than half the limit (`Ctx.fence`).
 
-**A binary runs only on a schema it can run on** (`Orca/Migrate`). Each
+**A binary runs only on a schema it can run on** (`Morca/Migrate`). Each
 migration applied records the fewest migrations a binary must know to run on
 the schema it left (`min_binary`, from `migration_floor`); a binary older
 than the database runs on it only if it knows that many (`schema_ahead`),
@@ -44,7 +44,7 @@ from any state, and other writers' commits to the same tables.
 
 ## Assumptions
 
-`Orca/Core/Assumptions.lean`; each is a hypothesis of the theorems that
+`Morca/Core/Assumptions.lean`; each is a hypothesis of the theorems that
 need it.
 
 | Hypothesis | Says | Taken by |
@@ -57,7 +57,7 @@ need it.
 
 `no_double_commit` doesn't need `PostgresAtomic` in its model (recognition
 reads the table only); it takes it because one invariant carries both
-`Retry` theorems. `Orca/Witness.lean` gives an environment that meets all
+`Retry` theorems. `Morca/Witness.lean` gives an environment that meets all
 three. In `Pins` a crash is a step of the model itself: the next attempt
 keeps nothing but the ledger. `Migrate` takes no hypothesis: its model is
 `State.migrate` as a function of the rows of `orca.schema_version`, run in
@@ -67,7 +67,7 @@ one transaction.
 
 - **One live attempt** (`Retry`, `Pins`)**.** Attempts follow each other; two
   processes running the same step of the same run at once are not modelled.
-  Orca rules that out with the run's owner and `Ctx.fence`, which is what
+  Morca rules that out with the run's owner and `Ctx.fence`, which is what
   `Fence.commit_only_by_owner` is about; the two aren't composed into one
   theorem yet.
 - **Fence: nothing else touches the heartbeat.** The model has beats, claims
@@ -105,23 +105,23 @@ one transaction.
 
 | Path | Contents |
 |---|---|
-| `Orca/Core/Types.lean` | step identity, summaries, snapshots, the ledger, a worker's state |
-| `Orca/Core/Assumptions.lean` | the three environment assumptions |
-| `Orca/Retry/Model.lean` | `made`, `findCommit`, the step relation, reachable states |
-| `Orca/Retry/NoDoubleCommit.lean` | the invariant and the two theorems |
-| `Orca/Fence/Model.lean` | `claimable`, `freshAt`, the step relation over a run's owner and heartbeat |
-| `Orca/Fence/OwnerCommits.lean` | the invariant and the theorem |
-| `Orca/Migrate/Model.lean` | `floorOf`, `schemaAhead`, `migrate` over the rows of `orca.schema_version` |
-| `Orca/Migrate/Floor.lean` | the invariant and the two theorems |
-| `Orca/Pins/Model.lean` | `lookup`, `pinsOf`, the step relation for reads |
-| `Orca/Pins/SameSnapshot.lean` | the invariant and the theorem |
-| `Orca/Witness.lean` | an environment that meets the assumptions |
-| `Orca/Audit.lean` | `#print axioms` for the theorems |
-| `Oracle/` | `orca-oracle <model>`: each model's own functions run over event sequences |
-| `difftest/retry.cases` | `orca-oracle retry`: 363 sequences of up to five events, and the table each leaves |
-| `difftest/pins.cases` | `orca-oracle pins`: 3905 sequences of up to five events, and the answers `Ctx.pin` gives |
-| `difftest/migrate.cases` | `orca-oracle migrate`: `migration_floor`, 810 `schema_ahead` verdicts, and 155 sequences of binaries migrating |
-| `difftest/fence.cases` | `orca-oracle fence`: 4680 sequences of up to four events, and which claims and fence checks pass |
+| `Morca/Core/Types.lean` | step identity, summaries, snapshots, the ledger, a worker's state |
+| `Morca/Core/Assumptions.lean` | the three environment assumptions |
+| `Morca/Retry/Model.lean` | `made`, `findCommit`, the step relation, reachable states |
+| `Morca/Retry/NoDoubleCommit.lean` | the invariant and the two theorems |
+| `Morca/Fence/Model.lean` | `claimable`, `freshAt`, the step relation over a run's owner and heartbeat |
+| `Morca/Fence/OwnerCommits.lean` | the invariant and the theorem |
+| `Morca/Migrate/Model.lean` | `floorOf`, `schemaAhead`, `migrate` over the rows of `orca.schema_version` |
+| `Morca/Migrate/Floor.lean` | the invariant and the two theorems |
+| `Morca/Pins/Model.lean` | `lookup`, `pinsOf`, the step relation for reads |
+| `Morca/Pins/SameSnapshot.lean` | the invariant and the theorem |
+| `Morca/Witness.lean` | an environment that meets the assumptions |
+| `Morca/Audit.lean` | `#print axioms` for the theorems |
+| `Oracle/` | `morca-oracle <model>`: each model's own functions run over event sequences |
+| `difftest/retry.cases` | `morca-oracle retry`: 363 sequences of up to five events, and the table each leaves |
+| `difftest/pins.cases` | `morca-oracle pins`: 3905 sequences of up to five events, and the answers `Ctx.pin` gives |
+| `difftest/migrate.cases` | `morca-oracle migrate`: `migration_floor`, 810 `schema_ahead` verdicts, and 155 sequences of binaries migrating |
+| `difftest/fence.cases` | `morca-oracle fence`: 4680 sequences of up to four events, and which claims and fence checks pass |
 | `scripts/check.sh` | the gate CI runs |
 
 ## Build and check
@@ -133,10 +133,10 @@ in `lean-toolchain`.
 cd formal
 lake build                                    # the model, the proofs, the oracle
 scripts/check.sh                              # no sorry or axiom; retry.cases is current
-lake exe orca-oracle retry > difftest/retry.cases   # after changing an oracle
-pixi run -e data test-formal-retry            # from the root: retry.cases through orca.tables.append
+lake exe morca-oracle retry > difftest/retry.cases   # after changing an oracle
+pixi run -e data test-formal-retry            # from the root: retry.cases through morca.tables.append
 pixi run test-formal-pins                     # pins.cases through Ctx.pin and the stores
-pixi run test-formal-migrate                  # migrate.cases through orca.state, on a throwaway Postgres
+pixi run test-formal-migrate                  # migrate.cases through morca.state, on a throwaway Postgres
 pixi run test-formal-fence                    # fence.cases through PgStore, on a throwaway Postgres
 ```
 
@@ -146,7 +146,7 @@ A proof says nothing if the model isn't the code. Each test replays its
 model's cases through the Mojo code and compares what comes out with the
 oracle's line.
 
-- `tests/test_formal_retry.mojo`: `orca.tables.append` on a local Iceberg
+- `tests/test_formal_retry.mojo`: `morca.tables.append` on a local Iceberg
   table per sequence, with a new `Ctx` for each attempt; compared are the
   table's snapshots (attempt and commit number, in order). Events are `c`
   (the attempt's next commit, start to finish), `x` (a crash; the next
@@ -161,7 +161,7 @@ oracle's line.
 - `tests/test_formal_migrate.mojo`: `migration_floor` and `schema_ahead`
   line by line, and `State.migrate` on an empty Postgres database per
   sequence, by binaries that know 23, 24, 40 and 46 migrations
-  (`ORCA_TEST_MIGRATIONS`), with `n` clearing every `min_binary`; compared
+  (`MORCA_TEST_MIGRATIONS`), with `n` clearing every `min_binary`; compared
   are which binaries refused, and the version and floor left. The oracle's
   `raisers` must be `_floor_raisers`: adding a floor-raiser fails this test
   until the oracle has it too.

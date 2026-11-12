@@ -4,38 +4,38 @@
 
 from std.os import getenv
 from postgres import Params
-from orca.civil import Civil
-from orca.control import (
+from morca.civil import Civil
+from morca.control import (
     CONTROL,
     pool_of,
 )
-from orca.config import (
+from morca.config import (
     parse_env,
     max_runs_auto,
 )
-from orca.fill import (
+from morca.fill import (
     Fill,
     FillPipeline,
 )
-from orca.cron import CronExpr
-from orca.day import Day
-from orca.hour import Hour
-from orca.ec2 import Ec2Spec
-from orca.month import Month
-from orca.schedule import Schedule
-from orca.secrets import parse_secrets
-from orca.resources import (
+from morca.cron import CronExpr
+from morca.day import Day
+from morca.hour import Hour
+from morca.ec2 import Ec2Spec
+from morca.month import Month
+from morca.schedule import Schedule
+from morca.secrets import parse_secrets
+from morca.resources import (
     Request,
     resolve_auto,
 )
-from orca.recommend import (
+from morca.recommend import (
     Recommendation,
     RunRequest,
     learned,
     resolve_request,
 )
-from orca.state import State
-from orca.tz import Zone
+from morca.state import State
+from morca.tz import Zone
 
 
 @fieldwise_init
@@ -55,7 +55,7 @@ struct Registered(Copyable, Movable):
     var max_runs: Int
     var run_retries: Int
     var retry_seconds: Int
-    """The first retry's wait, doubling; 0 for `ORCA_RETRY_SECONDS`."""
+    """The first retry's wait, doubling; 0 for `MORCA_RETRY_SECONDS`."""
     var max_retry_seconds: Int
     """The longest wait between retries; 0 for no limit."""
     var sensor: Bool
@@ -63,7 +63,7 @@ struct Registered(Copyable, Movable):
     var keys_dataset: String
     """A keyed pipeline's keys dataset; empty for time partitions."""
     var image: String
-    """The image its runs' pods run (`orca register --image`), or empty."""
+    """The image its runs' pods run (`morca register --image`), or empty."""
     var workers: Int
     """Its cluster's dista workers; 0 if it has no tasks."""
     var head_type: String
@@ -77,29 +77,29 @@ struct Registered(Copyable, Movable):
     var secrets: List[Tuple[String, String]]
     """Its runs' secrets: environment variable and Secrets Manager ID."""
     var paused: Bool
-    """`orca pause`: its runs are queued as ever, but none is started."""
+    """`morca pause`: its runs are queued as ever, but none is started."""
     var worker_procs: Int
     """On EC2, the dista worker processes on each worker instance
-    (`orca register --worker-procs`); 0 is one per vCPU."""
+    (`morca register --worker-procs`); 0 is one per vCPU."""
     var placement: String
-    """Where its runs run (`orca register --placement`): `control` (the
-    scheduler's host, `orca.control`), `ec2`, or empty for the scheduler's
+    """Where its runs run (`morca register --placement`): `control` (the
+    scheduler's host, `morca.control`), `ec2`, or empty for the scheduler's
     runner."""
     var env: List[Tuple[String, String]]
-    """Its runs' own variables (`env` in orca.toml, `orca.config`), given
-    to its runs alone, over those `ORCA_RUN_ENV` names."""
+    """Its runs' own variables (`env` in morca.toml, `morca.config`), given
+    to its runs alone, over those `MORCA_RUN_ENV` names."""
     var fill: Fill
-    """How it fills its range by itself (`orca.fill`)."""
+    """How it fills its range by itself (`morca.fill`)."""
     var cpus: String
-    """The CPUs it asks for, `N` or `MIN..MAX` (`orca.resources`); empty
+    """The CPUs it asks for, `N` or `MIN..MAX` (`morca.resources`); empty
     for none."""
     var memory_gb: String
     """The memory it asks for, in GB; empty for none."""
     var memory_raised_mb: Int
-    """What an out-of-memory kill raised its memory to (`orca.cgroup`),
+    """What an out-of-memory kill raised its memory to (`morca.cgroup`),
     which its runs ask for at least; 0 for none."""
     var learn: Bool
-    """Whether `auto` uses what its runs suggest (`learn` in orca.toml)."""
+    """Whether `auto` uses what its runs suggest (`learn` in morca.toml)."""
     var learn_key: String
     """For a pipeline asking for `auto`, what a learned request now would be
     learned from: its latest successful run (and whether that's measured
@@ -133,7 +133,7 @@ def recorded_memory_gb(p: Registered, sized: RunRequest) -> String:
 def run_request(
     mut db: State, p: Registered, most_cpus: Int = 0
 ) raises -> RunRequest:
-    """The request a start of `p` gets now (`orca.recommend`'s
+    """The request a start of `p` gets now (`morca.recommend`'s
     `resolve_request`): as declared, or for `auto` what its runs suggest. That is cached on the
     pipeline (`orca.pipelines.learned`) and learned again only when what it
     was learned from (`learn_key`) has changed, so a start doesn't query
@@ -195,7 +195,7 @@ def fill_key(kind: String, fills: String, local: Civil) raises -> String:
     if kind == "monthly":
         var m = Month.containing(local.year, local.month, local.day, 0)
         return String(m.prev() if fills == "previous" else m^)
-    raise Error("orca: unknown partitions '", kind, "'")
+    raise Error("morca: unknown partitions '", kind, "'")
 
 
 def repeated_fill(p: Registered, after: Int64) raises -> String:
@@ -351,10 +351,10 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
 
 def placed_of(p: Registered) -> String:
     """Where `p`'s runs start under a scheduler with this process's
-    `ORCA_RUNNER`: `control`, `ec2`, `kubernetes` or `local`."""
+    `MORCA_RUNNER`: `control`, `ec2`, `kubernetes` or `local`."""
     if p.placement == CONTROL or pool_of(p.placement):
         return p.placement
-    var runner = getenv("ORCA_RUNNER", "local")
+    var runner = getenv("MORCA_RUNNER", "local")
     if p.placement == "ec2":
         return "ec2"
     return runner
@@ -363,13 +363,13 @@ def placed_of(p: Registered) -> String:
 def fill_pipeline(
     p: Registered, placed: String = "", pool_seconds: Int = -1
 ) -> FillPipeline:
-    """What `orca.fill.fill_status` needs of `p`; where its runs start and
+    """What `morca.fill.fill_status` needs of `p`; where its runs start and
     the warm pool's seconds from this process's environment unless
     given."""
     var pool = pool_seconds
     if pool < 0:
         try:
-            pool = Int(Float64(getenv("ORCA_EC2_POOL_SECONDS", "150")))
+            pool = Int(Float64(getenv("MORCA_EC2_POOL_SECONDS", "150")))
         except:
             pool = 150
     return FillPipeline(

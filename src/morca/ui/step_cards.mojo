@@ -12,11 +12,11 @@ page `data-attempt`) shows the card of that step (and attempt), drawn by
 `STEP_CARDS_JS`. The one thing fetched is the function's own signature and
 docstring, from the source at the commit (`/code?u=&at=`, `def_summary`),
 once per step per page; until it comes, or where the code can't be had, the
-signature is the one `describe` records, its argument names orca's.
+signature is the one `describe` records, its argument names morca's.
 """
 
-from orca.highlight import highlight
-from orca.json import quote
+from morca.highlight import highlight
+from morca.json import quote
 
 
 def _lower(b: UInt8) -> Bool:
@@ -44,7 +44,7 @@ def _dtype_name(d: String) -> String:
 
 
 def short_type(name: StringSlice) -> String:
-    """A type's name as its code writes it: modules dropped (`orca.month.
+    """A type's name as its code writes it: modules dropped (`morca.month.
     Month` -> `Month`, `dista.seq.Seq[toy.Measured]` -> `Seq[Measured]`,
     a `::` path too), and a scalar `SIMD[DType.int, 1]` -> `Int`."""
     var s = String(name).replace("::", ".")
@@ -86,7 +86,7 @@ def short_type(name: StringSlice) -> String:
 
 
 def function_name(function: StringSlice) -> String:
-    """`toy::days(orca::ctx::Ctx,...)` -> `days`."""
+    """`toy::days(morca::ctx::Ctx,...)` -> `days`."""
     var f = String(function)
     var paren = f.find("(")
     if paren >= 0:
@@ -101,7 +101,7 @@ def signature(
 ) -> String:
     """The step function's signature from what `describe` records:
     `def days(mut ctx: Ctx, input: Month) raises -> Measured`. Its
-    argument names are orca's, as `describe` has none."""
+    argument names are morca's, as `describe` has none."""
     return String(
         "def ",
         function_name(function),
@@ -113,7 +113,7 @@ def signature(
 
 
 def signature_html(sig: StringSlice) -> String:
-    """`sig`, coloured (`orca.highlight`)."""
+    """`sig`, coloured (`morca.highlight`)."""
     var lines = highlight(sig)
     var out = String()
     for i in range(len(lines)):
@@ -369,7 +369,7 @@ def def_json(text: StringSlice, line: Int) -> String:
 
 
 comptime LEAD_JS = """
-function orcaLead(doc) {
+function morcaLead(doc) {
   const t = String(doc || "").trim();
   if (!t) return ["", ""];
   const para = t.split(/\\n\\s*\\n/)[0], m = /[.](\\s|$)/.exec(para);
@@ -379,7 +379,7 @@ function orcaLead(doc) {
   return [first, t.slice(end).replace(/\\s+/g, " ").trim()];
 }
 """
-"""A docstring's lead (`orcaLead`), which every code hover card opens
+"""A docstring's lead (`morcaLead`), which every code hover card opens
 with: its first sentence (to the first ". " or blank line), on one line,
 at most 160 characters with an ellipsis; and the rest, on one line too."""
 
@@ -474,7 +474,7 @@ comptime STEP_CARDS_JS = """
     } catch (e) {}
     if (cur !== el) return;
     if (sig) box.querySelector(".scard__sig code").innerHTML = sig;
-    const [first, rest] = orcaLead(doc);
+    const [first, rest] = morcaLead(doc);
     const l = box.querySelector(".scard__lead"), p = box.querySelector(".scard__doc");
     if (l) { if (first) { l.textContent = first; l.classList.remove("muted"); } else l.remove(); }
     if (p) { if (rest) p.textContent = rest; else p.remove(); }

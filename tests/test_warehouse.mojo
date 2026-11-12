@@ -1,6 +1,6 @@
 """What sensors read and decide without a database: a table's current
-snapshot from its metadata JSON (`orca.warehouse`), `sense`'s lines, and
-partition keys moved between kinds (`orca.sensors`).
+snapshot from its metadata JSON (`morca.warehouse`), `sense`'s lines, and
+partition keys moved between kinds (`morca.sensors`).
 
 tests/sensors.sh checks `sense` against tables iceberg wrote.
 """
@@ -10,8 +10,8 @@ from std.time import perf_counter_ns
 from std.testing import TestSuite, assert_equal, assert_false, assert_raises
 from std.testing import assert_true
 
-from orca.sensors import join_keys, key_kind, map_keys, parse_sense, split_keys
-from orca.warehouse import current_of, current_snapshot
+from morca.sensors import join_keys, key_kind, map_keys, parse_sense, split_keys
+from morca.warehouse import current_of, current_snapshot
 
 comptime META = """{
   "format-version" : 2,
@@ -43,15 +43,15 @@ def test_current_of() raises:
     )
     c = current_of("ns.t", m)
     assert_equal(c.snapshot, 11)
-    assert_false(c.by_orca)
+    assert_false(c.by_morca)
     assert_equal(c.partitions, "2023-12")
 
 
-def test_current_of_orca_snapshot() raises:
+def test_current_of_morca_snapshot() raises:
     var m = String(META).replace("-42", "4417")
     var c = current_of("ns.t", m)
     assert_equal(c.snapshot, 4417)
-    assert_true(c.by_orca)
+    assert_true(c.by_morca)
     assert_equal(c.partitions, "2024-01,2024-02")
 
 
@@ -66,7 +66,7 @@ def test_current_of_no_snapshot() raises:
     # A current snapshot the list doesn't have: its ID, nothing else known.
     var c = current_of("ns.t", '{"current-snapshot-id": 9, "snapshots": []}')
     assert_equal(c.snapshot, 9)
-    assert_false(c.by_orca)
+    assert_false(c.by_morca)
 
 
 def test_current_of_bad_json() raises:
@@ -120,16 +120,16 @@ def test_current_snapshot_files() raises:
 
 def test_parse_sense() raises:
     var got = parse_sense(
-        "a.b 12 other 2024-01\n\nc.d -1 other -\ne.f 5 orca 2024-02,2024-03\n"
+        "a.b 12 other 2024-01\n\nc.d -1 other -\ne.f 5 morca 2024-02,2024-03\n"
     )
     assert_equal(len(got), 3)
     assert_equal(got[0].dataset, "a.b")
     assert_equal(got[0].snapshot, 12)
-    assert_false(got[0].by_orca)
+    assert_false(got[0].by_morca)
     assert_equal(got[0].partitions, "2024-01")
     assert_equal(got[1].snapshot, -1)
     assert_equal(got[1].partitions, "")
-    assert_true(got[2].by_orca)
+    assert_true(got[2].by_morca)
     with assert_raises():
         _ = parse_sense("a.b 12 other\n")
     with assert_raises():

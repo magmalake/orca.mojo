@@ -1,4 +1,4 @@
-"""What every orca fuzz harness shares: replaying a saved input, and the
+"""What every morca fuzz harness shares: replaying a saved input, and the
 session's settings.
 
 A harness's target writes the input it's about to run to

@@ -1,10 +1,10 @@
 """Time keys by their partitions' kind (`monthly`, `daily`, `hourly`), as
 text: for code that has a pipeline's kind as a string, not its type."""
 
-from orca.day import Day
-from orca.hour import Hour
-from orca.key import parse_keys
-from orca.month import Month
+from morca.day import Day
+from morca.hour import Hour
+from morca.key import parse_keys
+from morca.month import Month
 
 
 def is_time_kind(kind: StringSlice) -> Bool:

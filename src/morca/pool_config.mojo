@@ -1,6 +1,6 @@
-"""Worker pools orca grows and shrinks itself (#267): a `[pools.<name>]`
-table in orca.toml, read and checked here, recorded by `orca register` in
-`orca.pools`, and acted on by the scheduler (`orca.pool_scale`).
+"""Worker pools morca grows and shrinks itself (#267): a `[pools.<name>]`
+table in morca.toml, read and checked here, recorded by `morca register` in
+`orca.pools`, and acted on by the scheduler (`morca.pool_scale`).
 
     [pools.lab]
     provider = "hetzner"
@@ -14,19 +14,19 @@ table in orca.toml, read and checked here, recorded by `orca register` in
     idle_seconds = 900
 
 A pipeline runs on the pool with `placement = "worker:lab"`, as on a pool of
-workers started by hand. `machines` is the order of preference: orca tries
+workers started by hand. `machines` is the order of preference: morca tries
 the first type in each location in turn, retries it until its `wait`
 (seconds) has passed since it started trying, then moves to the next. The
-last type has no `wait`: orca keeps trying it. A machine that's running is
+last type has no `wait`: morca keeps trying it. A machine that's running is
 never replaced by a type higher in the list.
 """
 
 from postgres import Params
 
-from orca.control import pool_problem
-from orca.json import quote
-from orca.state import State
-from orca.toml import ARRAY, INTEGER, STRING, TABLE, TomlDoc, toml_key
+from morca.control import pool_problem
+from morca.json import quote
+from morca.state import State
+from morca.toml import ARRAY, INTEGER, STRING, TABLE, TomlDoc, toml_key
 
 comptime PROVIDERS = ["hetzner", "ec2"]
 comptime POOL_KEYS = [
@@ -281,7 +281,7 @@ def read_pools(doc: TomlDoc) raises -> List[PoolConfig]:
 
 
 def record_pools(mut db: State, pools: List[PoolConfig]) raises -> List[String]:
-    """Makes `orca.pools` what orca.toml says, `pools`: each upserted, and
+    """Makes `orca.pools` what morca.toml says, `pools`: each upserted, and
     a pool the file no longer has deleted, so the scheduler stops adding
     machines to it and removes the ones it has once idle. The pools
     deleted."""

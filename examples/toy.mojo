@@ -6,12 +6,12 @@
 
 It's scheduled at 03:00 UTC on the 2nd of each month, for the month before,
 from 2024-01, with at most two runs at once: tests/scheduler.sh drives it
-through the `orca` scheduler.
+through the `morca` scheduler.
 
-A partition whose month is in ORCA_TOY_FAIL (e.g. `2024-02`) fails its
+A partition whose month is in MORCA_TOY_FAIL (e.g. `2024-02`) fails its
 `measure` step, to show the rest of the run carrying on; one in
-ORCA_TOY_CRASH aborts the process there, as a crash would (tests/crash.sh).
-ORCA_TOY_SLEEP makes
+MORCA_TOY_CRASH aborts the process there, as a crash would (tests/crash.sh).
+MORCA_TOY_SLEEP makes
 every step take that many seconds, so tests/kill.sh has time to kill it.
 """
 
@@ -19,7 +19,7 @@ from std.os import abort, getenv
 from std.time import sleep
 
 from dista import Seq
-from orca import (
+from morca import (
     Cron,
     Ctx,
     Gather,
@@ -28,12 +28,12 @@ from orca import (
     Monthly,
     Pipeline,
     Step,
-    orca_main,
+    morca_main,
 )
 
 
 def _nap() raises:
-    var s = getenv("ORCA_TOY_SLEEP")
+    var s = getenv("MORCA_TOY_SLEEP")
     if s:
         sleep(Float64(s))
 
@@ -57,11 +57,11 @@ def days(mut ctx: Ctx, m: Month) raises -> Measured:
 
 
 def measure(mut ctx: Ctx, m: Measured) raises -> Measured:
-    """Hours in the month; fails for the months in ORCA_TOY_FAIL."""
+    """Hours in the month; fails for the months in MORCA_TOY_FAIL."""
     _nap()
-    if String(m.month) in getenv("ORCA_TOY_FAIL"):
+    if String(m.month) in getenv("MORCA_TOY_FAIL"):
         raise Error("failing ", m.month, " as asked")
-    if String(m.month) in getenv("ORCA_TOY_CRASH"):
+    if String(m.month) in getenv("MORCA_TOY_CRASH"):
         abort(String("crashing ", m.month, " as asked"))
     ctx.log(String(m.month, " has ", m.days, " days"))
     return Measured(m.month.copy(), m.days * 24)
@@ -93,4 +93,4 @@ comptime Toy = Pipeline[
 
 
 def main() raises:
-    orca_main[Toy]()
+    morca_main[Toy]()

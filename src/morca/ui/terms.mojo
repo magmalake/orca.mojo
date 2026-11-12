@@ -9,7 +9,7 @@ header_help("From", "config")     # a column whose meaning depends on its table
 value_help("status", "deferred")  # what a status chip says on hover
 ```
 
-The UI (`orca.web.page.respond`) adds a header's help to every `<th>` it
+The UI (`morca.web.page.respond`) adds a header's help to every `<th>` it
 finds one for (a `data-help` attribute names a table-specific one), and
 `Html.status` and `Html.term` put a value's on its chip or word. Texts are
 HTML, written here as `if` chains (`_header`, `_context_header`, `_value`, `_key`), so
@@ -88,7 +88,7 @@ def _header(label: String) -> StaticString:
     if label == "Ended":
         return "When it finished, whatever the outcome."
     if label == "Error":
-        return "Why it failed, as the step or orca said."
+        return "Why it failed, as the step or morca said."
     if label == "Expires":
         return "When the token stops working."
     if label == "Fills":
@@ -108,7 +108,7 @@ def _header(label: String) -> StaticString:
         )
     if label == "Key":
         return (
-            "The setting's name, as orca.toml and orca register's flags "
+            "The setting's name, as morca.toml and morca register's flags "
             "call it."
         )
     if label == "Kind":
@@ -123,7 +123,7 @@ def _header(label: String) -> StaticString:
     if label == "Last seen":
         return "The last time it was seen."
     if label == "Latest":
-        return "Its newest snapshot that an orca run committed."
+        return "Its newest snapshot that a morca run committed."
     if label == "Launched":
         return "When EC2 started the instance."
     if label == "Level":
@@ -165,7 +165,7 @@ def _header(label: String) -> StaticString:
         return "The most memory the container held over the range shown."
     if label == "Pipeline":
         return (
-            "A pipeline: a binary of steps, registered with orca, that runs "
+            "A pipeline: a binary of steps, registered with morca, that runs "
             "on its schedule or when asked."
         )
     if label == "Pipelines":
@@ -226,7 +226,7 @@ def _header(label: String) -> StaticString:
             "for its lineage."
         )
     if label == "Snapshots":
-        return "How many snapshots orca runs have committed to it."
+        return "How many snapshots morca runs have committed to it."
     if label == "Snooze":
         return "Silence the rule for a while: its trips don't pause."
     if label == "Start":
@@ -283,7 +283,7 @@ def _header(label: String) -> StaticString:
     if label == "When":
         return "When it happened."
     if label == "Why":
-        return "Why it happened, as orca recorded it."
+        return "Why it happened, as morca recorded it."
     if label == "Worker":
         return "The worker using the token: its host name."
     if label == "Writes":
@@ -298,18 +298,18 @@ def _context_header(key: String) -> StaticString:
     table named by the header's `data-help`."""
     if key == "config:From":
         return (
-            "Where the value came from: the code's default, orca.toml (and "
-            "which table), a flag of orca register, or the scheduler's "
+            "Where the value came from: the code's default, morca.toml (and "
+            "which table), a flag of morca register, or the scheduler's "
             "environment. A link opens the line that sets it."
         )
     if key == "audit:From":
-        return "ui: this site. cli: the orca command, with a token."
+        return "ui: this site. cli: the morca command, with a token."
     if key == "alerts:Kind":
         return (
             "What raised the alert: a watchdog trip, a run that failed with "
             "no retry left, a stalled fill, the control disk filling, a "
             "worker gone quiet, memory pressure holding runs, a failed "
-            "backup or another script's orca notify; 'resolved' is the "
+            "backup or another script's morca notify; 'resolved' is the "
             "all-clear sent once it ended. Its priority is on hover."
         )
     if key == "alerts:When":
@@ -348,7 +348,7 @@ def _context_header(key: String) -> StaticString:
             "Why the snapshot's keys weren't run: they aren't this "
             "pipeline's partitions."
         )
-    # Ops' Pools (orca.ui.pools): a row per machine, the worker in its row.
+    # Ops' Pools (morca.ui.pools): a row per machine, the worker in its row.
     if key == "pools:Machine":
         return (
             "The machine: an EC2 instance's id, a Kubernetes run's pods, or "
@@ -357,14 +357,14 @@ def _context_header(key: String) -> StaticString:
         )
     if key == "pools:Pool":
         return (
-            "Where a placement sends runs: ec2 (instances orca launches), "
+            "Where a placement sends runs: ec2 (instances morca launches), "
             "kubernetes (a run's pods) or worker:&lt;pool&gt; (the machines "
-            "running orca worker for that pool). Click to show only it."
+            "running morca worker for that pool). Click to show only it."
         )
     if key == "pools:Kind":
         return (
-            "ec2: an instance orca launched and pays for. k8s: a run's pods "
-            "on the cluster. self-hosted: a machine of your own running orca "
+            "ec2: an instance morca launched and pays for. k8s: a run's pods "
+            "on the cluster. self-hosted: a machine of your own running morca "
             "worker."
         )
     if key == "pools:State":
@@ -372,12 +372,12 @@ def _context_header(key: String) -> StaticString:
             "live: up and taking work. draining: the scheduler is letting it "
             "finish before it goes. gone: an instance that ended (listed for "
             "an hour), or a worker revoked, expired or not heard from for "
-            "ORCA_STALE_SECONDS. Beside it, what it is doing."
+            "MORCA_STALE_SECONDS. Beside it, what it is doing."
         )
     if key == "pools:Image":
         return (
             "The image tag its runs need: the pipeline's image on EC2 and "
-            "Kubernetes, the worker's ORCA_IMAGE as it said."
+            "Kubernetes, the worker's MORCA_IMAGE as it said."
         )
     if key == "pools:CPUs":
         return (
@@ -402,8 +402,8 @@ def _context_header(key: String) -> StaticString:
         )
     if key == "pools:Worker":
         return (
-            "What orca runs there: a run's head or a dista worker on EC2; "
-            "orca worker, signed in with the token named (hover for when it "
+            "What morca runs there: a run's head or a dista worker on EC2; "
+            "morca worker, signed in with the token named (hover for when it "
             "expires); or a run's pods."
         )
     if key == "pools:Uptime":
@@ -414,7 +414,7 @@ def _context_header(key: String) -> StaticString:
         return "When the instance ended, and why."
     if key == "config:Key":
         return (
-            "The setting's name, as orca.toml and orca register's flags "
+            "The setting's name, as morca.toml and morca register's flags "
             "call it. Hover the name for what it sets."
         )
     return ""
@@ -432,11 +432,11 @@ def _value(key: String) -> StaticString:
             "expired or quiet)."
         )
     if key == "machine_kind:ec2":
-        return "An EC2 instance orca launched for a run, and pays for."
+        return "An EC2 instance morca launched for a run, and pays for."
     if key == "machine_kind:k8s":
         return "A run's pods on the Kubernetes runner's cluster."
     if key == "machine_kind:self-hosted":
-        return "A machine of your own, running orca worker for its pool."
+        return "A machine of your own, running morca worker for its pool."
     if key == "status:queued":
         return "Waiting to start: its turn, or room for its placement."
     if key == "status:running":
@@ -477,7 +477,7 @@ def _value(key: String) -> StaticString:
     if key == "trigger:sensor":
         return "Its sensor saw a new snapshot of a table it reads."
     if key == "trigger:backfill":
-        return "orca backfill, or the Start runs form, asked for it."
+        return "morca backfill, or the Start runs form, asked for it."
     if key == "trigger:manual":
         return "A binary's run command started it, outside the scheduler."
     if key == "trigger:ui":
@@ -490,7 +490,7 @@ def _value(key: String) -> StaticString:
         return "The fill: the scheduler working through the range by itself."
     if key == "placement:default":
         return (
-            "On the scheduler's runner (ORCA_RUNNER: local, kubernetes or ec2)."
+            "On the scheduler's runner (MORCA_RUNNER: local, kubernetes or ec2)."
         )
     if key == "placement:local":
         return "Beside the scheduler, on its machine."
@@ -506,11 +506,11 @@ def _value(key: String) -> StaticString:
     if key == "placement:worker":
         return "On a remote worker of that pool, which claims the run."
     if key == "from:code default":
-        return "Nothing set it: the pipeline's code, or orca, has this default."
-    if key == "from:orca.toml":
-        return "Set in orca.toml, in the table shown."
+        return "Nothing set it: the pipeline's code, or morca, has this default."
+    if key == "from:morca.toml":
+        return "Set in morca.toml, in the table shown."
     if key == "from:flag":
-        return "Set by a flag of orca register, over orca.toml."
+        return "Set by a flag of morca register, over morca.toml."
     if key == "from:environment":
         return "Taken from the scheduler's environment when the run starts."
     if key == "touch:read":
@@ -598,7 +598,7 @@ def _key(key: String) -> StaticString:
 
 
 def key_help(key: StringSlice) -> StaticString:
-    """The help of a setting `key` of orca.toml (`env.NAME` is `env`'s)."""
+    """The help of a setting `key` of morca.toml (`env.NAME` is `env`'s)."""
     var k = String(key)
     var dot = k.find(".")
     if dot > 0:

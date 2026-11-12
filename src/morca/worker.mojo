@@ -1,8 +1,8 @@
-"""`orca worker`: runs a pool's runs on this machine, talking only to
-`orca ui`'s API.
+"""`morca worker`: runs a pool's runs on this machine, talking only to
+`morca ui`'s API.
 
 ```
-ORCA_WORKER_TOKEN=orca_... orca worker --pool bgent --remote https://orca.mlake.dev
+MORCA_WORKER_TOKEN=morca_... morca worker --pool bgent --remote https://orca.mlake.dev
 ```
 
 Every `--poll-seconds` (2) the worker posts its heartbeat to
@@ -11,42 +11,42 @@ the runs it has, and, while it has fewer than `--max-runs` (1), asks for
 one. A run it's given starts as the local runner starts one: the
 pipeline's binary (the path it was registered with, which the worker's
 image has too) with `resume <run>`, in a process group of its own, its
-output staged under `--dir` (`$TMPDIR/orca-worker`), with the pipeline's
-`env`, its secrets read here with `ORCA_SECRET_FETCH` and named in
-`ORCA_SECRETS`, and `ORCA_STATE_URL` and `ORCA_STATE_TOKEN` in place of a
-database: the run records itself over the API (`orca.http_store`). Its
-data and logs go where the worker's own `ORCA_WAREHOUSE` and `ORCA_LOGS`
+output staged under `--dir` (`$TMPDIR/morca-worker`), with the pipeline's
+`env`, its secrets read here with `MORCA_SECRET_FETCH` and named in
+`MORCA_SECRETS`, and `MORCA_STATE_URL` and `MORCA_STATE_TOKEN` in place of a
+database: the run records itself over the API (`morca.http_store`). Its
+data and logs go where the worker's own `MORCA_WAREHOUSE` and `MORCA_LOGS`
 say, as any run's do. When the process ends, its output is appended to
 the run's `driver.log` by `<binary> keep-log`, which also fails the
 attempts a crash left running; a process that ended before claiming its
 run has the run failed, saying why (`/api/worker/exited`). Beside each
-run's process it starts `<binary> sample` (`orca.sample`, unless
-`ORCA_SAMPLE_SECONDS=0`), which writes this machine's metrics to
-`<ORCA_LOGS>/<pipeline>/<run>/metrics/worker-<name>.jsonl`, so the run's
+run's process it starts `<binary> sample` (`morca.sample`, unless
+`MORCA_SAMPLE_SECONDS=0`), which writes this machine's metrics to
+`<MORCA_LOGS>/<pipeline>/<run>/metrics/worker-<name>.jsonl`, so the run's
 page has its Machines card, as a local run's does. Each poll the
 worker samples its runs' process trees, as the scheduler samples a local
 run's, and sends the samples with `/api/worker/exited`, so their attempts
-get their peak memory and CPU (`orca.usage`). Where the worker can make
-cgroups (`orca.cgroup`), each run gets one at its grant, and an
+get their peak memory and CPU (`morca.usage`). Where the worker can make
+cgroups (`morca.cgroup`), each run gets one at its grant, and an
 out-of-memory kill is reported with `/api/worker/exited`, which fails the
 attempts saying so and raises what the pipeline asks for.
 
-**No database.** The worker refuses to start with `ORCA_DATABASE_URL` set:
+**No database.** The worker refuses to start with `MORCA_DATABASE_URL` set:
 nothing on a worker holds database credentials. Its token is
-`ORCA_WORKER_TOKEN`, or the first line of `--token-file`; one that's
+`MORCA_WORKER_TOKEN`, or the first line of `--token-file`; one that's
 revoked, expired or for another pool than `--pool` is refused, and the
 worker exits (code 3).
 
-**Versions.** The worker's image is `--image`, else `ORCA_IMAGE`. A run it's
+**Versions.** The worker's image is `--image`, else `MORCA_IMAGE`. A run it's
 given whose pipeline's image isn't that is put back (`/api/worker/release`)
 rather than started, though the UI shouldn't hand it one
 (`orca.workers.version_refusal`).
 
 **Dying.** A worker that's killed takes its runs with it: each run's
 heartbeat thread exits its process once its parent isn't the worker
-(`ORCA_WORKER_PID`), so the run's heartbeat goes stale and the scheduler
+(`MORCA_WORKER_PID`), so the run's heartbeat goes stale and the scheduler
 queues it again, for this worker or another, whatever its trigger
-(`orca.scheduler`'s `_requeue_lost`); a run this worker claimed and never
+(`morca.scheduler`'s `_requeue_lost`); a run this worker claimed and never
 started has its start given back.
 """
 
@@ -58,16 +58,16 @@ from std.time import perf_counter_ns, sleep
 
 from json import Value
 
-from orca.run_cluster import MemberSpec, member_spec_of
-from orca.tokens import new_token
-from orca.worker_cluster import (
+from morca.run_cluster import MemberSpec, member_spec_of
+from morca.tokens import new_token
+from morca.worker_cluster import (
     free_port,
     start_dista_worker,
     start_head,
     stop_group,
 )
-from orca.admission import Report
-from orca.cgroup import (
+from morca.admission import Report
+from morca.cgroup import (
     Cgroups,
     Contained,
     HeldWatch,
@@ -75,12 +75,12 @@ from orca.cgroup import (
     held_text,
     own_limit_pressure,
 )
-from orca.cgroup import put as put_cgroup
-from orca.cgroup import start_limit_mb
-from orca.control import fetch_secret
-from orca.http_store import Body, StateApi
-from orca.logs import run_dir
-from orca.pressure import (
+from morca.cgroup import put as put_cgroup
+from morca.cgroup import start_limit_mb
+from morca.control import fetch_secret
+from morca.http_store import Body, StateApi
+from morca.logs import run_dir
+from morca.pressure import (
     Admission,
     Source,
     find_source,
@@ -88,9 +88,9 @@ from orca.pressure import (
     pressure_env,
     read_psi,
 )
-from orca.proc import Reaped, reap, spawn
-from orca.resources import host_room, run_env as grant_env
-from orca.sample import (
+from morca.proc import Reaped, reap, spawn
+from morca.resources import host_room, run_env as grant_env
+from morca.sample import (
     _hostname,
     _sysctl_u64,
     machine_name,
@@ -99,9 +99,9 @@ from orca.sample import (
     sample_seconds,
     tree_usage,
 )
-from orca.store import FINAL
-from orca.usage import Meter, marks_json
-from orca.workers import (
+from morca.store import FINAL
+from morca.usage import Meter, marks_json
+from morca.workers import (
     WorkerRun,
     pool_problem,
     version_refusal,
@@ -109,10 +109,10 @@ from orca.workers import (
 )
 
 comptime WORKER_USAGE = """usage:
-  orca worker --pool <pool> [--remote <url>] [--token-file <path>]
+  morca worker --pool <pool> [--remote <url>] [--token-file <path>]
               [--max-runs N] [--poll-seconds S] [--dir <dir>]
               [--image <image>] [--name <name>] [--advertise <address>]
-              (the token: ORCA_WORKER_TOKEN, or --token-file)"""
+              (the token: MORCA_WORKER_TOKEN, or --token-file)"""
 
 
 @fieldwise_init
@@ -121,7 +121,7 @@ struct _Running(Copyable, Movable):
     var stage: String
     var env: List[String]
     var helpers: List[Int]
-    """Its cluster's head and dista worker (`orca.worker_cluster`), stopped
+    """Its cluster's head and dista worker (`morca.worker_cluster`), stopped
     when it ends; empty for a run on this worker alone."""
 
 
@@ -171,13 +171,13 @@ struct Worker(Movable):
     """`keep-log`s going, by pid, with the stage they're keeping."""
     var meters: Dict[Int, Meter]
     """The runs' processes' samples, by pid, sent when each ends
-    (`orca.usage`)."""
+    (`morca.usage`)."""
     var psi: Source
     """Where this host's memory pressure is read from (`orca.pressure`)."""
     var admission: Admission
     """Whether this worker claims runs for its host's memory pressure."""
     var cgroups: Cgroups
-    """Where the runs' cgroups go (`orca.cgroup`), or why they don't."""
+    """Where the runs' cgroups go (`morca.cgroup`), or why they don't."""
     var contained: Dict[Int, Contained]
     """The runs' processes' cgroups, by pid."""
     var held: HeldWatch
@@ -192,7 +192,7 @@ struct Worker(Movable):
     var advertise: String
     """The address the pool's machines reach this one at (`--advertise`):
     with it, a run that spreads is started as a cluster here, and runs are
-    joined (`orca.run_cluster`); without it, neither."""
+    joined (`morca.run_cluster`); without it, neither."""
     var members: Dict[Int, Int]
     """The dista workers this one runs for other workers' runs: pid to
     `orca.run_members` id."""
@@ -246,7 +246,7 @@ struct Worker(Movable):
     def _start(mut self, spec: WorkerRun) raises:
         var why = version_refusal(spec.image, self.image)
         if why:
-            print("orca worker: refusing run", spec.run, ":", why)
+            print("morca worker: refusing run", spec.run, ":", why)
             _ = self._post(
                 "/api/worker/release",
                 Body()
@@ -255,20 +255,20 @@ struct Worker(Movable):
                 .text("why", why),
             )
             return
-        # Its own variables and its grant of this host (orca.resources).
+        # Its own variables and its grant of this host (morca.resources).
         var env = grant_env(spec.env, spec.grant, pressure_env(self.psi))
         var names = String()
         for s in spec.secrets:
             env.append(String(s[0], "=", fetch_secret(s[1])))
             names.write("," if names else "", s[0])
         if names:
-            env.append(String("ORCA_SECRETS=", names))
+            env.append(String("MORCA_SECRETS=", names))
         if self.image:
-            env.append(String("ORCA_IMAGE=", self.image))
-        env.append(String("ORCA_STATE_URL=", self.api.url))
-        env.append(String("ORCA_STATE_TOKEN=", self.token))
-        env.append(String("ORCA_WORKER_PID=", external_call["getpid", c_int]()))
-        env.append(String("ORCA_RUN=", spec.run))
+            env.append(String("MORCA_IMAGE=", self.image))
+        env.append(String("MORCA_STATE_URL=", self.api.url))
+        env.append(String("MORCA_STATE_TOKEN=", self.token))
+        env.append(String("MORCA_WORKER_PID=", external_call["getpid", c_int]()))
+        env.append(String("MORCA_RUN=", spec.run))
         makedirs(self.dir, exist_ok=True)
         var stage = String(
             self.dir,
@@ -282,7 +282,7 @@ struct Worker(Movable):
         )
         with open(stage, "w") as f:
             f.write("")  # keep-log heads it with the start
-        # A run that spreads over the pool (orca.run_cluster): its head and a
+        # A run that spreads over the pool (morca.run_cluster): its head and a
         # dista worker here, the driver joining them, the others told where.
         var helpers = List[Int]()
         var cluster_head = String()
@@ -347,7 +347,7 @@ struct Worker(Movable):
                     cg.path = made[0]
                     cg.kill_mb = made[1]
                 except e:
-                    print("orca worker: run", spec.run, "without a cgroup:", e)
+                    print("morca worker: run", spec.run, "without a cgroup:", e)
         var pid = spawn(argv, stage, env=env, group=True, cgroup=cg.path)
         if cg.path:
             self.contained[pid] = cg^
@@ -375,9 +375,9 @@ struct Worker(Movable):
                     .text("token", cluster_token),
                 )
             except e:
-                print("orca worker: can't report run", spec.run, "'s head:", e)
+                print("morca worker: can't report run", spec.run, "'s head:", e)
         # The machine's metrics while the run's process lives, as the
-        # scheduler's beside a local run (orca.sample): the Machines card.
+        # scheduler's beside a local run (morca.sample): the Machines card.
         var metrics = metrics_location(
             spec.pipeline, spec.run, machine_name(self.name)
         )
@@ -394,15 +394,15 @@ struct Worker(Movable):
                     ]
                 )
             except e:
-                print("orca worker: no sampler for run", spec.run, ":", e)
+                print("morca worker: no sampler for run", spec.run, ":", e)
 
     def _join(mut self, m: MemberSpec) raises:
-        """A dista worker for another worker's run (`orca.run_cluster`)."""
+        """A dista worker for another worker's run (`morca.run_cluster`)."""
         var env = grant_env(m.env, m.grant, pressure_env(self.psi))
         for s in m.secrets:
             env.append(String(s[0], "=", fetch_secret(s[1])))
         if self.image:
-            env.append(String("ORCA_IMAGE=", self.image))
+            env.append(String("MORCA_IMAGE=", self.image))
         makedirs(self.dir, exist_ok=True)
         var pid = start_dista_worker(
             m.binary,
@@ -464,7 +464,7 @@ struct Worker(Movable):
         if pid in self.keeping:
             var stage = self.keeping.pop(pid)
             if code != 0:
-                print("orca worker: keep-log exited", code, "keeping", stage)
+                print("morca worker: keep-log exited", code, "keeping", stage)
             else:
                 try:
                     remove(stage)
@@ -520,11 +520,11 @@ struct Worker(Movable):
         try:
             _ = self._post("/api/worker/exited", body^)
         except e:
-            print("orca worker: can't report run", r.spec.run, "ending:", e)
+            print("morca worker: can't report run", r.spec.run, "ending:", e)
         var location = run_dir(r.spec.pipeline, r.spec.run)
         if location:
             # The output, masked, after what earlier starts left there; and
-            # a crash's attempts failed with its summary (orca.crash).
+            # a crash's attempts failed with its summary (morca.crash).
             try:
                 var kpid = spawn(
                     [
@@ -538,18 +538,18 @@ struct Worker(Movable):
                 )
                 self.keeping[kpid] = r.stage
             except e:
-                print("orca worker: can't keep run", r.spec.run, "log:", e)
+                print("morca worker: can't keep run", r.spec.run, "log:", e)
         else:
             print(
-                "orca worker: run",
+                "morca worker: run",
                 r.spec.run,
-                "output (no ORCA_LOGS) is in",
+                "output (no MORCA_LOGS) is in",
                 r.stage,
             )
 
     def serve(mut self) raises -> Int:
         print(
-            "orca worker",
+            "morca worker",
             self.name,
             "pool",
             self.pool,
@@ -561,26 +561,26 @@ struct Worker(Movable):
         )
         var cpus = num_logical_cores()
         var mem = _memory_mb()
-        # What this host can grant the runs it takes (orca.resources).
+        # What this host can grant the runs it takes (morca.resources).
         var room = host_room(worker=True)
         print(
-            "orca worker: grants up to",
+            "morca worker: grants up to",
             room.cpus,
             "CPUs and",
             room.memory_mb,
-            "MB (ORCA_RESERVE_CPUS, ORCA_RESERVE_MEMORY_MB)",
+            "MB (MORCA_RESERVE_CPUS, MORCA_RESERVE_MEMORY_MB)",
             flush=True,
         )
         if not self.psi:
             print(
-                "orca worker: no memory pressure to read here (no PSI);",
+                "morca worker: no memory pressure to read here (no PSI);",
                 " runs are claimed on --max-runs and grants alone",
                 sep="",
                 flush=True,
             )
         else:
             print(
-                "orca worker: memory pressure from",
+                "morca worker: memory pressure from",
                 self.psi.describe(),
                 "- claims nothing while some avg10 is over",
                 String(pct_text(self.admission.limit), "%"),
@@ -588,7 +588,7 @@ struct Worker(Movable):
             )
         self.room_mb = room.memory_mb
         self.cgroups = Cgroups.setup(MemoryKnobs.from_env())
-        print("orca worker: run cgroups", self.cgroups.why, flush=True)
+        print("morca worker: run cgroups", self.cgroups.why, flush=True)
         self.unswept = self.cgroups.stale()
         var said = String()
         while True:
@@ -596,7 +596,7 @@ struct Worker(Movable):
                 try:
                     self._ended(done)
                 except e:
-                    print("orca worker:", e)
+                    print("morca worker:", e)
             if len(self.unswept) > 0:
                 var left = List[String]()
                 for path in self.unswept:
@@ -612,7 +612,7 @@ struct Worker(Movable):
                 try:
                     ref c = self.contained[pid]
                     print(
-                        "orca worker: killed run",
+                        "morca worker: killed run",
                         c.run,
                         "pid",
                         pid,
@@ -642,16 +642,16 @@ struct Worker(Movable):
                 slots = min(slots, allowed)
             if self.admission.held() and not was:
                 print(
-                    "orca worker:",
+                    "morca worker:",
                     self.admission.hold,
                     "- claiming no runs",
                     flush=True,
                 )
             elif was and not self.admission.held():
-                print("orca worker: memory pressure eased", flush=True)
+                print("morca worker: memory pressure eased", flush=True)
             if self.admission.stuck:
                 print(
-                    "orca worker: memory pressure held past",
+                    "morca worker: memory pressure held past",
                     Int(self.admission.grace),
                     "s with none of its runs going: one at a time",
                     flush=True,
@@ -678,20 +678,20 @@ struct Worker(Movable):
                 var msg = String(e)
                 if msg.startswith(FINAL):
                     print(
-                        "orca worker: refused:",
+                        "morca worker: refused:",
                         String(msg[byte = FINAL.byte_length() :]),
                         flush=True,
                     )
                     return 3
                 if msg != said:
-                    print("orca worker:", msg, flush=True)
+                    print("morca worker:", msg, flush=True)
                     said = msg
                 sleep(self.poll)
                 continue
             said = ""
             if String("refused") in got:
                 var why = got["refused"].string_value()
-                print("orca worker: not given a run:", why, flush=True)
+                print("morca worker: not given a run:", why, flush=True)
             if String("stop") in got:
                 for s in got["stop"].array_items():
                     self._stop_member(Int(s.int_value()))
@@ -700,7 +700,7 @@ struct Worker(Movable):
                 try:
                     self._join(m)
                 except e:
-                    print("orca worker: can't join run", m.run, ":", e)
+                    print("morca worker: can't join run", m.run, ":", e)
                     _ = self._post(
                         "/api/worker/left",
                         Body().int("member", Int64(m.member)).int("code", 127),
@@ -711,7 +711,7 @@ struct Worker(Movable):
                 try:
                     self._start(spec)
                 except e:
-                    print("orca worker: can't start run", spec.run, ":", e)
+                    print("morca worker: can't start run", spec.run, ":", e)
                     try:
                         _ = self._post(
                             "/api/worker/exited",
@@ -734,16 +734,16 @@ def _usage(msg: String) -> Int:
 
 
 def worker_command(args: List[String], target: String) raises -> Int:
-    """`orca worker ...`, to the UI `target` unless `--remote` follows."""
+    """`morca worker ...`, to the UI `target` unless `--remote` follows."""
     var url = target
     var pool = String()
     var token_file = String()
     var max_runs = 1
     var poll = 2.0
-    var dir = String(getenv("TMPDIR", "/tmp").rstrip("/"), "/orca-worker")
-    var image = getenv("ORCA_IMAGE")
+    var dir = String(getenv("TMPDIR", "/tmp").rstrip("/"), "/morca-worker")
+    var image = getenv("MORCA_IMAGE")
     var name = _hostname()
-    var advertise = getenv("ORCA_WORKER_ADVERTISE")
+    var advertise = getenv("MORCA_WORKER_ADVERTISE")
     var i = 2
     while i < len(args):
         var a = args[i]
@@ -777,33 +777,33 @@ def worker_command(args: List[String], target: String) raises -> Int:
         else:
             return _usage(String("unknown argument: ", a))
         i += 2
-    if getenv("ORCA_DATABASE_URL"):
+    if getenv("MORCA_DATABASE_URL"):
         print(
-            "orca worker: ORCA_DATABASE_URL is set, and a worker talks only",
-            " to orca ui's API: unset it",
+            "morca worker: MORCA_DATABASE_URL is set, and a worker talks only",
+            " to morca ui's API: unset it",
             sep="",
         )
         return 2
     if not pool:
-        return _usage("orca worker needs --pool")
+        return _usage("morca worker needs --pool")
     var why = pool_problem(pool)
     if why:
-        return _usage(String("orca worker: ", why))
+        return _usage(String("morca worker: ", why))
     if max_runs < 1:
         return _usage("--max-runs is at least 1")
     if not url:
         return _usage(
-            "orca worker needs the UI: --remote <url>, or ORCA_REMOTE"
+            "morca worker needs the UI: --remote <url>, or MORCA_REMOTE"
         )
     if not url.startswith("http://") and not url.startswith("https://"):
         url = String("https://", url)
-    var token = getenv("ORCA_WORKER_TOKEN")
+    var token = getenv("MORCA_WORKER_TOKEN")
     if token_file:
         with open(token_file, "r") as f:
             token = String(f.read().split("\n")[0].strip())
     if not token:
         return _usage(
-            "orca worker needs a token: ORCA_WORKER_TOKEN, or --token-file"
+            "morca worker needs a token: MORCA_WORKER_TOKEN, or --token-file"
         )
     var w = Worker(
         url, token, pool, name, image, max_runs, poll, dir, advertise

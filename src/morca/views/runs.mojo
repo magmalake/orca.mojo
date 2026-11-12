@@ -7,17 +7,17 @@ keyset by run id, so pages stay put as runs arrive).
 
 from postgres import Params, Row
 
-from orca.views.cluster import ClusterRow, cluster_rows
-from orca.actions import stalled_sql
-from orca.html import query_param, query_values, url_decode, url_encode
-from orca.json import quote
-from orca.lineage import SnapshotRef
-from orca.logs import location_exists, run_dir
-from orca.metrics import InstanceMetrics, StepSpan, read_metrics
-from orca.resources import Grant
-from orca.state import State
-from orca.store import Usage
-from orca.views.pipelines import utc_text
+from morca.views.cluster import ClusterRow, cluster_rows
+from morca.actions import stalled_sql
+from morca.html import query_param, query_values, url_decode, url_encode
+from morca.json import quote
+from morca.lineage import SnapshotRef
+from morca.logs import location_exists, run_dir
+from morca.metrics import InstanceMetrics, StepSpan, read_metrics
+from morca.resources import Grant
+from morca.state import State
+from morca.store import Usage
+from morca.views.pipelines import utc_text
 
 
 def utc_sql(col: StaticString) -> String:
@@ -32,21 +32,21 @@ def utc_sql(col: StaticString) -> String:
 @fieldwise_init
 struct RunResources(Copyable, Movable):
     """What a run's latest start asked for and was granted
-    (`orca.resources`); empty and 0 for none."""
+    (`morca.resources`); empty and 0 for none."""
 
     var cpus: String
     var memory_gb: String
     var grant: Grant
     var limit_mb: Int
-    """Its latest start's cgroup limit, `memory.high` (`orca.cgroup`); 0
+    """Its latest start's cgroup limit, `memory.high` (`morca.cgroup`); 0
     for none."""
     var max_mb: Int
     """Its `memory.max`, past which the kernel kills its processes."""
     var memory_bytes: Int
     """Its cgroup's memory a few seconds ago while it runs; -1 else."""
     var source: String
-    """Where its request came from (`orca.recommend`): `declared`,
-    `learned` or `default`; empty for none, or a start before orca kept
+    """Where its request came from (`morca.recommend`): `declared`,
+    `learned` or `default`; empty for none, or a start before morca kept
     it."""
     var runs: Int
     """Learned, how many runs it's from; else 0."""
@@ -133,7 +133,7 @@ struct RunRow(Copyable, Movable):
     var ended: String
     var cancel_requested: Bool
     var stalled: Bool
-    """`running` with no live process (`orca.actions.stalled_sql`)."""
+    """`running` with no live process (`morca.actions.stalled_sql`)."""
     var error: String
     """Why the run ended without its steps saying so (`runs.error`)."""
     var waiting_until: String
@@ -144,17 +144,17 @@ struct RunRow(Copyable, Movable):
     """Where its latest start ran: `control` (the scheduler's host), `ec2`,
     `kubernetes` or `local`; empty before its first."""
     var held: String
-    """Why the scheduler keeps it queued (`orca.control`), or empty."""
+    """Why the scheduler keeps it queued (`morca.control`), or empty."""
     var usage: Usage
-    """What its attempts used (`orca.usage`): the largest peak, the CPU
+    """What its attempts used (`morca.usage`): the largest peak, the CPU
     seconds summed and the most cores."""
     var resources: RunResources
-    """What its latest start asked for and was granted (`orca.resources`)."""
+    """What its latest start asked for and was granted (`morca.resources`)."""
 
 
 @fieldwise_init
 struct VersionRow(Copyable, Movable):
-    """A version of a pipeline's code (`orca.source`)."""
+    """A version of a pipeline's code (`morca.source`)."""
 
     var id: Int
     var registry_hash: String
@@ -166,7 +166,7 @@ struct VersionRow(Copyable, Movable):
     var last_seen: String
     var runs: Int
     var locations: String
-    """Where its functions are (`orca.locate`), as JSON, or empty."""
+    """Where its functions are (`morca.locate`), as JSON, or empty."""
 
 
 @fieldwise_init
@@ -206,9 +206,9 @@ struct StepRow(Copyable, Movable):
     var usage: Usage
     """What the latest attempt used."""
     var limit_mb: Int
-    """The latest attempt's memory limit (`orca.cgroup`); 0 for none."""
+    """The latest attempt's memory limit (`morca.cgroup`); 0 for none."""
     var grant_mb: Int
-    """Its start's memory grant (`orca.resources`); 0 for none."""
+    """Its start's memory grant (`morca.resources`); 0 for none."""
 
 
 @fieldwise_init
@@ -267,8 +267,8 @@ comptime _GRANT_COLUMNS = (
     " memory_bytes, coalesce(request_source, '') AS request_source,"
     " coalesce(request_runs, 0)::bigint AS request_runs,"
 )
-"""SQL for a run's request and grant (`orca.resources`), and where the
-request came from (`orca.recommend`)."""
+"""SQL for a run's request and grant (`morca.resources`), and where the
+request came from (`morca.recommend`)."""
 
 
 def _resources_of(r: Row) raises -> RunResources:
@@ -618,7 +618,7 @@ struct RunsQuery(Copyable, Movable):
     any part of them (`modular/` for a keyed pipeline's repositories)."""
     var batch: Int
     """`?batch=`: the runs queued together in that batch
-    (`orca.batches`)."""
+    (`morca.batches`)."""
 
     @staticmethod
     def newest(view: String, size: Int) -> Self:
@@ -1119,7 +1119,7 @@ def live_status(status: String) -> Bool:
 
 def timeline_path(mut db: State, r: RunRow) raises -> String:
     """The run's Dista timeline, if it left one: beside its attempts' logs,
-    or in its directory under this process's ORCA_LOGS."""
+    or in its directory under this process's MORCA_LOGS."""
     var dirs = List[String]()
     var rows = db.conn.query(
         (
@@ -1166,9 +1166,9 @@ struct AttemptRow(Copyable, Movable):
     var log: String
     var usage: Usage
     var limit_mb: Int
-    """Its memory limit (`orca.cgroup`); 0 for none."""
+    """Its memory limit (`morca.cgroup`); 0 for none."""
     var grant_mb: Int
-    """Its start's memory grant (`orca.resources`); 0 for none."""
+    """Its start's memory grant (`morca.resources`); 0 for none."""
 
 
 def attempt_rows(
@@ -1270,8 +1270,8 @@ def runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
 
 @fieldwise_init
 struct AuditRow(Copyable, Movable):
-    """Who did something to a run, from the UI or the `orca` command
-    (`orca.auth`)."""
+    """Who did something to a run, from the UI or the `morca` command
+    (`morca.auth`)."""
 
     var at: String
     var user: String
@@ -1281,7 +1281,7 @@ struct AuditRow(Copyable, Movable):
 
 struct RunView(Movable):
     """A run as its page and its JSON show it, read once: `run_json`
-    (`orca.api.runs`) and `run_html` (`orca.ui.run`) both draw this."""
+    (`morca.api.runs`) and `run_html` (`morca.ui.run`) both draw this."""
 
     var run: RunRow
     var registry_hash: String
@@ -1291,7 +1291,7 @@ struct RunView(Movable):
     var rebuild: Int
     """The rebuild it's part of, or 0."""
     var batch: Int
-    """The batch it was queued in (`orca.batches`), or 0."""
+    """The batch it was queued in (`morca.batches`), or 0."""
     var batch_runs: Int
     """How many runs that batch has."""
     var version: Optional[VersionRow]
@@ -1305,7 +1305,7 @@ struct RunView(Movable):
     var touches: List[Touch]
     var instances: List[InstanceRow]
     var cluster: List[ClusterRow]
-    """The workers its dista cluster spread over (`orca.views.cluster`)."""
+    """The workers its dista cluster spread over (`morca.views.cluster`)."""
     var metrics: List[InstanceMetrics]
     var prev: Int64
     """The pipeline's run before it, or 0."""

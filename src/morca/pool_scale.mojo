@@ -1,9 +1,9 @@
-"""The pool autoscaler (#267): machines for the pools orca.toml declares
-(`orca.pool_config`), made and removed by the leading scheduler every
-`ORCA_POOL_SCALE_SECONDS` (15).
+"""The pool autoscaler (#267): machines for the pools morca.toml declares
+(`morca.pool_config`), made and removed by the leading scheduler every
+`MORCA_POOL_SCALE_SECONDS` (15).
 
 **Demand.** A pool needs a machine while runs of its pipelines (placement
-`worker:<pool>`, not paused) have been queued `ORCA_POOL_GROW_AFTER`
+`worker:<pool>`, not paused) have been queued `MORCA_POOL_GROW_AFTER`
 seconds (20) that a worker could start: no more of a pipeline's than
 `max_runs` less its running ones, and its fill runs. Workers already in
 the pool take what they have room for first; what's left waiting is the
@@ -11,11 +11,11 @@ demand.
 
 **Growing.** While there's demand, no machine of the pool is still booting
 (made, its worker not yet seen) and it has fewer than `max_machines`, the
-autoscaler makes one, at most once every `ORCA_POOL_TRY_SECONDS` (60):
+autoscaler makes one, at most once every `MORCA_POOL_TRY_SECONDS` (60):
 
 - it tries the type it's on (the first, to start with) in each location in
   turn; the first that the provider has is made;
-- a type the worker image has no variant for (`orca.registry`: the
+- a type the worker image has no variant for (`morca.registry`: the
   machine's architecture, as the provider says it, isn't among the
   image's) is skipped, saying so;
 - when no location has the type, it keeps trying it until the type's
@@ -25,7 +25,7 @@ autoscaler makes one, at most once every `ORCA_POOL_TRY_SECONDS` (60):
 
 The machine is named `orca-pool-<pool>-<n>`, labelled with the pool and this
 stack's id (`orca.stack_identity`, so a project several stacks share keeps
-them apart), and booted as a worker (`orca.pool_boot`) with a token of its
+them apart), and booted as a worker (`morca.pool_boot`) with a token of its
 own. `orca.pools.status` says what the last attempt came to.
 
 **Shrinking.** A machine is removed (its token revoked, then the machine
@@ -33,10 +33,10 @@ deleted, then its row ended with why) when:
 
 - it has run nothing for its pool's `idle_seconds` and the pool has no
   demand;
-- its pool is no longer in orca.toml, once it's idle;
-- its worker never showed up within `ORCA_POOL_BOOT_SECONDS` (900), or went
-  silent for `ORCA_POOL_LOST_SECONDS` (300): its runs are queued again as
-  any lost worker's are (`orca.pool_runs`).
+- its pool is no longer in morca.toml, once it's idle;
+- its worker never showed up within `MORCA_POOL_BOOT_SECONDS` (900), or went
+  silent for `MORCA_POOL_LOST_SECONDS` (300): its runs are queued again as
+  any lost worker's are (`morca.pool_runs`).
 
 **Strays.** A machine of the provider's with the pool's and this stack's
 labels that `orca.pool_machines` doesn't have live (made, but the row
@@ -49,13 +49,13 @@ from std.time import perf_counter_ns
 from json import loads
 from postgres import Params
 
-from orca.machines import MachineSpec, Provider
-from orca.pool_boot import CREATED_BY, WORKER_IMAGE, boot_script
-from orca.pool_config import NO_WAIT
-from orca.registry import Registry
-from orca.state import State
-from orca.tokens import token_hash
-from orca.workers import create_worker_token
+from morca.machines import MachineSpec, Provider
+from morca.pool_boot import CREATED_BY, WORKER_IMAGE, boot_script
+from morca.pool_config import NO_WAIT
+from morca.registry import Registry
+from morca.state import State
+from morca.tokens import token_hash
+from morca.workers import create_worker_token
 
 
 def _seconds(name: String, default: Float64) -> Float64:
@@ -69,14 +69,14 @@ def _seconds(name: String, default: Float64) -> Float64:
 
 
 def scale_seconds() -> Float64:
-    return _seconds("ORCA_POOL_SCALE_SECONDS", 15.0)
+    return _seconds("MORCA_POOL_SCALE_SECONDS", 15.0)
 
 
 def stack_id(mut db: State) raises -> String:
     """This stack's id, made once (`orca.stack_identity`): the label that
     marks its machines as its own."""
     _ = db.conn.execute(
-        "INSERT INTO orca.stack_identity (id) SELECT orca.uuidv7()::text WHERE"
+        "INSERT INTO orca.stack_identity (id) SELECT morca.uuidv7()::text WHERE"
         " NOT EXISTS (SELECT 1 FROM orca.stack_identity)"
     )
     return (
@@ -190,7 +190,7 @@ def _remove(
         try:
             _ = provider.delete(m.provider_id)
         except e:
-            print("orca: can't remove machine", m.name, ":", e)
+            print("morca: can't remove machine", m.name, ":", e)
             return False
     _ = db.conn.execute(
         (
@@ -220,7 +220,7 @@ struct _Pool(Copyable, Movable):
 
 
 def _pools(mut db: State) raises -> List[_Pool]:
-    """The pools orca.toml has, then those it no longer has that still have
+    """The pools morca.toml has, then those it no longer has that still have
     machines live."""
     var out = List[_Pool]()
     for r in db.conn.query(
@@ -291,7 +291,7 @@ struct PoolScaler(Movable):
     var arches_why: String
     var arches_at: Float64
     """When they were read (`perf_counter_ns` seconds): a tag can be
-    pushed again, so they're read again after `ORCA_POOL_IMAGE_SECONDS`
+    pushed again, so they're read again after `MORCA_POOL_IMAGE_SECONDS`
     (600)."""
 
     def __init__(out self):
@@ -313,7 +313,7 @@ struct PoolScaler(Movable):
         read (`arches_why`), when every type is tried."""
         var now = Float64(perf_counter_ns()) / 1e9
         if image == self.image and now - self.arches_at < _seconds(
-            "ORCA_POOL_IMAGE_SECONDS", 600.0
+            "MORCA_POOL_IMAGE_SECONDS", 600.0
         ):
             return len(self.arches) > 0
         self.image = image
@@ -325,7 +325,7 @@ struct PoolScaler(Movable):
         except e:
             self.arches_why = String(e)
             print(
-                "orca: pools: can't tell the worker image's architectures:", e
+                "morca: pools: can't tell the worker image's architectures:", e
             )
         return len(self.arches) > 0
 
@@ -337,17 +337,17 @@ struct PoolScaler(Movable):
             try:
                 self._pool(db, p)
             except e:
-                print("orca: can't scale pool", p.name, ":", e)
+                print("morca: can't scale pool", p.name, ":", e)
                 _status(db, p.name, String("error: ", e))
 
     def _pool(mut self, mut db: State, p: _Pool) raises:
         var provider = Provider.of(p.provider, self.owner)
         var want = demand(
-            db, p.name, _seconds("ORCA_POOL_GROW_AFTER", 20.0)
+            db, p.name, _seconds("MORCA_POOL_GROW_AFTER", 20.0)
         ) if p.configured else 0
         var live = _live(db, p.name)
-        var boot_s = _seconds("ORCA_POOL_BOOT_SECONDS", 900.0)
-        var lost_s = _seconds("ORCA_POOL_LOST_SECONDS", 300.0)
+        var boot_s = _seconds("MORCA_POOL_BOOT_SECONDS", 900.0)
+        var lost_s = _seconds("MORCA_POOL_LOST_SECONDS", 300.0)
         var kept = 0
         var booting = 0
         for m in live:
@@ -391,7 +391,7 @@ struct PoolScaler(Movable):
                     Params().int64(Int64(m.id)),
                 )
             if not p.configured:
-                if _remove(db, provider, m, "its pool left orca.toml"):
+                if _remove(db, provider, m, "its pool left morca.toml"):
                     continue
             elif (
                 want == 0
@@ -417,7 +417,7 @@ struct PoolScaler(Movable):
             return
         if booting > 0 or kept >= p.max_machines:
             return
-        var every = _seconds("ORCA_POOL_TRY_SECONDS", 60.0)
+        var every = _seconds("MORCA_POOL_TRY_SECONDS", 60.0)
         if p.since_try >= 0.0 and p.since_try < every:
             return
         self._grow(db, provider, p)
@@ -433,7 +433,7 @@ struct PoolScaler(Movable):
             Params().text(p.name),
         )
         var image = getenv(WORKER_IMAGE)
-        var remote = getenv("ORCA_POOL_REMOTE", getenv("ORCA_UI_URL"))
+        var remote = getenv("MORCA_POOL_REMOTE", getenv("MORCA_UI_URL"))
         if not image or not remote:
             _status(
                 db,
@@ -441,7 +441,7 @@ struct PoolScaler(Movable):
                 String(
                     "can't grow: the scheduler needs ",
                     WORKER_IMAGE,
-                    " and ORCA_UI_URL",
+                    " and MORCA_UI_URL",
                 ),
             )
             return
@@ -599,7 +599,7 @@ struct PoolScaler(Movable):
         """Makes one machine: (made, what it came to, out of stock, refused
         for quota)."""
         var id = Int(
-            db.conn.query("SELECT nextval('orca.pool_machines_id_seq') AS id")
+            db.conn.query("SELECT nextval('morca.pool_machines_id_seq') AS id")
             .row(0)
             .int64("id")
         )
@@ -617,7 +617,7 @@ struct PoolScaler(Movable):
             .int64("id")
         )
         var script = boot_script(
-            remote, pool, name, issued.token, getenv("ORCA_POOL_WORKER_COMMAND")
+            remote, pool, name, issued.token, getenv("MORCA_POOL_WORKER_COMMAND")
         )
         var arch = String()
         try:

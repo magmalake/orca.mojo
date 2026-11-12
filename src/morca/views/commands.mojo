@@ -1,13 +1,13 @@
-"""The `orca` command lines the pages show beside their buttons, so what
+"""The `morca` command lines the pages show beside their buttons, so what
 the UI does can be done from a shell, quoted for `sh`.
 """
 
-from orca.views.runs import RunRow
+from morca.views.runs import RunRow
 
 
 def cancel_cli(r: RunRow) -> String:
     return String(
-        "orca cancel ",
+        "morca cancel ",
         shell_quote(r.pipeline),
         " ",
         shell_quote(r.partitions),
@@ -21,7 +21,7 @@ def retry_cli(r: RunRow) -> String:
         r.pipeline,
         " binary> resume ",
         r.id,
-        "  (in that shell's process; orca has no command that queues it)",
+        "  (in that shell's process; morca has no command that queues it)",
     )
 
 
@@ -54,9 +54,9 @@ def shell_quote(s: StringSlice) -> String:
 
 
 def backfill_cmd(name: String, keys: String, rerun: Bool) -> String:
-    """`orca backfill [--rerun] <pipeline> <keys>`, as `orca` reads it."""
+    """`morca backfill [--rerun] <pipeline> <keys>`, as `morca` reads it."""
     return String(
-        "orca backfill ",
+        "morca backfill ",
         "--rerun " if rerun else "",
         shell_quote(name),
         " ",
@@ -65,11 +65,11 @@ def backfill_cmd(name: String, keys: String, rerun: Bool) -> String:
 
 
 def remote_cmd(cmd: String, url: String = "<url>") -> String:
-    """`cmd`, an `orca ...` line, against the UI at `url` from anywhere:
-    `orca login <url> && orca --remote <url> ...`. The pages show `<url>`,
+    """`cmd`, an `morca ...` line, against the UI at `url` from anywhere:
+    `morca login <url> && morca --remote <url> ...`. The pages show `<url>`,
     which their script makes the address the page was loaded from."""
     return String(
-        "orca login ", url, " && orca --remote ", url, String(cmd[byte=4:])
+        "morca login ", url, " && morca --remote ", url, String(cmd[byte=4:])
     )
 
 
@@ -83,9 +83,9 @@ def run_cmd(binary: String, keys: String) -> String:
 
 
 def rebuild_cmd(dataset: String, keys: String) -> String:
-    """`orca rebuild <dataset> <keys>`, as `orca` reads it."""
+    """`morca rebuild <dataset> <keys>`, as `morca` reads it."""
     return String(
-        "orca rebuild ",
+        "morca rebuild ",
         shell_quote(dataset),
         " ",
         shell_quote(keys) if keys else String("<range>"),

@@ -8,33 +8,33 @@ from std.os import getenv
 
 from postgres import Params
 
-from orca.civil import Civil, now
-from orca.config_show import (
+from morca.civil import Civil, now
+from morca.config_show import (
     Shown,
     shown,
 )
-from orca.coverage import Coverage, coverage
-from orca.cron import CronExpr
-from orca.fill import FillStatus, fill_status
-from orca.follow import Follow, follow
-from orca.lineage import SnapshotRef
-from orca.live import live_sql
-from orca.recommend import Recommendation
-from orca.schedule import Schedule
-from orca.queueing import (
+from morca.coverage import Coverage, coverage
+from morca.cron import CronExpr
+from morca.fill import FillStatus, fill_status
+from morca.follow import Follow, follow
+from morca.lineage import SnapshotRef
+from morca.live import live_sql
+from morca.recommend import Recommendation
+from morca.schedule import Schedule
+from morca.queueing import (
     current_keys,
     done_keys,
     keep_keys,
     kept_keys,
 )
-from orca.registered import (
+from morca.registered import (
     fill_key,
     fill_pipeline,
     registered,
 )
-from orca.state import State
-from orca.tz import Zone
-from orca.views.runs import (
+from morca.state import State
+from morca.tz import Zone
+from morca.views.runs import (
     RunsPage,
     VersionRow,
     int_or_zero,
@@ -43,7 +43,7 @@ from orca.views.runs import (
     utc_sql,
     version_rows,
 )
-from orca.views.start import StartPreview, start_preview
+from morca.views.start import StartPreview, start_preview
 
 
 def utc_text(t: Int64) -> String:
@@ -72,22 +72,22 @@ struct PipelineRow(Copyable, Movable):
     var next_fire: String
     var next_partition: String
     var paused: Bool
-    """`orca pause`: the scheduler starts none of its runs."""
+    """`morca pause`: the scheduler starts none of its runs."""
     var sense_error: String
     """Why the sensor's last pass failed, or empty."""
     var sense_error_at: String
     var placement: String
-    """`orca register --placement`: `control`, `ec2`, or empty for the
+    """`morca register --placement`: `control`, `ec2`, or empty for the
     scheduler's runner."""
     var cpus: String
-    """The CPUs it asks for (`orca.resources`), or empty."""
+    """The CPUs it asks for (`morca.resources`), or empty."""
     var memory_gb: String
     """The memory it asks for, in GB, or empty."""
     var waiting: String
     """Why its oldest queued run that waits for room on its host waits
-    (`orca.resources`), or empty."""
+    (`morca.resources`), or empty."""
     var fill_lag: String
-    """`fill_lag` as registered (`orca.fill`), or empty."""
+    """`fill_lag` as registered (`morca.fill`), or empty."""
 
 
 @fieldwise_init
@@ -270,9 +270,9 @@ last read, if any: it runs on the server's one thread."""
 
 def _keys_seconds() -> Float64:
     """How old kept keys may be before the page reads them again: the
-    scheduler's `ORCA_SENSE_SECONDS` (60)."""
+    scheduler's `MORCA_SENSE_SECONDS` (60)."""
     try:
-        return Float64(getenv("ORCA_SENSE_SECONDS", "60"))
+        return Float64(getenv("MORCA_SENSE_SECONDS", "60"))
     except:
         return 60.0
 
@@ -348,7 +348,7 @@ def key_counts(mut db: State, name: String) raises -> KeyCounts:
 
 
 def pipeline_coverage(mut db: State, p: PipelineRow) -> Optional[Coverage]:
-    """`p`'s coverage (`orca.coverage`), None if it has none or it can't
+    """`p`'s coverage (`morca.coverage`), None if it has none or it can't
     be read: a list of pipelines still shows the rest."""
     try:
         return coverage(db, p.name, p.kind, p.start, p.tz, p.fill_lag)
@@ -357,7 +357,7 @@ def pipeline_coverage(mut db: State, p: PipelineRow) -> Optional[Coverage]:
 
 
 def fill_of(mut db: State, name: String) raises -> Optional[FillStatus]:
-    """`name`'s fill (`orca.fill`), if it fills its range or has fill runs
+    """`name`'s fill (`morca.fill`), if it fills its range or has fill runs
     from when it did."""
     var regs = registered(db, name)
     if len(regs) == 0:
@@ -491,8 +491,8 @@ struct NotRun(Copyable, Movable):
 
 struct PipelineView(Movable):
     """A pipeline as its page and its JSON show it, read once:
-    `pipeline_json` (`orca.api.pipelines`) and `pipeline_html`
-    (`orca.ui.pipeline`) both draw this. The JSON is the same on every
+    `pipeline_json` (`morca.api.pipelines`) and `pipeline_html`
+    (`morca.ui.pipeline`) both draw this. The JSON is the same on every
     tab."""
 
     var pipeline: PipelineRow
@@ -503,19 +503,19 @@ struct PipelineView(Movable):
     """The page of its runs `url` asks for."""
     var fill: Optional[FillStatus]
     var following: Optional[Follow]
-    """How far a sensor is behind what it follows (`orca.follow`)."""
+    """How far a sensor is behind what it follows (`morca.follow`)."""
     var usage: UsageSummary
     var learned: Optional[Recommendation]
-    """The request its runs' peaks suggest (`orca.recommend`), from its
-    `orca config show`, applied where it asks for `auto`."""
+    """The request its runs' peaks suggest (`morca.recommend`), from its
+    `morca config show`, applied where it asks for `auto`."""
     var versions: List[VersionRow]
     """The code it's run, newest first."""
     var configs: List[Shown]
-    """What `orca config show <name>` prints (`orca.config`)."""
+    """What `morca config show <name>` prints (`morca.config`)."""
     var keys: Optional[KeyCounts]
     """A keyed pipeline's counts."""
     var coverage: Optional[Coverage]
-    """Its partitions or keys done of those it has (`orca.coverage`)."""
+    """Its partitions or keys done of those it has (`morca.coverage`)."""
     var not_run: List[NotRun]
     """The snapshots its sensor saw and couldn't run, latest first."""
     var start: Optional[StartPreview]

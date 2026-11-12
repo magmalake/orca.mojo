@@ -1,4 +1,4 @@
-# A project's GitHub release for a tag, for an orca project's own CI to call
+# A project's GitHub release for a tag, for a morca project's own CI to call
 # once the tag's image is pushed (docs/project-ci.md):
 #
 #     jobs:

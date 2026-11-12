@@ -1,8 +1,8 @@
-"""Placement: where a pipeline's runs run (`orca register --placement`), and
+"""Placement: where a pipeline's runs run (`morca register --placement`), and
 the control runner, which runs them on the scheduler's own host.
 
 A pipeline's placement is `default` (stored as null: the scheduler's runner,
-`ORCA_RUNNER`, as before), `ec2` (instances of their own, `orca.ec2`; on a
+`MORCA_RUNNER`, as before), `ec2` (instances of their own, `morca.ec2`; on a
 scheduler whose runner isn't `ec2` such runs wait, saying why),
 `worker:<pool>` (a remote worker of that pool starts them, `orca.workers`,
 never the scheduler) or `control`:
@@ -14,25 +14,25 @@ image's). Small runs then start in a second, without an instance to boot.
 **Limits**, so a run can't starve Postgres, the scheduler or the UI:
 
 - **Memory.** Each tick the scheduler adds up the resident memory of each
-  control-placed run's process tree (`orca.sample.tree_rss`) and kills one
-  over `ORCA_CONTROL_MEMORY_MB` (1024), failing its attempts with why. Its
+  control-placed run's process tree (`morca.sample.tree_rss`) and kills one
+  over `MORCA_CONTROL_MEMORY_MB` (1024), failing its attempts with why. Its
   processes are also the first the kernel kills if memory runs out before
   that (`oom_score_adj` 1000, on Linux).
-- **CPU.** Its processes run at `nice` `ORCA_CONTROL_NICE` (10), so the
+- **CPU.** Its processes run at `nice` `MORCA_CONTROL_NICE` (10), so the
   control instance's own processes win when the cores are busy.
-- **How many.** At most `ORCA_CONTROL_MAX_RUNS` (2) control-placed runs, of
+- **How many.** At most `MORCA_CONTROL_MAX_RUNS` (2) control-placed runs, of
   all pipelines, run at once.
 - **Pressure.** None starts while the control instance's newest minute
-  (`orca.system`, from its sampler) has memory or its fullest disk over 85%.
+  (`morca.system`, from its sampler) has memory or its fullest disk over 85%.
 
 A run held by either of the last two stays queued with the reason in
 `runs.held`, which its page and JSON show. dista inside such a run is in
-local mode, `ORCA_CONTROL_WORKERS` (1) forked workers.
+local mode, `MORCA_CONTROL_WORKERS` (1) forked workers.
 
 **Secrets** (`--secret NAME=ID`) are read by the scheduler when it starts
-the run, with `ORCA_SECRET_FETCH` as the instances read them, else from
+the run, with `MORCA_SECRET_FETCH` as the instances read them, else from
 Secrets Manager's API with the scheduler's credentials (the image has no
-`aws` command), and put in the run's environment only, with `ORCA_SECRETS`
+`aws` command), and put in the run's environment only, with `MORCA_SECRETS`
 naming them so its logs mask them. Its driver's output is kept in a staging
 file and appended to the run's `driver.log`, masked, by `<binary> keep-log`
 once the process has ended, as on an EC2 head.
@@ -42,10 +42,10 @@ from std.os import getenv
 
 from json import loads
 
-from orca.awsjson import aws_json
-from orca.json import quote
-from orca.proc import binary_seconds, capture
-from orca.system import Now
+from morca.awsjson import aws_json
+from morca.json import quote
+from morca.proc import binary_seconds, capture
+from morca.system import Now
 
 comptime CONTROL = "control"
 """The placement, and the instance name of a control-placed run's samples."""
@@ -112,7 +112,7 @@ def _env_int(name: StaticString, default: Int, least: Int) raises -> Int:
             return n
     except:
         pass
-    raise Error("orca: ", name, " must be a number from ", least, ", not ", s)
+    raise Error("morca: ", name, " must be a number from ", least, ", not ", s)
 
 
 @fieldwise_init
@@ -121,21 +121,21 @@ struct ControlLimits(Copyable, Movable):
     environment."""
 
     var max_runs: Int
-    """`ORCA_CONTROL_MAX_RUNS` (2): control-placed runs at once."""
+    """`MORCA_CONTROL_MAX_RUNS` (2): control-placed runs at once."""
     var memory_mb: Int
-    """`ORCA_CONTROL_MEMORY_MB` (1024): one run's resident memory."""
+    """`MORCA_CONTROL_MEMORY_MB` (1024): one run's resident memory."""
     var workers: Int
-    """`ORCA_CONTROL_WORKERS` (1): its dista workers, forked locally."""
+    """`MORCA_CONTROL_WORKERS` (1): its dista workers, forked locally."""
     var nice: Int
-    """`ORCA_CONTROL_NICE` (10): its CPU priority, lowered by this."""
+    """`MORCA_CONTROL_NICE` (10): its CPU priority, lowered by this."""
 
     @staticmethod
     def from_env() raises -> ControlLimits:
         return ControlLimits(
-            _env_int("ORCA_CONTROL_MAX_RUNS", 2, 0),
-            _env_int("ORCA_CONTROL_MEMORY_MB", 1024, 1),
-            _env_int("ORCA_CONTROL_WORKERS", 1, 1),
-            _env_int("ORCA_CONTROL_NICE", 10, 0),
+            _env_int("MORCA_CONTROL_MAX_RUNS", 2, 0),
+            _env_int("MORCA_CONTROL_MEMORY_MB", 1024, 1),
+            _env_int("MORCA_CONTROL_WORKERS", 1, 1),
+            _env_int("MORCA_CONTROL_NICE", 10, 0),
         )
 
 
@@ -178,18 +178,18 @@ def slots_reason(running: Int, max_runs: Int) -> String:
         running,
         " of ",
         max_runs,
-        " control-placed runs are running (ORCA_CONTROL_MAX_RUNS)",
+        " control-placed runs are running (MORCA_CONTROL_MAX_RUNS)",
     )
 
 
 def control_stage(pipeline: String, run: Int, start: Int) -> String:
     """Where a control-placed run's start, or a local run's with secrets,
     writes its output before `keep-log` appends it to the run's
-    `driver.log`: under `ORCA_LOG_STAGE` (else `$TMPDIR/orca-logs`), never
+    `driver.log`: under `MORCA_LOG_STAGE` (else `$TMPDIR/morca-logs`), never
     in the logs themselves, since it isn't masked yet."""
-    var root = getenv("ORCA_LOG_STAGE")
+    var root = getenv("MORCA_LOG_STAGE")
     if not root:
-        root = String(getenv("TMPDIR", "/tmp").rstrip("/"), "/orca-logs")
+        root = String(getenv("TMPDIR", "/tmp").rstrip("/"), "/morca-logs")
     return String(
         root, "/control/", pipeline, "-", run, "-", start, "-driver.log"
     )
@@ -203,25 +203,25 @@ def run_env(
     """What a control-placed run's process gets beside the scheduler's
     environment: its local workers, its image (which its version records)
     and its secrets' values, `secrets` being (NAME, value) pairs, named in
-    `ORCA_SECRETS`."""
-    var out: List[String] = [String("ORCA_WORKERS=", limits.workers)]
+    `MORCA_SECRETS`."""
+    var out: List[String] = [String("MORCA_WORKERS=", limits.workers)]
     if image:
-        out.append(String("ORCA_IMAGE=", image))
+        out.append(String("MORCA_IMAGE=", image))
     out.extend(secrets_env(secrets))
     return out^
 
 
 def secrets_env(secrets: List[Tuple[String, String]]) -> List[String]:
     """A run's secrets as environment entries, `secrets` being (NAME, value)
-    pairs: each `NAME=value`, then `ORCA_SECRETS` naming them, which
-    `orca.logs.mask` masks the values by. Nothing for no secrets."""
+    pairs: each `NAME=value`, then `MORCA_SECRETS` naming them, which
+    `morca.logs.mask` masks the values by. Nothing for no secrets."""
     var out = List[String]()
     var names = String()
     for s in secrets:
         out.append(String(s[0], "=", s[1]))
         names.write("," if names else "", s[0])
     if names:
-        out.append(String("ORCA_SECRETS=", names))
+        out.append(String("MORCA_SECRETS=", names))
     return out^
 
 
@@ -230,10 +230,10 @@ def _sh_word(s: String) -> String:
 
 
 def fetch_secret(id: String) raises -> String:
-    """The value of the secret `id`: what `ORCA_SECRET_FETCH <id>` prints,
+    """The value of the secret `id`: what `MORCA_SECRET_FETCH <id>` prints,
     as the instances' scripts read it (trailing newlines dropped, as `$(...)`
     drops them), else Secrets Manager's `GetSecretValue`."""
-    var cmd = getenv("ORCA_SECRET_FETCH")
+    var cmd = getenv("MORCA_SECRET_FETCH")
     if cmd:
         var got = capture(
             ["sh", "-c", String(cmd, " ", _sh_word(id))], binary_seconds()
@@ -248,16 +248,16 @@ def fetch_secret(id: String) raises -> String:
 
 
 def get_secret_value(id: String) raises -> String:
-    """Secrets Manager's `GetSecretValue` of `id` (`orca.awsjson`), with
+    """Secrets Manager's `GetSecretValue` of `id` (`morca.awsjson`), with
     the credentials of the `AWS_*` environment or else the instance role;
-    `ORCA_SECRETS_ENDPOINT` points it elsewhere, as the tests do at their
+    `MORCA_SECRETS_ENDPOINT` points it elsewhere, as the tests do at their
     stand-in (`tests/fake_ec2.py`)."""
     var got: Tuple[Int, String]
     try:
         got = aws_json(
             "secretsmanager",
             "secretsmanager.GetSecretValue",
-            "ORCA_SECRETS_ENDPOINT",
+            "MORCA_SECRETS_ENDPOINT",
             String('{"SecretId": ', quote(id), "}"),
         )
     except e:

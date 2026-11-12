@@ -12,7 +12,7 @@ an in-memory one (run 0), and a context always recognises its own summary.
 
 from harness import check, run_harness, save_last
 
-from orca import Ctx
+from morca import Ctx
 
 comptime NAMES: List[String] = [String("a"), String("b"), String("")]
 comptime FIELDS: List[String] = [

@@ -1,17 +1,17 @@
 """`/datasets`, the datasets and the graph of pipelines and datasets;
 `/datasets/<name>`, a dataset's writers, readers, snapshots and what a
 rebuild of it runs; `/datasets/<name>/snapshots/<id>`, a snapshot's
-lineage (`orca.lineage`); `/rebuilds/<id>`, a rebuild's runs by level.
+lineage (`morca.lineage`); `/rebuilds/<id>`, a rebuild's runs by level.
 """
 
 from postgres import Params
 
-from orca.api.datasets import json_made, json_rebuild
-from orca.api.pipelines import json_strings
-from orca.graph import Edge, Node, graph_svg
-from orca.html import Html, query_param, url_encode
-from orca.json import quote
-from orca.lineage import (
+from morca.api.datasets import json_made, json_rebuild
+from morca.api.pipelines import json_strings
+from morca.graph import Edge, Node, graph_svg
+from morca.html import Html, query_param, url_encode
+from morca.json import quote
+from morca.lineage import (
     Commit,
     Made,
     SnapshotCursor,
@@ -23,9 +23,9 @@ from orca.lineage import (
     forward,
     latest as latest_snapshot,
 )
-from orca.sensors import Link, Rebuild, downstream, rebuilds
-from orca.state import State
-from orca.ui.layout import (
+from morca.sensors import Link, Rebuild, downstream, rebuilds
+from morca.state import State
+from morca.ui.layout import (
     HERE_SLOT,
     ask_attrs,
     card_open,
@@ -35,18 +35,18 @@ from orca.ui.layout import (
     not_found,
     page_html,
 )
-from orca.ui.parts import code_link
-from orca.ui.runs import pager_link
-from orca.views.code import CodeLinks, code_of
-from orca.views.commands import rebuild_cmd, remote_cmd
-from orca.views.datasets import (
+from morca.ui.parts import code_link
+from morca.ui.runs import pager_link
+from morca.views.code import CodeLinks, code_of
+from morca.views.commands import rebuild_cmd, remote_cmd
+from morca.views.datasets import (
     RebuildPreview,
     SNAPSHOTS_PAGE,
     dataset_steps,
     rebuild_preview,
     steps_using,
 )
-from orca.web.page import Page
+from morca.web.page import Page
 
 
 def dataset_href(name: String) -> String:
@@ -423,7 +423,7 @@ def dataset_page(
         _rebuilds_table(h, rbs)
     h.raw("<h2>Snapshots", docs_link("datasets"), "</h2>")
     if len(cs) == 0:
-        h.raw('<p class="empty">No orca run has committed to it.</p>')
+        h.raw('<p class="empty">No morca run has committed to it.</p>')
     else:
         h.raw(
             '<div class="scroll"><table><thead><tr><th>Snapshot</th>',
@@ -592,7 +592,7 @@ def _lineage_graph(start: SnapshotRef, b: List[Made], f: List[Made]) -> String:
     for m in f:
         all.append(m.copy())
     # Inputs nobody here made first, then the made, back to front. An input
-    # upstream that no orca run made is a source (the back walk would have
+    # upstream that no morca run made is a source (the back walk would have
     # it otherwise); one only a downstream step read is another input of
     # that step, whose own lineage isn't drawn.
     for k in range(len(all)):
@@ -614,7 +614,7 @@ def _lineage_graph(start: SnapshotRef, b: List[Made], f: List[Made]) -> String:
                         == start else ("source" if source else "other"),
                         String(
                             i,
-                            ": a source, written by no orca run" if source else (
+                            ": a source, written by no morca run" if source else (
                                 ": also read by a step downstream; open it"
                                 " for its own lineage"
                             ),
@@ -634,7 +634,7 @@ def _lineage_graph(start: SnapshotRef, b: List[Made], f: List[Made]) -> String:
                     "snapshot",
                     snapshot_href(start),
                     "start",
-                    String(start, ": a source, written by no orca run"),
+                    String(start, ": a source, written by no morca run"),
                 )
             )
     for m in all:
@@ -683,10 +683,10 @@ comptime _LINEAGE_HELP = (
 
 
 comptime _UPSTREAM_HELP = (
-    "This snapshot, if an orca run wrote it, and every snapshot it was"
+    "This snapshot, if a morca run wrote it, and every snapshot it was"
     " written from, directly or not: for each, the run and step that wrote"
     " it and the snapshots that step read. A source, written by something"
-    " other than orca, is only in the Read column. back in the JSON."
+    " other than morca, is only in the Read column. back in the JSON."
 )
 
 
@@ -708,7 +708,7 @@ def snapshot_page(mut db: State, name: String, id: Int64) raises -> Page:
         Params().text(name).int64(id),
     )
     if len(known) == 0:
-        return not_found(String("no snapshot ", start, " that orca knows of"))
+        return not_found(String("no snapshot ", start, " that morca knows of"))
     var b = back(db, start)
     var f = forward(db, start)
     var j = String(
@@ -729,7 +729,7 @@ def snapshot_page(mut db: State, name: String, id: Int64) raises -> Page:
     h.raw(
         '<p class="muted graph__legend"><span class="graph__key',
         ' graph__key--start"></span>this snapshot <span class="graph__key">',
-        '</span>written by an orca run <span class="graph__key',
+        '</span>written by a morca run <span class="graph__key',
         ' graph__key--source"></span>a source, written by something else',
         ' <span class="graph__key graph__key--other"></span>another input of',
         ' a step downstream <span class="graph__arrow">↓</span> read, to',
@@ -743,7 +743,7 @@ def snapshot_page(mut db: State, name: String, id: Int64) raises -> Page:
     h.raw("</h2>")
     if len(b) == 0:
         h.raw(
-            '<p class="empty">No orca run wrote this snapshot: it is a'
+            '<p class="empty">No morca run wrote this snapshot: it is a'
             " source.</p>"
         )
     else:
@@ -752,7 +752,7 @@ def snapshot_page(mut db: State, name: String, id: Int64) raises -> Page:
     help_tip(h, "downstream", "Downstream", _DOWNSTREAM_HELP, "datasets")
     h.raw("</h2>")
     if len(f) == 0:
-        h.raw('<p class="empty">No orca run has read it yet.</p>')
+        h.raw('<p class="empty">No morca run has read it yet.</p>')
     else:
         _made_table(h, f)
     return Page(200, j^, page_html(String(name, " @ ", id), "/datasets", h))

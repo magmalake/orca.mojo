@@ -1,26 +1,26 @@
-"""The `orca` command against a deployed `orca ui`, over HTTPS, as a user of
+"""The `morca` command against a deployed `morca ui`, over HTTPS, as a user of
 it: log in once, then act from anywhere the UI can be reached.
 
 ```
-orca login https://orca.mlake.dev     # asks for a name and a password
-orca --remote orca.mlake.dev backfill gharchive 2025-01-02..2025-01-31
-orca --remote orca.mlake.dev pause gharchive
-orca --remote orca.mlake.dev status gharchive
-orca logout https://orca.mlake.dev    # revokes the token
+morca login https://orca.mlake.dev     # asks for a name and a password
+morca --remote orca.mlake.dev backfill gharchive 2025-01-02..2025-01-31
+morca --remote orca.mlake.dev pause gharchive
+morca --remote orca.mlake.dev status gharchive
+morca logout https://orca.mlake.dev    # revokes the token
 ```
 
-`--remote <url>` (or `--url`), else `ORCA_REMOTE` (or `ORCA_URL`), picks
-the UI; without one every command goes to `ORCA_DATABASE_URL`, as it always
+`--remote <url>` (or `--url`), else `MORCA_REMOTE` (or `MORCA_URL`), picks
+the UI; without one every command goes to `MORCA_DATABASE_URL`, as it always
 has. A bare host is `https://<host>`. Plain `http` is refused but to
 `127.0.0.1`, `localhost` and `[::1]`, where nothing is on the wire: a token,
 like a password, never crosses a network in the clear.
 
-`orca login` posts the name and password to `/api/login`, which checks
+`morca login` posts the name and password to `/api/login`, which checks
 them as `/login` does, under the same limit on failures, and answers an API
-token (`orca.tokens`). The password is read without echo from the terminal,
+token (`morca.tokens`). The password is read without echo from the terminal,
 or as a line of standard input when that isn't one (`--user` names the
-user then). The token is kept in `ORCA_CREDENTIALS`, by default
-`~/.config/orca/credentials` (`$XDG_CONFIG_HOME/orca` if set), a line per
+user then). The token is kept in `MORCA_CREDENTIALS`, by default
+`~/.config/morca/credentials` (`$XDG_CONFIG_HOME/morca` if set), a line per
 UI: its URL, the user, when the token expires, and the token. The file is
 written with mode 600 in a directory made with mode 700, and one that
 others can read is refused, as ssh refuses a key.
@@ -46,17 +46,17 @@ from std.sys import stderr
 from json import Value, loads
 from objectstore.http import Header, HttpClient, Response
 
-from orca.civil import now, parse_time
-from orca.html import url_encode
-from orca.json import quote
-from orca.lineage import SnapshotRef
-from orca.pressure import pct_text
-from orca.queueing import file_names
-from orca.state import State
-from orca.ui.parts import took_text
-from orca.usage import usage_of, usage_text
-from orca.watchdog import status_lines
-from orca.web.server import act, read_page
+from morca.civil import now, parse_time
+from morca.html import url_encode
+from morca.json import quote
+from morca.lineage import SnapshotRef
+from morca.pressure import pct_text
+from morca.queueing import file_names
+from morca.state import State
+from morca.ui.parts import took_text
+from morca.usage import usage_of, usage_text
+from morca.watchdog import status_lines
+from morca.web.server import act, read_page
 
 
 def is_remote_command(cmd: String) -> Bool:
@@ -90,7 +90,7 @@ def remote_url(given: String) raises -> String:
     `http` to this machine; a path, query, fragment or user in it."""
     var u = String(given.strip())
     if not u:
-        raise Error("orca: no UI to go to (--remote <url>, or ORCA_REMOTE)")
+        raise Error("morca: no UI to go to (--remote <url>, or MORCA_REMOTE)")
     if u.find("://") < 0:
         u = String("https://", u)
     var sep = u.find("://")
@@ -110,13 +110,13 @@ def remote_url(given: String) raises -> String:
             or c == UInt8(ord("\\"))
         ):
             raise Error(
-                "orca: a UI's URL is scheme://host[:port], with no path,",
+                "morca: a UI's URL is scheme://host[:port], with no path,",
                 " query or user: ",
                 given,
             )
     var authority = rest.lower()
     if not authority or authority.startswith(":"):
-        raise Error("orca: no host in ", given)
+        raise Error("morca: no host in ", given)
     # The host is what comes before the port: after `]` for an IPv6 one.
     var host = authority
     var close = authority.find("]")
@@ -129,7 +129,7 @@ def remote_url(given: String) raises -> String:
             if p < 1 or p > 65535:
                 raise Error()
         except:
-            raise Error("orca: not a port: ", port)
+            raise Error("morca: not a port: ", port)
         if (scheme == "https" and port == "443") or (
             scheme == "http" and port == "80"
         ):
@@ -137,27 +137,27 @@ def remote_url(given: String) raises -> String:
     if scheme == "http":
         if not _local_host(host):
             raise Error(
-                "orca: ",
+                "morca: ",
                 given,
                 " is plain http, which would send the password and the",
                 " token in the clear; use https (http is only for",
                 " 127.0.0.1 and localhost)",
             )
     elif scheme != "https":
-        raise Error("orca: a UI is reached over https, not ", scheme)
+        raise Error("morca: a UI is reached over https, not ", scheme)
     return String(scheme, "://", authority)
 
 
 def remote_target(mut args: List[String]) raises -> String:
     """The UI the command line picks, `--remote <url>` (or `--url`) right
-    after `orca`, which this removes from `args`, else `ORCA_REMOTE` (or
-    `ORCA_URL`); empty for none."""
+    after `morca`, which this removes from `args`, else `MORCA_REMOTE` (or
+    `MORCA_URL`); empty for none."""
     var given = String()
     if len(args) >= 2:
         var a = args[1]
         if a == "--remote" or a == "--url":
             if len(args) < 3:
-                raise Error("orca: ", a, " needs the UI's URL")
+                raise Error("morca: ", a, " needs the UI's URL")
             given = args[2]
             _ = args.pop(1)
             _ = args.pop(1)
@@ -165,7 +165,7 @@ def remote_target(mut args: List[String]) raises -> String:
             given = String(a[byte = a.find("=") + 1 :])
             _ = args.pop(1)
     if not given:
-        given = getenv("ORCA_REMOTE", getenv("ORCA_URL"))
+        given = getenv("MORCA_REMOTE", getenv("MORCA_URL"))
     return remote_url(given) if given else String()
 
 
@@ -181,18 +181,18 @@ struct Credential(Copyable, Movable):
 
 
 def credentials_path() raises -> String:
-    """`ORCA_CREDENTIALS`, else `orca/credentials` in `XDG_CONFIG_HOME`, else
+    """`MORCA_CREDENTIALS`, else `morca/credentials` in `XDG_CONFIG_HOME`, else
     in `~/.config`."""
-    var p = getenv("ORCA_CREDENTIALS")
+    var p = getenv("MORCA_CREDENTIALS")
     if p:
         return p
     var config = getenv("XDG_CONFIG_HOME")
     if not config:
         var home = getenv("HOME")
         if not home:
-            raise Error("orca: no HOME for the credentials (ORCA_CREDENTIALS)")
+            raise Error("morca: no HOME for the credentials (MORCA_CREDENTIALS)")
         config = String(home, "/.config")
-    return String(config, "/orca/credentials")
+    return String(config, "/morca/credentials")
 
 
 def _mode(path: String) raises -> Int:
@@ -208,11 +208,11 @@ def read_credentials(path: String) raises -> List[Credential]:
     var mode = _mode(path)
     if mode & 0o077 != 0:
         raise Error(
-            "orca: ",
+            "morca: ",
             path,
             " can be read by others (mode ",
             oct(mode),
-            "); chmod 600 it, or remove it and orca login again",
+            "); chmod 600 it, or remove it and morca login again",
         )
     var text: String
     with open(path, "r") as f:
@@ -223,7 +223,7 @@ def read_credentials(path: String) raises -> List[Credential]:
             continue
         var f = line.split("\t")
         if len(f) != 4:
-            raise Error("orca: ", path, " has a line that isn't a login")
+            raise Error("morca: ", path, " has a line that isn't a login")
         out.append(
             Credential(String(f[0]), String(f[1]), String(f[2]), String(f[3]))
         )
@@ -238,8 +238,8 @@ def write_credentials(path: String, creds: List[Credential]) raises:
     if dir:
         makedirs(dir, mode=0o700, exist_ok=True)
     var text = String(
-        "# orca login's API tokens (orca.remote): URL, user, expires, token."
-        "\n# Keep this file to yourself; orca logout <url> revokes one.\n"
+        "# morca login's API tokens (morca.remote): URL, user, expires, token."
+        "\n# Keep this file to yourself; morca logout <url> revokes one.\n"
     )
     for c in creds:
         text.write(c.url, "\t", c.user, "\t", c.expires, "\t", c.token, "\n")
@@ -252,7 +252,7 @@ def write_credentials(path: String, creds: List[Credential]) raises:
         _ = external_call["umask", c_uint](old)
     if _mode(tmp) != 0o600:
         remove(tmp)
-        raise Error("orca: couldn't make ", tmp, " mode 600")
+        raise Error("morca: couldn't make ", tmp, " mode 600")
     var final = path
     if (
         external_call["rename", c_int](
@@ -261,7 +261,7 @@ def write_credentials(path: String, creds: List[Credential]) raises:
         != 0
     ):
         remove(tmp)
-        raise Error("orca: couldn't write ", path)
+        raise Error("morca: couldn't write ", path)
 
 
 def find_credential(creds: List[Credential], url: String) -> Int:
@@ -276,10 +276,10 @@ def find_credential(creds: List[Credential], url: String) -> Int:
 
 
 def _refusal(v: Value) -> String:
-    """The `error` of a UI's JSON answer, as orca's own errors say it."""
+    """The `error` of a UI's JSON answer, as morca's own errors say it."""
     try:
         var why = v["error"].string_value()
-        return why if why.startswith("orca") else String("orca: ", why)
+        return why if why.startswith("morca") else String("morca: ", why)
     except:
         return ""
 
@@ -306,7 +306,7 @@ struct Remote(Movable):
         travels only with what it's for."""
         var h: List[Header] = [
             Header("accept", "application/json"),
-            Header("user-agent", "orca-cli"),
+            Header("user-agent", "morca-cli"),
         ]
         if json_body:
             h.append(Header("content-type", "application/json"))
@@ -321,10 +321,10 @@ struct Remote(Movable):
             return text^
         if resp.status == 401 and self.token:
             raise Error(
-                "orca: ",
+                "morca: ",
                 self.url,
                 " refused the login: the token has expired or been revoked;",
-                " orca login ",
+                " morca login ",
                 self.url,
                 " again",
             )
@@ -334,11 +334,11 @@ struct Remote(Movable):
         except:
             pass
         if resp.status == 401 and not why:
-            why = String("orca: log in first: orca login ", self.url)
+            why = String("morca: log in first: morca login ", self.url)
         if why:
             raise Error(why)
         raise Error(
-            "orca: ",
+            "morca: ",
             self.url,
             " answered ",
             resp.status,
@@ -351,7 +351,7 @@ struct Remote(Movable):
         try:
             resp = self.http.get(String(self.url, path), self._headers(False))
         except e:
-            raise Error("orca: can't reach ", self.url, ": ", e)
+            raise Error("morca: can't reach ", self.url, ": ", e)
         return self._answer(resp)
 
     def post(self, path: String, body: String) raises -> String:
@@ -364,7 +364,7 @@ struct Remote(Movable):
                 body.as_bytes(),
             )
         except e:
-            raise Error("orca: can't reach ", self.url, ": ", e)
+            raise Error("morca: can't reach ", self.url, ": ", e)
         return self._answer(resp)
 
 
@@ -422,7 +422,7 @@ struct Api(Movable):
         db.migrate()
         var done = act(db, path, _form(fields))
         if not done:
-            raise Error("orca: nothing at ", path)
+            raise Error("morca: nothing at ", path)
         ref page = done.value()
         if page.status != 303:
             raise Error(_refusal(loads(page.json)))
@@ -469,7 +469,7 @@ def _hostname() -> String:
 
 
 def login_command(args: List[String], target: String) raises -> Int:
-    """`orca login [<url>] [--user NAME] [--label L] [--days N]`."""
+    """`morca login [<url>] [--user NAME] [--label L] [--days N]`."""
     var url = target
     var user = String()
     var label = _hostname()
@@ -488,21 +488,21 @@ def login_command(args: List[String], target: String) raises -> Int:
                 try:
                     days = Int(args[i + 1])
                 except:
-                    raise Error("orca: --days is a count of days")
+                    raise Error("morca: --days is a count of days")
             i += 2
         elif not a.startswith("--") and not url:
             url = remote_url(a)
             i += 1
         else:
-            raise Error("orca: unknown argument to login: ", a)
+            raise Error("morca: unknown argument to login: ", a)
     if not url:
-        raise Error("orca: login needs the UI's URL: orca login https://<host>")
+        raise Error("morca: login needs the UI's URL: morca login https://<host>")
     var path = credentials_path()
     var creds = read_credentials(path)
     if not user:
         if not _isatty():
             raise Error(
-                "orca: login needs --user NAME when standard input isn't a"
+                "morca: login needs --user NAME when standard input isn't a"
                 " terminal"
             )
         print("User: ", end="", file=stderr, flush=True)
@@ -537,21 +537,21 @@ def login_command(args: List[String], target: String) raises -> Int:
 
 
 def logout_command(args: List[String], target: String) raises -> Int:
-    """`orca logout [<url>]`: revokes the token there, and forgets it."""
+    """`morca logout [<url>]`: revokes the token there, and forgets it."""
     var url = target
     if len(args) == 3:
         url = remote_url(args[2])
     elif len(args) > 3:
-        raise Error("orca: logout takes one URL")
+        raise Error("morca: logout takes one URL")
     var path = credentials_path()
     var creds = read_credentials(path)
     if not url and len(creds) == 1:
         url = creds[0].url
     if not url:
-        raise Error("orca: logout from which UI? orca logout https://<host>")
+        raise Error("morca: logout from which UI? morca logout https://<host>")
     var at = find_credential(creds, url)
     if at < 0:
-        raise Error("orca: not logged in to ", url)
+        raise Error("morca: not logged in to ", url)
     var note = String()
     try:
         _ = Remote(url, creds[at].token).post("/api/logout", "{}")
@@ -578,9 +578,9 @@ def remote_api(url: String) raises -> Api:
 def _need_login(api: Api) raises:
     if api.remote and not api.remote.value().token:
         raise Error(
-            "orca: not logged in to ",
+            "morca: not logged in to ",
             api.remote.value().url,
-            "; orca login ",
+            "; morca login ",
             api.remote.value().url,
             " first",
         )
@@ -664,8 +664,8 @@ def _status_line(p: Value) raises -> String:
 
 
 def pressure_status(v: Value) raises -> String:
-    """`orca status`'s line for the scheduler's host's memory pressure
-    (`memory_pressure` in `/`'s JSON, `orca.admission`), or empty for
+    """`morca status`'s line for the scheduler's host's memory pressure
+    (`memory_pressure` in `/`'s JSON, `morca.admission`), or empty for
     none."""
     if String("memory_pressure") not in v or v["memory_pressure"].is_null():
         return ""
@@ -698,7 +698,7 @@ def _pct(x: Float64) -> String:
 
 
 def print_status(json: String, one: Bool) raises:
-    """`orca status`'s lines from `/`'s JSON, or with `one` a pipeline's
+    """`morca status`'s lines from `/`'s JSON, or with `one` a pipeline's
     page's: its line, any sensing error, and its latest runs."""
     var v = loads(json)
     var ps = List[Value]()
@@ -754,7 +754,7 @@ def print_status(json: String, one: Bool) raises:
 
 
 def _print_made(ms: List[Value]) raises:
-    """As `orca lineage` prints `Made`s (orca.command)."""
+    """As `morca lineage` prints `Made`s (morca.command)."""
     if len(ms) == 0:
         print("  nothing")
     for m in ms:
@@ -781,12 +781,12 @@ def _print_made(ms: List[Value]) raises:
 
 
 def alert_lines(json: String) raises -> List[String]:
-    """`orca alerts`' lines from `/api/alerts`' JSON: a line per alert,
+    """`morca alerts`' lines from `/api/alerts`' JSON: a line per alert,
     newest first, its time, kind, state and delivery, then its title."""
     var v = loads(json)
     var out = List[String]()
     if not v["configured"].bool_value():
-        out.append("alerts aren't configured (ORCA_NOTIFY_URL)")
+        out.append("alerts aren't configured (MORCA_NOTIFY_URL)")
     var n = 0
     for a in v["alerts"].array_items():
         n += 1
@@ -822,7 +822,7 @@ def alert_lines(json: String) raises -> List[String]:
 
 
 def api_command(mut api: Api, args: List[String]) raises -> Int:
-    """Runs `args` (`orca <command> ...`) through `api`, printing what the
+    """Runs `args` (`morca <command> ...`) through `api`, printing what the
     command prints over the database."""
     var cmd = args[1]
     var n = len(args)
@@ -872,7 +872,7 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
                 i += 2
             else:
                 raise Error(
-                    "usage: orca alerts [--kind K] [--open|--resolved]",
+                    "usage: morca alerts [--kind K] [--open|--resolved]",
                     " [--limit N] [--json]",
                 )
         var got = api.get(String(q, "&limit=", url_encode(limit)))
@@ -893,7 +893,7 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
         else:
             var d = loads(api.get(String("/datasets/", _seg(ds))))
             if d["latest"].is_null():
-                raise Error("orca: no snapshot of ", ds, " is recorded")
+                raise Error("morca: no snapshot of ", ds, " is recorded")
             id = d["latest"].int_value()
         var got = api.get(String("/datasets/", _seg(ds), "/snapshots/", id))
         if json_out:
@@ -925,7 +925,7 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
                 pos.append(a)
         if len(pos) != 2:
             raise Error(
-                "usage: orca backfill [--rerun [--allow-append]] [--preview]",
+                "usage: morca backfill [--rerun [--allow-append]] [--preview]",
                 " <pipeline> KEYS",
             )
         var keys = _keys_arg(pos[1])
@@ -943,12 +943,12 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
                 )
             )
             if String("preview") not in v:
-                raise Error("orca: nothing to preview over '", keys, "'")
+                raise Error("morca: nothing to preview over '", keys, "'")
             var p = v["preview"]
             if not p["refused"].is_null():
                 var why = p["refused"].string_value()
                 raise Error(
-                    why if why.startswith("orca") else String("orca: ", why)
+                    why if why.startswith("morca") else String("morca: ", why)
                 )
             print(p["summary"].string_value())
             return 0
@@ -1023,7 +1023,7 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
             else:
                 run = _run_arg(a)
         if run == 0:
-            raise Error("usage: orca resume [--allow-new-code] <run>")
+            raise Error("usage: morca resume [--allow-new-code] <run>")
         var fields = List[Tuple[String, String]]()
         if allow:
             fields.append((String("allow_new_code"), String("1")))
@@ -1033,7 +1033,7 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
             var why = String(e)
             if "ran code" in why and not allow:
                 why.write(
-                    " (orca resume --allow-new-code ",
+                    " (morca resume --allow-new-code ",
                     run,
                     " resumes it with the new code)",
                 )
@@ -1049,7 +1049,7 @@ def api_command(mut api: Api, args: List[String]) raises -> Int:
             else:
                 pos.append(a)
         if len(pos) != 2:
-            raise Error("usage: orca rerun [--allow-append] <run> <step>")
+            raise Error("usage: morca rerun [--allow-append] <run> <step>")
         var run = _run_arg(pos[0])
         var fields: List[Tuple[String, String]] = [(String("step"), pos[1])]
         if allow_append:

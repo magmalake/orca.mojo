@@ -1,5 +1,5 @@
 """Requests learned from what a pipeline's runs used (#269): shown on its
-Resources card and in `orca config show`, and applied where its `cpus` or
+Resources card and in `morca config show`, and applied where its `cpus` or
 `memory_gb` is `auto` (`resolve_request`).
 
 From the peaks of a pipeline's last `LEARN_RUNS` successful measured runs
@@ -9,7 +9,7 @@ the request they suggest:
 - **memory** is the `MEMORY_PERCENTILE` of the runs' peak memory times
   `MEMORY_MARGIN`, rounded up to `MEMORY_STEP_MB`, and never below what an
   out-of-memory kill raised the pipeline to (`orca.pipelines.memory_raised_mb`,
-  `orca.cgroup`);
+  `morca.cgroup`);
 - **CPUs** are the `CPU_PERCENTILE` of the runs' peak cores, rounded up, at
   least 1; none where peak cores aren't measured (macOS);
 - each is clamped to the pipeline's declared range (`cpus`, `memory_gb`),
@@ -22,18 +22,18 @@ the request they suggest:
 
 This is the simplest rule that can work: a percentile over a fixed window,
 over all of a pipeline's runs alike (fill, manual or scheduled), with no
-decay. The Resources card and `orca config show` show it beside the declared
+decay. The Resources card and `morca config show` show it beside the declared
 request.
 
 **`auto`.** A pipeline whose `cpus` or `memory_gb` is `auto` (or `auto..MAX`)
 asks for what its runs suggest: `resolve_request` makes the request a start is
 admitted and granted with, each time the scheduler or a worker starts one of
 its runs, from the recommendation the scheduler caches per pipeline
-(`orca.pipelines.learned`, `orca.scheduler.run_request`) and works out again
+(`orca.pipelines.learned`, `morca.scheduler.run_request`) and works out again
 only when its latest successful run, its out-of-memory bump or its declared
 request changes. `auto` is the learned value as its minimum and maximum
 (`auto..MAX`: up to `MAX`); with none yet (fewer than `MIN_RUNS` runs, or no
-peak cores on macOS), or with learning off (`learn = false` in orca.toml),
+peak cores on macOS), or with learning off (`learn = false` in morca.toml),
 that resource has no request, as without `cpus` or `memory_gb`. The run
 records where its request came from (`orca.runs.request_source`: `declared`,
 `learned` or `default`) and, learned, from how many runs (`request_runs`).
@@ -43,9 +43,9 @@ from std.math import ceil
 
 from postgres import Params
 
-from orca.json import quote
-from orca.resources import Request, gb_hundredths
-from orca.state import State
+from morca.json import quote
+from morca.resources import Request, gb_hundredths
+from morca.state import State
 
 comptime DECLARED = "declared"
 comptime LEARNED = "learned"
@@ -54,7 +54,7 @@ comptime DEFAULT = "default"
 
 comptime LEARN_RUNS = 20
 """How many of the latest runs it learns from: the window the Resources card
-summarizes (`orca.views.pipelines.USAGE_RUNS`)."""
+summarizes (`morca.views.pipelines.USAGE_RUNS`)."""
 comptime MIN_RUNS = 3
 """Fewer runs than this and one odd run would be the whole percentile."""
 comptime MEMORY_PERCENTILE: Float64 = 0.95
@@ -62,7 +62,7 @@ comptime MEMORY_PERCENTILE: Float64 = 0.95
 one largest run as the rule."""
 comptime MEMORY_MARGIN: Float64 = 1.15
 """Headroom over the percentile for a run a little larger than any seen,
-under the 25% between a run's limit and its kill (`ORCA_RUN_MEMORY_MARGIN`)."""
+under the 25% between a run's limit and its kill (`MORCA_RUN_MEMORY_MARGIN`)."""
 comptime MEMORY_STEP_MB = 256
 """Rounded up to a quarter GB, which `memory_gb` writes exactly, so the
 number doesn't move with every run."""

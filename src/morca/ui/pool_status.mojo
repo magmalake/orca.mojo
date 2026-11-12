@@ -1,4 +1,4 @@
-"""The pools orca grows and shrinks itself (`orca.pool_scale`), on Ops ›
+"""The pools morca grows and shrinks itself (`morca.pool_scale`), on Ops ›
 Pools: each `[pools.<name>]` with its provider and machine types, how many
 of its machines are live, the type it's trying and what its last try came
 to (`orca.pools.status`), and as JSON for `/api/pools`.
@@ -7,14 +7,14 @@ to (`orca.pools.status`), and as JSON for `/api/pools`.
 from json import loads
 from postgres import Params
 
-from orca.html import Html
-from orca.json import quote
-from orca.state import State
-from orca.ui.layout import card_open
+from morca.html import Html
+from morca.json import quote
+from morca.state import State
+from morca.ui.layout import card_open
 
 comptime _HELP = (
-    "The pools orca makes and removes machines for itself, from"
-    " [pools.&lt;name&gt;] in orca.toml: their provider, the machine types in"
+    "The pools morca makes and removes machines for itself, from"
+    " [pools.&lt;name&gt;] in morca.toml: their provider, the machine types in"
     " order of preference (with how long each is tried), the live machines"
     " against max_machines, and what the last try to add one came to."
 )
@@ -81,7 +81,7 @@ def _types(p: ScaledPool) -> String:
 
 
 def scaled_pools_html(mut h: Html, pools: List[ScaledPool]):
-    """The card; nothing when orca.toml declares no pool."""
+    """The card; nothing when morca.toml declares no pool."""
     if len(pools) == 0:
         return
     card_open(

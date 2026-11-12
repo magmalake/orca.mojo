@@ -1,4 +1,4 @@
-"""The Lean model of pinned reads (formal/Orca/Pins) against `Ctx.pin` over a
+"""The Lean model of pinned reads (formal/Morca/Pins) against `Ctx.pin` over a
 store: every sequence of up to five events in formal/difftest/pins.cases is
 replayed in a run of its own, and the answers `Ctx.pin` gave are compared
 with the ones the model's oracle printed (formal/Oracle/Pins.lean; the
@@ -20,7 +20,7 @@ from std.os import remove
 from std.os.path import exists
 from std.testing import assert_equal
 
-from orca import Ctx, MemoryStore, RunStore, SqliteStore
+from morca import Ctx, MemoryStore, RunStore, SqliteStore
 
 comptime CASES = "formal/difftest/pins.cases"
 comptime PIPELINE = "formal_pins"

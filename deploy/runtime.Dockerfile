@@ -1,17 +1,17 @@
-# orca's runtime image, ghcr.io/morca-dev/morca-runtime:<orca version>, which
-# a project's image builds FROM (deploy/project.Dockerfile): orca's own
-# `orca` (bin/scheduler.mojo) and `orca_maintain` (bin/orca_maintain.mojo),
+# morca's runtime image, ghcr.io/morca-dev/morca-runtime:<morca version>, which
+# a project's image builds FROM (deploy/project.Dockerfile): morca's own
+# `morca` (bin/scheduler.mojo) and `morca_maintain` (bin/morca_maintain.mojo),
 # git, libcurl, the CA bundles where libcurl, OpenSSL and flare look for
-# them, llvm-symbolizer, and the /opt/orca layout and environment that
-# deploy/hetzner and `orca aws` run. orca's CI builds and tests it on every
-# pull request, and pushes main's as orca-runtime:<sha>, which a release
+# them, llvm-symbolizer, and the /opt/morca layout and environment that
+# deploy/hetzner and `morca aws` run. morca's CI builds and tests it on every
+# pull request, and pushes main's as morca-runtime:<sha>, which a release
 # tags <version> (.github/workflows/runtime-image.yml). Build it from the
 # repository root:
 #
-#     docker build -f deploy/runtime.Dockerfile -t orca-runtime:dev .
+#     docker build -f deploy/runtime.Dockerfile -t morca-runtime:dev .
 #
 # The binaries are built in deploy/runtime/pixi.toml, a project that adds
-# this checkout of orca-mojo, so they link the same packages a project's
+# this checkout of morca-mojo, so they link the same packages a project's
 # pipelines do, installed from its lock (deploy/runtime/lock.sh). Like
 # the project's image, everything has line tables (-g1), compressed, and
 # is built for MOJO_TARGET_CPU, not for the CPU of the machine building
@@ -21,13 +21,13 @@
 # amd64 for x86-64-v3 (AVX2).
 #
 # The stages are ordered for the layer cache: `env` is the pixi environment
-# and depends only on orca's pixi.toml, src/ and the lock; `curl` and `git` start from
+# and depends only on morca's pixi.toml, src/ and the lock; `curl` and `git` start from
 # it, so a change to bin/ alone reuses `pixi install` and git as they were.
 FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS env
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY pixi.toml /src/orca.mojo/pixi.toml
-COPY src /src/orca.mojo/src
+COPY pixi.toml /src/morca/pixi.toml
+COPY src /src/morca/src
 # At /src/project, the directory deploy/project.Dockerfile builds a project
 # in, so the CA bundle paths compiled into conda's libcurl and OpenSSL are
 # the same in both (below).
@@ -37,16 +37,16 @@ RUN pixi install --locked
 
 FROM env AS build
 ARG MOJO_TARGET_CPU=neoverse-n1
-# Beside the checkout, not in it: pixi would see orca-mojo's source change
+# Beside the checkout, not in it: pixi would see morca-mojo's source change
 # and build the package again.
 COPY bin /src/bin
 RUN mkdir -p /out/bin /out/share && cp pixi.lock /out/share/pixi.lock \
-    && pixi run sh -c 'mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" /src/bin/scheduler.mojo -o /out/bin/orca \
-        && mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" /src/bin/orca_maintain.mojo -o /out/bin/orca_maintain'
+    && pixi run sh -c 'mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" /src/bin/scheduler.mojo -o /out/bin/morca \
+        && mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" /src/bin/morca_maintain.mojo -o /out/bin/morca_maintain'
 # The line tables compressed, which llvm-symbolizer reads as they are.
 RUN for b in /out/bin/*; do objcopy --compress-debug-sections=zlib "$b" || exit 1; done
 # Only the pixi environment's libraries the binaries link or dlopen: libpq
-# (postgres), flare's shims (orca ui, apps) and every tin's shim, such as
+# (postgres), flare's shims (morca ui, apps) and every tin's shim, such as
 # objectstore's and the codecs' (zstd, for Iceberg writes); and
 # llvm-symbolizer, which Mojo's runtime runs to name a crash's frames, with
 # what it links. Stripped of their symbol tables. Not conda's libpsl, which
@@ -67,7 +67,7 @@ RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib /out/libexec \
 # mojo_versions): only the `git` binary (every builtin) and
 # git-remote-https, without Perl, Tcl/Tk, gettext, Python or expat (Debian's
 # git package and what it pulls in: 90 MB; this, 5 MB). Built on the image's
-# Debian against the pixi environment's libcurl, which /opt/orca/lib ships
+# Debian against the pixi environment's libcurl, which /opt/morca/lib ships
 # anyway (objectstore links it). `curl` gathers libcurl, the pixi libraries
 # it links (not libpsl or ICU, as above) and its headers from `env`, so git
 # is built again only when the pixi environment changes.
@@ -86,38 +86,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=curl /deps /deps
 RUN curl -fsSL https://mirrors.edge.kernel.org/pub/software/scm/git/git-$GIT_VERSION.tar.xz | tar xJ -C /usr/src \
     && cd /usr/src/git-$GIT_VERSION && ln -s libcurl.so.4 /deps/lib/libcurl.so \
-    && make -j"$(nproc)" prefix=/opt/orca gitexecdir=/opt/orca/libexec/git \
-        template_dir=/opt/orca/libexec/git/templates \
+    && make -j"$(nproc)" prefix=/opt/morca gitexecdir=/opt/morca/libexec/git \
+        template_dir=/opt/morca/libexec/git/templates \
         NO_PERL=1 NO_TCLTK=1 NO_GETTEXT=1 NO_PYTHON=1 NO_EXPAT=1 NO_OPENSSL=1 NO_INSTALL_HARDLINKS=1 \
         CURL_CFLAGS=-I/deps/include CURL_LDFLAGS='-L/deps/lib -lcurl -Wl,-rpath-link,/deps/lib' \
         git git-remote-http \
-    && mkdir -p /opt/orca/bin /opt/orca/libexec/git/templates \
-    && install -s git /opt/orca/libexec/git/git \
-    && install -s git-remote-http /opt/orca/libexec/git/git-remote-https \
-    && ln -s ../libexec/git/git /opt/orca/bin/git
+    && mkdir -p /opt/morca/bin /opt/morca/libexec/git/templates \
+    && install -s git /opt/morca/libexec/git/git \
+    && install -s git-remote-http /opt/morca/libexec/git/git-remote-https \
+    && ln -s ../libexec/git/git /opt/morca/bin/git
 
 FROM debian:bookworm-slim
 # tzdata: schedules read the system's TZif files. libpsl5 for libcurl (see
 # above).
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certificates libpsl5 \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=build /out/lib /opt/orca/lib
-COPY --from=build /out/bin /opt/orca/bin
-COPY --from=build /out/libexec /opt/orca/libexec
-COPY --from=build /out/share /opt/orca/share
-COPY --from=git /opt/orca /opt/orca
+COPY --from=build /out/lib /opt/morca/lib
+COPY --from=build /out/bin /opt/morca/bin
+COPY --from=build /out/libexec /opt/morca/libexec
+COPY --from=build /out/share /opt/morca/share
+COPY --from=git /opt/morca /opt/morca
 # libcurl (objectstore, git) and OpenSSL (flare) look for CA certificates
 # under the build environment's prefix, compiled in when conda relocated
 # them: /src/project/.pixi/envs/default/ssl, here and in a project's image
 # alike. A fetch that hands flare $CONDA_PREFIX/ssl/cacert.pem finds the
-# same bundle at /opt/orca/ssl. /opt/orca/pipelines is where a project's
+# same bundle at /opt/morca/ssl. /opt/morca/pipelines is where a project's
 # image puts its pipelines.
-COPY --from=build /src/project/.pixi/envs/default/ssl /opt/orca/ssl
-RUN mkdir -p /opt/orca/pipelines /src/project/.pixi/envs/default \
-    && ln -s /opt/orca/ssl /src/project/.pixi/envs/default/ssl
-ARG ORCA_VERSION=""
-LABEL org.opencontainers.image.title="orca-runtime" org.opencontainers.image.version="${ORCA_VERSION}"
+COPY --from=build /src/project/.pixi/envs/default/ssl /opt/morca/ssl
+RUN mkdir -p /opt/morca/pipelines /src/project/.pixi/envs/default \
+    && ln -s /opt/morca/ssl /src/project/.pixi/envs/default/ssl
+ARG MORCA_VERSION=""
+LABEL org.opencontainers.image.title="morca-runtime" org.opencontainers.image.version="${MORCA_VERSION}"
 # postgres.mojo and flare find what they dlopen under $CONDA_PREFIX/lib.
-ENV CONDA_PREFIX=/opt/orca LD_LIBRARY_PATH=/opt/orca/lib PATH=/opt/orca/bin:/opt/orca/pipelines:/usr/bin:/bin \
-    LLVM_SYMBOLIZER_PATH=/opt/orca/libexec/llvm-symbolizer GIT_EXEC_PATH=/opt/orca/libexec/git
-ENTRYPOINT ["/opt/orca/bin/orca"]
+ENV CONDA_PREFIX=/opt/morca LD_LIBRARY_PATH=/opt/morca/lib PATH=/opt/morca/bin:/opt/morca/pipelines:/usr/bin:/bin \
+    LLVM_SYMBOLIZER_PATH=/opt/morca/libexec/llvm-symbolizer GIT_EXEC_PATH=/opt/morca/libexec/git
+ENTRYPOINT ["/opt/morca/bin/morca"]

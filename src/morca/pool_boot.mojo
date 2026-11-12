@@ -2,18 +2,18 @@
 startup script, and the UI's answer to its `/api/worker/boot`.
 
 The script (`boot_script`, the machine's cloud-init user data) holds one
-secret, the machine's own worker token, which orca revokes when it removes
+secret, the machine's own worker token, which morca revokes when it removes
 the machine. With it the machine asks the UI for the rest, over TLS:
-`boot_answer` gives the worker image (`ORCA_WORKER_IMAGE`, the server's
-own), the login to pull it (`orca.registry`), and the variables a worker
-needs to reach the bucket (`ORCA_WAREHOUSE`, `ORCA_LOGS`, the `AWS_*`
+`boot_answer` gives the worker image (`MORCA_WORKER_IMAGE`, the server's
+own), the login to pull it (`morca.registry`), and the variables a worker
+needs to reach the bucket (`MORCA_WAREHOUSE`, `MORCA_LOGS`, the `AWS_*`
 ones), as the UI's own environment has them. It answers only a token the
 autoscaler made for a machine that's live, so a token someone made with
-`orca worker-token create` gets nothing from it.
+`morca worker-token create` gets nothing from it.
 
 The machine then installs Docker if it hasn't it, logs in, and runs the
-image as `orca worker --pool <pool> --name <machine>`, with run cgroups
-(`docs/hetzner.md`, "A cgroup per run"). With `ORCA_POOL_WORKER_COMMAND`
+image as `morca worker --pool <pool> --name <machine>`, with run cgroups
+(`docs/hetzner.md`, "A cgroup per run"). With `MORCA_POOL_WORKER_COMMAND`
 set on the scheduler, the script runs that command as the worker instead
 (tests, without Docker).
 """
@@ -22,18 +22,18 @@ from std.os import getenv
 
 from postgres import Params
 
-from orca.json import quote
-from orca.registry import ImageRef, Registry
-from orca.state import State
+from morca.json import quote
+from morca.registry import ImageRef, Registry
+from morca.state import State
 
 comptime BOOT_PATH = "/api/worker/boot"
 comptime CREATED_BY = "pool:"
 """`orca.workers.created_by` of a token the autoscaler made: `pool:<pool>`."""
-comptime WORKER_IMAGE = "ORCA_WORKER_IMAGE"
+comptime WORKER_IMAGE = "MORCA_WORKER_IMAGE"
 comptime _BUCKET_VARS = [
-    "ORCA_WAREHOUSE",
-    "ORCA_LOGS",
-    "ORCA_PUBLIC_WAREHOUSE",
+    "MORCA_WAREHOUSE",
+    "MORCA_LOGS",
+    "MORCA_PUBLIC_WAREHOUSE",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_REGION",
@@ -63,11 +63,11 @@ def boot_script(
     for s in [remote, pool, name, token, command]:
         if not _plain(s):
             raise Error(
-                "orca: can't put a quote or control character in a boot script"
+                "morca: can't put a quote or control character in a boot script"
             )
     var out = String(
         "#!/bin/sh\n",
-        "# An orca pool machine (orca.pool_boot): pool ",
+        "# A morca pool machine (morca.pool_boot): pool ",
         pool,
         ", machine ",
         name,
@@ -82,7 +82,7 @@ def boot_script(
         "'\nNAME='",
         name,
         "'\n",
-        'DIR="${ORCA_BOOT_DIR:-/etc/orca}"\n',
+        'DIR="${MORCA_BOOT_DIR:-/etc/orca}"\n',
         'mkdir -p "$DIR"\n',
         "umask 077\n",
         "# The rest, over TLS with its own token: never in this script.\n",
@@ -105,11 +105,11 @@ def boot_script(
         ),
         "PY\n",
         'rm -f "$DIR/boot.json"\n',
-        'echo "ORCA_WORKER_TOKEN=$TOKEN" >> "$DIR/worker.env"\n',
+        'echo "MORCA_WORKER_TOKEN=$TOKEN" >> "$DIR/worker.env"\n',
         # The address the pool's machines reach this one at, for a run that
         # spreads over them (#268): its private one, from Hetzner's or EC2's
         # metadata, waited for while the private network attaches.
-        'ADV="${ORCA_BOOT_ADVERTISE:-}"\n',
+        'ADV="${MORCA_BOOT_ADVERTISE:-}"\n',
         "MD=http://169.254.169.254\n",
         'if [ -z "$ADV" ] && curl -fsS -m 2 "$MD/hetzner/v1/metadata/hostname"',
         " > /dev/null 2>&1; then\n",
@@ -131,7 +131,7 @@ def boot_script(
         ' $T" "$MD/latest/meta-data/local-ipv4" 2> /dev/null) || ADV=\n',
         "fi\n",
         (
-            '[ -z "$ADV" ] || echo "ORCA_WORKER_ADVERTISE=$ADV" >>'
+            '[ -z "$ADV" ] || echo "MORCA_WORKER_ADVERTISE=$ADV" >>'
             ' "$DIR/worker.env"\n'
         ),
     )
@@ -161,14 +161,14 @@ def boot_script(
         ),
         "fi\n",
         "mkdir -p /var/lib/orca/stage\n",
-        "docker rm -f orca-worker > /dev/null 2>&1 || true\n",
-        "docker run -d --name orca-worker --restart always --network host",
+        "docker rm -f morca-worker > /dev/null 2>&1 || true\n",
+        "docker run -d --name morca-worker --restart always --network host",
         ' --env-file "$DIR/worker.env"',
         " --cap-add SYS_ADMIN --security-opt apparmor=unconfined",
         " --cgroupns private -v /var/lib/orca/stage:/var/lib/orca/stage",
         ' --entrypoint sh "$(cat "$DIR/image")" -c',
         ' "mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set',
-        " -sys_admin --inh-caps -sys_admin orca worker --pool $POOL --remote",
+        " -sys_admin --inh-caps -sys_admin morca worker --pool $POOL --remote",
         ' $REMOTE --name $NAME --max-runs 64 --dir /var/lib/orca/stage"\n',
     )
     return out^
@@ -194,12 +194,12 @@ def boot_answer(mut db: State, worker: Int) raises -> String:
     )
     if len(rows) == 0:
         raise Error(
-            "orca: this token isn't one the pool autoscaler made for a live",
+            "morca: this token isn't one the pool autoscaler made for a live",
             " machine",
         )
     var image = getenv(WORKER_IMAGE)
     if not image:
-        raise Error("orca: the UI has no ", WORKER_IMAGE, " to give")
+        raise Error("morca: the UI has no ", WORKER_IMAGE, " to give")
     var env = String()
     for v in materialize[_BUCKET_VARS]():
         env.write(_env_line(v, getenv(v)))

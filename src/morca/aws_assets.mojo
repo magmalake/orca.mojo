@@ -1,24 +1,24 @@
-"""The stack template and the project Dockerfile `orca aws` writes out:
-deploy/aws/orca.yaml and deploy/project.Dockerfile, embedded by
+"""The stack template and the project Dockerfile `morca aws` writes out:
+deploy/aws/morca.yaml and deploy/project.Dockerfile, embedded by
 scripts/embed-aws.py. Edit those, then run it; `pixi run test-aws-assets`
 fails while this is out of date.
 """
 
-comptime STACK_TEMPLATE: StaticString = """# orca on AWS with the ec2 runner (DESIGN.md, phase 5, PR 5b): one stack,
+comptime STACK_TEMPLATE: StaticString = """# morca on AWS with the ec2 runner (DESIGN.md, phase 5, PR 5b): one stack,
 # so it's reviewed as one file and deleted as one stack.
 #
 # - a VPC with one public subnet in the Availability Zone given, and a
 #   gateway endpoint for S3;
-# - the control instance: the scheduler (ORCA_RUNNER=ec2), Postgres and
-#   orca ui as containers, Caddy in front with a Let's Encrypt certificate;
-#   in one of two slots, blue and green, so that orca aws replace-control
+# - the control instance: the scheduler (MORCA_RUNNER=ec2), Postgres and
+#   morca ui as containers, Caddy in front with a Let's Encrypt certificate;
+#   in one of two slots, blue and green, so that morca aws replace-control
 #   can boot a new one from this template beside it and move the Elastic
 #   IP (DESIGN.md, "Replacing the control instance");
 # - what runs need: a bucket for the warehouse and logs, a repository for
 #   the image, a role and profile for run instances, a security group they
 #   share;
 # - a bucket for the lake, mlake-public-<account>: the warehouse,
-#   ORCA_WAREHOUSE, is in it; orca's own bucket keeps the logs. It's private
+#   MORCA_WAREHOUSE, is in it; morca's own bucket keeps the logs. It's private
 #   unless PublicData is true, when anyone may read it unsigned (the
 #   project's resource control policy refuses other accounts' signed
 #   requests), billed to the project at S3's egress price;
@@ -26,12 +26,12 @@ comptime STACK_TEMPLATE: StaticString = """# orca on AWS with the ec2 runner (DE
 #   named console on port 8080, once one runs;
 # - a Budgets alert.
 #
-# orca ui is public for reading, as a demo is; its actions need a login
-# (orca user add, in the scheduler's container). Nothing else accepts a
+# morca ui is public for reading, as a demo is; its actions need a login
+# (morca user add, in the scheduler's container). Nothing else accepts a
 # connection from outside: Postgres takes the run instances' only, and the
 # instances take each other's only.
 AWSTemplateFormatVersion: "2010-09-09"
-Description: orca with the ec2 runner, a control instance and runs on instances of their own
+Description: morca with the ec2 runner, a control instance and runs on instances of their own
 
 Parameters:
   AvailabilityZone:
@@ -51,7 +51,7 @@ Parameters:
   ImageTag:
     Type: String
     Default: latest
-    Description: The tag of the orca image the control instance starts with (orca aws push pushes latest)
+    Description: The tag of the morca image the control instance starts with (morca aws push pushes latest)
   ConsoleHostname:
     Type: String
     Default: libs.mlake.dev
@@ -81,12 +81,12 @@ Parameters:
     Default: ""
     # It goes into a shell script in single quotes.
     AllowedPattern: "[^']*"
-    Description: The control instance's settings beyond the template's, KEY=VALUE entries separated by ";" (orca aws up --env); never a secret
+    Description: The control instance's settings beyond the template's, KEY=VALUE entries separated by ";" (morca aws up --env); never a secret
   ActiveControl:
     Type: String
     Default: blue
     AllowedValues: [blue, green]
-    Description: The control slot the Elastic IP is on (orca aws replace-control moves it)
+    Description: The control slot the Elastic IP is on (morca aws replace-control moves it)
   BlueSlot:
     Type: String
     Default: "true"
@@ -129,7 +129,7 @@ Resources:
       CidrBlock: 10.42.0.0/16
       EnableDnsHostnames: true
       EnableDnsSupport: true
-      Tags: [{Key: Name, Value: orca}]
+      Tags: [{Key: Name, Value: morca}]
   Subnet:
     Type: AWS::EC2::Subnet
     Properties:
@@ -137,7 +137,7 @@ Resources:
       CidrBlock: 10.42.0.0/20
       AvailabilityZone: !Ref AvailabilityZone
       MapPublicIpOnLaunch: true
-      Tags: [{Key: Name, Value: orca}]
+      Tags: [{Key: Name, Value: morca}]
   Gateway:
     Type: AWS::EC2::InternetGateway
   GatewayAttachment:
@@ -165,7 +165,7 @@ Resources:
   Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub orca-${AWS::AccountId}-${AWS::Region}
+      BucketName: !Sub morca-${AWS::AccountId}-${AWS::Region}
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -177,7 +177,7 @@ Resources:
       LifecycleConfiguration:
         Rules:
           - {Id: logs, Status: Enabled, Prefix: logs/, ExpirationInDays: 30}
-          # The control instance's samples, a file a day (orca.system).
+          # The control instance's samples, a file a day (morca.system).
           - {Id: control, Status: Enabled, Prefix: logs/control/, ExpirationInDays: 14}
   # The lake's tables; anyone may read them when PublicData is true.
   # Account-level Block Public Access, if it's on, refuses the policy below.
@@ -218,7 +218,7 @@ Resources:
   Repository:
     Type: AWS::ECR::Repository
     Properties:
-      RepositoryName: orca
+      RepositoryName: morca
       ImageScanningConfiguration: {ScanOnPush: true}
       LifecyclePolicy:
         LifecyclePolicyText: |
@@ -229,7 +229,7 @@ Resources:
   RunGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: orca run instances, which talk to each other only
+      GroupDescription: morca run instances, which talk to each other only
       VpcId: !Ref Vpc
   RunGroupSelf:
     Type: AWS::EC2::SecurityGroupIngress
@@ -251,7 +251,7 @@ Resources:
   ControlGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: orca control instance, public for HTTPS only
+      GroupDescription: morca control instance, public for HTTPS only
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0}
@@ -265,7 +265,7 @@ Resources:
         Statement: [{Effect: Allow, Principal: {Service: ec2.amazonaws.com}, Action: sts:AssumeRole}]
       ManagedPolicyArns: [arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore]
       Policies:
-        # Runs' secrets (orca register --secret), only those under orca/.
+        # Runs' secrets (morca register --secret), only those under orca/.
         - PolicyName: secrets
           PolicyDocument:
             Statement:
@@ -278,7 +278,7 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
                 Resource: [!Sub "${Bucket.Arn}/*", !Sub "${PublicBucket.Arn}/*"]
-              # The control instance's backups (orca aws replace-control)
+              # The control instance's backups (morca aws replace-control)
               # hold the database and Caddy's keys: no run reads them.
               - Effect: Deny
                 Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
@@ -303,7 +303,7 @@ Resources:
         Statement: [{Effect: Allow, Principal: {Service: ec2.amazonaws.com}, Action: sts:AssumeRole}]
       ManagedPolicyArns: [arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore]
       Policies:
-        # The secrets of runs placed on this instance (orca register
+        # The secrets of runs placed on this instance (morca register
         # --placement control), which the scheduler reads as it starts them.
         - PolicyName: secrets
           PolicyDocument:
@@ -314,14 +314,14 @@ Resources:
         - PolicyName: run-instances
           PolicyDocument:
             Statement:
-              # Only instances tagged for orca, of the allowed types, from
+              # Only instances tagged for morca, of the allowed types, from
               # the stack's AMI, in its subnet and group, with its profile.
               - Effect: Allow
                 Action: ec2:RunInstances
                 Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
                 Condition:
                   StringEquals: {ec2:InstanceType: !Ref AllowedRunTypes}
-                  "Null": {"aws:RequestTag/orca.run": "false"}
+                  "Null": {"aws:RequestTag/morca.run": "false"}
               - Effect: Allow
                 Action: ec2:RunInstances
                 Resource:
@@ -340,7 +340,7 @@ Resources:
                 Action: ec2:TerminateInstances
                 Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
                 Condition:
-                  "Null": {"aws:ResourceTag/orca.run": "false"}
+                  "Null": {"aws:ResourceTag/morca.run": "false"}
               # Its instances, and the boot script it runs (ControlBoot).
               - Effect: Allow
                 Action: [ec2:DescribeInstances, ec2:DescribeLaunchTemplateVersions]
@@ -373,7 +373,7 @@ Resources:
   # The control instance's boot script, kept as the user data of a launch
   # template that launches nothing: each control instance's own user data
   # runs the latest version of it, so changing it (or a parameter it uses)
-  # stops no running instance. A new instance gets it: orca aws
+  # stops no running instance. A new instance gets it: morca aws
   # replace-control, which boots one in the other slot.
   ControlBoot:
     Type: AWS::EC2::LaunchTemplate
@@ -383,7 +383,7 @@ Resources:
           Fn::Base64: !Sub
             - |
               #!/bin/bash
-              # orca-boot SLOT: orca's control instance, in slot blue or
+              # orca-boot SLOT: morca's control instance, in slot blue or
               # green: Postgres, the scheduler, the UI and Caddy, as
               # containers that restart with the instance.
               set -eux
@@ -401,11 +401,11 @@ Resources:
               hosts="$sslip"
               [ -z "${Hostname}" ] || hosts="${Hostname}, $sslip"
               registry=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
-              image=$registry/orca:${ImageTag}
+              image=$registry/morca:${ImageTag}
               login="command -v aws >/dev/null || dnf install -y awscli; systemctl disable --now ecs || true; aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin $registry"
               # The image is pushed after the stack is made, so wait for it.
               until sh -c "$login" && docker pull $image; do sleep 30; done
-              docker network create orca || true
+              docker network create morca || true
               mkdir -p /var/lib/orca/pg /var/lib/orca/caddy /var/lib/orca/stage
               docker run -d --name postgres --restart always --network orca -p 5432:5432 \\
                 -e POSTGRES_USER=orca -e POSTGRES_DB=orca -e POSTGRES_PASSWORD='${DbPassword}' \\
@@ -413,7 +413,7 @@ Resources:
               # Over TCP: the server that initialises the database listens on
               # its socket only, and restarts once it's done.
               until docker exec postgres pg_isready -h 127.0.0.1 -U orca -d orca; do sleep 2; done
-              # A replacement (orca aws replace-control) points this slot at
+              # A replacement (morca aws replace-control) points this slot at
               # the backup of the instance it replaces: its database, image
               # tag, Caddy's certificates and apps come back before anything
               # starts on them.
@@ -430,28 +430,28 @@ Resources:
               fi
               [ -f /var/lib/orca/tag ] || echo ${ImageTag} > /var/lib/orca/tag
               cat > /etc/orca.env << EOF
-              ORCA_DATABASE_URL=postgresql://orca:${DbPassword}@postgres:5432/orca
-              ORCA_EC2_DATABASE_URL=postgresql://orca:${DbPassword}@$ip:5432/orca
-              ORCA_RUNNER=ec2
+              MORCA_DATABASE_URL=postgresql://orca:${DbPassword}@postgres:5432/orca
+              MORCA_EC2_DATABASE_URL=postgresql://orca:${DbPassword}@$ip:5432/orca
+              MORCA_RUNNER=ec2
               AWS_REGION=${AWS::Region}
-              ORCA_EC2_AMI=${Ami}
-              ORCA_EC2_SUBNET=${Subnet}
-              ORCA_EC2_SECURITY_GROUP=${RunGroup}
-              ORCA_EC2_PROFILE=${RunProfile}
-              ORCA_EC2_PREAMBLE=$login
-              ORCA_WAREHOUSE=s3://${PublicBucket}/warehouse
-              ORCA_LOGS=s3://${Bucket}/logs
-              ORCA_PUBLIC_WAREHOUSE=s3://${PublicBucket}/warehouse
-              ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE
-              ORCA_LOG_STAGE=/var/lib/orca/stage
-              ORCA_CONTROL_SAMPLES=/var/lib/orca/stage/control.jsonl
-              ORCA_CONTROL_TYPE=${ControlInstanceType}
-              ORCA_UI_ADDR=0.0.0.0:8270
-              ORCA_UI_LOGIN=required
-              ORCA_UI_SECURE_COOKIES=1
-              ORCA_UI_TRUST_PROXY=1
+              MORCA_EC2_AMI=${Ami}
+              MORCA_EC2_SUBNET=${Subnet}
+              MORCA_EC2_SECURITY_GROUP=${RunGroup}
+              MORCA_EC2_PROFILE=${RunProfile}
+              MORCA_EC2_PREAMBLE=$login
+              MORCA_WAREHOUSE=s3://${PublicBucket}/warehouse
+              MORCA_LOGS=s3://${Bucket}/logs
+              MORCA_PUBLIC_WAREHOUSE=s3://${PublicBucket}/warehouse
+              MORCA_RUN_ENV=MORCA_PUBLIC_WAREHOUSE
+              MORCA_LOG_STAGE=/var/lib/orca/stage
+              MORCA_CONTROL_SAMPLES=/var/lib/orca/stage/control.jsonl
+              MORCA_CONTROL_TYPE=${ControlInstanceType}
+              MORCA_UI_ADDR=0.0.0.0:8270
+              MORCA_UI_LOGIN=required
+              MORCA_UI_SECURE_COOKIES=1
+              MORCA_UI_TRUST_PROXY=1
               EOF
-              # The stack's own settings (ControlEnv; orca aws up --env K=V),
+              # The stack's own settings (ControlEnv; morca aws up --env K=V),
               # each in place of the line above with its key.
               printf '%s;' '${ControlEnv}' | tr ';' '\\n' | while IFS= read -r kv; do
                 [ -n "$kv" ] || continue
@@ -461,13 +461,13 @@ Resources:
                 mv /etc/orca.env.new /etc/orca.env
               done
               chmod 600 /etc/orca.env
-              # orca aws register and orca aws app run these over SSM.
+              # morca aws register and morca aws app run these over SSM.
               cat > /usr/local/bin/orca-refresh << 'EOS'
               #!/bin/bash
-              # orca-refresh [TAG]: pull the orca image at TAG (else the last
+              # orca-refresh [TAG]: pull the morca image at TAG (else the last
               # one) and run the scheduler and the UI from it again.
               set -eu
-              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/morca
               [ $# -gt 0 ] && echo "$1" > /var/lib/orca/tag
               tag=$(cat /var/lib/orca/tag)
               aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
@@ -491,7 +491,7 @@ Resources:
               EOS
               cat > /usr/local/bin/orca-app << 'EOS'
               #!/bin/bash
-              # orca-app NAME HOST [PORT]: run the image's /opt/orca/bin/NAME as
+              # orca-app NAME HOST [PORT]: run the image's /opt/morca/bin/NAME as
               # an app beside the UI, at https://HOST through Caddy, with the
               # region, the warehouse and PORT (default 8080). It's recorded in
               # /var/lib/orca/apps, which a replacement instance runs again.
@@ -500,15 +500,15 @@ Resources:
               host=$2
               port=8080
               [ $# -gt 2 ] && port=$3
-              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/morca
               tag=$(cat /var/lib/orca/tag)
               aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
               docker pull -q "$repo:$tag"
               docker rm -f "$name" > /dev/null 2>&1 || true
-              # An app reads the lake, not orca's database: it gets no password.
-              grep -E '^(AWS_REGION|ORCA_WAREHOUSE|ORCA_PUBLIC_WAREHOUSE)=' /etc/orca.env > /var/lib/orca/app.env
+              # An app reads the lake, not morca's database: it gets no password.
+              grep -E '^(AWS_REGION|MORCA_WAREHOUSE|MORCA_PUBLIC_WAREHOUSE)=' /etc/orca.env > /var/lib/orca/app.env
               docker run -d --name "$name" --restart always --network orca --env-file /var/lib/orca/app.env \\
-                -e PORT=$port --entrypoint /opt/orca/bin/$name "$repo:$tag"
+                -e PORT=$port --entrypoint /opt/morca/bin/$name "$repo:$tag"
               { grep -v "^$name " /var/lib/orca/apps 2> /dev/null || true; echo "$name $host $port"; } > /var/lib/orca/apps.new
               mv /var/lib/orca/apps.new /var/lib/orca/apps
               grep -q "^$host {" /var/lib/orca/Caddyfile \\
@@ -537,11 +537,11 @@ Resources:
                 cp /var/lib/orca/apps /var/lib/orca/apps.boot
                 while read -r name host port; do orca-app "$name" "$host" "$port"; done < /var/lib/orca/apps.boot
               fi
-              echo "orca ui at https://$sslip and https://${Hostname}"
+              echo "morca ui at https://$sslip and https://${Hostname}"
               date -u +%FT%TZ > /var/lib/orca/booted
             - {PublicIp: !Ref ControlAddress}
   # Two slots for the control instance, blue (Control, the stack's first)
-  # and green; the Elastic IP is on the active one. orca aws
+  # and green; the Elastic IP is on the active one. morca aws
   # replace-control turns the other slot on with a fresh instance, moves
   # ActiveControl to it once it's healthy, and turns the old slot off at the
   # end of the rollback window. Each slot's AMI is pinned (BlueAmi,
@@ -561,11 +561,11 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs: {VolumeSize: 40, VolumeType: gp3, Encrypted: true}
-      Tags: [{Key: Name, Value: orca-control}, {Key: orca.slot, Value: blue}]
+      Tags: [{Key: Name, Value: morca-control}, {Key: morca.slot, Value: blue}]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          # orca's control instance, slot blue: the latest version of the
+          # morca's control instance, slot blue: the latest version of the
           # stack's boot script (ControlBoot).
           set -eux
           command -v aws || dnf install -y awscli
@@ -588,11 +588,11 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs: {VolumeSize: 40, VolumeType: gp3, Encrypted: true}
-      Tags: [{Key: Name, Value: orca-control}, {Key: orca.slot, Value: green}]
+      Tags: [{Key: Name, Value: morca-control}, {Key: morca.slot, Value: green}]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          # orca's control instance, slot green: the latest version of the
+          # morca's control instance, slot green: the latest version of the
           # stack's boot script (ControlBoot).
           set -eux
           command -v aws || dnf install -y awscli
@@ -612,7 +612,7 @@ Resources:
     Type: AWS::Budgets::Budget
     Properties:
       Budget:
-        BudgetName: orca
+        BudgetName: morca
         BudgetType: COST
         TimeUnit: MONTHLY
         BudgetLimit: {Amount: !Ref BudgetDollars, Unit: USD}
@@ -628,7 +628,7 @@ Outputs:
       - https://${Dashed}.sslip.io
       - Dashed: !Join ["-", !Split [".", !Ref ControlAddress]]
   Repository:
-    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/morca
   Bucket:
     Value: !Ref Bucket
   PublicBucket:
@@ -653,45 +653,45 @@ Outputs:
     Value: !Ref ControlAddress
 """
 
-comptime PROJECT_DOCKERFILE: StaticString = """# The image `orca aws push` builds for a project that added orca with
-# `pixi shelf add orca-mojo`, on orca's runtime image,
-# ghcr.io/morca-dev/morca-runtime:<ORCA_VERSION> (deploy/runtime.Dockerfile).
-# The runtime has orca's own `orca` and `orca_maintain`, git, libcurl, the CA
-# bundles, llvm-symbolizer and the /opt/orca layout and environment; this
+comptime PROJECT_DOCKERFILE: StaticString = """# The image `morca aws push` builds for a project that added morca with
+# `pixi shelf add morca-mojo`, on morca's runtime image,
+# ghcr.io/morca-dev/morca-runtime:<MORCA_VERSION> (deploy/runtime.Dockerfile).
+# The runtime has morca's own `morca` and `morca_maintain`, git, libcurl, the CA
+# bundles, llvm-symbolizer and the /opt/morca layout and environment; this
 # adds only the project's programs:
 #
-# - its apps, every bin/*.mojo, at /opt/orca/bin/<name> (`orca aws app` runs
-#   them). bin/scheduler.mojo, the two lines calling orca.command, becomes
-#   /opt/orca/bin/orca in place of the runtime's, and bin/orca_maintain.mojo
-#   /opt/orca/bin/orca_maintain; a project without them runs the runtime's.
-# - its pipelines, every pipelines/*.mojo, at /opt/orca/pipelines/<name>,
-#   with the source map `orca locate` writes beside each.
-# - the pixi environment's libraries those link or dlopen, in /opt/orca/lib
+# - its apps, every bin/*.mojo, at /opt/morca/bin/<name> (`morca aws app` runs
+#   them). bin/scheduler.mojo, the two lines calling morca.command, becomes
+#   /opt/morca/bin/morca in place of the runtime's, and bin/morca_maintain.mojo
+#   /opt/morca/bin/morca_maintain; a project without them runs the runtime's.
+# - its pipelines, every pipelines/*.mojo, at /opt/morca/pipelines/<name>,
+#   with the source map `morca locate` writes beside each.
+# - the pixi environment's libraries those link or dlopen, in /opt/morca/lib
 #   over the runtime's, so the project's own versions win.
 #
 # `src/` is on the import path if the project has one. A project with a
-# Dockerfile.orca of its own builds that instead, and can start it the same
-# way: `ARG ORCA_VERSION` and `FROM ghcr.io/morca-dev/morca-runtime:${ORCA_VERSION}`.
+# Dockerfile.morca of its own builds that instead, and can start it the same
+# way: `ARG MORCA_VERSION` and `FROM ghcr.io/morca-dev/morca-runtime:${MORCA_VERSION}`.
 #
-# ORCA_VERSION is the orca-mojo the project pins, which `orca aws push`
+# MORCA_VERSION is the morca-mojo the project pins, which `morca aws push`
 # reads from pixi.lock; the runtime and the project's pipelines are then the
-# same orca. By hand:
+# same morca. By hand:
 #
-#     docker build -f project.Dockerfile --build-arg ORCA_VERSION=0.24.0 \\
+#     docker build -f project.Dockerfile --build-arg MORCA_VERSION=0.24.0 \\
 #         -t ghcr.io/<owner>/<project>:<version> .
 #
 # Name the image after the project (ghcr.io/morca-dev/census, not
-# ghcr.io/morca-dev/morca), and set ORCA_IMAGE in deploy/hetzner's
-# hetzner.env to it. ORCA_RUNTIME names another runtime repository, such as
+# ghcr.io/morca-dev/morca), and set MORCA_IMAGE in deploy/hetzner's
+# hetzner.env to it. MORCA_RUNTIME names another runtime repository, such as
 # one built locally (`docker build -f deploy/runtime.Dockerfile -t
-# orca-runtime:0.24.0 .` in orca.mojo, then --build-arg ORCA_RUNTIME=orca-runtime).
+# morca-runtime:0.24.0 .` in morca, then --build-arg MORCA_RUNTIME=morca-runtime).
 #
-# ORCA_SOURCE and ORCA_COMMIT say what the pipelines were built from, which
-# each run records and orca ui links.
+# MORCA_SOURCE and MORCA_COMMIT say what the pipelines were built from, which
+# each run records and morca ui links.
 #
 # Everything is built with line tables (-g1) and the image has
 # llvm-symbolizer, so a crash's stack dump in a run's driver.log names each
-# frame's function, file and line (orca.crash). The line tables, compressed,
+# frame's function, file and line (morca.crash). The line tables, compressed,
 # make a binary about half as big again (mojo-census's gharchive: 4.2 MB,
 # 6.5 MB with them, 25 MB uncompressed) and leave its speed as it was.
 #
@@ -702,9 +702,9 @@ comptime PROJECT_DOCKERFILE: StaticString = """# The image `orca aws push` build
 # 132). N1 code runs on N2, V1, V2 and Graviton. Build for something else
 # with --build-arg MOJO_TARGET_CPU=<cpu> (x86-64-v3 for linux/amd64).
 # No default version: the error for a build without one names what's missing.
-ARG ORCA_VERSION=needs-build-arg-orca-version
-ARG ORCA_RUNTIME=ghcr.io/morca-dev/morca-runtime
-FROM ${ORCA_RUNTIME}:${ORCA_VERSION} AS runtime
+ARG MORCA_VERSION=needs-build-arg-morca-version
+ARG MORCA_RUNTIME=ghcr.io/morca-dev/morca-runtime
+FROM ${MORCA_RUNTIME}:${MORCA_VERSION} AS runtime
 
 FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \\
@@ -712,29 +712,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev g
 WORKDIR /src/project
 COPY pixi.toml pixi.lock ./
 RUN pixi install --locked
-# The runtime's orca, for `orca locate` when the project has no bin/scheduler.mojo.
-COPY --from=runtime /opt/orca /opt/orca-runtime
+# The runtime's morca, for `morca locate` when the project has no bin/scheduler.mojo.
+COPY --from=runtime /opt/morca /opt/morca-runtime
 # Declared after `pixi install`: a RUN sees every ARG declared before it, so a
-# new ORCA_COMMIT on each commit would otherwise rerun it.
+# new MORCA_COMMIT on each commit would otherwise rerun it.
 ARG MOJO_TARGET_CPU=neoverse-n1
-ARG ORCA_SOURCE=""
-ARG ORCA_COMMIT=""
+ARG MORCA_SOURCE=""
+ARG MORCA_COMMIT=""
 COPY . .
 RUN mkdir -p /out/bin /out/pipelines \\
     && pixi run sh -c 'inc=""; [ -d src ] && inc="-I src"; \\
-        for f in bin/*.mojo; do [ -f "$f" ] || continue; n=$(basename "$f" .mojo); [ "$n" = scheduler ] && n=orca; \\
+        for f in bin/*.mojo; do [ -f "$f" ] || continue; n=$(basename "$f" .mojo); [ "$n" = scheduler ] && n=morca; \\
             mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc "$f" -o "/out/bin/$n" || exit 1; done; \\
         for p in pipelines/*.mojo; do [ -f "$p" ] || continue; n=$(basename "$p" .mojo); \\
-            mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc -D ORCA_SOURCE='"${ORCA_SOURCE}"' -D ORCA_COMMIT='"${ORCA_COMMIT}"' \\
+            mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc -D MORCA_SOURCE='"${MORCA_SOURCE}"' -D MORCA_COMMIT='"${MORCA_COMMIT}"' \\
                 "$p" -o "/out/pipelines/$n" || exit 1; done; \\
-        orca=/out/bin/orca; [ -x "$orca" ] || orca=/opt/orca-runtime/bin/orca; \\
+        morca=/out/bin/morca; [ -x "$morca" ] || morca=/opt/morca-runtime/bin/morca; \\
         if ls /out/pipelines/* > /dev/null 2>&1; then \\
-            LD_LIBRARY_PATH="$CONDA_PREFIX/lib:/opt/orca-runtime/lib" "$orca" locate /out/pipelines/* --root .; fi'
+            LD_LIBRARY_PATH="$CONDA_PREFIX/lib:/opt/morca-runtime/lib" "$morca" locate /out/pipelines/* --root .; fi'
 # The line tables compressed, which llvm-symbolizer reads as they are.
 RUN for b in /out/bin/* /out/pipelines/*; do [ -x "$b" ] || continue; \\
         objcopy --compress-debug-sections=zlib "$b" || exit 1; done
 # Only the pixi environment's libraries the binaries link or dlopen: libpq
-# (postgres), flare's shims (orca ui, apps), and every tin's shim, such as
+# (postgres), flare's shims (morca ui, apps), and every tin's shim, such as
 # objectstore's and the codecs' (zstd, for Iceberg writes). Not conda's
 # libpsl and ICU, which only libcurl links: the runtime has Debian's libpsl5.
 RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib \\
@@ -744,7 +744,7 @@ RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib \\
     && cp -L -t /out/lib $loaded
 
 FROM runtime
-COPY --from=build /out/lib /opt/orca/lib
-COPY --from=build /out/bin /opt/orca/bin
-COPY --from=build /out/pipelines /opt/orca/pipelines
+COPY --from=build /out/lib /opt/morca/lib
+COPY --from=build /out/bin /opt/morca/bin
+COPY --from=build /out/pipelines /opt/morca/pipelines
 """

@@ -4,7 +4,7 @@ A key is written as text (`2024-01`, `2024-01-31`, `log-0f3a`), read back
 by `parse`, and ordered, for sorting and display. `Month`, `Day` and
 `Hour` are `TimeKey`s too: each has a next and a previous key, and the key a date
 falls in, which ranges, schedules' fills and sensors' day-to-month mapping
-need. `Name` (`orca.name`) is a key that isn't a date, so asking it for its
+need. `Name` (`morca.name`) is a key that isn't a date, so asking it for its
 next key doesn't compile. `parse_keys` reads the ranges and lists the
 command line takes for time keys.
 """

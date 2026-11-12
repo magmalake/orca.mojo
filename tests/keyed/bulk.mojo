@@ -1,21 +1,21 @@
 """A keyed sensor over keys.bulk, a hundred keys to a run, four runs at
 once, never retried by the scheduler: `work` fails the names listed in
-ORCA_KEYED_FAIL and sleeps ORCA_KEYED_SLEEP seconds a key, and `tally`
+MORCA_KEYED_FAIL and sleeps MORCA_KEYED_SLEEP seconds a key, and `tally`
 counts its run's."""
 
 from std.os import getenv
 from std.time import sleep
 
 from dista import Seq
-from orca import Ctx, Gather, Mapped, Name, Pipeline, Step, orca_main
-from orca.keyed import Keyed
+from morca import Ctx, Gather, Mapped, Name, Pipeline, Step, morca_main
+from morca.keyed import Keyed
 
 
 def work(mut ctx: Ctx, n: Name) raises -> Int:
-    for bad in getenv("ORCA_KEYED_FAIL").split(","):
+    for bad in getenv("MORCA_KEYED_FAIL").split(","):
         if bad == n.text:
             raise Error("told to fail ", n)
-    var s = getenv("ORCA_KEYED_SLEEP")
+    var s = getenv("MORCA_KEYED_SLEEP")
     if s:
         sleep(Float64(s))
     return 1
@@ -40,4 +40,4 @@ comptime Bulk = Pipeline[
 
 
 def main() raises:
-    orca_main[Bulk]()
+    morca_main[Bulk]()

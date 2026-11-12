@@ -1,22 +1,22 @@
-"""API tokens: what `orca login` gets from `orca ui`, so the `orca` command
-on another machine can act as a user of it (`orca.remote`).
+"""API tokens: what `morca login` gets from `morca ui`, so the `morca` command
+on another machine can act as a user of it (`morca.remote`).
 
 ```
-orca user tokens alice          her tokens: label, created, last used, expires
-orca user revoke alice 3        or @all
+morca user tokens alice          her tokens: label, created, last used, expires
+morca user revoke alice 3        or @all
 ```
 
-A token is `orca_` and 64 hex digits, 32 random bytes from the system's
+A token is `morca_` and 64 hex digits, 32 random bytes from the system's
 generator; the prefix lets a secret scanner recognise one that leaked. The
 UI gives it out once, to `POST /api/login` with the right password, and
 keeps only its SHA-256 digest in `orca.api_tokens`, with its user, a label
 (the machine that logged in), when it was made and last used, and when it
-expires: `ORCA_API_TOKEN_DAYS` (default 30) days on, or fewer if the login
+expires: `MORCA_API_TOKEN_DAYS` (default 30) days on, or fewer if the login
 asked for fewer. A request sends it as `Authorization: Bearer <token>`;
-one that's unknown, expired or revoked is answered 401. `orca logout`
-revokes its own (`POST /api/logout`), `orca user revoke` any of a user's,
+one that's unknown, expired or revoked is answered 401. `morca logout`
+revokes its own (`POST /api/logout`), `morca user revoke` any of a user's,
 and changing a user's password or removing the user revokes all of hers,
-as it ends her sessions (`orca.auth`).
+as it ends her sessions (`morca.auth`).
 """
 
 from std.os import getenv
@@ -25,9 +25,9 @@ from flare.crypto.random import random_bytes
 from objectstore.crypto import sha256_hex
 from postgres import Params
 
-from orca.state import State
+from morca.state import State
 
-comptime TOKEN_PREFIX = "orca_"
+comptime TOKEN_PREFIX = "morca_"
 comptime TOKEN_BYTES = 32
 """256 bits: as many as a session's."""
 comptime DEFAULT_TOKEN_DAYS = 30
@@ -44,7 +44,7 @@ def _hex(b: List[UInt8]) -> String:
 
 
 def new_token() raises -> String:
-    """A new token: `orca_` and `TOKEN_BYTES` random bytes in hex."""
+    """A new token: `morca_` and `TOKEN_BYTES` random bytes in hex."""
     return String(TOKEN_PREFIX, _hex(random_bytes(TOKEN_BYTES)))
 
 
@@ -75,16 +75,16 @@ def token_hash(token: String) -> String:
 
 def token_days(asked: Int = 0) raises -> Int:
     """How many days a new token lasts: `asked` if it's from 1 to the most
-    allowed, `ORCA_API_TOKEN_DAYS` (default 30, at most 3650), else that
+    allowed, `MORCA_API_TOKEN_DAYS` (default 30, at most 3650), else that
     most. Raises for a setting that isn't a count of days."""
     var most: Int
     try:
-        most = Int(getenv("ORCA_API_TOKEN_DAYS", String(DEFAULT_TOKEN_DAYS)))
+        most = Int(getenv("MORCA_API_TOKEN_DAYS", String(DEFAULT_TOKEN_DAYS)))
     except:
-        raise Error("orca: ORCA_API_TOKEN_DAYS isn't a count of days")
+        raise Error("morca: MORCA_API_TOKEN_DAYS isn't a count of days")
     if most < 1 or most > MAX_TOKEN_DAYS:
         raise Error(
-            "orca: ORCA_API_TOKEN_DAYS is 1 to ", MAX_TOKEN_DAYS, ", not ", most
+            "morca: MORCA_API_TOKEN_DAYS is 1 to ", MAX_TOKEN_DAYS, ", not ", most
         )
     if asked >= 1 and asked < most:
         return asked

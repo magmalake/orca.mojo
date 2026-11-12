@@ -1,7 +1,7 @@
 [workspace]
 authors = ["Marius S <39998+winding-lines@users.noreply.github.com>"]
 channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
-name = "orca.mojo"
+name = "morca"
 version = "0.24.0"
 description = "Orchestration for Mojo data pipelines: DAGs in Mojo, cron schedules, a web UI."
 preview = ["pixi-build"]
@@ -12,23 +12,23 @@ platforms = ["osx-arm64", "linux-64", "linux-aarch64"]
 [dependencies]
 libpq = ">=16,<19"
 postgresql = ">=16,<19"
-# libsqlite is what sqlite-mojo dlopens for orca.sqlite_store; the sqlite3
+# libsqlite is what sqlite-mojo dlopens for morca.sqlite_store; the sqlite3
 # shell is for the tests that look into a run's file (tests/chaos.sh).
 libsqlite = ">=3.45,<4"
 sqlite = ">=3.45,<4"
 
-# orca as mojoshelf tin orca-mojo: the `orca` package, built against the
+# morca as mojoshelf tin morca-mojo: the `morca` package, built against the
 # revisions mojoshelf published of what it imports.
 [package]
-name = "orca-mojo"
+name = "morca-mojo"
 version = "0.24.0"
 
 [package.build]
 backend = { name = "pixi-build-mojo", version = "0.*" }
 
 [package.build.config.pkg]
-path = "src/orca"
-name = "orca"
+path = "src/morca"
+name = "morca"
 # The dependencies' .mojoc files, which their packages install there.
 extra-args = ["-I", "$PREFIX/lib/mojo"]
 
@@ -76,38 +76,38 @@ test-compile-fail = { cmd = "tests/compile_fail.sh" }
 # The executor over every store that needs no server (tests/store_suite.mojo),
 # then over Postgres, with what only Postgres has.
 test-store = { cmd = "scripts/mojo-build.sh -I src -I tests $DEP_INC tests/test_store.mojo -o build/test-store && ./build/test-store" }
-# The Lean model of pinned reads (formal/Orca/Pins) against Ctx.pin over the
+# The Lean model of pinned reads (formal/Morca/Pins) against Ctx.pin over the
 # memory and SQLite stores, on the event sequences in formal/difftest/pins.cases.
 test-formal-pins = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_formal_pins.mojo -o build/test-formal-pins && ./build/test-formal-pins" }
 test-state = { cmd = "scripts/mojo-build.sh -I src -I tests $DEP_INC tests/test_state.mojo -o build/test-state && scripts/with-postgres.sh ./build/test-state" }
-# The Lean model of the schema floor (formal/Orca/Migrate) against
+# The Lean model of the schema floor (formal/Morca/Migrate) against
 # migration_floor, schema_ahead and State.migrate, on formal/difftest/migrate.cases.
 test-formal-migrate = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_formal_migrate.mojo -o build/test-formal-migrate && scripts/with-postgres.sh ./build/test-formal-migrate" }
-# The Lean model of fencing (formal/Orca/Fence) against PgStore's claim, fence
+# The Lean model of fencing (formal/Morca/Fence) against PgStore's claim, fence
 # and beat_run, on the event sequences in formal/difftest/fence.cases.
 test-formal-fence = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_formal_fence.mojo -o build/test-formal-fence && scripts/with-postgres.sh ./build/test-formal-fence" }
 test-kill = { cmd = "scripts/with-postgres.sh tests/kill.sh" }
-# A crash's stack dump: orca.crash's summary of one, then a run whose
+# A crash's stack dump: morca.crash's summary of one, then a run whose
 # process aborts mid-step under the scheduler.
 test-crash = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_crash.mojo -o build/test-crash && ./build/test-crash && scripts/with-postgres.sh tests/crash.sh" }
 test-tasks = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_tasks.mojo -o build/test-tasks && ./build/test-tasks" }
-test-logs = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_logs.mojo -o build/test-logs && ./build/test-logs && rm -f build/logs.db build/logs.db-wal build/logs.db-shm && ORCA_DATABASE_URL=sqlite:build/logs.db tests/logs.sh" }
+test-logs = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_logs.mojo -o build/test-logs && ./build/test-logs && rm -f build/logs.db build/logs.db-wal build/logs.db-shm && MORCA_DATABASE_URL=sqlite:build/logs.db tests/logs.sh" }
 test-scheduler = { cmd = "scripts/with-postgres.sh tests/scheduler.sh" }
 test-chaos = { cmd = "scripts/with-postgres.sh tests/chaos.sh" }
-# The same over a SQLite file (orca.sqlite_store), with no server.
-test-chaos-sqlite = { cmd = "ORCA_DATABASE_URL=sqlite:build/chaos.db tests/chaos.sh" }
+# The same over a SQLite file (morca.sqlite_store), with no server.
+test-chaos-sqlite = { cmd = "MORCA_DATABASE_URL=sqlite:build/chaos.db tests/chaos.sh" }
 test-ui = { cmd = "scripts/with-postgres.sh tests/ui.sh" }
 test-actions = { cmd = "scripts/with-postgres.sh tests/actions.sh" }
-# The fleet page (orca.fleet): samples kept in Postgres, hosts, cost, charts.
+# The fleet page (morca.fleet): samples kept in Postgres, hosts, cost, charts.
 test-fleet = { cmd = "scripts/with-postgres.sh tests/fleet.sh" }
 test-system = { cmd = "scripts/with-postgres.sh tests/system.sh" }
 test-ui-login = { cmd = "scripts/with-postgres.sh tests/ui_login.sh" }
-# Stopping orca ui (orca.web.drain): SIGTERM finishes what's in flight.
+# Stopping morca ui (morca.web.drain): SIGTERM finishes what's in flight.
 test-ui-drain = { cmd = "scripts/with-postgres.sh tests/ui_drain.sh" }
-# `orca login` and `--remote` (orca.remote, orca.tokens): tokens, URLs and
-# the credentials file, then the command against orca ui over HTTP.
+# `morca login` and `--remote` (morca.remote, morca.tokens): tokens, URLs and
+# the credentials file, then the command against morca ui over HTTP.
 test-remote = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_remote.mojo -o build/test-remote && ./build/test-remote && scripts/with-postgres.sh tests/remote.sh" }
-# The watchdog (orca.watchdog): each rule over made-up rows, then the scheduler
+# The watchdog (morca.watchdog): each rule over made-up rows, then the scheduler
 # pausing pipelines, against the stand-in EC2 for the launches.
 test-notify = { cmd = "scripts/with-postgres.sh tests/notify.sh" }
 test-watchdog = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_watchdog.mojo -o build/test-watchdog && ./build/test-watchdog && scripts/with-postgres.sh tests/watchdog.sh" }
@@ -124,20 +124,20 @@ test-overlap = { cmd = "scripts/with-postgres.sh tests/overlap.sh" }
 test-one-run-per-key = { cmd = "scripts/with-postgres.sh tests/one_run_per_key.sh" }
 # Hourly partitions: */5 fires, hour backfills, the day-of-hours calendar.
 test-hourly = { cmd = "scripts/with-postgres.sh tests/hourly.sh" }
-# orca.toml (orca.toml, orca.config): the parser, what register reads from
+# morca.toml (morca.toml, morca.config): the parser, what register reads from
 # the file and records, config show and export, and the env on each runner.
 test-toml = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_toml.mojo -o build/test-toml && ./build/test-toml" }
 test-upgrade = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_upgrade.mojo -o build/test-upgrade && ./build/test-upgrade" }
 test-config = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_config.mojo -o build/test-config && ./build/test-config && scripts/with-postgres.sh tests/config.sh" }
-# Fills (orca.fill): a pipeline filling its range by itself, within limits.
+# Fills (morca.fill): a pipeline filling its range by itself, within limits.
 test-fill = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_fill.mojo -o build/test-fill && ./build/test-fill && scripts/with-postgres.sh tests/fill.sh" }
 test-fill-version = { cmd = "scripts/with-postgres.sh tests/fill_version.sh" }
-# Fills on a worker pool (#177): two `orca worker`s fill a range within
+# Fills on a worker pool (#177): two `morca worker`s fill a range within
 # fill_max_runs, and a run whose worker is gone is queued again.
 test-pool-fills = { cmd = "scripts/with-postgres.sh tests/pool_fills.sh" }
 test-source = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_source.mojo -o build/test-source && ./build/test-source" }
 test-highlight = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_highlight.mojo -o build/test-highlight && ./build/test-highlight" }
-# The step cards' data (orca.step_cards): signatures, docstrings, the JSON.
+# The step cards' data (morca.step_cards): signatures, docstrings, the JSON.
 test-step-cards = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_step_cards.mojo -o build/test-step-cards && ./build/test-step-cards" }
 test-graph = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_graph.mojo -o build/test-graph && ./build/test-graph" }
 playground = { cmd = "scripts/playground.sh" }
@@ -160,23 +160,23 @@ test-run-cluster = { cmd = "scripts/with-postgres.sh tests/run_cluster.sh" }
 # One run over two machines the pool autoscaler makes (#268).
 test-pool-spread = { cmd = "scripts/with-postgres.sh tests/pool_spread.sh" }
 test-secrets = { cmd = "scripts/with-postgres.sh tests/secrets.sh" }
-# Placement (orca.control): runs on the scheduler's own host, within its
+# Placement (morca.control): runs on the scheduler's own host, within its
 # limits, beside runs on the stand-in EC2.
-# A worker's run's state over orca ui's API: its encoding (orca.http_store,
+# A worker's run's state over morca ui's API: its encoding (morca.http_store,
 # orca.workers); tests/worker.sh (the data environment) runs the rest.
 test-worker-api = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_worker.mojo -o build/test-worker-api && ./build/test-worker-api" }
 test-placement = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_control.mojo -o build/test-control && ./build/test-control && scripts/with-postgres.sh tests/placement.sh" }
-# What runs use (orca.usage): the meter's sharing out, then a step holding a
+# What runs use (morca.usage): the meter's sharing out, then a step holding a
 # known amount on the local runner, the control host and a remote worker.
 test-resources = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_resources.mojo -o build/test-resources && ./build/test-resources" }
-# Requests learned from the measured peaks (orca.recommend), shown only.
+# Requests learned from the measured peaks (morca.recommend), shown only.
 test-recommend = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_recommend.mojo -o build/test-recommend && ./build/test-recommend" }
 test-grants = { cmd = "scripts/with-postgres.sh tests/grants.sh" }
-# Admission by memory pressure (orca.pressure, orca.admission): PSI parsing
+# Admission by memory pressure (orca.pressure, morca.admission): PSI parsing
 # and the hold's hysteresis, then runs waiting on a fixture PSI file.
 test-pressure = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_pressure.mojo -o build/test-pressure && ./build/test-pressure && scripts/with-postgres.sh tests/pressure.sh" }
 test-usage = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_usage.mojo -o build/test-usage && ./build/test-usage && scripts/with-postgres.sh tests/usage.sh" }
-# Containment (orca.cgroup): the arithmetic, then on Linux a run killed for
+# Containment (morca.cgroup): the arithmetic, then on Linux a run killed for
 # its memory and retried bigger (skipped, saying why, without cgroups).
 test-cgroups = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_cgroup.mojo -o build/test-cgroup && ./build/test-cgroup && scripts/with-postgres.sh tests/cgroups.sh" }
 test-aws = { cmd = "tests/aws.sh && tests/replace_control.sh" }
@@ -187,9 +187,9 @@ test-binary-timeouts = { cmd = "scripts/with-postgres.sh tests/binary_timeouts.s
 test-db-blip = { cmd = "scripts/with-postgres.sh tests/db_blip.sh" }
 test-sense-errors = { cmd = "scripts/with-postgres.sh tests/sense_errors.sh" }
 test-defer = { cmd = "scripts/with-postgres.sh tests/defer.sh" }
-# The sampler (orca.sample): its parsing, then the binary on this machine.
+# The sampler (morca.sample): its parsing, then the binary on this machine.
 test-sample = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_sample.mojo -o build/test-sample && ./build/test-sample && tests/sample.sh" }
-# A run's machines on its page (orca.metrics): peaks, warnings and charts.
+# A run's machines on its page (morca.metrics): peaks, warnings and charts.
 test-metrics = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_metrics.mojo -o build/test-metrics && ./build/test-metrics" }
 # Needs docker, kind and kubectl; builds the image of deploy/Dockerfile.
 test-kind = { cmd = "tests/kind.sh" }
@@ -204,10 +204,10 @@ test-scheduler-ui = { depends-on = ["build-shared", "test-toml", "test-upgrade",
 test = { depends-on = ["test-executor", "test-scheduler-ui"] }
 toy = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout" }
-orca = { cmd = "scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca" }
+morca = { cmd = "scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca" }
 daily = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/daily.mojo -o build/daily" }
 
-# Stable is the default: orca targets Mojo 1.2.0. dista and k8s compile from
+# Stable is the default: morca targets Mojo 1.2.0. dista and k8s compile from
 # checkouts next to this one (CI lays them out at the revisions in its
 # workflow), since they aren't on mojoshelf yet. dista's own dependencies
 # are packages, pinned at the revisions dista pins.
@@ -217,17 +217,17 @@ memory-region-mojo = { git = "https://github.com/magmalake/memory-region.mojo", 
 arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
 # dista writes actor checkpoints through objectstore.
 objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev = "ff66975c095f392695facc1b6dd56823dec914bc" }
-# orca's state. Pinned at the revision mojoshelf published as
+# morca's state. Pinned at the revision mojoshelf published as
 # postgres-mojo 0.3.2, and threads-mojo at the revision it pins: the
 # heartbeat runs on a thread of its own.
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
 threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e780a8de77278c140cee36904e46e93e0ca1c" }
-# `orca ui` serves its pages with flare. Pinned at the revision mojoshelf
+# `morca ui` serves its pages with flare. Pinned at the revision mojoshelf
 # published as flare_mlake 0.13.0, which pins threads at the revision above
 # and json_mlake at 0.4.2's revision; it builds its own native shims.
 flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b1371866a7844afefe86b25eb8af58aaa9d3fa6c" }
 json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "bcaa7161e757748a1310a213e123bf8810ff7e96" }
-# orca.sqlite_store. Pinned at the revision mojoshelf published as
+# morca.sqlite_store. Pinned at the revision mojoshelf published as
 # sqlite-mojo 0.3.5, which iceberg-mojo pins too (the data environment).
 sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7b672c85580f4d8c5de855772bc972d535" }
 
@@ -271,7 +271,7 @@ modular = ">=26.8.0.dev2026102305,<28"
 fmt = { cmd = "mojo format src tests examples fuzz bin" }
 format-check = { cmd = "mojo format src tests examples fuzz bin && git diff --exit-code -- src tests examples fuzz bin" }
 
-# The data environment adds orca.tables, which reads and commits Iceberg
+# The data environment adds morca.tables, which reads and commits Iceberg
 # tables. iceberg, parquet and their siblings compile from checkouts next to
 # this one, at the revisions iceberg-mojo 0.8.2 was published with, as in
 # dista's data environment (CI lays them out); the FFI tins are packages as
@@ -284,8 +284,8 @@ lz4-mojo = { git = "https://github.com/magmalake/lz4.mojo", rev = "23cd6e54967d7
 brotli-mojo = { git = "https://github.com/magmalake/brotli.mojo", rev = "dcbf840d22e3deaf24c587d12d28570a9a882b7f" }
 sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7b672c85580f4d8c5de855772bc972d535" }
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
-# The orca binary, which tests/lineage.sh builds for `orca lineage` and
-# `orca ui`, serves the UI with flare: the stable environment's pins.
+# The morca binary, which tests/lineage.sh builds for `morca lineage` and
+# `morca ui`, serves the UI with flare: the stable environment's pins.
 flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b1371866a7844afefe86b25eb8af58aaa9d3fa6c" }
 json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "bcaa7161e757748a1310a213e123bf8810ff7e96" }
 libcurl = ">=8,<9"
@@ -297,8 +297,8 @@ postgresql = ">=16,<19"
 DEP_INC = "-I ../dista.mojo/src -I ../k8s.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src -I ../parquet.mojo/src -I ../parquet.mojo/full/src -I ../threads.mojo/src -I ../threads.mojo/compat -I ../thrift.mojo/src -I ../hashes.mojo/src -I ../snappy.mojo/src -I ../deflate.mojo/src -I ../avro.mojo/src -I ../roaring.mojo/src -I ../objectstore.mojo/src -I ../zstd.mojo/src -I ../lz4.mojo/src -I ../brotli.mojo/src -I ../sqlite.mojo -I ../postgres.mojo/src -I ../iceberg.mojo/src"
 
 [feature.data.tasks]
-# orca, which most of these tests run, built once (scripts/mojo-build.sh).
-build-shared = { cmd = "scripts/build-shared.sh orca" }
+# morca, which most of these tests run, built once (scripts/mojo-build.sh).
+build-shared = { cmd = "scripts/build-shared.sh morca" }
 test-tables = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_tables.mojo -o build/test-tables && scripts/with-postgres.sh ./build/test-tables" }
 # Data files written in dista tasks, committed once by the step (append_files).
 test-append-files = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_append_files.mojo -o build/test-append-files && scripts/with-postgres.sh ./build/test-append-files" }
@@ -306,7 +306,7 @@ test-append-files = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_ap
 # retries, runs racing over one partition, and stale removals.
 test-replace = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_replace.mojo -o build/test-replace && scripts/with-postgres.sh ./build/test-replace" }
 test-replace-concurrent = { cmd = "tests/replace_concurrent.sh" }
-# The Lean model of a retried step (formal/) against orca.tables.append, on
+# The Lean model of a retried step (formal/) against morca.tables.append, on
 # the event sequences in formal/difftest/retry.cases.
 test-formal-retry = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_formal_retry.mojo -o build/test-formal-retry && ./build/test-formal-retry" }
 # A run's commits told from those of another run with its number, by the
@@ -316,7 +316,7 @@ test-chaos-tables = { cmd = "CHAOS_SRC=tests/chaos_tables.mojo CHAOS_CHECK=1 scr
 test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh" }
 test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh" }
 test-commits = { cmd = "tests/concurrent_commits.sh" }
-# Snapshot expiry: orca expire, orca_maintain and the scheduler's sweep.
+# Snapshot expiry: morca expire, morca_maintain and the scheduler's sweep.
 test-expire = { cmd = "scripts/with-postgres.sh tests/expire.sh" }
 test-sensors = { cmd = "scripts/with-postgres.sh tests/sensors.sh" }
 # keys_per_run for sensors and fills (#240), over tests/sensors.
@@ -324,16 +324,16 @@ test-keys-per-run = { cmd = "scripts/with-postgres.sh tests/keys_per_run.sh" }
 # A snapshot sensed while a run of its partition is live (#139).
 test-sensed-behind-live = { cmd = "scripts/with-postgres.sh tests/sensed_behind_live.sh" }
 # The same two over MinIO: the warehouse and logs in object storage.
-test-lineage-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/lineage.sh" }
-test-sensors-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/sensors.sh" }
+test-lineage-s3 = { cmd = "MORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/lineage.sh" }
+test-sensors-s3 = { cmd = "MORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/sensors.sh" }
 # The sampler's lines uploaded to the bucket while it runs and when it ends.
-test-sample-s3 = { cmd = "ORCA_TEST_S3=1 scripts/with-minio.sh tests/sample.sh" }
+test-sample-s3 = { cmd = "MORCA_TEST_S3=1 scripts/with-minio.sh tests/sample.sh" }
 test-keyed = { cmd = "scripts/with-postgres.sh tests/keyed.sh" }
 test-keyed-backfills = { cmd = "scripts/with-postgres.sh tests/keyed_backfills.sh" }
 test-keyed-sensor = { cmd = "scripts/with-postgres.sh tests/keyed_sensor.sh" }
 test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh" }
-# Remote workers (orca.worker, orca.workers): orca ui, the scheduler and an
-# `orca worker` with no database, committing to a local warehouse.
+# Remote workers (morca.worker, orca.workers): morca ui, the scheduler and an
+# `morca worker` with no database, committing to a local warehouse.
 test-worker = { cmd = "scripts/with-postgres.sh tests/worker.sh" }
 # CI runs these three groups on runners of their own; test-data is all three.
 test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-replace", "test-replace-concurrent", "test-formal-retry", "test-run-token", "test-chaos-tables", "test-lineage", "test-commits", "test-expire", "test-taxi"] }

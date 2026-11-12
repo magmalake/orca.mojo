@@ -7,7 +7,7 @@ retries its fill run gives up on it."""
 from std.os import getenv
 from std.sys import get_defined_int
 
-from orca import Ctx, Daily, Day, Mapped, Pipeline, Step, orca_main
+from morca import Ctx, Daily, Day, Mapped, Pipeline, Step, morca_main
 
 
 def make(mut ctx: Ctx, d: Day) raises -> Int:
@@ -31,6 +31,6 @@ comptime VDailyReads = Pipeline[
 
 def main() raises:
     comptime if get_defined_int["VDAILY_READS", 0]() == 1:
-        orca_main[VDailyReads]()
+        morca_main[VDailyReads]()
     else:
-        orca_main[VDaily]()
+        morca_main[VDaily]()

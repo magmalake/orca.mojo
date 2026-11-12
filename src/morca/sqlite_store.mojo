@@ -1,14 +1,14 @@
-"""orca's runs in a SQLite file: `SqliteStore`, for single-node orca.
+"""morca's runs in a SQLite file: `SqliteStore`, for single-node morca.
 
-A pipeline binary takes `ORCA_DATABASE_URL=sqlite:<path>` (or
+A pipeline binary takes `MORCA_DATABASE_URL=sqlite:<path>` (or
 `sqlite://<path>`, so `sqlite:///var/orca/runs.db` is an absolute path):
 `run`, `resume` and `status` then keep pipelines, runs, steps, attempts,
 reads and commits in that file, through sqlite-mojo, with nothing to
 operate. A run killed anywhere is resumed from the file as from Postgres,
-by the same `RunStore` code path. The scheduler, the UI and orca's other
-commands stay on Postgres (`orca.state.State` refuses a SQLite URL).
+by the same `RunStore` code path. The scheduler, the UI and morca's other
+commands stay on Postgres (`morca.state.State` refuses a SQLite URL).
 
-The tables are Postgres's, under the same names without the `orca.` schema,
+The tables are Postgres's, under the same names without the `morca.` schema,
 holding what a pipeline binary writes: steps' inputs and outputs are hex
 text, times are Unix seconds (`julianday` based, to the millisecond).
 
@@ -17,7 +17,7 @@ don't block the writer and the writer doesn't block them. There is one
 writer at a time: each change is one `BEGIN IMMEDIATE` transaction, which
 takes the file's write lock up front, and a writer that finds it taken
 waits up to a second (`busy_timeout`), then fails; the owned run's writes
-are retried, reopening the file, for `ORCA_DB_RETRY_SECONDS`, as `PgStore`
+are retried, reopening the file, for `MORCA_DB_RETRY_SECONDS`, as `PgStore`
 reconnects. That serialises several runs' processes on one machine, which
 is fine for steps that take seconds and rows that take microseconds; it
 isn't meant for hundreds of runs at once. Claims are a single guarded
@@ -35,8 +35,8 @@ from std.os import getenv
 
 from sqlite import Database, Statement
 
-from orca.heartbeat import Beater, Heartbeat
-from orca.store import (
+from morca.heartbeat import Beater, Heartbeat
+from morca.store import (
     DEFERRED,
     FAILED,
     FINAL,
@@ -76,7 +76,7 @@ def sqlite_path(url: String) -> String:
 
 # SQL for a new UUID version 7, as text: the milliseconds since 1970 in its
 # first 48 bits, then the version, the variant and random bits. A run's
-# token, as Postgres's `orca.uuidv7()` makes it.
+# token, as Postgres's `morca.uuidv7()` makes it.
 comptime _UUID7 = (
     "(SELECT lower(substr(t.ms, 1, 8) || '-' || substr(t.ms, 9, 4) || '-7' ||"
     " substr(hex(randomblob(2)), 2, 3) || '-' || substr('89ab', 1 + (random()"
@@ -171,7 +171,7 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE runs ADD COLUMN deferrals INTEGER NOT NULL DEFAULT 0",
         ],
         # What each attempt's processes used, as Postgres's migration 35
-        # keeps it (orca.usage); a run in a file has no scheduler or worker
+        # keeps it (morca.usage); a run in a file has no scheduler or worker
         # to measure it, so they stay null unless copied in.
         [
             "ALTER TABLE attempts ADD COLUMN peak_rss_bytes INTEGER",
@@ -213,7 +213,7 @@ def _nibble(c: UInt8) raises -> UInt8:
         return c - 48
     if c >= 97 and c <= 102:
         return c - 87
-    raise Error("orca: not hex in the SQLite store")
+    raise Error("morca: not hex in the SQLite store")
 
 
 def _unhex(s: String) raises -> List[UInt8]:
@@ -263,9 +263,9 @@ struct SqliteBeat(Beater):
         st.bind_int(1, self.run)
         st.bind_text(2, self.owner)
         _ = st.step()
-        # The watchdog (orca.heartbeat): an attempt past its step's
+        # The watchdog (morca.heartbeat): an attempt past its step's
         # timeout stops the process. There's no cancel to time out here:
-        # `orca cancel` is the scheduler's, on Postgres.
+        # `morca cancel` is the scheduler's, on Postgres.
         var why = self._timed_out()
         if why:
             print("run", self.run, why, flush=True)
@@ -357,7 +357,7 @@ struct SqliteBeat(Beater):
 
 
 struct SqliteStore(Movable, RunStore):
-    """orca's runs in a SQLite file, as their owner."""
+    """morca's runs in a SQLite file, as their owner."""
 
     var path: String
     var db: Database
@@ -372,7 +372,7 @@ struct SqliteStore(Movable, RunStore):
         """Opens the file at `path`, creating it if there's none; `own` a
         run before recording attempts."""
         if not path:
-            raise Error("orca: no file in the SQLite URL")
+            raise Error("morca: no file in the SQLite URL")
         self.path = path
         self.db = _open(path)
         self.run = 0
@@ -412,7 +412,7 @@ struct SqliteStore(Movable, RunStore):
             var migrations = _migrations()
             if have > len(migrations):
                 raise Error(
-                    "orca: the SQLite file is at schema version ",
+                    "morca: the SQLite file is at schema version ",
                     have,
                     ", newer than this binary's ",
                     len(migrations),
@@ -448,7 +448,7 @@ struct SqliteStore(Movable, RunStore):
         st.bind_text(3, describe)
         _ = st.step()
         var v = self.version(
-            pipeline, registry_hash, describe, getenv("ORCA_IMAGE")
+            pipeline, registry_hash, describe, getenv("MORCA_IMAGE")
         )
         var up = self._stmt("UPDATE pipelines SET version = ?2 WHERE name = ?1")
         up.bind_text(1, pipeline)
@@ -550,9 +550,9 @@ struct SqliteStore(Movable, RunStore):
             and info.status != DEFERRED
             and info.status != "queued"
         ):
-            raise Error("orca: run ", run, " is ", info.status)
+            raise Error("morca: run ", run, " is ", info.status)
         raise Error(
-            "orca: run ",
+            "morca: run ",
             run,
             " is held by ",
             info.owner,
@@ -648,7 +648,7 @@ struct SqliteStore(Movable, RunStore):
         st.bind_int(1, run)
         var got = self._run_infos(st)
         if len(got) == 0:
-            raise Error("orca: no run ", run)
+            raise Error("morca: no run ", run)
         return got[0].copy()
 
     def runs(
@@ -785,13 +785,13 @@ struct SqliteStore(Movable, RunStore):
         if not r:
             raise Error(
                 FINAL,
-                "orca: lost run ",
+                "morca: lost run ",
                 self.run,
                 " to another process; stopping",
             )
         if starting and r.value().int_val(0) != 0:
             raise Error(
-                FINAL, "orca: run ", self.run, " was cancelled; stopping"
+                FINAL, "morca: run ", self.run, " was cancelled; stopping"
             )
 
     def start_attempt(
@@ -1030,7 +1030,7 @@ struct SqliteStore(Movable, RunStore):
         # while the heartbeat could still be fresh, then the commit is off.
         var stale: Float64
         try:
-            stale = Float64(getenv("ORCA_STALE_SECONDS", "30"))
+            stale = Float64(getenv("MORCA_STALE_SECONDS", "30"))
         except:
             stale = 30.0
         var r = Backoff("SQLite")
@@ -1050,7 +1050,7 @@ struct SqliteStore(Movable, RunStore):
                 var got = st.step()
                 if not got:
                     raise Error(
-                        "orca: not committing: run ", self.run, " is gone"
+                        "morca: not committing: run ", self.run, " is gone"
                     )
                 ref row = got.value()
                 var owner = row.text_val(0)
@@ -1058,7 +1058,7 @@ struct SqliteStore(Movable, RunStore):
                 var fresh = row.int_val(2) != 0
                 if owner != self.owner or status != RUNNING:
                     raise Error(
-                        "orca: not committing: run ",
+                        "morca: not committing: run ",
                         self.run,
                         " is ",
                         status,
@@ -1070,7 +1070,7 @@ struct SqliteStore(Movable, RunStore):
                     )
                 if not fresh:
                     raise Error(
-                        "orca: not committing: run ",
+                        "morca: not committing: run ",
                         self.run,
                         "'s heartbeat is older than ",
                         stale / 2,
@@ -1078,12 +1078,12 @@ struct SqliteStore(Movable, RunStore):
                     )
                 return
             except e:
-                if String(e).startswith("orca: not committing"):
+                if String(e).startswith("morca: not committing"):
                     raise e^
                 try:
                     r.again(e)
                 except e2:
-                    raise Error("orca: not committing: ", e2)
+                    raise Error("morca: not committing: ", e2)
                 self._reopen()
 
     def set_log(

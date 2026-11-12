@@ -1,11 +1,11 @@
-"""orca: orchestration for Mojo data pipelines.
+"""morca: orchestration for Mojo data pipelines.
 
-Declare steps and the pipeline they make, and give the binary orca's
+Declare steps and the pipeline they make, and give the binary morca's
 command line:
 
 ```mojo
 from dista import Seq
-from orca import Ctx, Gather, Mapped, Month, Pipeline, Step, orca_main
+from morca import Ctx, Gather, Mapped, Month, Pipeline, Step, morca_main
 
 def size(mut ctx: Ctx, m: Month) raises -> Int:
     return m.month * 100
@@ -21,29 +21,29 @@ comptime Total = Step["total", Seq[Int], Int, total, Gather, after=Size]
 comptime Sizes = Pipeline["sizes", Size, Total]
 
 def main() raises:
-    orca_main[Sizes]()
+    morca_main[Sizes]()
 ```
 
 See DESIGN.md for how it works and where it's going.
 """
 
-from orca.cli import orca_main, report
-from orca.ctx import Ctx
-from orca.civil import Civil, now, parse_time, utc
-from orca.cron import CronExpr
-from orca.day import Day
-from orca.hour import Hour
-from orca.key import Key, TimeKey, parse_keys
-from orca.month import Month, days_in, parse_months
-from orca.name import Name, parse_names
-from orca.partitions import (
+from morca.cli import morca_main, report
+from morca.ctx import Ctx
+from morca.civil import Civil, now, parse_time, utc
+from morca.cron import CronExpr
+from morca.day import Day
+from morca.hour import Hour
+from morca.key import Key, TimeKey, parse_keys
+from morca.month import Month, days_in, parse_months
+from morca.name import Name, parse_names
+from morca.partitions import (
     Daily,
     Hourly,
     Monthly,
     Partitions,
     parse_partitions,
 )
-from orca.pipeline import (
+from morca.pipeline import (
     FAILED,
     SKIPPED,
     SUCCEEDED,
@@ -51,9 +51,9 @@ from orca.pipeline import (
     RunResult,
     StepRun,
 )
-from orca.pressure import Psi, Stall, memory_pressure
-from orca.resources import Grant, auto_count
-from orca.schedule import (
+from morca.pressure import Psi, Stall, memory_pressure
+from morca.resources import Grant, auto_count
+from morca.schedule import (
     Cron,
     Current,
     Fill,
@@ -62,9 +62,9 @@ from orca.schedule import (
     Schedule,
     ScheduleLike,
 )
-from orca.sqlite_store import SqliteStore, sqlite_path
-from orca.state import PgStore, State
-from orca.store import (
+from morca.sqlite_store import SqliteStore, sqlite_path
+from morca.state import PgStore, State
+from morca.store import (
     MemoryStore,
     Recorder,
     RunInfo,
@@ -73,8 +73,8 @@ from orca.store import (
     Store,
     TableSnapshot,
 )
-from orca.tasks import NoTasks, Tasks, TaskSet, workers
-from orca.step import (
+from morca.tasks import NoTasks, Tasks, TaskSet, workers
+from morca.step import (
     Gather,
     Mapped,
     NoStep,
@@ -83,4 +83,4 @@ from orca.step import (
     StepLike,
     defer,
 )
-from orca.tz import PosixTZ, Zone
+from morca.tz import PosixTZ, Zone

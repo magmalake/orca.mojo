@@ -3,17 +3,17 @@ day, over the run's workers.
 
     pixi run fanout
     ./build/fanout run --partitions 2024-01..2024-03
-    ORCA_WORKERS=8 ORCA_LOGS=build/logs ./build/fanout run --partitions 2024-01
+    MORCA_WORKERS=8 MORCA_LOGS=build/logs ./build/fanout run --partitions 2024-01
 
-The run's runtime is started once, before the first step; with ORCA_LOGS set
-its timeline is written to <ORCA_LOGS>/fanout/<run>/timeline.json.
-ORCA_FANOUT_SLEEP makes every task take that many seconds, so
+The run's runtime is started once, before the first step; with MORCA_LOGS set
+its timeline is written to <MORCA_LOGS>/fanout/<run>/timeline.json.
+MORCA_FANOUT_SLEEP makes every task take that many seconds, so
 tests/lost_workers.sh can kill workers while a step waits on them; the step
-is retried once in its run. With ORCA_FANOUT_SHOW_HOST set, each task prints
+is retried once in its run. With MORCA_FANOUT_SHOW_HOST set, each task prints
 the host it ran on, which tests/kind.sh reads from the worker pods' logs.
-ORCA_FANOUT_SECRET names a variable whose value every task prints and
+MORCA_FANOUT_SECRET names a variable whose value every task prints and
 `all_trips` logs, for tests/secrets.sh to look for in the logs.
-ORCA_FANOUT_PAUSE makes `all_trips` wait that many seconds first, with no
+MORCA_FANOUT_PAUSE makes `all_trips` wait that many seconds first, with no
 task running, which tests/autoscale.sh's run drains its idle workers in. On
 Kubernetes a run gets 3 workers.
 """
@@ -22,7 +22,7 @@ from std.os import getenv
 from std.time import sleep
 
 from dista import ObjectRef, Seq, Task
-from orca import Ctx, Gather, Mapped, Month, Pipeline, Step, Tasks, orca_main
+from morca import Ctx, Gather, Mapped, Month, Pipeline, Step, Tasks, morca_main
 
 
 @fieldwise_init
@@ -33,12 +33,12 @@ struct Day(Copyable, Movable):
 
 def trips(d: Day) -> Int:
     """A stand-in for a day's work: a number that depends on the date."""
-    if getenv("ORCA_FANOUT_SHOW_HOST"):
+    if getenv("MORCA_FANOUT_SHOW_HOST"):
         print("trips on", getenv("HOSTNAME", "?"), flush=True)
-    var secret = getenv("ORCA_FANOUT_SECRET")
+    var secret = getenv("MORCA_FANOUT_SECRET")
     if secret:
         print("secret", getenv(secret), flush=True)
-    var s = getenv("ORCA_FANOUT_SLEEP")
+    var s = getenv("MORCA_FANOUT_SLEEP")
     if s:
         try:
             sleep(Float64(s))
@@ -74,12 +74,12 @@ def month_trips(mut ctx: Ctx, m: Month) raises -> Int:
 
 
 def all_trips(mut ctx: Ctx, months: Seq[Int]) raises -> Int:
-    var secret = getenv("ORCA_FANOUT_SECRET")
+    var secret = getenv("MORCA_FANOUT_SECRET")
     if secret:
         var v = getenv(secret)
         print("secret", v, flush=True)
         ctx.log(String("secret ", v, " of length ", v.byte_length()))
-    var pause = getenv("ORCA_FANOUT_PAUSE")
+    var pause = getenv("MORCA_FANOUT_PAUSE")
     if pause:
         sleep(Float64(pause))
     var t = 0
@@ -101,4 +101,4 @@ comptime Fanout = Pipeline[
 
 
 def main() raises:
-    orca_main[Fanout]()
+    morca_main[Fanout]()

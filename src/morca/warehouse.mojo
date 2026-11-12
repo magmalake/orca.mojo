@@ -2,19 +2,19 @@
 without iceberg, for `<binary> sense`.
 
 A dataset `ns.table` is the filesystem catalog's table at
-`<ORCA_WAREHOUSE>/ns/table`, as in `orca.tables`. Its current metadata file
+`<MORCA_WAREHOUSE>/ns/table`, as in `morca.tables`. Its current metadata file
 is the one `metadata/version-hint.text` names, or else the highest version
 under `metadata/`, ties broken by `last-updated-ms`, as iceberg's catalog
 finds it. Of that file, `current_snapshot` reads the current snapshot's ID
-and two properties of its summary: whether an orca step made it
+and two properties of its summary: whether a morca step made it
 (`orca.run`), and the partition keys it holds (`orca.partitions`), which a
-writer that isn't orca can set too.
+writer that isn't morca can set too.
 
 The warehouse is a directory or a location in object storage
 (`s3://bucket/warehouse`), listed and read through objectstore's
 `FileIOResolver`, from the `AWS_*` environment.
 
-orca's pipelines import iceberg only if they use tables, and every binary
+morca's pipelines import iceberg only if they use tables, and every binary
 answers `sense`, so this reads the JSON itself: just enough of it to walk
 objects and arrays to the fields it needs.
 """
@@ -32,8 +32,8 @@ struct Sensed(Copyable, Movable):
     var dataset: String
     var snapshot: Int64
     """-1 when the table doesn't exist or has no snapshot."""
-    var by_orca: Bool
-    """Whether an orca step committed the snapshot."""
+    var by_morca: Bool
+    """Whether a morca step committed the snapshot."""
     var partitions: String
     """The snapshot summary's `orca.partitions`, or empty."""
 
@@ -42,7 +42,7 @@ def current_snapshot(warehouse: String, dataset: String) raises -> Sensed:
     """The dataset's current snapshot in the warehouse at `warehouse`."""
     var dot = dataset.rfind(".")
     if dot <= 0 or dot == dataset.byte_length() - 1:
-        raise Error("orca: a dataset is named namespace.table, not ", dataset)
+        raise Error("morca: a dataset is named namespace.table, not ", dataset)
     var dir = String(
         warehouse.rstrip("/"),
         "/",
@@ -115,7 +115,7 @@ def _latest(dir: String, names: List[String]) raises -> String:
             best_updated = updated
             path = p^
     if best < 0:
-        raise Error("orca: no *.metadata.json under ", dir)
+        raise Error("morca: no *.metadata.json under ", dir)
     return path^
 
 
@@ -137,7 +137,7 @@ def _version_of(name: String) -> Int:
 
 def current_of(dataset: String, text: String) raises -> Sensed:
     """The current snapshot a table metadata document names, and its
-    summary's orca properties."""
+    summary's morca properties."""
     var b = text.as_bytes()
     var top = _ws(b, 0)
     var at = _field(b, top, "current-snapshot-id")
@@ -182,7 +182,7 @@ def _ws(b: Span[Byte, _], i: Int) -> Int:
 
 
 def _bad(i: Int) -> Error:
-    return Error("orca: bad table metadata JSON at byte ", i)
+    return Error("morca: bad table metadata JSON at byte ", i)
 
 
 def _skip(b: Span[Byte, _], i: Int) raises -> Int:

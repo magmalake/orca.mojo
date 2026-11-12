@@ -1,15 +1,15 @@
 """Who a request is from, and whether it may act: the session cookie of a
-browser, the API token of a script (`orca --remote`), and the checks that
+browser, the API token of a script (`morca --remote`), and the checks that
 keep another site's page from posting to the UI. Also the endpoints that
 log in and out. The users, sessions and audit rows themselves are
-`orca.auth`; API tokens are `orca.tokens`; a worker's token is checked by
-`orca.api.worker` instead, and gets nothing here.
+`morca.auth`; API tokens are `morca.tokens`; a worker's token is checked by
+`morca.api.worker` instead, and gets nothing here.
 
 | Path | |
 |---|---|
-| `/login` | `GET`: the form; `POST` `name`, `password`, `next`: a session, as the cookie `orca_session` |
+| `/login` | `GET`: the form; `POST` `name`, `password`, `next`: a session, as the cookie `morca_session` |
 | `/logout` | ends the session and clears the cookie |
-| `/api/login` | JSON `name`, `password`, `label`, `days`: an API token for `orca login` |
+| `/api/login` | JSON `name`, `password`, `label`, `days`: an API token for `morca login` |
 | `/api/logout` | revokes the API token it's sent with |
 
 A script's request is one with an `Authorization` header (or a JSON login
@@ -25,7 +25,7 @@ from std.os import getenv
 from flare.http import Request, Response
 from json import loads
 
-from orca.auth import (
+from morca.auth import (
     SESSION_COOKIE,
     audit,
     close_session,
@@ -35,20 +35,20 @@ from orca.auth import (
     session_user,
     too_many_failures,
 )
-from orca.html import Html, url_encode
-from orca.json import quote
-from orca.state import State
-from orca.tokens import (
+from morca.html import Html, url_encode
+from morca.json import quote
+from morca.state import State
+from morca.tokens import (
     clean_label,
     issue_token,
     revoke_token,
     token_days,
     token_user,
 )
-from orca.ui.layout import page_html
-from orca.ui.login import login_page, safe_next
-from orca.web.page import Page, respond
-from orca.web.router import Call
+from morca.ui.layout import page_html
+from morca.ui.login import login_page, safe_next
+from morca.web.page import Page, respond
+from morca.web.router import Call
 
 comptime LOGIN = "/login"
 comptime LOGOUT = "/logout"
@@ -96,9 +96,9 @@ def sign_in(mut db: State, req: Request, mut call: Call) raises -> Bool:
 
 def client(req: Request) -> String:
     """The address a request came from: the connection's peer, or behind a
-    proxy (`ORCA_UI_TRUST_PROXY=1`) the first address of
+    proxy (`MORCA_UI_TRUST_PROXY=1`) the first address of
     `X-Forwarded-For`, which only a proxy in front can be trusted to set."""
-    if getenv("ORCA_UI_TRUST_PROXY") == "1":
+    if getenv("MORCA_UI_TRUST_PROXY") == "1":
         var fwd = req.headers.get("X-Forwarded-For")
         if fwd:
             return String(fwd.split(",")[0].strip())
@@ -115,7 +115,7 @@ def content_type(req: Request) -> String:
 
 
 def scripted(req: Request, path: String) -> Bool:
-    """Whether `req` is a script's (`orca.remote`): it has an
+    """Whether `req` is a script's (`morca.remote`): it has an
     `Authorization` header, or is a JSON login for a token. `/login` and
     `/logout` are a browser's whatever they're sent with."""
     if path == LOGIN or path == LOGOUT:
@@ -129,17 +129,17 @@ def scripted(req: Request, path: String) -> Bool:
 
 
 def _scheme(req: Request) raises -> String:
-    """The scheme the browser used: behind a proxy (`ORCA_UI_TRUST_PROXY=1`)
+    """The scheme the browser used: behind a proxy (`MORCA_UI_TRUST_PROXY=1`)
     the first of `X-Forwarded-Proto`, else `https` with
-    `ORCA_UI_SECURE_COOKIES=1` (secure cookies imply TLS in front), else
+    `MORCA_UI_SECURE_COOKIES=1` (secure cookies imply TLS in front), else
     `http`."""
-    if getenv("ORCA_UI_TRUST_PROXY") == "1":
+    if getenv("MORCA_UI_TRUST_PROXY") == "1":
         var fwd = req.headers.get("X-Forwarded-Proto")
         if fwd:
             var first = String(fwd.split(",")[0].strip()).lower()
             if first == "http" or first == "https":
                 return first
-    if getenv("ORCA_UI_SECURE_COOKIES") == "1":
+    if getenv("MORCA_UI_SECURE_COOKIES") == "1":
         return "https"
     return "http"
 
@@ -178,7 +178,7 @@ def same_origin(req: Request) raises -> Bool:
 
 def cross_origin() -> Page:
     var why = String(
-        "this form wasn't posted from orca ui's own pages (its Origin or",
+        "this form wasn't posted from morca ui's own pages (its Origin or",
         " Referer isn't this server), so it's refused",
     )
     var h = Html()
@@ -216,7 +216,7 @@ def login_needed(req: Request, json: Bool) raises -> Response:
 
 
 def json_form(body: String) raises -> String:
-    """A JSON object of strings, numbers and booleans (`orca.remote`'s
+    """A JSON object of strings, numbers and booleans (`morca.remote`'s
     actions) as the form the UI's own pages post, so both are handled and
     audited alike: true is `1`, false and null are left out."""
     var v = loads(body if body.strip() else "{}")
@@ -252,11 +252,11 @@ def token_refused() -> Page:
     var page = json_error(
         401,
         (
-            "this token is unknown, expired or revoked (orca login again), or"
+            "this token is unknown, expired or revoked (morca login again), or"
             " Authorization isn't Bearer <token>"
         ),
     )
-    page.headers.append(("WWW-Authenticate", 'Bearer realm="orca"'))
+    page.headers.append(("WWW-Authenticate", 'Bearer realm="morca"'))
     return page^
 
 
@@ -265,7 +265,7 @@ def token_refused() -> Page:
 
 def _cookie_header(token: String, max_age: Int) -> String:
     """The session cookie: only for this site's requests (`SameSite`), out
-    of scripts' reach (`HttpOnly`), and with `ORCA_UI_SECURE_COOKIES=1`
+    of scripts' reach (`HttpOnly`), and with `MORCA_UI_SECURE_COOKIES=1`
     (behind HTTPS) never sent in the clear."""
     return String(
         SESSION_COOKIE,
@@ -273,7 +273,7 @@ def _cookie_header(token: String, max_age: Int) -> String:
         token,
         "; Path=/; HttpOnly; SameSite=Strict; Max-Age=",
         max_age,
-        "; Secure" if getenv("ORCA_UI_SECURE_COOKIES") == "1" else "",
+        "; Secure" if getenv("MORCA_UI_SECURE_COOKIES") == "1" else "",
     )
 
 
@@ -298,7 +298,7 @@ def login(mut db: State, call: Call) raises -> Page:
     if not token:
         login_failed(db, name, call.address)
         return login_page(call.field("next"), "Wrong name or password.", 401)
-    var hours = Float64(getenv("ORCA_UI_SESSION_HOURS", "12"))
+    var hours = Float64(getenv("MORCA_UI_SESSION_HOURS", "12"))
     var page = Page(
         303,
         String('{"user": ', quote(name), "}"),
@@ -323,7 +323,7 @@ def logout(mut db: State, call: Call) raises -> Page:
 
 def api_login(mut db: State, call: Call) raises -> Page:
     """`POST /api/login`: a new API token for a JSON `name` and `password`,
-    labelled `label`, lasting `days` (at most `ORCA_API_TOKEN_DAYS`).
+    labelled `label`, lasting `days` (at most `MORCA_API_TOKEN_DAYS`).
     Failures count against the same limit as `/login`'s, and the token is
     in this answer only. A token it was sent with isn't looked at."""
     var name: String

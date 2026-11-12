@@ -1,9 +1,9 @@
 """What a run's processes use: each attempt's peak memory and CPU.
 
 Whoever starts a run's process measures it: the scheduler for a local or
-control-placed run (`orca.scheduler`), `orca worker` for a remote worker's
-(`orca.worker`). Each tick, at most every quarter of a second, it reads
-the process's tree in /proc (`orca.sample.tree_usage`: the driver and what
+control-placed run (`morca.scheduler`), `morca worker` for a remote worker's
+(`morca.worker`). Each tick, at most every quarter of a second, it reads
+the process's tree in /proc (`morca.sample.tree_usage`: the driver and what
 it started, dista's local workers among them) and keeps a `Meter` of it:
 the resident bytes, the CPU seconds so far (utime + stime, with what the
 tree's processes waited for), and the cores that kept busy since the
@@ -28,7 +28,7 @@ their columns stay NULL.
 
 The numbers are `orca.attempts`' `peak_rss_bytes`, `cpu_seconds` and
 `peak_cpus` (migration 35), written once, when the process ends: by the
-scheduler over Postgres, and for a worker's run by `orca ui`, which the
+scheduler over Postgres, and for a worker's run by `morca ui`, which the
 worker sends its meter with `/api/worker/exited` (`marks_json`, ages in
 seconds before the request, so neither clock needs to agree with the
 database's).
@@ -40,9 +40,9 @@ from std.time import perf_counter_ns
 from json import Value
 from postgres import Params
 
-from orca.sample import fixed1
-from orca.state import State
-from orca.store import Usage
+from morca.sample import fixed1
+from morca.state import State
+from morca.store import Usage
 
 comptime MAX_MARKS = 1024
 """The most samples a meter keeps; past it, neighbours are merged."""
@@ -339,7 +339,7 @@ def marks_of(v: Value) raises -> List[Mark]:
     for m in v.array_items():
         var f = m.array_items()
         if len(f) != 4:
-            raise Error("orca: a mark is [age, rss, cpu, cpus]")
+            raise Error("morca: a mark is [age, rss, cpu, cpus]")
         out.append(
             Mark(_float(f[0]), Int(_float(f[1])), _float(f[2]), _float(f[3]))
         )
@@ -350,7 +350,7 @@ def marks_of(v: Value) raises -> List[Mark]:
 
 
 def bytes_text(n: Int) -> String:
-    """Resident bytes as MB (MiB, as `ORCA_CONTROL_MEMORY_MB` counts them),
+    """Resident bytes as MB (MiB, as `MORCA_CONTROL_MEMORY_MB` counts them),
     or GB from 10 GB."""
     var mb = Float64(n) / (1024.0 * 1024.0)
     if mb >= 10240.0:

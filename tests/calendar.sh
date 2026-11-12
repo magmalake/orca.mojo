@@ -3,7 +3,7 @@
 # each day's (month's) state from the database, the page draws the same as
 # coverage and offers the picker only on top of the text field, and a range
 # picked on it is a range Start runs queues the right partitions for.
-# Needs ORCA_DATABASE_URL (pixi run test-calendar starts a throwaway
+# Needs MORCA_DATABASE_URL (pixi run test-calendar starts a throwaway
 # server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -14,15 +14,15 @@ scripts/mojo-build.sh -I src $DEP_INC examples/daily.mojo -o build/daily
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 
 log=build/calendar.log
 : > "$log"
-export ORCA_LOGS=build/calendar-logs
-rm -rf "$ORCA_LOGS"
+export MORCA_LOGS=build/calendar-logs
+rm -rf "$MORCA_LOGS"
 # Today is 2024-03-20, so the days after it are outside the pipeline's range.
-export ORCA_NOW=2024-03-20T00:00Z
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+export MORCA_NOW=2024-03-20T00:00Z
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 ui=
 fail() {
     echo "FAIL: $*"
@@ -31,13 +31,13 @@ fail() {
     exit 1
 }
 
-./build/orca register ./build/daily >> "$log" 2>&1 || fail "register daily"
-./build/orca register ./build/toy >> "$log" 2>&1 || fail "register toy"
+./build/morca register ./build/daily >> "$log" 2>&1 || fail "register daily"
+./build/morca register ./build/toy >> "$log" 2>&1 || fail "register toy"
 # A keyed pipeline (its binary a script), for its coverage; its `keys`
 # notes each call in $FAKE_KEYS.calls.
 export FAKE_KEYS="$PWD/build/calendar-keys"
 rm -f "$FAKE_KEYS".*
-./build/orca register tests/fake_keyed >> "$log" 2>&1 || fail "register fake_keyed"
+./build/morca register tests/fake_keyed >> "$log" 2>&1 || fail "register fake_keyed"
 hash=$(./build/daily describe | jq -r .registry_hash)
 # Done: a real run over three days. Failed, queued, running, and one that
 # succeeded as other code (so not done for this one).
@@ -55,11 +55,11 @@ q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
 
 free_port port
 base="http://127.0.0.1:$port"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 ui=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 get() { curl -fsS "$base$1" || fail "GET $1"; }
 code() { curl -s -o /dev/null -w '%{http_code}' "$base$1"; }
@@ -159,7 +159,7 @@ t=$(get '/pipelines/toy?tab=operate')
 echo "$t" | grep -qF 'id="coverage"' && echo "$t" | grep -qF 'data-view="year"' && fail "a monthly pipeline has tabs"
 echo "ok   calendar: coverage's month and year"
 
-# Coverage in one number (orca.coverage). daily's range so far is
+# Coverage in one number (morca.coverage). daily's range so far is
 # 2024-01-01..2024-03-18 (today is 03-19 in New York, still going): 78
 # days, 3 done; failed, queued, running and other code's aren't. toy's is
 # 2024-01..2024-02: January done, February failed.
@@ -211,7 +211,7 @@ echo "ok   calendar: coverage in one number"
 # A range as the picker writes it: the preview, then the backfill, queue
 # the days that aren't done or live, and no others.
 r='2024-03-02..2024-03-07'
-get "/pipelines/daily?preview=1&partitions=$r" | grep -qF 'data-cmd="backfill">orca login &lt;url&gt; &amp;&amp; orca --remote &lt;url&gt; backfill daily 2024-03-02..2024-03-07<' \
+get "/pipelines/daily?preview=1&partitions=$r" | grep -qF 'data-cmd="backfill">morca login &lt;url&gt; &amp;&amp; morca --remote &lt;url&gt; backfill daily 2024-03-02..2024-03-07<' \
     || fail "the command for the range"
 p=$(curl -fsS -H 'Accept: application/json' "$base/pipelines/daily?preview=1&partitions=$r")
 echo "$p" | jq -e '.preview.keys == ["2024-03-05", "2024-03-06", "2024-03-07"] and .preview.done == ["2024-03-02", "2024-03-03", "2024-03-04"]' > /dev/null \

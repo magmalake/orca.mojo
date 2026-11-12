@@ -1,4 +1,4 @@
-"""`Name`: the partition key of a keyed pipeline (`orca.keyed`).
+"""`Name`: the partition key of a keyed pipeline (`morca.keyed`).
 
 A name is 1 to 128 bytes of `[A-Za-z0-9._:/-]` without two dots in a row,
 such as a log's UUID or a repository's `owner/name`. A `/` separates
@@ -13,7 +13,7 @@ Wherever a name becomes one segment of a path or a URL (an attempt's log,
 writes `/` as `%2F`; no other byte of a name needs escaping.
 """
 
-from orca.key import Key
+from morca.key import Key
 
 comptime MAX_NAME = 128
 

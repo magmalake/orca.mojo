@@ -1,4 +1,4 @@
-"""Two views `orca ui` draws in the browser: a run's Dista timeline, and the
+"""Two views `morca ui` draws in the browser: a run's Dista timeline, and the
 pipelines over time on the home page. Both are plain scripts in the page
 (nothing is fetched from elsewhere) over JSON the UI serves, and both load
 that JSON only when they're looked at, so the pages stay as fast as they
@@ -37,11 +37,11 @@ from std.os import getenv
 
 from postgres import Params
 
-from orca.html import Html, url_encode
-from orca.json import quote
-from orca.lineage import flows
-from orca.state import State
-from orca.views.code import pipeline_srcs
+from morca.html import Html, url_encode
+from morca.json import quote
+from morca.lineage import flows
+from morca.state import State
+from morca.views.code import pipeline_srcs
 
 comptime MAX_RUNS = 20_000
 """Runs `/api/gantt` answers at most: the newest of the window."""
@@ -429,7 +429,7 @@ def timeline_section(mut h: Html, run: Int):
         "Reset zoom</button>",
     )
     # Perfetto fetches the file itself, so only from a UI it can reach.
-    var base = String(getenv("ORCA_UI_URL").rstrip("/"))
+    var base = String(getenv("MORCA_UI_URL").rstrip("/"))
     if base:
         h.link_out(
             String(
@@ -441,7 +441,7 @@ def timeline_section(mut h: Html, run: Int):
     else:
         h.raw(
             '<a href="https://ui.perfetto.dev" target="_blank" rel="noopener"',
-            ' title="Set ORCA_UI_URL for a link that opens this run; or',
+            ' title="Set MORCA_UI_URL for a link that opens this run; or',
             ' open the file there">Open in Perfetto ↗</a>',
         )
     h.link(src, "timeline.json")
@@ -461,7 +461,7 @@ def timeline_section(mut h: Html, run: Int):
 
 
 comptime VIZ_STYLE = """
-/* The views drawn in the browser (orca.ui.viz). */
+/* The views drawn in the browser (morca.ui.viz). */
 .vtabs { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center;
   justify-content: space-between; margin: 1.25rem 0 -0.5rem; }
 .vtabs [role=tablist], .vtabs__win { display: inline-flex; border: 1px solid var(--border);
@@ -519,7 +519,7 @@ a:hover .gantt__name { fill: var(--lake); text-decoration: underline; }
 .tlv__tip dt { color: var(--faint); }
 .tlv__tip dd { margin: 0; font-family: var(--mono); word-break: break-all; }
 """
-"""The views' rules, served after `orca.ui.style.STYLE` in `/static/orca.css`."""
+"""The views' rules, served after `morca.ui.style.STYLE` in `/static/morca.css`."""
 
 
 comptime _GANTT_JS = """
@@ -533,7 +533,7 @@ comptime _GANTT_JS = """
   const get = (k, d) => { try { return localStorage.getItem(k) || d; } catch (e) { return d; } };
   const put = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-  let win = get("orca.gantt.window", "24h"), data = null, shown = "list";
+  let win = get("morca.gantt.window", "24h"), data = null, shown = "list";
   tabs.hidden = false;
   const ORDER = { failed: 5, running: 4, retrying: 3, queued: 2, cancelled: 1, succeeded: 0 };
   const cls = (st) => st === "deferred" ? "retrying" : (st in ORDER ? st : "cancelled");
@@ -640,18 +640,18 @@ comptime _GANTT_JS = """
     list.hidden = shown !== "list";
     panel.hidden = shown !== "timeline";
     wins.hidden = shown !== "timeline";
-    if (save) put("orca.home.view", shown);
+    if (save) put("morca.home.view", shown);
     if (shown === "timeline") load();
   }
   tabs.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b) return;
     if (b.dataset.view) show(b.dataset.view, true);
-    if (b.dataset.window) { win = b.dataset.window; put("orca.gantt.window", win); load(); }
+    if (b.dataset.window) { win = b.dataset.window; put("morca.gantt.window", win); load(); }
   });
   let pending = false;
   addEventListener("resize", () => { if (pending || shown !== "timeline") return; pending = true; requestAnimationFrame(() => { pending = false; render(); }); });
-  show(get("orca.home.view", "list"), false);
+  show(get("morca.home.view", "list"), false);
 })();
 """
 """The home page's tabs, and the timeline drawn from `/api/gantt` as SVG

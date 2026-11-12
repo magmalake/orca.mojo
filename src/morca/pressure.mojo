@@ -11,7 +11,7 @@ same signal before memory runs out (Weiner et al., ASPLOS 2022).
 
 **Which file** (`find_source`, once per process):
 
-1. `ORCA_MEMORY_PRESSURE_FILE`, if set: that file, whatever it is (tests
+1. `MORCA_MEMORY_PRESSURE_FILE`, if set: that file, whatever it is (tests
    point it at a fixture);
 2. on Linux, the cgroup v2 `memory.pressure` of the nearest cgroup, from
    this process's own up, whose `memory.max` is a limit: in a Docker
@@ -29,17 +29,17 @@ same signal before memory runs out (Weiner et al., ASPLOS 2022).
 **Admission** (`Admission`): while `some avg10`, less what runs held at
 their own memory limits explain (the most of their cgroups' `some avg10`),
 is over the limit
-(`ORCA_ADMIT_MEMORY_PRESSURE`, percent, default 10; 0 turns it off), no new
+(`MORCA_ADMIT_MEMORY_PRESSURE`, percent, default 10; 0 turns it off), no new
 run starts on this host; runs already going go on. The hold ends once
 `avg10` is under half the limit, or has stayed at most the limit for
 `RESUME_SECONDS`, so a reading that hovers at the limit doesn't flap. A
-hold that has lasted `ORCA_ADMIT_PRESSURE_GRACE_SECONDS` (600) with none of
-orca's runs going on this host lets one run start at a time (`escape`): the
-pressure isn't orca's, and orca shouldn't wait for it forever. The caller
+hold that has lasted `MORCA_ADMIT_PRESSURE_GRACE_SECONDS` (600) with none of
+morca's runs going on this host lets one run start at a time (`escape`): the
+pressure isn't morca's, and morca shouldn't wait for it forever. The caller
 logs and alerts once when that happens (`stuck`).
 
 This module reads files and decides; it keeps nothing in a database, so a
-step (`memory_pressure`, from `ORCA_MEMORY_PRESSURE_FILE`, which every run
+step (`memory_pressure`, from `MORCA_MEMORY_PRESSURE_FILE`, which every run
 on the local runner, the control host and a worker is given) and the
 per-run cgroups of #201 can use it alone.
 """
@@ -48,13 +48,13 @@ from std.os import getenv
 from std.os.path import exists
 from std.sys.info import CompilationTarget
 
-comptime PRESSURE_FILE = "ORCA_MEMORY_PRESSURE_FILE"
+comptime PRESSURE_FILE = "MORCA_MEMORY_PRESSURE_FILE"
 """The file a run polls for its host's memory pressure, and the scheduler's
 override of which file it reads."""
-comptime ADMIT_LIMIT = "ORCA_ADMIT_MEMORY_PRESSURE"
+comptime ADMIT_LIMIT = "MORCA_ADMIT_MEMORY_PRESSURE"
 """The `some avg10` percent over which no new run starts; 0 turns it off."""
 comptime DEFAULT_LIMIT: Float64 = 10.0
-comptime GRACE = "ORCA_ADMIT_PRESSURE_GRACE_SECONDS"
+comptime GRACE = "MORCA_ADMIT_PRESSURE_GRACE_SECONDS"
 comptime DEFAULT_GRACE: Float64 = 600.0
 comptime RESUME_SECONDS: Float64 = 30.0
 """How long `avg10` stays at most the limit before a hold ends anyway."""
@@ -173,7 +173,7 @@ def read_psi(path: String) -> Optional[Psi]:
 
 def memory_pressure() -> Optional[Psi]:
     """This run's host's memory pressure, from the file
-    `ORCA_MEMORY_PRESSURE_FILE` names (which orca gives every run it
+    `MORCA_MEMORY_PRESSURE_FILE` names (which morca gives every run it
     starts where there is one), or None. A step can poll it and lower its
     own parallelism while `some.avg10` is high."""
     return read_psi(getenv(PRESSURE_FILE))
@@ -187,7 +187,7 @@ def memory_pressure() -> Optional[Psi]:
 @fieldwise_init
 struct Source(Boolable, Copyable, Movable, Writable):
     """The PSI file a host's memory pressure is read from: `kind` is
-    `file` (`ORCA_MEMORY_PRESSURE_FILE`), `cgroup` (a cgroup with a memory
+    `file` (`MORCA_MEMORY_PRESSURE_FILE`), `cgroup` (a cgroup with a memory
     limit), `host` (`/proc/pressure/memory`), `cgroup-unlimited`, or empty
     with no `path` for none."""
 
@@ -250,7 +250,7 @@ def pick_source(
     host_ok: Bool,
 ) -> Source:
     """The choice `find_source` makes, from what it found: `override`
-    (`ORCA_MEMORY_PRESSURE_FILE`), the cgroup directories from this
+    (`MORCA_MEMORY_PRESSURE_FILE`), the cgroup directories from this
     process's own up to the root of the mount, each one's `memory.max` in
     bytes (0 for none) and whether it has a readable `memory.pressure`, and
     whether `/proc/pressure/memory` reads."""
@@ -333,7 +333,7 @@ def pct_text(x: Float64) -> String:
 
 
 def admit_limit() -> Float64:
-    """`ORCA_ADMIT_MEMORY_PRESSURE`, percent; 10 when unset, and 0 (off)
+    """`MORCA_ADMIT_MEMORY_PRESSURE`, percent; 10 when unset, and 0 (off)
     for a value that isn't a number from 0."""
     var v = getenv(ADMIT_LIMIT)
     if not v:
@@ -344,7 +344,7 @@ def admit_limit() -> Float64:
             return x
     except:
         pass
-    print("orca:", ADMIT_LIMIT, "is a percent from 0, not", v, "- off")
+    print("morca:", ADMIT_LIMIT, "is a percent from 0, not", v, "- off")
     return 0.0
 
 
@@ -366,7 +366,7 @@ struct Admission(Copyable, Movable):
     var limit: Float64
     """`some avg10` percent over which runs wait; 0 for off."""
     var grace: Float64
-    """How long a hold lasts, with none of orca's runs going, before one
+    """How long a hold lasts, with none of morca's runs going, before one
     may start anyway."""
     var holding: Bool
     var held_since: Float64
@@ -379,7 +379,7 @@ struct Admission(Copyable, Movable):
     """While holding: the reason a run waits (`WAITING_PRESSURE`...); else
     empty."""
     var escape: Bool
-    """Holding past `grace` with nothing of orca's going: one run may
+    """Holding past `grace` with nothing of morca's going: one run may
     start while none is."""
     var stuck: Bool
     """`escape` became true at this reading: log it and alert, once a
@@ -411,9 +411,9 @@ struct Admission(Copyable, Movable):
         own: Float64 = 0.0,
     ):
         """Takes a reading (None: none could be read, which holds nothing),
-        at `now`, with `idle` whether none of orca's runs is going on this
+        at `now`, with `idle` whether none of morca's runs is going on this
         host. `own` is the part of `some avg10` that runs held at their own
-        memory limits explain (`orca.cgroup.own_limit_pressure`), which
+        memory limits explain (`morca.cgroup.own_limit_pressure`), which
         holds nothing: the host may have memory to spare, and such a run is
         killed and retried bigger in its own time."""
         self.reading = psi
@@ -474,7 +474,7 @@ struct Admission(Copyable, Movable):
 
 
 def pressure_env(s: Source) -> List[String]:
-    """`ORCA_MEMORY_PRESSURE_FILE=<path>` for a run's process, so a step can
+    """`MORCA_MEMORY_PRESSURE_FILE=<path>` for a run's process, so a step can
     poll its host's pressure (`memory_pressure`); nothing without one."""
     var out = List[String]()
     if s:

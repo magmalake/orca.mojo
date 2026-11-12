@@ -1,5 +1,5 @@
-"""The actions: each a `POST` of a form (or of JSON, from `orca --remote`)
-that changes something, through `orca.actions`.
+"""The actions: each a `POST` of a form (or of JSON, from `morca --remote`)
+that changes something, through `morca.actions`.
 
 | `POST` | |
 |---|---|
@@ -17,11 +17,11 @@ that changes something, through `orca.actions`.
 
 Each answers `303 See Other` to the page of what it made (a script gets
 that page's JSON, with 200), or 409 saying why it wasn't done, with a way
-to confirm when it asks for one. `orca.web.server` checks the session and
+to confirm when it asks for one. `morca.web.server` checks the session and
 audits each one done as its user's.
 """
 
-from orca.actions import (
+from morca.actions import (
     Bulk,
     Outcome,
     backfill_picked,
@@ -36,17 +36,17 @@ from orca.actions import (
     resume_run,
     start_run,
 )
-from orca.api.pipelines import json_strings
-from orca.auth import audit
-from orca.html import Html, query_values, url_encode
-from orca.json import quote
-from orca.state import State
-from orca.ui.datasets import dataset_href
-from orca.ui.layout import bad_request, page_html
-from orca.views.runs import count_runs, int_or_zero, run_ids, runs_query
-from orca.watchdog import acknowledge, snooze as snooze_rule
-from orca.web.page import Page
-from orca.web.router import Call
+from morca.api.pipelines import json_strings
+from morca.auth import audit
+from morca.html import Html, query_values, url_encode
+from morca.json import quote
+from morca.state import State
+from morca.ui.datasets import dataset_href
+from morca.ui.layout import bad_request, page_html
+from morca.views.runs import count_runs, int_or_zero, run_ids, runs_query
+from morca.watchdog import acknowledge, snooze as snooze_rule
+from morca.web.page import Page
+from morca.web.router import Call
 
 
 def _acted(
@@ -335,7 +335,7 @@ def _ids_json(mut j: String, ids: List[Int]):
 
 def bulk(mut db: State, call: Call) raises -> Page:
     """`POST /runs/bulk`: `do` (`cancel`, `retry` or `backfill`) to the runs
-    picked from a list (`orca.ui.runs`), each a `pick` field, or with
+    picked from a list (`morca.ui.runs`), each a `pick` field, or with
     `all=1` all those the list's filters match (the form's `view`,
     `pipeline`, `status`, `trigger`, `from`, `to`, `since`, `key`, `run`),
     if there are still the `expect` the page said; otherwise it asks again

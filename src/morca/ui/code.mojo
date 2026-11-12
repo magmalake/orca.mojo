@@ -1,15 +1,15 @@
 """`/code?u=`: a file at a commit on GitHub, its lines coloured as HTML
-(`orca.highlight`), for the code shown on hover; the UI fetches it, so a
+(`morca.highlight`), for the code shown on hover; the UI fetches it, so a
 browser needn't reach GitHub.
 """
 
 from objectstore.http import Header, HttpClient
 
-from orca.highlight import highlight
-from orca.json import quote
-from orca.source import is_hex
-from orca.ui.step_cards import def_json
-from orca.web.page import Page
+from morca.highlight import highlight
+from morca.json import quote
+from morca.source import is_hex
+from morca.ui.step_cards import def_json
+from morca.web.page import Page
 
 
 comptime _CODE_MAX = 1 << 20
@@ -74,11 +74,11 @@ def raw_code_url(href: String) -> String:
 
 def code_page(href: String, at: String = "") -> Page:
     """`/code?u=<a GitHub link to a file at a commit>`: the file's lines and
-    each coloured as HTML (`orca.highlight`), as JSON, for the code shown on
+    each coloured as HTML (`morca.highlight`), as JSON, for the code shown on
     hover. 400 for any other URL, 502 when GitHub doesn't give it (a
     private repository), 413 past `_CODE_MAX`. With `at`, a line, only
     the signature of the `def` there and its docstring's first paragraph
-    (`orca.ui.step_cards.def_json`), for a step's card; 400 for an `at` that
+    (`morca.ui.step_cards.def_json`), for a step's card; 400 for an `at` that
     isn't a line number."""
     var raw = raw_code_url(href)
     var line = 0
@@ -105,7 +105,7 @@ def code_page(href: String, at: String = "") -> Page:
         var resp = http.request(
             "GET",
             raw,
-            [Header("User-Agent", "orca-ui")],
+            [Header("User-Agent", "morca-ui")],
             List[UInt8]().copy(),
         )
         if resp.status != 200:

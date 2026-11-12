@@ -1,5 +1,5 @@
-"""`orca.toml`: one checked-in file for how each of a project's pipelines
-runs (#145), read by `orca register` and `orca aws register`.
+"""`morca.toml`: one checked-in file for how each of a project's pipelines
+runs (#145), read by `morca register` and `morca aws register`.
 
     [defaults]
     placement = "ec2"
@@ -11,25 +11,25 @@ runs (#145), read by `orca register` and `orca aws register`.
     worker_procs = 1             # or "auto", one per vCPU
     max_runs = 2                 # over the code's Pipeline max_runs
     keys_per_run = 30            # over the code's: keys a run takes (#240)
-    cpus = "1..16"               # a request: MIN..MAX (orca.resources)
-    memory_gb = "2..24"          # or "auto", "auto..24" (orca.recommend)
+    cpus = "1..16"               # a request: MIN..MAX (morca.resources)
+    memory_gb = "2..24"          # or "auto", "auto..24" (morca.recommend)
     learn = false                # don't: "auto" is then no request
     env = { DISTA_WORKER_SLOTS = "4", GHARCHIVE_PARALLEL = "16" }
     secrets = { GITHUB_TOKEN = "orca/github-token" }   # Secrets Manager IDs
-    fills = "all"                # fill the range by itself (orca.fill)
+    fills = "all"                # fill the range by itself (morca.fill)
     fill_budget_per_day = 5.0    # and the rest of the fill* keys
 
-    [stack]                      # for `orca aws up`; not read yet
+    [stack]                      # for `morca aws up`; not read yet
 
-`orca config check [<file>] [--secrets]` checks a file without a database,
-for a project's CI: what registering checks, and that orca can size each
+`morca config check [<file>] [--secrets]` checks a file without a database,
+for a project's CI: what registering checks, and that morca can size each
 instance type (a warning for one its price table hasn't); with `--secrets`,
 that each secret can be read (its value is never printed). The pipeline
-page's Configuration (`config_html`) is `orca config show`'s.
+page's Configuration (`config_html`) is `morca config show`'s.
 
 What stays in the pipeline's code is what it does; this file says where and
 how much. A key in `[pipelines.<name>]` beats the same key in `[defaults]`
-(`env` and `secrets` are merged name by name), and a flag of `orca register`
+(`env` and `secrets` are merged name by name), and a flag of `morca register`
 beats both, recorded with the registration as an override. A pipeline the
 file names is registered with exactly what it and its flags say: a key
 taken out of the file goes back to its default. `[defaults]` applies only to
@@ -38,13 +38,13 @@ each flag left out keeping what was registered.
 
 The registration keeps the file's SHA-256 and its git commit (and whether
 it had changes not committed) in `orca.pipelines.config`, with where each
-value came from, for `orca config show`. `orca config export` writes the
+value came from, for `morca config show`. `morca config export` writes the
 file back from what's registered.
 
 **Adding a key**: a name in `SCALAR_KEYS` and its check in `_canonical`
 (and its types in `_canonical_toml`), which gives the value as text; it is
 then read, merged, overridden, recorded, shown and exported like the
-others, and only its consumer is new. The `fill*` keys (#155, `orca.fill`)
+others, and only its consumer is new. The `fill*` keys (#155, `morca.fill`)
 were added this way, with no flag.
 """
 
@@ -54,8 +54,8 @@ from std.os.path import exists
 
 from objectstore.crypto import sha256_hex
 
-from orca.control import parse_placement
-from orca.fill import (
+from morca.control import parse_placement
+from morca.fill import (
     lag_text,
     parse_fill_budget,
     parse_fill_lag,
@@ -66,21 +66,21 @@ from orca.fill import (
     parse_fill_window,
     parse_fills,
 )
-from orca.json import quote
-from orca.proc import (
+from morca.json import quote
+from morca.proc import (
     absolute,
     capture,
 )
-from orca.resources import (
+from morca.resources import (
     canonical_cpus,
     canonical_memory_gb,
 )
-from orca.secrets import (
+from morca.secrets import (
     parse_secrets,
     secret_problem,
 )
-from orca.pool_config import read_pools
-from orca.toml import (
+from morca.pool_config import read_pools
+from morca.toml import (
     BOOLEAN,
     FLOAT,
     INTEGER,
@@ -93,8 +93,20 @@ from orca.toml import (
 )
 
 comptime CODE_DEFAULT = "code default"
-comptime FROM_FILE = "orca.toml"
+comptime FROM_FILE = "morca.toml"
 comptime FROM_FLAG = "flag"
+
+
+def refuse_orca_toml() raises:
+    """Raises when the project still has orca.toml and no morca.toml: the
+    file was renamed with the project (#384), and a register that read no
+    file would quietly drop its settings."""
+    if exists("orca.toml") and not exists("morca.toml"):
+        raise Error(
+            "morca: this project has orca.toml, which morca doesn't read:"
+            " rename it to morca.toml (and orca.<stack>.toml to"
+            " morca.<stack>.toml)"
+        )
 comptime FROM_ENV = "environment"
 
 comptime SCALAR_KEYS = [
@@ -116,27 +128,27 @@ comptime SCALAR_KEYS = [
     "fill_lag",
 ]
 """The keys of `[defaults]` and `[pipelines.<name>]` with one value. The
-`fill*` keys (`orca.fill`) are the file's only: no flag sets them."""
+`fill*` keys (`morca.fill`) are the file's only: no flag sets them."""
 comptime MAP_KEYS = ["secrets", "env"]
 """The keys whose value is a table of names."""
 
 comptime _RESERVED_ENV = [
-    "ORCA_DATABASE_URL",
-    "ORCA_IMAGE",
-    "ORCA_SECRETS",
-    "ORCA_WORKERS",
+    "MORCA_DATABASE_URL",
+    "MORCA_IMAGE",
+    "MORCA_SECRETS",
+    "MORCA_WORKERS",
     "DISTA_ROLE",
     "DISTA_HEAD",
     "DISTA_ADVERTISE",
-    "ORCA_GRANT_CPUS",
-    "ORCA_GRANT_MEMORY_MB",
-    "ORCA_MEMORY_PRESSURE_FILE",
+    "MORCA_GRANT_CPUS",
+    "MORCA_GRANT_MEMORY_MB",
+    "MORCA_MEMORY_PRESSURE_FILE",
 ]
-"""Variables orca gives a run itself, which `env` can't set."""
+"""Variables morca gives a run itself, which `env` can't set."""
 
 
 def flag_of(key: String) -> String:
-    """The `orca register` flag of `key`: `--head-type` of `head_type`."""
+    """The `morca register` flag of `key`: `--head-type` of `head_type`."""
     return String("--", key.replace("_", "-"))
 
 
@@ -221,7 +233,7 @@ def max_runs_auto(v: String) -> Bool:
 
 
 def max_runs_text(n: Int, auto: Bool) -> String:
-    """`max_runs` as orca.toml writes it."""
+    """`max_runs` as morca.toml writes it."""
     if not auto:
         return String(n)
     if n == AUTO_MAX_RUNS:
@@ -366,7 +378,7 @@ def env_name_problem(name: String) -> String:
         return "a variable's name can't be empty"
     for r in materialize[_RESERVED_ENV]():
         if name == r:
-            return String(name, " is set by orca itself")
+            return String(name, " is set by morca itself")
     var upper = name.upper()
     for word in ["PASSWORD", "SECRET", "TOKEN", "DATABASE_URL"]:
         if word in upper:
@@ -388,7 +400,7 @@ struct Setting(Copyable, Movable):
     var detail: String
     var line: Int
     """The file's line that sets it, from 1; 0 if not from the file, or
-    registered before orca kept it."""
+    registered before morca kept it."""
 
     def __init__(
         out self, value: String, source: String, detail: String, line: Int = 0
@@ -411,7 +423,7 @@ def is_map_key(key: String) -> Bool:
 
 
 struct ProjectConfig(Movable):
-    """A project's `orca.toml`, read and checked, or none (`path` empty)."""
+    """A project's `morca.toml`, read and checked, or none (`path` empty)."""
 
     var path: String
     """The file as given, for messages; empty for no file."""
@@ -422,7 +434,7 @@ struct ProjectConfig(Movable):
     var dirty: Bool
     """Whether it differs from that commit."""
     var source: String
-    """Where the commit is from (`ORCA_SOURCE`), for a file read outside a git
+    """Where the commit is from (`MORCA_SOURCE`), for a file read outside a git
     checkout, as in the image; empty otherwise."""
     var repo_path: String
     """Its path in its checkout (`git ls-files --full-name`), for a link to
@@ -447,7 +459,7 @@ struct ProjectConfig(Movable):
         dirty: Bool = False,
     ) raises:
         """`text`, the file `path` holds, checked: every key is one this
-        orca knows, every value of its type."""
+        morca knows, every value of its type."""
         self.path = path
         self.repo_path = String()
         self.hash = sha256_hex(text)
@@ -464,7 +476,7 @@ struct ProjectConfig(Movable):
     def load(path: String) raises -> ProjectConfig:
         """The file at `path`, with its checkout's commit."""
         if not exists(path):
-            raise Error("orca: no ", path)
+            raise Error("morca: no ", path)
         var text: String
         with open(path, "r") as f:
             text = f.read()
@@ -514,10 +526,10 @@ struct ProjectConfig(Movable):
         except:
             pass
         var source = String()
-        if not commit and getenv("ORCA_COMMIT"):
+        if not commit and getenv("MORCA_COMMIT"):
             # Not in a checkout (the image): what the build recorded.
-            commit = getenv("ORCA_COMMIT")
-            source = getenv("ORCA_SOURCE")
+            commit = getenv("MORCA_COMMIT")
+            source = getenv("MORCA_SOURCE")
         var cfg = ProjectConfig(text, path, commit, dirty)
         cfg.source = source
         cfg.repo_path = repo_path
@@ -527,7 +539,7 @@ struct ProjectConfig(Movable):
     def from_b64(
         b64: String, path: String, commit: String, dirty: Bool
     ) raises -> ProjectConfig:
-        """The file as `orca aws register` sends it: base64."""
+        """The file as `morca aws register` sends it: base64."""
         var bytes = b64decode(b64)
         return ProjectConfig(
             String(from_utf8_lossy=Span(bytes)), path, commit, dirty
@@ -645,18 +657,18 @@ struct ProjectConfig(Movable):
                         q, String("[pipelines.", toml_key(name), "]")
                     )
             elif top == "pools":
-                # Worker pools orca grows itself (orca.pool_config).
+                # Worker pools morca grows itself (morca.pool_config).
                 try:
                     _ = read_pools(self.doc)
                 except e:
                     raise Error(self.path, ":", e)
             elif top != "stack":
-                # [stack] is for `orca aws up`, which doesn't read it yet.
+                # [stack] is for `morca aws up`, which doesn't read it yet.
                 self._fail(
                     self._line(p),
                     String("[", toml_key(top), "]"),
                     (
-                        "isn't a table orca knows: [defaults],"
+                        "isn't a table morca knows: [defaults],"
                         " [pipelines.<name>], [pools.<name>] or [stack]"
                     ),
                 )
@@ -728,7 +740,7 @@ struct ProjectConfig(Movable):
 
 @fieldwise_init
 struct RegisterFlags(Copyable, Movable):
-    """What `orca register`'s command line gave."""
+    """What `morca register`'s command line gave."""
 
     var values: Dict[String, String]
     """A `SCALAR_KEYS` key to its flag's value, checked."""
@@ -760,7 +772,7 @@ struct Resolved(Movable):
     var name: String
     var in_file: Bool
     """Whether the file names it; if not, flags left out keep what was
-    registered, as before orca.toml."""
+    registered, as before morca.toml."""
     var values: Dict[String, Setting]
     var secrets: List[Tuple[String, Setting]]
     var env: List[Tuple[String, Setting]]
@@ -938,4 +950,4 @@ def resolve(
     return r^
 
 
-# `orca config show` and `orca config export`: from the registrations.
+# `morca config show` and `morca config export`: from the registrations.

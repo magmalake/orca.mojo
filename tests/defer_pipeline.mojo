@@ -12,7 +12,7 @@ from std.os import getenv
 from std.os.path import exists
 
 from dista import Seq
-from orca import (
+from morca import (
     Ctx,
     Gather,
     Mapped,
@@ -21,7 +21,7 @@ from orca import (
     Pipeline,
     Step,
     defer,
-    orca_main,
+    morca_main,
 )
 
 
@@ -60,4 +60,4 @@ comptime Deferring = Pipeline[
 
 
 def main() raises:
-    orca_main[Deferring]()
+    morca_main[Deferring]()

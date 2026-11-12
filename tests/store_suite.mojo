@@ -9,7 +9,7 @@ matter: runs are told apart by their number.
 from std.testing import assert_equal, assert_raises, assert_true
 
 from dista import Seq
-from orca import (
+from morca import (
     Ctx,
     Gather,
     Mapped,
@@ -22,7 +22,7 @@ from orca import (
     TableSnapshot,
     parse_months,
 )
-from orca.store import Recorder
+from morca.store import Recorder
 
 # --- a pipeline whose second step fails its first attempt ---
 
@@ -52,7 +52,7 @@ comptime Add = Step["add", Seq[Int], Int, add, Gather, after=Flaky]
 comptime Retrying = Pipeline["retrying", MonthNo, Flaky, Add]
 
 
-# --- a step that reads and commits a table, as orca.tables would ---
+# --- a step that reads and commits a table, as morca.tables would ---
 
 
 def touch(mut ctx: Ctx, m: Month) raises -> Int:

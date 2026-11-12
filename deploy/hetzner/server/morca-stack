@@ -1,6 +1,6 @@
 #!/bin/sh
-# orca-stack: what runs on the Hetzner server (installed by deploy/hetzner/up.sh
-# as /usr/local/sbin/orca-stack; the other scripts call it over ssh).
+# morca-stack: what runs on the Hetzner server (installed by deploy/hetzner/up.sh
+# as /usr/local/sbin/morca-stack; the other scripts call it over ssh).
 #
 #   configure [--keep-existing] KEY=VALUE...   stack settings (/etc/orca/stack.conf);
 #                                              prints each one it changes, old -> new
@@ -21,10 +21,10 @@
 #   tags [--previous]                          what's deployed (or was before it)
 #   rollback [--force]                         apply the tags deployed before, and
 #                                              register the pipelines again
-#   register                                   docker exec scheduler orca register
-#   upgrade-steps --tag T --from F --when W    T's image's upgrade steps (orca upgrade)
+#   register                                   docker exec scheduler morca register
+#   upgrade-steps --tag T --from F --when W    T's image's upgrade steps (morca upgrade)
 #                                              for a deploy from F, before or after
-#   upgrade-run orca ARG...                    docker exec scheduler orca ARG... (a step)
+#   upgrade-run morca ARG...                    docker exec scheduler morca ARG... (a step)
 #   can-overlap [--tag T]                      exit 0 if the new image's scheduler may start
 #                                              beside the old one (OVERLAP=1, docs/overlap.md)
 #   drain-old [--timeout SECONDS]              ask scheduler-old to drain, wait for it to exit,
@@ -34,7 +34,7 @@
 #                                              with --workers: rescale.sh's)
 #   resume                                     unpause what quiesce paused
 #   backup                                     pg_dump to s3://BUCKET/backups/pg/<time>.dump
-#                                              (a failure is pushed: orca notify --kind backup-failed)
+#                                              (a failure is pushed: morca notify --kind backup-failed)
 #   backup-now                                 the same, without the push (deploy.sh's)
 #                                              (both write <time>.paused beside the dump: what was paused)
 #   list-backups                               the dumps, and which have a <time>.paused
@@ -61,9 +61,9 @@
 # that one. Postgres is created once and never restarted by apply.
 #
 # The UI and the apps are replaced without downtime: the new one starts as
-# NAME-next on the orca network, apply waits until it's healthy (the UI:
+# NAME-next on the morca network, apply waits until it's healthy (the UI:
 # 200 on /healthz, and its worker API listener answering if
-# ORCA_WORKER_ADDR is set; an app: 200 on its CHECK path, not the census
+# MORCA_WORKER_ADDR is set; an app: 200 on its CHECK path, not the census
 # console's warming-up 503), gives it the alias NAME (Docker's DNS then
 # answers NAME with both) and checks it again, then stops the old one
 # (docker stop -t 10, for requests in flight), removes it and renames
@@ -76,11 +76,11 @@
 # curl). The sampler and cloudflared are replaced by stopping the old one
 # first, and so is the scheduler, unless apply is given --overlap.
 #
-# Overlapping schedulers (OVERLAP=1 in stack.conf, ORCA_OVERLAP=on in
-# orca.env; docs/overlap.md). With --overlap (deploy.sh passes it when
+# Overlapping schedulers (OVERLAP=1 in stack.conf, MORCA_OVERLAP=on in
+# morca.env; docs/overlap.md). With --overlap (deploy.sh passes it when
 # can-overlap says yes) the new scheduler starts as scheduler-next beside
 # the old one; the old one is set not to restart and renamed scheduler-old,
-# the new one renamed scheduler, and apply waits until it leads (orca
+# the new one renamed scheduler, and apply waits until it leads (morca
 # scheduler wait-lead, HEALTH_TIMEOUT). The old one has seen it and drains:
 # it starts nothing and exits once its runs have ended. drain-old asks it
 # to drain, waits for that (bounded), and removes it. Runs aren't paused or
@@ -90,25 +90,25 @@
 # running one stays until drain-old: can-overlap says no, and check fails.
 #
 # Each apply that changes a tag keeps what was deployed before it:
-# $CONF/deployed has the tags the last apply started ("orca TAG", then "app
-# NAME TAG" for each app, its own tag or the orca tag), $CONF/deployed.prev
-# the ones before, and stack.conf's ORCA_PREV_TAG the orca tag of those.
+# $CONF/deployed has the tags the last apply started ("morca TAG", then "app
+# NAME TAG" for each app, its own tag or the morca tag), $CONF/deployed.prev
+# the ones before, and stack.conf's MORCA_PREV_TAG the morca tag of those.
 #
-# The containers and the environment are the ones deploy/aws/orca.yaml makes
+# The containers and the environment are the ones deploy/aws/morca.yaml makes
 # (same images, same names, same env variable names), minus Caddy and the
 # instances: the runner is local, and cloudflared brings the traffic in.
 # Nothing here prints a secret.
 set -eu
 
 # The directories can be moved for a trial run on a workstation
-# (ORCA_STACK_TEST=1 also skips the Volume check); on the server they are these.
-CONF=${ORCA_CONF:-/etc/orca}
-DATA=${ORCA_DATA:-/mnt/orca-data}
-STATE=${ORCA_STATE:-/var/lib/orca}
+# (MORCA_STACK_TEST=1 also skips the Volume check); on the server they are these.
+CONF=${MORCA_CONF:-/etc/orca}
+DATA=${MORCA_DATA:-/mnt/orca-data}
+STATE=${MORCA_STATE:-/var/lib/orca}
 PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 die() {
-    echo "orca-stack: $*" >&2
+    echo "morca-stack: $*" >&2
     exit 1
 }
 
@@ -161,7 +161,7 @@ worker_runs() {
 list_worker_runs() {
     n=$(worker_runs)
     [ "$n" -gt 0 ] || return 0
-    echo "orca-stack: $n run(s) left running on workers (a scheduler restart doesn't stop them):"
+    echo "morca-stack: $n run(s) left running on workers (a scheduler restart doesn't stop them):"
     psql_q "SELECT '  run ' || r.id || ' ' || r.pipeline || ' ' || r.partitions || ' on ' || coalesce(w.label, 'worker ' || r.worker::text, r.placement) || ', running ' || date_trunc('second', now() - r.started) FROM orca.runs r LEFT JOIN orca.workers w ON w.id = r.worker WHERE $WORKER_RUNS ORDER BY r.id" 2> /dev/null || true
 }
 
@@ -195,7 +195,7 @@ cmd_configure() {
         k=${kv%%=*}
         v=${kv#*=}
         case "$k" in
-            ORCA_IMAGE | ORCA_TAG | CLOUDFLARED_IMAGE | BUCKET | BACKUP_KEEP | GHCR_USER | CGROUPS | HEALTH_TIMEOUT | OVERLAP) ;;
+            MORCA_IMAGE | MORCA_TAG | CLOUDFLARED_IMAGE | BUCKET | BACKUP_KEEP | GHCR_USER | CGROUPS | HEALTH_TIMEOUT | OVERLAP) ;;
             *) die "unknown setting $k" ;;
         esac
         [ "$k=" = "$kv" ] && [ "$k" = GHCR_USER ] || safe "$v"
@@ -204,7 +204,7 @@ cmd_configure() {
             continue
         fi
         [ "$old" != "$v" ] || continue
-        echo "orca-stack: $k ${old:-(unset)} -> ${v:-(unset)}"
+        echo "morca-stack: $k ${old:-(unset)} -> ${v:-(unset)}"
         if [ -z "$v" ]; then conf_unset "$k"; else conf_set "$k" "$v"; fi
     done
 }
@@ -237,7 +237,7 @@ key_changes() {
 
 # sync [--keys] NAME < FILE: FILE (standard input, so a secret is never an
 # argument) becomes $CONF/NAME, mode 600, if it differs from it; prints
-# "orca-stack: NAME: new", "NAME: changed" or, with --keys, the keys that
+# "morca-stack: NAME: new", "NAME: changed" or, with --keys, the keys that
 # differ; nothing if it's the same. Its contents are never printed.
 cmd_sync() {
     keys=0
@@ -269,10 +269,10 @@ cmd_sync() {
         what=changed
     fi
     mv "$f.sync" "$f"
-    echo "orca-stack: $1: $what"
+    echo "morca-stack: $1: $what"
 }
 
-# /etc/orca/apps: "name port tag check"; a tag of - is the orca tag, and
+# /etc/orca/apps: "name port tag check"; a tag of - is the morca tag, and
 # check the path that answers 200 once the app is ready (/ if there's
 # none: lines from before had three fields).
 cmd_app() {
@@ -287,17 +287,17 @@ cmd_app() {
     touch "$CONF/apps"
     if ! grep -q "^$1 " "$CONF/apps"; then
         echo "$1 $2 - ${check:-/}" >> "$CONF/apps"
-        echo "orca-stack: app $1 added (port $2)"
+        echo "morca-stack: app $1 added (port $2)"
     elif [ -n "$check" ] && [ "$(awk -v n="$1" '$1 == n { print $4 }' "$CONF/apps")" != "$check" ]; then
         # Set up already (up.sh and deploy.sh run this each time): only a
         # CHECK given changes it.
-        echo "orca-stack: app $1: check $(awk -v n="$1" '$1 == n { print $4 }' "$CONF/apps") -> $check"
+        echo "morca-stack: app $1: check $(awk -v n="$1" '$1 == n { print $4 }' "$CONF/apps") -> $check"
         awk -v n="$1" -v c="$check" '$1 == n { $4 = c } { print }' "$CONF/apps" > "$CONF/apps.new"
         mv "$CONF/apps.new" "$CONF/apps"
     fi
 }
 
-write_env() { # DIR: the containers' env files, pg.env, orca.env and app.env, in DIR
+write_env() { # DIR: the containers' env files, pg.env, morca.env and app.env, in DIR
     umask 077
     if [ ! -s "$CONF/db-password" ]; then
         openssl rand -hex 24 > "$CONF/db-password"
@@ -306,44 +306,44 @@ write_env() { # DIR: the containers' env files, pg.env, orca.env and app.env, in
     printf 'POSTGRES_USER=orca\nPOSTGRES_DB=orca\nPOSTGRES_PASSWORD=%s\n' "$pw" > "$1/pg.env"
     {
         cat "$CONF/settings.env"
-        printf 'ORCA_DATABASE_URL=postgresql://orca:%s@postgres:5432/orca\n' "$pw"
+        printf 'MORCA_DATABASE_URL=postgresql://orca:%s@postgres:5432/orca\n' "$pw"
         cat "$CONF/s3.env"
         cat << 'EOS'
-ORCA_RUNNER=local
-ORCA_LOG_STAGE=/var/lib/orca/stage
-ORCA_CONTROL_SAMPLES=/var/lib/orca/stage/control.jsonl
-ORCA_SECRET_FETCH=sh /etc/orca/secret-fetch
-ORCA_UI_ADDR=0.0.0.0:8270
-ORCA_UI_LOGIN=required
-ORCA_UI_SECURE_COOKIES=1
-ORCA_UI_TRUST_PROXY=1
+MORCA_RUNNER=local
+MORCA_LOG_STAGE=/var/lib/orca/stage
+MORCA_CONTROL_SAMPLES=/var/lib/orca/stage/control.jsonl
+MORCA_SECRET_FETCH=sh /etc/orca/secret-fetch
+MORCA_UI_ADDR=0.0.0.0:8270
+MORCA_UI_LOGIN=required
+MORCA_UI_SECURE_COOKIES=1
+MORCA_UI_TRUST_PROXY=1
 EOS
         # What machines of a worker pool run: the server's own image.
-        echo "ORCA_WORKER_IMAGE=$image:$tag"
+        echo "MORCA_WORKER_IMAGE=$image:$tag"
         # Off unless OVERLAP=1: the old way, one scheduler at a time.
-        [ "$(conf_get OVERLAP)" != 1 ] || echo ORCA_OVERLAP=on
-    } > "$1/orca.env"
-    # An app reads the lake, not orca's database: no password. It gets the
+        [ "$(conf_get OVERLAP)" != 1 ] || echo MORCA_OVERLAP=on
+    } > "$1/morca.env"
+    # An app reads the lake, not morca's database: no password. It gets the
     # UI's PostHog key as POSTHOG_KEY (the census console's analytics).
     {
-        grep -E '^(AWS_REGION|AWS_ENDPOINT_URL_S3|ORCA_WAREHOUSE|ORCA_PUBLIC_WAREHOUSE)=' "$CONF/settings.env" || true
-        sed -n 's/^ORCA_POSTHOG_KEY=/POSTHOG_KEY=/p' "$CONF/settings.env" | tail -n 1
+        grep -E '^(AWS_REGION|AWS_ENDPOINT_URL_S3|MORCA_WAREHOUSE|MORCA_PUBLIC_WAREHOUSE)=' "$CONF/settings.env" || true
+        sed -n 's/^MORCA_POSTHOG_KEY=/POSTHOG_KEY=/p' "$CONF/settings.env" | tail -n 1
         cat "$CONF/s3.env"
     } > "$1/app.env"
 }
 
 pull() { # IMAGE: fatal on failure (a trial run may use an image it has)
     docker pull -q "$1" > /dev/null 2>&1 && return 0
-    [ "${ORCA_STACK_TEST:-}" = 1 ] && docker image inspect "$1" > /dev/null 2>&1 && return 0
+    [ "${MORCA_STACK_TEST:-}" = 1 ] && docker image inspect "$1" > /dev/null 2>&1 && return 0
     die "can't pull $1"
 }
 
 login() {
     if [ -n "$(conf_get GHCR_USER)" ] && [ -f "$CONF/ghcr-token" ]; then
         docker login ghcr.io -u "$(conf_get GHCR_USER)" --password-stdin < "$CONF/ghcr-token" > /dev/null
-        # For orca too (ORCA_REGISTRY_TOKEN_SECRET=orca/ghcr-token): a worker
+        # For morca too (MORCA_REGISTRY_TOKEN_SECRET=orca/ghcr-token): a worker
         # pool's booting machine pulls the image with it.
-        mkdir -p "$CONF/secrets/orca"
+        mkdir -p "$CONF/secrets/morca"
         install -m 600 "$CONF/ghcr-token" "$CONF/secrets/orca/ghcr-token"
     fi
 }
@@ -353,10 +353,10 @@ digest() {
     if command -v sha256sum > /dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -c1-16
 }
 
-# The tags the stack is set to run: "orca TAG", then "app NAME TAG".
+# The tags the stack is set to run: "morca TAG", then "app NAME TAG".
 tags_now() {
-    t=$(conf_get ORCA_TAG)
-    echo "orca $t"
+    t=$(conf_get MORCA_TAG)
+    echo "morca $t"
     [ -s "$CONF/apps" ] || return 0
     while read -r name port atag _; do
         [ "$atag" != - ] || atag=$t
@@ -364,8 +364,8 @@ tags_now() {
     done < "$CONF/apps"
 }
 
-tags_line() { # FILE: its tags on one line: "T" if the apps run the orca tag, else "orca T, console U"
-    awk '$1 == "orca" { o = $2 } $1 == "app" { a = a ", " $2 " " $3; if ($3 != o) d = 1 } END { print d ? "orca " o a : o }' "$1"
+tags_line() { # FILE: its tags on one line: "T" if the apps run the morca tag, else "morca T, console U"
+    awk '$1 == "morca" { o = $2 } $1 == "app" { a = a ", " $2 " " $3; if ($3 != o) d = 1 } END { print d ? "morca " o a : o }' "$1"
 }
 
 cmd_tags() {
@@ -426,12 +426,12 @@ desired() {
     for f in settings.env s3.env stack.conf; do
         [ -f "$CONF/$f" ] || die "$CONF/$f is missing (deploy/hetzner/up.sh puts it there)"
     done
-    image=$(conf_get ORCA_IMAGE)
-    tag=${newtag:-$(conf_get ORCA_TAG)}
-    [ -n "$image" ] && [ -n "$tag" ] || die "ORCA_IMAGE and ORCA_TAG aren't set"
+    image=$(conf_get MORCA_IMAGE)
+    tag=${newtag:-$(conf_get MORCA_TAG)}
+    [ -n "$image" ] && [ -n "$tag" ] || die "MORCA_IMAGE and MORCA_TAG aren't set"
     cf=$(conf_get CLOUDFLARED_IMAGE)
     cf=${cf:-cloudflare/cloudflared:2026.10.7}
-    if [ -n "$only" ] && [ -n "$newtag" ] && [ "$newtag" != "$(conf_get ORCA_TAG)" ]; then
+    if [ -n "$only" ] && [ -n "$newtag" ] && [ "$newtag" != "$(conf_get MORCA_TAG)" ]; then
         die "--only $only with a new --tag would leave the other containers on the old one"
     fi
     APPS=$CONF/apps.next
@@ -441,7 +441,7 @@ desired() {
         t=${s#*=}
         safe "$n"
         safe "$t"
-        grep -q "^$n " "$APPS" || die "no app $n (orca-stack app NAME PORT)"
+        grep -q "^$n " "$APPS" || die "no app $n (morca-stack app NAME PORT)"
         [ -z "$only" ] || [ "$only" = "$n" ] || die "--only $only with --app $n: $n wouldn't be started"
         awk -v n="$n" -v t="$t" '$1 == n { $3 = t } { print }' "$APPS" > "$APPS.new"
         mv "$APPS.new" "$APPS"
@@ -467,34 +467,34 @@ pull_all() {
 # --restart and the labels.
 containers() {
     cb=$1
-    files="$ENVDIR/orca.env $CONF/secret-fetch"
-    # The UI's port is write_env's ORCA_UI_ADDR; the worker API's, settings.env's.
-    # An image before orca 0.18 has no /healthz: its UI answers 404 there,
+    files="$ENVDIR/morca.env $CONF/secret-fetch"
+    # The UI's port is write_env's MORCA_UI_ADDR; the worker API's, settings.env's.
+    # An image before morca 0.18 has no /healthz: its UI answers 404 there,
     # which says it is up as well.
     uihealth=8270:/healthz:200,404
-    waddr=$(setting ORCA_WORKER_ADDR)
+    waddr=$(setting MORCA_WORKER_ADDR)
     [ -z "$waddr" ] || uihealth="$uihealth ${waddr##*:}:/:any"
     # CGROUPS=1: a cgroup per run (docs/hetzner.md#a-cgroup-per-run).
     # The scheduler's cgroup namespace is its own, and its /sys/fs/cgroup,
-    # which docker mounts read-only, is made writable before orca starts:
+    # which docker mounts read-only, is made writable before morca starts:
     # remounting needs CAP_SYS_ADMIN, outside docker's AppArmor profile,
-    # and the capability is dropped (setpriv) before orca, and every run
+    # and the capability is dropped (setpriv) before morca, and every run
     # it starts, gets it. Its own cgroup is the container's: it can't
     # touch any other container's or the host's.
     if [ "$(conf_get CGROUPS)" = 1 ]; then
-        $cb scheduler "$files" - "$image:$tag" --network orca --env-file "$CONF/orca.env" \
+        $cb scheduler "$files" - "$image:$tag" --network orca --env-file "$CONF/morca.env" \
             -v "$STATE/stage:/var/lib/orca/stage" \
             -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
             --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
             --entrypoint /bin/sh "$image:$tag" -c \
-            'mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/orca/bin/orca scheduler'
+            'mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/morca/bin/morca scheduler'
     else
-        $cb scheduler "$files" - "$image:$tag" --network orca --env-file "$CONF/orca.env" \
+        $cb scheduler "$files" - "$image:$tag" --network orca --env-file "$CONF/morca.env" \
             -v "$STATE/stage:/var/lib/orca/stage" \
             -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
             "$image:$tag" scheduler
     fi
-    $cb ui "$files" "$uihealth" "$image:$tag" --network orca --env-file "$CONF/orca.env" \
+    $cb ui "$files" "$uihealth" "$image:$tag" --network orca --env-file "$CONF/morca.env" \
         -v "$STATE/stage:/var/lib/orca/stage" \
         -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
         "$image:$tag" ui
@@ -509,7 +509,7 @@ containers() {
         [ -n "$name" ] || continue
         [ "$atag" != - ] || atag=$tag
         $cb "$name" "$ENVDIR/app.env" "$port:${check:-/}:200" "$image:$atag" --network orca --env-file "$CONF/app.env" -e "PORT=$port" \
-            --entrypoint "/opt/orca/bin/$name" "$image:$atag" < /dev/null
+            --entrypoint "/opt/morca/bin/$name" "$image:$atag" < /dev/null
     done < "$APPS"
     # The tunnel: Cloudflare's routes point at http://ui:8270 and
     # http://<app>:<port> on this network. Nothing listens on the host.
@@ -567,7 +567,7 @@ EOF
         elif [ -n "$p_id" ] && [ "$c_id" != "$p_id" ]; then
             p_why="image ${p_image##*:} pushed again ($(printf %.12s "${c_id#sha256:}") -> $(printf %.12s "${p_id#sha256:}"))"
         elif [ -z "$c_spec" ]; then
-            p_why="no orca.stack.spec label: started by an older orca-stack"
+            p_why="no orca.stack.spec label: started by an older morca-stack"
         elif [ "$c_files" != "$p_fh" ]; then
             p_why="settings: its env file changed"
         elif [ "$c_args" != "$p_args" ]; then
@@ -622,11 +622,11 @@ EOF
             # The alias: NAME is answered with both until the old one stops.
             # An alias is only given on connecting, hence the reconnect, and
             # then the checks again.
-            if docker network disconnect orca "$a_name-next" > /dev/null \
-                && docker network connect --alias "$a_name" orca "$a_name-next" > /dev/null; then
+            if docker network disconnect morca "$a_name-next" > /dev/null \
+                && docker network connect --alias "$a_name" morca "$a_name-next" > /dev/null; then
                 ! healthy "$a_name-next" "$a_health" 30 || a_ok=1
             else
-                why="couldn't be given the alias $a_name on the orca network"
+                why="couldn't be given the alias $a_name on the morca network"
             fi
         fi
         if [ "$a_ok" = 0 ]; then
@@ -660,7 +660,7 @@ overlap_scheduler() {
     o_files=$3
     o_why=$4
     shift 4
-    docker inspect scheduler-old > /dev/null 2>&1 && die "scheduler-old is still draining from a deploy before (orca-stack drain-old)"
+    docker inspect scheduler-old > /dev/null 2>&1 && die "scheduler-old is still draining from a deploy before (morca-stack drain-old)"
     docker rm -f scheduler-next > /dev/null 2>&1 || true
     docker run -d --name scheduler-next --restart always \
         --label "orca.stack.spec=$o_spec" --label "orca.stack.args=$o_args" \
@@ -668,7 +668,7 @@ overlap_scheduler() {
     docker update --restart no scheduler > /dev/null
     docker rename scheduler scheduler-old
     docker rename scheduler-next scheduler
-    if ! docker exec scheduler orca scheduler wait-lead --timeout "$htimeout" > /dev/null 2>&1; then
+    if ! docker exec scheduler morca scheduler wait-lead --timeout "$htimeout" > /dev/null 2>&1; then
         echo "scheduler: replaced ($o_why), overlapping, but the new one doesn't lead after ${htimeout}s; scheduler-old drains all the same (docker logs scheduler)" >&2
         unhealthy="$unhealthy scheduler"
         replaced="$replaced scheduler"
@@ -786,24 +786,25 @@ EOF
             *) r_when="exited $(ago "$r_finished")" ;;
         esac
         docker rm -f "$r_name" > /dev/null
-        echo "orca-stack: removed $r_name, left by a deploy before ($r_image, $r_status, $r_when)"
+        echo "morca-stack: removed $r_name, left by a deploy before ($r_image, $r_status, $r_when)"
     done
 }
 
 cmd_apply() {
     # A stack applied before deployed was kept: what it runs is its conf.
-    if [ ! -f "$CONF/deployed" ] && [ -f "$STATE/applied" ] && [ -n "$(conf_get ORCA_TAG)" ]; then
+    # Not after the rename (migrate_orca): those tags can't be rolled back to.
+    if [ ! -f "$CONF/deployed" ] && [ ! -f "$CONF/renamed" ] && [ -f "$STATE/applied" ] && [ -n "$(conf_get MORCA_TAG)" ]; then
         tags_now > "$CONF/deployed"
     fi
     apply_args "$@"
-    [ "${ORCA_STACK_TEST:-}" = 1 ] || mountpoint -q "$DATA" || die "$DATA (the Volume) isn't mounted; Postgres must not start on the root disk"
+    [ "${MORCA_STACK_TEST:-}" = 1 ] || mountpoint -q "$DATA" || die "$DATA (the Volume) isn't mounted; Postgres must not start on the root disk"
     # Before the overlap's check for a scheduler-old still draining.
     remove_exited
     desired
     mkdir -p "$DATA/pg" "$STATE/stage" "$STATE/backup" "$CONF/secrets"
     write_env "$CONF"
     login
-    docker network create orca > /dev/null 2>&1 || true
+    docker network create morca > /dev/null 2>&1 || true
 
     # Postgres: created once; its data is on the Volume. Later applies leave it alone.
     if ! docker inspect postgres > /dev/null 2>&1; then
@@ -832,7 +833,7 @@ cmd_apply() {
             die "$(running_runs) run(s) running; restarting the scheduler ($why) kills them (pause the pipelines and wait, or --force; runs on remote workers don't count)"
         fi
     fi
-    [ -z "$newtag" ] || conf_set ORCA_TAG "$newtag"
+    [ -z "$newtag" ] || conf_set MORCA_TAG "$newtag"
     if [ -f "$CONF/apps" ] || [ -s "$APPS" ]; then
         mv "$APPS" "$CONF/apps"
         APPS=$CONF/apps
@@ -841,7 +842,7 @@ cmd_apply() {
         APPS=/dev/null
     fi
     [ "$dbonly" = 0 ] || {
-        echo "orca-stack: postgres is up"
+        echo "morca-stack: postgres is up"
         return 0
     }
 
@@ -849,63 +850,66 @@ cmd_apply() {
     unhealthy=
     containers act_one
     rm -f "$PLAN"
-    [ -s "$CONF/tunnel.env" ] || echo "orca-stack: no $CONF/tunnel.env, so no tunnel"
+    [ -s "$CONF/tunnel.env" ] || echo "morca-stack: no $CONF/tunnel.env, so no tunnel"
     date -u +%FT%TZ > "$STATE/applied"
     tags_now > "$CONF/deployed.new"
     if [ -f "$CONF/deployed" ] && ! cmp -s "$CONF/deployed" "$CONF/deployed.new"; then
         mv "$CONF/deployed" "$CONF/deployed.prev"
-        conf_set ORCA_PREV_TAG "$(sed -n 's/^orca //p' "$CONF/deployed.prev")"
+        conf_set MORCA_PREV_TAG "$(sed -n 's/^morca //p' "$CONF/deployed.prev")"
     fi
     mv "$CONF/deployed.new" "$CONF/deployed"
-    echo "orca-stack: applied $image:$tag"
+    rm -f "$CONF/renamed"
+    echo "morca-stack: applied $image:$tag"
 }
 
 # After cmd_apply (and what has to follow it even so): fails if a new
 # container wasn't healthy. The others are applied, so an apply again
 # retries only those.
 apply_failed() {
-    [ -z "$unhealthy" ] || die "not replaced:$unhealthy, whose new container wasn't healthy (above); the old one still serves, and orca-stack apply tries again"
+    [ -z "$unhealthy" ] || die "not replaced:$unhealthy, whose new container wasn't healthy (above); the old one still serves, and morca-stack apply tries again"
 }
 
-# The pipelines as the scheduler's image has them (its orca.toml). The
+# The pipelines as the scheduler's image has them (its morca.toml). The
 # scheduler may still be starting after an apply.
 cmd_register() {
     n=0
-    until out=$(docker exec scheduler orca register 2>&1); do
+    until out=$(docker exec scheduler morca register 2>&1); do
         n=$((n + 1))
-        [ "$n" -lt "${ORCA_STACK_REGISTER_TRIES:-15}" ] || {
+        [ "$n" -lt "${MORCA_STACK_REGISTER_TRIES:-15}" ] || {
             echo "$out" >&2
-            die "orca register failed"
+            die "morca register failed"
         }
         sleep 2
     done
-    echo "$out" | sed 's/^/orca-stack: /'
+    echo "$out" | sed 's/^/morca-stack: /'
 }
 
 # apply's arguments for the tags deployed before: sets args (and to, the
-# orca tag).
+# morca tag).
 rollback_args() {
+    [ -s "$CONF/deployed.prev" ] || [ ! -f "$CONF/deployed.prev.orca" ] \
+        || die "nothing to roll back to: the deploy before was orca's, whose images read ORCA_* (#384); its tags are in $CONF/deployed.prev.orca"
     [ -s "$CONF/deployed.prev" ] || die "nothing to roll back to: no earlier deploy is recorded ($CONF/deployed.prev)"
-    to=$(sed -n 's/^orca //p' "$CONF/deployed.prev")
+    to=$(sed -n 's/^morca //p' "$CONF/deployed.prev")
     safe "$to"
     args="--tag $to"
     while read -r kind name atag; do
         [ "$kind" = app ] || continue
         if ! grep -q "^$name " "$CONF/apps" 2> /dev/null; then
-            echo "orca-stack: the app $name isn't set up any more; not starting it" >&2
+            echo "morca-stack: the app $name isn't set up any more; not starting it" >&2
             continue
         fi
-        # An app that ran the orca tag follows it again.
+        # An app that ran the morca tag follows it again.
         [ "$atag" != "$to" ] || atag=-
         args="$args --app $name=$atag"
     done < "$CONF/deployed.prev"
 }
 
 # upgrade-steps --tag T --from F --when before|after: the upgrade steps
-# (orca#323) of the image at T for a deploy from F, from the image's
-# /opt/orca/upgrade.toml (`orca upgrade`), as its
+# (morca#323) of the image at T for a deploy from F, from the image's
+# /opt/morca/upgrade.toml (`morca upgrade`), as its
 # "step<TAB>id<TAB>when<TAB>kind<TAB>text" lines. None for a tag that isn't a
-# version, or an image whose orca has no `orca upgrade` (before 0.23).
+# version, or an image whose morca has no `morca upgrade` (before 0.23).
 cmd_upgrade_steps() {
     t=
     f=
@@ -924,22 +928,22 @@ cmd_upgrade_steps() {
     [ -z "$f" ] || safe "$f"
     case "$w" in before | after) ;; *) die "upgrade-steps: --when is before or after" ;; esac
     case "$t" in v[0-9]*.* | [0-9]*.*) ;; *) return 0 ;; esac
-    image=$(conf_get ORCA_IMAGE)
+    image=$(conf_get MORCA_IMAGE)
     login
     pull "$image:$t"
     rc=0
     out=$(docker run --rm "$image:$t" upgrade --from "${f:-none}" --to "$t" --when "$w" 2>&1) || rc=$?
     if [ "$rc" = 2 ]; then
-        echo "orca-stack: $image:$t has no orca upgrade (orca before 0.23): no upgrade steps" >&2
+        echo "morca-stack: $image:$t has no morca upgrade (morca before 0.23): no upgrade steps" >&2
         return 0
     fi
-    [ "$rc" = 0 ] || die "orca upgrade in $image:$t failed: $(echo "$out" | tail -n 1)"
+    [ "$rc" = 0 ] || die "morca upgrade in $image:$t failed: $(echo "$out" | tail -n 1)"
     echo "$out" | grep '^step	' || true
 }
 
-# upgrade-run orca ARG...: an upgrade step's command, in the scheduler.
+# upgrade-run morca ARG...: an upgrade step's command, in the scheduler.
 cmd_upgrade_run() {
-    [ "${1:-}" = orca ] || die "upgrade-run runs orca commands only"
+    [ "${1:-}" = morca ] || die "upgrade-run runs morca commands only"
     for a in "$@"; do
         case "$a" in
             "" | *[!A-Za-z0-9._:/@=,+-]*) die "refusing the argument '$a' (letters, digits and ._:/@=,+- only)" ;;
@@ -952,48 +956,49 @@ cmd_rollback() {
     force=
     [ "${1:-}" != --force ] || force=--force
     rollback_args
-    echo "orca-stack: rolling back from $(cmd_tags) to $(tags_line "$CONF/deployed.prev")"
+    echo "morca-stack: rolling back from $(cmd_tags) to $(tags_line "$CONF/deployed.prev")"
     # shellcheck disable=SC2086
     cmd_apply $args $force
     # The pipelines are in the scheduler's image: registered again only
     # when that changed.
     case " $replaced " in
         *" scheduler "*) cmd_register ;;
-        *) echo "orca-stack: the scheduler kept running, so the pipelines stay registered as they are" ;;
+        *) echo "morca-stack: the scheduler kept running, so the pipelines stay registered as they are" ;;
     esac
     apply_failed
-    echo "orca-stack: rolled back to $(cmd_tags); orca-stack rollback again goes forward to $(cmd_tags --previous)"
+    echo "morca-stack: rolled back to $(cmd_tags); morca-stack rollback again goes forward to $(cmd_tags --previous)"
 }
 
 # can-overlap [--tag T]: whether the image at T (the conf's tag without
 # it) may start its scheduler beside the running one: OVERLAP=1, the
 # scheduler running, none draining from a deploy before (a scheduler-old
 # that has exited doesn't count: apply removes it), and the new
-# binary's `orca scheduler can-overlap` (a migration that raises the floor
+# binary's `morca scheduler can-overlap` (a migration that raises the floor
 # says no). Prints "yes" or "no: why"; exit 0 or 1.
 cmd_can_overlap() {
-    t=$(conf_get ORCA_TAG)
+    t=$(conf_get MORCA_TAG)
     if [ "${1:-}" = --tag ]; then
         [ $# -ge 2 ] || die "--tag needs a value"
         t=$2
     fi
     safe "$t"
     [ "$(conf_get OVERLAP)" = 1 ] || { echo "no: OVERLAP isn't 1 in stack.conf"; return 1; }
+    [ ! -f "$CONF/renamed" ] || { echo "no: the first deploy after the orca -> morca rename (#384) replaces the scheduler"; return 1; }
     [ "$(docker inspect -f '{{.State.Running}}' scheduler 2> /dev/null)" = true ] \
         || { echo "no: no scheduler is running"; return 1; }
     # One that has exited holds no runs, and apply removes it first.
     [ "$(docker inspect -f '{{.State.Running}}' scheduler-old 2> /dev/null)" != true ] \
-        || { echo "no: scheduler-old is still draining (orca-stack drain-old)"; return 1; }
-    image=$(conf_get ORCA_IMAGE)
+        || { echo "no: scheduler-old is still draining (morca-stack drain-old)"; return 1; }
+    image=$(conf_get MORCA_IMAGE)
     login
     pull "$image:$t"
-    if out=$(docker run --rm --network orca --env-file "$CONF/orca.env" "$image:$t" scheduler can-overlap 2>&1); then
+    if out=$(docker run --rm --network orca --env-file "$CONF/morca.env" "$image:$t" scheduler can-overlap 2>&1); then
         echo "$out"
         return 0
     fi
     case "$out" in
         no:*) echo "$out" ;;
-        *) echo "no: the new image's orca scheduler can-overlap failed: $(echo "$out" | tail -n 1)" ;;
+        *) echo "no: the new image's morca scheduler can-overlap failed: $(echo "$out" | tail -n 1)" ;;
     esac
     return 1
 }
@@ -1010,22 +1015,22 @@ cmd_drain_old() {
         timeout=$2
     fi
     case "$timeout" in "" | *[!0-9]*) die "the timeout is a number of seconds, not '$timeout'" ;; esac
-    docker inspect scheduler-old > /dev/null 2>&1 || { echo "orca-stack: no scheduler-old: nothing drains"; return 0; }
+    docker inspect scheduler-old > /dev/null 2>&1 || { echo "morca-stack: no scheduler-old: nothing drains"; return 0; }
     host=$(docker inspect -f '{{.Config.Hostname}}' scheduler-old 2> /dev/null) || host=
     safe "$host"
     for id in $(psql_q "SELECT id FROM orca.schedulers WHERE ended IS NULL AND host = '$host' ORDER BY id" 2> /dev/null); do
-        docker exec scheduler orca scheduler drain "$id" > /dev/null 2>&1 || true
-        echo "orca-stack: asked scheduler instance $id (scheduler-old) to drain"
+        docker exec scheduler morca scheduler drain "$id" > /dev/null 2>&1 || true
+        echo "morca-stack: asked scheduler instance $id (scheduler-old) to drain"
     done
     t=0
     while [ "$(docker inspect -f '{{.State.Running}}' scheduler-old 2> /dev/null)" = true ]; do
         if [ "$t" -ge "$timeout" ]; then
-            echo "orca-stack: scheduler-old still runs after ${timeout}s: stopping it; the new scheduler queues its runs again"
+            echo "morca-stack: scheduler-old still runs after ${timeout}s: stopping it; the new scheduler queues its runs again"
             docker stop -t 30 scheduler-old > /dev/null
             break
         fi
         if [ $((t % 60)) -eq 0 ]; then
-            echo "orca-stack: waiting for scheduler-old's runs:"
+            echo "morca-stack: waiting for scheduler-old's runs:"
             # a run over more than 3 partitions shows its first and last
             psql_q "SELECT '  run ' || r.id || ' ' || r.pipeline || ' ' || CASE WHEN cardinality(p.a) > 3 THEN p.a[1] || ' ... ' || p.a[cardinality(p.a)] || ' (' || cardinality(p.a) || ' partitions)' ELSE r.partitions END || ', running ' || date_trunc('second', now() - r.started) FROM orca.runs r JOIN orca.schedulers s ON s.id = r.instance CROSS JOIN LATERAL (SELECT string_to_array(r.partitions, ',') AS a) p WHERE r.status = 'running' AND s.host = '$host' ORDER BY r.id" 2> /dev/null || true
         fi
@@ -1033,7 +1038,7 @@ cmd_drain_old() {
         t=$((t + 5))
     done
     docker rm -f scheduler-old > /dev/null
-    echo "orca-stack: scheduler-old drained and removed"
+    echo "morca-stack: scheduler-old drained and removed"
 }
 
 cmd_status() {
@@ -1041,9 +1046,9 @@ cmd_status() {
     echo "running runs: $(running_runs) here, $(worker_runs) on remote workers"
     if [ "$(conf_get OVERLAP)" = 1 ]; then
         echo "scheduler instances:"
-        docker exec scheduler orca scheduler status 2> /dev/null | sed 's/^/  /' || true
+        docker exec scheduler morca scheduler status 2> /dev/null | sed 's/^/  /' || true
     fi
-    echo "tag: $(conf_get ORCA_TAG)   applied: $(cat "$STATE/applied" 2> /dev/null || echo never)"
+    echo "tag: $(conf_get MORCA_TAG)   applied: $(cat "$STATE/applied" 2> /dev/null || echo never)"
     echo "deployed: $(cmd_tags)   before: $(cmd_tags --previous)"
     [ ! -f "$STATE/paused-by-quiesce" ] || echo "paused by quiesce: $(tr '\n' ' ' < "$STATE/paused-by-quiesce")"
 }
@@ -1059,15 +1064,15 @@ cmd_quiesce() {
                 shift
                 ;;
             --workers) workers=1 ;;
-            *) die "usage: orca-stack quiesce [--timeout SECONDS] [--workers]" ;;
+            *) die "usage: morca-stack quiesce [--timeout SECONDS] [--workers]" ;;
         esac
         shift
     done
     touch "$STATE/paused-by-quiesce"
     for p in $(psql_q "SELECT name FROM orca.pipelines WHERE NOT paused ORDER BY name"); do
-        docker exec scheduler orca pause "$p" > /dev/null
+        docker exec scheduler morca pause "$p" > /dev/null
         echo "$p" >> "$STATE/paused-by-quiesce"
-        echo "orca-stack: paused $p"
+        echo "morca-stack: paused $p"
     done
     sort -u "$STATE/paused-by-quiesce" > "$STATE/paused-by-quiesce.new"
     mv "$STATE/paused-by-quiesce.new" "$STATE/paused-by-quiesce"
@@ -1080,41 +1085,41 @@ cmd_quiesce() {
     t=0
     while [ "$(waiting)" -gt 0 ]; do
         if [ $((t % 60)) -eq 0 ]; then
-            echo "orca-stack: waiting for $(running_runs) running run(s):"
+            echo "morca-stack: waiting for $(running_runs) running run(s):"
             psql_q "SELECT '  run ' || id || ' ' || pipeline || ' ' || partitions || ', running ' || date_trunc('second', now() - started) FROM orca.runs WHERE $HERE_RUNS ORDER BY id" 2> /dev/null || true
             if [ "$workers" = 1 ] && [ "$(worker_runs)" -gt 0 ]; then
-                echo "orca-stack: and for $(worker_runs) on remote workers (--workers):"
+                echo "morca-stack: and for $(worker_runs) on remote workers (--workers):"
                 list_worker_runs | sed 1d
             else
                 list_worker_runs
             fi
         fi
-        [ "$t" -lt "$timeout" ] || die "$(waiting) run(s) still running after ${timeout}s; the pipelines stay paused (orca-stack resume undoes it)"
+        [ "$t" -lt "$timeout" ] || die "$(waiting) run(s) still running after ${timeout}s; the pipelines stay paused (morca-stack resume undoes it)"
         sleep 10
         t=$((t + 10))
     done
     [ "$t" -gt 0 ] || list_worker_runs
-    echo "orca-stack: quiet; paused: $(tr '\n' ' ' < "$STATE/paused-by-quiesce")"
+    echo "morca-stack: quiet; paused: $(tr '\n' ' ' < "$STATE/paused-by-quiesce")"
 }
 
 cmd_resume() {
     [ -f "$STATE/paused-by-quiesce" ] || {
-        echo "orca-stack: nothing to resume"
+        echo "morca-stack: nothing to resume"
         return 0
     }
     while read -r p; do
         [ -n "$p" ] || continue
         # The scheduler may still be starting after an apply.
         n=0
-        until docker exec scheduler orca unpause "$p" > /dev/null 2>&1; do
+        until docker exec scheduler morca unpause "$p" > /dev/null 2>&1; do
             n=$((n + 1))
             [ "$n" -lt 30 ] || die "couldn't unpause $p; still paused: $(tr '\n' ' ' < "$STATE/paused-by-quiesce")"
             sleep 2
         done
-        echo "orca-stack: unpaused $p"
+        echo "morca-stack: unpaused $p"
     done < "$STATE/paused-by-quiesce"
     rm -f "$STATE/paused-by-quiesce"
-    echo "orca-stack: unpaused"
+    echo "morca-stack: unpaused"
 }
 
 # The pipelines paused as a dump is taken, for the dump's <time>.paused:
@@ -1156,7 +1161,7 @@ cmd_backup_now() {
     docker exec -i postgres pg_restore --list < "$STATE/backup/$name" > /dev/null || die "the dump doesn't read back"
     s3 s3 cp "/b/$name" "s3://$bucket/backups/pg/$name" > /dev/null
     s3 s3 cp "/b/$stamp.paused" "s3://$bucket/backups/pg/$stamp.paused" > /dev/null
-    echo "orca-stack: paused then (in $stamp.paused): by hand:$(sed -n 's/^paused_by_hand//p' "$STATE/backup/$stamp.paused"); by a deploy:$(sed -n 's/^paused_by_deploy//p' "$STATE/backup/$stamp.paused")"
+    echo "morca-stack: paused then (in $stamp.paused): by hand:$(sed -n 's/^paused_by_hand//p' "$STATE/backup/$stamp.paused"); by a deploy:$(sed -n 's/^paused_by_deploy//p' "$STATE/backup/$stamp.paused")"
     rm -f "$STATE/backup/$name" "$STATE/backup/$stamp.paused"
     # Keep the newest $keep (the names sort by time), each with its .paused.
     dumps | awk -v k="$keep" '{ a[NR] = $0 } END { for (i = 1; i <= NR - k; i++) print a[i] }' | while read -r old; do
@@ -1165,10 +1170,10 @@ cmd_backup_now() {
             s3 s3 rm "s3://$bucket/backups/pg/${old%.dump}.paused" > /dev/null 2>&1 || true
         }
     done
-    echo "orca-stack: backed up to s3://$bucket/backups/pg/$name"
+    echo "morca-stack: backed up to s3://$bucket/backups/pg/$name"
 }
 
-# A failed backup is a push to the phone (orca notify, if alerts are set up):
+# A failed backup is a push to the phone (morca notify, if alerts are set up):
 # the backup runs as a process of its own, whose output is kept for the message.
 cmd_backup() {
     out=$(mktemp)
@@ -1177,8 +1182,8 @@ cmd_backup() {
     cat "$out"
     if [ "$rc" -ne 0 ]; then
         why=$(tail -n 3 "$out" | tr '\n' ' ' | cut -c1-300)
-        docker exec scheduler orca notify --kind backup-failed --subject nightly --priority high \
-            --tags rotating_light --title "orca: nightly backup failed" "$why" > /dev/null 2>&1 || true
+        docker exec scheduler morca notify --kind backup-failed --subject nightly --priority high \
+            --tags rotating_light --title "morca: nightly backup failed" "$why" > /dev/null 2>&1 || true
     fi
     rm -f "$out"
     return "$rc"
@@ -1209,7 +1214,7 @@ cmd_restore() {
     docker rm -f scheduler ui > /dev/null 2>&1 || true
     have=$(psql_q "SELECT count(*) FROM information_schema.schemata WHERE schema_name = 'orca'")
     if [ "$have" != 0 ]; then
-        [ "$force" = 1 ] || die "the database already has the orca schema; --force drops it first"
+        [ "$force" = 1 ] || die "the database already has the morca schema; --force drops it first"
         docker exec postgres psql -U orca -d orca -c 'DROP SCHEMA orca CASCADE' > /dev/null
     fi
     f=restore.dump
@@ -1226,22 +1231,22 @@ cmd_restore() {
         by_hand=$(sed -n 's/^paused_by_hand//p' "$STATE/backup/restore.paused")
         rm -f "$STATE/backup/restore.paused"
         for p in $by_deploy; do
-            case "$p" in *[!A-Za-z0-9._-]*) echo "orca-stack: not unpausing '$p' (an unexpected name)"; continue ;; esac
+            case "$p" in *[!A-Za-z0-9._-]*) echo "morca-stack: not unpausing '$p' (an unexpected name)"; continue ;; esac
             psql_q "UPDATE orca.pipelines SET paused = false WHERE name = '$p'" > /dev/null
-            echo "orca-stack: unpaused $p (a deploy had paused it)"
+            echo "morca-stack: unpaused $p (a deploy had paused it)"
         done
-        echo "orca-stack: paused by hand or the watchdog, so still paused:${by_hand:- none}"
+        echo "morca-stack: paused by hand or the watchdog, so still paused:${by_hand:- none}"
     else
-        echo "orca-stack: $key has no ${side##*/}: every pipeline paused in it stays paused (docker exec scheduler orca unpause <name>)"
+        echo "morca-stack: $key has no ${side##*/}: every pipeline paused in it stays paused (docker exec scheduler morca unpause <name>)"
     fi
-    echo "orca-stack: restored $key; now: orca-stack apply"
+    echo "morca-stack: restored $key; now: morca-stack apply"
 }
 
 # --- check: the smoke check at the end of every deploy ---------------------
 
-check_ok() { echo "orca-stack: check: ok    $*"; }
+check_ok() { echo "morca-stack: check: ok    $*"; }
 check_fail() {
-    echo "orca-stack: check: FAIL  $*"
+    echo "morca-stack: check: FAIL  $*"
     check_bad=$((check_bad + 1))
 }
 
@@ -1259,7 +1264,7 @@ check_one() {
         check_fail "$1: $k_status"
     elif [ "$k_image" != "$4" ]; then
         check_fail "$1: runs $k_image, not $4"
-    elif [ "$3" != - ] && ! healthy "$1" "$3" "${ORCA_STACK_CHECK_SECONDS:-30}"; then
+    elif [ "$3" != - ] && ! healthy "$1" "$3" "${MORCA_STACK_CHECK_SECONDS:-30}"; then
         check_fail "$1: $why"
     else
         check_ok "$1: $k_image$([ "$3" = - ] || echo ", healthy")"
@@ -1269,13 +1274,13 @@ check_one() {
 # canary_run PIPELINE KEY TIMEOUT: a run of PIPELINE over KEY, waited for;
 # ok if it succeeded within TIMEOUT seconds.
 canary_run() {
-    c_out=$(docker exec scheduler orca start "$1" "$2" 2>&1) || {
-        check_fail "canary $1 $2: orca start: $(echo "$c_out" | tail -n 1)"
+    c_out=$(docker exec scheduler morca start "$1" "$2" 2>&1) || {
+        check_fail "canary $1 $2: morca start: $(echo "$c_out" | tail -n 1)"
         return 0
     }
     c_run=$(echo "$c_out" | sed -n 's/^queued run \([0-9][0-9]*\)$/\1/p' | tail -n 1)
     [ -n "$c_run" ] || {
-        check_fail "canary $1 $2: orca start said: $(echo "$c_out" | tail -n 1)"
+        check_fail "canary $1 $2: morca start said: $(echo "$c_out" | tail -n 1)"
         return 0
     }
     c_t=0
@@ -1287,12 +1292,12 @@ canary_run() {
                 return 0
                 ;;
             failed | cancelled)
-                check_fail "canary $1 $2: run $c_run $c_st (orca status $c_run)"
+                check_fail "canary $1 $2: run $c_run $c_st (morca status $c_run)"
                 return 0
                 ;;
         esac
         [ "$c_t" -lt "$3" ] || {
-            check_fail "canary $1 $2: run $c_run still ${c_st:-unknown} after ${c_t}s (paused? orca status $c_run)"
+            check_fail "canary $1 $2: run $c_run still ${c_st:-unknown} after ${c_t}s (paused? morca status $c_run)"
             return 0
         }
         sleep 5
@@ -1317,7 +1322,7 @@ cmd_check() {
                 fi
                 shift
                 ;;
-            *) die "usage: orca-stack check [--canary PIPELINE=KEY]... [--timeout SECONDS]" ;;
+            *) die "usage: morca-stack check [--canary PIPELINE=KEY]... [--timeout SECONDS]" ;;
         esac
         shift
     done
@@ -1339,14 +1344,14 @@ cmd_check() {
     containers check_one
     # One scheduler: none of a deploy's second one left beside it.
     for c in scheduler-next scheduler-old; do
-        ! docker inspect "$c" > /dev/null 2>&1 || check_fail "$c is still there (orca-stack drain-old)"
+        ! docker inspect "$c" > /dev/null 2>&1 || check_fail "$c is still there (morca-stack drain-old)"
     done
     if [ "$(conf_get OVERLAP)" = 1 ]; then
-        leaders=$(docker exec scheduler orca scheduler status 2> /dev/null | grep -c ' leading ' || true)
+        leaders=$(docker exec scheduler morca scheduler status 2> /dev/null | grep -c ' leading ' || true)
         if [ "$leaders" = 1 ]; then
             check_ok "scheduler instances: one leads"
         else
-            check_fail "scheduler instances: ${leaders:-0} lead (orca scheduler status)"
+            check_fail "scheduler instances: ${leaders:-0} lead (morca scheduler status)"
         fi
     fi
     # The pipelines: registered, each one's binary in the scheduler's image.
@@ -1367,9 +1372,9 @@ cmd_check() {
         fi
     done
     if [ "$n" = 0 ]; then
-        check_fail "pipelines: none registered (orca-stack register)"
+        check_fail "pipelines: none registered (morca-stack register)"
     elif [ -n "$missing" ]; then
-        check_fail "pipelines: not in the scheduler's image:$missing (orca-stack register)"
+        check_fail "pipelines: not in the scheduler's image:$missing (morca-stack register)"
     else
         check_ok "pipelines: $n registered, each binary in the image; paused:${paused:- none}"
     fi
@@ -1383,13 +1388,39 @@ cmd_check() {
     # RESULT TIME KIND TAGS: TAGS last, as cmd_tags prints them (they may have spaces).
     echo "$result $(date -u +%FT%TZ) $([ -z "$canaries" ] && echo plain || echo canary) $(cmd_tags)" > "$STATE/checked"
     [ "$check_bad" = 0 ] || die "check: $check_bad failed (above)"
-    echo "orca-stack: check: all ok"
+    echo "morca-stack: check: all ok"
 }
 
 cmd_checked() {
-    [ -s "$STATE/checked" ] || die "no check yet (orca-stack check)"
+    [ -s "$STATE/checked" ] || die "no check yet (morca-stack check)"
     cat "$STATE/checked"
 }
+
+# Once, on the first run after the orca -> morca rename (#384): stack.conf's
+# and settings.env's ORCA_* keys become MORCA_* (each file as it was is kept
+# as NAME.orca). The tags deployed before can't be rolled back to, since
+# their images read ORCA_*, so deployed and deployed.prev are set aside as
+# *.orca too, and the first apply records no earlier deploy.
+migrate_orca() {
+    [ -d "$CONF" ] || return 0
+    for f in stack.conf settings.env; do
+        if [ -f "$CONF/$f" ] && grep -q '^ORCA_' "$CONF/$f"; then
+            cp -p "$CONF/$f" "$CONF/$f.orca"
+            cp -p "$CONF/$f" "$CONF/$f.new"
+            sed 's/^ORCA_/MORCA_/' "$CONF/$f.orca" > "$CONF/$f.new"
+            mv "$CONF/$f.new" "$CONF/$f"
+            echo "morca-stack: $CONF/$f: renamed its ORCA_* keys to MORCA_* (as it was: $f.orca)" >&2
+            [ "$f" != stack.conf ] || touch "$CONF/renamed"
+        fi
+    done
+    if [ -f "$CONF/renamed" ]; then
+        conf_unset MORCA_PREV_TAG
+        for f in deployed deployed.prev; do
+            [ ! -f "$CONF/$f" ] || mv "$CONF/$f" "$CONF/$f.orca"
+        done
+    fi
+}
+migrate_orca
 
 sub=${1:-}
 [ $# -eq 0 ] || shift
@@ -1418,5 +1449,5 @@ case "$sub" in
     restore) cmd_restore "$@" ;;
     check) cmd_check "$@" ;;
     checked) cmd_checked ;;
-    *) die "usage: orca-stack configure|sync|app|apply|plan|status|tags|rollback|register|can-overlap|drain-old|quiesce|resume|backup|list-backups|restore|check|checked" ;;
+    *) die "usage: morca-stack configure|sync|app|apply|plan|status|tags|rollback|register|can-overlap|drain-old|quiesce|resume|backup|list-backups|restore|check|checked" ;;
 esac

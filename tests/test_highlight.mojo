@@ -1,9 +1,9 @@
-"""The code-on-hover highlighter (`orca.highlight`): what each run of
+"""The code-on-hover highlighter (`morca.highlight`): what each run of
 source is, and the HTML lines it makes."""
 
 from std.testing import TestSuite, assert_equal, assert_true
 
-from orca.highlight import highlight, tokens
+from morca.highlight import highlight, tokens
 
 
 def _kinds(src: String) -> String:

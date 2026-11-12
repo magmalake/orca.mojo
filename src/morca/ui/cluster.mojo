@@ -1,10 +1,10 @@
 """The Cluster card on a run's page (#268): the workers its dista cluster
-spread over (`orca.views.cluster`)."""
+spread over (`morca.views.cluster`)."""
 
-from orca.html import Html
-from orca.json import quote
-from orca.ui.layout import card_open
-from orca.views.cluster import ClusterRow
+from morca.html import Html
+from morca.json import quote
+from morca.ui.layout import card_open
+from morca.views.cluster import ClusterRow
 
 comptime _HELP = (
     "This run's dista cluster spread over several workers of its pool"

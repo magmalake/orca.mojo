@@ -1,5 +1,5 @@
 #!/bin/sh
-# The adoption rule (docs/overlap.md, orca.live.held_sql): a local run that
+# The adoption rule (docs/overlap.md, morca.live.held_sql): a local run that
 # another scheduler instance started (`runs.instance`) is left alone while
 # that instance is seen and lists it, whatever its heartbeat, and counts as
 # live; once the instance is gone (not seen for the stale limit, or ended)
@@ -7,8 +7,8 @@
 # audited. A run of a live instance that no longer lists it is dead as
 # before (a UI run fails), and so is a local run of no instance. The other
 # instance is made up here as its rows: an `orca.schedulers` row, and runs
-# placed local with its id. Over examples/toy.mojo, paused so `orca tick`
-# starts nothing. Needs ORCA_DATABASE_URL (pixi run test-adopt starts a
+# placed local with its id. Over examples/toy.mojo, paused so `morca tick`
+# starts nothing. Needs MORCA_DATABASE_URL (pixi run test-adopt starts a
 # throwaway server).
 set -eu
 cd "$(dirname "$0")/.."
@@ -17,25 +17,25 @@ mkdir -p build
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy &
 b1=$!
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 b2=$!
 wait "$b1"
 wait "$b2"
 
 log=build/adopt.log
 : > "$log"
-export ORCA_STALE_SECONDS=2 ORCA_WATCHDOG_SECONDS=0 ORCA_NOW=2024-01-15T00:00Z
+export MORCA_STALE_SECONDS=2 MORCA_WATCHDOG_SECONDS=0 MORCA_NOW=2024-01-15T00:00Z
 fail() {
     echo "FAIL: $*"
     tail -30 "$log"
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -qAtc "$1"; }
-tick() { ./build/orca tick >> "$log" 2>&1 || fail "tick"; }
+q() { psql "$MORCA_DATABASE_URL" -qAtc "$1"; }
+tick() { ./build/morca tick >> "$log" 2>&1 || fail "tick"; }
 status() { q "SELECT status || ' ' || starts || ' ' || coalesce(held, '-') || ' ' || coalesce(error, '-') FROM orca.runs WHERE id = $1"; }
 
-./build/orca register ./build/toy >> "$log" 2>&1 || fail "register"
-./build/orca pause toy >> "$log" 2>&1 || fail "pause"
+./build/morca register ./build/toy >> "$log" 2>&1 || fail "register"
+./build/morca pause toy >> "$log" 2>&1 || fail "pause"
 inst=$(q "INSERT INTO orca.schedulers (host, pid, known, role, last_seen) VALUES ('old', 1, 42, 'draining', now()) RETURNING id")
 # run KEY OWNER HEARTBEAT INSTANCE: a UI run going on this host since an hour.
 run() {
@@ -57,7 +57,7 @@ case "$(status "$unclaimed")" in "running 1 "*) ;; *) fail "an unclaimed run: $(
 [ "$(status "$mine")" = "failed 1 - interrupted: its process stopped" ] || fail "a dead run of no instance: $(status "$mine")"
 [ "$(status "$reaped")" = "failed 1 - interrupted: its process stopped" ] || fail "a dead run its live instance doesn't list: $(status "$reaped")"
 # Live, so a backfill leaves its key to it.
-out=$(./build/orca backfill toy 2024-03..2024-04 2> build/adopt.err) || fail "backfill exited $?"
+out=$(./build/morca backfill toy 2024-03..2024-04 2> build/adopt.err) || fail "backfill exited $?"
 [ "$out" = "queued 0 runs" ] || fail "a backfill over the instance's runs: $out ($(cat build/adopt.err))"
 grep -qx "skipped 2 in live runs: 2024-03 (run $held), 2024-04 (run $fresh)" build/adopt.err \
     || fail "the backfill didn't leave the keys to the instance's runs: $(cat build/adopt.err)"

@@ -4,7 +4,7 @@ from std.os import remove
 from std.os.path import exists
 from std.testing import TestSuite, assert_equal, assert_raises, assert_true
 
-from orca import (
+from morca import (
     MemoryStore,
     PgStore,
     RunResult,
@@ -200,7 +200,7 @@ def test_sqlite_urls() raises:
     assert_equal(sqlite_path("sqlite:runs.db"), "runs.db")
     assert_equal(sqlite_path("sqlite://runs.db"), "runs.db")
     assert_equal(sqlite_path("sqlite:///var/orca/runs.db"), "/var/orca/runs.db")
-    assert_equal(sqlite_path("postgresql:///orca"), "")
+    assert_equal(sqlite_path("postgresql:///morca"), "")
     with assert_raises(contains="no file"):
         _ = SqliteStore(sqlite_path("sqlite:"))
     with assert_raises(contains="need Postgres"):

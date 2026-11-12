@@ -1,6 +1,6 @@
 """The router: a table of routes, each a method, a path pattern, what kind
-of request it is and the handler that answers it. `orca.web.routes` is the
-table; `orca.web.server` looks a request up here and wraps the handler in
+of request it is and the handler that answers it. `morca.web.routes` is the
+table; `morca.web.server` looks a request up here and wraps the handler in
 what its kind needs.
 
 A pattern is the path's segments: a literal (`runs`), a parameter
@@ -16,10 +16,10 @@ the actions take one, unless it's an action's but for its number, which
 is 404.
 """
 
-from orca.html import query_param, url_decode
-from orca.state import State
-from orca.ui.layout import not_found
-from orca.web.page import Page
+from morca.html import query_param, url_decode
+from morca.state import State
+from morca.ui.layout import not_found
+from morca.web.page import Page
 
 comptime GET = 1
 """`GET`, and `HEAD` with it."""
@@ -29,10 +29,10 @@ comptime PAGE = 0
 """A read: the page, its JSON or a fragment of it. Its header says who's
 logged in."""
 comptime ACTION = 1
-"""A `POST` that changes something (`orca.api.actions`): it needs a session
+"""A `POST` that changes something (`morca.api.actions`): it needs a session
 once login is on, and is audited as its user's."""
 comptime AUTH = 2
-"""Logging in and out (`orca.web.auth`), answered as the handler says."""
+"""Logging in and out (`morca.web.auth`), answered as the handler says."""
 
 
 struct Call(Movable):
@@ -45,12 +45,12 @@ struct Call(Movable):
     var params: Dict[String, String]
     var form: String
     """A `POST`'s fields, `application/x-www-form-urlencoded` (a JSON body
-    is converted, `orca.web.auth.json_form`)."""
+    is converted, `morca.web.auth.json_form`)."""
     var body: String
     """The body as it was sent."""
     var user: String
     """Who's logged in (a session or an API token), or empty
-    (`orca.web.auth.sign_in`)."""
+    (`morca.web.auth.sign_in`)."""
     var source: String
     """How they're logged in: "ui" (a session) or "cli" (an API token)."""
     var bearer: String
@@ -58,7 +58,7 @@ struct Call(Movable):
     var session: String
     """The session cookie it was sent with, or empty."""
     var address: String
-    """The address it came from (`orca.web.auth.client`)."""
+    """The address it came from (`morca.web.auth.client`)."""
 
     def __init__(out self, url: String, path: String):
         self.url = url
@@ -210,7 +210,7 @@ def answer(
     routes: List[Route], mut db: State, var call: Call, kind: Int
 ) raises -> Optional[Page]:
     """What the `PAGE` or `ACTION` route `call.path` names answers, for
-    `orca` commands over the database (`orca.web.server.read_page`, `act`):
+    `morca` commands over the database (`morca.web.server.read_page`, `act`):
     for no such page a 404, and for no such action None."""
     var found = find(routes, "GET" if kind == PAGE else "POST", call.path)
     if not found.route or found.route.value().kind != kind:

@@ -1,4 +1,4 @@
-import Orca.Migrate.Model
+import Morca.Migrate.Model
 
 /-!
 # A binary runs only on a schema it can run on
@@ -14,7 +14,7 @@ write a row at a time, and fill in later, add up to the right answer. That a
 migration left out of the floor-raisers really is additive is a reviewer's
 call (AGENTS.md, "Migrations"), which nothing here checks.
 -/
-namespace Orca.Migrate
+namespace Morca.Migrate
 
 /-! ## `larger`, `floorOf`, `maxVersion`, `dbFloor` -/
 
@@ -455,4 +455,4 @@ theorem runs_when_only_additive_since (R : List Nat) (db : Db) (k : Nat)
       ++ newRows R (maxVersion (fill R k db))
         (k - maxVersion (fill R k db)), by simp [migrate, hv]⟩
 
-end Orca.Migrate
+end Morca.Migrate

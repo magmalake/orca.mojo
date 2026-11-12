@@ -1,12 +1,12 @@
 """A run's dista cluster over several workers of its pool (#268,
-`orca.run_cluster`), as its page and JSON show it: the worker that started
+`morca.run_cluster`), as its page and JSON show it: the worker that started
 it, holding its head, then each worker that joined it, with their grants
 and when and why each ended.
 """
 
 from postgres import Params
 
-from orca.state import State
+from morca.state import State
 
 comptime _TS = '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\''
 

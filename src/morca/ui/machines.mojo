@@ -1,17 +1,17 @@
 """A run's machines on its page: each instance with its role, its
-metrics' peaks and warnings (`orca.metrics`), and the steps that ran on
+metrics' peaks and warnings (`morca.metrics`), and the steps that ran on
 it.
 """
 
 from postgres import Params
 
-from orca.control import CONTROL
-from orca.html import Html
-from orca.metrics import InstanceMetrics, metrics_html
-from orca.state import State
-from orca.timeline import workers_svg
-from orca.ui.layout import card_open
-from orca.views.runs import (
+from morca.control import CONTROL
+from morca.html import Html
+from morca.metrics import InstanceMetrics, metrics_html
+from morca.state import State
+from morca.timeline import workers_svg
+from morca.ui.layout import card_open
+from morca.views.runs import (
     InstanceRow,
     RunRow,
     cluster_log_name,
@@ -22,7 +22,7 @@ from orca.views.runs import (
 
 comptime _MACHINES_HELP = (
     "Samples of the whole machine, every few seconds while the run ran"
-    " (ORCA_SAMPLE_SECONDS, 5 by default): its CPU, memory, fullest disk,"
+    " (MORCA_SAMPLE_SECONDS, 5 by default): its CPU, memory, fullest disk,"
     " disk io and network, by a sampler the runner starts beside the run's"
     " process. They count everything on that machine, not just this run."
     " What the run's own processes used is in Resources, above. The steps"
@@ -95,7 +95,7 @@ def _machines_of(
 def machines_html(
     mut h: Html, mut db: State, r: RunRow, metrics: List[InstanceMetrics]
 ) raises:
-    """The Machines card (`orca.metrics`), saying what its numbers are:
+    """The Machines card (`morca.metrics`), saying what its numbers are:
     nothing for a run without samples."""
     if len(metrics) == 0:
         return

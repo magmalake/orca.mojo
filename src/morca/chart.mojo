@@ -1,7 +1,7 @@
 """Runs per day, drawn as SVG on the server for the home page: one bar a
 day, stacked by how the runs ended."""
 
-from orca.html import escape
+from morca.html import escape
 
 comptime _LEFT = 34
 comptime _WIDTH = 760

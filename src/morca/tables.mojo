@@ -1,7 +1,7 @@
 """Iceberg tables from steps: pinned reads, and commits a retry recognises.
 
 ```mojo
-from orca.tables import append, scan
+from morca.tables import append, scan
 
 def load(mut ctx: Ctx, raw: RawFile) raises -> Loaded:
     var src = Table.load_local(raw.table)
@@ -15,7 +15,7 @@ def load(mut ctx: Ctx, raw: RawFile) raises -> Loaded:
   attempt read, or its current snapshot if this is the first attempt, which
   is then recorded. A retry or a resume of the step sees the same data,
   whatever was committed in between.
-- **`append`** and **`commit`** put `orca.*` properties in the summary of the
+- **`append`** and **`commit`** put `morca.*` properties in the summary of the
   snapshot they commit (`Ctx.summary`): pipeline, run, step, partition,
   attempt, commit number, code, and the snapshots read. Before writing
   anything, they look through the table's snapshots for one this step
@@ -24,7 +24,7 @@ def load(mut ctx: Ctx, raw: RawFile) raises -> Loaded:
   returns it instead of committing the data a second time.
 
 A table is known by its location, `metadata.location`, and, when it's in
-the warehouse, by its dataset name. `ORCA_WAREHOUSE` is the root of a
+the warehouse, by its dataset name. `MORCA_WAREHOUSE` is the root of a
 filesystem catalog: dataset `nyc.trips` is the table at
 `<warehouse>/nyc/trips`, where the warehouse is a directory or a location
 in object storage (`s3://bucket/warehouse`, as iceberg's `FileIO` reads it,
@@ -33,7 +33,7 @@ from the `AWS_*` environment). **`table`** loads a dataset the step declared, an
 columns the step's schema has and the table lacks. `scan` refuses a
 dataset the step didn't declare in `reads=`, and `append` and `commit` one it
 didn't declare in `writes=`. A table outside the warehouse (or with
-`ORCA_WAREHOUSE` unset) is used by location as before, and belongs to no
+`MORCA_WAREHOUSE` unset) is used by location as before, and belongs to no
 dataset.
 
 **Files written on a worker.** A dista task can write a table's data
@@ -70,7 +70,7 @@ def load_day(mut ctx: Ctx, d: Day) raises -> Int64:
   attempt that died before committing them are left unreferenced in
   `data/`, as with an interrupted `append`.
 
-**Replacing partitions.** A new run of a key (`orca backfill --rerun`)
+**Replacing partitions.** A new run of a key (`morca backfill --rerun`)
 isn't a retry: `find_commit` doesn't recognise an earlier run's commits, so
 `append` adds the key's rows a second time. A step that recomputes a key's
 rows declares the dataset in `replaces=` rather than `writes=`, and its
@@ -99,7 +99,7 @@ on every try: a removal planned before another writer replaced them
 would otherwise keep both writers' rows.
 
 This module imports iceberg, so only pipelines that use tables build it;
-`orca` itself doesn't.
+`morca` itself doesn't.
 """
 
 from std.os import getenv
@@ -135,8 +135,8 @@ from iceberg.values import Datum, compare, datum_from_bytes_prim
 from iceberg.write import WriteOptions, _partition_key, write_data_files
 from parquet import RecordBatch
 
-from orca.ctx import Ctx
-from orca.proc import absolute
+from morca.ctx import Ctx
+from morca.proc import absolute
 
 comptime _COMMIT_RETRIES = 8
 """How many times to reload and retry when another writer got there first."""
@@ -148,7 +148,7 @@ def _backoff(attempt: Int):
     half. Two writers that both wrote the same metadata version both back
     out (iceberg's filesystem catalog deletes both files), so retrying at
     once can clash again and again; the random wait lets one get ahead.
-    Each process seeds `std.random` itself (`orca.cli.seed_random`)."""
+    Each process seeds `std.random` itself (`morca.cli.seed_random`)."""
     var base = 0.01 * Float64(1 << min(attempt - 1, 6))
     sleep(base * random_float64(0.5, 1.5))
 
@@ -166,7 +166,7 @@ def _reload(mut table: Table) raises:
             attempt += 1
             if attempt > _COMMIT_RETRIES:
                 raise Error(
-                    "orca: can't reload ", table.metadata.location, ": ", e
+                    "morca: can't reload ", table.metadata.location, ": ", e
                 )
             _backoff(attempt)
 
@@ -180,7 +180,7 @@ def _load(cat: FilesystemCatalog, ns: String, name: String) raises -> Table:
         except e:
             attempt += 1
             if attempt > _COMMIT_RETRIES:
-                raise Error("orca: can't load ", ns, ".", name, ": ", e)
+                raise Error("morca: can't load ", ns, ".", name, ": ", e)
             _backoff(attempt)
 
 
@@ -198,8 +198,8 @@ def _landed(table: Table, snapshot_id: Int64) -> Bool:
 
 
 def warehouse() -> String:
-    """`ORCA_WAREHOUSE`: the root datasets are found under, or empty."""
-    return getenv("ORCA_WAREHOUSE")
+    """`MORCA_WAREHOUSE`: the root datasets are found under, or empty."""
+    return getenv("MORCA_WAREHOUSE")
 
 
 def _norm(path: String) raises -> String:
@@ -233,7 +233,7 @@ def dataset_of(location: String) raises -> String:
 def _split(dataset: String) raises -> Tuple[String, String]:
     var dot = dataset.rfind(".")
     if dot <= 0 or dot == dataset.byte_length() - 1:
-        raise Error("orca: a dataset is named namespace.table, not ", dataset)
+        raise Error("morca: a dataset is named namespace.table, not ", dataset)
     return (
         String(dataset[byte=:dot]),
         String(dataset[byte = dot + 1 :]),
@@ -247,7 +247,7 @@ def _catalog() raises -> FilesystemCatalog:
     var root = warehouse()
     if not root:
         raise Error(
-            "orca: ORCA_WAREHOUSE isn't set, so datasets can't be found"
+            "morca: MORCA_WAREHOUSE isn't set, so datasets can't be found"
         )
     if "://" in root and not root.startswith("file://"):
         return FilesystemCatalog(String(root.rstrip("/")), FileIO())
@@ -257,12 +257,12 @@ def _catalog() raises -> FilesystemCatalog:
 def load_dataset(dataset: String) raises -> Table:
     """A dataset's table, outside any step: nothing is checked or recorded.
     For reading what isn't a step's input, such as a keyed pipeline's keys
-    (`orca.keyed`)."""
+    (`morca.keyed`)."""
     var name = _split(dataset)
     try:
         return _catalog().load_table(name[0], name[1])
     except e:
-        raise Error("orca: can't load ", dataset, ": ", e)
+        raise Error("morca: can't load ", dataset, ": ", e)
 
 
 def table(mut ctx: Ctx, dataset: String) raises -> Table:
@@ -275,7 +275,7 @@ def table(mut ctx: Ctx, dataset: String) raises -> Table:
 
 comptime DAY_MS: Int64 = 86_400_000
 comptime DEFAULT_HISTORY_DAYS = 30
-"""How long an orca table keeps its snapshots by default."""
+"""How long a morca table keeps its snapshots by default."""
 
 
 def table_defaults() -> Dict[String, String]:
@@ -287,9 +287,9 @@ def table_defaults() -> Dict[String, String]:
       metadata files older than the last hundred, so `metadata/` stops
       growing by one file per commit.
     - `history.expire.max-snapshot-age-ms` (30 days): the history the
-      scheduler's expiry keeps (`orca expire`, `ORCA_EXPIRE_HOURS`). Its
+      scheduler's expiry keeps (`morca expire`, `MORCA_EXPIRE_HOURS`). Its
       presence is also what makes the scheduler expire the table at all;
-      a table orca didn't create keeps all its snapshots.
+      a table morca didn't create keeps all its snapshots.
     """
     var d = Dict[String, String]()
     d["write.metadata.delete-after-commit.enabled"] = "true"
@@ -339,7 +339,7 @@ def _settle_properties(
         except e:
             attempt += 1
             if attempt > _COMMIT_RETRIES:
-                raise Error("orca: can't set ", dataset, "'s properties: ", e)
+                raise Error("morca: can't set ", dataset, "'s properties: ", e)
             _backoff(attempt)
             _reload(table)
             continue
@@ -390,7 +390,7 @@ def ensure_table(
         except e:
             # Another run, started at the same time, created it first.
             if not cat.table_exists(name[0], name[1]):
-                raise Error("orca: can't create ", dataset, ": ", e)
+                raise Error("morca: can't create ", dataset, ": ", e)
     var t = _load(cat, name[0], name[1])
     _evolve(ctx, t, schema, dataset)
     _settle_properties(ctx, t, properties, dataset)
@@ -453,7 +453,7 @@ def _evolve(
         var left_out = _required_left_out(before, schema)
         if left_out:
             raise Error(
-                "orca: ",
+                "morca: ",
                 dataset,
                 " requires column '",
                 left_out,
@@ -467,13 +467,13 @@ def _evolve(
             change = prepare_schema_update(table.metadata, update)
         except e:
             raise Error(
-                "orca: ", dataset, " can't take the schema given: ", String(e)
+                "morca: ", dataset, " can't take the schema given: ", String(e)
             )
         # Checked against the schema the commit would make, so a schema
         # with the wrong ids is refused before anything is committed.
         var mismatch = _other_id(change.schema, schema)
         if mismatch:
-            raise Error("orca: ", dataset, ": ", mismatch)
+            raise Error("morca: ", dataset, ": ", mismatch)
         if change.changed:
             try:
                 table.commit_metadata(change.metadata.copy())
@@ -481,7 +481,7 @@ def _evolve(
                 attempt += 1
                 if attempt > _COMMIT_RETRIES:
                     raise Error(
-                        "orca: can't commit ",
+                        "morca: can't commit ",
                         dataset,
                         "'s new schema (",
                         attempt,
@@ -622,7 +622,7 @@ struct FileWriter(Movable):
         except e:
             var name = dataset_of(self.location)
             raise Error(
-                "orca: can't write data files for ",
+                "morca: can't write data files for ",
                 name if name else self.location,
                 ": ",
                 e,
@@ -703,7 +703,7 @@ def _append(
         )
     except e:
         raise Error(
-            "orca: can't write data files for ",
+            "morca: can't write data files for ",
             dataset_of(table.metadata.location),
             ": ",
             e,
@@ -738,11 +738,11 @@ def _append_files(
     for f in files:
         if f.content != CONTENT_DATA:
             raise Error(
-                "orca: append_files takes data files, and ",
+                "morca: append_files takes data files, and ",
                 f.file_path,
                 " is a delete file (content ",
                 f.content,
-                "); commit it with orca.tables.commit",
+                "); commit it with morca.tables.commit",
             )
     var found = _found(ctx, table)
     if found >= 0:
@@ -779,7 +779,7 @@ def _commit_append(
             attempt += 1
             if attempt > _COMMIT_RETRIES:
                 raise Error(
-                    "orca: can't commit to ",
+                    "morca: can't commit to ",
                     dataset,
                     " (",
                     attempt,
@@ -833,7 +833,7 @@ def commit(
             attempt += 1
             if attempt > _COMMIT_RETRIES:
                 raise Error(
-                    "orca: can't commit to ",
+                    "morca: can't commit to ",
                     dataset,
                     " (",
                     attempt,
@@ -876,7 +876,7 @@ def _check_removed(result: AppendResult, removing: Int, name: String) raises:
     )
     if found < removing:
         raise Error(
-            "orca: ",
+            "morca: ",
             removing - found,
             " of the ",
             removing,
@@ -1021,7 +1021,7 @@ def _by_whom(m: TableMetadata, at: Int) -> String:
             ", step ",
             s.get("orca.step", "?"),
         )
-    return String("snapshot ", m.snapshots[at].snapshot_id, ", not orca's")
+    return String("snapshot ", m.snapshots[at].snapshot_id, ", not morca's")
 
 
 def _plan_replace(
@@ -1078,7 +1078,7 @@ def _plan_replace(
             var at = index.get(e.snapshot_id, -1)
             if first_mine >= 0 and at > first_mine:
                 raise Error(
-                    "orca: another writer is writing a partition of ",
+                    "morca: another writer is writing a partition of ",
                     name if name else loc,
                     " that this run replaces: ",
                     _by_whom(m, at),
@@ -1134,7 +1134,7 @@ def _commit_replace(
             attempt += 1
             if attempt > _COMMIT_RETRIES:
                 raise Error(
-                    "orca: can't commit to ",
+                    "morca: can't commit to ",
                     dataset,
                     " (",
                     attempt,

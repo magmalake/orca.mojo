@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fills follow the data version (#297): a step's `version=`. Over
 # tests/fill_version/vdaily.mojo (daily from 2024-01-01, fills = "all") on
-# the local runner, with ORCA_NOW fixed:
+# the local runner, with MORCA_NOW fixed:
 #
 # - the fill runs each day once; a day whose fill run failed (no run
 #   retries) is left alone;
@@ -10,7 +10,7 @@
 # - a raised version= fills every day again, the failed one included,
 #   and then nothing more.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-fill-version starts a throwaway
+# Needs MORCA_DATABASE_URL (pixi run test-fill-version starts a throwaway
 # server) and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -22,23 +22,23 @@ scripts/mojo-build.sh -I src $DEP_INC -D VDAILY_READS=1 tests/fill_version/vdail
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC -D VDAILY_VERSION=1 tests/fill_version/vdaily.mojo -o build/vdaily-v1
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 
 log=build/fill-version.log
 : > "$log"
 proj=$PWD/build/fill-version-project
 rm -rf "$proj"
 mkdir -p "$proj"
-export ORCA_WATCHDOG_SECONDS=0 ORCA_SAMPLE_SECONDS=0
+export MORCA_WATCHDOG_SECONDS=0 MORCA_SAMPLE_SECONDS=0
 fail() {
     echo "FAIL: $*"
     tail -40 "$log"
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 T=2024-01-06T12:00Z  # the range is 2024-01-01..05
-tick() { ORCA_NOW=$T ./build/orca tick >> "$log" 2>&1 || fail "tick exited $?"; }
-reg() { ORCA_NOW=$T ./build/orca register --config "$proj/orca.toml" "$@" >> "$log" 2>&1 || fail "register $*"; }
+tick() { MORCA_NOW=$T ./build/morca tick >> "$log" 2>&1 || fail "tick exited $?"; }
+reg() { MORCA_NOW=$T ./build/morca register --config "$proj/morca.toml" "$@" >> "$log" 2>&1 || fail "register $*"; }
 fills() { q "SELECT coalesce(string_agg(partitions, ',' ORDER BY partitions), '') FROM orca.runs WHERE pipeline = 'vdaily' AND trigger = 'fill' AND id > ${1:-0}"; }
 last() { q "SELECT coalesce(max(id), 0) FROM orca.runs"; }
 settle() {
@@ -49,7 +49,7 @@ settle() {
 }
 dv() { q "SELECT coalesce(v.data_version, '') FROM orca.pipelines p JOIN orca.pipeline_versions v ON v.id = p.version WHERE p.name = 'vdaily'"; }
 
-cat > "$proj/orca.toml" << 'TOML'
+cat > "$proj/morca.toml" << 'TOML'
 [pipelines.vdaily]
 fills = "all"
 fill_max_runs = 5
@@ -85,7 +85,7 @@ echo "ok   new code with the same data version fills nothing again"
 # --- version=1: every day again, the cancelled one too, then nothing ---
 reg ./build/vdaily-v1
 [ "$(dv)" = "make=1" ] || fail "v1's data version is '$(dv)', not make=1"
-grep -q "orca: vdaily its steps' version= is now make=1: its fill runs its partitions again" "$log" \
+grep -q "morca: vdaily its steps' version= is now make=1: its fill runs its partitions again" "$log" \
     || fail "register didn't say the fill runs again"
 tick
 settle

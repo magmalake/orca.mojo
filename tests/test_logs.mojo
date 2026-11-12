@@ -1,4 +1,4 @@
-"""The local files of orca.logs: `write_location` replaces a file whole, by
+"""The local files of morca.logs: `write_location` replaces a file whole, by
 a rename, so a reader never sees it half written and a writer killed
 partway (`put-log` on an instance that is terminated) leaves the old file,
 not a truncated one. tests/logs.sh runs the logs a run leaves.
@@ -8,11 +8,11 @@ from std.os import getenv, listdir, makedirs, remove
 from std.os.path import exists
 from std.testing import TestSuite, assert_equal, assert_false
 
-from orca.logs import read_location, write_location
+from morca.logs import read_location, write_location
 
 
 def _dir() raises -> String:
-    var d = String(getenv("TMPDIR", "/tmp").rstrip("/"), "/orca-test-logs")
+    var d = String(getenv("TMPDIR", "/tmp").rstrip("/"), "/morca-test-logs")
     makedirs(d, exist_ok=True)
     return d^
 

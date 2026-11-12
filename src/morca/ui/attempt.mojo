@@ -4,16 +4,16 @@ error, and its facts, which refresh from `/facts` while it runs.
 
 from postgres import Params
 
-from orca.html import Html
-from orca.json import quote
-from orca.logs import read_location
-from orca.state import State
-from orca.ui.layout import LIVE_EVERY, act_button, not_found, page_html
-from orca.ui.parts import code_link, limit_facts, usage_facts
-from orca.usage import bytes_text, usage_json
-from orca.views.code import CodeLinks, code_of
-from orca.views.runs import AttemptRow, attempt_rows, live_status
-from orca.web.page import Page
+from morca.html import Html
+from morca.json import quote
+from morca.logs import read_location
+from morca.state import State
+from morca.ui.layout import LIVE_EVERY, act_button, not_found, page_html
+from morca.ui.parts import code_link, limit_facts, usage_facts
+from morca.usage import bytes_text, usage_json
+from morca.views.code import CodeLinks, code_of
+from morca.views.runs import AttemptRow, attempt_rows, live_status
+from morca.web.page import Page
 
 
 comptime _LOG_LIMIT = 1 << 20
@@ -45,7 +45,7 @@ def _log_html(mut h: Html, a: AttemptRow):
     elif a.log:
         h.raw('<span class="muted">Nothing logged yet.</span>')
     else:
-        h.raw('<span class="muted">No log file: ORCA_LOGS wasn\'t set.</span>')
+        h.raw('<span class="muted">No log file: MORCA_LOGS wasn\'t set.</span>')
     h.raw("</pre>")
 
 
@@ -197,7 +197,7 @@ def attempt(mut db: State, run: Int, id: Int) raises -> Page:
             "Rerun from here",
             "rerun from here",
             String(
-                "no orca command for this yet: a new run from ",
+                "no morca command for this yet: a new run from ",
                 a.step,
                 " on, the steps before it copied",
             ),

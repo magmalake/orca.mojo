@@ -1,21 +1,21 @@
-"""Finding a pipeline's functions in its source (`orca.locate`), over this
+"""Finding a pipeline's functions in its source (`morca.locate`), over this
 repository's examples."""
 
 from std.testing import TestSuite, assert_equal, assert_true
 
 from json import loads
 
-from orca.locate import function_key, locate, mojo_files
+from morca.locate import function_key, locate, mojo_files
 
 comptime DESCRIBE = """{"pipeline": "toy", "steps": [
-  {"name": "days", "function": "toy::days(orca::ctx::Ctx,orca::month::Month)"},
-  {"name": "gone", "function": "toy::not_there(orca::ctx::Ctx)"},
+  {"name": "days", "function": "toy::days(morca::ctx::Ctx,morca::month::Month)"},
+  {"name": "gone", "function": "toy::not_there(morca::ctx::Ctx)"},
   {"name": "x", "function": "nowhere::x(Int)"}],
- "tasks": ["fanout::trips(fanout::Day)", "toy::days(orca::ctx::Ctx)"]}"""
+ "tasks": ["fanout::trips(fanout::Day)", "toy::days(morca::ctx::Ctx)"]}"""
 
 
 def test_function_key() raises:
-    assert_equal(function_key("toy::days(orca::ctx::Ctx,Int)"), "toy::days")
+    assert_equal(function_key("toy::days(morca::ctx::Ctx,Int)"), "toy::days")
     assert_equal(function_key("lake::steps::parse"), "lake::steps::parse")
 
 

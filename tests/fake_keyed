@@ -5,7 +5,7 @@
 case "$1" in
     describe)
         cat << 'J'
-{"pipeline": "fake_keyed", "registry_hash": "0x4e75", "partitions": {"kind": "keyed", "start": null, "dataset": "keys.names", "column": "name"}, "schedule": null, "max_runs": 1, "run_retries": 0, "sensor": false, "keys_per_run": 10, "workers": 2, "steps": [{"name": "label", "kind": "mapped", "after": null, "function": "label", "input": "orca.name.Name", "output": "Int", "reads": [], "writes": []}], "tasks": [], "source": {"repo": "", "commit": "", "dirty": false}}
+{"pipeline": "fake_keyed", "registry_hash": "0x4e75", "partitions": {"kind": "keyed", "start": null, "dataset": "keys.names", "column": "name"}, "schedule": null, "max_runs": 1, "run_retries": 0, "sensor": false, "keys_per_run": 10, "workers": 2, "steps": [{"name": "label", "kind": "mapped", "after": null, "function": "label", "input": "morca.name.Name", "output": "Int", "reads": [], "writes": []}], "tasks": [], "source": {"repo": "", "commit": "", "dirty": false}}
 J
         ;;
     keys)

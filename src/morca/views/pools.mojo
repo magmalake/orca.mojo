@@ -3,16 +3,16 @@ each, by the pool a placement names.
 
 | Pool | Kind | A machine is |
 |---|---|---|
-| `ec2` | EC2 | an instance orca launched for a run (`orca.instances`), live or ended in the last hour |
-| `kubernetes` | k8s | a live run's pods (`orca-<run>-<start>`), on the Kubernetes runner: the runner records no pods or nodes, so the run is what there is |
-| `worker:<pool>` | self-hosted | the machine a worker token's `orca worker` runs on (`orca.workers`), with the worker as columns of its row |
+| `ec2` | EC2 | an instance morca launched for a run (`orca.instances`), live or ended in the last hour |
+| `kubernetes` | k8s | a live run's pods (`morca-<run>-<start>`), on the Kubernetes runner: the runner records no pods or nodes, so the run is what there is |
+| `worker:<pool>` | self-hosted | the machine a worker token's `morca worker` runs on (`orca.workers`), with the worker as columns of its row |
 
 The scheduler's own machine (the local runner, and control-placed runs)
 isn't a pool: it is Control (`/ops/control`).
 
 A machine's state is `live`, `draining` (an EC2 worker the scheduler
 drained) or `gone` (an instance that ended; a worker whose token was
-revoked or expired, or that hasn't been seen for `ORCA_STALE_SECONDS`),
+revoked or expired, or that hasn't been seen for `MORCA_STALE_SECONDS`),
 with what it's doing in `detail`. Like Fleet, a page view reads
 `orca.instances`, `orca.fleet_samples`, `orca.workers` and `orca.runs`,
 never a sampler's file.
@@ -22,16 +22,16 @@ from std.os import getenv
 
 from postgres import Params
 
-from orca.live import dead_sql, stale_limit, start_grace
-from orca.state import State
+from morca.live import dead_sql, stale_limit, start_grace
+from morca.state import State
 
 
 comptime EC2 = "ec2"
-"""The kind (and the pool) of the EC2 instances orca launches."""
+"""The kind (and the pool) of the EC2 instances morca launches."""
 comptime K8S = "k8s"
 """The kind of a Kubernetes run's pods; their pool is `kubernetes`."""
 comptime SELF_HOSTED = "self-hosted"
-"""The kind of a machine running `orca worker`; its pool `worker:<pool>`."""
+"""The kind of a machine running `morca worker`; its pool `worker:<pool>`."""
 comptime KUBERNETES = "kubernetes"
 
 comptime GONE_MINUTES = 60
@@ -69,7 +69,7 @@ struct Machine(Copyable, Movable):
     """Seconds since its last heartbeat (a sample, a worker's claim, a
     run's heartbeat); -1 if never."""
     var process: String
-    """What orca runs there: `head` or `worker` of a run, `orca worker`,
+    """What morca runs there: `head` or `worker` of a run, `morca worker`,
     or `pods`."""
     var instance_type: String
     var market: String
@@ -105,8 +105,8 @@ struct Machine(Copyable, Movable):
 
 
 def type_size(instance_type: String) -> Tuple[Int, Int]:
-    """The vCPUs and memory (MiB) of the instance types orca runs on, as
-    `orca.fleet.hourly_price` prices them; (0, 0) for any other."""
+    """The vCPUs and memory (MiB) of the instance types morca runs on, as
+    `morca.fleet.hourly_price` prices them; (0, 0) for any other."""
     if instance_type == "c7g.large":
         return (2, 4096)
     if instance_type == "c7g.xlarge":
@@ -222,8 +222,8 @@ def _ec2(mut db: State, mut out: List[Machine], one: String) raises:
 
 def _kubernetes(mut db: State, mut out: List[Machine], one: String) raises:
     """On the Kubernetes runner, a row per live run of the default
-    placement: its pods, which the runner names `orca-<run>-<start>`."""
-    if getenv("ORCA_RUNNER") != KUBERNETES:
+    placement: its pods, which the runner names `morca-<run>-<start>`."""
+    if getenv("MORCA_RUNNER") != KUBERNETES:
         return
     var stale = stale_limit()
     var sql = String(
@@ -235,7 +235,7 @@ def _kubernetes(mut db: State, mut out: List[Machine], one: String) raises:
         " 'running' AND coalesce(r.placement, 'default') IN ('default', '')",
         " AND NOT ",
         dead_sql(String(stale), start_grace(stale), "r"),
-        " AND ('orca-' || r.id || '-' || r.starts) = $1" if one else (
+        " AND ('morca-' || r.id || '-' || r.starts) = $1" if one else (
             " AND $1 = ''"
         ),
         " ORDER BY r.id",
@@ -243,7 +243,7 @@ def _kubernetes(mut db: State, mut out: List[Machine], one: String) raises:
     for r in db.conn.query(sql, Params().text(one)):
         var run = Int(r.int64("id"))
         var start = Int(r.int64("starts"))
-        var pod = String("orca-", run, "-", start)
+        var pod = String("morca-", run, "-", start)
         var millis = Int(r.int64("cpu_millis"))
         out.append(
             Machine(
@@ -318,7 +318,7 @@ def _workers(mut db: State, mut out: List[Machine], one: Int) raises:
                 memory_mb=Int(r.int64("mem")),
                 runs=runs^,
                 seen_ago=Int(r.int64("ago")),
-                process="orca worker",
+                process="morca worker",
                 instance_type=String(),
                 market=String(),
                 uptime=-1,

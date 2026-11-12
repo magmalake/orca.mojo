@@ -1,4 +1,4 @@
-"""Containment (orca.cgroup): the limit, margin and retry arithmetic, and
+"""Containment (morca.cgroup): the limit, margin and retry arithmetic, and
 reading /proc/self/cgroup and memory.events."""
 
 from std.os import getenv, makedirs, setenv, unsetenv
@@ -10,7 +10,7 @@ from std.testing import (
     assert_true,
 )
 
-from orca.cgroup import (
+from morca.cgroup import (
     Contained,
     MemoryKnobs,
     avg10_of,
@@ -151,7 +151,7 @@ def test_own_limit_pressure() raises:
     assert_equal(
         avg10_of("some avg10=81.27 avg60=0 avg300=0 total=1\n", "some"), 81.27
     )
-    var base = String(getenv("TMPDIR", "/tmp"), "/orca-test-own-limit")
+    var base = String(getenv("TMPDIR", "/tmp"), "/morca-test-own-limit")
     _fake_cgroup(String(base, "/held"), 510, "81.50")
     _fake_cgroup(String(base, "/also"), 1000, "40.00")
     _fake_cgroup(String(base, "/easy"), 100, "90.00")
@@ -200,37 +200,37 @@ def test_controllers() raises:
 def test_names() raises:
     assert_equal(run_name(42, 3, 1234), "orca-run-42-3-1234")
     assert_equal(owner_of("orca-run-42-3-1234"), 1234)
-    assert_equal(owner_of("orca"), -1)
+    assert_equal(owner_of("morca"), -1)
     assert_equal(owner_of("orca-run-x"), -1)
 
 
 def test_knobs() raises:
-    _ = unsetenv("ORCA_RUN_MEMORY_MB")
-    _ = unsetenv("ORCA_RUN_MEMORY_MARGIN")
-    _ = unsetenv("ORCA_RUN_MEMORY_GROWTH")
-    _ = unsetenv("ORCA_RUN_MEMORY_HELD_SECONDS")
+    _ = unsetenv("MORCA_RUN_MEMORY_MB")
+    _ = unsetenv("MORCA_RUN_MEMORY_MARGIN")
+    _ = unsetenv("MORCA_RUN_MEMORY_GROWTH")
+    _ = unsetenv("MORCA_RUN_MEMORY_HELD_SECONDS")
     var k = MemoryKnobs.from_env()
     assert_equal(k.default_mb, 0)
     assert_equal(k.margin_pct, 25)
     assert_equal(k.growth_pct, 150)
     assert_equal(k.held_s, 120)
-    _ = setenv("ORCA_RUN_MEMORY_GROWTH", "2", True)
-    _ = setenv("ORCA_RUN_MEMORY_MARGIN", "10", True)
-    _ = setenv("ORCA_RUN_MEMORY_MB", "512", True)
+    _ = setenv("MORCA_RUN_MEMORY_GROWTH", "2", True)
+    _ = setenv("MORCA_RUN_MEMORY_MARGIN", "10", True)
+    _ = setenv("MORCA_RUN_MEMORY_MB", "512", True)
     k = MemoryKnobs.from_env()
     assert_equal(k.growth_pct, 200)
     assert_equal(k.margin_pct, 10)
     assert_equal(k.default_mb, 512)
     assert_equal(growth_pct_of("1.25"), 125)
     for bad in ["0.5", "x", "-1"]:
-        with assert_raises(contains="ORCA_RUN_MEMORY_GROWTH"):
+        with assert_raises(contains="MORCA_RUN_MEMORY_GROWTH"):
             _ = growth_pct_of(bad)
-    _ = setenv("ORCA_RUN_MEMORY_MARGIN", "-3", True)
-    with assert_raises(contains="ORCA_RUN_MEMORY_MARGIN"):
+    _ = setenv("MORCA_RUN_MEMORY_MARGIN", "-3", True)
+    with assert_raises(contains="MORCA_RUN_MEMORY_MARGIN"):
         _ = MemoryKnobs.from_env()
-    _ = unsetenv("ORCA_RUN_MEMORY_MB")
-    _ = unsetenv("ORCA_RUN_MEMORY_MARGIN")
-    _ = unsetenv("ORCA_RUN_MEMORY_GROWTH")
+    _ = unsetenv("MORCA_RUN_MEMORY_MB")
+    _ = unsetenv("MORCA_RUN_MEMORY_MARGIN")
+    _ = unsetenv("MORCA_RUN_MEMORY_GROWTH")
 
 
 def main() raises:

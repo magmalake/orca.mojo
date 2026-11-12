@@ -1,5 +1,5 @@
 """A run's commits are told from those of another run that had its number
-(#292): a run created after orca's database was restored from a backup, or
+(#292): a run created after morca's database was restored from a backup, or
 in a new database over the same tables, is given the number of a run whose
 snapshots are still in the tables. Each run has a random token
 (`Store.run_token`), its commits carry it (`orca.run-token`), and
@@ -19,8 +19,8 @@ from iceberg.util import now_ms
 from iceberg.values import Datum
 from parquet import RecordBatch
 
-from orca import Ctx
-from orca.tables import append
+from morca import Ctx
+from morca.tables import append
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -40,7 +40,7 @@ def _rows(id: Int) raises -> List[RecordBatch]:
 
 
 def _create(name: String) raises -> Table:
-    var cat = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE"))
+    var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
     _ = cat.create_table("db", name, Schema.parse(SCHEMA))
     return cat.load_table("db", name)
 
@@ -59,13 +59,13 @@ def _ctx(name: String, attempt: Int, token: String) -> Ctx:
 
 
 def _snapshots(name: String) raises -> Int:
-    var root = String(getenv("ORCA_WAREHOUSE"))
+    var root = String(getenv("MORCA_WAREHOUSE"))
     return len(Table.load_local(String(root, "/db/", name)).metadata.snapshots)
 
 
 def test_a_run_with_another_token_commits_again() raises:
     var t = _create("restored")
-    # Run 7, which a restore of orca's database then loses.
+    # Run 7, which a restore of morca's database then loses.
     var lost = _ctx("restored", 1, "01938f2a-0000-7111-8111-111111111111")
     var first = append(lost, t, _rows(1))
     assert_equal(_snapshots("restored"), 1)
@@ -99,7 +99,7 @@ def test_a_commit_from_before_tokens_is_still_recognised() raises:
 
 def test_a_run_without_a_token_recognises_its_commit() raises:
     var t = _create("worker")
-    # A worker's run whose `orca ui` knows tokens for one attempt and not
+    # A worker's run whose `morca ui` knows tokens for one attempt and not
     # for the next (an image rolled back): the number alone tells.
     var with_token = _ctx("worker", 1, "01938f2d-0000-7444-8444-444444444444")
     var first = append(with_token, t, _rows(1))
@@ -109,7 +109,7 @@ def test_a_run_without_a_token_recognises_its_commit() raises:
 
 
 def main() raises:
-    _ = setenv("ORCA_WAREHOUSE", String("build/wh-run-token-", now_ms()))
+    _ = setenv("MORCA_WAREHOUSE", String("build/wh-run-token-", now_ms()))
     test_a_run_with_another_token_commits_again()
     print("PASS test_a_run_with_another_token_commits_again")
     test_a_commit_from_before_tokens_is_still_recognised()

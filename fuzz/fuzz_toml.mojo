@@ -1,5 +1,5 @@
-"""Fuzz: `parse_toml` on arbitrary text, as `orca register` reads
-`orca.toml` (`orca.toml`, `orca.config`).
+"""Fuzz: `parse_toml` on arbitrary text, as `morca register` reads
+`morca.toml` (`morca.toml`, `morca.config`).
 
 Whatever it accepts must read back the same from what `TomlDoc.dump`
 writes of it: the same entries, each of the same kind and text, and a dump
@@ -10,7 +10,7 @@ of the second reading the same as the first.
 
 from harness import bytes_of, check, only_findings, run_harness, save_last
 
-from orca.toml import parse_toml
+from morca.toml import parse_toml
 
 
 def target(data: List[UInt8]) raises:

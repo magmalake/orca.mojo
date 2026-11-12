@@ -1,9 +1,9 @@
-"""The login page (`/login`, `orca.web.auth`)."""
+"""The login page (`/login`, `morca.web.auth`)."""
 
-from orca.html import Html
-from orca.json import quote
-from orca.ui.layout import page_html
-from orca.web.page import Page
+from morca.html import Html
+from morca.json import quote
+from morca.ui.layout import page_html
+from morca.web.page import Page
 
 
 def safe_next(next: String) -> String:
@@ -30,7 +30,7 @@ def login_page(next: String, why: String, status: Int = 200) -> Page:
         '<button type="submit">Log in</button></form>',
         '<p class="muted">Reading needs no login; starting, resuming,',
         " rerunning, backfilling, cancelling and rebuilding do. Users are",
-        " added with <code>orca user add</code>.</p></div>",
+        " added with <code>morca user add</code>.</p></div>",
     )
     return Page(
         status,

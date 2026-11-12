@@ -15,7 +15,7 @@ for the snapshot a lineage page is about. Edges that close a cycle
 the right-hand side, back up, and don't move a node down.
 """
 
-from orca.html import escape
+from morca.html import escape
 
 comptime _W = 170
 comptime _H = 46

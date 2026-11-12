@@ -1,10 +1,10 @@
-"""The few EC2 calls the `ec2` runner makes (`orca.ec2`), over objectstore's
+"""The few EC2 calls the `ec2` runner makes (`morca.ec2`), over objectstore's
 SigV4 signing and HTTP.
 
 EC2's API is a form `POST` of `Action=...&Version=...` to
 `https://ec2.<region>.amazonaws.com/`, answered in XML. Credentials come
 from the `AWS_*` environment, else the instance role (IMDSv2); the region
-from `AWS_REGION`. `ORCA_EC2_ENDPOINT` points the calls elsewhere, as the
+from `AWS_REGION`. `MORCA_EC2_ENDPOINT` points the calls elsewhere, as the
 tests do at a stand-in (`tests/fake_ec2.py`).
 
 The answers are read for the fields the runner uses and nothing else: an
@@ -150,10 +150,10 @@ struct Ec2(Movable):
     def __init__(out self) raises:
         self.region = getenv("AWS_REGION", getenv("AWS_DEFAULT_REGION"))
         if not self.region:
-            raise Error("orca: the ec2 runner needs AWS_REGION")
+            raise Error("morca: the ec2 runner needs AWS_REGION")
         self.endpoint = String(
             getenv(
-                "ORCA_EC2_ENDPOINT",
+                "MORCA_EC2_ENDPOINT",
                 String("https://ec2.", self.region, ".amazonaws.com"),
             ).rstrip("/")
         )
@@ -173,7 +173,7 @@ struct Ec2(Movable):
         var role = instance_credentials()
         if not role:
             raise Error(
-                "orca: no AWS credentials (AWS_ACCESS_KEY_ID, or an instance"
+                "morca: no AWS credentials (AWS_ACCESS_KEY_ID, or an instance"
                 " role)"
             )
         return role.take()
@@ -219,11 +219,11 @@ struct Ec2(Movable):
                 String(self.endpoint, "/"), body.as_bytes(), headers
             )
         except e:
-            raise Error("orca: EC2 ", action, ": ", e)
+            raise Error("morca: EC2 ", action, ": ", e)
         var text = String(from_utf8_lossy=Span(resp.body))
         if resp.status != 200:
             raise Error(
-                "orca: EC2 ",
+                "morca: EC2 ",
                 action,
                 " answered ",
                 resp.status,
@@ -279,5 +279,5 @@ struct Ec2(Movable):
             out.append(got[0])
             at = got[1]
         if len(out) == 0:
-            raise Error("orca: EC2 has no instance type ", instance_type)
+            raise Error("morca: EC2 has no instance type ", instance_type)
         return out^

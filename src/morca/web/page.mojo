@@ -5,7 +5,7 @@ JSON to a script; a fragment or a file as itself, whatever was asked for.
 
 from flare.http import Response
 
-from orca.ui.layout import with_header_help
+from morca.ui.layout import with_header_help
 
 
 struct Page(Movable):
@@ -82,7 +82,7 @@ def respond(page: Page, json: Bool) -> Response:
     ):
         # A fragment's ids apart from its page's.
         body = with_header_help(body, String("thf") if raw else String("th"))
-    # An action's 303, and a moved page that kept its JSON (`orca.ui.ops.
+    # An action's 303, and a moved page that kept its JSON (`morca.ui.ops.
     # to_pools`), answer a script its JSON there, with no redirect.
     var here = (
         Bool(page.location)

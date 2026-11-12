@@ -7,20 +7,20 @@ from postgres import (
     Params,
     Transaction,
 )
-from orca.batches import mark_batch
-from orca.live import live_runs
-from orca.timekeys import parse_time_keys
-from orca.name import (
+from morca.batches import mark_batch
+from morca.live import live_runs
+from morca.timekeys import parse_time_keys
+from morca.name import (
     Name,
     parse_names,
     sort_texts,
 )
-from orca.proc import (
+from morca.proc import (
     binary_seconds,
     capture,
 )
-from orca.state import State
-from orca.registered import Registered
+from morca.state import State
+from morca.registered import Registered
 
 
 def dataset_cycle(mut db: State, describe: String) raises -> String:
@@ -95,7 +95,7 @@ def parse_keys_output(
     """What `<binary> keys` printed: its keys snapshot, then its keys."""
     var lines = text.splitlines()
     if len(lines) == 0:
-        raise Error("orca: ", binary, " keys printed nothing")
+        raise Error("morca: ", binary, " keys printed nothing")
     var keys = List[String]()
     for i in range(1, len(lines)):
         if lines[i]:
@@ -108,12 +108,12 @@ def current_keys(
 ) raises -> Tuple[Int64, List[String]]:
     """A keyed pipeline's keys snapshot and keys, as `<binary> keys`
     prints them, killed past `timeout` seconds (by default
-    `ORCA_BINARY_SECONDS`)."""
+    `MORCA_BINARY_SECONDS`)."""
     var got = capture(
         [p.binary, "keys"], timeout if timeout >= 0 else binary_seconds()
     )
     if got[0] != 0:
-        raise Error("orca: ", p.binary, " keys exited ", got[0], ": ", got[1])
+        raise Error("morca: ", p.binary, " keys exited ", got[0], ": ", got[1])
     return parse_keys_output(p.binary, got[1])
 
 
@@ -184,10 +184,10 @@ def file_names(path: String) raises -> String:
             try:
                 _ = Name.parse(n)
             except:
-                raise Error("orca: line ", at, " of ", path, " isn't a name")
+                raise Error("morca: line ", at, " of ", path, " isn't a name")
             joined.write("," if joined else "", n)
     if not joined:
-        raise Error("orca: no names in ", path)
+        raise Error("morca: no names in ", path)
     return joined^
 
 
@@ -259,7 +259,7 @@ def partition_keys(p: Registered, keys: String) raises -> List[String]:
         ) else keys
         for n in parse_names(list):
             if n.text not in have:
-                raise Error("orca: ", n, " isn't a key of ", p.keys_dataset)
+                raise Error("morca: ", n, " isn't a key of ", p.keys_dataset)
             texts.append(n.text)
         return texts^
     return parse_time_keys(p.kind, keys, p.start)
@@ -484,7 +484,7 @@ def append_again(
     """Why a rerun of `what` is refused: it appends again (`writes`, from
     `appending_writes`). `how` says how to rerun anyway."""
     var line = String(
-        "orca: rerunning ",
+        "morca: rerunning ",
         what,
         " appends again to what ",
         pipeline,
@@ -493,7 +493,7 @@ def append_again(
     _list(line, writes)
     line.write(
         ". Declare a dataset in its step's replaces= to have a new run",
-        " replace its partitions (orca.tables), or ",
+        " replace its partitions (morca.tables), or ",
         how,
     )
     return line^
@@ -503,7 +503,7 @@ comptime ALLOW_APPEND_HOW = "pass --allow-append to append anyway"
 
 
 def rerun_refusal(mut db: State, p: Registered, keys: String) raises -> String:
-    """Why `orca backfill --rerun` of `keys` is refused without
+    """Why `morca backfill --rerun` of `keys` is refused without
     `--allow-append`, or empty: some are done, and the pipeline's steps
     append to datasets (`appending_writes`), so a new run of them would
     leave their rows twice."""
@@ -532,7 +532,7 @@ def backfill(
 ) raises -> Queued:
     """Queues runs for the keys in `keys` that aren't done and aren't in a
     live run, `keys_per_run` to a run; returns the runs it queued and the
-    keys it left. With `rerun` (`orca backfill --rerun`) the done ones are
+    keys it left. With `rerun` (`morca backfill --rerun`) the done ones are
     queued again too, as for a day whose source has changed since; unless
     `allow_append`, that's refused for a pipeline whose steps append to
     what they write (`rerun_refusal`)."""

@@ -1,33 +1,33 @@
-# orca on Kubernetes, in the `orca` namespace: Postgres, and the scheduler
-# with orca ui beside it in one pod. Each run gets a cluster of its own in
-# the orca-runs namespace (runs.yaml, orca.kube): a driver Job, and a dista
+# morca on Kubernetes, in the `morca` namespace: Postgres, and the scheduler
+# with morca ui beside it in one pod. Each run gets a cluster of its own in
+# the morca-runs namespace (runs.yaml, morca.kube): a driver Job, and a dista
 # head and workers for a pipeline with tasks. Until logs go to object
-# storage, a run's logs are its pods' (kubectl -n orca-runs logs).
+# storage, a run's logs are its pods' (kubectl -n morca-runs logs).
 #
-#     kubectl apply -f deploy/k8s/orca.yaml -f deploy/k8s/runs.yaml
-#     kubectl -n orca port-forward svc/orca-ui 8270:8270
+#     kubectl apply -f deploy/k8s/morca.yaml -f deploy/k8s/runs.yaml
+#     kubectl -n morca port-forward svc/morca-ui 8270:8270
 #
-# The password in orca-db is for a local cluster; anywhere else, make the
+# The password in morca-db is for a local cluster; anywhere else, make the
 # Secret yourself and leave it out of this file.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: orca
+  name: morca
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: orca-db
-  namespace: orca
+  name: morca-db
+  namespace: morca
 stringData:
-  password: orca-local
-  url: postgresql://orca:orca-local@postgres.orca.svc:5432/orca
+  password: morca-local
+  url: postgresql://orca:morca-local@postgres.morca.svc:5432/orca
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: postgres
-  namespace: orca
+  namespace: morca
 spec:
   selector: {app: postgres}
   ports: [{port: 5432}]
@@ -38,7 +38,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: postgres
-  namespace: orca
+  namespace: morca
 spec:
   serviceName: postgres
   replicas: 1
@@ -53,10 +53,10 @@ spec:
           image: postgres:17-bookworm
           args: ["-c", "synchronous_commit=on"]
           env:
-            - {name: POSTGRES_USER, value: orca}
-            - {name: POSTGRES_DB, value: orca}
+            - {name: POSTGRES_USER, value: morca}
+            - {name: POSTGRES_DB, value: morca}
             - name: POSTGRES_PASSWORD
-              valueFrom: {secretKeyRef: {name: orca-db, key: password}}
+              valueFrom: {secretKeyRef: {name: morca-db, key: password}}
             - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
           ports: [{containerPort: 5432}]
           readinessProbe:
@@ -75,8 +75,8 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: orca-scheduler
-  namespace: orca
+  name: morca-scheduler
+  namespace: morca
 ---
 # One replica: two schedulers are safe (every decision is a row in
 # Postgres), but one is all that's needed. Recreate, so an upgrade doesn't
@@ -84,54 +84,54 @@ metadata:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: orca-scheduler
-  namespace: orca
+  name: morca-scheduler
+  namespace: morca
 spec:
   replicas: 1
   strategy: {type: Recreate}
   selector:
-    matchLabels: {app: orca-scheduler}
+    matchLabels: {app: morca-scheduler}
   template:
     metadata:
-      labels: {app: orca-scheduler}
+      labels: {app: morca-scheduler}
     spec:
-      serviceAccountName: orca-scheduler
+      serviceAccountName: morca-scheduler
       containers:
         - name: scheduler
-          image: orca:dev
+          image: morca:dev
           imagePullPolicy: IfNotPresent
-          # ORCA_REGISTER: the pipeline binaries in the image to register
+          # MORCA_REGISTER: the pipeline binaries in the image to register
           # before the first tick, separated by spaces; their runs' pods run
-          # ORCA_IMAGE.
+          # MORCA_IMAGE.
           command:
             - /bin/sh
             - -c
-            - for b in $ORCA_REGISTER; do orca register --image "$ORCA_IMAGE" "$b" || exit 1; done; exec orca scheduler
+            - for b in $MORCA_REGISTER; do morca register --image "$MORCA_IMAGE" "$b" || exit 1; done; exec morca scheduler
           env:
-            - name: ORCA_DATABASE_URL
-              valueFrom: {secretKeyRef: {name: orca-db, key: url}}
-            - {name: ORCA_LOGS, value: /var/orca/logs}
-            - {name: ORCA_REGISTER, value: ""}
-            - {name: ORCA_IMAGE, value: "orca:dev"}
-            - {name: ORCA_RUNNER, value: kubernetes}
+            - name: MORCA_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: morca-db, key: url}}
+            - {name: MORCA_LOGS, value: /var/orca/logs}
+            - {name: MORCA_REGISTER, value: ""}
+            - {name: MORCA_IMAGE, value: "morca:dev"}
+            - {name: MORCA_RUNNER, value: kubernetes}
           volumeMounts: &logs [{name: logs, mountPath: /var/orca/logs}]
           resources:
             requests: {cpu: 500m, memory: 512Mi}
         - name: ui
-          image: orca:dev
+          image: morca:dev
           imagePullPolicy: IfNotPresent
           args: [ui]
           env:
-            - name: ORCA_DATABASE_URL
-              valueFrom: {secretKeyRef: {name: orca-db, key: url}}
-            - {name: ORCA_LOGS, value: /var/orca/logs}
-            # Actions need a user (orca user add, in the scheduler's
+            - name: MORCA_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: morca-db, key: url}}
+            - {name: MORCA_LOGS, value: /var/orca/logs}
+            # Actions need a user (morca user add, in the scheduler's
             # container); reading doesn't, so nothing should expose the
             # Service outside the cluster but through a proxy that asks for
-            # a login too. Behind HTTPS, set ORCA_UI_SECURE_COOKIES=1, and
-            # ORCA_UI_TRUST_PROXY=1 if the proxy sets X-Forwarded-Proto.
-            - {name: ORCA_UI_ADDR, value: "0.0.0.0:8270"}
-            - {name: ORCA_UI_LOGIN, value: required}
+            # a login too. Behind HTTPS, set MORCA_UI_SECURE_COOKIES=1, and
+            # MORCA_UI_TRUST_PROXY=1 if the proxy sets X-Forwarded-Proto.
+            - {name: MORCA_UI_ADDR, value: "0.0.0.0:8270"}
+            - {name: MORCA_UI_LOGIN, value: required}
           ports: [{containerPort: 8270}]
           readinessProbe:
             httpGet: {path: /, port: 8270}
@@ -146,8 +146,8 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: orca-ui
-  namespace: orca
+  name: morca-ui
+  namespace: morca
 spec:
-  selector: {app: orca-scheduler}
+  selector: {app: morca-scheduler}
   ports: [{port: 8270}]

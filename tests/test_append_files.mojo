@@ -3,7 +3,7 @@
 under scripts/with-postgres.sh, in the data environment.
 
 The runtime's workers are forked before any test, so they see the
-warehouse `main` sets then (`ORCA_WAREHOUSE`), as a cluster's workers see
+warehouse `main` sets then (`MORCA_WAREHOUSE`), as a cluster's workers see
 theirs; each test has datasets of its own in it.
 """
 
@@ -24,7 +24,7 @@ from iceberg.values import Datum
 from parquet import RecordBatch
 from postgres import Connection, Params
 
-from orca import (
+from morca import (
     Ctx,
     Mapped,
     Month,
@@ -36,7 +36,7 @@ from orca import (
     Tasks,
     parse_months,
 )
-from orca.tables import (
+from morca.tables import (
     DataFiles,
     FileWriter,
     append_files,
@@ -103,14 +103,14 @@ comptime FileTasks = Tasks[WritePart]
 
 
 def _die_once(name: String) raises -> Bool:
-    """True the first time for `name` while ORCA_TEST_DIE is `once`, and
+    """True the first time for `name` while MORCA_TEST_DIE is `once`, and
     every time while it's `always`."""
-    var how = getenv("ORCA_TEST_DIE")
+    var how = getenv("MORCA_TEST_DIE")
     if how == "always":
         return True
     if how != "once":
         return False
-    var marker = String(getenv("ORCA_WAREHOUSE"), "/died-", name)
+    var marker = String(getenv("MORCA_WAREHOUSE"), "/died-", name)
     if exists(marker):
         return False
     with open(marker, "w") as f:
@@ -122,7 +122,7 @@ def load[
     dataset: StaticString, check_first: Bool
 ](mut ctx: Ctx, m: Month) raises -> Int64:
     """The month's parts written by tasks and committed as one append.
-    ORCA_TEST_DIE kills the attempt right after it commits. With
+    MORCA_TEST_DIE kills the attempt right after it commits. With
     `check_first`, a retry that finds its commit writes nothing; without,
     the tasks write the files again and `append_files` alone keeps them
     from being committed twice."""
@@ -185,7 +185,7 @@ comptime DeleteFiles = Pipeline["append_files_deletes", DeleteFile]
 
 
 def _table(name: String) raises -> Table:
-    return Table.load_local(String(getenv("ORCA_WAREHOUSE"), "/db/", name))
+    return Table.load_local(String(getenv("MORCA_WAREHOUSE"), "/db/", name))
 
 
 def _count(t: Table) raises -> Int:
@@ -198,7 +198,7 @@ def _count(t: Table) raises -> Int:
 def _parquet_files(name: String) raises -> Int:
     """The data files on disk under the table, committed or not."""
     var n = 0
-    var root = String(getenv("ORCA_WAREHOUSE"), "/db/", name, "/data")
+    var root = String(getenv("MORCA_WAREHOUSE"), "/db/", name, "/data")
     if not exists(root):
         return 0
     for p in FileIO.local().list(root):
@@ -208,7 +208,7 @@ def _parquet_files(name: String) raises -> Int:
 
 
 def _store(run_name: String) raises -> PgStore:
-    var url = getenv("ORCA_DATABASE_URL")
+    var url = getenv("MORCA_DATABASE_URL")
     var db = State(url)
     db.migrate()
     db.register(run_name, "h", "{}")
@@ -224,11 +224,11 @@ def _error(res: RunResult) -> String:
 
 
 def test_a_resumed_step_doesnt_append_its_files_twice(runtime: Int) raises:
-    var cat = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE"))
+    var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
     _ = cat.create_table("db", "a", Schema.parse(SCHEMA))
     var store = _store("append_files_resume")
     var months = parse_months("2024-01..2024-02")
-    _ = setenv("ORCA_TEST_DIE", "always")
+    _ = setenv("MORCA_TEST_DIE", "always")
     var res = ResumeA.execute(store, RunResult(), months, store.run, runtime)
     assert_true(not res.succeeded())
     assert_true("died after committing" in _error(res), _error(res))
@@ -240,7 +240,7 @@ def test_a_resumed_step_doesnt_append_its_files_twice(runtime: Int) raises:
     assert_equal(written, 2 * PARTS * 2)
     # Another process resumes the run: it finds both commits, and neither
     # writes nor commits the files again.
-    _ = setenv("ORCA_TEST_DIE", "")
+    _ = setenv("MORCA_TEST_DIE", "")
     _ = store.db.interrupt(store.run)
     res = ResumeA.execute(
         store, store.db.prior(store.run), months, store.run, runtime
@@ -263,7 +263,7 @@ def test_a_resumed_step_doesnt_append_its_files_twice(runtime: Int) raises:
     assert_equal(s["added-data-files"], String(PARTS * 2))
     assert_equal(s["added-records"], String(PARTS * 2 * ROWS))
     # The commits are on record for the run, one per month.
-    var conn = Connection(getenv("ORCA_DATABASE_URL"))
+    var conn = Connection(getenv("MORCA_DATABASE_URL"))
     var n = conn.query(
         (
             "SELECT count(DISTINCT c.snapshot_id) AS n FROM orca.commits c"
@@ -276,14 +276,14 @@ def test_a_resumed_step_doesnt_append_its_files_twice(runtime: Int) raises:
 
 
 def test_a_retried_step_doesnt_append_its_files_twice(runtime: Int) raises:
-    var cat = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE"))
+    var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
     _ = cat.create_table("db", "b", Schema.parse(SCHEMA))
     var store = _store("append_files_retry")
-    _ = setenv("ORCA_TEST_DIE", "once")
+    _ = setenv("MORCA_TEST_DIE", "once")
     var res = RetryB.execute(
         store, RunResult(), parse_months("2024-03"), store.run, runtime
     )
-    _ = setenv("ORCA_TEST_DIE", "")
+    _ = setenv("MORCA_TEST_DIE", "")
     assert_true(res.succeeded(), _error(res))
     assert_equal(res.steps[0].attempt, 2)
     var b = _table("b")
@@ -300,13 +300,13 @@ def test_a_retried_step_doesnt_append_its_files_twice(runtime: Int) raises:
 
 
 def test_append_files_checks_the_declaration() raises:
-    var cat = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE"))
+    var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
     _ = cat.create_table("db", "undeclared", Schema.parse(SCHEMA))
     var res = Undeclareds.run(parse_months("2024-01"))
     assert_equal(
         _error(res),
         (
-            "orca: step undeclared of append_files_undeclared writes"
+            "morca: step undeclared of append_files_undeclared writes"
             " db.undeclared, which it doesn't declare in writes="
         ),
     )
@@ -314,7 +314,7 @@ def test_append_files_checks_the_declaration() raises:
 
 
 def test_append_files_refuses_a_delete_file() raises:
-    var cat = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE"))
+    var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
     _ = cat.create_table("db", "deletes", Schema.parse(SCHEMA))
     var res = DeleteFiles.run(parse_months("2024-01"))
     assert_true("append_files takes data files" in _error(res), _error(res))
@@ -322,7 +322,7 @@ def test_append_files_refuses_a_delete_file() raises:
 
 
 def test_data_files_cross_dista_inside_a_struct() raises:
-    var cat = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE"))
+    var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
     var t = cat.create_table("db", "codec", Schema.parse(SCHEMA))
     var w = Written(write_files(t, _rows("2024-01", 0, 5)), 5, 7)
     var bytes = List[UInt8]()
@@ -342,7 +342,7 @@ def test_data_files_cross_dista_inside_a_struct() raises:
 
 def main() raises:
     var root = String("build/wh-append-files-", now_ms())
-    _ = setenv("ORCA_WAREHOUSE", root)
+    _ = setenv("MORCA_WAREHOUSE", root)
     # Before any connection, as a run starts its runtime.
     var rt = FileTasks.start(2)
     var runtime = Int(Pointer(to=rt))

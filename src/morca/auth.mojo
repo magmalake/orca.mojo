@@ -1,27 +1,27 @@
-"""Who may act in `orca ui`: users with passwords, their sessions, and a
+"""Who may act in `morca ui`: users with passwords, their sessions, and a
 record of what each did.
 
 ```
-orca user add alice       reads the password from standard input
-orca user remove alice    and ends their sessions
-orca user list
+morca user add alice       reads the password from standard input
+morca user remove alice    and ends their sessions
+morca user list
 ```
 
 Anyone who can reach the UI can read it. Its actions (start, backfill,
 resume, rerun, cancel, rebuild) need a logged-in user once login is on:
-when `ORCA_UI_LOGIN=required`, or as soon as any user exists, so a
+when `MORCA_UI_LOGIN=required`, or as soon as any user exists, so a
 deployment can't be left open by forgetting the variable once it has users.
 
 Passwords are kept as bcrypt hashes made by Postgres's pgcrypto
-(`crypt(password, gen_salt('bf', 12))`), so neither orca nor its logs see
+(`crypt(password, gen_salt('bf', 12))`), so neither morca nor its logs see
 one after it's checked. Logging in makes a session: 32 random bytes from
-the system's generator, given to the browser as the cookie `orca_session`
-and kept only as their SHA-256 digest, for `ORCA_UI_SESSION_HOURS` (default
+the system's generator, given to the browser as the cookie `morca_session`
+and kept only as their SHA-256 digest, for `MORCA_UI_SESSION_HOURS` (default
 12). Every action a user takes is a row of `orca.audit`, and so is every failed
 login, which `too_many_failures` counts: after 5 for one name, or 20 from
 one address, in 15 minutes, `/login` (and `/api/login`) answers 429
 without checking a password, so a public UI can't be guessed at. API
-tokens, for the `orca` command on another machine, are `orca.tokens`.
+tokens, for the `morca` command on another machine, are `morca.tokens`.
 """
 
 from std.os import getenv
@@ -29,9 +29,9 @@ from std.os import getenv
 from flare.crypto.random import random_bytes
 from postgres import Params
 
-from orca.state import State
+from morca.state import State
 
-comptime SESSION_COOKIE = "orca_session"
+comptime SESSION_COOKIE = "morca_session"
 
 
 def _name_ok(name: String) -> Bool:
@@ -53,7 +53,7 @@ def _name_ok(name: String) -> Bool:
 
 
 def login_required(mut db: State) raises -> Bool:
-    if getenv("ORCA_UI_LOGIN") == "required":
+    if getenv("MORCA_UI_LOGIN") == "required":
         return True
     return (
         db.conn.query(
@@ -69,14 +69,14 @@ def add_user(mut db: State, name: String, password: String) raises -> Bool:
     sessions and revoking her API tokens); True if the user is new."""
     if not _name_ok(name):
         raise Error(
-            "orca: a user's name is 1 to 64 of A-Z a-z 0-9 . _ - @, not '",
+            "morca: a user's name is 1 to 64 of A-Z a-z 0-9 . _ - @, not '",
             name,
             "'",
         )
     var n = password.byte_length()
     # bcrypt reads at most 72 bytes; a longer password would be cut.
     if n < 8 or n > 72:
-        raise Error("orca: a password is 8 to 72 bytes")
+        raise Error("morca: a password is 8 to 72 bytes")
     var tx = db.conn.begin()
     var new = (
         tx.query(
@@ -184,7 +184,7 @@ def open_session(
     if not password_ok(db, name, password):
         return ""
     var token = _hex(random_bytes(32))
-    var hours = Float64(getenv("ORCA_UI_SESSION_HOURS", "12"))
+    var hours = Float64(getenv("MORCA_UI_SESSION_HOURS", "12"))
     _ = db.conn.execute(
         (
             "INSERT INTO orca.sessions (token_hash, username, expires) VALUES"
@@ -230,7 +230,7 @@ def audit(
 ) raises:
     """Records that `user` did `action` (the action's path), to `run` (0 for
     none), with `detail` (what the form gave), from `source`: `ui` for a
-    browser's session, `cli` for an API token (`orca.tokens`)."""
+    browser's session, `cli` for an API token (`morca.tokens`)."""
     var p = Params().text(user).text(action)
     p = p^.null() if run == 0 else p^.int64(Int64(run))
     _ = db.conn.execute(

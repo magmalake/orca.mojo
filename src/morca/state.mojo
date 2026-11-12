@@ -1,17 +1,17 @@
-"""orca's state in Postgres: pipelines, runs, steps and attempts.
+"""morca's state in Postgres: pipelines, runs, steps and attempts.
 
-Everything lives in the `orca` schema, which `State.migrate` creates and
+Everything lives in the `morca` schema, which `State.migrate` creates and
 brings up to date; migrations are SQL in `_migrations`, applied in order
 under a transaction-scoped advisory lock, so two processes starting at once
 don't both apply one.
 
 **One writer per run.** The process running a run is its `owner` and keeps
-`runs.heartbeat` fresh from a thread (`orca.heartbeat`). `State.claim` takes
+`runs.heartbeat` fresh from a thread (`morca.heartbeat`). `State.claim` takes
 a run only if its heartbeat is older than the stale limit, or cleared, which
 `finish_run` does when a run ends. Every attempt checks in the same
 transaction that this process still owns the run, so a process that lost its
 run to a resume stops at its next step instead of racing it. The same check
-stops a run that was asked to cancel (`runs.cancel_requested`, which `orca
+stops a run that was asked to cancel (`runs.cancel_requested`, which `morca
 ui` sets) before its next attempt; an attempt already going finishes and is
 recorded.
 
@@ -27,16 +27,16 @@ from std.sys import stderr
 
 from postgres import Connection, Params, Transaction
 
-from orca.heartbeat import Beater, Heartbeat
-from orca.migrations import (
+from morca.heartbeat import Beater, Heartbeat
+from morca.migrations import (
     data_version_sql,
     _migrations,
     migration_floor,
     known_migrations,
     schema_ahead,
 )
-from orca.live import stale_limit
-from orca.store import (
+from morca.live import stale_limit
+from morca.store import (
     CANCELLED,
     DEFERRED,
     FINAL,
@@ -95,7 +95,7 @@ def _refuse_overlap(mut tx: Transaction, floor: Int) raises:
     if len(old) == 0:
         return
     raise Error(
-        "orca: this binary's migrations need a binary that knows at least ",
+        "morca: this binary's migrations need a binary that knows at least ",
         floor,
         ", and scheduler instance ",
         old[0][0],
@@ -109,16 +109,16 @@ def _refuse_overlap(mut tx: Transaction, floor: Int) raises:
 
 
 struct State(Movable):
-    """A connection to orca's database."""
+    """A connection to morca's database."""
 
     var conn: Connection
 
     def __init__(out self, url: String) raises:
         if url.startswith("sqlite:"):
             raise Error(
-                "orca: ORCA_DATABASE_URL is a SQLite file, which only a",
+                "morca: MORCA_DATABASE_URL is a SQLite file, which only a",
                 " pipeline binary's run, resume and status take; the",
-                " scheduler, the UI and orca's other commands need Postgres",
+                " scheduler, the UI and morca's other commands need Postgres",
             )
         self.conn = Connection(url)
 
@@ -173,7 +173,7 @@ struct State(Movable):
             _refuse_overlap(tx, raises_to)
         if schema_ahead(have, Int(row.int64("floor")), known):
             print(
-                "orca: the database is at schema version ",
+                "morca: the database is at schema version ",
                 have,
                 ", ahead of this binary's ",
                 known,
@@ -217,14 +217,14 @@ struct State(Movable):
             .int64(
                 Int64(
                     self.version(
-                        pipeline, registry_hash, describe, getenv("ORCA_IMAGE")
+                        pipeline, registry_hash, describe, getenv("MORCA_IMAGE")
                     )
                 )
             ),
         )
 
     def scheduled_hash(mut self, pipeline: String) raises -> String:
-        """The registry hash `orca register` gave `pipeline`, or empty if it
+        """The registry hash `morca register` gave `pipeline`, or empty if it
         wasn't registered with a binary."""
         var res = self.conn.query(
             (
@@ -318,7 +318,7 @@ struct State(Movable):
             Params().int64(Int64(run)),
         )
         if len(res) == 0:
-            raise Error("orca: no run ", run)
+            raise Error("morca: no run ", run)
         var r = res.row(0)
         return RunInfo(
             run,
@@ -356,9 +356,9 @@ struct State(Movable):
             and info.status != "queued"
             and info.status != DEFERRED
         ):
-            raise Error("orca: run ", run, " is ", info.status)
+            raise Error("morca: run ", run, " is ", info.status)
         raise Error(
-            "orca: run ",
+            "morca: run ",
             run,
             " is held by ",
             info.owner,
@@ -370,7 +370,7 @@ struct State(Movable):
     def interrupt(mut self, run: Int, why: String = "") raises -> Int:
         """Marks attempts left `running` by a process that died as failed,
         and returns how many there were. `why` is their error and their
-        steps', such as a crash's (`orca.crash`); empty, it's
+        steps', such as a crash's (`morca.crash`); empty, it's
         `INTERRUPTED`."""
         var tx = self.conn.begin()
         var n = tx.execute(
@@ -603,7 +603,7 @@ def _stop(
     else:
         why = String(
             "cancelled: its step hadn't finished when the cancel's",
-            " ORCA_CANCEL_KILL_SECONDS ran out, so its process was stopped",
+            " MORCA_CANCEL_KILL_SECONDS ran out, so its process was stopped",
         )
         _ = tx.execute(
             (
@@ -642,9 +642,9 @@ def beat_run(
     mut conn: Connection, run: Int, owner: String, timeouts: String
 ) raises -> String:
     """One beat of `run`'s heartbeat as `owner`, and the watchdog's look at
-    it (`orca.heartbeat`): why the run's process must stop now, a cancel
+    it (`morca.heartbeat`): why the run's process must stop now, a cancel
     whose time has come or an attempt past its step's timeout, which is
-    then recorded, or empty. `PgBeat`'s, and `orca ui`'s for a worker's run
+    then recorded, or empty. `PgBeat`'s, and `morca ui`'s for a worker's run
     (`orca.workers`), whose process then stops itself."""
     _ = conn.execute(
         (
@@ -690,10 +690,10 @@ struct PgBeat(Beater):
 
 
 struct PgStore(Movable, RunStore):
-    """orca's runs in Postgres, `State` behind the `RunStore` trait.
+    """morca's runs in Postgres, `State` behind the `RunStore` trait.
 
     The calls for the owned run (attempts, skips, reads and commits, its
-    end) are retried for `ORCA_DB_RETRY_SECONDS` on a new connection
+    end) are retried for `MORCA_DB_RETRY_SECONDS` on a new connection
     (`DbRetry`), except when the run was lost or cancelled, so a blip of
     the server doesn't throw away a step that finished. The others are made
     once, before the run starts or after it ends."""
@@ -813,8 +813,8 @@ struct PgStore(Movable, RunStore):
         input: Span[UInt8, _],
     ) raises -> Int:
         """`start_attempt` without its retries, its errors as they are
-        (`FINAL` for a lost or cancelled run): for `orca ui`, whose worker
-        retries the call itself (`orca.http_store`)."""
+        (`FINAL` for a lost or cancelled run): for `morca ui`, whose worker
+        retries the call itself (`morca.http_store`)."""
         return self._start_attempt(step, partition, ord, input)
 
     def finish_attempt_once(
@@ -862,10 +862,10 @@ struct PgStore(Movable, RunStore):
         )
         if len(res) != 1:
             raise Error(
-                FINAL, "orca: lost run ", run, " to another process; stopping"
+                FINAL, "morca: lost run ", run, " to another process; stopping"
             )
         if starting and res.row(0).bool("cancel_requested"):
-            raise Error(FINAL, "orca: run ", run, " was cancelled; stopping")
+            raise Error(FINAL, "morca: run ", run, " was cancelled; stopping")
 
     def start_attempt(
         mut self,
@@ -991,7 +991,7 @@ struct PgStore(Movable, RunStore):
             try:
                 _ = self.db.conn.execute(
                     String(
-                        "INSERT INTO orca.",
+                        "INSERT INTO morca.",
                         "commits" if commit else "reads",
                         " (attempt, table_name, snapshot_id, dataset) VALUES",
                         " ($1, $2, $3, nullif($4, ''))",
@@ -1011,7 +1011,7 @@ struct PgStore(Movable, RunStore):
         # while the heartbeat could still be fresh, then the commit is off.
         var stale: Float64
         try:
-            stale = Float64(getenv("ORCA_STALE_SECONDS", "30"))
+            stale = Float64(getenv("MORCA_STALE_SECONDS", "30"))
         except:
             stale = 30.0
         var r = DbRetry()
@@ -1031,7 +1031,7 @@ struct PgStore(Movable, RunStore):
                     or row.text("status") != RUNNING
                 ):
                     raise Error(
-                        "orca: not committing: run ",
+                        "morca: not committing: run ",
                         self.run,
                         " is ",
                         row.text("status"),
@@ -1043,7 +1043,7 @@ struct PgStore(Movable, RunStore):
                     )
                 if not row.bool("fresh"):
                     raise Error(
-                        "orca: not committing: run ",
+                        "morca: not committing: run ",
                         self.run,
                         "'s heartbeat is older than ",
                         stale / 2,
@@ -1051,12 +1051,12 @@ struct PgStore(Movable, RunStore):
                     )
                 return
             except e:
-                if String(e).startswith("orca: not committing"):
+                if String(e).startswith("morca: not committing"):
                     raise e^
                 try:
                     r.again(e, self.db, self.url)
                 except e2:
-                    raise Error("orca: not committing: ", e2)
+                    raise Error("morca: not committing: ", e2)
 
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String

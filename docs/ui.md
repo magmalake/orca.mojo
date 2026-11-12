@@ -1,16 +1,16 @@
 # The UI
 
-`orca ui` serves pipelines, runs and datasets as web pages on
-`127.0.0.1:8270` (`ORCA_UI_ADDR`). Every page is also JSON, to
+`morca ui` serves pipelines, runs and datasets as web pages on
+`127.0.0.1:8270` (`MORCA_UI_ADDR`). Every page is also JSON, to
 `Accept: application/json` or `?format=json`. Reading needs no login; the
-actions need one once a user exists (`orca user add <name>`). The full list
-of paths is the docstring of `src/orca/web/routes.mojo`, and of the actions
-`src/orca/api/actions.mojo`'s (DESIGN.md's "Web layer" maps the modules);
+actions need one once a user exists (`morca user add <name>`). The full list
+of paths is the docstring of `src/morca/web/routes.mojo`, and of the actions
+`src/morca/api/actions.mojo`'s (DESIGN.md's "Web layer" maps the modules);
 the site's [UI page](https://mlake.dev/s/orca/docs/ui) has the older pages.
 This page is the parts that changed most recently.
 
 ```sh
-ORCA_DATABASE_URL=postgresql:///orca ./build/orca ui
+MORCA_DATABASE_URL=postgresql:///morca ./build/morca ui
 pixi run playground          # or the playground: example pipelines and runs, demo / demo-password
 ```
 
@@ -28,7 +28,7 @@ commits started. Its data is `GET /api/gantt?window=24h` (`1h`, `6h`,
 `24h`, `7d`).
 
 Under the tabs, **Recent runs** has a row per batch: the runs one
-`orca backfill`, fill pass or sensor pass queued together share a batch
+`morca backfill`, fill pass or sensor pass queued together share a batch
 (`orca.runs.batch`, migration 56, its first run's id). A batch's row says
 how many runs it has and how many are running, queued, succeeded, failed
 and cancelled, over a bar of those that have ended, and links to
@@ -99,7 +99,7 @@ the table acts on the runs ticked: **Cancel** (queued, deferred and
 running ones, as each row's Cancel does; the others are left), **Retry
 failed** (failed and stalled ones queued again, as each row's Retry does,
 except one whose code has changed, which is resumed from its own page)
-and **Backfill again** (what `orca backfill --rerun` does, over the
+and **Backfill again** (what `morca backfill --rerun` does, over the
 partitions of the runs ticked, a backfill per pipeline; one whose steps
 append asks first, for all of them). The header's box ticks the page's
 runs; ticks survive the table refreshing. **or all N that match** acts on
@@ -165,7 +165,7 @@ The name, Pause and the Progress card are on every tab. Links to
 
 The header is four cards, side by side on a wide screen:
 
-- **Progress**: runs going, the [fill](orca-toml.md#fills) (done of total,
+- **Progress**: runs going, the [fill](morca-toml.md#fills) (done of total,
   rate, ETA, today's spend against its budget, why it's idle), a failing
   sensor, the next run, and the pipeline's
   [coverage](#coverage-in-one-number) (`1141 / 1407 days done (81%)`),
@@ -179,10 +179,10 @@ The header is four cards, side by side on a wide screen:
   and the most of each run's peak memory, CPU time and peak cores: what
   to ask for in a request (#171). It's `usage` in the page's JSON. See
   [What a run uses](#what-a-run-uses). A pipeline with a request
-  (`cpus`, `memory_gb` in [orca.toml](orca-toml.md#requests-and-grants))
+  (`cpus`, `memory_gb` in [morca.toml](morca-toml.md#requests-and-grants))
   has it here too, as **Requested**, and `request` in the JSON.
   **Learned** is the request its runs suggest
-  ([Learned requests](orca-toml.md#learned-requests)), `learned` in the
+  ([Learned requests](morca-toml.md#learned-requests)), `learned` in the
   JSON: `learned from 20 runs: 3.25 GB, 2 CPUs`, **applied** when its
   `cpus` or `memory_gb` is `auto` and it learns, else **not applied**.
 
@@ -193,7 +193,7 @@ their days (months) in its range it has done, and the rest broken down
 into running or queued, failed and not queued yet, the first few of each
 linking to their month on Coverage (`toy (up.days): 3 of 9 days done; 6
 behind: 3 running or queued, 1 failed and 2 not queued yet`). What they
-have is every partition orca knows of: those of each snapshot another
+have is every partition morca knows of: those of each snapshot another
 pipeline's succeeded attempt committed (`orca.commits`) and those of the
 runs the sensor's own sensed snapshots started (`orca.sensed`), mapped to
 its kind. The page's JSON (and `/api/pipelines/<name>`) has it as
@@ -205,7 +205,7 @@ the keys and the calendar's three for their states.
 While its oldest queued run waits on its host, the Progress card says why
 under **Waiting**, and the JSON has it as `waiting` (null otherwise): for
 room (`waiting: needs 2 GB, 1.3 GB free of grants`), or for the host's
-[memory pressure](orca-toml.md#memory-pressure) to ease (`waiting: memory
+[memory pressure](morca-toml.md#memory-pressure) to ease (`waiting: memory
 pressure 23% (limit 10%)`, `... on worker <name>` for a worker's pool).
 
 ### Coverage in one number
@@ -215,7 +215,7 @@ Each pipeline has one coverage number, the same on the home page's
 each pipeline of `/` and on `/api/pipelines/<name>`'s `pipeline`, as
 `{"done": 1141, "total": 1407, "pct": 81.0, "unit": "day"}`, `pct`
 rounded down to a tenth; the page shows it rounded down to a whole
-percent, so 100% means all of them). `src/orca/coverage.mojo` defines it:
+percent, so 100% means all of them). `src/morca/coverage.mojo` defines it:
 
 - **Hourly, daily or monthly**: partitions done of those in the range so
   far, from the first partition through the last one that has ended on the
@@ -224,8 +224,8 @@ percent, so 100% means all of them). `src/orca/coverage.mojo` defines it:
   hourly pipeline's Coverage card shows a day of hours (`?cal=YYYY-MM-DD`). That's the range a fill works
   through; today's day, still going, is in neither number, nor is one
   that ended less than the pipeline's
-  [`fill_lag`](orca-toml.md#the-lag) ago.
-- **Keyed**: keys done of the keys orca knows, those `<binary> keys` last
+  [`fill_lag`](morca-toml.md#the-lag) ago.
+- **Keyed**: keys done of the keys morca knows, those `<binary> keys` last
   printed (`orca.keys`, which the sensor and the pipeline's page keep
   fresh; the home page never runs the binary).
 - **Done** is what the calendar and a backfill count as done: every
@@ -265,7 +265,7 @@ are links (`?cal=2026` or `?cal=2026-03`, `&cov=year` or `month`), so all
 of it works without scripts. A monthly pipeline's card is a year of
 months, a keyed pipeline has none.
 
-For a sensor (`orca.sensors`), days the datasets it follows have but no run
+For a sensor (`morca.sensors`), days the datasets it follows have but no run
 of it has done, failed on or is running are **behind**, in amber, with a
 line under the legend saying what that means.
 
@@ -313,7 +313,7 @@ recorded them, and its subtitle says whose:
 
 So Machines is never the run's own use; Resources is. Below it come
 Instances (`#instances`, EC2), the Dista timeline (`#timeline`), Actions
-(`#audit`, who did what from the UI or `orca`) and **Snapshots**
+(`#audit`, who did what from the UI or `morca`) and **Snapshots**
 (`#tables`): the table snapshots each step read and wrote, linked to
 their lineage.
 
@@ -323,7 +323,7 @@ their lineage.
 a snapshot, each arrow a step that read the snapshot it starts at and
 wrote the one it points to, so data flows down. The legend under
 the heading names the boxes: this snapshot (a thick border), one written
-by an orca run (its pipeline and partition on the second line; hover for
+by a morca run (its pipeline and partition on the second line; hover for
 the run and step), a source (dashed), written by something else, and
 another input (dotted) of a step downstream, whose own lineage its page
 has. A box nothing points to sits just above what read it. The diagram, like
@@ -337,7 +337,7 @@ from, with the run and step that wrote each and what that step read
 ### What a run uses
 
 The scheduler measures the runs it starts here (local and control-placed),
-and `orca worker` the runs it starts: each tick (every second; a worker's
+and `morca worker` the runs it starts: each tick (every second; a worker's
 every poll) it reads the run's process tree in `/proc` (the run's process
 and what it started, dista's local workers too), and when the process
 ends `wait4` gives the largest single process and the CPU time of those
@@ -351,28 +351,28 @@ The run's page has the run's Peak memory (its attempts' largest) and CPU
 used (their sum, with the most cores at once), and the Steps table each
 step's latest attempt's; an attempt's page has its own. Runs tables have
 a Peak column. In the JSON, a run, each step and each attempt have
-`usage`, with `null` for what wasn't measured. `orca status <pipeline>`
+`usage`, with `null` for what wasn't measured. `morca status <pipeline>`
 prints each run's, and `<binary> status <run>` each step's.
 
 A run of a pipeline with a request also has **Requested** (what its
 latest start asked for) and **Granted** (what it was given of its host, in
-`ORCA_GRANT_CPUS` and `ORCA_GRANT_MEMORY_MB`), beside its peak: a peak
+`MORCA_GRANT_CPUS` and `MORCA_GRANT_MEMORY_MB`), beside its peak: a peak
 well under the grant means the request can come down, one at the grant
 that it may need more. The run's JSON has `request` (`cpus`, `memory_gb`)
 and `grant` (`cpus`, `memory_mb`), both null for a pipeline without one.
-For an `auto` request ([Learned requests](orca-toml.md#learned-requests)),
+For an `auto` request ([Learned requests](morca-toml.md#learned-requests)),
 **Requested** says `· learned from 20 runs`, and `request_source` in the
 JSON is `{"source": "learned", "runs": 20, ...}` (`declared` or `default`
-otherwise; null before orca kept it).
+otherwise; null before morca kept it).
 A queued run held for room or by memory pressure shows why under
 **Held**, and `held` in the JSON. While the scheduler's host holds new runs
 for its memory pressure, the home page and Runs say so at the top (and
 their JSON has `memory_pressure`).
 
 Where the scheduler (or worker) gives runs a cgroup of their own
-([docs/hetzner.md](hetzner.md#a-cgroup-per-run), `orca.cgroup`), the run's
+([docs/hetzner.md](hetzner.md#a-cgroup-per-run), `morca.cgroup`), the run's
 page also has **Memory limit**: its latest start's `memory.high` (its grant,
-request maximum or `ORCA_RUN_MEMORY_MB`) and the `memory.max` past which the
+request maximum or `MORCA_RUN_MEMORY_MB`) and the `memory.max` past which the
 kernel kills it. The Steps table's Peak cell reads `312 MB / 1 GB`: the
 latest attempt's peak against the limit it ran under (its grant in the
 title), and an attempt's page has its own limit and grant. An attempt the
@@ -402,21 +402,21 @@ it, on hover, keyboard focus or a tap. A value from a fixed set (a status
 such as `deferred`, a step's kind `mapped`, a trigger, a placement, where
 a setting came from) is dotted underlined instead, and says what it means
 the same ways, so a table doesn't get a "?" in every cell. The texts are
-in one place, `src/orca/ui/terms.mojo`: a header's by its label (or its
+in one place, `src/morca/ui/terms.mojo`: a header's by its label (or its
 table's, for a word that means different things, as From does in the
 Configuration and Actions tables), a value's by its kind and value, and a
 setting's by its key. The UI adds a header's "?" to every `<th>` it has a
 text for as it answers, so a new table gets them by using the same words.
 
 The Configuration table (a pipeline's Overview) has each key's "?", and
-its From column links to where the value is set, where orca knows it:
+its From column links to where the value is set, where morca knows it:
 
 | From | Links to |
 |---|---|
-| orca.toml | the line at the commit the file was registered from, on the host of the pipeline's source (`config.sources.<key>.line` and `config.repo_path`, recorded by `orca register` from a git checkout; not for a file with uncommitted changes, one registered before orca kept lines, or one outside a checkout) |
-| code default, from the pipeline (max_runs, workers) | the pipeline's `Pipeline[...]` line, from `orca locate` |
-| code default, orca's own (placement, instance types, worker_procs, fills) | nothing: it's orca's, not the pipeline's |
-| flag, environment | nothing: a flag of `orca register`, or the scheduler's environment, has no line |
+| morca.toml | the line at the commit the file was registered from, on the host of the pipeline's source (`config.sources.<key>.line` and `config.repo_path`, recorded by `morca register` from a git checkout; not for a file with uncommitted changes, one registered before morca kept lines, or one outside a checkout) |
+| code default, from the pipeline (max_runs, workers) | the pipeline's `Pipeline[...]` line, from `morca locate` |
+| code default, morca's own (placement, instance types, worker_procs, fills) | nothing: it's morca's, not the pipeline's |
+| flag, environment | nothing: a flag of `morca register`, or the scheduler's environment, has no line |
 
 ## Code on hover
 
@@ -424,7 +424,7 @@ Hovering a link to a line on GitHub shows that function, coloured:
 keywords, names a `def` or `struct` defines, strings (triple-quoted too),
 comments, numbers and decorators, from the theme's colours. The UI fetches
 the file (`/code?u=`, only a GitHub file at a commit, at most 1 MiB) and
-colours it (`orca.highlight`, a small tokenizer, no library), so the
+colours it (`morca.highlight`, a small tokenizer, no library), so the
 browser needn't reach GitHub; a private repository's file it can't fetch
 says so, and the link still opens it.
 
@@ -456,7 +456,7 @@ goes back to the button that asked.
 
 | Action | Asks |
 |---|---|
-| Cancel (a runs row, a run's header or Status card) | "Cancel run 4418?": a queued run leaves the queue and won't start; a running one stops before its next step, and the step running has `ORCA_CANCEL_KILL_SECONDS` to finish; a failed one isn't retried |
+| Cancel (a runs row, a run's header or Status card) | "Cancel run 4418?": a queued run leaves the queue and won't start; a running one stops before its next step, and the step running has `MORCA_CANCEL_KILL_SECONDS` to finish; a failed one isn't retried |
 | Cancel on a runs list (bulk) | "Cancel 3 runs?" (or "all 120 runs that match"); nothing ticked, it doesn't ask |
 | Cancel queued runs (a pipeline's Operate) | "Cancel the runs of toy over 2024-01..2024-03?" |
 | Rerun (a succeeded run's header) | "Rerun every step of run 4418?", a new run over the same partitions |
@@ -465,7 +465,7 @@ goes back to the button that asked.
 
 A form asks with `data-confirm` (on the form, or on one of its submit
 buttons), `data-confirm-body`, `data-confirm-yes`, `data-confirm-no` and
-`data-confirm-danger` (`ask_attrs` in `orca.ui.layout`). It's one
+`data-confirm-danger` (`ask_attrs` in `morca.ui.layout`). It's one
 `<dialog>` per page, and yes submits the form again with the same button,
 so what's posted, the login cookie and the Origin check are as before.
 Without scripts, or in a browser without `<dialog>`, the form posts
@@ -483,7 +483,7 @@ the code.
 
 | Part | From |
 |---|---|
-| Its docstring's first sentence over the signature, coloured, and the rest of its first paragraph under it, with a link to the line | the source at the commit the run ran or the pipeline is registered with: `/code?u=<file>&at=<line>` answers only the `def`'s lines and docstring, fetched once per step per page. Until it answers (or for a private repository, or code `orca locate` didn't map) the card shows the signature `describe` records, `def measure(mut ctx: Ctx, input: Measured) raises -> Measured`, its argument names orca's |
+| Its docstring's first sentence over the signature, coloured, and the rest of its first paragraph under it, with a link to the line | the source at the commit the run ran or the pipeline is registered with: `/code?u=<file>&at=<line>` answers only the `def`'s lines and docstring, fetched once per step per page. Until it answers (or for a private repository, or code `morca locate` didn't map) the card shows the signature `describe` records, `def measure(mut ctx: Ctx, input: Measured) raises -> Measured`, its argument names morca's |
 | Kind (with what it means), `after=`, input and output types | the registration's `describe` |
 | Reads and Writes, linked to the datasets' pages | the step's `reads=` and `writes=` |
 | Pipeline page: its last runs' attempts, how many failed, the p50 and most its succeeded attempts took, and their peak memory's p50 and most | the attempts of the pipeline's latest 20 runs, with what each used where it was measured |
@@ -503,8 +503,8 @@ Alerts, the first:
 | Page | What it shows |
 |---|---|
 | Ops › Alerts (`/ops/alerts`, `/api/alerts`) | every [alert](alerts.md) sent to the phone, newest first, with its links and whether it is still open. See [Alerts](#alerts) |
-| Ops › Control (`/ops/control`, `/api/system`) | the one machine running the scheduler, the UI, Postgres and local and control-placed runs: CPU, memory, disk, network and each container's memory over `?range=24h`, `7d` or `14d`; its **Memory pressure** (PSI `some` and `full` avg10, avg60 and avg300, the file read, and whether new runs wait for it: [orca.toml](orca-toml.md#memory-pressure)), `memory_pressure` in the JSON, null without a reading in the last minute; whether [alerts](alerts.md) are on and the last ones; the [watchdog](watchdog.md)'s banner; the local and control-placed runs going, each with its cgroup's memory against its limit, its kill line and its grant (`runs` in the JSON) |
-| Ops › Pools (`/ops/pools`, `/api/pools`) | every machine runs are placed on, a row each, by pool: the EC2 instances orca launches, a Kubernetes run's pods, the machines running [`orca worker`](workers.md). See [Pools](#pools) |
+| Ops › Control (`/ops/control`, `/api/system`) | the one machine running the scheduler, the UI, Postgres and local and control-placed runs: CPU, memory, disk, network and each container's memory over `?range=24h`, `7d` or `14d`; its **Memory pressure** (PSI `some` and `full` avg10, avg60 and avg300, the file read, and whether new runs wait for it: [morca.toml](morca-toml.md#memory-pressure)), `memory_pressure` in the JSON, null without a reading in the last minute; whether [alerts](alerts.md) are on and the last ones; the [watchdog](watchdog.md)'s banner; the local and control-placed runs going, each with its cgroup's memory against its limit, its kill line and its grant (`runs` in the JSON) |
+| Ops › Pools (`/ops/pools`, `/api/pools`) | every machine runs are placed on, a row each, by pool: the EC2 instances morca launches, a Kubernetes run's pods, the machines running [`morca worker`](workers.md). See [Pools](#pools) |
 | Ops › Watchdog (`/watchdog`, `/api/watchdog`) | the rules that pause pipelines, and their trips. See [the watchdog page](#the-watchdog-page) |
 
 Each section's heading links to it, so a link can open at one chart:
@@ -524,7 +524,7 @@ are unchanged.
 
 ### Alerts
 
-Ops › Alerts lists every alert orca has pushed to ntfy, or is about to,
+Ops › Alerts lists every alert morca has pushed to ntfy, or is about to,
 newest first and 50 to a page, so what reached the phone can be found in
 the UI too. Each row has:
 
@@ -535,7 +535,7 @@ the UI too. Each row has:
 | Alert | its title and message, as they were sent |
 | Links | what it is about: the run, the pipelines it paused or names, the watchdog's rule, the worker, or Control |
 | Delivered | sent; waiting; failed, retrying (with the error ntfy's server or the network gave); or not sent, when a newer alert or its resolution replaced it before it went |
-| State | for the alerts that end (a watchdog trip, a stalled fill, the disk, memory pressure, and a kind `orca notify --resolved` has ended): open, resolved with when, or raised again when the same alert was sent anew first |
+| State | for the alerts that end (a watchdog trip, a stalled fill, the disk, memory pressure, and a kind `morca notify --resolved` has ended): open, resolved with when, or raised again when the same alert was sent anew first |
 
 Open alerts are tinted red, and a line above the table counts them and
 links to `?state=open`. The filters are `?kind=` (each kind with its count)
@@ -543,13 +543,13 @@ and `?state=open` or `resolved`; `?before=<id>` and `?after=<id>` page it
 (the arrow keys too), `?limit=` sets the size (at most 500). `/api/alerts`
 is the same as JSON: `alerts` (each with its `links`, `delivery`, `error`,
 `state` and `resolved`), `open`, `total`, `kinds`, and the cursors `next`
-and `prev` with their URLs. `orca alerts [--kind K] [--open|--resolved]
+and `prev` with their URLs. `morca alerts [--kind K] [--open|--resolved]
 [--limit N] [--json]` prints the newest 20, over the database or
 `--remote`.
 
 Alerts are kept for 90 days in `orca.alerts`, a row per alert raised and
 per "resolved". One held back because the same alert went out within
-`ORCA_NOTIFY_MIN_SECONDS` isn't sent, so it has no row; the
+`MORCA_NOTIFY_MIN_SECONDS` isn't sent, so it has no row; the
 [watchdog](watchdog.md)'s trips are all on its page.
 
 ### Pools
@@ -558,9 +558,9 @@ Every placement target is a pool, and a machine is in one:
 
 | Pool | Kind | A row is |
 |---|---|---|
-| `ec2` | `ec2` | an instance orca launched for a run, while it's up and for an hour after it ended |
-| `kubernetes` | `k8s` | a live run's pods (`orca-<run>-<start>`), on the Kubernetes runner. The runner records no pods or nodes of its own, so the run is the machine |
-| `worker:<pool>` | `self-hosted` | the machine a [worker token](workers.md#tokens)'s `orca worker` runs on |
+| `ec2` | `ec2` | an instance morca launched for a run, while it's up and for an hour after it ended |
+| `kubernetes` | `k8s` | a live run's pods (`morca-<run>-<start>`), on the Kubernetes runner. The runner records no pods or nodes of its own, so the run is the machine |
+| `worker:<pool>` | `self-hosted` | the machine a [worker token](workers.md#tokens)'s `morca worker` runs on |
 
 The scheduler's own machine isn't a pool: it runs the local runner's runs
 and control-placed ones, and it is Control.
@@ -571,7 +571,7 @@ state (`live`, `draining` or `gone`, with what it's doing beside it:
 `expired`, `not seen`), the image tag its runs need, its CPUs and memory,
 the runs on it, its last heartbeat, its CPU now and over ten minutes (EC2
 instances only, which are sampled), and the worker: a run's head or dista
-worker on EC2, or `orca worker` with its token and label. Every column's
+worker on EC2, or `morca worker` with its token and label. Every column's
 "?" says what it is.
 
 The kind tabs (All, EC2, Kubernetes, Self-hosted) and the pool links
@@ -579,7 +579,7 @@ filter it with `?kind=` and `?pool=`, plain links that keep each other.
 With EC2 in view the page also has Fleet's cards (hosts, cost, runs and
 errors per hour) and charts over `?range=24h` or `7d`, and on the local
 runner it says that no instances are launched and the Cost tile shows
-`ORCA_FIXED_COST`.
+`MORCA_FIXED_COST`.
 
 A machine's page (`/ops/pools/<kind>/<id>`, from its row) has its facts
 and, for an EC2 instance, its samples over its run, as the run page's
@@ -595,14 +595,14 @@ tripped on. See [watchdog.md](watchdog.md).
 
 ## Stopping
 
-SIGTERM (what `docker stop` sends) or SIGINT (Ctrl-C) drains `orca ui`
+SIGTERM (what `docker stop` sends) or SIGINT (Ctrl-C) drains `morca ui`
 instead of cutting it off: it closes its listening socket, so new
 connections are refused, answers `/healthz` with 503 `draining` from then
 on, so a health checker or proxy asking over a kept-alive connection stops
 routing here, lets the requests already in flight finish, and
-exits 0 once none has been for 200 ms. `ORCA_UI_DRAIN_SECONDS` (default 8,
+exits 0 once none has been for 200 ms. `MORCA_UI_DRAIN_SECONDS` (default 8,
 under `docker stop`'s 10 s grace) bounds the wait; when it's up the server
 stops and closes its kept-alive connections, and a request still running
 half a second later is given up, with exit code 1. A second signal stops
-it at once. The worker API on `ORCA_WORKER_ADDR`, if any, ends with the
-process. `src/orca/web/drain.mojo` has the details.
+it at once. The worker API on `MORCA_WORKER_ADDR`, if any, ends with the
+process. `src/morca/web/drain.mojo` has the details.

@@ -8,14 +8,14 @@ h.raw("</td>")
 h.link("/runs/7", "run 7")
 ```
 
-`orca ui` writes its pages through this rather than a template engine: a
+`morca ui` writes its pages through this rather than a template engine: a
 page is tables of records, and writing it in Mojo keeps each value's type
 until the moment it's escaped.
 """
 
 from std.os import getenv
 
-from orca.ui.terms import value_help
+from morca.ui.terms import value_help
 
 
 def escape(s: StringSlice) -> String:
@@ -169,7 +169,7 @@ struct Html(Movable, Writable):
         mut self, href: StringSlice, label: StringSlice, commit: StringSlice
     ):
         """A link to source code on its host, set apart from links inside
-        orca: an icon, `label` (where, as `file.mojo:26`) in monospace, and
+        morca: an icon, `label` (where, as `file.mojo:26`) in monospace, and
         ↗; it opens in a new tab, and its title names the commit."""
         self._src(String(href), String(label), String(commit), String())
 
@@ -237,7 +237,7 @@ struct Html(Movable, Writable):
     def status(mut self, s: StringSlice):
         """A status as a badge, its class named after it (a space in the
         status is a hyphen in the class), with what it means on hover or
-        keyboard focus (`orca.ui.terms`)."""
+        keyboard focus (`morca.ui.terms`)."""
         var e = escape(s)
         self.out.write("<span")
         self._tip(value_help("status", s))
@@ -274,7 +274,7 @@ struct Html(Movable, Writable):
         )
         if docs:
             var href = String(docs) if docs.startswith("http") else String(
-                getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"),
+                getenv("MORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"),
                 "#",
                 docs,
             )
@@ -286,7 +286,7 @@ struct Html(Movable, Writable):
         self.raw("</span></span>")
 
     def term(mut self, kind: StringSlice, value: StringSlice):
-        """`value`, one of a fixed set (`kind` in `orca.ui.terms`): dotted
+        """`value`, one of a fixed set (`kind` in `morca.ui.terms`): dotted
         underlined, with what it means on hover, keyboard focus or a tap;
         plain text if the set doesn't know it."""
         var tip = value_help(kind, value)

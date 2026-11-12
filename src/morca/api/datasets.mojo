@@ -1,8 +1,8 @@
 """Rebuilds and lineage as JSON."""
 
-from orca.json import quote
-from orca.lineage import Made
-from orca.sensors import Rebuild
+from morca.json import quote
+from morca.lineage import Made
+from morca.sensors import Rebuild
 
 
 def json_rebuild(mut out: String, r: Rebuild):

@@ -2,12 +2,12 @@
 
 The expected times were worked out by hand from each zone's rules (and
 agree with `date` on macOS and Linux). Zones come from the system's
-zoneinfo, or `ORCA_ZONEINFO`.
+zoneinfo, or `MORCA_ZONEINFO`.
 """
 
 from std.testing import TestSuite, assert_equal, assert_raises, assert_true
 
-from orca import (
+from morca import (
     Civil,
     Cron,
     CronExpr,

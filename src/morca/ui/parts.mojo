@@ -3,17 +3,17 @@ table's cells, a runs table with each row's actions, links to code, and a
 run's grant and usage as facts.
 """
 
-from orca.actions import cancel_kill_seconds
-from orca.html import Html, url_encode
-from orca.resources import gb_text
-from orca.sample import fixed1
-from orca.source import commit_url, web_url
-from orca.store import Usage
-from orca.ui.layout import act_button, fact_item
-from orca.usage import bytes_text, cpu_text, usage_text
-from orca.views.code import CodeLinks, CodeRef, RunCode
-from orca.views.commands import cancel_cli, retry_cli, shell_quote
-from orca.views.runs import RunResources, RunRow, VersionRow
+from morca.actions import cancel_kill_seconds
+from morca.html import Html, url_encode
+from morca.resources import gb_text
+from morca.sample import fixed1
+from morca.source import commit_url, web_url
+from morca.store import Usage
+from morca.ui.layout import act_button, fact_item
+from morca.usage import bytes_text, cpu_text, usage_text
+from morca.views.code import CodeLinks, CodeRef, RunCode
+from morca.views.commands import cancel_cli, retry_cli, shell_quote
+from morca.views.runs import RunResources, RunRow, VersionRow
 
 
 def dataset_links(mut h: Html, names: List[String]):
@@ -133,15 +133,15 @@ def partitions_fact(mut h: Html, partitions: String):
 
 
 def code_link(mut h: Html, at: CodeRef):
-    """A link to a line of code: every one orca shows is drawn by this,
-    so they all look alike and unlike orca's own links."""
+    """A link to a line of code: every one morca shows is drawn by this,
+    so they all look alike and unlike morca's own links."""
     h.code(at.url, at.at, at.commit)
 
 
 def step_cell(mut h: Html, name: String, links: CodeLinks, attempt: Int = -1):
     """A step's name, then a link to its function where the code is known.
     With `attempt` (0 for none yet), the name shows the step's card
-    (`orca.ui.step_cards`), and that attempt's on a run's page."""
+    (`morca.ui.step_cards`), and that attempt's on a run's page."""
     var at = links.step(name)
     h.raw("<td>")
     if attempt >= 0:
@@ -164,7 +164,7 @@ def source_html(mut h: Html, v: VersionRow):
     """The commit, linked to its tree where the host is known."""
     if not v.commit:
         h.raw('<span class="muted">not recorded (built without')
-        h.raw(" <code>-D ORCA_COMMIT</code>)</span>")
+        h.raw(" <code>-D MORCA_COMMIT</code>)</span>")
         return
     var url = commit_url(v.source, v.commit)
     var short = String(v.commit[byte = : min(12, v.commit.byte_length())])
@@ -195,7 +195,7 @@ def pause_button(mut h: Html, name: String, paused: Bool):
             String(base, "/unpause"),
             "Resume",
             "resume",
-            String("orca unpause ", shell_quote(name)),
+            String("morca unpause ", shell_quote(name)),
         )
     else:
         act_button(
@@ -203,13 +203,13 @@ def pause_button(mut h: Html, name: String, paused: Bool):
             String(base, "/pause"),
             "Pause",
             "pause",
-            String("orca pause ", shell_quote(name)),
+            String("morca pause ", shell_quote(name)),
         )
 
 
 def cancel_tell(r: RunRow) -> String:
     """What cancelling `r` does, as its Cancel's dialog says it
-    (`orca.actions.cancel_run`)."""
+    (`morca.actions.cancel_run`)."""
     if r.status == "running":
         return String(
             "It stops before its next step; the step running now has ",
@@ -265,7 +265,7 @@ def runs_table_html(
     code: Dict[Int, RunCode] = Dict[Int, RunCode](),
 ):
     """A table of runs; with `pick`, a checkbox before each, for the list's
-    bulk actions (`form="bulk-runs"`, `orca.ui.runs.runs_bulk_html`), and
+    bulk actions (`form="bulk-runs"`, `morca.ui.runs.runs_bulk_html`), and
     one in the header that ticks the page's (with JavaScript). With a run's
     `code`, its pipeline's name shows the pipeline's declaration on hover
     (`data-src`, the page's `_PEEK`) and a failed run names the step that
@@ -382,7 +382,7 @@ def mb_text(mb: Int) -> String:
 
 def usage_cell(mut h: Html, u: Usage, limit_mb: Int = 0, grant_mb: Int = 0):
     """A `<td>` of a peak in memory, with the CPU in its title, and after
-    it the attempt's memory limit (`orca.cgroup`) when it had one."""
+    it the attempt's memory limit (`morca.cgroup`) when it had one."""
     if u.peak_rss_bytes < 0 and limit_mb <= 0:
         h.raw('<td class="num"></td>')
         return
@@ -419,10 +419,10 @@ comptime CPU_HELP = (
 
 
 comptime _GRANT_HELP = (
-    "What its pipeline asks for (cpus and memory_gb in orca.toml; for auto,"
+    "What its pipeline asks for (cpus and memory_gb in morca.toml; for auto,"
     " what its runs suggest), and what"
     " its latest start was given of its host's CPUs and memory, fixed for"
-    " that start, in ORCA_GRANT_CPUS and ORCA_GRANT_MEMORY_MB. Compare it"
+    " that start, in MORCA_GRANT_CPUS and MORCA_GRANT_MEMORY_MB. Compare it"
     " with the peak below."
 )
 
@@ -447,16 +447,16 @@ def request_text(cpus: String, memory_gb: String) -> String:
 
 
 comptime LIMIT_HELP = (
-    "Its latest start's cgroup (orca.cgroup): past the limit (memory.high,"
-    " its grant, request or ORCA_RUN_MEMORY_MB) the kernel slows its"
+    "Its latest start's cgroup (morca.cgroup): past the limit (memory.high,"
+    " its grant, request or MORCA_RUN_MEMORY_MB) the kernel slows its"
     " processes and reclaims their memory; past the kill line (memory.max,"
-    " ORCA_RUN_MEMORY_MARGIN above) it kills them, and the retry asks for"
-    " more. None where orca can't make cgroups."
+    " MORCA_RUN_MEMORY_MARGIN above) it kills them, and the retry asks for"
+    " more. None where morca can't make cgroups."
 )
 
 
 def limit_facts(mut h: Html, limit_mb: Int, max_mb: Int, grant_mb: Int = 0):
-    """A Memory limit fact (`orca.cgroup`), when there was one."""
+    """A Memory limit fact (`morca.cgroup`), when there was one."""
     if limit_mb <= 0:
         return
     fact_item(h, "Memory limit", "memory-limit", LIMIT_HELP, "runners")
@@ -469,8 +469,8 @@ def limit_facts(mut h: Html, limit_mb: Int, max_mb: Int, grant_mb: Int = 0):
 
 
 def grant_facts(mut h: Html, r: RunResources):
-    """A run's Requested and Granted facts (`orca.resources`), when its
-    pipeline asked for any, and its memory limit (`orca.cgroup`) when it
+    """A run's Requested and Granted facts (`morca.resources`), when its
+    pipeline asked for any, and its memory limit (`morca.cgroup`) when it
     had one."""
     if not r.any():
         if r.source:
@@ -503,7 +503,7 @@ def grant_facts(mut h: Html, r: RunResources):
 
 
 def usage_facts(mut h: Html, u: Usage, live: Bool):
-    """A run's or an attempt's Peak memory and CPU used facts (`orca.usage`)."""
+    """A run's or an attempt's Peak memory and CPU used facts (`morca.usage`)."""
     var none = String(
         "recorded when its process ends" if live else "not measured"
     )

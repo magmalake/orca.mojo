@@ -1,7 +1,7 @@
 """A one-step pipeline that replaces its partitions of lake.r, for
-tests/datasets.sh: `orca backfill --rerun` of it needs no --allow-append."""
+tests/datasets.sh: `morca backfill --rerun` of it needs no --allow-append."""
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
 
 
 def step(mut ctx: Ctx, m: Month) raises -> Int:
@@ -13,4 +13,4 @@ comptime P = Pipeline["replacer", S, partitions=Monthly["2024-01"]]
 
 
 def main() raises:
-    orca_main[P]()
+    morca_main[P]()

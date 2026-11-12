@@ -1,42 +1,42 @@
 """Runs on Kubernetes: a dista cluster per run, made and removed by the
 scheduler (K8S.md).
 
-With `ORCA_RUNNER=kubernetes`, the scheduler starts a run by creating, in
-`ORCA_RUNS_NAMESPACE` (default `orca-runs`), from the image the pipeline
-was registered with (`orca register --image`):
+With `MORCA_RUNNER=kubernetes`, the scheduler starts a run by creating, in
+`MORCA_RUNS_NAMESPACE` (default `morca-runs`), from the image the pipeline
+was registered with (`morca register --image`):
 
 | Object | |
 |---|---|
-| A Job, `orca-<run>-<start>` | the driver: `<binary> resume <run>` |
-| A Pod and a Service, `orca-<run>-<start>-head` | the dista head, for a pipeline with tasks |
-| `workers` Pods, `orca-<run>-<start>-worker-<i>` | dista's workers, for a pipeline with tasks |
+| A Job, `morca-<run>-<start>` | the driver: `<binary> resume <run>` |
+| A Pod and a Service, `morca-<run>-<start>-head` | the dista head, for a pipeline with tasks |
+| `workers` Pods, `morca-<run>-<start>-worker-<i>` | dista's workers, for a pipeline with tasks |
 
 All are labelled `orca.run`, `orca.start` (the run's start count),
-`orca.pipeline` and `orca.role`, and the head, its Service and the workers
+`morca.pipeline` and `orca.role`, and the head, its Service and the workers
 are owned by the Job, so deleting the Job deletes them. The Job has
-`activeDeadlineSeconds` (`ORCA_RUN_DEADLINE`, default a day) and
-`ttlSecondsAfterFinished` (10 minutes), and `backoffLimit: 0`, as orca
+`activeDeadlineSeconds` (`MORCA_RUN_DEADLINE`, default a day) and
+`ttlSecondsAfterFinished` (10 minutes), and `backoffLimit: 0`, as morca
 retries runs itself. The driver reaches Postgres through the Secret
-`ORCA_RUN_SECRET` (default `orca-db`, key `url`) in that namespace, and the
+`MORCA_RUN_SECRET` (default `morca-db`, key `url`) in that namespace, and the
 head through `DISTA_HEAD`; the scheduler's variables named in
-`ORCA_RUN_ENV` are copied to every pod.
+`MORCA_RUN_ENV` are copied to every pod.
 
 Every tick, `sweep` deletes the objects of a run that isn't running at that
 start any more, and those of a Job that has finished, first appending its
-driver pod's log to the run's `driver.log` under `ORCA_LOGS`: what's left after a
+driver pod's log to the run's `driver.log` under `MORCA_LOGS`: what's left after a
 run ends, a run restarted on a new cluster, and what a scheduler that was
 killed left behind. Each pod's command runs with the sampler beside it
-(`orca.sample`, unless `ORCA_SAMPLE_SECONDS=0`), whose lines go to the
+(`morca.sample`, unless `MORCA_SAMPLE_SECONDS=0`), whose lines go to the
 pod's log prefixed `orca-sample `; before a finished Job is deleted, each
 of its pods' lines are kept in the run's `metrics/<pod>.jsonl` and left out
 of `driver.log`. A run ends when its driver says so, before its pods
-have, so the Job of a run that ended in the last `ORCA_KUBE_SETTLE_SECONDS`
+have, so the Job of a run that ended in the last `MORCA_KUBE_SETTLE_SECONDS`
 (30) is kept until it finishes: its pods' last lines and samples are in
 their logs by then, even a run shorter than its sampler's start. A pod deleted before its Job finishes takes its samples
-with it, as it does its log. Pods ask for `ORCA_DRIVER_CPU`, `ORCA_HEAD_CPU` and
-`ORCA_WORKER_CPU` (default 500m, 250m and 1) and `ORCA_POD_MEMORY` (512Mi)
+with it, as it does its log. Pods ask for `MORCA_DRIVER_CPU`, `MORCA_HEAD_CPU` and
+`MORCA_WORKER_CPU` (default 500m, 250m and 1) and `MORCA_POD_MEMORY` (512Mi)
 each; `cpu_millis` is a run's total, which the scheduler checks against
-`ORCA_VCPU_BUDGET` before making a cluster.
+`MORCA_VCPU_BUDGET` before making a cluster.
 """
 
 from std.os import getenv
@@ -45,11 +45,11 @@ from json import Value
 from k8s import JOBS, PODS, SERVICES, Client, Config
 from postgres import Params
 
-from orca.crash import crash_summary
-from orca.json import quote
-from orca.logs import location_exists, read_location, run_dir, write_location
-from orca.sample import PREFIX, metrics_location, sample_seconds
-from orca.state import State
+from morca.crash import crash_summary
+from morca.json import quote
+from morca.logs import location_exists, read_location, run_dir, write_location
+from morca.sample import PREFIX, metrics_location, sample_seconds
+from morca.state import State
 
 comptime DISTA_PORT = 6390
 
@@ -64,8 +64,8 @@ sampler has written its last line."""
 
 
 def _command(var argv: List[String]) -> String:
-    """A container's `command`: `argv`, with the sampler (`orca.sample`)
-    beside it unless `ORCA_SAMPLE_SECONDS=0`. Its lines go to the pod's
+    """A container's `command`: `argv`, with the sampler (`morca.sample`)
+    beside it unless `MORCA_SAMPLE_SECONDS=0`. Its lines go to the pod's
     log, prefixed, and the scheduler moves them to the run's metrics."""
     var out = String("[")
     if sample_seconds() > 0:
@@ -108,22 +108,22 @@ struct RunSpec(Copyable, Movable):
     """0 for a pipeline without dista tasks: no head, no workers."""
     var allow_new_code: Bool
     var env: List[Tuple[String, String]]
-    """The pipeline's own variables (orca.toml's `env`), given to every pod
-    over those `ORCA_RUN_ENV` names."""
+    """The pipeline's own variables (morca.toml's `env`), given to every pod
+    over those `MORCA_RUN_ENV` names."""
 
 
 def pod_env(
     copied: List[String], own: List[Tuple[String, String]], extra: String
 ) -> String:
     """A container's `env`: the scheduler's variables named in `copied`
-    (`ORCA_RUN_ENV`) but those the pipeline sets itself, the pipeline's own
+    (`MORCA_RUN_ENV`) but those the pipeline sets itself, the pipeline's own
     (`own`), then `extra`, JSON entries."""
     var out = String("[")
     var first = True
     var names = copied.copy()
     # The sampler's interval, as the scheduler has it.
-    if "ORCA_SAMPLE_SECONDS" not in names:
-        names.append("ORCA_SAMPLE_SECONDS")
+    if "MORCA_SAMPLE_SECONDS" not in names:
+        names.append("MORCA_SAMPLE_SECONDS")
     for n in names:
         var mine = False
         for kv in own:
@@ -170,18 +170,18 @@ struct KubeRunner(Movable):
     """Names of the scheduler's variables copied to every pod."""
 
     def __init__(out self) raises:
-        self.namespace = getenv("ORCA_RUNS_NAMESPACE", "orca-runs")
+        self.namespace = getenv("MORCA_RUNS_NAMESPACE", "morca-runs")
         var cfg = Config.load()
         cfg.namespace = self.namespace
         self.k = Client(cfg^)
-        self.secret = getenv("ORCA_RUN_SECRET", "orca-db")
-        self.driver_cpu = cpu_millis(getenv("ORCA_DRIVER_CPU", "500m"))
-        self.head_cpu = cpu_millis(getenv("ORCA_HEAD_CPU", "250m"))
-        self.worker_cpu = cpu_millis(getenv("ORCA_WORKER_CPU", "1"))
-        self.memory = getenv("ORCA_POD_MEMORY", "512Mi")
-        self.deadline = Int(getenv("ORCA_RUN_DEADLINE", "86400"))
+        self.secret = getenv("MORCA_RUN_SECRET", "morca-db")
+        self.driver_cpu = cpu_millis(getenv("MORCA_DRIVER_CPU", "500m"))
+        self.head_cpu = cpu_millis(getenv("MORCA_HEAD_CPU", "250m"))
+        self.worker_cpu = cpu_millis(getenv("MORCA_WORKER_CPU", "1"))
+        self.memory = getenv("MORCA_POD_MEMORY", "512Mi")
+        self.deadline = Int(getenv("MORCA_RUN_DEADLINE", "86400"))
         self.env = List[String]()
-        for n in getenv("ORCA_RUN_ENV").split(","):
+        for n in getenv("MORCA_RUN_ENV").split(","):
             if n.strip():
                 self.env.append(String(n.strip()))
 
@@ -193,7 +193,7 @@ struct KubeRunner(Movable):
         return self.driver_cpu + self.head_cpu + workers * self.worker_cpu
 
     def _name(self, r: RunSpec) -> String:
-        return String("orca-", r.run, "-", r.start)
+        return String("morca-", r.run, "-", r.start)
 
     def _labels(self, r: RunSpec, role: StaticString) -> String:
         return String(
@@ -261,12 +261,12 @@ struct KubeRunner(Movable):
             args.append("--allow-new-code")
         var argv = _command(args^)
         var driver_env = String(
-            '{"name": "ORCA_DATABASE_URL", "valueFrom": {"secretKeyRef":',
+            '{"name": "MORCA_DATABASE_URL", "valueFrom": {"secretKeyRef":',
             ' {"name": ',
             quote(self.secret),
-            ', "key": "url"}}}, {"name": "ORCA_STALE_SECONDS", "value": ',
-            quote(getenv("ORCA_STALE_SECONDS", "30")),
-            '}, {"name": "ORCA_IMAGE", "value": ',
+            ', "key": "url"}}}, {"name": "MORCA_STALE_SECONDS", "value": ',
+            quote(getenv("MORCA_STALE_SECONDS", "30")),
+            '}, {"name": "MORCA_IMAGE", "value": ',
             quote(r.image),
             "}",
         )
@@ -367,16 +367,16 @@ struct KubeRunner(Movable):
 
     def _keep_logs(self, mut db: State, job: Value):
         """Appends the log of the Job's driver pod to the run's `driver.log`
-        under `ORCA_LOGS`, and keeps each of its pods' samples in the run's
+        under `MORCA_LOGS`, and keeps each of its pods' samples in the run's
         `metrics/<pod>.jsonl`, as the pods are about to go. A driver that
         crashed has the attempts it left running failed with the crash's
-        first frames (`orca.crash`), if the run is still at that start."""
+        first frames (`morca.crash`), if the run is still at that start."""
         try:
-            var run = Int(job.at("/metadata/labels/orca.run").string_value())
+            var run = Int(job.at("/metadata/labels/morca.run").string_value())
             var pipeline = job.at(
-                "/metadata/labels/orca.pipeline"
+                "/metadata/labels/morca.pipeline"
             ).string_value()
-            var start = job.at("/metadata/labels/orca.start").string_value()
+            var start = job.at("/metadata/labels/morca.start").string_value()
             var at = run_dir(pipeline, run)
             if not at:
                 return
@@ -392,7 +392,7 @@ struct KubeRunner(Movable):
                         metrics_location(pipeline, run, name),
                         got[1].as_bytes(),
                     )
-                var role = pod.try_at("/metadata/labels/orca.role")
+                var role = pod.try_at("/metadata/labels/morca.role")
                 if role and role.value().string_value() == "driver":
                     text.write(got[0])
             if not text:
@@ -418,7 +418,7 @@ struct KubeRunner(Movable):
                 var n = db.interrupt(run, why)
                 print("run", run, "crashed,", n, "attempts failed:", why)
         except e:
-            print("orca: can't keep a run's pod logs:", e)
+            print("morca: can't keep a run's pod logs:", e)
 
     def remove(self, run: Int) raises:
         """Deletes everything labelled with the run, whatever its start."""
@@ -442,14 +442,14 @@ struct KubeRunner(Movable):
         # A run ends when its driver says so, before its pods have: their
         # last lines and samples aren't in their logs yet, and a short run
         # can end before its sampler's first line. Its Job is kept until it
-        # finishes, for `ORCA_KUBE_SETTLE_SECONDS` (30) at most.
+        # finishes, for `MORCA_KUBE_SETTLE_SECONDS` (30) at most.
         var settling = Dict[String, Bool]()
         for r in db.conn.query(
             (
                 "SELECT id || '-' || starts AS k FROM orca.runs WHERE status <>"
                 " 'running' AND ended > now() - make_interval(secs => $1)"
             ),
-            Params().float64(Float64(getenv("ORCA_KUBE_SETTLE_SECONDS", "30"))),
+            Params().float64(Float64(getenv("MORCA_KUBE_SETTLE_SECONDS", "30"))),
         ):
             settling[r.text("k")] = True
         var n = 0
@@ -488,8 +488,8 @@ def _name_of(o: Value) raises -> String:
 
 def _key(o: Value) raises -> String:
     """`<run>-<start>` from an object's labels."""
-    var run = o.try_at("/metadata/labels/orca.run")
-    var start = o.try_at("/metadata/labels/orca.start")
+    var run = o.try_at("/metadata/labels/morca.run")
+    var start = o.try_at("/metadata/labels/morca.start")
     if not run or not start:
         return ""
     return String(run.value().string_value(), "-", start.value().string_value())

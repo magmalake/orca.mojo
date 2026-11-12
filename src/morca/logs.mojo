@@ -1,23 +1,23 @@
 """Where attempts' logs, drivers' logs and runs' timelines go.
 
-With `ORCA_LOGS` set, each attempt logs to
-`<ORCA_LOGS>/<pipeline>/<run>/<step>/<partition>/<attempt>.log` (the
+With `MORCA_LOGS` set, each attempt logs to
+`<MORCA_LOGS>/<pipeline>/<run>/<step>/<partition>/<attempt>.log` (the
 partition is `_run` for a gather step, and a keyed one's `/` is written
-`%2F`, `orca.name.path_segment`), a run of a pipeline with dista
-tasks leaves its timeline at `<ORCA_LOGS>/<pipeline>/<run>/timeline.json`,
+`%2F`, `morca.name.path_segment`), a run of a pipeline with dista
+tasks leaves its timeline at `<MORCA_LOGS>/<pipeline>/<run>/timeline.json`,
 and the scheduler keeps a run's output at `.../<run>/driver.log`. Without
 it, logs go to stdout only.
 
-`ORCA_LOGS` is a directory, or a location in object storage such as
-`s3://bucket/orca/logs` (objectstore's `FileIOResolver`, configured from the
+`MORCA_LOGS` is a directory, or a location in object storage such as
+`s3://bucket/morca/logs` (objectstore's `FileIOResolver`, configured from the
 `AWS_*` environment). An object can't be appended to, so for a remote root
-a log is written to a staging file under `ORCA_LOG_STAGE` (default
-`$TMPDIR/orca-logs`) and `publish`ed when it's complete: an attempt's when
+a log is written to a staging file under `MORCA_LOG_STAGE` (default
+`$TMPDIR/morca-logs`) and `publish`ed when it's complete: an attempt's when
 the attempt ends, a timeline when the run does. `attempts.log` records
 where the log ends up, which `read_location` reads either way.
 
-Secrets are masked in every log written here: `ORCA_SECRETS` names the
-environment variables that hold a run's secrets (`orca register --secret`),
+Secrets are masked in every log written here: `MORCA_SECRETS` names the
+environment variables that hold a run's secrets (`morca register --secret`),
 and `mask` replaces their values with `***`.
 """
 
@@ -27,18 +27,18 @@ from std.os.path import exists
 
 from objectstore.fileio import FileIOResolver
 
-from orca.civil import Civil
-from orca.name import path_segment
+from morca.civil import Civil
+from morca.name import path_segment
 
 
 comptime _MASK = "***"
 
 
 def _secret_values() -> List[String]:
-    """The values of the variables `ORCA_SECRETS` names; short ones are
+    """The values of the variables `MORCA_SECRETS` names; short ones are
     left out, since masking them would hide ordinary text."""
     var out = List[String]()
-    for n in getenv("ORCA_SECRETS").split(","):
+    for n in getenv("MORCA_SECRETS").split(","):
         var name = String(n.strip())
         if not name:
             continue
@@ -85,7 +85,7 @@ def mask_bytes(data: Span[UInt8, _]) -> List[UInt8]:
 
 
 def logs_dir() -> String:
-    return getenv("ORCA_LOGS")
+    return getenv("MORCA_LOGS")
 
 
 def is_remote(location: String) -> Bool:
@@ -94,7 +94,7 @@ def is_remote(location: String) -> Bool:
 
 
 def run_dir(pipeline: String, run: Int) -> String:
-    """The run's directory under `ORCA_LOGS`, or "" without it."""
+    """The run's directory under `MORCA_LOGS`, or "" without it."""
     var root = logs_dir()
     if not root:
         return ""
@@ -103,12 +103,12 @@ def run_dir(pipeline: String, run: Int) -> String:
 
 def stage_of(location: String) -> String:
     """Where a log bound for `location` is written first: `location` itself
-    on this machine, else its path under `ORCA_LOG_STAGE`."""
+    on this machine, else its path under `MORCA_LOG_STAGE`."""
     if not is_remote(location):
         return location
-    var root = getenv("ORCA_LOG_STAGE")
+    var root = getenv("MORCA_LOG_STAGE")
     if not root:
-        root = String(getenv("TMPDIR", "/tmp").rstrip("/"), "/orca-logs")
+        root = String(getenv("TMPDIR", "/tmp").rstrip("/"), "/morca-logs")
     var rel = location[byte = location.find("://") + 3 :]
     return String(root, "/", rel)
 
@@ -122,7 +122,7 @@ def attempt_log(
     pipeline: String, run: Int, step: String, partition: String, attempt: Int
 ) raises -> String:
     """Where the attempt's log ends up, `stage_of` it ready to be written;
-    "" without `ORCA_LOGS`."""
+    "" without `MORCA_LOGS`."""
     var dir = run_dir(pipeline, run)
     if not dir:
         return ""
@@ -177,7 +177,7 @@ def write_location(location: String, data: Span[UInt8, _]) raises:
             remove(tmp)
         except:
             pass
-        raise Error("orca: can't replace ", location)
+        raise Error("morca: can't replace ", location)
 
 
 def read_location(location: String) raises -> List[UInt8]:

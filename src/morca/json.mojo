@@ -1,4 +1,4 @@
-"""The little JSON orca writes: quoted strings."""
+"""The little JSON morca writes: quoted strings."""
 
 
 def quote(s: StringSlice) -> String:

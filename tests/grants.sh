@@ -1,25 +1,25 @@
 #!/bin/sh
-# Requests and grants (orca.resources), over tests/grants/grantee.mojo built
+# Requests and grants (morca.resources), over tests/grants/grantee.mojo built
 # as three pipelines, on the local runner against a host of 4 CPUs and 8 GB
-# (ORCA_HOST_CPUS, ORCA_HOST_MEMORY_MB) with no reserve:
+# (MORCA_HOST_CPUS, MORCA_HOST_MEMORY_MB) with no reserve:
 #
-# - `orca config check` refuses bad ranges, `orca register` bad flags, and
-#   `orca config show` gives each request with its source;
+# - `morca config check` refuses bad ranges, `morca register` bad flags, and
+#   `morca config show` gives each request with its source;
 # - wide (1..3 CPUs, 5..6 GB) and narrow (5 GB) don't both fit: their runs
 #   go one after the other, the one waiting held saying why;
 # - with narrow at 1..2 GB they run at once;
-# - each start's grant reaches its process (ORCA_GRANT_*, DISTA_WORKER_SLOTS
-#   = "auto" as a number, orca.auto_count) and is recorded on the run, its
+# - each start's grant reaches its process (MORCA_GRANT_*, DISTA_WORKER_SLOTS
+#   = "auto" as a number, morca.auto_count) and is recorded on the run, its
 #   page and its JSON;
 # - plain, with no request, is started as before: with no check, no grant,
 #   while wide waits for more memory than the host has, which the
 #   pipeline's page, the run's and their JSON say;
 # - max_runs = "auto" runs as many at once as fit (4 of 2 GB in 8 GB), and
 #   with no request to weigh, one at a time;
-# - a remote worker (`orca worker`) admits a run against its own host the
+# - a remote worker (`morca worker`) admits a run against its own host the
 #   same way, and passes the grant.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-grants starts a throwaway server),
+# Needs MORCA_DATABASE_URL (pixi run test-grants starts a throwaway server),
 # curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -30,17 +30,17 @@ for b in wide narrow plain; do
     scripts/mojo-build.sh -I src $DEP_INC -D GRANTEE=$b tests/grants/grantee.mojo -o "build/$b"
 done
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/grants.log
 : > "$log"
 out=$PWD/build/grants-out
 rm -rf "$out" build/grants-stage build/grants-*.out
 mkdir -p "$out"
 export GRANTEE_OUT="$out" GRANTEE_SLEEP=3
-export ORCA_STALE_SECONDS=5 ORCA_START_SECONDS=20 ORCA_SAMPLE_SECONDS=0 ORCA_WATCHDOG_SECONDS=0
-export ORCA_HOST_CPUS=4 ORCA_HOST_MEMORY_MB=8192 ORCA_RESERVE_CPUS=0 ORCA_RESERVE_MEMORY_MB=0
-export ORCA_WORKERS=1
-unset ORCA_RUNNER ORCA_CONFIG
+export MORCA_STALE_SECONDS=5 MORCA_START_SECONDS=20 MORCA_SAMPLE_SECONDS=0 MORCA_WATCHDOG_SECONDS=0
+export MORCA_HOST_CPUS=4 MORCA_HOST_MEMORY_MB=8192 MORCA_RESERVE_CPUS=0 MORCA_RESERVE_MEMORY_MB=0
+export MORCA_WORKERS=1
+unset MORCA_RUNNER MORCA_CONFIG
 pids=
 sched=
 cleanup() {
@@ -53,7 +53,7 @@ fail() {
     for f in build/grants-*.out; do [ -f "$f" ] && { echo "== $f"; tail -15 "$f"; }; done
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 until_() {
     t=$1; what=$2; shift 2
     i=0
@@ -63,7 +63,7 @@ until_() {
 }
 is() { [ "$(q "$1")" = "$2" ]; }
 start_sched() {
-    ./build/orca scheduler >> build/grants-sched.out 2>&1 &
+    ./build/morca scheduler >> build/grants-sched.out 2>&1 &
     sched=$!
 }
 stop_sched() {
@@ -77,7 +77,7 @@ ended() {
 }
 
 # Bad requests are refused, by the file's check and by a flag.
-check() { env -u ORCA_DATABASE_URL ./build/orca config check "$@"; }
+check() { env -u MORCA_DATABASE_URL ./build/morca config check "$@"; }
 bad() {
     printf '[pipelines.wide]\n%s\n' "$1" > build/grants-bad.toml
     if check build/grants-bad.toml > build/grants-bad.out 2>&1; then
@@ -96,10 +96,10 @@ bad 'cpus = "many"' "cpus: is CPUs, N, MIN..MAX, auto or auto..MAX, not many"
 bad 'memory_gb = "2..auto"' "memory_gb: is GB with auto as a range's lower end only"
 bad 'cpus = "auto..0"' "cpus: is CPUs, auto..MAX with MAX from 1"
 bad 'learn = "no"' "learn: is true or false"
-if ./build/orca register --no-config --cpus 0 ./build/plain >> "$log" 2>&1; then
+if ./build/morca register --no-config --cpus 0 ./build/plain >> "$log" 2>&1; then
     fail "registered --cpus 0"
 fi
-if ./build/orca register --no-config --memory-gb 3..1 ./build/plain >> "$log" 2>&1; then
+if ./build/morca register --no-config --memory-gb 3..1 ./build/plain >> "$log" 2>&1; then
     fail "registered --memory-gb 3..1"
 fi
 cat > build/grants.toml << 'EOF'
@@ -116,14 +116,14 @@ EOF
 [ "$(check build/grants.toml 2>&1)" = "build/grants.toml: ok, 3 pipelines" ] \
     || fail "config check of grants.toml: $(check build/grants.toml 2>&1)"
 for b in wide narrow plain; do
-    ./build/orca register --config build/grants.toml "./build/$b" >> "$log" 2>&1 || fail "register $b"
+    ./build/morca register --config build/grants.toml "./build/$b" >> "$log" 2>&1 || fail "register $b"
 done
-./build/orca config show wide > build/grants-show.out 2>&1 || fail "config show wide"
-grep -qE '^  cpus +1\.\.3 +orca.toml \[pipelines.wide\]$' build/grants-show.out \
+./build/morca config show wide > build/grants-show.out 2>&1 || fail "config show wide"
+grep -qE '^  cpus +1\.\.3 +morca.toml \[pipelines.wide\]$' build/grants-show.out \
     || fail "config show wide: $(cat build/grants-show.out)"
-grep -qE '^  memory_gb +5\.\.6 +orca.toml \[pipelines.wide\]$' build/grants-show.out \
+grep -qE '^  memory_gb +5\.\.6 +morca.toml \[pipelines.wide\]$' build/grants-show.out \
     || fail "config show wide: $(cat build/grants-show.out)"
-./build/orca config show plain > build/grants-show.out 2>&1 || fail "config show plain"
+./build/morca config show plain > build/grants-show.out 2>&1 || fail "config show plain"
 if grep -qE '^  (cpus|memory_gb) ' build/grants-show.out; then
     fail "config show plain shows a request: $(cat build/grants-show.out)"
 fi
@@ -133,9 +133,9 @@ echo "ok   bad requests are refused; config show gives a request and its source"
 
 free_port port
 base="http://127.0.0.1:$port"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 pids="$pids $!"
-until_ 10 "orca ui didn't start" curl -fs "$base/" -o /dev/null
+until_ 10 "morca ui didn't start" curl -fs "$base/" -o /dev/null
 json() { curl -fsS -H 'Accept: application/json' "$base$1" || fail "GET $1"; }
 
 # watch: until every run has ended, the most of wide's and narrow's runs
@@ -158,8 +158,8 @@ watch() {
 
 # Minimums that don't both fit: one after the other.
 start_sched
-./build/orca backfill narrow 2024-01 >> "$log" 2>&1 || fail "backfill narrow"
-./build/orca backfill wide 2024-01 >> "$log" 2>&1 || fail "backfill wide"
+./build/morca backfill narrow 2024-01 >> "$log" 2>&1 || fail "backfill narrow"
+./build/morca backfill wide 2024-01 >> "$log" 2>&1 || fail "backfill wide"
 watch
 [ "$most" -eq 1 ] || fail "$most of wide's and narrow's runs ran at once in 8 GB"
 echo "$held" | grep -qE '^waiting: needs 5 GB, [23] GB free of grants$' || fail "held: '$held'"
@@ -172,9 +172,9 @@ is "SELECT request_cpus || ' ' || request_memory_gb || ' ' || grant_cpus || ' ' 
     || fail "wide's run: $(q "SELECT request_cpus, request_memory_gb, grant_cpus, grant_memory_mb FROM orca.runs WHERE id = $w1")"
 is "SELECT coalesce(request_cpus, '-') || ' ' || request_memory_gb || ' ' || coalesce(grant_cpus, 0) || ' ' || grant_memory_mb FROM orca.runs WHERE id = $n1" "- 5 0 5120" \
     || fail "narrow's run: $(q "SELECT request_cpus, request_memory_gb, grant_cpus, grant_memory_mb FROM orca.runs WHERE id = $n1")"
-printf 'ORCA_GRANT_CPUS=3\nORCA_GRANT_MEMORY_MB=6144\nDISTA_WORKER_SLOTS=3\nGRANTEE_PARALLEL=3\n' > build/grants-want.out
+printf 'MORCA_GRANT_CPUS=3\nMORCA_GRANT_MEMORY_MB=6144\nDISTA_WORKER_SLOTS=3\nGRANTEE_PARALLEL=3\n' > build/grants-want.out
 cmp -s build/grants-want.out "$out/wide-2024-01.env" || fail "wide's process got: $(cat "$out/wide-2024-01.env")"
-printf 'ORCA_GRANT_CPUS=-\nORCA_GRANT_MEMORY_MB=5120\nDISTA_WORKER_SLOTS=-\nGRANTEE_PARALLEL=16\n' > build/grants-want.out
+printf 'MORCA_GRANT_CPUS=-\nMORCA_GRANT_MEMORY_MB=5120\nDISTA_WORKER_SLOTS=-\nGRANTEE_PARALLEL=16\n' > build/grants-want.out
 cmp -s build/grants-want.out "$out/narrow-2024-01.env" || fail "narrow's process got: $(cat "$out/narrow-2024-01.env")"
 json "/runs/$w1" | jq -e '.run.request == {"cpus": "1..3", "memory_gb": "5..6"} and .run.grant == {"cpus": 3, "memory_mb": 6144}' > /dev/null \
     || fail "wide's run's JSON: $(json "/runs/$w1" | jq -c '.run')"
@@ -189,9 +189,9 @@ json /pipelines/wide | jq -e '.pipeline.request == {"cpus": "1..3", "memory_gb":
 echo "ok   each start's grant reaches its process and is recorded, shown and in the JSON"
 
 # With room for both: at once.
-./build/orca register --config build/grants.toml --memory-gb 1..2 ./build/narrow >> "$log" 2>&1 || fail "register narrow at 1..2 GB"
-./build/orca backfill narrow 2024-02 >> "$log" 2>&1 || fail "backfill narrow"
-./build/orca backfill wide 2024-02 >> "$log" 2>&1 || fail "backfill wide"
+./build/morca register --config build/grants.toml --memory-gb 1..2 ./build/narrow >> "$log" 2>&1 || fail "register narrow at 1..2 GB"
+./build/morca backfill narrow 2024-02 >> "$log" 2>&1 || fail "backfill narrow"
+./build/morca backfill wide 2024-02 >> "$log" 2>&1 || fail "backfill wide"
 watch
 [ "$most" -eq 2 ] || fail "$most of wide's and narrow's runs ran at once with room for both"
 [ -z "$held" ] || fail "a run was held with room for both: $held"
@@ -201,11 +201,11 @@ echo "ok   runs whose minimums fit run at once"
 
 # No request: started as before, while wide waits for more than the host has.
 stop_sched
-export ORCA_HOST_MEMORY_MB=1024
+export MORCA_HOST_MEMORY_MB=1024
 start_sched
-./build/orca backfill wide 2024-03 >> "$log" 2>&1 || fail "backfill wide"
+./build/morca backfill wide 2024-03 >> "$log" 2>&1 || fail "backfill wide"
 w3=$(q "SELECT max(id) FROM orca.runs")
-./build/orca backfill plain 2024-01 >> "$log" 2>&1 || fail "backfill plain"
+./build/morca backfill plain 2024-01 >> "$log" 2>&1 || fail "backfill plain"
 p1=$(q "SELECT max(id) FROM orca.runs")
 until_ 30 "plain's run didn't succeed: $(q "SELECT id, status, error FROM orca.runs WHERE id = $p1")" \
     is "SELECT status FROM orca.runs WHERE id = $p1" succeeded
@@ -214,7 +214,7 @@ is "SELECT status || ' ' || starts || ' ' || held FROM orca.runs WHERE id = $w3"
     || fail "wide's run: $(q "SELECT status, starts, held FROM orca.runs WHERE id = $w3")"
 is "SELECT coalesce(request_cpus, request_memory_gb, grant_cpus::text, grant_memory_mb::text, 'none') FROM orca.runs WHERE id = $p1" none \
     || fail "plain's run has a request or a grant"
-printf 'ORCA_GRANT_CPUS=-\nORCA_GRANT_MEMORY_MB=-\nDISTA_WORKER_SLOTS=-\nGRANTEE_PARALLEL=16\n' > build/grants-want.out
+printf 'MORCA_GRANT_CPUS=-\nMORCA_GRANT_MEMORY_MB=-\nDISTA_WORKER_SLOTS=-\nGRANTEE_PARALLEL=16\n' > build/grants-want.out
 cmp -s build/grants-want.out "$out/plain-2024-01.env" || fail "plain's process got: $(cat "$out/plain-2024-01.env")"
 json "/runs/$p1" | jq -e '.run.request == null and .run.grant == null' > /dev/null || fail "plain's run's JSON"
 json "/runs/$w3" | jq -e --arg w "$want" '.run.held == $w' > /dev/null || fail "wide's run's JSON: $(json "/runs/$w3" | jq -c .run)"
@@ -231,7 +231,7 @@ echo "ok   a pipeline without a request is started as before, while one with a r
 
 # max_runs = "auto" (#266): as many at once as the host has room for, and
 # with no request to weigh, one at a time.
-export ORCA_HOST_MEMORY_MB=8192
+export MORCA_HOST_MEMORY_MB=8192
 cat > build/grants-auto.toml << 'EOF'
 [pipelines.narrow]
 memory_gb = 2
@@ -241,10 +241,10 @@ max_runs = "auto"
 max_runs = "auto..3"
 EOF
 for b in narrow plain; do
-    ./build/orca register --config build/grants-auto.toml "./build/$b" >> "$log" 2>&1 || fail "register $b with max_runs auto"
+    ./build/morca register --config build/grants-auto.toml "./build/$b" >> "$log" 2>&1 || fail "register $b with max_runs auto"
 done
-./build/orca config show narrow > build/grants-show.out 2>&1 || fail "config show narrow"
-grep -qE '^  max_runs +auto +orca.toml \[pipelines.narrow\]$' build/grants-show.out \
+./build/morca config show narrow > build/grants-show.out 2>&1 || fail "config show narrow"
+grep -qE '^  max_runs +auto +morca.toml \[pipelines.narrow\]$' build/grants-show.out \
     || fail "config show narrow: $(cat build/grants-show.out)"
 is "SELECT max_runs || ' ' || max_runs_auto FROM orca.pipelines WHERE name = 'plain'" "3 true" \
     || fail "plain's max_runs: $(q "SELECT max_runs, max_runs_auto FROM orca.pipelines WHERE name = 'plain'")"
@@ -269,22 +269,22 @@ most_of() {
 }
 start_sched
 for m in 01 02 03 04 05 06; do
-    ./build/orca backfill narrow 2025-$m >> "$log" 2>&1 || fail "backfill narrow 2025-$m"
+    ./build/morca backfill narrow 2025-$m >> "$log" 2>&1 || fail "backfill narrow 2025-$m"
 done
 most_of narrow
 [ "$most" -eq 4 ] || fail "$most of narrow's 2 GB runs ran at once in 8 GB, not 4"
 echo "$held" | grep -qE '^waiting: needs 2 GB, 0 GB free of grants$' || fail "narrow's held: '$held'"
 echo "ok   max_runs = \"auto\" runs as many at once as the host has room for (4 of 2 GB in 8 GB)"
 for m in 01 02 03; do
-    ./build/orca backfill plain 2025-$m >> "$log" 2>&1 || fail "backfill plain 2025-$m"
+    ./build/morca backfill plain 2025-$m >> "$log" 2>&1 || fail "backfill plain 2025-$m"
 done
 most_of plain
 [ "$most" -eq 1 ] || fail "$most of plain's runs ran at once with no request to weigh"
 [ "$held" = 'waiting: max_runs = "auto" starts one run at a time until its runs have a request to weigh (cpus, memory_gb, learned or declared)' ] \
     || fail "plain's held: '$held'"
 stop_sched
-./build/orca register --config build/grants.toml ./build/narrow >> "$log" 2>&1 || fail "register narrow back"
-./build/orca register --config build/grants.toml ./build/plain >> "$log" 2>&1 || fail "register plain back"
+./build/morca register --config build/grants.toml ./build/narrow >> "$log" 2>&1 || fail "register narrow back"
+./build/morca register --config build/grants.toml ./build/plain >> "$log" 2>&1 || fail "register plain back"
 echo "ok   with no request to weigh, max_runs = \"auto\" starts one run at a time"
 
 # fill_max_runs = "auto" (#322): fill runs too, as many as fit.
@@ -294,10 +294,10 @@ memory_gb = 2
 fills = "all"
 fill_max_runs = "auto"
 EOF
-./build/orca register --config build/grants-fill.toml ./build/narrow >> "$log" 2>&1 || fail "register narrow with fills"
+./build/morca register --config build/grants-fill.toml ./build/narrow >> "$log" 2>&1 || fail "register narrow with fills"
 is "SELECT fill_max_runs || ' ' || fill_max_runs_auto FROM orca.pipelines WHERE name = 'narrow'" "64 true" \
     || fail "narrow's fill_max_runs: $(q "SELECT fill_max_runs, fill_max_runs_auto FROM orca.pipelines WHERE name = 'narrow'")"
-./build/orca config show narrow 2>&1 | grep -qE '^  fill_max_runs +auto ' || fail "config show: $(./build/orca config show narrow 2>&1)"
+./build/morca config show narrow 2>&1 | grep -qE '^  fill_max_runs +auto ' || fail "config show: $(./build/morca config show narrow 2>&1)"
 start_sched
 most=0
 i=0
@@ -311,19 +311,19 @@ stop_sched
 q "UPDATE orca.runs SET status = 'cancelled', ended = now() WHERE trigger = 'fill' AND status IN ('queued', 'running')" > /dev/null
 q "UPDATE orca.pipelines SET fills = NULL WHERE name = 'narrow'" > /dev/null
 [ "$most" -eq 4 ] || fail "$most of narrow's 2 GB fill runs ran at once in 8 GB, not 4"
-./build/orca register --config build/grants.toml ./build/narrow >> "$log" 2>&1 || fail "register narrow back"
+./build/morca register --config build/grants.toml ./build/narrow >> "$log" 2>&1 || fail "register narrow back"
 echo "ok   fill_max_runs = \"auto\" runs as many fill runs at once as fit (4 of 2 GB in 8 GB)"
 
 # On a remote worker, against its own host.
-export ORCA_HOST_MEMORY_MB=8192
-./build/orca register --config build/grants.toml --placement worker:g ./build/wide >> "$log" 2>&1 || fail "register wide on a worker"
-tok=$(./build/orca worker-token create --pool g --label grants 2>> "$log") || fail "worker-token create"
+export MORCA_HOST_MEMORY_MB=8192
+./build/morca register --config build/grants.toml --placement worker:g ./build/wide >> "$log" 2>&1 || fail "register wide on a worker"
+tok=$(./build/morca worker-token create --pool g --label grants 2>> "$log") || fail "worker-token create"
 start_sched
-./build/orca backfill wide 2024-04 >> "$log" 2>&1 || fail "backfill wide"
+./build/morca backfill wide 2024-04 >> "$log" 2>&1 || fail "backfill wide"
 w4=$(q "SELECT max(id) FROM orca.runs")
-env -u ORCA_DATABASE_URL -u ORCA_RESERVE_CPUS -u ORCA_RESERVE_MEMORY_MB \
-    ORCA_HOST_MEMORY_MB=4096 ORCA_WORKER_TOKEN="$tok" \
-    ./build/orca worker --pool g --remote "$base" --poll-seconds 0.3 --name small \
+env -u MORCA_DATABASE_URL -u MORCA_RESERVE_CPUS -u MORCA_RESERVE_MEMORY_MB \
+    MORCA_HOST_MEMORY_MB=4096 MORCA_WORKER_TOKEN="$tok" \
+    ./build/morca worker --pool g --remote "$base" --poll-seconds 0.3 --name small \
     --dir "$PWD/build/grants-stage" > build/grants-worker-small.out 2>&1 &
 small=$!
 pids="$pids $small"
@@ -332,15 +332,15 @@ until_ 20 "the small worker didn't hold wide's run: $(q "SELECT status, held FRO
     is "SELECT held FROM orca.runs WHERE id = $w4" "waiting: needs 5 GB, more than the 3.5 GB worker small grants at most"
 kill "$small" 2> /dev/null || true
 wait "$small" 2> /dev/null || true
-env -u ORCA_DATABASE_URL ORCA_WORKER_TOKEN="$tok" \
-    ./build/orca worker --pool g --remote "$base" --poll-seconds 0.3 --name big \
+env -u MORCA_DATABASE_URL MORCA_WORKER_TOKEN="$tok" \
+    ./build/morca worker --pool g --remote "$base" --poll-seconds 0.3 --name big \
     --dir "$PWD/build/grants-stage" > build/grants-worker-big.out 2>&1 &
 pids="$pids $!"
 until_ 60 "wide's run didn't succeed on the worker: $(q "SELECT id, status, error, held FROM orca.runs WHERE id = $w4")" \
     is "SELECT status FROM orca.runs WHERE id = $w4" succeeded
 is "SELECT placement || ' ' || grant_cpus || ' ' || grant_memory_mb FROM orca.runs WHERE id = $w4" "worker:g 3 6144" \
     || fail "wide's run on the worker: $(q "SELECT placement, grant_cpus, grant_memory_mb FROM orca.runs WHERE id = $w4")"
-printf 'ORCA_GRANT_CPUS=3\nORCA_GRANT_MEMORY_MB=6144\nDISTA_WORKER_SLOTS=3\nGRANTEE_PARALLEL=3\n' > build/grants-want.out
+printf 'MORCA_GRANT_CPUS=3\nMORCA_GRANT_MEMORY_MB=6144\nDISTA_WORKER_SLOTS=3\nGRANTEE_PARALLEL=3\n' > build/grants-want.out
 cmp -s build/grants-want.out "$out/wide-2024-04.env" || fail "wide's process on the worker got: $(cat "$out/wide-2024-04.env")"
 echo "ok   a worker admits a run against its own host, and passes the grant"
 echo "grants: ok"

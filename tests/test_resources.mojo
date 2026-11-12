@@ -1,4 +1,4 @@
-"""Requests, admission and grants (orca.resources): the parsing, what fits,
+"""Requests, admission and grants (morca.resources): the parsing, what fits,
 the grants and the reason a run waits, and `auto`."""
 
 from std.os import setenv, unsetenv
@@ -10,7 +10,7 @@ from std.testing import (
     assert_true,
 )
 
-from orca.resources import (
+from morca.resources import (
     Grant,
     Request,
     Room,
@@ -55,7 +55,7 @@ def test_parse_memory_gb() raises:
 
 
 def test_parse_auto() raises:
-    # `auto`: learned (orca.recommend), (0, 0); `auto..MAX`: up to MAX.
+    # `auto`: learned (morca.recommend), (0, 0); `auto..MAX`: up to MAX.
     assert_equal(parse_cpus("auto")[0], 0)
     assert_equal(parse_cpus("auto")[1], 0)
     assert_equal(parse_cpus("auto..16")[0], 0)
@@ -177,15 +177,15 @@ def test_run_env() raises:
         ("GHARCHIVE_PARALLEL", "auto"),
         ("X", "1"),
     ]
-    var got = run_env(env, Grant(8, 4096), ["ORCA_WORKERS=2"])
+    var got = run_env(env, Grant(8, 4096), ["MORCA_WORKERS=2"])
     assert_equal(len(got), 6)
     assert_equal(got[0], "DISTA_WORKER_SLOTS=4")
     assert_equal(got[1], "GHARCHIVE_PARALLEL=auto")
     assert_equal(got[2], "X=1")
-    assert_equal(got[3], "ORCA_GRANT_CPUS=8")
-    assert_equal(got[4], "ORCA_GRANT_MEMORY_MB=4096")
-    assert_equal(got[5], "ORCA_WORKERS=2")
-    got = run_env(env, Grant(1, 0), ["ORCA_WORKERS=4"])
+    assert_equal(got[3], "MORCA_GRANT_CPUS=8")
+    assert_equal(got[4], "MORCA_GRANT_MEMORY_MB=4096")
+    assert_equal(got[5], "MORCA_WORKERS=2")
+    got = run_env(env, Grant(1, 0), ["MORCA_WORKERS=4"])
     assert_equal(got[0], "DISTA_WORKER_SLOTS=1")
     assert_equal(len(got), 5)
     got = run_env(env, Grant.none())
@@ -197,45 +197,45 @@ def test_run_env() raises:
 
 
 def test_auto_count() raises:
-    _ = unsetenv("ORCA_TEST_PARALLEL")
-    assert_equal(auto_count("ORCA_TEST_PARALLEL", 16), 16)
-    _ = setenv("ORCA_TEST_PARALLEL", "3")
-    assert_equal(auto_count("ORCA_TEST_PARALLEL", 16), 3)
-    _ = setenv("ORCA_TEST_PARALLEL", "auto")
-    _ = setenv("ORCA_GRANT_CPUS", "6")
-    _ = setenv("ORCA_GRANT_MEMORY_MB", "4000")
-    assert_equal(auto_count("ORCA_TEST_PARALLEL", 16), 6)
-    assert_equal(auto_count("ORCA_TEST_PARALLEL", 16, memory_mb_each=1500), 2)
-    assert_equal(auto_count("ORCA_TEST_PARALLEL", 16, memory_mb_each=9000), 1)
-    _ = setenv("ORCA_TEST_PARALLEL", "many")
+    _ = unsetenv("MORCA_TEST_PARALLEL")
+    assert_equal(auto_count("MORCA_TEST_PARALLEL", 16), 16)
+    _ = setenv("MORCA_TEST_PARALLEL", "3")
+    assert_equal(auto_count("MORCA_TEST_PARALLEL", 16), 3)
+    _ = setenv("MORCA_TEST_PARALLEL", "auto")
+    _ = setenv("MORCA_GRANT_CPUS", "6")
+    _ = setenv("MORCA_GRANT_MEMORY_MB", "4000")
+    assert_equal(auto_count("MORCA_TEST_PARALLEL", 16), 6)
+    assert_equal(auto_count("MORCA_TEST_PARALLEL", 16, memory_mb_each=1500), 2)
+    assert_equal(auto_count("MORCA_TEST_PARALLEL", 16, memory_mb_each=9000), 1)
+    _ = setenv("MORCA_TEST_PARALLEL", "many")
     with assert_raises(contains="a number or auto"):
-        _ = auto_count("ORCA_TEST_PARALLEL", 16)
-    _ = unsetenv("ORCA_TEST_PARALLEL")
-    _ = unsetenv("ORCA_GRANT_CPUS")
-    _ = unsetenv("ORCA_GRANT_MEMORY_MB")
+        _ = auto_count("MORCA_TEST_PARALLEL", 16)
+    _ = unsetenv("MORCA_TEST_PARALLEL")
+    _ = unsetenv("MORCA_GRANT_CPUS")
+    _ = unsetenv("MORCA_GRANT_MEMORY_MB")
 
 
 def test_host() raises:
     var cap = host_capacity()
     assert_true(cap[0] >= 1)
     assert_true(cap[1] > 0)
-    _ = setenv("ORCA_HOST_CPUS", "4")
-    _ = setenv("ORCA_HOST_MEMORY_MB", "8192")
+    _ = setenv("MORCA_HOST_CPUS", "4")
+    _ = setenv("MORCA_HOST_MEMORY_MB", "8192")
     var room = host_room()
     assert_equal(room.cpus, 3)
     assert_equal(room.memory_mb, 8192 - 1536)
     room = host_room(worker=True)
     assert_equal(room.cpus, 4)
     assert_equal(room.memory_mb, 8192 - 512)
-    _ = setenv("ORCA_RESERVE_MEMORY_MB", "10000")
+    _ = setenv("MORCA_RESERVE_MEMORY_MB", "10000")
     assert_equal(host_room().memory_mb, 0)
-    _ = setenv("ORCA_RESERVE_CPUS", "two")
-    with assert_raises(contains="ORCA_RESERVE_CPUS"):
+    _ = setenv("MORCA_RESERVE_CPUS", "two")
+    with assert_raises(contains="MORCA_RESERVE_CPUS"):
         _ = host_room()
-    _ = unsetenv("ORCA_RESERVE_CPUS")
-    _ = unsetenv("ORCA_RESERVE_MEMORY_MB")
-    _ = unsetenv("ORCA_HOST_CPUS")
-    _ = unsetenv("ORCA_HOST_MEMORY_MB")
+    _ = unsetenv("MORCA_RESERVE_CPUS")
+    _ = unsetenv("MORCA_RESERVE_MEMORY_MB")
+    _ = unsetenv("MORCA_HOST_CPUS")
+    _ = unsetenv("MORCA_HOST_MEMORY_MB")
 
 
 def main() raises:

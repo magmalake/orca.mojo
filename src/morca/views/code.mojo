@@ -6,10 +6,10 @@ step a page shows.
 from json import loads
 from postgres import Params
 
-from orca.locate import function_key
-from orca.source import is_hex, web_url
-from orca.state import State
-from orca.views.runs import RunRow, VersionRow, version_rows
+from morca.locate import function_key
+from morca.source import is_hex, web_url
+from morca.state import State
+from morca.views.runs import RunRow, VersionRow, version_rows
 
 
 def _code_url(v: VersionRow, location: String) -> String:
@@ -50,7 +50,7 @@ def _code_ref(v: VersionRow, location: String) -> CodeRef:
 
 struct CodeLinks(Copyable, Movable):
     """A version's code on its host: the pipeline's declaration, each
-    step's function and each dista task, from `orca.locate`'s map."""
+    step's function and each dista task, from `morca.locate`'s map."""
 
     var pipeline: CodeRef
     var steps: Dict[String, CodeRef]

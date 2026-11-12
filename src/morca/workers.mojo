@@ -1,15 +1,15 @@
 """Remote workers, the server's side: worker tokens, claims, and the store
-calls a worker's runs make over `orca ui` (`orca.http_store`).
+calls a worker's runs make over `morca ui` (`morca.http_store`).
 
 ```
-orca worker-token create --pool bgent [--days N] [--label L]   prints the token once
-orca worker-token list                                          id, pool, label, worker, last seen
-orca worker-token revoke <id>
+morca worker-token create --pool bgent [--days N] [--label L]   prints the token once
+morca worker-token list                                          id, pool, label, worker, last seen
+morca worker-token revoke <id>
 ```
 
-A pipeline placed `worker:<pool>` (`placement` in orca.toml, or `orca
+A pipeline placed `worker:<pool>` (`placement` in morca.toml, or `morca
 register --placement worker:<pool>`) has its runs started by a worker of
-that pool (`orca worker`, `orca.worker`), never by the scheduler, which
+that pool (`morca worker`, `morca.worker`), never by the scheduler, which
 keeps them queued, `held` "waiting for a worker of pool <pool>", requeues
 one whose heartbeat went stale (a worker that died, or a laptop that went
 to sleep) as it would start any dead run again, and fails one that has no
@@ -17,17 +17,17 @@ retries left. A run whose worker is gone (not seen for half the stale
 limit, or seen since without it) is queued again whatever its trigger. A
 pipeline with `fills = "all"` has its fill runs queued the same way, held
 for a worker, at most `fill_max_runs` of them queued or running across the
-pool (`orca.fill`).
+pool (`morca.fill`).
 
-**Tokens.** A worker token is an API token (`orca.tokens`: `orca_` and 64
+**Tokens.** A worker token is an API token (`morca.tokens`: `morca_` and 64
 hex digits, kept only as its SHA-256), in `orca.workers` rather than
 `orca.api_tokens`, scoped to one pool: it can claim that pool's runs and
 make the store calls of the runs it claimed, and nothing else; a user's
 token gets nothing here, and a worker token gets nothing elsewhere. It
-lasts `--days` (default and at most `ORCA_WORKER_TOKEN_DAYS`, 365). A
+lasts `--days` (default and at most `MORCA_WORKER_TOKEN_DAYS`, 365). A
 revoked token stays listed, as revoked, and is answered 401.
 
-**The API** (`orca.api.worker`): `/api/worker/claim`, the worker's
+**The API** (`morca.api.worker`): `/api/worker/claim`, the worker's
 heartbeat and its claims; `/api/worker/release`, a run it won't start;
 `/api/worker/exited`, a run's process ended; `/api/worker/store/<call>`,
 `store_call`, a `RunStore` call of a run it claimed.
@@ -41,9 +41,9 @@ scheduler starts a run: `running`, owner `worker`, no heartbeat yet (the
 run's process claims it, within the start grace), one more start. Each
 claim is a row of `orca.audit` (user `worker:<label>`, source `worker`).
 **Versions.** A run needs its pipeline's image (`--image`, `image` in
-orca.toml) to be the worker's (`ORCA_IMAGE`), both empty included: a worker
+morca.toml) to be the worker's (`MORCA_IMAGE`), both empty included: a worker
 of another image isn't given it, and it stays queued, held saying why. The
-worker checks the spec again before it starts anything (`orca.worker`).
+worker checks the spec again before it starts anything (`morca.worker`).
 """
 
 from std.os import getenv
@@ -51,7 +51,7 @@ from std.os import getenv
 from json import Value, loads
 from postgres import Params
 
-from orca.run_cluster import (
+from morca.run_cluster import (
     MEMBER_GRANTS_SQL,
     MEMBER_MB_SQL,
     join_claim,
@@ -60,7 +60,7 @@ from orca.run_cluster import (
     members_to_stop,
     stop_json,
 )
-from orca.admission import (
+from morca.admission import (
     PressureRow,
     Report,
     alert_stuck,
@@ -70,8 +70,8 @@ from orca.admission import (
     row_json,
     worker_host,
 )
-from orca.control import WORKER_PREFIX, pool_of, pool_problem
-from orca.http_store import (
+from morca.control import WORKER_PREFIX, pool_of, pool_problem
+from morca.http_store import (
     STORE_PATH,
     Body,
     bytes_of_hex,
@@ -80,28 +80,28 @@ from orca.http_store import (
     run_info_json,
     steps_json,
 )
-from orca.civil import now
-from orca.json import quote
-from orca.live import behind_sql, dead_sql, stale_limit, start_grace
-from orca.cgroup import growth_pct_of, oom_text, raised_mb, raised_request
-from orca.recommend import RunRequest
-from orca.resources import Grant, Request, Room, admit
-from orca.registered import (
+from morca.civil import now
+from morca.json import quote
+from morca.live import behind_sql, dead_sql, stale_limit, start_grace
+from morca.cgroup import growth_pct_of, oom_text, raised_mb, raised_request
+from morca.recommend import RunRequest
+from morca.resources import Grant, Request, Room, admit
+from morca.registered import (
     recorded_cpus,
     recorded_memory_gb,
     registered,
     run_request,
 )
-from orca.state import PgStore, State, beat_run
-from orca.store import FINAL, TableSnapshot
-from orca.tokens import (
+from morca.state import PgStore, State, beat_run
+from morca.store import FINAL, TableSnapshot
+from morca.tokens import (
     Issued,
     clean_label,
     is_token,
     new_token,
     token_hash,
 )
-from orca.usage import marks_of, record as record_usage
+from morca.usage import marks_of, record as record_usage
 
 comptime WORKER_OWNER = "worker"
 """A run's owner once a worker claimed it, until its process does."""
@@ -120,7 +120,7 @@ def version_refusal(needed: String, have: String) -> String:
         "the run needs image ",
         needed if needed else "(none)",
         " and the worker is ",
-        have if have else "(none: ORCA_IMAGE isn't set)",
+        have if have else "(none: MORCA_IMAGE isn't set)",
     )
 
 
@@ -128,17 +128,17 @@ def version_refusal(needed: String, have: String) -> String:
 
 
 def worker_token_days(asked: Int = 0) raises -> Int:
-    """`asked` if from 1 to `ORCA_WORKER_TOKEN_DAYS` (default 365, at most
+    """`asked` if from 1 to `MORCA_WORKER_TOKEN_DAYS` (default 365, at most
     3650), else that most."""
     var most: Int
     try:
         most = Int(
-            getenv("ORCA_WORKER_TOKEN_DAYS", String(DEFAULT_WORKER_TOKEN_DAYS))
+            getenv("MORCA_WORKER_TOKEN_DAYS", String(DEFAULT_WORKER_TOKEN_DAYS))
         )
     except:
-        raise Error("orca: ORCA_WORKER_TOKEN_DAYS isn't a count of days")
+        raise Error("morca: MORCA_WORKER_TOKEN_DAYS isn't a count of days")
     if most < 1 or most > 3650:
-        raise Error("orca: ORCA_WORKER_TOKEN_DAYS is 1 to 3650, not ", most)
+        raise Error("morca: MORCA_WORKER_TOKEN_DAYS is 1 to 3650, not ", most)
     return asked if asked >= 1 and asked < most else most
 
 
@@ -148,7 +148,7 @@ def create_worker_token(
     """A new token for a worker of `pool`, which only this answer holds."""
     var why = pool_problem(pool)
     if why:
-        raise Error("orca: ", why)
+        raise Error("morca: ", why)
     var token = new_token()
     var expires = (
         db.conn.query(
@@ -239,7 +239,7 @@ struct WorkerRow(Copyable, Movable):
     """The runs it's running, comma-separated, as it said."""
     var expires: String
     var pressure: Optional[PressureRow]
-    """Its host's newest memory pressure reading (`orca.admission`), if
+    """Its host's newest memory pressure reading (`morca.admission`), if
     it sent one."""
 
 
@@ -326,17 +326,17 @@ struct WorkerRun(Copyable, Movable):
     var image: String
     """The image it needs the worker to be (`version_refusal`)."""
     var env: List[Tuple[String, String]]
-    """The pipeline's own variables (`env` in orca.toml)."""
+    """The pipeline's own variables (`env` in morca.toml)."""
     var secrets: List[Tuple[String, String]]
     """Its secrets: the variable and the ID the worker reads it by, with its
-    own `ORCA_SECRET_FETCH`."""
+    own `MORCA_SECRET_FETCH`."""
     var grant: Grant
-    """What this start was granted of the worker's host (`orca.resources`);
+    """What this start was granted of the worker's host (`morca.resources`);
     none for a pipeline without a request, or a worker that didn't say
     what it can grant."""
     var members: Int
     """How many more workers its dista cluster may spread over
-    (`orca.run_cluster`); 0 runs it on this worker alone."""
+    (`morca.run_cluster`); 0 runs it on this worker alone."""
 
 
 def _pairs_json(
@@ -428,9 +428,9 @@ def _seen(mut db: State, w: WorkerAuth, v: Value) raises:
 
 
 def _pressure_seen(mut db: State, w: WorkerAuth, v: Value, r: Report) raises:
-    """Keeps a worker's memory pressure (`orca.admission`), says on its
+    """Keeps a worker's memory pressure (`morca.admission`), says on its
     pool's queued runs that they wait for it while it claims none, and
-    alerts once a hold has nothing of orca's to wait for."""
+    alerts once a hold has nothing of morca's to wait for."""
     record_pressure(db, worker_host(w.id), r)
     var name = text_field(v, "name")
     var who = String("worker ", name) if name else w.user()
@@ -481,7 +481,7 @@ def text_field(v: Value, key: String) raises -> String:
 
 def _num(v: Value, key: String) raises -> Int64:
     if key not in v:
-        raise Error("orca: no ", key, " in the request")
+        raise Error("morca: no ", key, " in the request")
     return v[key].int_value()
 
 
@@ -489,7 +489,7 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     """`/api/worker/claim`'s answer: `{"run": <spec>|null, "refused": ...,
     "join": <member spec>, "stop": [member, ...]}`. With no run to start,
     room left and an address the pool's machines reach it at
-    (`advertise`), a run to join (`orca.run_cluster`); and always the
+    (`advertise`), a run to join (`morca.run_cluster`); and always the
     members it has whose run has ended, to stop."""
     var stop = members_to_stop(db, w.id)
     var answer = _claim_run(db, w, v)
@@ -548,7 +548,7 @@ def _claim_run(mut db: State, w: WorkerAuth, v: Value) raises -> String:
         return String('{"run": null}')
     var image = text_field(v, "image")
     var name = text_field(v, "name")
-    # What the worker's host can grant (orca.resources), from a worker that
+    # What the worker's host can grant (morca.resources), from a worker that
     # says; -1 from one that doesn't, whose runs aren't admitted.
     var room_cpus = -1
     var room_mb = -1
@@ -563,7 +563,7 @@ def _claim_run(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     # (its cap, image or request), and a long queue of one pipeline at its
     # max_runs mustn't hide the runs of the others behind it. The other
     # runs first, then the fill runs, each oldest first. One behind an
-    # older run of its keys waits for it (orca.live.behind_sql).
+    # older run of its keys waits for it (morca.live.behind_sql).
     var candidates = db.conn.query(
         "SELECT id, pipeline, trigger FROM (SELECT DISTINCT ON"
         " (r.pipeline, r.trigger = 'fill') r.id, r.pipeline, r.trigger"
@@ -600,8 +600,8 @@ def _claim_run(mut db: State, w: WorkerAuth, v: Value) raises -> String:
                 .bool(fill),
             )
             continue
-        # Its request (orca.resources), `auto` learned from its runs
-        # (orca.recommend), from a worker that says what it can grant.
+        # Its request (morca.resources), `auto` learned from its runs
+        # (morca.recommend), from a worker that says what it can grant.
         var sized = RunRequest(Request(0, 0, 0, 0), "", 0, "")
         if room_cpus >= 0:
             sized = run_request(db, p)
@@ -766,7 +766,7 @@ def release(mut db: State, w: WorkerAuth, v: Value) raises -> String:
 
 
 def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
-    """A worker's run's cgroup (`orca.cgroup`), at its process's end: its
+    """A worker's run's cgroup (`morca.cgroup`), at its process's end: its
     limit on the attempts it made, and after an out-of-memory kill, while
     the start is still this worker's, those left running failed saying so
     and the pipeline's memory raised, up to its request's maximum; killed
@@ -818,7 +818,7 @@ def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
     var ceiling = limit
     if r.text("memory_gb"):
         ceiling = Request.of("", r.text("memory_gb")).memory_max_mb
-    var g = getenv("ORCA_RUN_MEMORY_GROWTH")
+    var g = getenv("MORCA_RUN_MEMORY_GROWTH")
     var next = raised_mb(limit, growth_pct_of(g) if g else 150, ceiling)
     # `held` from a worker that knows it (an older one doesn't send it).
     var held = String("held") in v and _num(v, "held") == 1
@@ -909,7 +909,7 @@ def _run_of(mut db: State, w: WorkerAuth, run: Int64) raises -> String:
     if len(rows) != 1:
         raise Error(
             FINAL,
-            "orca: run ",
+            "morca: run ",
             run,
             " isn't one ",
             w.user(),
@@ -932,7 +932,7 @@ def _check_attempt(mut db: State, run: Int64, attempt_id: Int64) raises:
         != 1
     ):
         raise Error(
-            FINAL, "orca: attempt ", attempt_id, " isn't run ", run, "'s"
+            FINAL, "morca: attempt ", attempt_id, " isn't run ", run, "'s"
         )
 
 
@@ -960,7 +960,7 @@ def store_call(
         return "{}"
     if call == "version":
         if text_field(v, "pipeline") != pipeline:
-            raise Error(FINAL, "orca: run ", run, " is of pipeline ", pipeline)
+            raise Error(FINAL, "morca: run ", run, " is of pipeline ", pipeline)
         var n = store.version(
             pipeline,
             text_field(v, "registry_hash"),
@@ -1054,7 +1054,7 @@ def store_call(
             text_field(v, "timeouts"),
         )
         return String('{"stop": ', quote(why), "}")
-    raise Error("orca: no store call ", call)
+    raise Error("morca: no store call ", call)
 
 
 # ── Ops ──────────────────────────────────────────────────────────────────────

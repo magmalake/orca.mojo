@@ -4,10 +4,10 @@ and the warning on the home page.
 The control instance (Postgres, the scheduler, the UI, Caddy, the apps) runs
 a sampler of its own: a container the stack's user data starts beside the
 scheduler, with the host's process and network namespaces and the host's
-cgroup files and Docker's config files mounted read-only (`orca.sample`
+cgroup files and Docker's config files mounted read-only (`morca.sample`
 `--cgroup` and `--names`). It keeps its last hour of lines in the file
-`ORCA_CONTROL_SAMPLES` names. Every `ORCA_FLEET_SECONDS` the scheduler reads
-the file (`orca.fleet.ingest`) and, here:
+`MORCA_CONTROL_SAMPLES` names. Every `MORCA_FLEET_SECONDS` the scheduler reads
+the file (`morca.fleet.ingest`) and, here:
 
 - rolls the lines it hasn't seen into one row a minute in
   `orca.system_minutes` (CPU, memory, the fullest disk, network: sums to
@@ -16,11 +16,11 @@ the file (`orca.fleet.ingest`) and, here:
   "Hasn't seen" is the newest sample already in a row (`last_t`), so a pass
   again adds nothing;
 - appends those lines, as they are, to a file per UTC day,
-  `<ORCA_LOGS>/control/<date>.jsonl`, so the history outlives the database
+  `<MORCA_LOGS>/control/<date>.jsonl`, so the history outlives the database
   and can be read back whole. In object storage a file is uploaded whole,
-  every `ORCA_CONTROL_UPLOAD_SECONDS` (300) and once its day is over; the
+  every `MORCA_CONTROL_UPLOAD_SECONDS` (300) and once its day is over; the
   stack's bucket expires `logs/control/` after 14 days, and a local
-  `ORCA_LOGS` has files older than that removed.
+  `MORCA_LOGS` has files older than that removed.
 
 A page view reads only those two tables: no file, no bucket. The gauges on
 `/metrics` are the newest minute's, left out once it is older than ten
@@ -35,11 +35,11 @@ from std.time import perf_counter_ns
 from json import Value, loads
 from postgres import Params
 
-from orca.civil import Civil
-from orca.fleet import Series, Summary, _chart, _fixed
-from orca.html import Html, escape
-from orca.json import quote
-from orca.logs import (
+from morca.civil import Civil
+from morca.fleet import Series, Summary, _chart, _fixed
+from morca.html import Html, escape
+from morca.json import quote
+from morca.logs import (
     is_remote,
     location_exists,
     logs_dir,
@@ -47,9 +47,9 @@ from orca.logs import (
     read_location,
     stage_of,
 )
-from orca.metrics import bytes_text
-from orca.sample import append_line
-from orca.state import State
+from morca.metrics import bytes_text
+from morca.sample import append_line
+from morca.state import State
 
 comptime KEEP_DAYS = 14
 """How long the minutes, the containers' and the day files are kept."""
@@ -300,7 +300,7 @@ struct Archive(Movable):
         self.dirty = List[String]()
         self.next = 0
         try:
-            self.seconds = Float64(getenv("ORCA_CONTROL_UPLOAD_SECONDS", "300"))
+            self.seconds = Float64(getenv("MORCA_CONTROL_UPLOAD_SECONDS", "300"))
         except:
             self.seconds = 300.0
 
@@ -316,7 +316,7 @@ def day_of(t: Float64) -> String:
 
 
 def day_file(date: String) -> String:
-    """Where the day's lines go, or "" without `ORCA_LOGS`."""
+    """Where the day's lines go, or "" without `MORCA_LOGS`."""
     var root = logs_dir()
     if not root:
         return ""
@@ -361,7 +361,7 @@ def _archive(
         try:
             publish(loc)
         except e:
-            print("orca: can't upload", loc, ":", e)
+            print("morca: can't upload", loc, ":", e)
             keep.append(date)
     if due:
         archive.next = t + Int(archive.seconds * 1e9)
@@ -432,17 +432,17 @@ def keep(mut db: State, text: String, mut archive: Archive) raises -> Int:
     try:
         _archive(fresh, archive)
     except e:
-        print("orca: can't keep the control instance's day files:", e)
+        print("morca: can't keep the control instance's day files:", e)
     return len(fresh)
 
 
 def trim(mut db: State) raises:
     """Drops what is older than `KEEP_DAYS`, in the database and in a local
-    `ORCA_LOGS`."""
+    `MORCA_LOGS`."""
     for t in ["system_minutes", "system_containers"]:
         _ = db.conn.execute(
             String(
-                "DELETE FROM orca.",
+                "DELETE FROM morca.",
                 t,
                 " WHERE minute < now() - make_interval(days => $1::int)",
             ),
@@ -760,9 +760,9 @@ def system_html(mut h: Html, now: Optional[Now], c: Charts, range: String):
     if not now:
         h.raw(
             '<p class="empty">The control instance has not been sampled yet.',
-            " Its sampler (<code>orca sample --cgroup ...</code>, started by",
+            " Its sampler (<code>morca sample --cgroup ...</code>, started by",
             " the stack's user data) writes the file",
-            " <code>ORCA_CONTROL_SAMPLES</code> names, which the scheduler",
+            " <code>MORCA_CONTROL_SAMPLES</code> names, which the scheduler",
             " reads.</p>",
         )
         return
@@ -1007,79 +1007,79 @@ def _label_value(s: String) -> String:
 
 def prometheus(now: Optional[Now], f: Summary) -> String:
     """The gauges, in Prometheus' text format: the fleet's (`f`, from
-    `orca.fleet`) and the control instance's, which are left out while its
+    `morca.fleet`) and the control instance's, which are left out while its
     samples are stale or missing."""
     var out = String()
     if now and not now.value().stale():
         ref n = now.value()
         _gauge(
             out,
-            "orca_control_cpu_percent",
+            "morca_control_cpu_percent",
             "Control instance CPU, percent of all cores, minute average.",
             _f(n.cpu, 2),
         )
         _gauge(
             out,
-            "orca_control_memory_used_bytes",
+            "morca_control_memory_used_bytes",
             "Control instance memory in use.",
             String(n.mem_used),
         )
         _gauge(
             out,
-            "orca_control_memory_total_bytes",
+            "morca_control_memory_total_bytes",
             "Control instance memory.",
             String(n.mem_total),
         )
         _gauge(
             out,
-            "orca_control_memory_percent",
+            "morca_control_memory_percent",
             "Control instance memory in use, percent.",
             _f(n.mem_pct, 2),
         )
         _gauge(
             out,
-            "orca_control_disk_used_bytes",
+            "morca_control_disk_used_bytes",
             "Used space on the control instance's fullest disk.",
             String(n.disk_used),
         )
         _gauge(
             out,
-            "orca_control_disk_total_bytes",
+            "morca_control_disk_total_bytes",
             "Size of the control instance's fullest disk.",
             String(n.disk_total),
         )
         _gauge(
             out,
-            "orca_control_disk_percent",
+            "morca_control_disk_percent",
             "Control instance's fullest disk, percent used.",
             _f(n.disk_pct, 2),
         )
         _gauge(
             out,
-            "orca_control_network_in_bytes_per_second",
+            "morca_control_network_in_bytes_per_second",
             "Control instance network in, bytes a second.",
             _f(n.net_in, 0),
         )
         _gauge(
             out,
-            "orca_control_network_out_bytes_per_second",
+            "morca_control_network_out_bytes_per_second",
             "Control instance network out, bytes a second.",
             _f(n.net_out, 0),
         )
         _gauge(
             out,
-            "orca_control_sample_age_seconds",
+            "morca_control_sample_age_seconds",
             "Seconds since the control instance's newest sample.",
             _f(n.age, 0),
         )
         out.write(
-            "# HELP orca_control_container_memory_bytes A container's memory,",
+            "# HELP morca_control_container_memory_bytes A container's memory,",
             " as docker stats counts it.\n",
-            "# TYPE orca_control_container_memory_bytes gauge\n",
+            "# TYPE morca_control_container_memory_bytes gauge\n",
         )
         for c in n.containers:
             out.write(
-                'orca_control_container_memory_bytes{container="',
+                'morca_control_container_memory_bytes{container="',
                 _label_value(c.name),
                 '"} ',
                 c.mem,
@@ -1087,30 +1087,30 @@ def prometheus(now: Optional[Now], f: Summary) -> String:
             )
     _gauge(
         out,
-        "orca_runs",
+        "morca_runs",
         "Runs by status, now.",
         String(f.running),
         '{status="running"}',
     )
-    out.write('orca_runs{status="queued"} ', f.queued, "\n")
+    out.write('morca_runs{status="queued"} ', f.queued, "\n")
     _gauge(
         out,
-        "orca_fleet_hosts",
+        "morca_fleet_hosts",
         "Hosts running, by role.",
         String(f.heads),
         '{role="head"}',
     )
-    out.write('orca_fleet_hosts{role="worker"} ', f.workers, "\n")
-    out.write('orca_fleet_hosts{role="control"} ', 1 if f.control else 0, "\n")
+    out.write('morca_fleet_hosts{role="worker"} ', f.workers, "\n")
+    out.write('morca_fleet_hosts{role="control"} ', 1 if f.control else 0, "\n")
     _gauge(
         out,
-        "orca_runs_started_last_hour",
+        "morca_runs_started_last_hour",
         "Runs started in the last 60 minutes.",
         String(f.runs_hour),
     )
     _gauge(
         out,
-        "orca_errors_last_hour",
+        "morca_errors_last_hour",
         (
             "Failures in the last 60 minutes: step attempts (including ones a"
             " retry fixed) and runs."
@@ -1118,5 +1118,5 @@ def prometheus(now: Optional[Now], f: Summary) -> String:
         String(f.failed_attempts_hour),
         '{kind="step_attempts"}',
     )
-    out.write('orca_errors_last_hour{kind="runs"} ', f.failed_runs_hour, "\n")
+    out.write('morca_errors_last_hour{kind="runs"} ', f.failed_runs_hour, "\n")
     return out^

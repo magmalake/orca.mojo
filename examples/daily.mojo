@@ -10,7 +10,7 @@ scheduled at 02:30 New York time for the day before; on 2024-03-10 the clocks
 skip 02:30, so that day's fire is at 03:00. With `catchup=False`, a
 scheduler that was down starts only the latest fire it missed.
 
-ORCA_DAILY_SLEEP makes each day's step take that many seconds, so
+MORCA_DAILY_SLEEP makes each day's step take that many seconds, so
 tests/fill.sh can see its runs while they go.
 """
 
@@ -18,7 +18,7 @@ from std.os import getenv
 from std.time import sleep
 
 from dista import Seq
-from orca import (
+from morca import (
     Cron,
     Ctx,
     Daily,
@@ -27,13 +27,13 @@ from orca import (
     Mapped,
     Pipeline,
     Step,
-    orca_main,
+    morca_main,
 )
 
 
 def trips(mut ctx: Ctx, d: Day) raises -> Int:
     """A stand-in for a day's work: a number that depends on the date."""
-    var nap = getenv("ORCA_DAILY_SLEEP")
+    var nap = getenv("MORCA_DAILY_SLEEP")
     if nap:
         sleep(Float64(nap))
     return d.month * 100 + d.day
@@ -60,4 +60,4 @@ comptime DailyTrips = Pipeline[
 
 
 def main() raises:
-    orca_main[DailyTrips]()
+    morca_main[DailyTrips]()

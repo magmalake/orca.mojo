@@ -1,30 +1,30 @@
 """The Ops pages: Control (`/ops/control`, the machine running the
-scheduler, the UI and Postgres; `orca.system`), the watchdog (`/watchdog`;
-`orca.watchdog`) and Prometheus' `/metrics`, with the fragments each
+scheduler, the UI and Postgres; `morca.system`), the watchdog (`/watchdog`;
+`morca.watchdog`) and Prometheus' `/metrics`, with the fragments each
 refreshes from; Alerts (`/ops/alerts`, where `/ops` goes) is
-`orca.ui.alerts` and Pools (`/ops/pools`) is `orca.ui.pools`. Fleet and
+`morca.ui.alerts` and Pools (`/ops/pools`) is `morca.ui.pools`. Fleet and
 Workers' old paths redirect to Pools (`moved`, `to_pools`).
 """
 
 from std.os import getenv
 
-from orca.admission import (
+from morca.admission import (
     pressure_html,
     pressure_prometheus,
     pressure_rows,
     row_json,
     scheduler_pressure,
 )
-from orca.fleet import fleet_summary
-from orca.html import Html
-from orca.notify import (
+from morca.fleet import fleet_summary
+from morca.html import Html
+from morca.notify import (
     configured as notify_configured,
     notify_html,
     notify_json,
     recent as recent_alerts,
 )
-from orca.state import State
-from orca.system import (
+from morca.state import State
+from morca.system import (
     prometheus,
     range_hours,
     system_charts,
@@ -32,9 +32,9 @@ from orca.system import (
     system_json,
     system_now,
 )
-from orca.ui.contained import host_runs, host_runs_html, host_runs_json
-from orca.ui.layout import page_html
-from orca.watchdog import (
+from morca.ui.contained import host_runs, host_runs_html, host_runs_json
+from morca.ui.layout import page_html
+from morca.watchdog import (
     active_trips,
     banner_html,
     config as watchdog_config,
@@ -44,7 +44,7 @@ from orca.watchdog import (
     watchdog_html,
     watchdog_json,
 )
-from orca.web.page import Page
+from morca.web.page import Page
 
 
 def _system_range(range: String) -> String:
@@ -153,7 +153,7 @@ def to_pools(path: String, range: String, var json: String) -> Page:
     `/fleet/hosts`, the pages Pools replaced: moved for good to Pools,
     filtered to the kind they showed (EC2, self-hosted), Fleet's `?range=`
     kept. `json` is the old page's JSON, which a script asking for JSON
-    still gets, with no redirect (`orca.web.page.respond`)."""
+    still gets, with no redirect (`morca.web.page.respond`)."""
     var workers = path.startswith("/ops/workers")
     var live = path.endswith("/hosts") or path.endswith("/live")
     var to = String(

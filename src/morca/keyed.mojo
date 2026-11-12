@@ -1,7 +1,7 @@
 """Keyed partitions: keys that are names, read from a column of a dataset.
 
 ```mojo
-from orca.keyed import Keyed
+from morca.keyed import Keyed
 
 comptime Labels = Pipeline[
     "labels", Label, Score, partitions=Keyed["av2.logs", "log_id"], keys_per_run=100
@@ -9,7 +9,7 @@ comptime Labels = Pipeline[
 ```
 
 The keys are the distinct values of `column` in the current snapshot of the
-warehouse dataset `dataset` (`ORCA_WAREHOUSE`), each a `Name`. They live in
+warehouse dataset `dataset` (`MORCA_WAREHOUSE`), each a `Name`. They live in
 data rather than in the source because there can be thousands and they
 grow. A value that isn't a name, or is null, isn't a key: it's left out,
 and `keys` says how many there were on stderr. `--partitions` takes a list of names, `@all` for every current key,
@@ -25,9 +25,9 @@ with a keyed pipeline build it.
 
 from std.sys import stderr
 
-from orca.name import Name, parse_names, sort_texts
-from orca.partitions import Partitions
-from orca.tables import load_dataset
+from morca.name import Name, parse_names, sort_texts
+from morca.partitions import Partitions
+from morca.tables import load_dataset
 
 
 def _read_file(path: String) raises -> String:
@@ -109,7 +109,7 @@ struct Keyed[dataset_: StaticString, column_: StaticString](Partitions):
     def fill(
         year: Int, month: Int, day: Int, hour: Int, previous: Bool
     ) raises -> Name:
-        raise Error("orca: keyed partitions have no calendar to fill")
+        raise Error("morca: keyed partitions have no calendar to fill")
 
     @staticmethod
     def keys() raises -> Tuple[Int64, List[String]]:
@@ -146,7 +146,7 @@ struct Keyed[dataset_: StaticString, column_: StaticString](Partitions):
             for i in range(len(bad)):
                 why.write("; " if i else "", bad[i])
             print(
-                "orca: ",
+                "morca: ",
                 Self.dataset_,
                 " (",
                 Self.column_,

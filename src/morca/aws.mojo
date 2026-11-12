@@ -1,43 +1,43 @@
-"""`orca aws`: a project's orca on AWS, with the `aws` and `docker` commands
+"""`morca aws`: a project's morca on AWS, with the `aws` and `docker` commands
 its user already has (`aws login`, or `AWS_PROFILE` for a named profile).
 
-    orca aws up --email you@example.com [--stack orca] [--hostname H]
+    morca aws up --email you@example.com [--stack morca] [--hostname H]
                 [--console-hostname H] [--budget 100] [--zone us-east-2a]
                 [--public-data true|false] [--env KEY=VALUE ...]
-    orca aws push [--tag T]                     # the project's image, to ECR
-    orca aws register [--tag T] [--config F|--no-config] [register flags]
+    morca aws push [--tag T]                     # the project's image, to ECR
+    morca aws register [--tag T] [--config F|--no-config] [register flags]
                       <pipeline> [...]
-    orca aws app <name> [--host H] [--port 8080] [--tag T]
-    orca aws status
-    orca aws replace-control [--plan] [--wait] [--keep-old 24h] [--smoke P=KEY]
+    morca aws app <name> [--host H] [--port 8080] [--tag T]
+    morca aws status
+    morca aws replace-control [--plan] [--wait] [--keep-old 24h] [--smoke P=KEY]
                              [--env KEY=VALUE ...] | --resume | --rollback
-    orca aws down --yes
+    morca aws down --yes
 
-`up` creates or updates the stack from the template orca carries
-(deploy/aws/orca.yaml, in `orca.aws_assets`); the first time it needs
+`up` creates or updates the stack from the template morca carries
+(deploy/aws/morca.yaml, in `morca.aws_assets`); the first time it needs
 `--email`, for the Budgets alert, and makes the database's password. `push`
 builds the project's image from a staged copy of `pixi.toml`, `pixi.lock`,
-`bin/`, `pipelines/` and `src/`, with the project's `Dockerfile.orca` or
+`bin/`, `pipelines/` and `src/`, with the project's `Dockerfile.morca` or
 else the template (deploy/project.Dockerfile, which builds FROM
-`ghcr.io/morca-dev/morca-runtime:<the orca-mojo version in pixi.lock>`),
+`ghcr.io/morca-dev/morca-runtime:<the morca-mojo version in pixi.lock>`),
 for arm64, tagged with the commit (or `--tag`) and `latest`, and pushes it
 to the stack's repository.
 `register` and `app` run on the control instance through SSM: `register`
 moves the scheduler and the UI to the image (`orca-refresh`) and registers
-each pipeline, `/opt/orca/pipelines/<pipeline>`, with the flags given, as
-`orca register` takes them, and the project's `orca.toml` (or `--config`'s
-file; `orca.config`), which it checks and sends whole with its git commit; `app` runs the image's `/opt/orca/bin/<name>`
+each pipeline, `/opt/morca/pipelines/<pipeline>`, with the flags given, as
+`morca register` takes them, and the project's `morca.toml` (or `--config`'s
+file; `morca.config`), which it checks and sends whole with its git commit; `app` runs the image's `/opt/morca/bin/<name>`
 beside the UI, at `https://<host>` (for `console`, the stack's
 `ConsoleHostname`). `--env KEY=VALUE` (repeated) sets the control
 instance's settings beyond the template's (`ControlEnv`, all of them at
 once; never a secret). An update changes no running control instance: its
 boot script is the stack's `ControlBoot`, which a new one runs, and each
 slot's AMI is pinned to the one its instance has. `replace-control`
-(`orca.aws_replace`) boots a new control instance from the template, with
+(`morca.aws_replace`) boots a new control instance from the template, with
 the old one's database, and moves the Elastic IP to it. `down` deletes the
 stack, which fails while its buckets hold objects.
 
-Files go to `build/orca-aws/`. `--stack` (default `orca`) and `--region`
+Files go to `build/morca-aws/`. `--stack` (default `morca`) and `--region`
 (default `AWS_REGION`, else the `aws` command's own) go anywhere.
 """
 
@@ -49,24 +49,24 @@ from std.time import sleep
 
 from json import loads
 
-from orca.aws_assets import PROJECT_DOCKERFILE, STACK_TEMPLATE
-from orca.config import ProjectConfig
-from orca.json import quote
-from orca.proc import capture
+from morca.aws_assets import PROJECT_DOCKERFILE, STACK_TEMPLATE
+from morca.config import ProjectConfig, refuse_orca_toml
+from morca.json import quote
+from morca.proc import capture
 
-comptime _DIR = "build/orca-aws"
+comptime _DIR = "build/morca-aws"
 comptime AWS_USAGE = """usage:
-  orca aws up --email ADDR [--hostname H] [--console-hostname H] [--budget N]
+  morca aws up --email ADDR [--hostname H] [--console-hostname H] [--budget N]
               [--zone AZ] [--public-data true|false] [--env KEY=VALUE ...]
-  orca aws push [--tag T]
-  orca aws register [--tag T] [--config F|--no-config] [register flags]
+  morca aws push [--tag T]
+  morca aws register [--tag T] [--config F|--no-config] [register flags]
                     <pipeline> [...]
-  orca aws app <name> [--host H] [--port 8080] [--tag T]
-  orca aws status
-  orca aws replace-control [--plan] [--wait] [--keep-old 24h] [--smoke P=KEY]
+  morca aws app <name> [--host H] [--port 8080] [--tag T]
+  morca aws status
+  morca aws replace-control [--plan] [--wait] [--keep-old 24h] [--smoke P=KEY]
                            [--env KEY=VALUE ...] | --resume | --rollback
-  orca aws down --yes
-  (each takes --stack NAME, default orca, and --region R)"""
+  morca aws down --yes
+  (each takes --stack NAME, default morca, and --region R)"""
 
 comptime _VALUED = [
     "--stack",
@@ -84,7 +84,7 @@ comptime _VALUED = [
     "--keep-old",
     "--smoke",
 ]
-"""`orca aws`'s own options with a value; any other is `register`'s."""
+"""`morca aws`'s own options with a value; any other is `register`'s."""
 comptime _REGISTER_VALUED = [
     "--head-type",
     "--worker-type",
@@ -137,7 +137,7 @@ def _system(cmd: String) raises -> Int:
     c.append(0)
     var s = Int(external_call["system", c_int](c.unsafe_ptr()))
     if s < 0:
-        raise Error("orca aws: can't run ", cmd)
+        raise Error("morca aws: can't run ", cmd)
     return (s >> 8) & 0xFF if s & 0x7F == 0 else 128 + (s & 0x7F)
 
 
@@ -145,14 +145,14 @@ def _run(cmd: String) raises:
     print("+", cmd)
     var code = _system(cmd)
     if code != 0:
-        raise Error("orca aws: exit ", code, ": ", cmd)
+        raise Error("morca aws: exit ", code, ": ", cmd)
 
 
 def _out(cmd: String) raises -> String:
     """`cmd`'s standard output, stripped; raises if it fails."""
     var got = capture(["sh", "-c", cmd])
     if got[0] != 0:
-        raise Error("orca aws: exit ", got[0], ": ", cmd)
+        raise Error("morca aws: exit ", got[0], ": ", cmd)
     return String(got[1].strip())
 
 
@@ -180,10 +180,10 @@ struct _Opts(Movable):
     var rollback: Bool
     var resume: Bool
     var rest: List[String]
-    """The arguments that aren't `orca aws`'s own options, in order."""
+    """The arguments that aren't `morca aws`'s own options, in order."""
 
     def __init__(out self, args: List[String], start: Int) raises:
-        self.stack = String("orca")
+        self.stack = String("morca")
         self.region = getenv("AWS_REGION")
         self.tag = String()
         self.email = String()
@@ -231,7 +231,7 @@ struct _Opts(Movable):
                 i += 1
                 continue
             if i + 1 >= len(args):
-                raise Error("orca aws: ", a, " needs a value")
+                raise Error("morca aws: ", a, " needs a value")
             var v = args[i + 1]
             if a == "--stack":
                 self.stack = v
@@ -251,14 +251,14 @@ struct _Opts(Movable):
                 self.zone = v
             elif a == "--public-data":
                 if v != "true" and v != "false":
-                    raise Error("orca aws: --public-data is true or false")
+                    raise Error("morca aws: --public-data is true or false")
                 self.public_data = v
             elif a == "--host":
                 self.host = v
             elif a == "--env":
                 var why = env_problem(v)
                 if why:
-                    raise Error("orca aws: --env ", why)
+                    raise Error("morca aws: --env ", why)
                 self.env.append(v)
             elif a == "--keep-old":
                 self.keep_old = v
@@ -299,7 +299,7 @@ def _outputs(o: _Opts) raises -> Dict[String, String]:
 def _output(outs: Dict[String, String], key: String) raises -> String:
     var v = outs.get(key, "")
     if not v:
-        raise Error("orca aws: the stack has no output ", key)
+        raise Error("morca aws: the stack has no output ", key)
     return v^
 
 
@@ -333,25 +333,25 @@ def _git(args: String) -> String:
         return ""
 
 
-def lock_orca_version(lock: String) -> String:
-    """The orca-mojo version a project's pixi.lock resolved, which names the
-    runtime image its Dockerfile builds FROM (`orca-runtime:<version>`):
-    a source package's record (`- conda_source: orca-mojo[...] @ git+...`,
+def lock_morca_version(lock: String) -> String:
+    """The morca-mojo version a project's pixi.lock resolved, which names the
+    runtime image its Dockerfile builds FROM (`morca-runtime:<version>`):
+    a source package's record (`- conda_source: morca-mojo[...] @ git+...`,
     then its `version:` line) or a channel package's file name
-    (`- conda: .../orca-mojo-0.24.0-<build>.conda`); "" if it has neither."""
-    var in_orca = False
+    (`- conda: .../morca-mojo-0.24.0-<build>.conda`); "" if it has neither."""
+    var in_morca = False
     for raw in lock.split("\n"):
         var line = String(raw)
         if line.startswith("- "):
-            in_orca = line.startswith("- conda_source: orca-mojo[")
-            var at = line.find("/orca-mojo-")
+            in_morca = line.startswith("- conda_source: morca-mojo[")
+            var at = line.find("/morca-mojo-")
             if line.startswith("- conda: ") and at >= 0:
                 var rest = String(line[byte = at + 11 :])
                 var dash = rest.find("-")
                 if dash > 0:
                     return String(rest[byte=:dash])
             continue
-        if in_orca:
+        if in_morca:
             var t = String(raw.strip())
             if t.startswith("version: "):
                 return String(t[byte=9:].strip())
@@ -373,7 +373,7 @@ def _up(o: _Opts) raises -> Int:
     if not _stack_exists(o):
         if not o.email:
             print(
-                "orca aws up: a new stack needs --email, for its budget alert"
+                "morca aws up: a new stack needs --email, for its budget alert"
             )
             return 2
         # The database's password, made once; updates keep it.
@@ -401,13 +401,13 @@ def _up(o: _Opts) raises -> Int:
         var outs = _outputs(o)
         if "ActiveControl" not in outs and not o.yes:
             print(
-                "orca aws up: the stack",
+                "morca aws up: the stack",
                 o.stack,
                 (
                     "predates the control instance's slots: this update"
                     " moves its boot script out of its user data, so"
                     " CloudFormation stops and starts it once. Pause its"
-                    " pipelines and run it again with --yes, or let orca aws"
+                    " pipelines and run it again with --yes, or let morca aws"
                     " replace-control make the update with a new instance."
                 ),
             )
@@ -428,9 +428,9 @@ def control_env(o: _Opts) -> String:
 
 
 def deploy(o: _Opts, params: List[String], show: Bool) raises:
-    """`cloudformation deploy` of the template orca carries with `params`
+    """`cloudformation deploy` of the template morca carries with `params`
     (the others keep their values), printing them if `show`."""
-    var template = String(_DIR, "/orca.yaml")
+    var template = String(_DIR, "/morca.yaml")
     _write(template, STACK_TEMPLATE)
     var cmd = o.aws(
         String(
@@ -455,7 +455,7 @@ def deploy(o: _Opts, params: List[String], show: Bool) raises:
     print(shown)
     var code = _system(cmd)
     if code != 0:
-        raise Error("orca aws: cloudformation deploy exited ", code)
+        raise Error("morca aws: cloudformation deploy exited ", code)
 
 
 def image_of(o: _Opts, instance: String) raises -> String:
@@ -497,7 +497,7 @@ def _status(o: _Opts) raises -> Int:
 def _push(o: _Opts) raises -> Int:
     if not exists("pixi.toml") or not exists("bin/scheduler.mojo"):
         print(
-            "orca aws push: run it in the project, which needs pixi.toml and"
+            "morca aws push: run it in the project, which needs pixi.toml and"
             " bin/scheduler.mojo"
         )
         return 2
@@ -506,7 +506,7 @@ def _push(o: _Opts) raises -> Int:
         manifest = f.read()
     if '"linux-aarch64"' not in manifest:
         print(
-            "orca aws push: the image is linux-aarch64, which pixi.toml's"
+            "morca aws push: the image is linux-aarch64, which pixi.toml's"
             " platforms don't list; add it with\n    pixi workspace platform"
             " add linux-aarch64"
         )
@@ -528,17 +528,17 @@ def _push(o: _Opts) raises -> Int:
             "/; done",
         )
     )
-    # The template builds FROM the runtime image of the orca the project
-    # pins (deploy/project.Dockerfile); a Dockerfile.orca may use it too.
+    # The template builds FROM the runtime image of the morca the project
+    # pins (deploy/project.Dockerfile); a Dockerfile.morca may use it too.
     var lock: String
     with open("pixi.lock", "r") as f:
         lock = f.read()
-    var orca_version = lock_orca_version(lock)
-    var dockerfile = String("Dockerfile.orca")
+    var morca_version = lock_morca_version(lock)
+    var dockerfile = String("Dockerfile.morca")
     if not exists(dockerfile):
-        if not orca_version:
+        if not morca_version:
             print(
-                "orca aws push: pixi.lock has no orca-mojo, whose version"
+                "morca aws push: pixi.lock has no morca-mojo, whose version"
                 " names the image the project's builds on"
                 " (ghcr.io/morca-dev/morca-runtime:<version>); run pixi"
                 " install first"
@@ -547,17 +547,17 @@ def _push(o: _Opts) raises -> Int:
         dockerfile = String(_DIR, "/Dockerfile")
         _write(dockerfile, PROJECT_DOCKERFILE)
     var version_arg = String("")
-    if orca_version:
-        version_arg = String(" --build-arg ORCA_VERSION=", _q(orca_version))
+    if morca_version:
+        version_arg = String(" --build-arg MORCA_VERSION=", _q(morca_version))
     var image = String(repo, ":", tag)
     _run(
         String(
             "docker build --platform linux/arm64 -f ",
             _q(dockerfile),
             version_arg,
-            " --build-arg ORCA_SOURCE=",
+            " --build-arg MORCA_SOURCE=",
             _q(_git("remote get-url origin")),
-            " --build-arg ORCA_COMMIT=",
+            " --build-arg MORCA_COMMIT=",
             _q(_git("rev-parse HEAD")),
             " -t ",
             _q(image),
@@ -602,7 +602,7 @@ def ssm_run(
             String(
                 "ssm send-command --instance-ids ",
                 _q(instance),
-                " --document-name AWS-RunShellScript --comment 'orca aws'",
+                " --document-name AWS-RunShellScript --comment 'morca aws'",
                 " --parameters ",
                 _q(params),
                 " --query Command.CommandId --output text",
@@ -638,7 +638,7 @@ def ssm_run(
     if err and err != "None":
         print(err)
     if status != "Success":
-        print("orca aws: the command on", instance, "", status)
+        print("morca aws: the command on", instance, "", status)
         return (3, text^)
     return (0, text^)
 
@@ -652,7 +652,7 @@ def _register(o: _Opts) raises -> Int:
     while i < len(o.rest):
         var a = o.rest[i]
         if a == "--image":
-            print("orca aws register: the image is the project's, from push")
+            print("morca aws register: the image is the project's, from push")
             return 2
         if a == "--config" and i + 1 < len(o.rest):
             config_path = o.rest[i + 1]
@@ -676,23 +676,25 @@ def _register(o: _Opts) raises -> Int:
             pipelines.append(a)
         i += 1
     if len(pipelines) == 0:
-        print("orca aws register needs a pipeline, as named in pipelines/")
+        print("morca aws register needs a pipeline, as named in pipelines/")
         return 2
     var outs = _outputs(o)
     var repo = _output(outs, "Repository")
     var tag = _tag(o)
     var reg = String(
-        "docker exec scheduler orca register --image ",
+        "docker exec scheduler morca register --image ",
         _q(String(repo, ":", tag)),
         flags,
     )
-    # The project's orca.toml (orca.config), read and checked here and sent
+    # The project's morca.toml (morca.config), read and checked here and sent
     # whole, with its commit: the control instance has no checkout.
     if not no_config:
         if not config_path:
-            config_path = getenv("ORCA_CONFIG")
-        if not config_path and exists("orca.toml"):
-            config_path = String("orca.toml")
+            config_path = getenv("MORCA_CONFIG")
+        if not config_path and exists("morca.toml"):
+            config_path = String("morca.toml")
+        if not config_path:
+            refuse_orca_toml()
     if config_path:
         var file = ProjectConfig.load(config_path)
         var text: String
@@ -710,21 +712,21 @@ def _register(o: _Opts) raises -> Int:
         if file.dirty:
             reg.write(" --config-dirty")
         print(
-            "orca aws register: with",
+            "morca aws register: with",
             config_path,
             String("(sha256 ", file.hash[byte=:12], ")"),
         )
     else:
         reg.write(" --no-config")
     for p in pipelines:
-        reg.write(" ", _q(String("/opt/orca/pipelines/", p)))
+        reg.write(" ", _q(String("/opt/morca/pipelines/", p)))
     var cmds: List[String] = [String("orca-refresh ", _q(tag)), reg^]
     return _ssm(o, _output(outs, "ControlInstance"), cmds)
 
 
 def _app(o: _Opts) raises -> Int:
     if len(o.rest) != 1:
-        print("orca aws app needs the app's name, a bin/<name>.mojo")
+        print("morca aws app needs the app's name, a bin/<name>.mojo")
         return 2
     var name = o.rest[0]
     var outs = _outputs(o)
@@ -732,7 +734,7 @@ def _app(o: _Opts) raises -> Int:
     if not host and name == "console":
         host = outs.get("ConsoleHostname", "")
     if not host:
-        print("orca aws app needs --host")
+        print("morca aws app needs --host")
         return 2
     var cmds = List[String]()
     if o.tag:
@@ -747,7 +749,7 @@ def _app(o: _Opts) raises -> Int:
 def _down(o: _Opts) raises -> Int:
     if not o.yes:
         print(
-            "orca aws down deletes the stack",
+            "morca aws down deletes the stack",
             o.stack,
             (
                 "and everything in it: the control instance, its database,"
@@ -768,7 +770,7 @@ def _down(o: _Opts) raises -> Int:
     )
     if code != 0:
         print(
-            "orca aws: the stack didn't delete. A bucket or the repository"
+            "morca aws: the stack didn't delete. A bucket or the repository"
             " that still holds something stays: empty it (aws s3 rm"
             " --recursive s3://<bucket>) and run down again."
         )
@@ -778,7 +780,7 @@ def _down(o: _Opts) raises -> Int:
 
 
 def aws_command(args: List[String]) raises -> Int:
-    """`orca aws <cmd> ...`: `args` is the whole command line."""
+    """`morca aws <cmd> ...`: `args` is the whole command line."""
     if len(args) < 3:
         print(AWS_USAGE)
         return 2

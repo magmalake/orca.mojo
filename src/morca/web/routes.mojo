@@ -1,51 +1,51 @@
-"""Every path `orca ui` answers, and what answers it: the route table
-`orca.web.server` serves (`orca.web.router` for how a path matches).
+"""Every path `morca ui` answers, and what answers it: the route table
+`morca.web.server` serves (`morca.web.router` for how a path matches).
 
 Each handler here only takes the request's parameters out of the `Call`
-and hands them to the page (`orca.ui`) or the action (`orca.api.actions`)
+and hands them to the page (`morca.ui`) or the action (`morca.api.actions`)
 that does the work. A page answers HTML, or its JSON to `Accept:
 application/json` or `?format=json` (`/api/...` always JSON). The worker
-API (`/api/worker/...`) has a table of its own, `orca.api.worker`, and the
+API (`/api/worker/...`) has a table of its own, `morca.api.worker`, and the
 stylesheet is served before any route is looked up.
 
 | Path | |
 |---|---|
-| `/` | pipelines, with their coverage (`orca.coverage`: partitions or keys done of those it has, `coverage` in the JSON), schedules, next runs and last runs |
-| `/pipelines/<name>` | `?tab=overview` (default), `runs` or `operate`, each its own page; a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`orca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; its registration as `orca config show` prints it (`#config`, Overview); `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing; `?steps=graph` or `table`: the Steps tab shown without scripts |
-| `/pipelines/<name>/progress` | the page's Progress card (runs going, fill, how far a sensor is behind what it follows (`orca.follow`), next run, coverage), as an HTML fragment the page refreshes every 5 s; `?tab=` is the tab polling it, which its "Log in to ..." links come back to |
+| `/` | pipelines, with their coverage (`morca.coverage`: partitions or keys done of those it has, `coverage` in the JSON), schedules, next runs and last runs |
+| `/pipelines/<name>` | `?tab=overview` (default), `runs` or `operate`, each its own page; a pipeline's steps, partitions, schedule, next runs and runs; a keyed one's keys, done, live and failed; its fill (`morca.fill`): done of total, rate, ETA, today's estimated spend against its budget and why it's idle; its registration as `morca config show` prints it (`#config`, Overview); `?preview=1&partitions=` (`&rerun=1`): what Start runs would queue, queueing nothing; `?steps=graph` or `table`: the Steps tab shown without scripts |
+| `/pipelines/<name>/progress` | the page's Progress card (runs going, fill, how far a sensor is behind what it follows (`morca.follow`), next run, coverage), as an HTML fragment the page refreshes every 5 s; `?tab=` is the tab polling it, which its "Log in to ..." links come back to |
 | `/api/pipelines/<name>` | the same as JSON, whatever is asked for |
-| `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=` a month or year, `?cov=month` or `year`: a daily one's tab, year by default, both from one read of the year in `orca.ui.coverage`) and as the Start runs form's date picker |
+| `/pipelines/<name>/calendar` | a daily or monthly pipeline's days (months) of `?month=2023-01` (`2023`) with their state, as JSON: done, failed, live, open, outside; the page shows it as coverage (`?cal=` a month or year, `?cov=month` or `year`: a daily one's tab, year by default, both from one read of the year in `morca.ui.coverage`) and as the Start runs form's date picker |
 | `/pipelines/<name>/keys/<key>` | one key of a keyed pipeline: its steps in every run it was in |
 | `/runs` | runs, newest first, `?limit=` (or `?n=`; 50, at most 500) to a page; `?pipeline=`, `?status=` (one or more), `?trigger=`, `?from=`, `?to=`, `?since=`, `?key=` (a partition: a glob or a part), `?run=` (goes to that run), `?batch=` (the runs queued together in one backfill, fill pass or sensor pass); `?before=<id>`: the page older than that run, `?after=<id>`: the page newer than it (keyset, so pages stay put as runs arrive); the JSON's `next`, `prev` (and `next_url`, `prev_url`) are the cursors either side. A pipeline's Runs tab pages and filters the same, 20 to a page (`runs_page` in its JSON). Each status's count under the other filters is the JSON's `counts` |
 | `/runs/table` | a runs list's page as the fragment it refreshes from: `?view=list` (`/runs`), `pipeline` (a pipeline's Runs tab) or `home` (recent runs, a row per batch), with the list's filters, `limit` and cursor; `X-Poll-Every` says when to ask again (5 s while a run on it is queued or running, 30 s on the newest page otherwise), and an older page with nothing going on answers 286 |
 | `/home/pipelines` | the home page's table of pipelines, as the fragment it refreshes from (5 s while a run is queued or running, else 30 s) |
 | `/runs/<id>` | a run's cards (Status, Partitions & trigger, Code, Resources, Settings), its steps (`?steps=table` (default), `timeline` or `graph`: the Steps tab shown without scripts), its machines, and the snapshots each step read and wrote |
 | `/runs/<id>/attempts/<attempt>` | an attempt's log, with its error; its facts refresh from `/runs/<id>/attempts/<attempt>/facts` while it runs |
-| `/code` | `?u=` a link to a file at a commit on GitHub: its lines and each coloured as HTML (`orca.highlight`), as JSON, for the code shown on hover; the UI fetches the file, so a browser needn't reach GitHub. With `&at=` a line, only that `def`'s signature, coloured, and its docstring's first paragraph, for a step's card (`orca.ui.step_cards`) |
-| `/runs/<id>/timeline.json` | the run's Dista timeline, which its page draws (`orca.ui.viz`) and Perfetto opens |
-| `/api/gantt` | the pipelines in dataset order with their runs over `?window=1h`, `6h`, `24h` (default) or `7d`, and the runs each started: the home page's Timeline tab (`orca.ui.viz`) |
+| `/code` | `?u=` a link to a file at a commit on GitHub: its lines and each coloured as HTML (`morca.highlight`), as JSON, for the code shown on hover; the UI fetches the file, so a browser needn't reach GitHub. With `&at=` a line, only that `def`'s signature, coloured, and its docstring's first paragraph, for a step's card (`morca.ui.step_cards`) |
+| `/runs/<id>/timeline.json` | the run's Dista timeline, which its page draws (`morca.ui.viz`) and Perfetto opens |
+| `/api/gantt` | the pipelines in dataset order with their runs over `?window=1h`, `6h`, `24h` (default) or `7d`, and the runs each started: the home page's Timeline tab (`morca.ui.viz`) |
 | `/runs/<id>/driver.log` | the run's driver output, as the scheduler kept it |
-| `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`orca.metrics`) |
+| `/runs/<id>/metrics` | the run's machines: charts and peaks from its samples (`morca.metrics`) |
 | `/ops` | redirects to `/ops/alerts`; "Ops" in the nav has Alerts, Control, Pools and Watchdog under it |
-| `/ops/alerts` | Alerts (`orca.ui.alerts`): every alert sent (`orca.alerts`), newest first, 50 to a page (`?limit=`, at most 500; `?before=<id>`, `?after=<id>`), `?kind=` and `?state=open` or `resolved`; its kind, title and message, links, whether ntfy took it and whether it is still open; the newest page refreshes every 30 s from `/ops/alerts/live`; `/api/alerts` is the same as JSON |
-| `/ops/control` | Control, the one machine running the scheduler, this UI, Postgres and local and control-placed runs (so not a pool on Pools): its own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`orca.system`), and the watchdog's banner, refreshed every 30 s from `/ops/control/live`; `/api/system` is the same as JSON; `/system` redirects here (301) |
+| `/ops/alerts` | Alerts (`morca.ui.alerts`): every alert sent (`orca.alerts`), newest first, 50 to a page (`?limit=`, at most 500; `?before=<id>`, `?after=<id>`), `?kind=` and `?state=open` or `resolved`; its kind, title and message, links, whether ntfy took it and whether it is still open; the newest page refreshes every 30 s from `/ops/alerts/live`; `/api/alerts` is the same as JSON |
+| `/ops/control` | Control, the one machine running the scheduler, this UI, Postgres and local and control-placed runs (so not a pool on Pools): its own health: CPU, memory, the disk Postgres is on and network over `?range=24h`, `7d` or `14d`, and each container's memory (`morca.system`), and the watchdog's banner, refreshed every 30 s from `/ops/control/live`; `/api/system` is the same as JSON; `/system` redirects here (301) |
 | `/metrics` | Prometheus gauges: the control instance's CPU, memory, disk, network and containers' memory, runs running and queued, hosts, and errors in the last hour; open like the other pages (reads need no login) |
-| `/ops/pools` | Pools, every machine runs are placed on (`orca.ui.pools`, `orca.views.pools`): a row per EC2 instance orca launched (live, and gone for an hour after it ended), per live Kubernetes run's pods (on the Kubernetes runner) and per worker token's machine (`orca.workers`), with its pool, kind, state, image, CPUs, memory, runs, last heartbeat, CPU and worker; `?pool=` (`ec2`, `kubernetes`, `worker:<pool>`) and `?kind=` (`ec2`, `k8s`, `self-hosted`) filter it; machines gone for over an hour are behind `?gone=1`; with EC2 in view, Fleet's cards (`orca.fleet`) and its charts over `?range=24h` or `7d`; refreshed every 10 s from `/ops/pools/live`; `/api/pools` the same as JSON, every machine unless `?gone=0` |
+| `/ops/pools` | Pools, every machine runs are placed on (`morca.ui.pools`, `morca.views.pools`): a row per EC2 instance morca launched (live, and gone for an hour after it ended), per live Kubernetes run's pods (on the Kubernetes runner) and per worker token's machine (`orca.workers`), with its pool, kind, state, image, CPUs, memory, runs, last heartbeat, CPU and worker; `?pool=` (`ec2`, `kubernetes`, `worker:<pool>`) and `?kind=` (`ec2`, `k8s`, `self-hosted`) filter it; machines gone for over an hour are behind `?gone=1`; with EC2 in view, Fleet's cards (`morca.fleet`) and its charts over `?range=24h` or `7d`; refreshed every 10 s from `/ops/pools/live`; `/api/pools` the same as JSON, every machine unless `?gone=0` |
 | `/ops/pools/<kind>/<id>` | a machine: its facts, and an EC2 instance's samples over its run (the run page's Machines charts) or the runs a worker claimed |
-| `/ops/fleet`, `/ops/workers` | moved to `/ops/pools?kind=ec2` (Fleet's `?range=` kept) and `?kind=self-hosted` (301), as are `/ops/fleet/hosts`, `/ops/workers/live`, `/fleet` and `/fleet/hosts` (to `/ops/pools/live` for the fragments); asked for JSON, they answer Fleet's and Workers' JSON as before, as `/api/fleet` (the summary, hosts and charts of `orca.fleet`) and `/api/workers` (each worker token's pool, label, worker, image, last heartbeat, runs, CPUs and memory) do. A worker's own requests go to `/api/worker/...` with its token |
-| `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`orca.watchdog`); also the red banner on `/`, `/ops/pools` and `/ops/control`; the page refreshes every 30 s from `/watchdog/live` |
+| `/ops/fleet`, `/ops/workers` | moved to `/ops/pools?kind=ec2` (Fleet's `?range=` kept) and `?kind=self-hosted` (301), as are `/ops/fleet/hosts`, `/ops/workers/live`, `/fleet` and `/fleet/hosts` (to `/ops/pools/live` for the fragments); asked for JSON, they answer Fleet's and Workers' JSON as before, as `/api/fleet` (the summary, hosts and charts of `morca.fleet`) and `/api/workers` (each worker token's pool, label, worker, image, last heartbeat, runs, CPUs and memory) do. A worker's own requests go to `/api/worker/...` with its token |
+| `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`morca.watchdog`); also the red banner on `/`, `/ops/pools` and `/ops/control`; the page refreshes every 30 s from `/watchdog/live` |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), what a rebuild of it runs, and its snapshots; `?preview=1&partitions=`: a rebuild's runs by level, queueing nothing |
 | `/datasets/<name>?before=<cursor>` | its snapshots 50 to a page, newest first; `?after=` for the newer page, the cursor `<attempt>.<snapshot>` (`snapshots_page` in the JSON) |
-| `/datasets/<name>/snapshots/<id>` | a snapshot's lineage (`orca.lineage`): its diagram, Upstream (`back` in the JSON: the snapshot, if a run wrote it, and the snapshots it was written from, with the run and step that wrote each and what that step read) and Downstream (`forward`: the snapshots written from it) |
-| `/rebuilds/<id>` | a rebuild's pipelines by level, with their runs (`orca.sensors`) |
+| `/datasets/<name>/snapshots/<id>` | a snapshot's lineage (`morca.lineage`): its diagram, Upstream (`back` in the JSON: the snapshot, if a run wrote it, and the snapshots it was written from, with the run and step that wrote each and what that step read) and Downstream (`forward`: the snapshots written from it) |
+| `/rebuilds/<id>` | a rebuild's pipelines by level, with their runs (`morca.sensors`) |
 
-The actions, each a `POST`, are `orca.api.actions`'; `/login`, `/logout`,
-`/api/login` and `/api/logout` are `orca.web.auth`'s.
+The actions, each a `POST`, are `morca.api.actions`'; `/login`, `/logout`,
+`/api/login` and `/api/logout` are `morca.web.auth`'s.
 """
 
-from orca.api import actions
-from orca.api.ops import (
+from morca.api import actions
+from morca.api.ops import (
     fleet_api,
     fleet_json,
     gantt_api,
@@ -53,21 +53,21 @@ from orca.api.ops import (
     watchdog_api,
     workers_api,
 )
-from orca.api.pipelines import calendar_page, pipeline_json
-from orca.api.runs import run_json
-from orca.state import State
-from orca.ui.alerts import alerts, alerts_api, alerts_live
-from orca.ui.attempt import attempt, attempt_facts, attempt_log
-from orca.ui.code import code_page
-from orca.ui.datasets import (
+from morca.api.pipelines import calendar_page, pipeline_json
+from morca.api.runs import run_json
+from morca.state import State
+from morca.ui.alerts import alerts, alerts_api, alerts_live
+from morca.ui.attempt import attempt, attempt_facts, attempt_log
+from morca.ui.code import code_page
+from morca.ui.datasets import (
     dataset_page,
     datasets_page,
     rebuild_page,
     snapshot_page,
 )
-from orca.ui.home import home, home_pipelines
-from orca.ui.layout import not_found
-from orca.ui.ops import (
+from morca.ui.home import home, home_pipelines
+from morca.ui.layout import not_found
+from morca.ui.ops import (
     control_live,
     metrics_page,
     moved,
@@ -77,7 +77,7 @@ from orca.ui.ops import (
     watchdog_live,
     watchdog_page,
 )
-from orca.ui.pools import (
+from morca.ui.pools import (
     PoolsAsk,
     machine_page,
     pools_api,
@@ -85,13 +85,13 @@ from orca.ui.pools import (
     pools_live,
     pools_page,
 )
-from orca.ui.pipeline import (
+from morca.ui.pipeline import (
     key_page,
     pipeline_html,
     pipeline_progress,
     pipeline_progress_here,
 )
-from orca.ui.run import (
+from morca.ui.run import (
     cluster_log,
     driver_log,
     run_html,
@@ -100,10 +100,10 @@ from orca.ui.run import (
     run_steps,
     timeline,
 )
-from orca.ui.runs import jumped, runs, runs_fragment_query, runs_table
-from orca.views.pipelines import PipelineAsk, pipeline_view
-from orca.views.runs import run_view, runs_query
-from orca.web.auth import (
+from morca.ui.runs import jumped, runs, runs_fragment_query, runs_table
+from morca.views.pipelines import PipelineAsk, pipeline_view
+from morca.views.runs import run_view, runs_query
+from morca.web.auth import (
     API_LOGIN,
     API_LOGOUT,
     LOGIN,
@@ -114,8 +114,8 @@ from orca.web.auth import (
     login_form,
     logout,
 )
-from orca.web.page import Page
-from orca.web.router import Call, Route, action, auth, page
+from morca.web.page import Page
+from morca.web.router import Call, Route, action, auth, page
 
 
 def routes() -> List[Route]:
@@ -184,13 +184,13 @@ def routes() -> List[Route]:
         page("/watchdog/live", _watchdog_live),
         page("/api/watchdog", _watchdog_api),
         page("/api/gantt", _gantt),
-        # Logging in and out (orca.web.auth).
+        # Logging in and out (morca.web.auth).
         page(LOGIN, login_form),
         auth(LOGIN, login),
         auth(LOGOUT, logout),
         auth(API_LOGIN, api_login),
         auth(API_LOGOUT, api_logout),
-        # The actions (orca.api.actions).
+        # The actions (morca.api.actions).
         action("/pipelines/{name}/runs", actions.start),
         action("/pipelines/{name}/backfill", actions.backfill),
         action("/pipelines/{name}/cancel", actions.cancel_pipeline),

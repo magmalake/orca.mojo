@@ -2,14 +2,14 @@
 alive.
 
 A running run's process is taken to have died when its heartbeat is older
-than the stale limit (`ORCA_STALE_SECONDS`), or, before its first beat, when
+than the stale limit (`MORCA_STALE_SECONDS`), or, before its first beat, when
 the scheduler started it longer ago than the start grace
-(`ORCA_START_SECONDS`). A live run holds its partition keys: the
+(`MORCA_START_SECONDS`). A live run holds its partition keys: the
 scheduler, sensors, rebuilds and the UI's start queue no second run over a
 key a live run has.
 
 **Held by its scheduler instance.** A local or control-placed run started
-by an `orca scheduler` with ORCA_OVERLAP=on records that instance
+by an `morca scheduler` with MORCA_OVERLAP=on records that instance
 (`runs.instance`, a row of `orca.schedulers`: docs/overlap.md). It isn't
 dead while that instance has been seen within the stale limit and lists
 it among its runs, whatever its heartbeat: the instance kills a
@@ -24,20 +24,20 @@ from postgres import Params, Transaction
 
 
 def stale_limit() raises -> Float64:
-    """`ORCA_STALE_SECONDS` (default 30): how old a running run's heartbeat
+    """`MORCA_STALE_SECONDS` (default 30): how old a running run's heartbeat
     is when its process is taken to have died."""
-    return Float64(getenv("ORCA_STALE_SECONDS", "30"))
+    return Float64(getenv("MORCA_STALE_SECONDS", "30"))
 
 
 def start_grace(stale: Float64) raises -> Float64:
-    """`ORCA_START_SECONDS`: how long a run the scheduler started may go
+    """`MORCA_START_SECONDS`: how long a run the scheduler started may go
     without a heartbeat. By default the stale limit for local runs, and 300
     s on Kubernetes or EC2, where a pod or an instance can take minutes to
     start."""
-    var runner = getenv("ORCA_RUNNER", "local")
+    var runner = getenv("MORCA_RUNNER", "local")
     return Float64(
         getenv(
-            "ORCA_START_SECONDS",
+            "MORCA_START_SECONDS",
             "300" if runner == "kubernetes"
             or runner == "ec2" else String(stale),
         )
@@ -189,7 +189,7 @@ def live_runs(
 ) raises -> Dict[String, Int]:
     """The keys of `pipeline` in a live run, each with the first such run.
     Callers that then queue a run hold the pipeline's row `FOR UPDATE`, as
-    `orca.scheduler` does, so two can't both see a key free."""
+    `morca.scheduler` does, so two can't both see a key free."""
     var out = Dict[String, Int]()
     for r in tx.query(live_sql(), Params().text(pipeline)):
         out[r.text("key")] = Int(r.int64("id"))

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Six processes appending to one new table at once, five times: every one
 # commits, once. Writers that clash on a metadata version all back out, so
-# orca.tables retries after a random, growing wait; retrying at once, a
+# morca.tables retries after a random, growing wait; retrying at once, a
 # round lost up to half its writers. In memory, with the lineage test's
 # ingest pipeline (tests/lineage/), which appends three rows a month.
 #
@@ -19,14 +19,14 @@ rounds=${COMMIT_ROUNDS:-5}
 mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src -I tests/lineage $DEP_INC tests/lineage/ingest.mojo -o build/ln-ingest
-export ORCA_WAREHOUSE=build/commits-wh
+export MORCA_WAREHOUSE=build/commits-wh
 months=$(seq -f %02g 1 "$writers")
 
 # The newest metadata file: the highest version (one file per version once
 # every writer is done).
 newest() {
     # shellcheck disable=SC2012
-    ls "$ORCA_WAREHOUSE"/lake/raw/metadata/*.metadata.json | sort | tail -1
+    ls "$MORCA_WAREHOUSE"/lake/raw/metadata/*.metadata.json | sort | tail -1
 }
 
 # Prints what's wrong with the table after a round, or nothing.
@@ -56,17 +56,17 @@ dump() {
         (.snapshots | sort_by(.["sequence-number"]) | .[]
             | "  snapshot \(.["snapshot-id"]) parent \(.["parent-snapshot-id"] // "-") seq \(.["sequence-number"]): \(.summary.operation) partition \(.summary["orca.partition"]) added-records \(.summary["added-records"]) added-data-files \(.summary["added-data-files"]) total-records \(.summary["total-records"]) total-data-files \(.summary["total-data-files"])")' "$1"
     echo "metadata files:"
-    ls "$ORCA_WAREHOUSE"/lake/raw/metadata/ | grep metadata.json | sed 's/^/  /'
-    echo "data files on disk: $(find "$ORCA_WAREHOUSE"/lake/raw/data -name '*.parquet' | wc -l | tr -d ' ')"
+    ls "$MORCA_WAREHOUSE"/lake/raw/metadata/ | grep metadata.json | sed 's/^/  /'
+    echo "data files on disk: $(find "$MORCA_WAREHOUSE"/lake/raw/data -name '*.parquet' | wc -l | tr -d ' ')"
     grep -h -i "clash\|another writer\|wrote version\|retry" build/commits-*.log | head -20 || true
 }
 
 round=1
 while [ "$round" -le "$rounds" ]; do
-    rm -rf "$ORCA_WAREHOUSE"
+    rm -rf "$MORCA_WAREHOUSE"
     pids=
     for m in $months; do
-        ORCA_DATABASE_URL= ./build/ln-ingest run --partitions "2024-$m" > "build/commits-$m.log" 2>&1 &
+        MORCA_DATABASE_URL= ./build/ln-ingest run --partitions "2024-$m" > "build/commits-$m.log" 2>&1 &
         pids="$pids $!"
     done
     failed=0

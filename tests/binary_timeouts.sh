@@ -1,16 +1,16 @@
 #!/bin/sh
 # A pipeline binary that hangs holds up nothing else (#64). With
-# tests/fake_sensor's `sense` hanging and ORCA_BINARY_SECONDS=3:
+# tests/fake_sensor's `sense` hanging and MORCA_BINARY_SECONDS=3:
 #
 # - the scheduler's ticks go on: the toy pipeline's due fire runs while the
 #   sense is still going;
 # - the sense is killed after 3 s, and kept as the sensor's sense_error;
 #   once sense answers again, the error is cleared;
-# - orca ui's keyed pipeline page (tests/fake_keyed) runs `keys` once for
+# - morca ui's keyed pipeline page (tests/fake_keyed) runs `keys` once for
 #   many views, keeps what it printed in orca.keys, and when `keys` hangs,
 #   answers within its own 10 s with the keys kept and a note.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-binary-timeouts starts a
+# Needs MORCA_DATABASE_URL (pixi run test-binary-timeouts starts a
 # throwaway server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -19,10 +19,10 @@ mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/binary-timeouts.log
 : > "$log"
-export ORCA_SENSE_SECONDS=0 ORCA_BINARY_SECONDS=3 ORCA_STALE_SECONDS=5
+export MORCA_SENSE_SECONDS=0 MORCA_BINARY_SECONDS=3 MORCA_STALE_SECONDS=5
 export FAKE_SENSE="$PWD/build/binary-timeouts-sense.txt" FAKE_KEYS="$PWD/build/binary-timeouts-keys"
 rm -f "$FAKE_SENSE".* "$FAKE_KEYS".*
 sched=
@@ -35,7 +35,7 @@ fail() {
     [ ! -s "$FAKE_SENSE.pid" ] || kill "$(cat "$FAKE_SENSE.pid")" 2> /dev/null || true
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 until_true() {
     i=0
     until [ "$(q "$1")" = t ]; do
@@ -45,14 +45,14 @@ until_true() {
 
 printf 'raw.a -1 other -\nraw.b -1 other -\n' > "$FAKE_SENSE"
 for b in tests/fake_sensor build/toy tests/fake_keyed; do
-    ORCA_NOW=2024-01-15T00:00Z ./build/orca register "$b" >> "$log" 2>&1 || fail "register $b"
+    MORCA_NOW=2024-01-15T00:00Z ./build/morca register "$b" >> "$log" 2>&1 || fail "register $b"
 done
 # The toy pipeline's fire for 2024-01 is due.
-export ORCA_NOW=2024-02-02T03:00Z
+export MORCA_NOW=2024-02-02T03:00Z
 
 # fake_sensor comes first in each tick, and its sense hangs.
 touch "$FAKE_SENSE.slow"
-./build/orca scheduler >> "$log" 2>&1 &
+./build/morca scheduler >> "$log" 2>&1 &
 sched=$!
 until_true "SELECT count(*) = 1 FROM orca.runs WHERE pipeline = 'toy' AND status = 'succeeded'" 100
 [ -s "$FAKE_SENSE.pid" ] || fail "sense wasn't asked"
@@ -72,11 +72,11 @@ sched=
 # The UI's keyed page: keys read once, then kept.
 free_port port
 base="http://127.0.0.1:$port"
-ORCA_SENSE_SECONDS=2 ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_SENSE_SECONDS=2 MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 ui=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 json() { curl -fsS -m 30 -H 'Accept: application/json' "$base/pipelines/fake_keyed" || fail "GET /pipelines/fake_keyed"; }
 for _ in 1 2 3; do
@@ -85,7 +85,7 @@ done
 [ "$(wc -l < "$FAKE_KEYS.calls")" -eq 1 ] || fail "keys ran $(wc -l < "$FAKE_KEYS.calls") times for three views"
 [ "$(q "SELECT snapshot_id || ' ' || replace(keys, chr(10), ',') FROM orca.keys WHERE pipeline = 'fake_keyed'")" = "7 ann,bob,cy" ] \
     || fail "orca.keys: $(q "SELECT * FROM orca.keys")"
-# Kept keys go stale after ORCA_SENSE_SECONDS; a keys that hangs then
+# Kept keys go stale after MORCA_SENSE_SECONDS; a keys that hangs then
 # costs the page its 10 s, not a hang, and the kept ones are shown.
 touch "$FAKE_KEYS.slow"
 sleep 2.5

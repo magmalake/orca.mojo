@@ -11,7 +11,7 @@ def data_version_sql(describe: String) -> String:
     expression): its steps' `version=` as `<step>=<version>`, by step
     name, comma-separated; empty when no step sets one (#297). The fill
     takes a partition done under another code as done only when this
-    matches (`orca.fill`)."""
+    matches (`morca.fill`)."""
     return String(
         (
             "coalesce((SELECT string_agg((x->>'name') || '=' ||"
@@ -100,7 +100,7 @@ def _migrations() -> List[List[String]]:
             snapshot_id bigint NOT NULL)""",
         ],
         # The scheduler: a pipeline's binary and since when it's scheduled
-        # (both on the scheduler's clock, which ORCA_NOW can fix), how often
+        # (both on the scheduler's clock, which MORCA_NOW can fix), how often
         # the scheduler started a run and when it retries it, and fires.
         [
             "ALTER TABLE orca.pipelines ADD COLUMN binary_path text",
@@ -149,7 +149,7 @@ def _migrations() -> List[List[String]]:
             "CREATE INDEX reads_attempt ON orca.reads (attempt)",
             "CREATE INDEX commits_attempt ON orca.commits (attempt)",
         ],
-        # Sensors and rebuilds (orca.sensors): since when a pipeline is a
+        # Sensors and rebuilds (morca.sensors): since when a pipeline is a
         # sensor, the snapshots each sensor has seen and the run each
         # started, and rebuilds with their plans and runs.
         [
@@ -183,13 +183,13 @@ def _migrations() -> List[List[String]]:
         ],
         # Keys: what's done is a step's status by its partition key.
         ["CREATE INDEX steps_partition ON orca.steps (partition, step)"],
-        # Runs on Kubernetes (orca.kube): the image a pipeline's pods run,
+        # Runs on Kubernetes (morca.kube): the image a pipeline's pods run,
         # and the CPU a run's pods asked for, in thousandths of a vCPU.
         [
             "ALTER TABLE orca.pipelines ADD COLUMN image text",
             "ALTER TABLE orca.runs ADD COLUMN cpu_millis int",
         ],
-        # Login to orca ui (orca.auth): users, their sessions, and what each
+        # Login to morca ui (morca.auth): users, their sessions, and what each
         # did. pgcrypto, a trusted extension, hashes the passwords.
         [
             "CREATE EXTENSION IF NOT EXISTS pgcrypto",
@@ -212,7 +212,7 @@ def _migrations() -> List[List[String]]:
             detail text NOT NULL)""",
             "CREATE INDEX audit_run ON orca.audit (run)",
         ],
-        # The ec2 runner (orca.ec2): a pipeline's instance types, its
+        # The ec2 runner (morca.ec2): a pipeline's instance types, its
         # workers' count and whether they're Spot, as registered.
         [
             "ALTER TABLE orca.pipelines ADD COLUMN head_type text",
@@ -220,7 +220,7 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pipelines ADD COLUMN ec2_workers int",
             "ALTER TABLE orca.pipelines ADD COLUMN spot boolean",
         ],
-        # Versions (orca.source): each registry hash, source commit and
+        # Versions (morca.source): each registry hash, source commit and
         # image a pipeline was registered or run with, the pipeline's
         # latest, and the one each run ran.
         [
@@ -245,7 +245,7 @@ def _migrations() -> List[List[String]]:
                 " orca.pipeline_versions (id)"
             ),
         ],
-        # The instances a run ran on (orca.ec2): what each was, when it
+        # The instances a run ran on (morca.ec2): what each was, when it
         # started and ended, and why it ended.
         [
             """CREATE TABLE orca.instances (
@@ -263,7 +263,7 @@ def _migrations() -> List[List[String]]:
                 "CREATE INDEX instances_live ON orca.instances (run) WHERE"
                 " ended IS NULL"
             ),
-            # Where its functions are in its source (orca.locate), as
+            # Where its functions are in its source (morca.locate), as
             # registration found them beside the binary.
             "ALTER TABLE orca.pipeline_versions ADD COLUMN locations jsonb",
         ],
@@ -286,8 +286,8 @@ def _migrations() -> List[List[String]]:
         [
             "ALTER TABLE orca.runs ADD COLUMN error text",
         ],
-        # `orca pause`: the scheduler starts none of a paused pipeline's
-        # runs, which stay queued (or due to retry) until `orca unpause`.
+        # `morca pause`: the scheduler starts none of a paused pipeline's
+        # runs, which stay queued (or due to retry) until `morca unpause`.
         [
             (
                 "ALTER TABLE orca.pipelines ADD COLUMN paused boolean NOT NULL"
@@ -302,12 +302,12 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pipelines ADD COLUMN sense_error text",
             "ALTER TABLE orca.pipelines ADD COLUMN sense_error_at timestamptz",
         ],
-        # Deferred runs (orca.step.defer): how many of a run's starts were
+        # Deferred runs (morca.step.defer): how many of a run's starts were
         # after it deferred, which its retry budget doesn't count.
         [
             "ALTER TABLE orca.runs ADD COLUMN deferrals int NOT NULL DEFAULT 0",
         ],
-        # Stopping a step (orca.heartbeat): when a running run asked to
+        # Stopping a step (morca.heartbeat): when a running run asked to
         # cancel is stopped if its step hasn't finished by then.
         [
             "ALTER TABLE orca.runs ADD COLUMN cancel_at timestamptz",
@@ -321,7 +321,7 @@ def _migrations() -> List[List[String]]:
             keys text NOT NULL,
             read_at timestamptz NOT NULL DEFAULT now())""",
         ],
-        # The fleet page (orca.fleet): each live host's last half hour of
+        # The fleet page (morca.fleet): each live host's last half hour of
         # samples, an hour-by-hour total for the 7-day charts, and indexes
         # for the runs and failed attempts per hour.
         [
@@ -353,7 +353,7 @@ def _migrations() -> List[List[String]]:
                 " status = 'failed'"
             ),
         ],
-        # API tokens for `orca login` (orca.tokens), kept as their SHA-256,
+        # API tokens for `morca login` (morca.tokens), kept as their SHA-256,
         # and where each audited action came from: `ui` (a session) or `cli`
         # (a token).
         [
@@ -370,7 +370,7 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.audit ADD COLUMN source text",
         ],
         # Several dista worker processes per EC2 worker instance
-        # (`orca register --worker-procs`): the count registered (0 is one
+        # (`morca register --worker-procs`): the count registered (0 is one
         # per vCPU), and for each instance the processes it was started with
         # and how many of them have been drained.
         [
@@ -381,7 +381,7 @@ def _migrations() -> List[List[String]]:
                 " NULL DEFAULT 0"
             ),
         ],
-        # A warm pool on EC2 (orca.ec2, `ORCA_EC2_POOL_SECONDS`): an
+        # A warm pool on EC2 (morca.ec2, `MORCA_EC2_POOL_SECONDS`): an
         # instance serves one run after another, a row for each, so an ID
         # is unique among the live rows only. Each row has what the
         # instance was started as (`pool_key`), its vCPUs, when it went
@@ -409,7 +409,7 @@ def _migrations() -> List[List[String]]:
                 " ended IS NULL AND idle IS NOT NULL"
             ),
         ],
-        # The control instance's own health (orca.system): a row a minute of
+        # The control instance's own health (morca.system): a row a minute of
         # its CPU, memory, fullest disk and network, and one a minute for
         # each container's memory, kept 14 days.
         [
@@ -436,13 +436,13 @@ def _migrations() -> List[List[String]]:
             PRIMARY KEY (minute, name))""",
         ],
         # A run's EC2 registration as its start was given it (so a later
-        # `orca register` doesn't change how a live run's workers start),
+        # `morca register` doesn't change how a live run's workers start),
         # and since when its head has had tasks and no worker.
         [
             "ALTER TABLE orca.runs ADD COLUMN spec jsonb",
             "ALTER TABLE orca.runs ADD COLUMN waiting_since timestamptz",
         ],
-        # The watchdog (orca.watchdog): each rule's last reading and the
+        # The watchdog (morca.watchdog): each rule's last reading and the
         # snooze it may have, and the trips: when a rule paused which
         # pipelines, and the numbers it paused them for.
         [
@@ -463,16 +463,16 @@ def _migrations() -> List[List[String]]:
             detail text NOT NULL,
             pipelines text NOT NULL)""",
         ],
-        # Where a pipeline's runs run (`orca register --placement`): null
+        # Where a pipeline's runs run (`morca register --placement`): null
         # for the scheduler's runner, `control` for the scheduler's own host
-        # (orca.control), `ec2` for instances of their own. Each run keeps
+        # (morca.control), `ec2` for instances of their own. Each run keeps
         # where its latest start was placed, and why a queued one is held.
         [
             "ALTER TABLE orca.pipelines ADD COLUMN placement text",
             "ALTER TABLE orca.runs ADD COLUMN placement text",
             "ALTER TABLE orca.runs ADD COLUMN held text",
         ],
-        # orca.toml (orca.config): a pipeline's own environment for its
+        # morca.toml (morca.config): a pipeline's own environment for its
         # runs, its max_runs over the code's, and what it was registered
         # from: the file's hash and commit, where each value came from, and
         # the flags that overrode the file.
@@ -481,7 +481,7 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pipelines ADD COLUMN max_runs int",
             "ALTER TABLE orca.pipelines ADD COLUMN config jsonb",
         ],
-        # Fills (orca.fill): whether a pipeline fills its whole range by
+        # Fills (morca.fill): whether a pipeline fills its whole range by
         # itself (`fills`; null, since registration), in which order, with
         # how many fill runs at once, a budget a UTC day in US dollars and
         # the UTC hours fill runs start in. Its fill runs are runs with
@@ -527,7 +527,7 @@ def _migrations() -> List[List[String]]:
             running text)""",
             "ALTER TABLE orca.runs ADD COLUMN worker bigint",
         ],
-        # Alerts to a person (orca.notify): a row per kind and subject, so a
+        # Alerts to a person (morca.notify): a row per kind and subject, so a
         # restart doesn't send an alert again, and one that couldn't be sent
         # waits there for its retry.
         [
@@ -548,14 +548,14 @@ def _migrations() -> List[List[String]]:
             last_error text,
             PRIMARY KEY (kind, subject))""",
         ],
-        # Every threshold a watchdog rule checks (orca.watchdog.limits), its
+        # Every threshold a watchdog rule checks (morca.watchdog.limits), its
         # value and whether it was past it, on the rule's last reading and
         # on each trip: which of a rule's thresholds tripped it.
         [
             "ALTER TABLE orca.watchdog_rules ADD COLUMN checks jsonb",
             "ALTER TABLE orca.watchdog_trips ADD COLUMN checks jsonb",
         ],
-        # What each attempt's processes used (orca.usage): the peak resident
+        # What each attempt's processes used (morca.usage): the peak resident
         # bytes of its process tree, its CPU seconds and the most cores it
         # kept busy; null where it isn't known (EC2, Kubernetes, macOS's
         # peak cores).
@@ -564,7 +564,7 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.attempts ADD COLUMN cpu_seconds double precision",
             "ALTER TABLE orca.attempts ADD COLUMN peak_cpus double precision",
         ],
-        # Requests and grants (orca.resources): the CPUs and memory a
+        # Requests and grants (morca.resources): the CPUs and memory a
         # pipeline asks for, `N` or `MIN..MAX` (null for none), and on each
         # run the request its latest start had and what it was granted.
         [
@@ -583,7 +583,7 @@ def _migrations() -> List[List[String]]:
         # `?to=`, `?since=`): one range of this index, for its page and its
         # counts, where without it each is a scan of every run.
         ["CREATE INDEX runs_created ON orca.runs (created)"],
-        # Containment (orca.cgroup): what out-of-memory kills raised a
+        # Containment (morca.cgroup): what out-of-memory kills raised a
         # pipeline's memory to; on each run its latest start's cgroup limit
         # (memory.high), its memory.max and its memory now; on each attempt
         # the limit and memory grant of the start that made it.
@@ -595,7 +595,7 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.attempts ADD COLUMN memory_limit_mb bigint",
             "ALTER TABLE orca.attempts ADD COLUMN grant_memory_mb bigint",
         ],
-        # Each host's newest memory pressure reading (orca.admission, #202):
+        # Each host's newest memory pressure reading (morca.admission, #202):
         # the scheduler's own and each worker's, with whether it holds new
         # runs and since when.
         [
@@ -614,7 +614,7 @@ def _migrations() -> List[List[String]]:
             held_since timestamptz,
             updated timestamptz NOT NULL DEFAULT now())""",
         ],
-        # Every alert sent, a row each (orca.notify, Ops › Alerts):
+        # Every alert sent, a row each (morca.notify, Ops › Alerts):
         # `orca.notifications` keeps only the latest per kind and subject,
         # for dedup and retries; this keeps each one raised and each
         # 'resolved', with whether it was delivered and when its alert
@@ -656,8 +656,8 @@ def _migrations() -> List[List[String]]:
                 " OR pending ORDER BY coalesce(sent_at, next_try)"
             ),
         ],
-        # Scheduler instances (docs/overlap.md): a row each `orca scheduler`
-        # with ORCA_OVERLAP=on keeps fresh, with the migrations it knows,
+        # Scheduler instances (docs/overlap.md): a row each `morca scheduler`
+        # with MORCA_OVERLAP=on keeps fresh, with the migrations it knows,
         # whether it leads or drains, and the runs its processes are; and on
         # each local or control-placed run the instance that started it.
         [
@@ -677,12 +677,12 @@ def _migrations() -> List[List[String]]:
             running text)""",
             "ALTER TABLE orca.runs ADD COLUMN instance bigint",
         ],
-        # A fill's lag (orca.fill): how long after its end a partition of
-        # the pipeline fills, as orca.toml's `fill_lag` gives it (`2h`);
+        # A fill's lag (morca.fill): how long after its end a partition of
+        # the pipeline fills, as morca.toml's `fill_lag` gives it (`2h`);
         # null for none.
         ["ALTER TABLE orca.pipelines ADD COLUMN fill_lag text"],
-        # Learned requests (orca.recommend, #269): a pipeline's `learn`
-        # (orca.toml; null is on), and the request its runs suggest, cached
+        # Learned requests (morca.recommend, #269): a pipeline's `learn`
+        # (morca.toml; null is on), and the request its runs suggest, cached
         # with what it was learned from (`learned`: key, runs, memory_mb,
         # cpus); on each run where its latest start's request came from
         # (`declared`, `learned` or `default`) and how many runs a learned
@@ -695,7 +695,7 @@ def _migrations() -> List[List[String]]:
         ],
         # The run whose out-of-memory kill last raised a pipeline's memory
         # (`memory_raised_mb`): the raise expires once LEARN_RUNS of its runs
-        # after that one have succeeded (orca.recommend.expire_raised). A
+        # after that one have succeeded (morca.recommend.expire_raised). A
         # raise from before it counts from the pipeline's latest run.
         # Additive: an older binary neither reads it nor expires anything.
         [
@@ -706,7 +706,7 @@ def _migrations() -> List[List[String]]:
                 " memory_raised_mb IS NOT NULL"
             ),
         ],
-        # How long an attempt's run waited on memory (orca.cgroup; #281):
+        # How long an attempt's run waited on memory (morca.cgroup; #281):
         # its cgroup's memory.pressure totals at the reap, in ms, some tasks
         # and all of them; null where it had no cgroup or no PSI. Additive.
         [
@@ -718,15 +718,15 @@ def _migrations() -> List[List[String]]:
         # number of one a restore lost doesn't take that run's commits for
         # its own (`Ctx.made`). A UUID version 7: its first 48 bits are the
         # milliseconds since 1970 it was made at, the rest random.
-        # Postgres has `uuidv7()` from 18 on and orca runs on 16 and 17 too
-        # (its deployments are on 17), so `orca.uuidv7()` makes one from a
+        # Postgres has `uuidv7()` from 18 on and morca runs on 16 and 17 too
+        # (its deployments are on 17), so `morca.uuidv7()` makes one from a
         # random UUID: the time over its first six bytes, and the version's
         # 4 turned into a 7. Additive: the default gives a token to the runs
         # an older binary creates, which neither reads nor writes it; the
         # runs there already are have none, and are told by their number.
         [
             (
-                "CREATE OR REPLACE FUNCTION orca.uuidv7() RETURNS uuid"
+                "CREATE OR REPLACE FUNCTION morca.uuidv7() RETURNS uuid"
                 " LANGUAGE sql VOLATILE AS $$ SELECT"
                 " encode(set_bit(set_bit(overlay(uuid_send(gen_random_uuid())"
                 " placing substring(int8send(floor(extract(epoch FROM"
@@ -736,7 +736,7 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.runs ADD COLUMN token uuid",
             (
                 "ALTER TABLE orca.runs ALTER COLUMN token SET DEFAULT"
-                " orca.uuidv7()"
+                " morca.uuidv7()"
             ),
         ],
         # The start of a failed run whose failure isn't retried (#287: killed
@@ -763,8 +763,8 @@ def _migrations() -> List[List[String]]:
                 " p.registry_hash = v.registry_hash",
             ),
         ],
-        # Worker pools orca grows itself (#267, orca.pool_config): each
-        # pool's settings from orca.toml, and the machines it made (with
+        # Worker pools morca grows itself (#267, morca.pool_config): each
+        # pool's settings from morca.toml, and the machines it made (with
         # the architecture the provider says their type has), kept after
         # they end for Ops. New tables: additive.
         [
@@ -789,7 +789,7 @@ def _migrations() -> List[List[String]]:
                 " WHERE ended IS NULL"
             ),
         ],
-        # The pool autoscaler (#267, orca.pool_scale): which machine type a
+        # The pool autoscaler (#267, morca.pool_scale): which machine type a
         # pool is trying and since when, its last attempt and what that came
         # to; and this stack's id, the label that marks its machines.
         # Additive.
@@ -803,11 +803,11 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pools ADD COLUMN status text",
             "CREATE TABLE orca.stack_identity (id text PRIMARY KEY)",
         ],
-        # keys_per_run from orca.toml (#240), over the code's: how many keys
+        # keys_per_run from morca.toml (#240), over the code's: how many keys
         # a backfill, a sensor's run or a fill run takes. Additive: an
         # older binary reads the code's from `describe`, as it did.
         ["ALTER TABLE orca.pipelines ADD COLUMN keys_per_run integer"],
-        # One run over several workers of a pool (#268, orca.run_cluster):
+        # One run over several workers of a pool (#268, morca.run_cluster):
         # its dista head's address and cluster token for the start it's in,
         # and the workers that joined it. Additive.
         [
@@ -866,7 +866,7 @@ def _floor_raisers() -> List[Int]:
     `instance` left as it was, which no live instance lists, so it holds
     nothing.
 
-    44 (learned requests, `orca.recommend`) is additive: new nullable
+    44 (learned requests, `morca.recommend`) is additive: new nullable
     columns the binaries before it neither read nor write. A start they make
     leaves `request_source` and `request_runs` as an earlier start set them.
     """
@@ -885,10 +885,10 @@ def migration_floor(version: Int) -> Int:
 
 def known_migrations() raises -> Int:
     """How many migrations this binary knows: all of `_migrations`, or fewer
-    under `ORCA_TEST_MIGRATIONS=N`, which the tests use to act as an older
+    under `MORCA_TEST_MIGRATIONS=N`, which the tests use to act as an older
     binary on a database a newer one migrated."""
     var n = len(_migrations())
-    var test = getenv("ORCA_TEST_MIGRATIONS")
+    var test = getenv("MORCA_TEST_MIGRATIONS")
     if test:
         var t = Int(test)
         if 0 <= t < n:
@@ -913,7 +913,7 @@ def schema_ahead(have: Int, floor: Int, known: Int) raises -> Bool:
             "it doesn't record which binaries can run on it"
         )
         raise Error(
-            "orca: the database is at schema version ",
+            "morca: the database is at schema version ",
             have,
             ", newer than this binary's ",
             known,

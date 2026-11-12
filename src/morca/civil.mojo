@@ -9,7 +9,7 @@ were UTC, which is what cron matches against.
 from std.ffi import external_call
 from std.os import getenv
 
-from orca.month import days_in
+from morca.month import days_in
 
 
 def days_from_civil(year: Int, month: Int, day: Int) -> Int64:
@@ -129,9 +129,9 @@ def parse_time(s: StringSlice) raises -> Int64:
 
 
 def now() raises -> Int64:
-    """Seconds since the epoch: `ORCA_NOW` if it's set (a time `parse_time`
+    """Seconds since the epoch: `MORCA_NOW` if it's set (a time `parse_time`
     reads), else the system clock. The scheduler's tests fix time with it."""
-    var fixed = getenv("ORCA_NOW")
+    var fixed = getenv("MORCA_NOW")
     if fixed:
         return parse_time(fixed)
     return external_call["time", Int64](Int(0))

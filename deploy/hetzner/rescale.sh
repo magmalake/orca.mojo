@@ -8,7 +8,7 @@
 #
 #   1. pause every pipeline and wait for the running runs to end, those
 #      on remote workers too, since the UI they talk to goes down with the
-#      server (orca-stack quiesce --workers; --timeout, default 3600 s; on
+#      server (morca-stack quiesce --workers; --timeout, default 3600 s; on
 #      a timeout the pipelines stay paused and nothing else was done);
 #   2. a last backup;
 #   3. shut the server down, wait until it is off (power it off after 2 minutes);
@@ -59,8 +59,8 @@ if [ "$DRY_RUN" = 0 ]; then
 fi
 confirm "This pauses the pipelines, stops the server for a few minutes and changes its type to $target."
 
-remote orca-stack quiesce --workers --timeout "$timeout"
-remote orca-stack backup
+remote morca-stack quiesce --workers --timeout "$timeout"
+remote morca-stack backup
 hc server shutdown "$SERVER"
 if [ "$DRY_RUN" = 0 ]; then
     n=0
@@ -87,5 +87,5 @@ if [ "$DRY_RUN" = 0 ]; then
         sleep 5
     done
 fi
-remote orca-stack resume
-remote orca-stack status
+remote morca-stack resume
+remote morca-stack status

@@ -1,28 +1,28 @@
 """Runs on EC2: a head instance and worker instances per run, started and
 ended by the scheduler (DESIGN.md, phase 5, PR 5).
 
-With `ORCA_RUNNER=ec2` the scheduler starts a run's start `s` as:
+With `MORCA_RUNNER=ec2` the scheduler starts a run's start `s` as:
 
 - **a head instance** (`--head-type` at registration, else
-  `ORCA_EC2_HEAD_TYPE`, on-demand): the dista head, for a pipeline with
+  `MORCA_EC2_HEAD_TYPE`, on-demand): the dista head, for a pipeline with
   tasks, and the driver, `<binary> resume <run>`, beside it on localhost;
 - **`workers` worker instances** (`--worker-type`, else
-  `ORCA_EC2_WORKER_TYPE`; Spot with `--spot`), for a pipeline with tasks,
+  `MORCA_EC2_WORKER_TYPE`; Spot with `--spot`), for a pipeline with tasks,
   started straight after with `DISTA_HEAD` at the head's private address.
 
-Each is tagged `orca.run`, `orca.start`, `orca.pipeline` and `orca.role`,
+Each is tagged `orca.run`, `orca.start`, `morca.pipeline` and `orca.role`,
 told to terminate when it shuts down, and started from user data that runs
-the pipeline's image (`ORCA_EC2_MODE=docker`, the default: `docker run
---network host`, after `ORCA_EC2_PREAMBLE`, such as an ECR login) or the
+the pipeline's image (`MORCA_EC2_MODE=docker`, the default: `docker run
+--network host`, after `MORCA_EC2_PREAMBLE`, such as an ECR login) or the
 binary itself (`direct`, for the tests' stand-in EC2), then shuts down
-(`ORCA_EC2_SHUTDOWN`). The head keeps the driver's output in the run's
+(`MORCA_EC2_SHUTDOWN`). The head keeps the driver's output in the run's
 `driver.log` (`<binary> keep-log`) before it does, and if the driver
 crashed, fails the attempts it left running with the crash's first frames
-(`orca.crash`). Beside its work each
-instance runs `<binary> sample` (`orca.sample`; in docker mode as a
+(`morca.crash`). Beside its work each
+instance runs `<binary> sample` (`morca.sample`; in docker mode as a
 container with `--pid host`), whose lines its script uploads to the run's
 `metrics/<role>-<instance>.jsonl` with its log (`<binary> put-log`), every
-`ORCA_CLUSTER_LOG_SECONDS` and once when it ends, after telling the
+`MORCA_CLUSTER_LOG_SECONDS` and once when it ends, after telling the
 sampler to write a last line and stop (`--until`).
 
 With `--worker-procs N` (`auto`: one per vCPU of the worker type) each
@@ -37,12 +37,12 @@ A pipeline registered with `--workers MIN..MAX` scales: its run starts
 `MIN` workers, which may be none, and every tick `scale` reads the head's
 demand (`dista status --json`, from port 6390 on the head's private address,
 through the pipeline's binary: `<binary> dista-status`, since dista's
-sockets can't share orca's binary with flare's) and asks
+sockets can't share morca's binary with flare's) and asks
 `dista.scale.decide` what to do. It starts the workers asked for,
 up to `MAX`, and drains the ones named with `dista drain`; a drained worker
 exits once its work and results have moved, and its instance's script shuts
-it down. `ORCA_SCALE_UP_AFTER` (5 s), `ORCA_SCALE_IDLE` (60 s) and
-`ORCA_SCALE_STEP` (4) tune the policy. The budget counts `MAX`.
+it down. `MORCA_SCALE_UP_AFTER` (5 s), `MORCA_SCALE_IDLE` (60 s) and
+`MORCA_SCALE_STEP` (4) tune the policy. The budget counts `MAX`.
 
 A run is scaled, and its workers are started, as its pipeline was registered
 when the run started (`orca.runs.spec`, kept at each start), so registering
@@ -50,7 +50,7 @@ the pipeline again meanwhile doesn't strand a live run on settings it never
 had; its next start takes the new registration.
 
 A run that needs workers (`MAX` above 0) whose head has tasks waiting and no
-worker for `ORCA_NO_WORKERS_SECONDS` (600; 0 turns it off) has the attempt
+worker for `MORCA_NO_WORKERS_SECONDS` (600; 0 turns it off) has the attempt
 that waits fail with `no workers joined in 10 min (tasks waiting: N)`, and
 its instances terminated. Its driver stops beating with them, so the
 scheduler starts it again as it does a run whose process died, until its
@@ -60,23 +60,23 @@ whatever it waits for.
 
 A pipeline's secrets (`--secret NAME=ID`) are read by each instance's
 script at start, after the preamble, with `aws secretsmanager
-get-secret-value` (`ORCA_SECRET_FETCH` replaces the command, which is given
+get-secret-value` (`MORCA_SECRET_FETCH` replaces the command, which is given
 the ID), exported as NAME, given to the containers, and named in
-`ORCA_SECRETS` so that every log orca writes masks them.
+`MORCA_SECRETS` so that every log morca writes masks them.
 
 Every tick, `sweep` terminates the instances of runs that aren't running at
-that start, and those older than `ORCA_RUN_DEADLINE` (a day). A head whose
-run has just ended is left `ORCA_EC2_HEAD_GRACE` seconds (60) to finish its
+that start, and those older than `MORCA_RUN_DEADLINE` (a day). A head whose
+run has just ended is left `MORCA_EC2_HEAD_GRACE` seconds (60) to finish its
 script: keep the driver's log, upload its own and its samples, and shut
 itself down. Instances get
-`ORCA_EC2_DATABASE_URL` as `ORCA_DATABASE_URL` (the control instance's
+`MORCA_EC2_DATABASE_URL` as `MORCA_DATABASE_URL` (the control instance's
 private address), the warehouse, the logs, the region and the scheduler's
-variables named in `ORCA_RUN_ENV`; `ORCA_EC2_AMI`, `ORCA_EC2_SUBNET`,
-`ORCA_EC2_SECURITY_GROUP` and `ORCA_EC2_PROFILE` say where and as what they
+variables named in `MORCA_RUN_ENV`; `MORCA_EC2_AMI`, `MORCA_EC2_SUBNET`,
+`MORCA_EC2_SECURITY_GROUP` and `MORCA_EC2_PROFILE` say where and as what they
 run. `cpu_millis` is a run's instances' vCPUs, which the scheduler checks
-against `ORCA_VCPU_BUDGET` first.
+against `MORCA_VCPU_BUDGET` first.
 
-**The warm pool** (`ORCA_EC2_POOL_SECONDS`, 150; 0 turns it off). An
+**The warm pool** (`MORCA_EC2_POOL_SECONDS`, 150; 0 turns it off). An
 instance's script is then a loop over runs, and the next run of the same
 pipeline, started as the same instances, takes its head and workers rather
 than launching new ones:
@@ -88,7 +88,7 @@ than launching new ones:
   given and its worker processes. A run takes only instances of its own
   keys, so a new registration, image or setting never reuses old ones.
 - **Back to the pool.** A head's driver exits; a worker's `<binary>
-  pool-wait` (`orca.pool`) sees its run end and the script kills its dista
+  pool-wait` (`morca.pool`) sees its run end and the script kills its dista
   processes, which don't end with their head. Each uploads that run's logs
   and samples and runs `<binary> pool-next`, which marks the run's row
   `idle` and beats `polled` every second until it's handed a run. Its run's
@@ -98,7 +98,7 @@ than launching new ones:
   are still on their way there (at most the head's grace).
 - **Hand-over** (`_take`). In one transaction, the idle rows of the key
   whose run has ended, that weren't drained and that beat within
-  `ORCA_EC2_POOL_LIVE_SECONDS` (5) are locked `FOR UPDATE SKIP LOCKED`,
+  `MORCA_EC2_POOL_LIVE_SECONDS` (5) are locked `FOR UPDATE SKIP LOCKED`,
   checked with `DescribeInstances`, ended (`pooled: on to run N`) and
   replaced by rows of the new run (`pooled`); `pool-next` sees its new row,
   records that it `joined`, and the next pass runs it: a new dista head
@@ -107,10 +107,10 @@ than launching new ones:
   pooled workers up to what it starts (`MIN`, and what `scale` adds), then
   launches the rest; the others stay pooled.
 - **Failure.** One handed a run that hasn't joined within
-  `ORCA_EC2_POOL_JOIN_SECONDS` (30) is terminated (`pooled: never took the
+  `MORCA_EC2_POOL_JOIN_SECONDS` (30) is terminated (`pooled: never took the
   run up`) and replaced: a worker by a new worker, a head by new instances
   for the same start. The sweep ends idle instances after
-  `ORCA_EC2_POOL_SECONDS` (`pooled: idle N s, shut down`), those that stop
+  `MORCA_EC2_POOL_SECONDS` (`pooled: idle N s, shut down`), those that stop
   beating, and those that don't reach the pool within the head's grace;
   their rows end before they're terminated, so one handed on meanwhile
   isn't. An instance's tags keep its first run; the sweep goes by its live
@@ -126,16 +126,16 @@ from dista.socket import wall_ns
 from objectstore.crypto import sha256_hex
 from postgres import Params
 
-from orca.awsec2 import Ec2, Instance
-from orca.config import (
+from morca.awsec2 import Ec2, Instance
+from morca.config import (
     env_json,
     parse_env,
 )
-from orca.json import quote
-from orca.proc import capture
-from orca.sample import sample_seconds
-from orca.secrets import parse_secrets
-from orca.state import State
+from morca.json import quote
+from morca.proc import capture
+from morca.sample import sample_seconds
+from morca.secrets import parse_secrets
+from morca.state import State
 
 comptime HEAD_PORT = 6390
 
@@ -147,26 +147,26 @@ comptime HEAD_SECONDS = 10.0
 run's head, before it's killed and the run skipped this tick."""
 
 comptime _COPIED = [
-    "ORCA_STALE_SECONDS",
-    "ORCA_WAREHOUSE",
-    "ORCA_LOGS",
+    "MORCA_STALE_SECONDS",
+    "MORCA_WAREHOUSE",
+    "MORCA_LOGS",
     "AWS_REGION",
-    "ORCA_HEAD_WAIT_SECONDS",
-    "ORCA_SAMPLE_SECONDS",
+    "MORCA_HEAD_WAIT_SECONDS",
+    "MORCA_SAMPLE_SECONDS",
 ]
 """Variables every instance gets from the scheduler's environment."""
 
 
 def vcpus(instance_type: String) raises -> Int:
-    """An instance type's vCPUs: from `ORCA_EC2_VCPUS` (`type=n,...`), else
+    """An instance type's vCPUs: from `MORCA_EC2_VCPUS` (`type=n,...`), else
     by its size, as Graviton families are sized."""
-    for pair in getenv("ORCA_EC2_VCPUS").split(","):
+    for pair in getenv("MORCA_EC2_VCPUS").split(","):
         var eq = pair.find("=")
         if eq > 0 and String(pair[byte=:eq].strip()) == instance_type:
             return Int(pair[byte = eq + 1 :].strip())
     var dot = instance_type.find(".")
     if dot < 0:
-        raise Error("orca: not an instance type: ", instance_type)
+        raise Error("morca: not an instance type: ", instance_type)
     var family = String(instance_type[byte=:dot])
     var size = String(instance_type[byte = dot + 1 :])
     if family.startswith("t"):
@@ -184,9 +184,9 @@ def vcpus(instance_type: String) raises -> Int:
     if size.endswith("xlarge"):
         return Int(size[byte = : size.byte_length() - 6]) * 4
     raise Error(
-        "orca: the vCPUs of ",
+        "morca: the vCPUs of ",
         instance_type,
-        " aren't known; set ORCA_EC2_VCPUS",
+        " aren't known; set MORCA_EC2_VCPUS",
     )
 
 
@@ -285,8 +285,8 @@ struct Ec2Spec(Copyable, Movable):
     """The pipeline's code, which an instance from the pool must have been
     started with."""
     var env: List[Tuple[String, String]]
-    """The pipeline's own variables (orca.toml's `env`), exported on every
-    instance over those `ORCA_RUN_ENV` names, and so part of the pool's
+    """The pipeline's own variables (morca.toml's `env`), exported on every
+    instance over those `MORCA_RUN_ENV` names, and so part of the pool's
     key."""
 
 
@@ -320,41 +320,41 @@ struct Ec2Runner(Movable):
     """For each scaling run, `run-start`, since when it's been short of
     workers: `decide`'s memory between ticks."""
     var no_workers: Int
-    """`ORCA_NO_WORKERS_SECONDS` (600): how long a run whose head has tasks
+    """`MORCA_NO_WORKERS_SECONDS` (600): how long a run whose head has tasks
     waiting and no worker may go on before its attempt is failed; 0 turns
     it off."""
     var pool_seconds: Float64
-    """`ORCA_EC2_POOL_SECONDS` (150): how long an instance whose run ended
+    """`MORCA_EC2_POOL_SECONDS` (150): how long an instance whose run ended
     waits, idle, to be handed another; 0 turns the pool off, and every
     instance ends with its run."""
     var pool_live: Float64
-    """`ORCA_EC2_POOL_LIVE_SECONDS` (5): how recently an idle instance must
+    """`MORCA_EC2_POOL_LIVE_SECONDS` (5): how recently an idle instance must
     have asked for a run (`pool-next`) to be handed one."""
     var pool_join: Float64
-    """`ORCA_EC2_POOL_JOIN_SECONDS` (30): how long an instance handed a run
+    """`MORCA_EC2_POOL_JOIN_SECONDS` (30): how long an instance handed a run
     has to take it up before it's terminated and replaced by a new one."""
 
     def __init__(out self) raises:
         self.ec2 = Ec2()
-        self.mode = getenv("ORCA_EC2_MODE", "docker")
+        self.mode = getenv("MORCA_EC2_MODE", "docker")
         if self.mode != "docker" and self.mode != "direct":
             raise Error(
-                "orca: ORCA_EC2_MODE is docker or direct, not ", self.mode
+                "morca: MORCA_EC2_MODE is docker or direct, not ", self.mode
             )
-        self.head_type = getenv("ORCA_EC2_HEAD_TYPE", "c7g.large")
-        self.worker_type = getenv("ORCA_EC2_WORKER_TYPE", "c7g.xlarge")
-        self.deadline = Int(getenv("ORCA_RUN_DEADLINE", "86400"))
-        self.grace = Float64(getenv("ORCA_EC2_HEAD_GRACE", "60"))
-        self.up_after = Float64(getenv("ORCA_SCALE_UP_AFTER", "5"))
-        self.idle = Float64(getenv("ORCA_SCALE_IDLE", "60"))
-        self.step = Int(getenv("ORCA_SCALE_STEP", "4"))
+        self.head_type = getenv("MORCA_EC2_HEAD_TYPE", "c7g.large")
+        self.worker_type = getenv("MORCA_EC2_WORKER_TYPE", "c7g.xlarge")
+        self.deadline = Int(getenv("MORCA_RUN_DEADLINE", "86400"))
+        self.grace = Float64(getenv("MORCA_EC2_HEAD_GRACE", "60"))
+        self.up_after = Float64(getenv("MORCA_SCALE_UP_AFTER", "5"))
+        self.idle = Float64(getenv("MORCA_SCALE_IDLE", "60"))
+        self.step = Int(getenv("MORCA_SCALE_STEP", "4"))
         self.short_since = Dict[String, Float64]()
-        self.no_workers = Int(getenv("ORCA_NO_WORKERS_SECONDS", "600"))
-        self.pool_seconds = Float64(getenv("ORCA_EC2_POOL_SECONDS", "150"))
-        self.pool_live = Float64(getenv("ORCA_EC2_POOL_LIVE_SECONDS", "5"))
-        self.pool_join = Float64(getenv("ORCA_EC2_POOL_JOIN_SECONDS", "30"))
+        self.no_workers = Int(getenv("MORCA_NO_WORKERS_SECONDS", "600"))
+        self.pool_seconds = Float64(getenv("MORCA_EC2_POOL_SECONDS", "150"))
+        self.pool_live = Float64(getenv("MORCA_EC2_POOL_LIVE_SECONDS", "5"))
+        self.pool_join = Float64(getenv("MORCA_EC2_POOL_JOIN_SECONDS", "30"))
         self.env = List[String]()
-        for n in getenv("ORCA_RUN_ENV").split(","):
+        for n in getenv("MORCA_RUN_ENV").split(","):
             if n.strip():
                 self.env.append(String(n.strip()))
 
@@ -386,10 +386,10 @@ struct Ec2Runner(Movable):
         """The script's environment: what every instance gets, and its
         role's own."""
         var out = String()
-        var url = getenv("ORCA_EC2_DATABASE_URL", getenv("ORCA_DATABASE_URL"))
-        out.write("export ORCA_DATABASE_URL=", _quote(url), "\n")
+        var url = getenv("MORCA_EC2_DATABASE_URL", getenv("MORCA_DATABASE_URL"))
+        out.write("export MORCA_DATABASE_URL=", _quote(url), "\n")
         # The run records its version with the image it ran from.
-        out.write("export ORCA_IMAGE=", _quote(r.image), "\n")
+        out.write("export MORCA_IMAGE=", _quote(r.image), "\n")
         var names = List[String]()
         for n in materialize[_COPIED]():
             names.append(String(n))
@@ -431,8 +431,8 @@ struct Ec2Runner(Movable):
             return String(pre, _quote(r.binary), " ", args)
         var flags = String("--rm --network host")
         var names = List[String]()
-        names.append("ORCA_DATABASE_URL")
-        names.append("ORCA_IMAGE")
+        names.append("MORCA_DATABASE_URL")
+        names.append("MORCA_IMAGE")
         for n in materialize[_COPIED]():
             names.append(String(n))
         for n in self.env:
@@ -441,7 +441,7 @@ struct Ec2Runner(Movable):
         for kv in r.env:
             names.append(kv[0])
         if len(r.secrets) > 0:
-            names.append("ORCA_SECRETS")
+            names.append("MORCA_SECRETS")
         for s in r.secrets:
             names.append(s[0])
         for n in names:
@@ -465,7 +465,7 @@ struct Ec2Runner(Movable):
         if len(r.secrets) == 0:
             return ""
         var fetch = getenv(
-            "ORCA_SECRET_FETCH",
+            "MORCA_SECRET_FETCH",
             (
                 'aws secretsmanager get-secret-value --region "$AWS_REGION"'
                 " --query SecretString --output text --secret-id"
@@ -480,11 +480,11 @@ struct Ec2Runner(Movable):
                 fetch,
                 " ",
                 _quote(s[1]),
-                ") || { echo \"orca: can't read secret ",
+                ") || { echo \"morca: can't read secret ",
                 s[1],
                 '"; ',
                 getenv(
-                    "ORCA_EC2_SHUTDOWN",
+                    "MORCA_EC2_SHUTDOWN",
                     "shutdown -h now" if self.mode == "docker" else "true",
                 ),
                 "; exit 1; }\nexport ",
@@ -492,7 +492,7 @@ struct Ec2Runner(Movable):
                 "\n",
             )
             names.write("," if names else "", s[0])
-        out.write("export ORCA_SECRETS=", names, "\n")
+        out.write("export MORCA_SECRETS=", names, "\n")
         return out^
 
     def _instance_id(self) -> String:
@@ -517,7 +517,7 @@ struct Ec2Runner(Movable):
         self, r: Ec2Spec, run: String, local: String, under_run: String
     ) -> String:
         """A command uploading the file at `local` to `under_run` in run
-        `run`'s directory under ORCA_LOGS, quietly: it may not be there
+        `run`'s directory under MORCA_LOGS, quietly: it may not be there
         yet."""
         return String(
             self._mounted(
@@ -527,7 +527,7 @@ struct Ec2Runner(Movable):
                     String(
                         "put-log ",
                         local,
-                        ' "$ORCA_LOGS/',
+                        ' "$MORCA_LOGS/',
                         r.pipeline,
                         "/",
                         run,
@@ -565,7 +565,7 @@ struct Ec2Runner(Movable):
             "  for p in $alive; do\n",
             '    if kill -0 $p 2>/dev/null; then left="$left $p"; else\n',
             "      wait $p; rc=$?\n",
-            '      echo "orca: worker process $p exited with status $rc"',
+            '      echo "morca: worker process $p exited with status $rc"',
             " | tee -a ",
             log,
             ".sup\n    fi\n  done\n  alive=$left\ndone\n",
@@ -606,7 +606,7 @@ struct Ec2Runner(Movable):
         if docker:
             # Named, so that the run's end removes them whatever they do.
             line = line.replace(
-                "docker run --rm", "docker run --rm --name orca-worker-$k"
+                "docker run --rm", "docker run --rm --name morca-worker-$k"
             )
         var out = String(" > ", log, ".p$k") if procs > 1 else String(
             " > ", log
@@ -634,7 +634,7 @@ struct Ec2Runner(Movable):
             "  left=\n  for p in $alive; do\n",
             '    if kill -0 $p 2>/dev/null; then left="$left $p"; else\n',
             "      wait $p; rc=$?\n",
-            '      echo "orca: worker process $p exited with status $rc"',
+            '      echo "morca: worker process $p exited with status $rc"',
             " | tee -a ",
             log,
             ".sup\n    fi\n  done\n  alive=$left\n",
@@ -649,7 +649,7 @@ struct Ec2Runner(Movable):
             s.write(
                 "    k=1; while [ $k -le ",
                 procs,
-                " ]; do docker rm -f orca-worker-$k >/dev/null 2>&1;",
+                " ]; do docker rm -f morca-worker-$k >/dev/null 2>&1;",
                 " k=$((k + 1)); done\n",
             )
         s.write(
@@ -663,7 +663,7 @@ struct Ec2Runner(Movable):
     ) raises -> String:
         """The instance's script. With the pool on, its work is a loop: run
         `run` at `start`, then, back in the pool, wait for the next with
-        `<binary> pool-next` (`orca.pool`), which sets the run, start, head
+        `<binary> pool-next` (`morca.pool`), which sets the run, start, head
         and new-code flag the next pass uses, or shuts down. Everything a
         pass writes and uploads is named by its run, so each run's logs and
         samples hold its own part only, and its secrets are read again."""
@@ -671,7 +671,7 @@ struct Ec2Runner(Movable):
         var run = String("${run}") if pool else String(r.run)
         var start = String("${start}") if pool else String(r.start)
         var s = String(
-            "#!/bin/bash\n# orca run ",
+            "#!/bin/bash\n# morca run ",
             r.run,
             " start ",
             r.start,
@@ -696,28 +696,28 @@ struct Ec2Runner(Movable):
                 "\n",
             )
         s.write(self._exports(r, role, head, pool))
-        s.write(getenv("ORCA_EC2_PREAMBLE"), "\n")
+        s.write(getenv("MORCA_EC2_PREAMBLE"), "\n")
         if pool:
             s.write(self._instance_id(), "\nwhile :; do\n")
             if role == "worker":
                 s.write('export DISTA_HEAD="$head:', HEAD_PORT, '"\n')
         s.write(self._secrets(r))
         # The head's or worker's output, and its machine's samples
-        # (orca.sample), uploaded while it runs and once when it ends: an
+        # (morca.sample), uploaded while it runs and once when it ends: an
         # instance can go without notice.
         var keeps = role == "worker" or r.tasks
-        var samples = sample_seconds() > 0 and getenv("ORCA_LOGS") != ""
+        var samples = sample_seconds() > 0 and getenv("MORCA_LOGS") != ""
         var name = String(run, "-", start, "-", role, "-$iid")
-        var log = String("/tmp/orca-", name, ".log")
-        var metrics = String("/tmp/orca-", name, ".jsonl")
-        var stop = String("/tmp/orca-", name, ".stop")
+        var log = String("/tmp/morca-", name, ".log")
+        var metrics = String("/tmp/morca-", name, ".jsonl")
+        var stop = String("/tmp/morca-", name, ".stop")
         var procs = self.procs_of(r) if role == "worker" else 1
         if keeps or samples:
             if not pool:
                 s.write(self._instance_id(), "\n")
             if procs > 1:
                 s.write(self._join_logs(log))
-            s.write('up() { [ -z "${ORCA_LOGS:-}" ] || {')
+            s.write('up() { [ -z "${MORCA_LOGS:-}" ] || {')
             if procs > 1:
                 s.write(" joinlogs;")
             if keeps:
@@ -746,7 +746,7 @@ struct Ec2Runner(Movable):
                 " }; }\n",
                 "( trap 'kill $nap 2>/dev/null; exit 0' TERM; while :; do",
                 " sleep ",
-                getenv("ORCA_CLUSTER_LOG_SECONDS", "30"),
+                getenv("MORCA_CLUSTER_LOG_SECONDS", "30"),
                 " & nap=$!; wait $nap; up; done ) &\nuploader=$!\n",
             )
         if samples:
@@ -812,7 +812,7 @@ struct Ec2Runner(Movable):
                 )
                 if pool and self.mode == "docker":
                     line = line.replace(
-                        "docker run --rm", "docker run --rm --name orca-head"
+                        "docker run --rm", "docker run --rm --name morca-head"
                     )
                 s.write(line, " > ", log, " 2>&1 &\nhead=$!\n")
             var args = String("resume ", run)
@@ -823,24 +823,24 @@ struct Ec2Runner(Movable):
             var env = List[String]()
             if r.tasks:
                 env.append(String("DISTA_HEAD=127.0.0.1:", HEAD_PORT))
-            var out = String("/tmp/orca-", run, "-", start, "-driver.log")
+            var out = String("/tmp/morca-", run, "-", start, "-driver.log")
             s.write(self._run(r, env, args), " > ", out, " 2>&1\n")
             if r.tasks:
                 s.write("kill $head 2>/dev/null\nwait $head 2>/dev/null\n")
                 if pool and self.mode == "docker":
                     # Gone before the next run's head takes its port.
-                    s.write("docker rm -f orca-head >/dev/null 2>&1\n")
+                    s.write("docker rm -f morca-head >/dev/null 2>&1\n")
             s.write(
-                'if [ -n "${ORCA_LOGS:-}" ]; then ',
+                'if [ -n "${MORCA_LOGS:-}" ]; then ',
                 self._mounted(
                     self._run(
                         r,
-                        # Which run's attempts a crash fails (orca.crash).
-                        [String("ORCA_RUN=", run)],
+                        # Which run's attempts a crash fails (morca.crash).
+                        [String("MORCA_RUN=", run)],
                         String(
                             "keep-log ",
                             out,
-                            ' "$ORCA_LOGS/',
+                            ' "$MORCA_LOGS/',
                             r.pipeline,
                             "/",
                             run,
@@ -890,7 +890,7 @@ struct Ec2Runner(Movable):
             )
         s.write(
             getenv(
-                "ORCA_EC2_SHUTDOWN",
+                "MORCA_EC2_SHUTDOWN",
                 "shutdown -h now" if self.mode == "docker" else "true",
             ),
             "\n",
@@ -919,13 +919,13 @@ struct Ec2Runner(Movable):
                 "\n",
                 "spot" if spot else "on-demand",
                 "\n",
-                getenv("ORCA_EC2_AMI"),
+                getenv("MORCA_EC2_AMI"),
                 "\n",
-                getenv("ORCA_EC2_SUBNET"),
+                getenv("MORCA_EC2_SUBNET"),
                 "\n",
-                getenv("ORCA_EC2_SECURITY_GROUP"),
+                getenv("MORCA_EC2_SECURITY_GROUP"),
                 "\n",
-                getenv("ORCA_EC2_PROFILE"),
+                getenv("MORCA_EC2_PROFILE"),
                 "\n",
                 r.registry_hash,
                 "\n",
@@ -958,7 +958,7 @@ struct Ec2Runner(Movable):
         head: String,
     ) raises -> List[Tuple[String, String]]:
         var p: List[Tuple[String, String]] = [
-            ("ImageId", getenv("ORCA_EC2_AMI")),
+            ("ImageId", getenv("MORCA_EC2_AMI")),
             ("InstanceType", itype),
             ("MinCount", String(count)),
             ("MaxCount", String(count)),
@@ -977,16 +977,16 @@ struct Ec2Runner(Movable):
             ("TagSpecification.1.Tag.5.Key", "Name"),
             (
                 "TagSpecification.1.Tag.5.Value",
-                String("orca-", r.run, "-", r.start, "-", role),
+                String("morca-", r.run, "-", r.start, "-", role),
             ),
         ]
-        var subnet = getenv("ORCA_EC2_SUBNET")
+        var subnet = getenv("MORCA_EC2_SUBNET")
         if subnet:
             p.append(("SubnetId", subnet))
-        var sg = getenv("ORCA_EC2_SECURITY_GROUP")
+        var sg = getenv("MORCA_EC2_SECURITY_GROUP")
         if sg:
             p.append(("SecurityGroupId.1", sg))
-        var profile = getenv("ORCA_EC2_PROFILE")
+        var profile = getenv("MORCA_EC2_PROFILE")
         if profile:
             p.append(("IamInstanceProfile.Name", profile))
         if spot:
@@ -1036,7 +1036,7 @@ struct Ec2Runner(Movable):
             )
             if len(head) != 1 or not head[0].private_ip:
                 raise Error(
-                    "orca: RunInstances gave no head instance with an address"
+                    "morca: RunInstances gave no head instance with an address"
                 )
             head_ip = head[0].private_ip
         var n = min(r.min_workers, r.workers)
@@ -1248,7 +1248,7 @@ struct Ec2Runner(Movable):
                     [r.binary, "dista-status", head], HEAD_SECONDS
                 )
             except e:
-                print("orca: run", r.run, "has no status from its head:", e)
+                print("morca: run", r.run, "has no status from its head:", e)
                 continue
             if got_status[0] != 0:
                 continue  # its head isn't up yet, or has gone
@@ -1325,11 +1325,11 @@ struct Ec2Runner(Movable):
                         [r.binary, "dista-drain", head, addr], HEAD_SECONDS
                     )
                 except e:
-                    print("orca: run", r.run, "can't drain", addr, ":", e)
+                    print("morca: run", r.run, "can't drain", addr, ":", e)
                     continue
                 if drain[0] != 0:
                     print(
-                        "orca: run", r.run, "can't drain", addr, ":", drain[1]
+                        "morca: run", r.run, "can't drain", addr, ":", drain[1]
                     )
                     continue
                 drained += 1
@@ -1357,7 +1357,7 @@ struct Ec2Runner(Movable):
 
     def _give_up(mut self, mut db: State, r: Ec2Spec, waiting: Int) raises:
         """Fails the attempt of a run whose head has had `waiting` tasks and
-        no worker for `ORCA_NO_WORKERS_SECONDS`: its running attempts fail
+        no worker for `MORCA_NO_WORKERS_SECONDS`: its running attempts fail
         with why, and its instances are terminated. Its driver stops beating
         with them, and the scheduler starts it again as it does a run whose
         process died, while its retries last."""
@@ -1380,7 +1380,7 @@ struct Ec2Runner(Movable):
             Params()
             .int64(Int64(r.run))
             .int64(Int64(r.start))
-            .text(String("terminated by orca: ", why)),
+            .text(String("terminated by morca: ", why)),
         ):
             ids.append(o.text("id"))
         _ = db.conn.execute(
@@ -1392,7 +1392,7 @@ struct Ec2Runner(Movable):
         )
         self.ec2.terminate(ids)
         print(
-            "orca: run",
+            "morca: run",
             r.run,
             "start",
             r.start,
@@ -1407,7 +1407,7 @@ struct Ec2Runner(Movable):
 
     def policy(self, lo: Int, hi: Int, per: Int = 1) -> Policy:
         """The scaling policy over worker processes: `lo` to `hi` of them,
-        and `ORCA_SCALE_STEP` instances of `per` at most at once."""
+        and `MORCA_SCALE_STEP` instances of `per` at most at once."""
         return Policy(
             min_workers=lo,
             max_workers=hi,
@@ -1420,7 +1420,7 @@ struct Ec2Runner(Movable):
         """Terminates the instances of runs that aren't running at their
         start, and those older than the deadline, but for the pool's: an
         instance whose run ended goes to the pool, and is terminated once
-        it has been idle `ORCA_EC2_POOL_SECONDS`, or has stopped asking for
+        it has been idle `MORCA_EC2_POOL_SECONDS`, or has stopped asking for
         a run. Returns how many it terminated."""
         var live = Dict[String, Bool]()
         for row in db.conn.query(
@@ -1473,7 +1473,7 @@ struct Ec2Runner(Movable):
                     kept[id] = True
                 else:
                     pooled[id] = String(
-                        "terminated by orca: it didn't go back to the pool"
+                        "terminated by morca: it didn't go back to the pool"
                     )
             elif row.float64("idle_for") >= self.pool_seconds:
                 pooled[id] = String(
@@ -1543,14 +1543,14 @@ struct Ec2Runner(Movable):
                 doomed.append(id)
         self.ec2.terminate(doomed)
         for id in doomed:
-            _ended(db, id, "terminated by orca: its run had ended")
+            _ended(db, id, "terminated by morca: its run had ended")
         self._ended_since(db, up)
         self._rescue(db)
         return len(doomed)
 
     def _rescue(self, mut db: State) raises:
         """Replaces the instances the pool handed to a run that haven't
-        taken it up within `ORCA_EC2_POOL_JOIN_SECONDS`: such a worker with a
+        taken it up within `MORCA_EC2_POOL_JOIN_SECONDS`: such a worker with a
         new one, and such a head with a new head and workers for the same
         start, well within the start grace."""
         if self.pool_seconds <= 0:
@@ -1581,7 +1581,7 @@ struct Ec2Runner(Movable):
             if n == 0:
                 continue
             self.ec2.terminate([id])
-            print("orca: run", run, "replaces pooled", role, id, "(no answer)")
+            print("morca: run", run, "replaces pooled", role, id, "(no answer)")
             var spec = self._spec_of(db, run, start)
             if not spec:
                 continue

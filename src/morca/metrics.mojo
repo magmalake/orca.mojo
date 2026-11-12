@@ -1,8 +1,8 @@
-"""A run's machine metrics on its page: the samplers' files (`orca.sample`)
+"""A run's machine metrics on its page: the samplers' files (`morca.sample`)
 read back, their peaks and warnings, and the charts, drawn as SVG on the
 server like the DAG.
 
-`read_metrics` reads every `<ORCA_LOGS>/<pipeline>/<run>/metrics/*.jsonl`,
+`read_metrics` reads every `<MORCA_LOGS>/<pipeline>/<run>/metrics/*.jsonl`,
 local or in object storage, into one `InstanceMetrics` per file; a line it
 can't read is skipped. `metrics_svg` draws them under a lane of the run's
 steps, every row on the same time axis (wall-clock time, from the first
@@ -28,9 +28,9 @@ from std.os.path import exists
 from json import Value, loads
 from objectstore.fileio import FileIOResolver
 
-from orca.html import Html, escape
-from orca.json import quote
-from orca.logs import is_remote, read_location, run_dir
+from morca.html import Html, escape
+from morca.json import quote
+from morca.logs import is_remote, read_location, run_dir
 
 comptime _LABEL = 150
 comptime _WIDTH = 760
@@ -179,7 +179,7 @@ struct StepSpan(Copyable, Movable):
     var start: Float64
     var end: Float64
     var attempt: Int
-    """Its ID, which shows its card (`orca.ui.step_cards`), or 0."""
+    """Its ID, which shows its card (`morca.ui.step_cards`), or 0."""
 
 
 def _num(v: Value, ptr: String) -> Float64:
@@ -261,7 +261,7 @@ def _rank(name: String) -> Int:
 
 
 def read_metrics(pipeline: String, run: Int) -> List[InstanceMetrics]:
-    """Every instance's samples for the run under `ORCA_LOGS`; none without
+    """Every instance's samples for the run under `MORCA_LOGS`; none without
     it, or if the directory can't be listed."""
     var out = List[InstanceMetrics]()
     var dir = run_dir(pipeline, run)

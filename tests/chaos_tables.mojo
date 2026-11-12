@@ -3,7 +3,7 @@ environment: kills that land between a commit and its record must still
 leave exactly one snapshot per month.
 
     chaos_tables init          creates the table under CHAOS_WH
-    chaos_tables run ...       orca's command line
+    chaos_tables run ...       morca's command line
     chaos_tables check <run>   checks the table after a run
 
 `load` appends three rows for its month to `out`, napping CHAOS_NAP before
@@ -24,8 +24,8 @@ from iceberg.catalog.filesystem import FilesystemCatalog, Table
 from iceberg.schema import Schema
 from iceberg.values import Datum
 from parquet import RecordBatch
-from orca import Ctx, Gather, Mapped, Month, Pipeline, Step, orca_main
-from orca.tables import append, scan
+from morca import Ctx, Gather, Mapped, Month, Pipeline, Step, morca_main
+from morca.tables import append, scan
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -113,4 +113,4 @@ def main() raises:
     if len(args) == 3 and String(args[1]) == "check":
         _check(String(args[2]))
         return
-    orca_main[ChaosTables]()
+    morca_main[ChaosTables]()

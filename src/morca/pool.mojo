@@ -1,6 +1,6 @@
-"""An EC2 instance's side of the warm pool (`orca.ec2`,
-`ORCA_EC2_POOL_SECONDS`): the two commands its script runs between runs,
-through the pipeline's binary, over `ORCA_DATABASE_URL`.
+"""An EC2 instance's side of the warm pool (`morca.ec2`,
+`MORCA_EC2_POOL_SECONDS`): the two commands its script runs between runs,
+through the pipeline's binary, over `MORCA_DATABASE_URL`.
 
 ```
 <binary> pool-wait <instance> <run> <start>             a worker: until its run is over
@@ -32,7 +32,7 @@ from std.time import perf_counter_ns, sleep
 
 from postgres import Params
 
-from orca.state import State
+from morca.state import State
 
 
 def _over(mut db: State, iid: String, run: Int, start: Int) raises -> Bool:
@@ -65,7 +65,7 @@ def pool_wait_main(args: List[String]) raises -> Int:
                 return 0
         except e:
             if not said:
-                print("orca: pool-wait can't read run", run, ":", e)
+                print("morca: pool-wait can't read run", run, ":", e)
                 said = True
             db = None
         sleep(1.0)
@@ -121,7 +121,7 @@ def pool_next_main(args: List[String]) raises -> Int:
                 return 0
         except e:
             if not said:
-                print("orca: pool-next can't reach the database:", e)
+                print("morca: pool-next can't reach the database:", e)
                 said = True
             db = None
         sleep(1.0)
@@ -129,7 +129,7 @@ def pool_next_main(args: List[String]) raises -> Int:
 
 
 def getenv_url() raises -> String:
-    var url = getenv("ORCA_DATABASE_URL")
+    var url = getenv("MORCA_DATABASE_URL")
     if not url:
-        raise Error("orca: the pool's commands need ORCA_DATABASE_URL")
+        raise Error("morca: the pool's commands need MORCA_DATABASE_URL")
     return url^

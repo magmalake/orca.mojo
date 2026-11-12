@@ -11,9 +11,9 @@ build -g1`, as the image builds it). Without the symbolizer the dump starts
 `abort` or a failed `debug_assert` said.
 
 The runners call `crash_summary` on the output of a start that ended: the
-local runner when it reaps the process (`orca.scheduler`), the ec2 runner's
-`keep-log` on the head (`orca.ec2`), and the Kubernetes runner as it keeps
-the driver pod's log (`orca.kube`); each marks the attempts the process
+local runner when it reaps the process (`morca.scheduler`), the ec2 runner's
+`keep-log` on the head (`morca.ec2`), and the Kubernetes runner as it keeps
+the driver pod's log (`morca.kube`); each marks the attempts the process
 left `running` as failed with it.
 """
 
@@ -68,7 +68,7 @@ def crash_summary(output: String) -> String:
             break
         # `#4 0x... boom /p/x.mojo:9:11`: the function and where it is. A
         # function the symbolizer names by its linkage name, such as
-        # `orca::step::Step::run[<parameters>](<arguments>)`, is cut to
+        # `morca::step::Step::run[<parameters>](<arguments>)`, is cut to
         # its path.
         var parts = l.split(" ", 2)
         if len(parts) < 3:

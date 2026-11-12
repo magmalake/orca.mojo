@@ -1,5 +1,5 @@
 """The Coverage card on a dated pipeline's Operate tab: its partitions'
-states (`orca.calendar`) as plain HTML, read-only.
+states (`morca.calendar`) as plain HTML, read-only.
 
 A daily pipeline's card has two tabs, **Month** (a month of days) and
 **Year** (twelve small months, each with how many of its days are done, and
@@ -10,14 +10,14 @@ is kept in `localStorage`, as the Steps tabs are. Year is the default. A
 monthly pipeline's card is its year of months, as before, and an hourly
 one's a day of hours (`?cal=YYYY-MM-DD`). For a sensor,
 the days what it follows has but it hasn't done, failed or started are
-`behind` (`orca.follow`), and `follow_html` is its Progress card's
+`behind` (`morca.follow`), and `follow_html` is its Progress card's
 Following line.
 
 One calendar is read for both tabs (`year_calendar`): the month is cut out
 of the year, so the card costs the same three queries as a month did.
 """
 
-from orca.calendar import (
+from morca.calendar import (
     Calendar,
     Year,
     calendar,
@@ -25,16 +25,16 @@ from orca.calendar import (
     year_calendar,
     year_of,
 )
-from orca.civil import Civil, now
-from orca.estimate import estimate_text
-from orca.follow import Follow, LISTED
-from orca.html import Html, url_encode
-from orca.ui.layout import act_button
-from orca.day import Day
-from orca.hour import Hour
-from orca.month import Month, days_in
-from orca.views.commands import shell_quote
-from orca.state import State
+from morca.civil import Civil, now
+from morca.estimate import estimate_text
+from morca.follow import Follow, LISTED
+from morca.html import Html, url_encode
+from morca.ui.layout import act_button
+from morca.day import Day
+from morca.hour import Hour
+from morca.month import Month, days_in
+from morca.views.commands import shell_quote
+from morca.state import State
 
 
 def states() -> List[String]:
@@ -381,7 +381,7 @@ def coverage_html(
 
 
 def coverage_href(name: String, kind: String) -> String:
-    """Where a pipeline's coverage number links (`orca.coverage`): its
+    """Where a pipeline's coverage number links (`morca.coverage`): its
     Coverage card, a daily one's on the Year tab, or a keyed one's Keys
     on the Overview."""
     var href = String("/pipelines/", url_encode(name))
@@ -421,7 +421,7 @@ def _key_links(
 
 
 def key_ranges(keys: List[String], unit: String) raises -> String:
-    """Sorted day (month) keys as `orca backfill` takes them, each run of
+    """Sorted day (month) keys as `morca backfill` takes them, each run of
     consecutive ones as `FIRST..LAST`: `2023-01-01..2023-01-31,2023-03-04`."""
     var out = String()
     var i = 0
@@ -449,7 +449,7 @@ def key_ranges(keys: List[String], unit: String) raises -> String:
 
 def _queue_waiting(mut h: Html, name: String, f: Follow, max_runs: Int):
     """A button that backfills the keys in no run yet: a run for each, as
-    `orca backfill` over them would queue."""
+    `morca backfill` over them would queue."""
     var n = len(f.waiting)
     var units = String(f.unit, "" if n == 1 else "s")
     var keys: String
@@ -480,7 +480,7 @@ def _queue_waiting(mut h: Html, name: String, f: Follow, max_runs: Int):
         String("/pipelines/", url_encode(name), "/backfill"),
         "Queue them",
         "queue them",
-        String("orca backfill ", shell_quote(name), " ", shell_quote(keys)),
+        String("morca backfill ", shell_quote(name), " ", shell_quote(keys)),
         ask=String("Queue the ", units, " not queued yet?"),
         tell=tell,
         yes=String("Queue ", n, " run" if n == 1 else " runs"),
@@ -538,7 +538,7 @@ comptime _COVERAGE_JS = """
       a.setAttribute("aria-selected", String(a.dataset.view === v));
       document.getElementById("coverage-" + a.dataset.view).hidden = a.dataset.view !== v;
     }
-    if (save) put("orca.coverage.view", v);
+    if (save) put("morca.coverage.view", v);
   };
   sec.querySelector("[role=tablist]").addEventListener("click", (e) => {
     const a = e.target.closest("a[data-view]");
@@ -547,7 +547,7 @@ comptime _COVERAGE_JS = """
     show(a.dataset.view, true);
   });
   const q = new URLSearchParams(location.search);
-  if (!q.has("cov")) show(get("orca.coverage.view"), false);
+  if (!q.has("cov")) show(get("morca.coverage.view"), false);
 })();
 """
 """The Coverage tabs: switch without loading the page, and remember the
@@ -595,4 +595,4 @@ comptime COVERAGE_STYLE = """
   .cov__body { padding: 0.6rem 0.75rem 0.75rem; }
 }
 """
-"""The Coverage card's rules, served after `orca.ui.style.STYLE`."""
+"""The Coverage card's rules, served after `morca.ui.style.STYLE`."""

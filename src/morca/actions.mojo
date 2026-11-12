@@ -1,12 +1,12 @@
-"""What `orca ui` does to runs: each action is rows in Postgres that the
+"""What `morca ui` does to runs: each action is rows in Postgres that the
 scheduler, or the run's own process, acts on.
 
 The UI never starts a pipeline's binary. Starting, resuming, rerunning and
 backfilling leave a `queued` run, which the scheduler starts on its next
 tick as it starts any other, within `max_runs`; cancelling sets
 `cancel_requested`, which a running run sees before its next attempt; an
-attempt still going `ORCA_CANCEL_KILL_SECONDS` (60) later is stopped, its
-process exiting (`orca.heartbeat`). Pausing a pipeline sets
+attempt still going `MORCA_CANCEL_KILL_SECONDS` (60) later is stopped, its
+process exiting (`morca.heartbeat`). Pausing a pipeline sets
 `pipelines.paused`, and the scheduler starts none of its runs until it's
 unpaused. So the UI works the same wherever the
 scheduler runs, and retries and limits stay in one place.
@@ -20,10 +20,10 @@ from std.os import getenv
 
 from postgres import Params
 
-from orca.live import live_runs
-from orca.name import parse_names
-from orca.pause import set_paused
-from orca.queueing import (
+from morca.live import live_runs
+from morca.name import parse_names
+from morca.pause import set_paused
+from morca.queueing import (
     ALLOW_APPEND_HOW,
     append_again,
     appending_writes,
@@ -31,14 +31,14 @@ from orca.queueing import (
     partition_keys,
     rerun_refusal,
 )
-from orca.registered import (
+from morca.registered import (
     Registered,
     registered,
 )
-from orca.scheduler import RETRIED_SQL
-from orca.sensors import rebuild
-from orca.state import State
-from orca.timekeys import parse_time_keys
+from morca.scheduler import RETRIED_SQL
+from morca.sensors import rebuild
+from morca.state import State
+from morca.timekeys import parse_time_keys
 
 
 @fieldwise_init
@@ -64,19 +64,19 @@ struct Outcome(Movable):
 
 
 def stale_seconds() -> Float64:
-    """`ORCA_STALE_SECONDS` (default 30): how old a running run's heartbeat
+    """`MORCA_STALE_SECONDS` (default 30): how old a running run's heartbeat
     is when its process is taken to have died."""
     try:
-        return Float64(getenv("ORCA_STALE_SECONDS", "30"))
+        return Float64(getenv("MORCA_STALE_SECONDS", "30"))
     except:
         return 30.0
 
 
 def cancel_kill_seconds() -> Float64:
-    """`ORCA_CANCEL_KILL_SECONDS` (default 60): how long a running run
+    """`MORCA_CANCEL_KILL_SECONDS` (default 60): how long a running run
     asked to cancel has to finish its step before it's stopped."""
     try:
-        return Float64(getenv("ORCA_CANCEL_KILL_SECONDS", "60"))
+        return Float64(getenv("MORCA_CANCEL_KILL_SECONDS", "60"))
     except:
         return 60.0
 
@@ -158,7 +158,7 @@ def backfill_runs(
     rerun: Bool = False,
     allow_append: Bool = False,
 ) raises -> Outcome:
-    """What `orca backfill` does: queued runs, `keys_per_run` keys each, of
+    """What `morca backfill` does: queued runs, `keys_per_run` keys each, of
     the keys in `keys` that aren't done and aren't in a live run; for time
     keys, by default a run for each partition in `keys`
     that has none queued, running or succeeded. With `rerun`, done keys are
@@ -363,8 +363,8 @@ def _cancel_set(kill_seconds: StaticString) -> String:
 def cancel_run(mut db: State, run: Int) raises -> Outcome:
     """Cancels a run: a queued, deferred or failed one at once (it isn't
     started again), a running one before its next attempt, or, if its step
-    is still going `ORCA_CANCEL_KILL_SECONDS` later, by stopping its process
-    (`orca.heartbeat`)."""
+    is still going `MORCA_CANCEL_KILL_SECONDS` later, by stopping its process
+    (`morca.heartbeat`)."""
     var rows = db.conn.query(
         String(
             _cancel_set("$2"),
@@ -389,7 +389,7 @@ def cancel_run(mut db: State, run: Int) raises -> Outcome:
 def cancel_runs(
     mut db: State, pipeline: String, keys: String
 ) raises -> Outcome:
-    """What `orca cancel` does: cancels, as `cancel_run` does each, the
+    """What `morca cancel` does: cancels, as `cancel_run` does each, the
     pipeline's runs that are queued, deferred, running, or failed and due
     to be retried, over any of `keys` (a run of several keys is cancelled whole),
     or all of them for `@all`. The outcome's `queued` is how many."""
@@ -443,7 +443,7 @@ def cancel_runs(
 def pause_pipeline(
     mut db: State, pipeline: String, paused: Bool
 ) raises -> Outcome:
-    """What `orca pause` (or, with `paused` false, `orca unpause`) does:
+    """What `morca pause` (or, with `paused` false, `morca unpause`) does:
     while a pipeline is paused the scheduler starts none of its runs. Fires,
     sensors, retries and backfills still queue theirs, which start once
     it's unpaused; runs already going go on."""
@@ -456,7 +456,7 @@ def pause_pipeline(
 def rebuild_downstream(
     mut db: State, dataset: String, keys: String
 ) raises -> Outcome:
-    """What `orca rebuild` does: plans runs of every pipeline downstream of
+    """What `morca rebuild` does: plans runs of every pipeline downstream of
     `dataset` over `keys`, which the scheduler queues a level at a time.
     The outcome's `run` is the rebuild's ID."""
     try:
@@ -469,7 +469,7 @@ def _unregistered(pipeline: String) -> String:
     return String(
         "pipeline ",
         pipeline,
-        " isn't registered with a binary (orca register), so the scheduler",
+        " isn't registered with a binary (morca register), so the scheduler",
         " can't start its runs",
     )
 
@@ -479,7 +479,7 @@ def _unregistered(pipeline: String) -> String:
 
 @fieldwise_init
 struct Bulk(Movable):
-    """What an action on runs picked from a list did (`orca.api.actions.bulk`).
+    """What an action on runs picked from a list did (`morca.api.actions.bulk`).
     """
 
     var done: List[Int]
@@ -575,7 +575,7 @@ def resume_failed(mut db: State, runs: List[Int]) raises -> Bulk:
 def backfill_picked(
     mut db: State, runs: List[Int], allow_append: Bool
 ) raises -> Bulk:
-    """What `orca backfill --rerun` does, over the partitions of `runs`, a
+    """What `morca backfill --rerun` does, over the partitions of `runs`, a
     backfill per pipeline: a queued run for each of them that isn't in a
     live run. If a pipeline's steps append to what they write, nothing is
     done until `allow_append` confirms it (`confirm` says why)."""

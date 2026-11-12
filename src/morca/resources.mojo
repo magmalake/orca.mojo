@@ -4,10 +4,10 @@ machine.
     [pipelines.gharchive]
     cpus = "1..16"           # or a count, 4: MIN = MAX
     memory_gb = "2..24"      # GB, decimals allowed: "0.5..2"
-    # or "auto", "auto..24": learned from its runs (orca.recommend)
+    # or "auto", "auto..24": learned from its runs (morca.recommend)
 
-**Requests.** A pipeline asks for a range of CPUs and memory in orca.toml
-(`[defaults]` or its own table) or with `orca register --cpus` and
+**Requests.** A pipeline asks for a range of CPUs and memory in morca.toml
+(`[defaults]` or its own table) or with `morca register --cpus` and
 `--memory-gb`. Either can be left out. A pipeline with neither is started
 as before: no admission check, no grant.
 
@@ -15,9 +15,9 @@ as before: no admission check, no grant.
 scheduler starts a run of a pipeline with a request only if its minimum
 fits in what this host's running runs haven't been granted: the host's
 CPUs and memory (`host_capacity`: cgroup limits if set, else
-`/proc/meminfo` and the cores; `sysctl` on macOS; `ORCA_HOST_CPUS` and
-`ORCA_HOST_MEMORY_MB` override both), less a reserve for the scheduler,
-Postgres and the UI (`ORCA_RESERVE_CPUS`, 1, and `ORCA_RESERVE_MEMORY_MB`,
+`/proc/meminfo` and the cores; `sysctl` on macOS; `MORCA_HOST_CPUS` and
+`MORCA_HOST_MEMORY_MB` override both), less a reserve for the scheduler,
+Postgres and the UI (`MORCA_RESERVE_CPUS`, 1, and `MORCA_RESERVE_MEMORY_MB`,
 1536), less the grants of the runs going there. Otherwise the run waits,
 queued, `held` with why (`WAITING`...): "waiting: needs 2 GB, 1.3 GB free of
 grants". Runs without a request take no part: they're neither checked nor
@@ -26,38 +26,38 @@ counted. `max_runs` and `fill_max_runs` stay as caps on top; with
 to its ceiling, and a pipeline with no request to weigh starts one at a time.
 
 **Grants.** A run that starts gets up to its maximum from what's left,
-fixed for that start's life, in `ORCA_GRANT_CPUS` and
-`ORCA_GRANT_MEMORY_MB`, and recorded on the run (`orca.runs.grant_cpus`,
-`grant_memory_mb`, with the request it had). A remote worker (`orca
+fixed for that start's life, in `MORCA_GRANT_CPUS` and
+`MORCA_GRANT_MEMORY_MB`, and recorded on the run (`orca.runs.grant_cpus`,
+`grant_memory_mb`, with the request it had). A remote worker (`morca
 worker`) admits the runs it takes the same way against its own host, with
 the same variables (its reserve defaults to 0 CPUs and 512 MB).
 
 **Learned requests.** `cpus` and `memory_gb` may be `auto`, or have `auto`
 as a range's lower end (`"auto..24"`): what the pipeline's runs suggest
-(`orca.recommend`), at most the range's maximum, resolved each time a run
+(`morca.recommend`), at most the range's maximum, resolved each time a run
 starts (`resolve_request`); without one, no request of that resource.
 `Request.of` reads `auto` as `cpus_auto` or `memory_auto` with a minimum of
 0 and the maximum given (0 for none).
 
 **`"auto"` in `env`.** An `env` value `"auto"` is passed to the run as it
 is, for the pipeline to size itself from the grant (`auto_count`), except
-`DISTA_WORKER_SLOTS`, which dista reads as a number: orca gives it the
-grant's CPUs over the run's local dista workers (`ORCA_WORKERS`), at least
+`DISTA_WORKER_SLOTS`, which dista reads as a number: morca gives it the
+grant's CPUs over the run's local dista workers (`MORCA_WORKERS`), at least
 1, or 0 (dista's one per core) for a run without a CPU grant.
 """
 
 from std.os import getenv
 from std.sys.info import CompilationTarget, num_logical_cores
 
-from orca.sample import _read, _sysctl_u64, parse_meminfo
+from morca.sample import _read, _sysctl_u64, parse_meminfo
 
 comptime MAX_CPUS = 1024
 comptime MAX_MEMORY_GB = 65536.0
 comptime WAITING = "waiting: needs "
 """How a run held by admission's reason starts."""
 
-comptime GRANT_CPUS = "ORCA_GRANT_CPUS"
-comptime GRANT_MEMORY_MB = "ORCA_GRANT_MEMORY_MB"
+comptime GRANT_CPUS = "MORCA_GRANT_CPUS"
+comptime GRANT_MEMORY_MB = "MORCA_GRANT_MEMORY_MB"
 comptime AUTO = "auto"
 
 
@@ -74,7 +74,7 @@ def _auto_max(v: String) -> Tuple[Bool, String]:
 
 def parse_cpus(v: String) raises -> Tuple[Int, Int]:
     """`cpus`' value, `N` or `MIN..MAX`: whole CPUs from 1 to 1024. `auto`
-    is (0, 0) and `auto..MAX` (0, MAX), learned (`orca.recommend`)."""
+    is (0, 0) and `auto..MAX` (0, MAX), learned (`morca.recommend`)."""
     var a = _auto_max(v)
     if a[0]:
         if not a[1]:
@@ -120,7 +120,7 @@ def _mb_of_gb(gb: Float64) -> Int:
 def parse_memory_gb(v: String) raises -> Tuple[Int, Int]:
     """`memory_gb`'s value, `N` or `MIN..MAX` in GB (decimals allowed), as
     MB: more than 0 and at most 65536 GB. `auto` is (0, 0) and `auto..MAX`
-    (0, MAX), learned (`orca.recommend`)."""
+    (0, MAX), learned (`morca.recommend`)."""
     var a = _auto_max(v)
     if a[0]:
         if not a[1]:
@@ -199,7 +199,7 @@ def gb_text(mb: Int) -> String:
 struct Request(ImplicitlyCopyable, Movable):
     """A pipeline's range of CPUs and memory; 0s for a resource it doesn't
     ask for. `cpus_auto` and `memory_auto` mark a learned one (`auto`, or
-    `auto..MAX` with its maximum), which `orca.recommend.resolve_request`
+    `auto..MAX` with its maximum), which `morca.recommend.resolve_request`
     makes a range before admission."""
 
     var cpus_min: Int
@@ -311,8 +311,8 @@ struct Grant(ImplicitlyCopyable, Movable):
 
     @staticmethod
     def from_env() -> Grant:
-        """This run's grant, from `ORCA_GRANT_CPUS` and
-        `ORCA_GRANT_MEMORY_MB`; 0 for what isn't set."""
+        """This run's grant, from `MORCA_GRANT_CPUS` and
+        `MORCA_GRANT_MEMORY_MB`; 0 for what isn't set."""
         var g = Grant(0, 0)
         try:
             if getenv(GRANT_CPUS):
@@ -357,7 +357,7 @@ def _env_int(name: StaticString, default: Int) raises -> Int:
             return n
     except:
         pass
-    raise Error("orca: ", name, " must be a number from 0, not ", s)
+    raise Error("morca: ", name, " must be a number from 0, not ", s)
 
 
 def _cgroup_int(path: String) -> Int:
@@ -373,7 +373,7 @@ def _cgroup_int(path: String) -> Int:
 
 def host_capacity() raises -> Tuple[Int, Int]:
     """This host's CPUs and memory in MB, as a run here may use them:
-    `ORCA_HOST_CPUS` and `ORCA_HOST_MEMORY_MB` if set; else on Linux the
+    `MORCA_HOST_CPUS` and `MORCA_HOST_MEMORY_MB` if set; else on Linux the
     cgroup's limits (v2 `cpu.max` and `memory.max`, or v1's) where they're
     lower than the cores and `/proc/meminfo`'s MemTotal; else `sysctl`."""
     var cpus = num_logical_cores()
@@ -404,18 +404,18 @@ def host_capacity() raises -> Tuple[Int, Int]:
             cpus = min(cpus, max((quota + period - 1) // period, 1))
     else:
         mb = _sysctl_u64("hw.memsize") // (1024 * 1024)
-    cpus = _env_int("ORCA_HOST_CPUS", cpus)
-    mb = _env_int("ORCA_HOST_MEMORY_MB", mb)
+    cpus = _env_int("MORCA_HOST_CPUS", cpus)
+    mb = _env_int("MORCA_HOST_MEMORY_MB", mb)
     return (cpus, mb)
 
 
 def host_room(worker: Bool = False) raises -> Room:
-    """What this host can grant: `host_capacity` less `ORCA_RESERVE_CPUS`
-    and `ORCA_RESERVE_MEMORY_MB` (1 and 1536 beside the scheduler, Postgres
+    """What this host can grant: `host_capacity` less `MORCA_RESERVE_CPUS`
+    and `MORCA_RESERVE_MEMORY_MB` (1 and 1536 beside the scheduler, Postgres
     and the UI; 0 and 512 on a worker)."""
     var cap = host_capacity()
-    var rc = _env_int("ORCA_RESERVE_CPUS", 0 if worker else 1)
-    var rm = _env_int("ORCA_RESERVE_MEMORY_MB", 512 if worker else 1536)
+    var rc = _env_int("MORCA_RESERVE_CPUS", 0 if worker else 1)
+    var rm = _env_int("MORCA_RESERVE_MEMORY_MB", 512 if worker else 1536)
     return Room(max(cap[0] - rc, 0), max(cap[1] - rm, 0), cap[0], cap[1])
 
 
@@ -502,12 +502,12 @@ def admit(
 
 
 def _workers_of(env: List[String]) -> Int:
-    """`ORCA_WORKERS` among `env`'s `NAME=value`s, else this process's
+    """`MORCA_WORKERS` among `env`'s `NAME=value`s, else this process's
     (default 4), the local dista workers a run forks."""
-    var text = getenv("ORCA_WORKERS", "4")
+    var text = getenv("MORCA_WORKERS", "4")
     for e in env:
-        if e.startswith("ORCA_WORKERS="):
-            text = String(e[byte = String("ORCA_WORKERS=").byte_length() :])
+        if e.startswith("MORCA_WORKERS="):
+            text = String(e[byte = String("MORCA_WORKERS=").byte_length() :])
     try:
         return max(Int(text), 1)
     except:
@@ -519,7 +519,7 @@ def run_env(
 ) -> List[String]:
     """A start's `NAME=value`s: the pipeline's `env`, with
     `DISTA_WORKER_SLOTS = "auto"` made a number from `g` (its CPUs over the
-    local workers that `extra` or this process's `ORCA_WORKERS` gives, or 0
+    local workers that `extra` or this process's `MORCA_WORKERS` gives, or 0
     for none), then `g`'s variables, then `extra`."""
     var out = List[String]()
     for kv in env:

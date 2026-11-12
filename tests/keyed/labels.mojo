@@ -5,8 +5,8 @@ many names it saw.
 """
 
 from dista import Seq
-from orca import Ctx, Gather, Mapped, Name, Pipeline, Step, orca_main
-from orca.keyed import Keyed
+from morca import Ctx, Gather, Mapped, Name, Pipeline, Step, morca_main
+from morca.keyed import Keyed
 
 
 def label(mut ctx: Ctx, n: Name) raises -> Int:
@@ -33,4 +33,4 @@ comptime Labels = Pipeline[
 
 
 def main() raises:
-    orca_main[Labels]()
+    morca_main[Labels]()

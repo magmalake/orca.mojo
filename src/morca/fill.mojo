@@ -1,5 +1,5 @@
 """Fills (#155): a pipeline filling its whole partition range by itself,
-within limits, set in orca.toml (`orca.config`):
+within limits, set in morca.toml (`morca.config`):
 
     [pipelines.gharchive]
     fills = "all"                # "since_registration", the default
@@ -23,21 +23,21 @@ schedule's clock), a Monthly month from the 1st of the next plus the lag.
 Until then the partition is outside the range, for the fill and for the
 coverage alike (`range_keys`), so it isn't counted as missing; the
 pipeline page's Fill line says when it fills (`FillStatus.lag_key`). The default,
-`since_registration`, is what orca did before: a schedule fills from the
-pipeline's registration on, and `orca backfill` the rest by hand.
+`since_registration`, is what morca did before: a schedule fills from the
+pipeline's registration on, and `morca backfill` the rest by hand.
 
 **What a fill takes.** A partition is left alone when it's done in a run of
 any code of the pipeline (every mapped step succeeded for it; with no
 mapped step, a run over it succeeded), when a live run has it, or when a
 fill run of it was ever queued, so a fill never runs a partition twice:
 one whose fill run failed past its retries, or was cancelled, is left to a
-person (`orca backfill`, or resume in the UI). Running done partitions
-again stays `orca backfill --rerun`. All of that is within the pipeline's
+person (`morca backfill`, or resume in the UI). Running done partitions
+again stays `morca backfill --rerun`. All of that is within the pipeline's
 current data version, its steps' `version=` (#297): raising one makes every
 partition fillable again, and the fill regenerates them within its limits.
 
 **Limits**, each a reason the pipeline page gives for a fill being idle:
-the pipeline paused (by a person or by the watchdog, `orca.watchdog`), the
+the pipeline paused (by a person or by the watchdog, `morca.watchdog`), the
 hour outside `fill_window`, the day's budget, the pipeline's other queued
 runs (a scheduled or backfilled run starts first, so fills never starve
 them), and `fill_max_runs`. Fill runs don't count against `max_runs`.
@@ -52,22 +52,22 @@ than that many going whatever the number of workers; each worker's
 runs cost nothing more than its machines, which run anyway.
 
 **The cost estimate** is conservative, and fails closed. A fill run's
-cost is its instances' time (`orca.instances`) at `orca.fleet`'s on-demand
+cost is its instances' time (`orca.instances`) at `morca.fleet`'s on-demand
 price table, times `COST_MARGIN` for what the table leaves out (EBS,
 transfer, requests). The day's spend is that over the fill runs' instances
-since 00:00 UTC, up to now. Before starting a run, orca also counts what
+since 00:00 UTC, up to now. Before starting a run, morca also counts what
 the fill runs going and the new one may still cost: the pipeline's
 hourly price (head plus its most workers) for the longest fill run of its
 last `_HISTORY` (an hour if it has none, at least a minute, plus the warm
 pool's idle time on EC2), less what each has run already. A run starts only
 if the spend plus that stays within `fill_budget_per_day`. When a price
 isn't known (an instance type not in the table, or Kubernetes, whose
-cluster orca can't price), no fill run starts on a budget, and the reason
+cluster morca can't price), no fill run starts on a budget, and the reason
 says so. A pipeline whose runs cost money (placed on EC2 or Kubernetes)
 starts no fill run without a budget. Runs on the control host or local
 processes cost nothing more than the machine already running.
 
-Keyed pipelines and sensors don't fill: `orca register` refuses
+Keyed pipelines and sensors don't fill: `morca register` refuses
 `fills = "all"` for them (`fill_refusal`).
 """
 
@@ -75,17 +75,17 @@ from std.os import getenv
 
 from postgres import Params, Transaction
 
-from orca.civil import Civil
-from orca.fleet import hourly_price
-from orca.json import quote
-from orca.live import dead_sql, live_runs, stale_limit, start_grace
-from orca.timekeys import (
+from morca.civil import Civil
+from morca.fleet import hourly_price
+from morca.json import quote
+from morca.live import dead_sql, live_runs, stale_limit, start_grace
+from morca.timekeys import (
     is_time_kind,
     parse_time_keys,
     containing_key,
     prev_key,
 )
-from orca.tz import Zone
+from morca.tz import Zone
 
 comptime ALL = "all"
 comptime SINCE_REGISTRATION = "since_registration"
@@ -145,7 +145,7 @@ def parse_fill_max_runs(v: String) raises -> Int:
 
 
 def fill_max_runs_text(n: Int, auto: Bool) -> String:
-    """`fill_max_runs` as orca.toml writes it."""
+    """`fill_max_runs` as morca.toml writes it."""
     if not auto:
         return String(n)
     if n == AUTO_FILL_MAX_RUNS:
@@ -305,7 +305,7 @@ def fill_refusal(
         return String(
             pipeline,
             " is keyed: its keys come from its keys dataset, which its",
-            " sensor or `orca backfill ",
+            " sensor or `morca backfill ",
             pipeline,
             " @all` runs; fills are for Hourly, Daily and Monthly partitions",
         )
@@ -387,21 +387,21 @@ def run_hourly(
     0 on the control host, as a local process or on a worker pool's
     machines (which run anyway), the head and its most
     workers at on-demand prices on EC2 (a type left empty is the runner's,
-    `ORCA_EC2_HEAD_TYPE` / `ORCA_EC2_WORKER_TYPE`), and -1 for a price that
-    isn't known (a type not in `orca.fleet`'s table, or Kubernetes)."""
+    `MORCA_EC2_HEAD_TYPE` / `MORCA_EC2_WORKER_TYPE`), and -1 for a price that
+    isn't known (a type not in `morca.fleet`'s table, or Kubernetes)."""
     if placed == "control" or placed == "local" or placed.startswith("worker:"):
         return 0.0
     if placed != "ec2":
         return -1.0
     var head = head_type if head_type else getenv(
-        "ORCA_EC2_HEAD_TYPE", "c7g.large"
+        "MORCA_EC2_HEAD_TYPE", "c7g.large"
     )
     var price = hourly_price(head)
     if price < 0:
         return -1.0
     if workers > 0:
         var worker = worker_type if worker_type else getenv(
-            "ORCA_EC2_WORKER_TYPE", "c7g.xlarge"
+            "MORCA_EC2_WORKER_TYPE", "c7g.xlarge"
         )
         var w = hourly_price(worker)
         if w < 0:
@@ -417,12 +417,12 @@ def unknown_type(
     if placed != "ec2":
         return ""
     var head = head_type if head_type else getenv(
-        "ORCA_EC2_HEAD_TYPE", "c7g.large"
+        "MORCA_EC2_HEAD_TYPE", "c7g.large"
     )
     if hourly_price(head) < 0:
         return head
     var worker = worker_type if worker_type else getenv(
-        "ORCA_EC2_WORKER_TYPE", "c7g.xlarge"
+        "MORCA_EC2_WORKER_TYPE", "c7g.xlarge"
     )
     if workers > 0 and hourly_price(worker) < 0:
         return worker
@@ -533,7 +533,7 @@ comptime _SAME_DATA = (
     " v.id = p.version WHERE p.name = $1), '')"
 )
 """The runs of pipeline `$1` whose code has its current data version
-(`orca.state.data_version_sql`): the same steps' `version=`. A run's is its
+(`morca.state.data_version_sql`): the same steps' `version=`. A run's is its
 registry hash's, since a step's version is in the hash; a hash recorded
 before data versions, or none, has none."""
 
@@ -553,7 +553,7 @@ comptime _DONE_ANY_CODE = (
 )
 """The keys done for pipeline `$1` in a run of any of its code with its
 current data version: every mapped step succeeded for the key; with no
-mapped step, a run over it succeeded. (`orca.scheduler.DONE_SQL` asks the
+mapped step, a run over it succeeded. (`morca.scheduler.DONE_SQL` asks the
 same of the current code.) A raised `version=` is a new data version, so
 the fill runs the partitions again (#297)."""
 
@@ -742,7 +742,7 @@ def fill_status(
             s.idle.write(
                 "; ",
                 s.failed,
-                " failed for good, left for orca backfill or a resume",
+                " failed for good, left for morca backfill or a resume",
             )
     elif p.paused:
         var by = tx.query(
@@ -773,8 +773,8 @@ def fill_status(
         var t = unknown_type(p.placed, p.head_type, p.worker_type, p.workers)
         s.idle = String(
             "price unknown: ",
-            String("no price for ", t, " in orca.fleet's table") if t else (
-                String("orca can't price runs on ", p.placed)
+            String("no price for ", t, " in morca.fleet's table") if t else (
+                String("morca can't price runs on ", p.placed)
             ),
             ", so it can't keep to a budget",
         )
@@ -782,7 +782,7 @@ def fill_status(
         s.idle = String(
             "price unknown: today's fill runs ran on ",
             unpriced,
-            ", which orca.fleet's table has no price for",
+            ", which morca.fleet's table has no price for",
         )
     elif s.budget >= 0 and s.spent + s.next_cost > s.budget:
         s.idle = String(

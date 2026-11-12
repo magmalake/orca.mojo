@@ -3,13 +3,13 @@
 `Pipeline.execute` reports every attempt it starts and finishes, and every
 step it skips, to a `Store`; a step's reads and commits reach the same store
 through the `Recorder` its `Ctx` holds. `MemoryStore` keeps them in the
-process, for a run that lives as long as it does; `orca.state.PgStore`
+process, for a run that lives as long as it does; `morca.state.PgStore`
 writes them to Postgres, so a run can be resumed by another process.
 
 `RunStore` is a `Store` that also keeps runs: the rest of what a pipeline
-binary (`orca.cli`) asks of persistence, from registering the pipeline to
+binary (`morca.cli`) asks of persistence, from registering the pipeline to
 ending its run, so the binary depends on this trait and nothing else.
-The scheduler and the UI query `orca.state.State`'s SQL directly.
+The scheduler and the UI query `morca.state.State`'s SQL directly.
 """
 
 from std.ffi import external_call
@@ -44,7 +44,7 @@ struct StepRun(Copyable, Movable):
     var attempt: Int
     """The number of the attempt that settled it; 0 for a skipped step."""
     var until: Int64
-    """When a deferred step may run again, on `orca.civil.now`'s clock."""
+    """When a deferred step may run again, on `morca.civil.now`'s clock."""
 
     def __init__(
         out self,
@@ -133,13 +133,13 @@ another process, or cancelled. `Backoff` raises it at once, without it."""
 
 
 def db_retry_seconds() -> Float64:
-    """`ORCA_DB_RETRY_SECONDS`: how long a run's process keeps retrying a
+    """`MORCA_DB_RETRY_SECONDS`: how long a run's process keeps retrying a
     write to its store that failed, by default the stale limit
-    (`ORCA_STALE_SECONDS`, 30), past which another process may take the run
+    (`MORCA_STALE_SECONDS`, 30), past which another process may take the run
     over anyway."""
     try:
         return Float64(
-            getenv("ORCA_DB_RETRY_SECONDS", getenv("ORCA_STALE_SECONDS", "30"))
+            getenv("MORCA_DB_RETRY_SECONDS", getenv("MORCA_STALE_SECONDS", "30"))
         )
     except:
         return 30.0
@@ -173,7 +173,7 @@ struct Backoff(Movable):
         if spent + self.wait > self.budget:
             raise Error(msg)
         print(
-            "orca: ",
+            "morca: ",
             self.what,
             " failed (",
             msg,
@@ -200,7 +200,7 @@ struct RunInfo(Copyable, Movable):
 
 @fieldwise_init
 struct Usage(ImplicitlyCopyable, Movable):
-    """What an attempt's processes used (`orca.usage`): the peak resident
+    """What an attempt's processes used (`morca.usage`): the peak resident
     bytes of its process tree, its CPU seconds, and the most cores it kept
     busy over a sample's interval. Each is -1 where it isn't known: a run
     on EC2 or Kubernetes, one no scheduler or worker started, or on macOS
@@ -298,7 +298,7 @@ struct Recorder(Movable):
 
     def fence(mut self) raises:
         """Raises unless this process may still commit for its run: what
-        `orca.tables` checks right before each commit (`Store.fence`)."""
+        `morca.tables` checks right before each commit (`Store.fence`)."""
         self._fence(self._store)
 
     def read(mut self, t: TableSnapshot) raises:
@@ -361,10 +361,10 @@ trait Store:
 
     def fence(mut self) raises:
         """Raises unless this process still owns the run, with a heartbeat
-        younger than half of `ORCA_STALE_SECONDS`, so no other process can
+        younger than half of `MORCA_STALE_SECONDS`, so no other process can
         have claimed it nor claim it during a commit: what a commit to
-        Iceberg checks right before it's made (`orca.ctx`). Its message
-        starts `orca: not committing`."""
+        Iceberg checks right before it's made (`morca.ctx`). Its message
+        starts `morca: not committing`."""
         ...
 
     def recorder(mut self) raises -> Recorder:
@@ -398,7 +398,7 @@ trait RunStore(Store):
         ...
 
     def scheduled_hash(mut self, pipeline: String) raises -> String:
-        """The registry hash `orca register` gave `pipeline`, or empty if it
+        """The registry hash `morca register` gave `pipeline`, or empty if it
         wasn't registered with a binary."""
         ...
 
@@ -437,7 +437,7 @@ trait RunStore(Store):
     def interrupt(mut self, run: Int, why: String = "") raises -> Int:
         """Marks attempts left `running` by a process that died as failed,
         and returns how many there were. `why` is their error and their
-        steps', such as a crash's (`orca.crash`); empty, it's `interrupted:
+        steps', such as a crash's (`morca.crash`); empty, it's `interrupted:
         the process running it stopped`."""
         ...
 
@@ -473,7 +473,7 @@ trait RunStore(Store):
     ) raises:
         """Keeps the owned run's heartbeat fresh, every `interval` seconds,
         from a thread, until `stop_heartbeat`. The thread is also the run's
-        watchdog (`orca.heartbeat`): `timeouts` is `step=seconds` for each
+        watchdog (`morca.heartbeat`): `timeouts` is `step=seconds` for each
         step with `timeout_seconds`, comma-separated
         (`Pipeline.timeouts`)."""
         ...
@@ -489,7 +489,7 @@ trait RunStore(Store):
 
     def defer_run(mut self, until: Int64) raises:
         """Ends the owned run `deferred`, to go on at `until` (on
-        `orca.civil.now`'s clock): a step raised `defer` and none failed.
+        `morca.civil.now`'s clock): a step raised `defer` and none failed.
         That start isn't counted against its retries."""
         ...
 
@@ -548,7 +548,7 @@ struct MemRecord(Copyable, Movable):
 
 struct MemoryStore(Movable, RunStore):
     """Keeps runs in the process's memory: what `<pipeline> run` uses
-    without `ORCA_DATABASE_URL`, and `Pipeline.run`.
+    without `MORCA_DATABASE_URL`, and `Pipeline.run`.
 
     The same rows `PgStore` keeps, and the same rules: a run in it can be
     interrupted, claimed by another owner and resumed, so long as the
@@ -587,7 +587,7 @@ struct MemoryStore(Movable, RunStore):
 
     def _at(self, run: Int) raises -> Int:
         if run > 0 or -run >= len(self._runs):
-            raise Error("orca: no run ", run)
+            raise Error("morca: no run ", run)
         return -run
 
     def _step_at(self, run: Int, step: String, partition: String) -> Int:
@@ -603,10 +603,10 @@ struct MemoryStore(Movable, RunStore):
         ref r = self._runs[self._at(self.run)]
         if r.owner != self.owner or r.status != RUNNING:
             raise Error(
-                "orca: lost run ", self.run, " to another process; stopping"
+                "morca: lost run ", self.run, " to another process; stopping"
             )
         if starting and r.cancel_requested:
-            raise Error("orca: run ", self.run, " was cancelled; stopping")
+            raise Error("morca: run ", self.run, " was cancelled; stopping")
         r.heartbeat = Int(perf_counter_ns())
 
     def _upsert_step(
@@ -630,7 +630,7 @@ struct MemoryStore(Movable, RunStore):
         return len(self._steps) - 1
 
     def request_cancel(mut self, run: Int) raises:
-        """Asks `run` to cancel, as `orca ui` does in Postgres."""
+        """Asks `run` to cancel, as `morca ui` does in Postgres."""
         self._runs[self._at(run)].cancel_requested = True
 
     # --- RunStore ---
@@ -643,11 +643,11 @@ struct MemoryStore(Movable, RunStore):
     ) raises:
         self._pipelines[pipeline] = registry_hash
         _ = self.version(
-            pipeline, registry_hash, describe, getenv("ORCA_IMAGE")
+            pipeline, registry_hash, describe, getenv("MORCA_IMAGE")
         )
 
     def scheduled_hash(mut self, pipeline: String) raises -> String:
-        # Only `orca register`, against a shared store, schedules a binary.
+        # Only `morca register`, against a shared store, schedules a binary.
         return String()
 
     def version(
@@ -697,14 +697,14 @@ struct MemoryStore(Movable, RunStore):
             and r.status != DEFERRED
             and r.status != "queued"
         ):
-            raise Error("orca: run ", run, " is ", r.status)
+            raise Error("morca: run ", run, " is ", r.status)
         var now = Int(perf_counter_ns())
         if (
             r.heartbeat >= 0
             and Float64(now - r.heartbeat) / 1e9 <= stale_seconds
         ):
             raise Error(
-                "orca: run ",
+                "morca: run ",
                 run,
                 " is held by ",
                 r.owner,
@@ -872,7 +872,7 @@ struct MemoryStore(Movable, RunStore):
         self._still_owner(starting=False)
         var i = self._step_at(self.run, step, partition)
         if i < 0:
-            raise Error("orca: no step ", step, " ", partition)
+            raise Error("morca: no step ", step, " ", partition)
         for ref a in self._attempts:
             if a.step == i and a.attempt == attempt:
                 a.status = status

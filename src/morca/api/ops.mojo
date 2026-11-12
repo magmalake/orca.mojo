@@ -1,10 +1,10 @@
 """The Ops pages' JSON endpoints: `/api/fleet`, `/api/workers`,
 `/api/system`, `/api/gantt` and `/api/watchdog` (`/api/pools` is the Pools
-page's, `orca.ui.pools`). `/api/fleet` and `/api/workers` are what the
+page's, `morca.ui.pools`). `/api/fleet` and `/api/workers` are what the
 Fleet and Workers pages were, before Pools replaced them.
 """
 
-from orca.fleet import (
+from morca.fleet import (
     charts_json,
     fleet_charts,
     fleet_hosts,
@@ -13,17 +13,17 @@ from orca.fleet import (
     sort_hosts,
     summary_json,
 )
-from orca.state import State
-from orca.ui.ops import system_page
-from orca.ui.viz import gantt_json
-from orca.watchdog import (
+from morca.state import State
+from morca.ui.ops import system_page
+from morca.ui.viz import gantt_json
+from morca.watchdog import (
     active_trips,
     config as watchdog_config,
     trips_json,
     watchdog_json,
 )
-from orca.web.page import Page
-from orca.workers import worker_rows, workers_json
+from morca.web.page import Page
+from morca.workers import worker_rows, workers_json
 
 
 def _fleet_sort(sort: String) -> String:
@@ -49,7 +49,7 @@ def _fleet_sort(sort: String) -> String:
 def fleet_json(
     mut db: State, sort: String, dir: String, range: String
 ) raises -> String:
-    """The machines orca is paying for, and what they have been doing: the
+    """The machines morca is paying for, and what they have been doing: the
     watchdog's trips, the summary, the hosts (`?sort=` a column,
     `&dir=desc`) and the charts over `?range=24h` or `7d`."""
     var hosts = fleet_hosts(db)
@@ -94,6 +94,6 @@ def watchdog_api(mut db: State) raises -> Page:
 
 def gantt_api(mut db: State, window: String) raises -> Page:
     """`/api/gantt`: the home page's Timeline tab's pipelines and runs over
-    `window` (`orca.ui.viz`)."""
+    `window` (`morca.ui.viz`)."""
     var j = gantt_json(db, window)
     return Page(200, j.copy(), j^, "application/json")

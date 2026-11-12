@@ -1,9 +1,9 @@
-"""Ops › Alerts (`/ops/alerts`): every alert `orca.notify` sent or is
+"""Ops › Alerts (`/ops/alerts`): every alert `morca.notify` sent or is
 sending, newest first, from `orca.alerts`: when, its kind, its title and
 message as sent, links to what it is about (the run, the pipelines, the
 watchdog's rules, a worker, Control), whether ntfy took it, and for those
 that resolve (a watchdog trip, a stalled fill, the disk, memory pressure,
-an `orca notify` that was later `--resolved`) whether it is still open.
+an `morca notify` that was later `--resolved`) whether it is still open.
 
 `?kind=` and `?state=open|resolved` filter it; `?before=<id>` and
 `?after=<id>` page it, 50 to a page (`?limit=`, at most 500), keyset like
@@ -13,13 +13,13 @@ the runs list. The newest page refreshes from `/ops/alerts/live` every
 
 from postgres import Params
 
-from orca.html import Html, query_param, url_encode
-from orca.json import quote
-from orca.notify import configured as notify_configured, min_seconds
-from orca.state import State
-from orca.ui.layout import IDLE_EVERY, page_html
-from orca.ui.runs import grouped, pager_link
-from orca.web.page import Page
+from morca.html import Html, query_param, url_encode
+from morca.json import quote
+from morca.notify import configured as notify_configured, min_seconds
+from morca.state import State
+from morca.ui.layout import IDLE_EVERY, page_html
+from morca.ui.runs import grouped, pager_link
+from morca.web.page import Page
 
 
 comptime ALERTS_PAGE = 50
@@ -34,7 +34,7 @@ comptime ALERT_KINDS: List[String] = [
     "memory-pressure",
     "backup-failed",
 ]
-"""The kinds orca raises (`orca.alerts`, `orca.admission`) and the one the
+"""The kinds morca raises (`orca.alerts`, `morca.admission`) and the one the
 Hetzner server's backup sends; the filter adds any others the table has."""
 
 comptime _RESOLVABLE = (
@@ -42,9 +42,9 @@ comptime _RESOLVABLE = (
     " 'memory-pressure') OR a.resolved_at IS NOT NULL OR EXISTS (SELECT 1"
     " FROM orca.alerts r WHERE r.kind = a.kind AND r.event = 'resolved')))"
 )
-"""Whether an alert resolves: those of the kinds orca resolves (a watchdog
+"""Whether an alert resolves: those of the kinds morca resolves (a watchdog
 trip, a stalled fill, the disk, memory pressure), and of a kind that
-`orca notify --resolved` has ended once."""
+`morca notify --resolved` has ended once."""
 
 comptime _OPEN = (
     "(a.event = 'raised' AND (a.kind IN ('watchdog', 'fill-stalled', 'disk',"
@@ -684,7 +684,7 @@ def alerts_html(mut h: Html, on: Bool, p: AlertsPage):
     h.raw('<p class="muted">')
     if on:
         h.raw(
-            "What orca pushed to the ntfy topic (not shown: anyone who knows",
+            "What morca pushed to the ntfy topic (not shown: anyone who knows",
             " it can read it), newest first; the same alert is sent at most",
             " once every ",
             min_seconds() // 60,
@@ -692,14 +692,14 @@ def alerts_html(mut h: Html, on: Bool, p: AlertsPage):
         )
     else:
         h.raw(
-            "Alerts aren't configured: set <code>ORCA_NOTIFY_URL</code> (an",
+            "Alerts aren't configured: set <code>MORCA_NOTIFY_URL</code> (an",
             " ntfy topic URL) to get a push when the watchdog trips, a run",
             " fails, a fill stalls, the disk fills, memory pressure holds",
             " runs or a worker is lost, and they are listed here. ",
         )
     h.raw(
         '<a href="/watchdog">Watchdog</a> has the rules that pause pipelines;',
-        " <code>orca notify test</code> sends a test message.</p>",
+        " <code>morca notify test</code> sends a test message.</p>",
     )
     _filters_html(h, p)
     if p.q.first():

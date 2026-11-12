@@ -1,5 +1,5 @@
-import Orca.Core.Assumptions
-import Orca.Pins.Model
+import Morca.Core.Assumptions
+import Morca.Pins.Model
 
 /-!
 # Every attempt reads the snapshot the first one read
@@ -8,9 +8,9 @@ import Orca.Pins.Model
 Postgres writes, other writers committing to the tables), any two answers
 `Ctx.pin` ever gave for one table, in any attempts, are the same snapshot.
 -/
-namespace Orca.Pins
+namespace Morca.Pins
 
-open Orca.Assumptions
+open Morca.Assumptions
 
 /-- Ledger `l` has a read of table `t` at snapshot `v`. -/
 abbrev Has (l : Reads) (t : String) (v : Nat) : Prop :=
@@ -260,4 +260,4 @@ theorem retry_reads_same_snapshot
   have e := inv.agree r1 r2 h1 h2 (t1.trans t2.symm)
   exact v1.symm.trans (e.trans v2)
 
-end Orca.Pins
+end Morca.Pins

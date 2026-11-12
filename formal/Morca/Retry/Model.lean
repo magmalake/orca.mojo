@@ -1,4 +1,4 @@
-import Orca.Core.Types
+import Morca.Core.Types
 
 /-!
 # A step's attempts and commits
@@ -9,13 +9,13 @@ earlier attempt of the same step in the same run) already made, commits if
 there is none, and records the snapshot in Postgres. Other writers commit to
 the table in between, and the worker can crash between any two of these.
 
-Mirrors src/orca/tables.mojo#find_commit+_found+_commit_append and
-src/orca/ctx.mojo#Ctx.made+Ctx.summary+Ctx.committed+Ctx.commits_to.
+Mirrors src/morca/tables.mojo#find_commit+_found+_commit_append and
+src/morca/ctx.mojo#Ctx.made+Ctx.summary+Ctx.committed+Ctx.commits_to.
 -/
-namespace Orca
+namespace Morca
 
 /-- The environment: what an Iceberg commit, a Postgres write and a crash can
-do. `Orca.Assumptions` says what the theorems assume of each. -/
+do. `Morca.Assumptions` says what the theorems assume of each. -/
 structure Env where
   commit : Table → Summary → Table → Option Nat → Prop
   record : Ledger → Record → Ledger → Bool → Prop
@@ -81,4 +81,4 @@ inductive Reachable (env : Env) (me : StepId) : State → Prop where
   | step {s s' : State} :
       Reachable env me s → Step env me s s' → Reachable env me s'
 
-end Orca
+end Morca

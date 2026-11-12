@@ -1,7 +1,7 @@
 #!/bin/sh
 # examples/taxi over the fixtures in tests/fixtures/taxi (two real months,
 # sliced): a run loads and compacts them, and a run whose download fails
-# resumes at that month once the file is there. Needs ORCA_DATABASE_URL (pixi
+# resumes at that month once the file is there. Needs MORCA_DATABASE_URL (pixi
 # run -e data test-taxi starts a throwaway server). The full 24-month load is
 # run by hand: it downloads 1.2 GB.
 set -eu
@@ -15,11 +15,11 @@ fail() {
     echo "$out"
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 
 root=build/taxi-test
 rm -rf "$root"
-export TAXI_TLC="$root/tlc" ORCA_WAREHOUSE="$root/wh"
+export TAXI_TLC="$root/tlc" MORCA_WAREHOUSE="$root/wh"
 
 # The fixtures: 499 rows of 2023-01 and 498 of 2024-01 picked up in their
 # month, 48 and 18 not, in 128-row row groups.
@@ -101,6 +101,6 @@ grep -q 'pickup_month=2024-01: 4 files to 1$' "$root.b" && ! grep -q 2023-01 "$r
 [ "$(q "SELECT count(*) FROM orca.reads WHERE dataset IS DISTINCT FROM 'taxi.trips'")" -eq 0 ] \
     || fail "reads not recorded as taxi.trips"
 [ "$(jq -r '[.snapshots[].summary["orca.partitions"]] | sort | join(" ")' "$meta")" = "2023-01 2023-01 2024-01 2024-01" ] \
-    || fail "the snapshots' orca.partitions: $(jq -c '[.snapshots[].summary["orca.partitions"]]' "$meta")"
+    || fail "the snapshots' morca.partitions: $(jq -c '[.snapshots[].summary["orca.partitions"]]' "$meta")"
 rm -f "$root.a" "$root.b"
 echo "ok   taxi"

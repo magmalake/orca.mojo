@@ -23,7 +23,7 @@ concurrency:
 # should hang on that. The scheduler still reads the runner's PSI file;
 # tests/pressure.sh sets a limit of its own over a fixture file.
 env:
-  ORCA_ADMIT_MEMORY_PRESSURE: "0"
+  MORCA_ADMIT_MEMORY_PRESSURE: "0"
 
 jobs:
   # A release PR (only versions, CHANGELOG.md, revs and locks change; see
@@ -89,13 +89,13 @@ jobs:
         shard: [test-executor, test-scheduler-ui]
     defaults:
       run:
-        working-directory: orca.mojo
+        working-directory: morca
     steps:
       - uses: actions/checkout@v4
         with:
-          path: orca.mojo
+          path: morca
 
-      # dista compiles from source next door, at the revision orca builds on.
+      # dista compiles from source next door, at the revision morca builds on.
       - uses: actions/checkout@v4
         with:
           repository: morca-dev/dista
@@ -141,7 +141,7 @@ jobs:
           repository: magmalake/threads.mojo
           ref: f45e780a8de77278c140cee36904e46e93e0ca1c
           path: threads.mojo
-      # orca ui's server, and the JSON library it imports, at the revisions
+      # morca ui's server, and the JSON library it imports, at the revisions
       # mojoshelf published as flare_mlake 0.13.0 and json_mlake 0.4.2.
       - if: matrix.env == 'nightly'
         uses: actions/checkout@v4
@@ -155,7 +155,7 @@ jobs:
           repository: magmalake/json_mlake
           ref: bcaa7161e757748a1310a213e123bf8810ff7e96
           path: json_mlake
-      # orca.sqlite_store's binding, at the revision mojoshelf published as
+      # morca.sqlite_store's binding, at the revision mojoshelf published as
       # sqlite-mojo 0.3.5.
       - if: matrix.env == 'nightly'
         uses: actions/checkout@v4
@@ -175,7 +175,7 @@ jobs:
           # rejects the committed lock with "lock file not up-to-date".
           pixi-version: v0.78.0
           environments: ${{ matrix.env }}
-          manifest-path: orca.mojo/pixi.toml
+          manifest-path: morca/pixi.toml
           # Only main and the nightly write the environment cache. Every PR
           # writing ~1 GB per environment kept the repository over GitHub's
           # 10 GB cap, which evicted main's entries: the only ones every PR can
@@ -194,10 +194,10 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: |
-            orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
-            orca.mojo/build/.mojo-build
-          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
-          restore-keys: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
+            morca/.pixi/envs/${{ matrix.env }}/share/max/cache
+            morca/build/.mojo-build
+          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('morca/pixi.lock') }}-${{ github.run_id }}
+          restore-keys: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('morca/pixi.lock') }}-
 
       # The state and kill tests start a throwaway PostgreSQL server from
       # conda-forge's postgresql, on a Unix socket: no service container.
@@ -213,11 +213,11 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
-            orca.mojo/build/.mojo-build
-          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+            morca/.pixi/envs/${{ matrix.env }}/share/max/cache
+            morca/build/.mojo-build
+          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('morca/pixi.lock') }}-${{ github.run_id }}
 
-  # orca on a kind cluster (deploy/): the image, built with pixi inside
+  # morca on a kind cluster (deploy/): the image, built with pixi inside
   # docker, the manifests, and the toy pipeline run by the scheduler's pod.
   kind:
     needs: [changes, release]
@@ -260,7 +260,7 @@ jobs:
       push: true
       project: arm64 amd64
 
-  # deploy/runtime/pixi.lock against what orca-mojo depends on now. Fast,
+  # deploy/runtime/pixi.lock against what morca-mojo depends on now. Fast,
   # and run on release PRs too (which skip runtime-image), so a release that
   # moves a tin's revision can't merge with a lock main's image can't build
   # from. A stale lock: `sh deploy/runtime/lock.sh` and commit it.
@@ -278,9 +278,9 @@ jobs:
           run-install: false
       - run: sh deploy/runtime/lock.sh --check
 
-  # orca's reusable workflows for a project's CI (docs/project-ci.md), each
+  # morca's reusable workflows for a project's CI (docs/project-ci.md), each
   # called as a project calls it, on a scratch project that adds this commit
-  # of orca-mojo (tests/example-project.sh). Nothing is pushed or released:
+  # of morca-mojo (tests/example-project.sh). Nothing is pushed or released:
   # the image is built on a runtime built from this commit, and the release
   # only writes its notes.
   project-image:
@@ -293,9 +293,9 @@ jobs:
       image: ghcr.io/morca-dev/morca-example-project
       prepare: sh tests/example-project.sh build/example-project
       context: build/example-project
-      configs: build/example-project/orca.toml
-      orca-repository: ${{ github.repository }}
-      orca-ref: ${{ github.sha }}
+      configs: build/example-project/morca.toml
+      morca-repository: ${{ github.repository }}
+      morca-ref: ${{ github.sha }}
       build-runtime: true
       smoke: docker run --rm --entrypoint toy "$IMAGE" run --partitions 2024-01
 
@@ -330,11 +330,11 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: orca.mojo
+        working-directory: morca
     steps:
       - uses: actions/checkout@v4
         with:
-          path: orca.mojo
+          path: morca
       - uses: actions/checkout@v4
         with:
           repository: morca-dev/dista
@@ -349,15 +349,15 @@ jobs:
         with:
           pixi-version: v0.78.0
           environments: fuzz
-          manifest-path: orca.mojo/pixi.toml
+          manifest-path: morca/pixi.toml
           cache-write: ${{ github.event_name != 'pull_request' }}
       - uses: actions/cache/restore@v4
         with:
           path: |
-            orca.mojo/.pixi/envs/fuzz/share/max/cache
-            orca.mojo/build/.mojo-build
-          key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
-          restore-keys: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-
+            morca/.pixi/envs/fuzz/share/max/cache
+            morca/build/.mojo-build
+          key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('morca/pixi.lock') }}-${{ github.run_id }}
+          restore-keys: mojo-${{ runner.os }}-fuzz-${{ hashFiles('morca/pixi.lock') }}-
       - name: Fuzz
         run: FUZZ_RUNS=20000 pixi run -e fuzz fuzz
       - if: failure()
@@ -372,9 +372,9 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            orca.mojo/.pixi/envs/fuzz/share/max/cache
-            orca.mojo/build/.mojo-build
-          key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+            morca/.pixi/envs/fuzz/share/max/cache
+            morca/build/.mojo-build
+          key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('morca/pixi.lock') }}-${{ github.run_id }}
 
   format:
     needs: [changes, release]
@@ -394,10 +394,12 @@ jobs:
           cache-write: ${{ github.event_name != 'pull_request' }}
       - name: mojo format leaves the tree unchanged
         run: pixi run -e fmt format-check
+      - name: nothing reads the old orca names (#384)
+        run: sh tests/no-orca.sh
 
   # The Lean 4 models under formal/: the project builds, no proof is left
   # open or rests on an axiom of its own, and formal/difftest/retry.cases,
-  # which the data job's test-formal-retry replays through orca.tables, is
+  # which the data job's test-formal-retry replays through morca.tables, is
   # the model's output (formal/scripts/check.sh). Lean comes from elan, at
   # the version in formal/lean-toolchain.
   formal:
@@ -418,7 +420,7 @@ jobs:
       - name: No sorry, no axioms, and the cases are the oracle's
         run: formal/scripts/check.sh
 
-  # orca.tables over local Iceberg tables, and the taxi example. iceberg,
+  # morca.tables over local Iceberg tables, and the taxi example. iceberg,
   # parquet and their siblings compile from source at the revisions
   # iceberg-mojo 0.9.1 was published with (dista's data job uses the same
   # set); memory-region at the fix that lets it share a binary with the
@@ -439,11 +441,11 @@ jobs:
         group: [tables, sensors, keyed]
     defaults:
       run:
-        working-directory: orca.mojo
+        working-directory: morca
     steps:
       - uses: actions/checkout@v4
         with:
-          path: orca.mojo
+          path: morca
       - uses: actions/checkout@v4
         with: {repository: morca-dev/dista, ref: 3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30, path: dista.mojo}
       - uses: actions/checkout@v4
@@ -493,15 +495,15 @@ jobs:
         with:
           pixi-version: v0.78.0
           environments: data
-          manifest-path: orca.mojo/pixi.toml
+          manifest-path: morca/pixi.toml
           cache-write: ${{ github.event_name != 'pull_request' }}
       - uses: actions/cache/restore@v4
         with:
           path: |
-            orca.mojo/.pixi/envs/data/share/max/cache
-            orca.mojo/build/.mojo-build
-          key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
-          restore-keys: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
+            morca/.pixi/envs/data/share/max/cache
+            morca/build/.mojo-build
+          key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('morca/pixi.lock') }}-${{ github.run_id }}
+          restore-keys: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('morca/pixi.lock') }}-
       - name: The ${{ matrix.group }} tests
         run: pixi run -e data test-data-${{ matrix.group }}
       - if: always() && github.event_name != 'pull_request'
@@ -511,9 +513,9 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            orca.mojo/.pixi/envs/data/share/max/cache
-            orca.mojo/build/.mojo-build
-          key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
+            morca/.pixi/envs/data/share/max/cache
+            morca/build/.mojo-build
+          key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('morca/pixi.lock') }}-${{ github.run_id }}
 
   # The tests that apply on macOS, on the Mac mini runner (m4-mini, an isolated
   # `ci` user; no Docker, no sudo), for the repo's own code only: a fork's
@@ -526,7 +528,7 @@ jobs:
   # /sys/fs/cgroup, test-pressure and test-sample read /proc, test-kind needs
   # docker), and everything of the data environment (it runs a local
   # warehouse and MinIO, and local mode over an S3 warehouse crashes forked
-  # workers on macOS, orca #135). The nightly leg's macos-latest runs the two
+  # workers on macOS, morca #135). The nightly leg's macos-latest runs the two
   # halves of `test` in full.
   #
   # Also left out, to keep the job near 20 minutes (the cold build of the
@@ -545,11 +547,11 @@ jobs:
       contents: read
     defaults:
       run:
-        working-directory: orca.mojo
+        working-directory: morca
     steps:
       - uses: actions/checkout@v4
         with:
-          path: orca.mojo
+          path: morca
           clean: true
           persist-credentials: false
       - uses: actions/checkout@v4

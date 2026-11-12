@@ -1,18 +1,18 @@
-# orca on AWS with the ec2 runner (DESIGN.md, phase 5, PR 5b): one stack,
+# morca on AWS with the ec2 runner (DESIGN.md, phase 5, PR 5b): one stack,
 # so it's reviewed as one file and deleted as one stack.
 #
 # - a VPC with one public subnet in the Availability Zone given, and a
 #   gateway endpoint for S3;
-# - the control instance: the scheduler (ORCA_RUNNER=ec2), Postgres and
-#   orca ui as containers, Caddy in front with a Let's Encrypt certificate;
-#   in one of two slots, blue and green, so that orca aws replace-control
+# - the control instance: the scheduler (MORCA_RUNNER=ec2), Postgres and
+#   morca ui as containers, Caddy in front with a Let's Encrypt certificate;
+#   in one of two slots, blue and green, so that morca aws replace-control
 #   can boot a new one from this template beside it and move the Elastic
 #   IP (DESIGN.md, "Replacing the control instance");
 # - what runs need: a bucket for the warehouse and logs, a repository for
 #   the image, a role and profile for run instances, a security group they
 #   share;
 # - a bucket for the lake, mlake-public-<account>: the warehouse,
-#   ORCA_WAREHOUSE, is in it; orca's own bucket keeps the logs. It's private
+#   MORCA_WAREHOUSE, is in it; morca's own bucket keeps the logs. It's private
 #   unless PublicData is true, when anyone may read it unsigned (the
 #   project's resource control policy refuses other accounts' signed
 #   requests), billed to the project at S3's egress price;
@@ -20,12 +20,12 @@
 #   named console on port 8080, once one runs;
 # - a Budgets alert.
 #
-# orca ui is public for reading, as a demo is; its actions need a login
-# (orca user add, in the scheduler's container). Nothing else accepts a
+# morca ui is public for reading, as a demo is; its actions need a login
+# (morca user add, in the scheduler's container). Nothing else accepts a
 # connection from outside: Postgres takes the run instances' only, and the
 # instances take each other's only.
 AWSTemplateFormatVersion: "2010-09-09"
-Description: orca with the ec2 runner, a control instance and runs on instances of their own
+Description: morca with the ec2 runner, a control instance and runs on instances of their own
 
 Parameters:
   AvailabilityZone:
@@ -45,7 +45,7 @@ Parameters:
   ImageTag:
     Type: String
     Default: latest
-    Description: The tag of the orca image the control instance starts with (orca aws push pushes latest)
+    Description: The tag of the morca image the control instance starts with (morca aws push pushes latest)
   ConsoleHostname:
     Type: String
     Default: libs.mlake.dev
@@ -75,12 +75,12 @@ Parameters:
     Default: ""
     # It goes into a shell script in single quotes.
     AllowedPattern: "[^']*"
-    Description: The control instance's settings beyond the template's, KEY=VALUE entries separated by ";" (orca aws up --env); never a secret
+    Description: The control instance's settings beyond the template's, KEY=VALUE entries separated by ";" (morca aws up --env); never a secret
   ActiveControl:
     Type: String
     Default: blue
     AllowedValues: [blue, green]
-    Description: The control slot the Elastic IP is on (orca aws replace-control moves it)
+    Description: The control slot the Elastic IP is on (morca aws replace-control moves it)
   BlueSlot:
     Type: String
     Default: "true"
@@ -123,7 +123,7 @@ Resources:
       CidrBlock: 10.42.0.0/16
       EnableDnsHostnames: true
       EnableDnsSupport: true
-      Tags: [{Key: Name, Value: orca}]
+      Tags: [{Key: Name, Value: morca}]
   Subnet:
     Type: AWS::EC2::Subnet
     Properties:
@@ -131,7 +131,7 @@ Resources:
       CidrBlock: 10.42.0.0/20
       AvailabilityZone: !Ref AvailabilityZone
       MapPublicIpOnLaunch: true
-      Tags: [{Key: Name, Value: orca}]
+      Tags: [{Key: Name, Value: morca}]
   Gateway:
     Type: AWS::EC2::InternetGateway
   GatewayAttachment:
@@ -159,7 +159,7 @@ Resources:
   Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub orca-${AWS::AccountId}-${AWS::Region}
+      BucketName: !Sub morca-${AWS::AccountId}-${AWS::Region}
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -171,7 +171,7 @@ Resources:
       LifecycleConfiguration:
         Rules:
           - {Id: logs, Status: Enabled, Prefix: logs/, ExpirationInDays: 30}
-          # The control instance's samples, a file a day (orca.system).
+          # The control instance's samples, a file a day (morca.system).
           - {Id: control, Status: Enabled, Prefix: logs/control/, ExpirationInDays: 14}
   # The lake's tables; anyone may read them when PublicData is true.
   # Account-level Block Public Access, if it's on, refuses the policy below.
@@ -212,7 +212,7 @@ Resources:
   Repository:
     Type: AWS::ECR::Repository
     Properties:
-      RepositoryName: orca
+      RepositoryName: morca
       ImageScanningConfiguration: {ScanOnPush: true}
       LifecyclePolicy:
         LifecyclePolicyText: |
@@ -223,7 +223,7 @@ Resources:
   RunGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: orca run instances, which talk to each other only
+      GroupDescription: morca run instances, which talk to each other only
       VpcId: !Ref Vpc
   RunGroupSelf:
     Type: AWS::EC2::SecurityGroupIngress
@@ -245,7 +245,7 @@ Resources:
   ControlGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: orca control instance, public for HTTPS only
+      GroupDescription: morca control instance, public for HTTPS only
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0}
@@ -259,7 +259,7 @@ Resources:
         Statement: [{Effect: Allow, Principal: {Service: ec2.amazonaws.com}, Action: sts:AssumeRole}]
       ManagedPolicyArns: [arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore]
       Policies:
-        # Runs' secrets (orca register --secret), only those under orca/.
+        # Runs' secrets (morca register --secret), only those under orca/.
         - PolicyName: secrets
           PolicyDocument:
             Statement:
@@ -272,7 +272,7 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
                 Resource: [!Sub "${Bucket.Arn}/*", !Sub "${PublicBucket.Arn}/*"]
-              # The control instance's backups (orca aws replace-control)
+              # The control instance's backups (morca aws replace-control)
               # hold the database and Caddy's keys: no run reads them.
               - Effect: Deny
                 Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
@@ -297,7 +297,7 @@ Resources:
         Statement: [{Effect: Allow, Principal: {Service: ec2.amazonaws.com}, Action: sts:AssumeRole}]
       ManagedPolicyArns: [arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore]
       Policies:
-        # The secrets of runs placed on this instance (orca register
+        # The secrets of runs placed on this instance (morca register
         # --placement control), which the scheduler reads as it starts them.
         - PolicyName: secrets
           PolicyDocument:
@@ -308,14 +308,14 @@ Resources:
         - PolicyName: run-instances
           PolicyDocument:
             Statement:
-              # Only instances tagged for orca, of the allowed types, from
+              # Only instances tagged for morca, of the allowed types, from
               # the stack's AMI, in its subnet and group, with its profile.
               - Effect: Allow
                 Action: ec2:RunInstances
                 Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
                 Condition:
                   StringEquals: {ec2:InstanceType: !Ref AllowedRunTypes}
-                  "Null": {"aws:RequestTag/orca.run": "false"}
+                  "Null": {"aws:RequestTag/morca.run": "false"}
               - Effect: Allow
                 Action: ec2:RunInstances
                 Resource:
@@ -334,7 +334,7 @@ Resources:
                 Action: ec2:TerminateInstances
                 Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
                 Condition:
-                  "Null": {"aws:ResourceTag/orca.run": "false"}
+                  "Null": {"aws:ResourceTag/morca.run": "false"}
               # Its instances, and the boot script it runs (ControlBoot).
               - Effect: Allow
                 Action: [ec2:DescribeInstances, ec2:DescribeLaunchTemplateVersions]
@@ -367,7 +367,7 @@ Resources:
   # The control instance's boot script, kept as the user data of a launch
   # template that launches nothing: each control instance's own user data
   # runs the latest version of it, so changing it (or a parameter it uses)
-  # stops no running instance. A new instance gets it: orca aws
+  # stops no running instance. A new instance gets it: morca aws
   # replace-control, which boots one in the other slot.
   ControlBoot:
     Type: AWS::EC2::LaunchTemplate
@@ -377,7 +377,7 @@ Resources:
           Fn::Base64: !Sub
             - |
               #!/bin/bash
-              # orca-boot SLOT: orca's control instance, in slot blue or
+              # orca-boot SLOT: morca's control instance, in slot blue or
               # green: Postgres, the scheduler, the UI and Caddy, as
               # containers that restart with the instance.
               set -eux
@@ -395,11 +395,11 @@ Resources:
               hosts="$sslip"
               [ -z "${Hostname}" ] || hosts="${Hostname}, $sslip"
               registry=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
-              image=$registry/orca:${ImageTag}
+              image=$registry/morca:${ImageTag}
               login="command -v aws >/dev/null || dnf install -y awscli; systemctl disable --now ecs || true; aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin $registry"
               # The image is pushed after the stack is made, so wait for it.
               until sh -c "$login" && docker pull $image; do sleep 30; done
-              docker network create orca || true
+              docker network create morca || true
               mkdir -p /var/lib/orca/pg /var/lib/orca/caddy /var/lib/orca/stage
               docker run -d --name postgres --restart always --network orca -p 5432:5432 \
                 -e POSTGRES_USER=orca -e POSTGRES_DB=orca -e POSTGRES_PASSWORD='${DbPassword}' \
@@ -407,7 +407,7 @@ Resources:
               # Over TCP: the server that initialises the database listens on
               # its socket only, and restarts once it's done.
               until docker exec postgres pg_isready -h 127.0.0.1 -U orca -d orca; do sleep 2; done
-              # A replacement (orca aws replace-control) points this slot at
+              # A replacement (morca aws replace-control) points this slot at
               # the backup of the instance it replaces: its database, image
               # tag, Caddy's certificates and apps come back before anything
               # starts on them.
@@ -424,28 +424,28 @@ Resources:
               fi
               [ -f /var/lib/orca/tag ] || echo ${ImageTag} > /var/lib/orca/tag
               cat > /etc/orca.env << EOF
-              ORCA_DATABASE_URL=postgresql://orca:${DbPassword}@postgres:5432/orca
-              ORCA_EC2_DATABASE_URL=postgresql://orca:${DbPassword}@$ip:5432/orca
-              ORCA_RUNNER=ec2
+              MORCA_DATABASE_URL=postgresql://orca:${DbPassword}@postgres:5432/orca
+              MORCA_EC2_DATABASE_URL=postgresql://orca:${DbPassword}@$ip:5432/orca
+              MORCA_RUNNER=ec2
               AWS_REGION=${AWS::Region}
-              ORCA_EC2_AMI=${Ami}
-              ORCA_EC2_SUBNET=${Subnet}
-              ORCA_EC2_SECURITY_GROUP=${RunGroup}
-              ORCA_EC2_PROFILE=${RunProfile}
-              ORCA_EC2_PREAMBLE=$login
-              ORCA_WAREHOUSE=s3://${PublicBucket}/warehouse
-              ORCA_LOGS=s3://${Bucket}/logs
-              ORCA_PUBLIC_WAREHOUSE=s3://${PublicBucket}/warehouse
-              ORCA_RUN_ENV=ORCA_PUBLIC_WAREHOUSE
-              ORCA_LOG_STAGE=/var/lib/orca/stage
-              ORCA_CONTROL_SAMPLES=/var/lib/orca/stage/control.jsonl
-              ORCA_CONTROL_TYPE=${ControlInstanceType}
-              ORCA_UI_ADDR=0.0.0.0:8270
-              ORCA_UI_LOGIN=required
-              ORCA_UI_SECURE_COOKIES=1
-              ORCA_UI_TRUST_PROXY=1
+              MORCA_EC2_AMI=${Ami}
+              MORCA_EC2_SUBNET=${Subnet}
+              MORCA_EC2_SECURITY_GROUP=${RunGroup}
+              MORCA_EC2_PROFILE=${RunProfile}
+              MORCA_EC2_PREAMBLE=$login
+              MORCA_WAREHOUSE=s3://${PublicBucket}/warehouse
+              MORCA_LOGS=s3://${Bucket}/logs
+              MORCA_PUBLIC_WAREHOUSE=s3://${PublicBucket}/warehouse
+              MORCA_RUN_ENV=MORCA_PUBLIC_WAREHOUSE
+              MORCA_LOG_STAGE=/var/lib/orca/stage
+              MORCA_CONTROL_SAMPLES=/var/lib/orca/stage/control.jsonl
+              MORCA_CONTROL_TYPE=${ControlInstanceType}
+              MORCA_UI_ADDR=0.0.0.0:8270
+              MORCA_UI_LOGIN=required
+              MORCA_UI_SECURE_COOKIES=1
+              MORCA_UI_TRUST_PROXY=1
               EOF
-              # The stack's own settings (ControlEnv; orca aws up --env K=V),
+              # The stack's own settings (ControlEnv; morca aws up --env K=V),
               # each in place of the line above with its key.
               printf '%s;' '${ControlEnv}' | tr ';' '\n' | while IFS= read -r kv; do
                 [ -n "$kv" ] || continue
@@ -455,13 +455,13 @@ Resources:
                 mv /etc/orca.env.new /etc/orca.env
               done
               chmod 600 /etc/orca.env
-              # orca aws register and orca aws app run these over SSM.
+              # morca aws register and morca aws app run these over SSM.
               cat > /usr/local/bin/orca-refresh << 'EOS'
               #!/bin/bash
-              # orca-refresh [TAG]: pull the orca image at TAG (else the last
+              # orca-refresh [TAG]: pull the morca image at TAG (else the last
               # one) and run the scheduler and the UI from it again.
               set -eu
-              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/morca
               [ $# -gt 0 ] && echo "$1" > /var/lib/orca/tag
               tag=$(cat /var/lib/orca/tag)
               aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
@@ -485,7 +485,7 @@ Resources:
               EOS
               cat > /usr/local/bin/orca-app << 'EOS'
               #!/bin/bash
-              # orca-app NAME HOST [PORT]: run the image's /opt/orca/bin/NAME as
+              # orca-app NAME HOST [PORT]: run the image's /opt/morca/bin/NAME as
               # an app beside the UI, at https://HOST through Caddy, with the
               # region, the warehouse and PORT (default 8080). It's recorded in
               # /var/lib/orca/apps, which a replacement instance runs again.
@@ -494,15 +494,15 @@ Resources:
               host=$2
               port=8080
               [ $# -gt 2 ] && port=$3
-              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+              repo=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/morca
               tag=$(cat /var/lib/orca/tag)
               aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$(echo $repo | cut -d/ -f1)" > /dev/null
               docker pull -q "$repo:$tag"
               docker rm -f "$name" > /dev/null 2>&1 || true
-              # An app reads the lake, not orca's database: it gets no password.
-              grep -E '^(AWS_REGION|ORCA_WAREHOUSE|ORCA_PUBLIC_WAREHOUSE)=' /etc/orca.env > /var/lib/orca/app.env
+              # An app reads the lake, not morca's database: it gets no password.
+              grep -E '^(AWS_REGION|MORCA_WAREHOUSE|MORCA_PUBLIC_WAREHOUSE)=' /etc/orca.env > /var/lib/orca/app.env
               docker run -d --name "$name" --restart always --network orca --env-file /var/lib/orca/app.env \
-                -e PORT=$port --entrypoint /opt/orca/bin/$name "$repo:$tag"
+                -e PORT=$port --entrypoint /opt/morca/bin/$name "$repo:$tag"
               { grep -v "^$name " /var/lib/orca/apps 2> /dev/null || true; echo "$name $host $port"; } > /var/lib/orca/apps.new
               mv /var/lib/orca/apps.new /var/lib/orca/apps
               grep -q "^$host {" /var/lib/orca/Caddyfile \
@@ -531,11 +531,11 @@ Resources:
                 cp /var/lib/orca/apps /var/lib/orca/apps.boot
                 while read -r name host port; do orca-app "$name" "$host" "$port"; done < /var/lib/orca/apps.boot
               fi
-              echo "orca ui at https://$sslip and https://${Hostname}"
+              echo "morca ui at https://$sslip and https://${Hostname}"
               date -u +%FT%TZ > /var/lib/orca/booted
             - {PublicIp: !Ref ControlAddress}
   # Two slots for the control instance, blue (Control, the stack's first)
-  # and green; the Elastic IP is on the active one. orca aws
+  # and green; the Elastic IP is on the active one. morca aws
   # replace-control turns the other slot on with a fresh instance, moves
   # ActiveControl to it once it's healthy, and turns the old slot off at the
   # end of the rollback window. Each slot's AMI is pinned (BlueAmi,
@@ -555,11 +555,11 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs: {VolumeSize: 40, VolumeType: gp3, Encrypted: true}
-      Tags: [{Key: Name, Value: orca-control}, {Key: orca.slot, Value: blue}]
+      Tags: [{Key: Name, Value: morca-control}, {Key: morca.slot, Value: blue}]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          # orca's control instance, slot blue: the latest version of the
+          # morca's control instance, slot blue: the latest version of the
           # stack's boot script (ControlBoot).
           set -eux
           command -v aws || dnf install -y awscli
@@ -582,11 +582,11 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs: {VolumeSize: 40, VolumeType: gp3, Encrypted: true}
-      Tags: [{Key: Name, Value: orca-control}, {Key: orca.slot, Value: green}]
+      Tags: [{Key: Name, Value: morca-control}, {Key: morca.slot, Value: green}]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          # orca's control instance, slot green: the latest version of the
+          # morca's control instance, slot green: the latest version of the
           # stack's boot script (ControlBoot).
           set -eux
           command -v aws || dnf install -y awscli
@@ -606,7 +606,7 @@ Resources:
     Type: AWS::Budgets::Budget
     Properties:
       Budget:
-        BudgetName: orca
+        BudgetName: morca
         BudgetType: COST
         TimeUnit: MONTHLY
         BudgetLimit: {Amount: !Ref BudgetDollars, Unit: USD}
@@ -622,7 +622,7 @@ Outputs:
       - https://${Dashed}.sslip.io
       - Dashed: !Join ["-", !Split [".", !Ref ControlAddress]]
   Repository:
-    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/orca
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/morca
   Bucket:
     Value: !Ref Bucket
   PublicBucket:

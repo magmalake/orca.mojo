@@ -2,16 +2,16 @@
 made from it, from the reads and commits every attempt records.
 
 ```
-orca lineage lake.report            the latest snapshot's, back and forward
-orca lineage lake.report 4417...    one snapshot's
+morca lineage lake.report            the latest snapshot's, back and forward
+morca lineage lake.report 4417...    one snapshot's
 ```
 
-A snapshot that an orca attempt committed is **made** by that attempt: its
+A snapshot that a morca attempt committed is **made** by that attempt: its
 run, pipeline, step, partition and code, and the snapshots it read, its
 **inputs**. The walks go over those edges in SQL (recursive CTEs):
 
 - **`back`** from a snapshot: the attempt that made it, then the attempts
-  that made each of its inputs, and so on, to inputs no orca attempt made
+  that made each of its inputs, and so on, to inputs no morca attempt made
   (sources: a table written by something else, or a read of a dataset
   before it had any snapshot, which isn't listed).
 - **`forward`** from a snapshot: every snapshot made by an attempt that read
@@ -26,7 +26,7 @@ The same edges are in the snapshots' own summaries, as `orca.reads`.
 
 from postgres import Params
 
-from orca.state import State
+from morca.state import State
 
 comptime DEPTH = 20
 
@@ -121,8 +121,8 @@ def _made(mut db: State, walk: String, start: SnapshotRef) raises -> List[Made]:
 
 
 def back(mut db: State, start: SnapshotRef) raises -> List[Made]:
-    """The snapshot, if an orca attempt made it, and everything it was made
-    from: one `Made` per snapshot an orca attempt made."""
+    """The snapshot, if a morca attempt made it, and everything it was made
+    from: one `Made` per snapshot a morca attempt made."""
     return _made(
         db,
         (
@@ -159,7 +159,7 @@ def forward(mut db: State, start: SnapshotRef) raises -> List[Made]:
 
 
 def latest(mut db: State, dataset: String) raises -> Int64:
-    """The dataset's newest snapshot orca knows of, committed or read, or
+    """The dataset's newest snapshot morca knows of, committed or read, or
     -1 if it knows of none."""
     var rows = db.conn.query(
         (
@@ -181,7 +181,7 @@ struct Dataset(Copyable, Movable):
     var readers: List[String]
     var commits: Int
     var latest: Int64
-    """The newest snapshot an orca attempt committed, or -1."""
+    """The newest snapshot a morca attempt committed, or -1."""
     var latest_run: Int
 
 
@@ -267,7 +267,7 @@ def flows(mut db: State) raises -> List[Flow]:
 
 @fieldwise_init
 struct Commit(Copyable, Movable):
-    """A snapshot of a dataset an orca attempt committed."""
+    """A snapshot of a dataset a morca attempt committed."""
 
     var snapshot: Int64
     var pipeline: String
@@ -317,7 +317,7 @@ def commits(
     before: SnapshotCursor = SnapshotCursor(0, 0),
     after: SnapshotCursor = SnapshotCursor(0, 0),
 ) raises -> List[Commit]:
-    """The dataset's snapshots orca committed, newest first (by the attempt
+    """The dataset's snapshots morca committed, newest first (by the attempt
     that first committed each, then the snapshot): those after `before` if
     it's set; with `after` set, the `limit` just before it, oldest first."""
     var rows = db.conn.query(

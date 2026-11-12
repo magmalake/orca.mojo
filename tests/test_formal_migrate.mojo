@@ -1,5 +1,5 @@
-"""The Lean model of the schema floor (formal/Orca/Migrate) against
-`orca.state`: every line of formal/difftest/migrate.cases, which the model's
+"""The Lean model of the schema floor (formal/Morca/Migrate) against
+`morca.state`: every line of formal/difftest/migrate.cases, which the model's
 oracle printed (formal/Oracle/Migrate.lean; the `formal` CI job checks the
 file is its output), is checked against the code.
 
@@ -8,7 +8,7 @@ file is its output), is checked against the code.
   False (the binary migrates), `A` True (it runs on a schema ahead of it),
   `X` it raises.
 - `E <events> <outcomes> <version> <floor>`: binaries migrating an empty
-  database in turn (`State.migrate` under `ORCA_TEST_MIGRATIONS`): `a`,
+  database in turn (`State.migrate` under `MORCA_TEST_MIGRATIONS`): `a`,
   `b`, `c`, `d` know 23, 24, 40 and 46 migrations, and `n` leaves every row
   of `orca.schema_version` without a floor. An outcome is `o` (the binary
   goes on), `x` (it refuses) or `-` (for `n`); then the database's version
@@ -22,8 +22,8 @@ from std.testing import assert_equal
 
 from postgres import Connection
 
-from orca import State
-from orca.migrations import migration_floor, schema_ahead
+from morca import State
+from morca.migrations import migration_floor, schema_ahead
 
 comptime CASES = "formal/difftest/migrate.cases"
 
@@ -44,22 +44,22 @@ def _number(mut conn: Connection, sql: String) raises -> Int:
 def _migrate_as(known: String) -> String:
     """`State.migrate` by a binary that knows `known` migrations: `o` if it
     goes on, `x` if it refuses."""
-    _ = setenv("ORCA_TEST_MIGRATIONS", known, True)
+    _ = setenv("MORCA_TEST_MIGRATIONS", known, True)
     var outcome = String("o")
     try:
-        var db = State(getenv("ORCA_DATABASE_URL"))
+        var db = State(getenv("MORCA_DATABASE_URL"))
         db.migrate()
     except:
         outcome = String("x")
-    _ = unsetenv("ORCA_TEST_MIGRATIONS")
+    _ = unsetenv("MORCA_TEST_MIGRATIONS")
     return outcome
 
 
 def _replay(events: String) raises -> String:
     """Replays `events` on an empty database, and renders the outcomes, the
     version and the floor as the oracle prints them."""
-    var conn = Connection(getenv("ORCA_DATABASE_URL"))
-    _ = conn.execute("DROP SCHEMA IF EXISTS orca CASCADE")
+    var conn = Connection(getenv("MORCA_DATABASE_URL"))
+    _ = conn.execute("DROP SCHEMA IF EXISTS morca CASCADE")
     _ = conn.execute("CREATE SCHEMA orca")
     _ = conn.execute(
         "CREATE TABLE orca.schema_version (version int NOT NULL, min_binary"

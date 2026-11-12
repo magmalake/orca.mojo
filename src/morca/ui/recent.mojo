@@ -1,22 +1,22 @@
-"""The home page's Recent runs (`orca.views.recent`): a row per batch, with
+"""The home page's Recent runs (`morca.views.recent`): a row per batch, with
 its counts and how far it has got, linking to `/runs?batch=`, and a run
 with no batch as the runs lists show it; refreshed from
 `/runs/table?view=home`.
 """
 
-from orca.html import Html, url_encode
-from orca.state import State
-from orca.ui.layout import IDLE_EVERY, LIVE_EVERY
-from orca.ui.parts import (
+from morca.html import Html, url_encode
+from morca.state import State
+from morca.ui.layout import IDLE_EVERY, LIVE_EVERY
+from morca.ui.parts import (
     run_row_html,
     runs_table_head,
     took_text,
     when_cell,
 )
-from orca.views.code import runs_code
-from orca.views.recent import RecentRow, recent_rows
-from orca.views.runs import RunRow, RunsQuery
-from orca.web.page import Page
+from morca.views.code import runs_code
+from morca.views.recent import RecentRow, recent_rows
+from morca.views.runs import RunRow, RunsQuery
+from morca.web.page import Page
 
 
 def _live(rows: List[RecentRow]) -> Bool:

@@ -1,5 +1,5 @@
-"""The worker API: what `orca worker` (`orca.worker`) and the runs it starts
-(`orca.http_store.HttpStore`) call, each a `POST` of JSON with
+"""The worker API: what `morca worker` (`morca.worker`) and the runs it starts
+(`morca.http_store.HttpStore`) call, each a `POST` of JSON with
 `Authorization: Bearer <worker token>`. What each call does is
 `orca.workers`; this is how a request reaches it.
 
@@ -8,20 +8,20 @@
 | `/api/worker/claim` | the worker's heartbeat, and with `slots` > 0 a queued run of its pool to start: its spec, or `null` |
 | `/api/worker/release` | a run it was given and won't start: queued again, held saying why |
 | `/api/worker/exited` | a run's process ended, with its samples |
-| `/api/worker/cluster` | a run this worker started as a cluster: its head's address and token (`orca.run_cluster`) |
+| `/api/worker/cluster` | a run this worker started as a cluster: its head's address and token (`morca.run_cluster`) |
 | `/api/worker/left` | a member's process ended |
-| `/api/worker/boot` | a machine the pool autoscaler made, booting: the image, its login and the bucket's variables (`orca.pool_boot`) |
-| `/api/worker/store/<call>` | a `RunStore` call of a run this worker claimed (`orca.state.PgStore`) |
+| `/api/worker/boot` | a machine the pool autoscaler made, booting: the image, its login and the bucket's variables (`morca.pool_boot`) |
+| `/api/worker/store/<call>` | a `RunStore` call of a run this worker claimed (`morca.state.PgStore`) |
 
 Every call is checked the same way first: the token is a live worker
 token (401), the body a JSON object (400), and a `pool` it names the
 token's (403). A user's API token gets nothing here, and a worker token
 nothing elsewhere.
 
-**Its own listener.** By default `orca ui` answers these with its pages.
-With `ORCA_WORKER_ADDR` (`host:port`) it also serves them on that address,
+**Its own listener.** By default `morca ui` answers these with its pages.
+With `MORCA_WORKER_ADDR` (`host:port`) it also serves them on that address,
 from a thread of their own, so a slow page can't hold up a worker's claims
-and heartbeats or its runs' store calls: point `orca worker --remote` at
+and heartbeats or its runs' store calls: point `morca worker --remote` at
 it. Everything else there is 404.
 """
 
@@ -33,15 +33,15 @@ from json import Value, loads
 from threads import AtomicFlag, WorkerPool
 from threads.ffi import OpaquePtr, opaque_ptr
 
-from orca.run_cluster import member_left, report_head
-from orca.pool_boot import BOOT_PATH, boot_answer
-from orca.http_store import STORE_PATH
-from orca.json import quote
-from orca.state import State
-from orca.store import FINAL
-from orca.web.auth import bearer
-from orca.web.page import Page, respond
-from orca.workers import (
+from morca.run_cluster import member_left, report_head
+from morca.pool_boot import BOOT_PATH, boot_answer
+from morca.http_store import STORE_PATH
+from morca.json import quote
+from morca.state import State
+from morca.store import FINAL
+from morca.web.auth import bearer
+from morca.web.page import Page, respond
+from morca.workers import (
     WorkerAuth,
     claim,
     exited,
@@ -110,18 +110,18 @@ def _exited(mut db: State, w: WorkerCall) raises -> Page:
 
 
 def _cluster(mut db: State, w: WorkerCall) raises -> Page:
-    """A run's head, started by this worker (`orca.run_cluster`)."""
+    """A run's head, started by this worker (`morca.run_cluster`)."""
     return _answer(200, report_head(db, w.worker.id, w.body))
 
 
 def _left(mut db: State, w: WorkerCall) raises -> Page:
-    """A member's process ended (`orca.run_cluster`)."""
+    """A member's process ended (`morca.run_cluster`)."""
     return _answer(200, member_left(db, w.worker.id, w.body))
 
 
 def _boot(mut db: State, w: WorkerCall) raises -> Page:
     """A machine the pool autoscaler made, booting: what it needs to run its
-    worker (`orca.pool_boot`); 403 for any other token."""
+    worker (`morca.pool_boot`); 403 for any other token."""
     try:
         return _answer(200, boot_answer(db, w.worker.id))
     except e:
@@ -139,7 +139,7 @@ def _store(mut db: State, w: WorkerCall) raises -> Page:
             var bare = String(msg[byte = FINAL.byte_length() :])
             var status = 403 if " claimed; stopping" in bare else 409
             return _error(status, bare)
-        if msg.startswith("orca: not committing"):
+        if msg.startswith("morca: not committing"):
             return _error(409, msg)
         return _error(500, msg)
 
@@ -165,19 +165,19 @@ def answer(url: String, path: String, token: String, body: String) -> Page:
             return _error(
                 401,
                 (
-                    "orca: this worker token is unknown, expired or revoked"
-                    " (orca worker-token create)"
+                    "morca: this worker token is unknown, expired or revoked"
+                    " (morca worker-token create)"
                 ),
             )
         var v = _body(body)
         if not v:
-            return _error(400, "orca: a worker's request is a JSON object")
+            return _error(400, "morca: a worker's request is a JSON object")
         var pool = text_field(v.value(), "pool")
         if pool and pool != w.value().pool:
             return _error(
                 403,
                 String(
-                    "orca: this worker token is for pool ",
+                    "morca: this worker token is for pool ",
                     w.value().pool,
                     ", not ",
                     pool,
@@ -193,7 +193,7 @@ def answer(url: String, path: String, token: String, body: String) -> Page:
                 url=url, worker=w.value().copy(), body=v.take(), call=call^
             )
             return r.handler(db, wc)
-        return _error(404, String("orca: nothing at ", path))
+        return _error(404, String("morca: nothing at ", path))
     except e:
         return _error(500, String(e))
 
@@ -210,7 +210,7 @@ def worker_response(url: String, req: Request) -> Response:
         String(from_utf8_lossy=Span(req.body)),
     )
     if page.status == 401:
-        page.headers.append(("WWW-Authenticate", 'Bearer realm="orca"'))
+        page.headers.append(("WWW-Authenticate", 'Bearer realm="morca"'))
     return respond(page, True)
 
 
@@ -218,7 +218,7 @@ def worker_response(url: String, req: Request) -> Response:
 
 
 struct WorkerServer(Copyable, Handler):
-    """The worker listener (`ORCA_WORKER_ADDR`): the worker API, and 404
+    """The worker listener (`MORCA_WORKER_ADDR`): the worker API, and 404
     for anything else."""
 
     var url: String
@@ -229,7 +229,7 @@ struct WorkerServer(Copyable, Handler):
     def serve(self, req: Request) raises -> Response:
         if req.method == "POST" and req.url.startswith(PREFIX):
             return worker_response(self.url, req)
-        return respond(_error(404, String("orca: nothing at ", req.url)), True)
+        return respond(_error(404, String("morca: nothing at ", req.url)), True)
 
 
 struct _Listening(Movable):
@@ -246,7 +246,7 @@ def _listen(worker: Int, ctx: OpaquePtr, stop: AtomicFlag) -> None:
     try:
         l.server.serve(WorkerServer(l.url))
     except e:
-        print("orca ui: the worker listener stopped:", e)
+        print("morca ui: the worker listener stopped:", e)
 
 
 struct _Listener(Movable):

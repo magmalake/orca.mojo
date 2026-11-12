@@ -1,4 +1,4 @@
-"""Stopping `orca ui` without dropping a request. `docker stop` sends
+"""Stopping `morca ui` without dropping a request. `docker stop` sends
 SIGTERM and waits 10 s before it kills; Ctrl-C sends SIGINT. Either one
 starts a drain:
 
@@ -9,9 +9,9 @@ starts a drain:
 2. The requests already in the handler finish and their answers go out;
    so does one a kept-alive connection sends meanwhile.
 3. Once no request has been in the handler for 200 ms, or after
-   `ORCA_UI_DRAIN_SECONDS` (default 8, under `docker stop`'s 10), the
+   `MORCA_UI_DRAIN_SECONDS` (default 8, under `docker stop`'s 10), the
    server's loop stops, which closes the kept-alive connections, and
-   `orca ui` exits 0. A request still running half a second after that
+   `morca ui` exits 0. A request still running half a second after that
    can't be cut short (the handler runs on the loop's thread), so the
    process then exits 1 without it.
 
@@ -64,7 +64,7 @@ def _wake(sig: c_int):
 def _readable(fd: c_int, timeout_ms: Int) -> Bool:
     """Whether `fd` has something to read, waiting up to `timeout_ms`."""
     # struct pollfd { int fd; short events; short revents; }; `events` is
-    # the low half of the second int on the little-endian targets orca runs
+    # the low half of the second int on the little-endian targets morca runs
     # on. The argument types are flare's (`flare.net._libc._poll`): one
     # program can't declare `poll` twice with different ones.
     var p = Array[Int32, 2](fill=0)
@@ -91,16 +91,16 @@ def _now_ms() -> Int:
 
 
 def drain_seconds() -> Int:
-    """`ORCA_UI_DRAIN_SECONDS`, or 8 if it's unset or not a number; 0 stops
+    """`MORCA_UI_DRAIN_SECONDS`, or 8 if it's unset or not a number; 0 stops
     without waiting for anything."""
-    var raw = getenv("ORCA_UI_DRAIN_SECONDS")
+    var raw = getenv("MORCA_UI_DRAIN_SECONDS")
     if not raw:
         return DEFAULT_DRAIN_SECONDS
     try:
         return max(Int(raw), 0)
     except:
         print(
-            "orca ui: ORCA_UI_DRAIN_SECONDS isn't a number of seconds:",
+            "morca ui: MORCA_UI_DRAIN_SECONDS isn't a number of seconds:",
             raw,
             "- using",
             DEFAULT_DRAIN_SECONDS,
@@ -158,7 +158,7 @@ def _drain(s: _Stopping, stop: AtomicFlag):
     )[]
     s.draining.set()
     print(
-        "orca ui: stopping: no new connections; waiting up to ",
+        "morca ui: stopping: no new connections; waiting up to ",
         s.drain_ms // 1000,
         " s for ",
         s.busy.load(),
@@ -174,7 +174,7 @@ def _drain(s: _Stopping, stop: AtomicFlag):
         if now - start >= s.drain_ms:
             if s.busy.load() > 0:
                 print(
-                    "orca ui: ",
+                    "morca ui: ",
                     s.busy.load(),
                     " request(s) still in flight after ",
                     s.drain_ms // 1000,
@@ -183,7 +183,7 @@ def _drain(s: _Stopping, stop: AtomicFlag):
                 )
             break
         if _readable(s.wake, 0):
-            print("orca ui: a second signal: stopping now")
+            print("morca ui: a second signal: stopping now")
             break
         if s.busy.load() == 0:
             if idle_since < 0:
@@ -200,7 +200,7 @@ def _drain(s: _Stopping, stop: AtomicFlag):
     var told = _now_ms()
     while not stop.is_set():
         if _now_ms() - told >= _LAST_MS:
-            print("orca ui: a request is still running: exiting without it")
+            print("morca ui: a request is still running: exiting without it")
             external_call["_exit", NoneType](c_int(1))
         sleep(0.01)
 
@@ -257,7 +257,7 @@ struct Drain(Movable):
         var wake = _wake_fd()
         if wake < 0:
             print(
-                "orca ui: can't watch for SIGTERM (descriptor",
+                "morca ui: can't watch for SIGTERM (descriptor",
                 WAKE_FD,
                 "is taken): it stops at once",
             )

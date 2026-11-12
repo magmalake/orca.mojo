@@ -1,20 +1,20 @@
 """The sampler: a run's machine metrics, one JSON line every few seconds.
 
 ```
-orca sample --out <location> [--pid PID] [--until FILE] [--match PATH]
+morca sample --out <location> [--pid PID] [--until FILE] [--match PATH]
             [--dirs D,...] [--seconds S] [--count N] [--keep N]
             [--cgroup DIR] [--names DIR]
 <pipeline> sample ...                       the same, from a pipeline binary
 ```
 
 It runs beside every process that does a run's work, started by the runner:
-on the ec2 runner by each instance's user data, next to dista (`orca.ec2`);
-on the local runner beside each run's process (`orca.scheduler`); on the
-kube runner in each pod (`orca.kube`). The runners start it as
+on the ec2 runner by each instance's user data, next to dista (`morca.ec2`);
+on the local runner beside each run's process (`morca.scheduler`); on the
+kube runner in each pod (`morca.kube`). The runners start it as
 `<binary> sample`, since the pipeline's binary is what every instance and
-image has; `orca sample` is the same command.
+image has; `morca sample` is the same command.
 
-Every `--seconds` (`ORCA_SAMPLE_SECONDS`, default 5; the first line a fifth
+Every `--seconds` (`MORCA_SAMPLE_SECONDS`, default 5; the first line a fifth
 of a second after it starts, so any instance it ran on leaves one) it reads `/proc` on Linux,
 or sysctls and the Mach host calls on macOS, and appends a line:
 
@@ -49,16 +49,16 @@ Later fields may be added (CPU counters), so readers ignore keys they don't know
 that's here changes meaning.
 
 `--out` is where the lines go: a file, a location in object storage (lines
-are appended to its `orca.logs.stage_of` staging file and the whole of it
-uploaded every `ORCA_SAMPLE_UPLOAD_SECONDS`, 30 by default, and when the
+are appended to its `morca.logs.stage_of` staging file and the whole of it
+uploaded every `MORCA_SAMPLE_UPLOAD_SECONDS`, 30 by default, and when the
 sampler ends), or `-`, standard output with each line prefixed
 `orca-sample `, for a pod whose log the scheduler keeps. The runners put it
-at `<ORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`
+at `<MORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`
 (`metrics_location`).
 
 `--keep N` keeps a file `--out` names to about its last N lines, for a
 sampler that never ends (the control instance's, which the scheduler reads
-back into the fleet page, `orca.fleet`): once the file has 2 N it's
+back into the fleet page, `morca.fleet`): once the file has 2 N it's
 rewritten with its last N, atomically, so a reader sees either.
 
 `--cgroup DIR` (the control instance's sampler) adds `containers`: the
@@ -90,7 +90,7 @@ from std.time import perf_counter_ns, sleep
 
 from json import loads
 
-from orca.logs import (
+from morca.logs import (
     is_remote,
     location_exists,
     publish,
@@ -109,9 +109,9 @@ comptime _USAGE = """usage:
 
 
 def sample_seconds() -> Float64:
-    """`ORCA_SAMPLE_SECONDS`: the sampler's interval; 0 turns it off. A value
+    """`MORCA_SAMPLE_SECONDS`: the sampler's interval; 0 turns it off. A value
     that isn't a number is the default, 5."""
-    var s = getenv("ORCA_SAMPLE_SECONDS", "5")
+    var s = getenv("MORCA_SAMPLE_SECONDS", "5")
     try:
         return max(Float64(s), 0.0)
     except:
@@ -119,7 +119,7 @@ def sample_seconds() -> Float64:
 
 
 def metrics_location(pipeline: String, run: Int, instance: String) -> String:
-    """Where an instance's samples go under `ORCA_LOGS`; "" without it."""
+    """Where an instance's samples go under `MORCA_LOGS`; "" without it."""
     var dir = run_dir(pipeline, run)
     if not dir:
         return ""
@@ -922,7 +922,7 @@ def _json_safe(s: String) -> String:
 def tree_rss(root: Int, argv0: String = "") -> Int:
     """The resident bytes of `root`'s process tree, and on Linux of the
     processes whose command is `argv0`; the scheduler checks a control-placed
-    run's against its cap with it (orca.control)."""
+    run's against its cap with it (morca.control)."""
     if root <= 0 and not argv0:
         return 0
     comptime if CompilationTarget.is_macos():
@@ -1010,7 +1010,7 @@ def tree_usage(roots: List[Int]) -> Dict[Int, Tuple[Int, Float64]]:
     """Each root's process tree's resident bytes and CPU seconds (its own
     and its descendants', with what they waited for: so a child's time
     stays counted once it ends), from one pass over /proc; the scheduler
-    and `orca worker` sample their runs with it each tick (orca.usage).
+    and `morca worker` sample their runs with it each tick (morca.usage).
     Empty on macOS, which has no /proc: there the runs' usage is what
     `wait4` says at their end."""
     var out = Dict[Int, Tuple[Int, Float64]]()
@@ -1177,7 +1177,7 @@ def sample_main(args: List[String]) -> Int:
         return 0
     var upload = 30.0
     try:
-        upload = Float64(getenv("ORCA_SAMPLE_UPLOAD_SECONDS", "30"))
+        upload = Float64(getenv("MORCA_SAMPLE_UPLOAD_SECONDS", "30"))
     except:
         pass
     var remote = is_remote(dest)
@@ -1191,7 +1191,7 @@ def sample_main(args: List[String]) -> Int:
             with open(path, "w") as f:
                 f.write_bytes(Span(before))
     except e:
-        print("orca sample: can't stage", dest, ":", e)
+        print("morca sample: can't stage", dest, ":", e)
     var s = Sampler(root, argv0, dirs^, cgroup, names)
     var written = 0
     var failed = False
@@ -1219,7 +1219,7 @@ def sample_main(args: List[String]) -> Int:
                 failed = False
             except e:
                 if not failed:
-                    print("orca sample: dropped a line:", e)
+                    print("morca sample: dropped a line:", e)
                 failed = True
             written += 1
             due = max(due + seconds, now + seconds / 2)
@@ -1229,7 +1229,7 @@ def sample_main(args: List[String]) -> Int:
                 publish(dest)
                 dirty = False
             except e:
-                print("orca sample: can't upload", dest, ":", e)
+                print("morca sample: can't upload", dest, ":", e)
             uploaded = now
         if last:
             break

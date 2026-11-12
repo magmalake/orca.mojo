@@ -7,10 +7,10 @@ and a process commits to Iceberg only right after checking that it still
 owns the run and that its heartbeat is younger than half the limit (`fence`).
 All of it is by the database's clock.
 
-Mirrors src/orca/state.mojo#State.claim+beat_run+PgStore.fence and
-src/orca/ctx.mojo#Ctx.fence.
+Mirrors src/morca/state.mojo#State.claim+beat_run+PgStore.fence and
+src/morca/ctx.mojo#Ctx.fence.
 -/
-namespace Orca.Fence
+namespace Morca.Fence
 
 /-- The run's row and the processes about to commit: the database's clock,
 the owner, the heartbeat, and for each process the time its fence check
@@ -59,4 +59,4 @@ inductive Reachable (stale half : Nat) (advance : Nat → Nat → Prop) :
       Reachable stale half advance s → Step stale half advance s s' →
       Reachable stale half advance s'
 
-end Orca.Fence
+end Morca.Fence

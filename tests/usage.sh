@@ -1,26 +1,26 @@
 #!/bin/sh
-# What a run's processes use (orca.usage), over tests/usage/hog.mojo, whose
+# What a run's processes use (morca.usage), over tests/usage/hog.mojo, whose
 # step holds 200 MiB while a child of its own holds 100 MiB more, each
 # burning a core for 4 s:
 #
 # - a run on the local runner and a control-placed one, which the scheduler
-#   samples each tick, and one on `orca worker`, which samples it and sends
+#   samples each tick, and one on `morca worker`, which samples it and sends
 #   the samples with /api/worker/exited, each record on their attempt a
 #   peak within a margin of what was held (on Linux the tree's, both
 #   processes; on macOS wait4's largest process), their CPU seconds, and
 #   on Linux the most cores they kept busy;
 # - the run's page, the attempt's and the pipeline's (its Resources card:
-#   p50 and max of each) show them, and their JSON has them; `orca status
+#   p50 and max of each) show them, and their JSON has them; `morca status
 #   hog` and `hog status <run>` print them;
-# - from the three, the request they suggest (orca.recommend): the largest
-#   peak plus 15% in quarter GBs, on the card, in the JSON and in `orca
+# - from the three, the request they suggest (morca.recommend): the largest
+#   peak plus 15% in quarter GBs, on the card, in the JSON and in `morca
 #   config show`, not applied;
 # - registered with `memory_gb = "auto"`, a run on the local runner is
 #   granted it, recording that it's learned from 3 runs, and the card and
-#   `orca config show` say it's applied; with `learn = false`, the next run
+#   `morca config show` say it's applied; with `learn = false`, the next run
 #   has no request, recording `default`.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-usage starts a throwaway server),
+# Needs MORCA_DATABASE_URL (pixi run test-usage starts a throwaway server),
 # curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -30,15 +30,15 @@ mkdir -p build
 scripts/mojo-build.sh -I src $DEP_INC tests/usage/hog.mojo -o build/hog &
 b1=$!
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 b2=$!
 wait "$b1"
 wait "$b2"
 log=build/usage.log
 : > "$log"
 rm -rf build/usage-stage build/usage-*.out
-export ORCA_STALE_SECONDS=5 ORCA_START_SECONDS=20 ORCA_SAMPLE_SECONDS=0
-export ORCA_CONTROL_MEMORY_MB=2048
+export MORCA_STALE_SECONDS=5 MORCA_START_SECONDS=20 MORCA_SAMPLE_SECONDS=0
+export MORCA_CONTROL_MEMORY_MB=2048
 pids=
 cleanup() {
     for p in $pids; do kill "$p" 2> /dev/null || true; done
@@ -50,7 +50,7 @@ fail() {
     for f in build/usage-*.out; do [ -f "$f" ] && { echo "== $f"; tail -15 "$f"; }; done
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 until_() {
     t=$1; what=$2; shift 2
     i=0
@@ -98,33 +98,33 @@ check() {
 
 free_port port
 base="http://127.0.0.1:$port"
-./build/orca register ./build/hog >> "$log" 2>&1 || fail "register"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+./build/morca register ./build/hog >> "$log" 2>&1 || fail "register"
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 pids="$pids $!"
-until_ 10 "orca ui didn't start" curl -fs "$base/" -o /dev/null
-./build/orca scheduler > build/usage-sched.out 2>&1 &
+until_ 10 "morca ui didn't start" curl -fs "$base/" -o /dev/null
+./build/morca scheduler > build/usage-sched.out 2>&1 &
 pids="$pids $!"
 
 # On the local runner.
-./build/orca backfill hog 2024-01 >> "$log" 2>&1 || fail "backfill 2024-01"
+./build/morca backfill hog 2024-01 >> "$log" 2>&1 || fail "backfill 2024-01"
 r1=$(q "SELECT max(id) FROM orca.runs")
 check "$r1" local
 
 # On the control host.
-./build/orca register --placement control ./build/hog >> "$log" 2>&1 || fail "register control"
-./build/orca backfill hog 2024-02 >> "$log" 2>&1 || fail "backfill 2024-02"
+./build/morca register --placement control ./build/hog >> "$log" 2>&1 || fail "register control"
+./build/morca backfill hog 2024-02 >> "$log" 2>&1 || fail "backfill 2024-02"
 r2=$(q "SELECT max(id) FROM orca.runs")
 check "$r2" control
 is "SELECT placement FROM orca.runs WHERE id = $r2" control \
     || fail "run $r2 wasn't placed on the control host: $(q "SELECT id, placement FROM orca.runs")"
 
 # On a remote worker, whose samples reach the database through the UI.
-./build/orca register --placement worker:u ./build/hog >> "$log" 2>&1 || fail "register worker"
-tok=$(./build/orca worker-token create --pool u --label usage 2>> "$log") || fail "worker-token create"
-./build/orca backfill hog 2024-03 >> "$log" 2>&1 || fail "backfill 2024-03"
+./build/morca register --placement worker:u ./build/hog >> "$log" 2>&1 || fail "register worker"
+tok=$(./build/morca worker-token create --pool u --label usage 2>> "$log") || fail "worker-token create"
+./build/morca backfill hog 2024-03 >> "$log" 2>&1 || fail "backfill 2024-03"
 r3=$(q "SELECT max(id) FROM orca.runs")
-env -u ORCA_DATABASE_URL -u ORCA_PGDATA ORCA_WORKER_TOKEN="$tok" \
-    ./build/orca worker --pool u --remote "$base" --poll-seconds 0.3 \
+env -u MORCA_DATABASE_URL -u MORCA_PGDATA MORCA_WORKER_TOKEN="$tok" \
+    ./build/morca worker --pool u --remote "$base" --poll-seconds 0.3 \
     --dir "$PWD/build/usage-stage" > build/usage-worker.out 2>&1 &
 pids="$pids $!"
 check "$r3" worker
@@ -171,24 +171,24 @@ else
 fi
 
 # What the commands print.
-./build/orca status hog > build/usage-status.out 2>&1 || fail "orca status hog"
+./build/morca status hog > build/usage-status.out 2>&1 || fail "morca status hog"
 grep -qE "^  $r1 succeeded backfill 2024-01 .* peak [0-9]+ MB, CPU [0-9.]+ s" build/usage-status.out \
-    || fail "orca status: $(cat build/usage-status.out)"
+    || fail "morca status: $(cat build/usage-status.out)"
 ./build/hog status "$r2" > build/usage-binary.out 2>&1 || fail "hog status"
 grep -qE "^hog 2024-02 succeeded \(peak [0-9]+ MB, CPU [0-9.]+ s" build/usage-binary.out \
     || fail "hog status: $(cat build/usage-binary.out)"
-./build/orca config show hog > build/usage-config.out 2>&1 || fail "orca config show hog"
+./build/morca config show hog > build/usage-config.out 2>&1 || fail "morca config show hog"
 grep -qE "^  learned from 3 runs: [0-9.]+ GB.*; shown, not applied: its request isn't auto$" build/usage-config.out \
     || fail "config show: $(cat build/usage-config.out)"
-[ "$(./build/orca config show hog --json | jq -r .learned.memory_mb)" = "$(jq -r .learned.memory_mb build/usage-pipeline.json)" ] \
-    || fail "config show --json: $(./build/orca config show hog --json)"
+[ "$(./build/morca config show hog --json | jq -r .learned.memory_mb)" = "$(jq -r .learned.memory_mb build/usage-pipeline.json)" ] \
+    || fail "config show --json: $(./build/morca config show hog --json)"
 
-# "auto" (orca.recommend): the next run on the local runner is granted the
+# "auto" (morca.recommend): the next run on the local runner is granted the
 # learned memory, and records where it came from.
 mb=$(jq -r .learned.memory_mb build/usage-pipeline.json)
-./build/orca register --placement default --memory-gb auto ./build/hog >> "$log" 2>&1 \
+./build/morca register --placement default --memory-gb auto ./build/hog >> "$log" 2>&1 \
     || fail "register --memory-gb auto"
-./build/orca backfill hog 2024-04 >> "$log" 2>&1 || fail "backfill 2024-04"
+./build/morca backfill hog 2024-04 >> "$log" 2>&1 || fail "backfill 2024-04"
 r4=$(q "SELECT max(id) FROM orca.runs")
 check "$r4" auto
 is "SELECT placement || ' ' || request_source || ' ' || request_runs || ' ' || grant_memory_mb FROM orca.runs WHERE id = $r4" \
@@ -208,23 +208,23 @@ curl -fs "$base/runs/$r4" | grep -qE 'Requested<span class="help">.*[0-9.]+ GB <
 curl -fs -H 'Accept: application/json' "$base/pipelines/hog" | jq -e '.learned.applied == true' > /dev/null \
     || fail "the pipeline's learned isn't applied: $(curl -fs -H 'Accept: application/json' "$base/pipelines/hog" | jq -c .learned)"
 curl -fs "$base/pipelines/hog" | grep -q '· applied' || fail "the Resources card doesn't say applied"
-./build/orca config show hog | grep -qE '^  learned from 4 runs: .*; applied: its request is auto$' \
-    || fail "config show auto: $(./build/orca config show hog)"
+./build/morca config show hog | grep -qE '^  learned from 4 runs: .*; applied: its request is auto$' \
+    || fail "config show auto: $(./build/morca config show hog)"
 
 # learn = false: auto falls back to no request, recorded as the default.
-printf '[pipelines.hog]\nmemory_gb = "auto"\nlearn = false\n' > build/usage-orca.toml
-[ "$(env -u ORCA_DATABASE_URL ./build/orca config check build/usage-orca.toml 2>&1)" = "build/usage-orca.toml: ok, 1 pipeline" ] \
-    || fail "config check: $(env -u ORCA_DATABASE_URL ./build/orca config check build/usage-orca.toml 2>&1)"
-./build/orca register --config build/usage-orca.toml ./build/hog >> "$log" 2>&1 || fail "register learn = false"
-./build/orca backfill hog 2024-05 >> "$log" 2>&1 || fail "backfill 2024-05"
+printf '[pipelines.hog]\nmemory_gb = "auto"\nlearn = false\n' > build/usage-morca.toml
+[ "$(env -u MORCA_DATABASE_URL ./build/morca config check build/usage-morca.toml 2>&1)" = "build/usage-morca.toml: ok, 1 pipeline" ] \
+    || fail "config check: $(env -u MORCA_DATABASE_URL ./build/morca config check build/usage-morca.toml 2>&1)"
+./build/morca register --config build/usage-morca.toml ./build/hog >> "$log" 2>&1 || fail "register learn = false"
+./build/morca backfill hog 2024-05 >> "$log" 2>&1 || fail "backfill 2024-05"
 r5=$(q "SELECT max(id) FROM orca.runs")
 check "$r5" "learn = false"
 is "SELECT request_source || ' ' || coalesce(request_runs, 0) || ' ' || coalesce(grant_memory_mb, 0) FROM orca.runs WHERE id = $r5" "default 0 0" \
     || fail "run $r5's request: $(q "SELECT request_memory_gb, request_source, request_runs, grant_memory_mb FROM orca.runs WHERE id = $r5")"
 curl -fs -H 'Accept: application/json' "$base/runs/$r5" | jq -e '.run.request == null and .run.request_source.source == "default"' > /dev/null \
     || fail "run $r5's JSON: $(curl -fs -H 'Accept: application/json' "$base/runs/$r5" | jq -c .run)"
-./build/orca config show hog > build/usage-config.out 2>&1 || fail "config show learn = false"
-grep -qE '^  learn +false +orca.toml \[pipelines.hog\]$' build/usage-config.out \
+./build/morca config show hog > build/usage-config.out 2>&1 || fail "config show learn = false"
+grep -qE '^  learn +false +morca.toml \[pipelines.hog\]$' build/usage-config.out \
     && grep -qE '^  learned from 5 runs: .*; not applied: learn = false$' build/usage-config.out \
     || fail "config show learn = false: $(cat build/usage-config.out)"
 curl -fs "$base/pipelines/hog" | grep -q '· not applied' || fail "the Resources card doesn't say not applied"

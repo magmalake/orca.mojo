@@ -1,5 +1,5 @@
 #!/bin/sh
-# Containment (orca.cgroup), Linux only: a run whose step holds more than its
+# Containment (morca.cgroup), Linux only: a run whose step holds more than its
 # cgroup's memory.max is killed by the kernel, it alone; its attempt fails
 # "out of memory at <limit>"; its retry has a bigger limit and succeeds; the
 # pipeline's next run starts from that limit; the run page, its JSON and
@@ -15,7 +15,7 @@
 # Elsewhere (macOS, cgroup v1, no delegation and no sudo) it says why and
 # skips.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-cgroups starts a throwaway server),
+# Needs MORCA_DATABASE_URL (pixi run test-cgroups starts a throwaway server),
 # curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
@@ -32,18 +32,18 @@ grep -q '^0::' /proc/self/cgroup || skip "no cgroup v2 hierarchy (cgroup v1?)"
 own=$(sed -n 's/^0:://p' /proc/self/cgroup)
 made=
 back=
-# Whether orca, in this shell's cgroup, could make cgroups there: the files
+# Whether morca, in this shell's cgroup, could make cgroups there: the files
 # it writes are this user's (or root's, for root) and memory is delegated.
 writable() {
     d=/sys/fs/cgroup${own%/}
     [ "$own" = / ] && d=/sys/fs/cgroup
-    case "$d" in */orca) d=${d%/orca} ;; esac
+    case "$d" in */morca) d=${d%/morca} ;; esac
     grep -qw memory "$d/cgroup.controllers" 2> /dev/null && [ -w "$d/cgroup.procs" ] \
         && [ -w "$d/cgroup.subtree_control" ] && touch "$d/cgroup.procs" 2> /dev/null
 }
 if ! writable; then
     if sudo -n true 2> /dev/null && grep -qw memory /sys/fs/cgroup/cgroup.subtree_control; then
-        made=/sys/fs/cgroup/orca-test-$$
+        made=/sys/fs/cgroup/morca-test-$$
         sudo mkdir "$made"
         sudo chown -R "$(id -u):$(id -g)" "$made"
         back=/sys/fs/cgroup${own}
@@ -60,19 +60,19 @@ mkdir -p build
 scripts/mojo-build.sh -I src $DEP_INC tests/cgroups/grower.mojo -o build/grower &
 b1=$!
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 b2=$!
 wait "$b1"
 wait "$b2"
 log=build/cgroups.log
 : > "$log"
 rm -f build/cgroups-*.out
-export ORCA_STALE_SECONDS=5 ORCA_START_SECONDS=20 ORCA_SAMPLE_SECONDS=0 ORCA_RETRY_SECONDS=1
+export MORCA_STALE_SECONDS=5 MORCA_START_SECONDS=20 MORCA_SAMPLE_SECONDS=0 MORCA_RETRY_SECONDS=1
 # A run without a request has 200 MB, and is killed past it (no margin, so
 # no throttling between memory.high and memory.max); after a
 # kill it asks for twice that. Its step holds 300 MiB: over the first limit,
 # under the second.
-export ORCA_RUN_MEMORY_MB=200 ORCA_RUN_MEMORY_MARGIN=0 ORCA_RUN_MEMORY_GROWTH=2 GROW_MB=300
+export MORCA_RUN_MEMORY_MB=200 MORCA_RUN_MEMORY_MARGIN=0 MORCA_RUN_MEMORY_GROWTH=2 GROW_MB=300
 pids=
 sched=
 cleanup() {
@@ -91,7 +91,7 @@ fail() {
     for f in build/cgroups-*.out; do [ -f "$f" ] && { echo "== $f"; tail -25 "$f"; }; done
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 until_() {
     t=$1; what=$2; shift 2
     i=0
@@ -102,28 +102,28 @@ until_() {
 is() { [ "$(q "$1")" = "$2" ]; }
 said() { grep -q "$1" build/cgroups-sched.out; }
 start_scheduler() {
-    ./build/orca scheduler >> build/cgroups-sched.out 2>&1 &
+    ./build/morca scheduler >> build/cgroups-sched.out 2>&1 &
     sched=$!
-    until_ 20 "the scheduler didn't say whether runs get cgroups" said "orca: run cgroups"
+    until_ 20 "the scheduler didn't say whether runs get cgroups" said "morca: run cgroups"
 }
 
 free_port port
 base="http://127.0.0.1:$port"
-./build/orca register ./build/grower >> "$log" 2>&1 || fail "register"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+./build/morca register ./build/grower >> "$log" 2>&1 || fail "register"
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 pids="$pids $!"
-until_ 10 "orca ui didn't start" curl -fs "$base/" -o /dev/null
+until_ 10 "morca ui didn't start" curl -fs "$base/" -o /dev/null
 start_scheduler
-if ! said "orca: run cgroups on"; then
-    why=$(grep "orca: run cgroups" build/cgroups-sched.out | head -1)
-    [ -z "$made" ] || fail "orca can't use the cgroup made for it: $why"
+if ! said "morca: run cgroups on"; then
+    why=$(grep "morca: run cgroups" build/cgroups-sched.out | head -1)
+    [ -z "$made" ] || fail "morca can't use the cgroup made for it: $why"
     skip "$why"
 fi
-cgbase=$(sed -n "s/^orca: run cgroups on: runs' cgroups go in //p" build/cgroups-sched.out | head -1)
+cgbase=$(sed -n "s/^morca: run cgroups on: runs' cgroups go in //p" build/cgroups-sched.out | head -1)
 echo "cgroups: runs' cgroups go in $cgbase" >> "$log"
 
 # Killed at 200 MB, then retried at 400.
-./build/orca backfill grower 2024-01 >> "$log" 2>&1 || fail "backfill 2024-01"
+./build/morca backfill grower 2024-01 >> "$log" 2>&1 || fail "backfill 2024-01"
 r1=$(q "SELECT max(id) FROM orca.runs")
 until_ 120 "run $r1 didn't succeed: $(q "SELECT id, status, starts, error FROM orca.runs WHERE id = $r1")" \
     is "SELECT status FROM orca.runs WHERE id = $r1" succeeded
@@ -149,7 +149,7 @@ is "SELECT memory_limit_mb || ' ' || memory_max_mb FROM orca.runs WHERE id = $r1
     || fail "run $r1's limit: $(q "SELECT memory_limit_mb, memory_max_mb FROM orca.runs WHERE id = $r1")"
 
 # The next run starts from the raised value.
-./build/orca backfill grower 2024-02 >> "$log" 2>&1 || fail "backfill 2024-02"
+./build/morca backfill grower 2024-02 >> "$log" 2>&1 || fail "backfill 2024-02"
 r2=$(q "SELECT max(id) FROM orca.runs")
 until_ 60 "run $r2 didn't succeed: $(q "SELECT id, status, starts, error FROM orca.runs WHERE id = $r2")" \
     is "SELECT status FROM orca.runs WHERE id = $r2" succeeded
@@ -171,7 +171,7 @@ jq -e '.attempt.memory_limit_mb == 200 and (.attempt.error | startswith("out of 
     build/cgroups-attempt.json > /dev/null || fail "the attempt's JSON: $(cat build/cgroups-attempt.json)"
 
 # Ops > Control lists a run going with its memory against its limit.
-./build/orca backfill grower 2024-03 >> "$log" 2>&1 || fail "backfill 2024-03"
+./build/morca backfill grower 2024-03 >> "$log" 2>&1 || fail "backfill 2024-03"
 r3=$(q "SELECT max(id) FROM orca.runs")
 until_ 30 "run $r3 didn't start" is "SELECT status FROM orca.runs WHERE id = $r3" running
 until_ 20 "Ops > Control has no run $r3: $(curl -fs -H 'Accept: application/json' "$base/ops/control" | jq -c .runs)" \
@@ -179,23 +179,23 @@ until_ 20 "Ops > Control has no run $r3: $(curl -fs -H 'Accept: application/json
 until_ 60 "run $r3 didn't succeed" is "SELECT status FROM orca.runs WHERE id = $r3" succeeded
 
 # Nothing is left: no run's cgroup, no grower process.
-until_ 10 "run cgroups are left: $(ls -d "$cgbase"/orca-run-* 2> /dev/null)" \
-    sh -c "! ls -d '$cgbase'/orca-run-* > /dev/null 2>&1"
+until_ 10 "run cgroups are left: $(ls -d "$cgbase"/morca-run-* 2> /dev/null)" \
+    sh -c "! ls -d '$cgbase'/morca-run-* > /dev/null 2>&1"
 if ps -eo args | grep -q '^[^ ]*build/grower resume'; then
     fail "grower processes are left: $(ps -eo pid,args | grep 'build/grower')"
 fi
 
 # A run held at memory.high short of memory.max (a margin of 100%: 300 MB at
 # a 200 MB limit is throttled, and never reaches the 400 MB kill) is killed
-# after ORCA_RUN_MEMORY_HELD_SECONDS and counts as out of memory: its retry
+# after MORCA_RUN_MEMORY_HELD_SECONDS and counts as out of memory: its retry
 # asks for 400 MB and succeeds. Needs the cgroup's PSI (memory.pressure).
 if [ -f "$cgbase/memory.pressure" ]; then
     kill "$sched"
     wait "$sched" 2> /dev/null || true
     q "UPDATE orca.pipelines SET memory_raised_mb = NULL WHERE name = 'grower'" > /dev/null
-    export ORCA_RUN_MEMORY_MARGIN=100 ORCA_RUN_MEMORY_HELD_SECONDS=3
+    export MORCA_RUN_MEMORY_MARGIN=100 MORCA_RUN_MEMORY_HELD_SECONDS=3
     start_scheduler
-    ./build/orca backfill grower 2024-04 >> "$log" 2>&1 || fail "backfill 2024-04"
+    ./build/morca backfill grower 2024-04 >> "$log" 2>&1 || fail "backfill 2024-04"
     r4=$(q "SELECT max(id) FROM orca.runs")
     until_ 120 "run $r4 didn't succeed: $(q "SELECT id, status, starts, error FROM orca.runs WHERE id = $r4")" \
         is "SELECT status FROM orca.runs WHERE id = $r4" succeeded
@@ -208,8 +208,8 @@ if [ -f "$cgbase/memory.pressure" ]; then
     # It waited on memory for most of those seconds, and its attempt says so.
     stalled=$(q "SELECT coalesce(a.memory_stall_full_ms, -1) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $r4 AND a.attempt = 1")
     [ "$stalled" -ge 1000 ] || fail "run $r4's held attempt's memory stall: $stalled ms"
-    export ORCA_RUN_MEMORY_MARGIN=0
-    unset ORCA_RUN_MEMORY_HELD_SECONDS
+    export MORCA_RUN_MEMORY_MARGIN=0
+    unset MORCA_RUN_MEMORY_HELD_SECONDS
 else
     echo "cgroups: no memory.pressure in $cgbase: the held case is skipped"
 fi
@@ -218,8 +218,8 @@ fi
 # step's 300), a run fails then and there with the kill as its error: a
 # retry would ask for the same and be killed again.
 q "UPDATE orca.pipelines SET memory_raised_mb = NULL WHERE name = 'grower'" > /dev/null
-./build/orca register --memory-gb 0.25 ./build/grower >> "$log" 2>&1 || fail "register --memory-gb 0.25"
-./build/orca backfill grower 2024-05 >> "$log" 2>&1 || fail "backfill 2024-05"
+./build/morca register --memory-gb 0.25 ./build/grower >> "$log" 2>&1 || fail "register --memory-gb 0.25"
+./build/morca backfill grower 2024-05 >> "$log" 2>&1 || fail "backfill 2024-05"
 r5=$(q "SELECT max(id) FROM orca.runs")
 until_ 60 "run $r5 didn't fail: $(q "SELECT id, status, starts, error FROM orca.runs WHERE id = $r5")" \
     is "SELECT status FROM orca.runs WHERE id = $r5" failed
@@ -228,7 +228,7 @@ case "$spent" in
     "1|out of memory at 256 MB: "*"the most it may ask for"*) ;;
     *) fail "run $r5 wasn't failed by its kill at its maximum, unretried: $spent" ;;
 esac
-# And it stays so: no retry is scheduled (ORCA_RETRY_SECONDS is 1).
+# And it stays so: no retry is scheduled (MORCA_RETRY_SECONDS is 1).
 sleep 5
 spent=$(q "SELECT status || '|' || starts || '|' || coalesce(retry_at::text, '') FROM orca.runs WHERE id = $r5")
 [ "$spent" = "failed|1|" ] || fail "run $r5 was retried after its kill at its maximum: $spent"

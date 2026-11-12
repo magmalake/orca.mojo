@@ -7,17 +7,17 @@ each machine's log.
 
 from postgres import Params
 
-from orca.ui.cluster import cluster_html
-from orca.views.cluster import cluster_rows
-from orca.dag import DagStep, aggregate, dag_svg
-from orca.html import Html, url_encode
-from orca.lineage import SnapshotRef
-from orca.logs import location_exists, read_location, run_dir
-from orca.metrics import InstanceMetrics, metrics_svg, read_metrics
-from orca.state import State
-from orca.ui.attempt import read_log
-from orca.ui.datasets import snapshot_href
-from orca.ui.layout import (
+from morca.ui.cluster import cluster_html
+from morca.views.cluster import cluster_rows
+from morca.dag import DagStep, aggregate, dag_svg
+from morca.html import Html, url_encode
+from morca.lineage import SnapshotRef
+from morca.logs import location_exists, read_location, run_dir
+from morca.metrics import InstanceMetrics, metrics_svg, read_metrics
+from morca.state import State
+from morca.ui.attempt import read_log
+from morca.ui.datasets import snapshot_href
+from morca.ui.layout import (
     act_button,
     ask_attrs,
     card_open,
@@ -27,8 +27,8 @@ from orca.ui.layout import (
     not_found,
     page_html,
 )
-from orca.ui.machines import instances_html, machines_html
-from orca.ui.parts import (
+from morca.ui.machines import instances_html, machines_html
+from morca.ui.parts import (
     TRIES,
     cancel_tell,
     grant_facts,
@@ -41,12 +41,12 @@ from orca.ui.parts import (
     usage_cell,
     usage_facts,
 )
-from orca.ui.step_cards import cards_script
-from orca.ui.viz import timeline_section
-from orca.usage import cpu_text
-from orca.views.code import code_links
-from orca.views.pipelines import StepDef, step_defs
-from orca.views.runs import (
+from morca.ui.step_cards import cards_script
+from morca.ui.viz import timeline_section
+from morca.usage import cpu_text
+from morca.views.code import code_links
+from morca.views.pipelines import StepDef, step_defs
+from morca.views.runs import (
     RunRow,
     RunView,
     StepRow,
@@ -59,9 +59,9 @@ from orca.views.runs import (
     step_spans,
     timeline_path,
 )
-from orca.views.steps import attempt_cards, step_cards_of
-from orca.web.page import Page
-from orca.workers import ran_on
+from morca.views.steps import attempt_cards, step_cards_of
+from morca.web.page import Page
+from morca.workers import ran_on
 
 
 def run_html(mut db: State, v: RunView, view: String = "") raises -> String:
@@ -96,7 +96,7 @@ def run_html(mut db: State, v: RunView, view: String = "") raises -> String:
                 String("/runs/", r.id, "/rerun"),
                 "Rerun",
                 "rerun",
-                "no orca command for this yet: a new run of every step",
+                "no morca command for this yet: a new run of every step",
                 danger=True,
                 step=defs[0].name,
                 ask=String("Rerun every step of run ", r.id, "?"),
@@ -128,14 +128,14 @@ def run_html(mut db: State, v: RunView, view: String = "") raises -> String:
     if timeline:
         # Drawn in the browser, from timeline.json once it's in view.
         timeline_section(h, r.id)
-    # Who did what to it from the UI (orca.auth).
+    # Who did what to it from the UI (morca.auth).
     if len(v.actions) > 0:
         card_open(
             h,
             "audit",
             "Actions",
             (
-                "Who did what to this run, from the UI or the orca command,"
+                "Who did what to this run, from the UI or the morca command,"
                 " as the user they logged in as."
             ),
             facts=False,
@@ -363,7 +363,7 @@ def _status_card(mut h: Html, r: RunRow, defs: List[StepDef]):
             "Error",
             "run-error",
             (
-                "Why the run failed, as its process or orca said. The"
+                "Why the run failed, as its process or morca said. The"
                 " failed step's attempt, under Steps, has its log."
             ),
         )
@@ -392,7 +392,7 @@ def _status_card(mut h: Html, r: RunRow, defs: List[StepDef]):
 def _trigger_card(mut h: Html, mut db: State, r: RunRow) raises:
     """The Partitions & trigger card: what the run does and what started
     it, with the rebuild or the snapshots a sensor saw, and the batch it
-    was queued in (`orca.batches`) with how many runs that has."""
+    was queued in (`morca.batches`) with how many runs that has."""
     var row = db.conn.query(
         (
             "SELECT coalesce(rebuild, 0) AS rebuild, coalesce(batch, 0) AS"
@@ -537,7 +537,7 @@ def _run_code_card(mut h: Html, mut db: State, r: RunRow) raises:
             "Source",
             "run-source",
             (
-                "The commit its binary was built from (-D ORCA_COMMIT), in"
+                "The commit its binary was built from (-D MORCA_COMMIT), in"
                 " which repository, and the image it ran in, if any."
             ),
             "versions",
@@ -555,7 +555,7 @@ def _run_code_card(mut h: Html, mut db: State, r: RunRow) raises:
             "Driver log",
             "run-driver",
             (
-                "What the run's process printed: orca's lines and its steps'"
+                "What the run's process printed: morca's lines and its steps'"
                 " output, as the scheduler kept it. Each attempt under Steps"
                 " has its own log too."
             ),
@@ -566,7 +566,7 @@ def _run_code_card(mut h: Html, mut db: State, r: RunRow) raises:
     if not any and not version:
         h.raw(
             '<p class="card__none">No links to the code: the binary records',
-            " no source, or <code>orca locate</code> didn't map it.</p>",
+            " no source, or <code>morca locate</code> didn't map it.</p>",
         )
     h.raw('<p class="hash">Code hash <code>')
     h.text(hash)
@@ -669,7 +669,7 @@ def _run_state(mut h: Html, mut db: State, r: RunRow, view: String = "") raises:
             h.text(waiting.row(0).text("since"))
             h.raw(
                 ": its head has tasks and no worker; the attempt fails when"
-                " that has lasted <code>ORCA_NO_WORKERS_SECONDS</code>.</p>"
+                " that has lasted <code>MORCA_NO_WORKERS_SECONDS</code>.</p>"
             )
     var instances = instance_rows(db, r.id)
     if len(instances) > 0:
@@ -723,7 +723,7 @@ def _setting_help(key: String) -> StaticString:
 
 def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
     """The Settings card: where the run ran, and what it was set up with:
-    its environment as it was after orca.toml and the flags (what its start
+    its environment as it was after morca.toml and the flags (what its start
     recorded, else what the pipeline is registered with), and the limits
     and machines. Secrets by name only."""
     var rows = db.conn.query(
@@ -752,7 +752,7 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
         "settings",
         "Settings",
         (
-            "What the run was set up with, orca.toml and the flags applied:"
+            "What the run was set up with, morca.toml and the flags applied:"
             " as its start recorded them, or else as the pipeline is"
             " registered. The pipeline's Config card says where each value"
             " came from."
@@ -839,7 +839,7 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
             "Environment",
             "run-env",
             (
-                "The variables orca.toml's env and the flags set in the run's"
+                "The variables morca.toml's env and the flags set in the run's"
                 " environment."
             ),
         )
@@ -900,7 +900,7 @@ def _run_live(
             )
         )
     h.raw(
-        '<section class="card steps" id="steps" data-tabs="orca.run.steps"',
+        '<section class="card steps" id="steps" data-tabs="morca.run.steps"',
         ' data-tabs-param="steps" data-step-cards><div class="steps__head">',
         "<h2>Steps",
     )
@@ -1057,7 +1057,7 @@ def timeline(mut db: State, id: Int) raises -> Page:
 
 
 def driver_log(mut db: State, id: Int) raises -> Page:
-    """The run's driver log, as the scheduler kept it under ORCA_LOGS."""
+    """The run's driver log, as the scheduler kept it under MORCA_LOGS."""
     var found = runs_one(db, id)
     if not found:
         return not_found(String("no run ", id))
@@ -1072,7 +1072,7 @@ def driver_log(mut db: State, id: Int) raises -> Page:
 
 
 def cluster_log(mut db: State, id: Int, name: String) raises -> Page:
-    """An instance's log, as its script kept it under ORCA_LOGS: only the
+    """An instance's log, as its script kept it under MORCA_LOGS: only the
     names of the run's own instances are served."""
     var found = runs_one(db, id)
     if not found:

@@ -1,15 +1,15 @@
 """Runs started by datasets: sensors, and rebuilds downstream of a dataset.
 
 ```
-orca rebuild raw.events 2024-03           every pipeline downstream, in order
+morca rebuild raw.events 2024-03           every pipeline downstream, in order
 ```
 
 **Sensors.** A pipeline declared `sensor=True` runs when a dataset it reads
 (and doesn't write itself) gets a snapshot. The scheduler learns of one in
-two ways (`orca.scheduler`): from `orca.commits`, for a snapshot a
+two ways (`morca.scheduler`): from `orca.commits`, for a snapshot a
 succeeded run of another pipeline committed, and by polling `<binary>
-sense` every `ORCA_SENSE_SECONDS` (default 60), for a snapshot something
-other than orca committed. `orca.sensed` holds a row per pipeline and
+sense` every `MORCA_SENSE_SECONDS` (default 60), for a snapshot something
+other than morca committed. `orca.sensed` holds a row per pipeline and
 snapshot seen, with the run it started, inserted in the transaction that
 queues the run, so a snapshot starts one run however many ticks (or
 schedulers) see it. The snapshots a tick sees for one pipeline start one
@@ -19,7 +19,7 @@ A sensor counts from when it's registered as one: the snapshots its
 datasets have then are recorded as seen without a run, and commits from
 before then are ignored. A backfill or a rebuild covers what came before.
 
-**Partitions.** A snapshot an orca run committed holds the partition of
+**Partitions.** A snapshot a morca run committed holds the partition of
 the step that committed it, or the run's partitions for a gather step. One
 committed by something else holds what its summary's `orca.partitions`
 says, and without that the downstream pipeline runs the partition its
@@ -41,15 +41,15 @@ runs itself.
 
 from postgres import Params
 
-from orca.day import Day
-from orca.hour import Hour
-from orca.lineage import flows
-from orca.live import live_runs
-from orca.month import Month, days_in
-from orca.name import sort_texts
-from orca.state import State
-from orca.timekeys import parse_time_keys
-from orca.warehouse import Sensed
+from morca.day import Day
+from morca.hour import Hour
+from morca.lineage import flows
+from morca.live import live_runs
+from morca.month import Month, days_in
+from morca.name import sort_texts
+from morca.state import State
+from morca.timekeys import parse_time_keys
+from morca.warehouse import Sensed
 
 
 def key_kind(key: StringSlice) -> String:
@@ -112,7 +112,7 @@ def map_keys(
             for h in range(24):
                 mapped.append(String(Hour(d.year, d.month, d.day, h)))
         else:
-            raise Error("orca: not a partition key: '", k, "'")
+            raise Error("morca: not a partition key: '", k, "'")
         # Keys of one kind order as text.
         for t in mapped:
             if (not start or t >= start) and t not in out:
@@ -140,7 +140,7 @@ def parse_sense(text: StringSlice) raises -> List[Sensed]:
         if len(f) == 0:
             continue
         if len(f) != 4:
-            raise Error("orca: not a sense line: '", line, "'")
+            raise Error("morca: not a sense line: '", line, "'")
         out.append(
             Sensed(
                 String(f[0]),
@@ -271,11 +271,11 @@ def plan_rebuild(
     written. Raises, saying why, if there's nothing to rebuild."""
     var parts = split_keys(keys)
     if len(parts) == 0:
-        raise Error("orca: a rebuild needs partitions")
+        raise Error("morca: a rebuild needs partitions")
     var given = parse_time_keys(key_kind(parts[0].split("..")[0]), keys)
     var level = _levels(db, dataset)
     if len(level) == 0:
-        raise Error("orca: no registered pipeline reads ", dataset)
+        raise Error("morca: no registered pipeline reads ", dataset)
     var plan = List[Planned]()
     var rows = db.conn.query(
         (
@@ -292,18 +292,18 @@ def plan_rebuild(
             continue
         if not r.bool("has_binary"):
             raise Error(
-                "orca: pipeline ",
+                "morca: pipeline ",
                 name,
                 " is downstream of ",
                 dataset,
-                " but isn't registered with a binary (orca register)",
+                " but isn't registered with a binary (morca register)",
             )
         var ks = map_keys(given, r.text("kind"), r.text("start"))
         if len(ks) > 0:
             plan.append(Planned(name, level[name], join_keys(ks), 0, ""))
     if len(plan) == 0:
         raise Error(
-            "orca: every partition given is before the first of each",
+            "morca: every partition given is before the first of each",
             " pipeline downstream of ",
             dataset,
         )

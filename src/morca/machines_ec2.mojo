@@ -1,20 +1,20 @@
-"""A worker pool's machines on EC2 (#267): `orca.machines.Provider` for a
+"""A worker pool's machines on EC2 (#267): `morca.machines.Provider` for a
 pool with `provider = "ec2"`.
 
 - **Where:** a pool's `locations` are subnet IDs, tried in order (each is
   in one availability zone); with none, EC2's default (or
-  `ORCA_EC2_SUBNET`).
+  `MORCA_EC2_SUBNET`).
 - **What each instance gets:** the security group
-  `ORCA_POOL_EC2_SECURITY_GROUP` (else `ORCA_EC2_SECURITY_GROUP`), and the
-  instance profile `ORCA_POOL_EC2_PROFILE` (else `ORCA_EC2_PROFILE`), whose
+  `MORCA_POOL_EC2_SECURITY_GROUP` (else `MORCA_EC2_SECURITY_GROUP`), and the
+  instance profile `MORCA_POOL_EC2_PROFILE` (else `MORCA_EC2_PROFILE`), whose
   role is what its worker reaches the bucket with. IMDSv2 only;
   `InstanceInitiatedShutdownBehavior=terminate`.
 - **Its OS image:** Ubuntu 24.04 for the instance type's architecture,
   from the public SSM parameter Canonical keeps
   (`/aws/service/canonical/ubuntu/server/24.04/stable/current/<arch>/hvm/ebs-gp3/ami-id`),
-  or `ORCA_POOL_EC2_AMI_ARM64` / `ORCA_POOL_EC2_AMI_AMD64` to pin one.
-  `ORCA_SSM_ENDPOINT` points the lookup elsewhere (tests).
-- **Tags:** `orca=pool`, `orca-pool=<pool>`, `orca-owner=<stack>` and
+  or `MORCA_POOL_EC2_AMI_ARM64` / `MORCA_POOL_EC2_AMI_AMD64` to pin one.
+  `MORCA_SSM_ENDPOINT` points the lookup elsewhere (tests).
+- **Tags:** `morca=pool`, `orca-pool=<pool>`, `orca-owner=<stack>` and
   `Name`, which is how a pool's are listed.
 - **No capacity:** `InsufficientInstanceCapacity`, `Unsupported` (the type
   isn't offered in that zone) and `InsufficientCapacity` are no stock;
@@ -26,10 +26,10 @@ from std.os import getenv
 
 from json import loads
 
-from orca.awsec2 import Ec2
-from orca.awsjson import aws_json
-from orca.hcloud import Created
-from orca.json import quote
+from morca.awsec2 import Ec2
+from morca.awsjson import aws_json
+from morca.hcloud import Created
+from morca.json import quote
 
 comptime NO_CAPACITY = [
     "InsufficientInstanceCapacity",
@@ -53,20 +53,20 @@ def ec2_arch(arch: String) -> String:
 
 def ubuntu_ami(docker_arch: String) raises -> String:
     """The Ubuntu 24.04 image for `docker_arch` (`arm64`, `amd64`): pinned
-    by `ORCA_POOL_EC2_AMI_<ARCH>`, else Canonical's public SSM parameter."""
-    var pinned = getenv(String("ORCA_POOL_EC2_AMI_", docker_arch.upper()))
+    by `MORCA_POOL_EC2_AMI_<ARCH>`, else Canonical's public SSM parameter."""
+    var pinned = getenv(String("MORCA_POOL_EC2_AMI_", docker_arch.upper()))
     if pinned:
         return pinned
     var name = String(_UBUNTU, docker_arch, "/hvm/ebs-gp3/ami-id")
     var got = aws_json(
         "ssm",
         "AmazonSSM.GetParameter",
-        "ORCA_SSM_ENDPOINT",
+        "MORCA_SSM_ENDPOINT",
         String('{"Name": ', quote(name), "}"),
     )
     if got[0] != 200:
         raise Error(
-            "orca: can't look up the Ubuntu image for ",
+            "morca: can't look up the Ubuntu image for ",
             docker_arch,
             ": ",
             got[0],
@@ -126,15 +126,15 @@ struct Ec2Machines(Movable):
             p.append(
                 (String("TagSpecification.1.Tag.", i + 1, ".Value"), all[i][1])
             )
-        var sn = subnet if subnet else getenv("ORCA_EC2_SUBNET")
+        var sn = subnet if subnet else getenv("MORCA_EC2_SUBNET")
         if sn:
             p.append(("SubnetId", sn))
         var sg = _first_env(
-            "ORCA_POOL_EC2_SECURITY_GROUP", "ORCA_EC2_SECURITY_GROUP"
+            "MORCA_POOL_EC2_SECURITY_GROUP", "MORCA_EC2_SECURITY_GROUP"
         )
         if sg:
             p.append(("SecurityGroupId.1", sg))
-        var profile = _first_env("ORCA_POOL_EC2_PROFILE", "ORCA_EC2_PROFILE")
+        var profile = _first_env("MORCA_POOL_EC2_PROFILE", "MORCA_EC2_PROFILE")
         if profile:
             p.append(("IamInstanceProfile.Name", profile))
         try:

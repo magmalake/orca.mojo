@@ -1,10 +1,10 @@
-"""`orca register`: recording a pipeline binary and how its runs run
+"""`morca register`: recording a pipeline binary and how its runs run
 (`register_pipeline`).
 """
 
 from std.os.path import exists
 from postgres import Params
-from orca.config import (
+from morca.config import (
     ProjectConfig,
     RegisterFlags,
     max_runs_auto,
@@ -14,28 +14,28 @@ from orca.config import (
     parse_workers,
     resolve,
 )
-from orca.fill import (
+from morca.fill import (
     fill_refusal,
     parse_fill_budget,
     fill_max_runs_auto,
     parse_fill_max_runs,
 )
-from orca.proc import (
+from morca.proc import (
     absolute,
     binary_seconds,
     capture,
 )
-from orca.secrets import secrets_json
-from orca.sensors import parse_sense
-from orca.scheduler import (
+from morca.secrets import secrets_json
+from morca.sensors import parse_sense
+from morca.scheduler import (
     Scheduler,
     _RETRIED,
 )
-from orca.registered import (
+from morca.registered import (
     registered,
     repeated_fill,
 )
-from orca.queueing import (
+from morca.queueing import (
     backfill,
     dataset_cycle,
     kind_mismatch,
@@ -54,7 +54,7 @@ def register_pipeline(
     first time it's one, with the snapshots its datasets have now seen.
     Queued runs move to the new code, and so do failed ones waiting for
     a retry with no step done. How its runs run is `flags` over what
-    `file`, the project's orca.toml (`orca.config`), says for it: for a
+    `file`, the project's morca.toml (`morca.config`), says for it: for a
     pipeline the file names, exactly that, a setting neither gives
     going back to its default; for one it doesn't, the flags given,
     each left out keeping what was registered (`--workers MIN..MAX`
@@ -65,13 +65,13 @@ def register_pipeline(
     var path = absolute(binary)
     var got = capture([path, "describe"], binary_seconds())
     if got[0] != 0 or not got[1].startswith('{"pipeline": '):
-        raise Error("orca: ", path, " describe exited ", got[0], ": ", got[1])
+        raise Error("morca: ", path, " describe exited ", got[0], ": ", got[1])
     var cycle = dataset_cycle(self.db, got[1])
     if cycle:
-        raise Error("orca: ", path, " can't be registered: ", cycle)
+        raise Error("morca: ", path, " can't be registered: ", cycle)
     var mismatch = kind_mismatch(self.db, got[1])
     if mismatch:
-        raise Error("orca: ", path, " can't be registered: ", mismatch)
+        raise Error("morca: ", path, " can't be registered: ", mismatch)
     var info = self.db.conn.query(
         (
             "SELECT $1::jsonb->>'pipeline' AS name,"
@@ -100,7 +100,7 @@ def register_pipeline(
     if r.text("max_runs"):
         max_runs = parse_max_runs(r.text("max_runs"))
         auto_runs = max_runs_auto(r.text("max_runs"))
-    # Fills (orca.fill): only from the file.
+    # Fills (morca.fill): only from the file.
     if r.text("fills") == "all":
         var why = fill_refusal(
             info.text("kind"), info.text("start"), sensor, r.name
@@ -108,7 +108,7 @@ def register_pipeline(
         if why:
             var at = file.where(r.name, "fills", r.values["fills"].copy())
             raise Error(
-                "orca: ",
+                "morca: ",
                 at,
                 ' fills = "all" can\'t be registered: ',
                 why,
@@ -131,11 +131,11 @@ def register_pipeline(
         var sensed = capture([path, "sense"], binary_seconds())
         if sensed[0] != 0:
             raise Error(
-                "orca: ", path, " sense exited ", sensed[0], ": ", sensed[1]
+                "morca: ", path, " sense exited ", sensed[0], ": ", sensed[1]
             )
         if len(parse_sense(sensed[1])) == 0:
             raise Error(
-                "orca: ",
+                "morca: ",
                 path,
                 " is a sensor, but reads no dataset it doesn't write",
             )
@@ -283,7 +283,7 @@ def register_pipeline(
         "UPDATE orca.pipelines SET version = $2 WHERE name = $1",
         Params().text(name).int64(Int64(version)),
     )
-    # Where its functions are, if `orca locate` left a map beside it.
+    # Where its functions are, if `morca locate` left a map beside it.
     var map = String(path, ".source.json")
     if exists(map):
         var text: String
@@ -315,7 +315,7 @@ def register_pipeline(
             )
             if q.fill.all:
                 print(
-                    "orca:",
+                    "morca:",
                     q.name,
                     String(what, ":"),
                     "its fill runs its partitions again, within its",
@@ -323,20 +323,20 @@ def register_pipeline(
                 )
             else:
                 print(
-                    "orca:",
+                    "morca:",
                     q.name,
                     String(what, ":"),
                     "its keys are no longer done; regenerate its history",
-                    "with `orca backfill",
+                    "with `morca backfill",
                     q.name,
                     '<range>` (or fills = "all")',
                 )
         var twice = repeated_fill(q, now)
         if twice:
-            print("orca: warning:", twice)
+            print("morca: warning:", twice)
         if q.fill.all and q.fill.budget < 0:
             print(
-                "orca: warning:",
+                "morca: warning:",
                 q.name,
                 "fills its range with no fill_budget_per_day: its fill",
                 "runs start only where they cost nothing (placement",

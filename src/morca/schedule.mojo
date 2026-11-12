@@ -17,8 +17,8 @@ missed while it was down. The scheduler itself is phase 2's next PR; until
 then a schedule is declared, checked, and shown by `describe` and `fires`.
 """
 
-from orca.cron import CronExpr
-from orca.tz import Zone
+from morca.cron import CronExpr
+from morca.tz import Zone
 
 
 @fieldwise_init

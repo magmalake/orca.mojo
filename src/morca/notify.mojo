@@ -3,7 +3,7 @@
 A problem is otherwise only visible in the UI. These are raised where
 they're decided (the watchdog's trip, a run failing after its last retry, a
 fill that stopped moving, the control host's disk, a worker that went quiet,
-and `orca notify` from a shell script such as the nightly backup) and sent
+and `morca notify` from a shell script such as the nightly backup) and sent
 as one HTTP POST of plain text to an ntfy topic URL, with the headers ntfy
 reads:
 
@@ -13,15 +13,15 @@ reads:
 
 | Variable | Meaning |
 |---|---|
-| `ORCA_NOTIFY_URL` | a topic URL (`https://ntfy.sh/<long-random-topic>`), or just a server (`https://ntfy.example.com`) when the topic comes from the secret. Unset, and no `ORCA_NOTIFY_SECRET`: no alerts. |
-| `ORCA_NOTIFY_SECRET` | the id of a secret, read with `ORCA_SECRET_FETCH` (`orca.control.fetch_secret`), holding the topic: a name (appended to `ORCA_NOTIFY_URL`, else `https://ntfy.sh`), or a whole URL. The topic is a secret in practice (anyone who knows it can read it). |
-| `ORCA_NOTIFY_TOKEN`, `ORCA_NOTIFY_TOKEN_SECRET` | an ntfy access token for a protected topic, plain or as a secret's id. |
-| `ORCA_NOTIFY_MIN_SECONDS` | 1800: the same alert (kind and subject) is sent at most once per period. |
-| `ORCA_NOTIFY_TIMEOUT_MS` | 5000: how long a send may take. |
-| `ORCA_NOTIFY_FILL_STALL_HOURS` | 2: see `orca.scheduler`. |
-| `ORCA_NOTIFY_DISK_PERCENT` | 85: the control host's fullest disk. |
-| `ORCA_NOTIFY_WORKER_SECONDS` | 300: a worker holding runs, quiet for this long. |
-| `ORCA_UI_URL` | where `Click` goes (`<ORCA_UI_URL>/runs/<id>`, `/ops/control`). |
+| `MORCA_NOTIFY_URL` | a topic URL (`https://ntfy.sh/<long-random-topic>`), or just a server (`https://ntfy.example.com`) when the topic comes from the secret. Unset, and no `MORCA_NOTIFY_SECRET`: no alerts. |
+| `MORCA_NOTIFY_SECRET` | the id of a secret, read with `MORCA_SECRET_FETCH` (`morca.control.fetch_secret`), holding the topic: a name (appended to `MORCA_NOTIFY_URL`, else `https://ntfy.sh`), or a whole URL. The topic is a secret in practice (anyone who knows it can read it). |
+| `MORCA_NOTIFY_TOKEN`, `MORCA_NOTIFY_TOKEN_SECRET` | an ntfy access token for a protected topic, plain or as a secret's id. |
+| `MORCA_NOTIFY_MIN_SECONDS` | 1800: the same alert (kind and subject) is sent at most once per period. |
+| `MORCA_NOTIFY_TIMEOUT_MS` | 5000: how long a send may take. |
+| `MORCA_NOTIFY_FILL_STALL_HOURS` | 2: see `morca.scheduler`. |
+| `MORCA_NOTIFY_DISK_PERCENT` | 85: the control host's fullest disk. |
+| `MORCA_NOTIFY_WORKER_SECONDS` | 300: a worker holding runs, quiet for this long. |
+| `MORCA_UI_URL` | where `Click` goes (`<MORCA_UI_URL>/runs/<id>`, `/ops/control`). |
 
 **Dedup and retries are in Postgres** (`orca.notifications`, a row per kind
 and subject), so a restart doesn't send again. `alert` records the alert as
@@ -46,10 +46,10 @@ from std.os import getenv
 from objectstore.http import Header, HttpClient
 from postgres import Params
 
-from orca.control import fetch_secret
-from orca.html import Html
-from orca.json import quote
-from orca.state import State
+from morca.control import fetch_secret
+from morca.html import Html
+from morca.json import quote
+from morca.state import State
 
 comptime DEFAULT_MIN_SECONDS = 1800
 comptime DEFAULT_SERVER = "https://ntfy.sh"
@@ -67,21 +67,21 @@ def _number(name: String, default: Int) -> Int:
 
 
 def min_seconds() -> Int:
-    """`ORCA_NOTIFY_MIN_SECONDS`: how long the same alert is held back."""
-    return _number("ORCA_NOTIFY_MIN_SECONDS", DEFAULT_MIN_SECONDS)
+    """`MORCA_NOTIFY_MIN_SECONDS`: how long the same alert is held back."""
+    return _number("MORCA_NOTIFY_MIN_SECONDS", DEFAULT_MIN_SECONDS)
 
 
 def configured() -> Bool:
     """Whether alerts are on: the URL or the secret naming the topic is set.
     Reads only the environment (the secret is read when sending)."""
-    return getenv("ORCA_NOTIFY_URL").byte_length() > 0 or (
-        getenv("ORCA_NOTIFY_SECRET").byte_length() > 0
+    return getenv("MORCA_NOTIFY_URL").byte_length() > 0 or (
+        getenv("MORCA_NOTIFY_SECRET").byte_length() > 0
     )
 
 
 def ui_link(path: String) -> String:
-    """`path` on the UI at `ORCA_UI_URL`, or empty when that isn't set."""
-    var base = String(getenv("ORCA_UI_URL").rstrip("/"))
+    """`path` on the UI at `MORCA_UI_URL`, or empty when that isn't set."""
+    var base = String(getenv("MORCA_UI_URL").rstrip("/"))
     if not base:
         return String()
     return String(base, path)
@@ -98,17 +98,17 @@ struct Target(Movable):
 def target() raises -> Target:
     """The topic URL and token from the settings, reading the secrets. The
     errors say which setting, never a value."""
-    var base = String(getenv("ORCA_NOTIFY_URL").strip())
+    var base = String(getenv("MORCA_NOTIFY_URL").strip())
     var url = base
-    var secret = getenv("ORCA_NOTIFY_SECRET")
+    var secret = getenv("MORCA_NOTIFY_SECRET")
     if secret:
         var topic = String()
         try:
             topic = String(fetch_secret(secret).strip())
         except:
-            raise Error("can't read the secret ORCA_NOTIFY_SECRET names")
+            raise Error("can't read the secret MORCA_NOTIFY_SECRET names")
         if not topic:
-            raise Error("the secret ORCA_NOTIFY_SECRET names is empty")
+            raise Error("the secret MORCA_NOTIFY_SECRET names is empty")
         if "://" in topic:
             url = topic
         else:
@@ -118,16 +118,16 @@ def target() raises -> Target:
                 topic,
             )
     if not url:
-        raise Error("no ORCA_NOTIFY_URL or ORCA_NOTIFY_SECRET")
+        raise Error("no MORCA_NOTIFY_URL or MORCA_NOTIFY_SECRET")
     if not (url.startswith("https://") or url.startswith("http://")):
         raise Error("the notify URL isn't http or https")
-    var token = String(getenv("ORCA_NOTIFY_TOKEN").strip())
-    var token_secret = getenv("ORCA_NOTIFY_TOKEN_SECRET")
+    var token = String(getenv("MORCA_NOTIFY_TOKEN").strip())
+    var token_secret = getenv("MORCA_NOTIFY_TOKEN_SECRET")
     if not token and token_secret:
         try:
             token = String(fetch_secret(token_secret).strip())
         except:
-            raise Error("can't read the secret ORCA_NOTIFY_TOKEN_SECRET names")
+            raise Error("can't read the secret MORCA_NOTIFY_TOKEN_SECRET names")
     return Target(url^, token^)
 
 
@@ -156,7 +156,7 @@ def post(
     token: `HTTP <status>` for a refusal, else that it couldn't connect."""
     var h: List[Header] = [
         Header("Content-Type", "text/plain; charset=utf-8"),
-        Header("User-Agent", "orca-notify"),
+        Header("User-Agent", "morca-notify"),
         Header("Title", _header_text(title, 200)),
         Header(
             "Priority", _header_text(priority if priority else "default", 20)
@@ -171,7 +171,7 @@ def post(
     var http = HttpClient()
     http.follow_redirects = False
     http.verify_tls = True
-    http.timeout_ms = _number("ORCA_NOTIFY_TIMEOUT_MS", 5000)
+    http.timeout_ms = _number("MORCA_NOTIFY_TIMEOUT_MS", 5000)
     var status = 0
     try:
         status = http.request("POST", t.url, h, body.as_bytes()).status
@@ -188,8 +188,8 @@ def send_now(
     tags: String = "",
     click: String = "",
 ) raises:
-    """Sends at once, without Postgres: `orca notify test`, and the fallback
-    of `orca notify` when the database isn't there."""
+    """Sends at once, without Postgres: `morca notify test`, and the fallback
+    of `morca notify` when the database isn't there."""
     post(target(), title, body, priority, tags, click)
 
 
@@ -522,7 +522,7 @@ def flush(mut db: State) raises -> Int:
             Params().text(kind).text(subject).text(failure),
         )
         print(
-            "orca: notify:",
+            "morca: notify:",
             kind,
             "alert not sent (",
             failure,
@@ -643,17 +643,17 @@ def notify_html(mut h: Html, on: Bool, sent: List[Sent]):
     h.raw("<h2>Alerts</h2>")
     if not on:
         h.raw(
-            '<p class="muted">Not configured: set <code>ORCA_NOTIFY_URL</code>',
+            '<p class="muted">Not configured: set <code>MORCA_NOTIFY_URL</code>',
             " (an ntfy topic URL) to get a push when the watchdog trips, a",
             " run fails, a fill stalls, the disk fills or a worker is lost;",
-            " <code>orca notify test</code> sends a test message.</p>",
+            " <code>morca notify test</code> sends a test message.</p>",
         )
         return
     h.raw("<p>Alerts go to an ntfy topic (not shown: anyone who knows it can")
     h.raw(
         " read it); the same alert is sent at most once every ",
         min_seconds() // 60,
-        " minutes. <code>orca notify test</code> sends a test message.</p>",
+        " minutes. <code>morca notify test</code> sends a test message.</p>",
     )
     if len(sent) == 0:
         h.raw('<p class="muted">None sent yet.</p>')

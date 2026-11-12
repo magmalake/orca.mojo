@@ -9,7 +9,7 @@ colours. Pipelines are chains today, so this is usually one row; it's
 written for a DAG, as datasets may branch one later.
 """
 
-from orca.html import escape
+from morca.html import escape
 
 comptime _W = 150
 comptime _H = 46
@@ -124,7 +124,7 @@ def dag_svg(steps: List[DagStep]) -> String:
             out.write(
                 '<a href="', escape(s.href), '" target="_blank" rel="noopener">'
             )
-        # Its card (`orca.ui.step_cards`) on hover, focus or a tap: the link is
+        # Its card (`morca.ui.step_cards`) on hover, focus or a tap: the link is
         # the tab stop where there is one, the box where there isn't.
         out.write(
             '<g class="',

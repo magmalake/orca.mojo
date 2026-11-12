@@ -1,5 +1,5 @@
 """Mojo source coloured for the UI's code-on-hover (`_PEEK` in
-`orca.ui.layout`), on the server, with no library: `tokens` splits source
+`morca.ui.layout`), on the server, with no library: `tokens` splits source
 into runs of one kind, and `highlight` turns those into HTML lines with a
 `<span>` per coloured run.
 
@@ -26,7 +26,7 @@ of them. It's a highlighter, not a parser: an unterminated string runs to
 the end of its line (or, triple-quoted, of the file).
 """
 
-from orca.html import escape
+from morca.html import escape
 
 comptime PLAIN = ""
 comptime KEYWORD = "kw"

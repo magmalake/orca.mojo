@@ -1,8 +1,8 @@
-"""Snapshot expiry, the scheduler's half: what orca still needs of a
+"""Snapshot expiry, the scheduler's half: what morca still needs of a
 dataset's history, and the binary that does the expiring.
 
-Expiring needs iceberg, which the `orca` binary doesn't link, so it runs in
-the project's `orca_maintain` binary (`orca.maintain`). This side decides
+Expiring needs iceberg, which the `morca` binary doesn't link, so it runs in
+the project's `morca_maintain` binary (`morca.maintain`). This side decides
 what must survive whatever the table's policy says, from Postgres:
 
 - **the snapshots a run that can still go on has read.** A step's reads are
@@ -12,12 +12,12 @@ what must survive whatever the table's policy says, from Postgres:
   can't, and is let go.)
 - **the snapshots such a run committed.** A retry finds the commits its
   step made before it was killed by looking through the table's snapshots
-  (`orca.tables.find_commit`); one that was expired would be committed a
+  (`morca.tables.find_commit`); one that was expired would be committed a
   second time.
 - **every snapshot of the last run that committed to the dataset**, so an
   expiry never leaves fewer than one run's worth of history.
 
-What expiry costs: `orca lineage` and the UI's dataset and snapshot pages
+What expiry costs: `morca lineage` and the UI's dataset and snapshot pages
 read Postgres only, so they still show an expired snapshot, what made it
 and what it was made from; but the snapshot itself is gone from the table,
 so it can no longer be read (time travel, `use_snapshot`), and a `rebuild`
@@ -30,14 +30,14 @@ from std.sys import argv
 
 from postgres import Params
 
-from orca.state import State
+from morca.state import State
 
 
-comptime MAINTAIN_BINARY = String("orca_maintain")
+comptime MAINTAIN_BINARY = String("morca_maintain")
 
 
 def retained(mut db: State, dataset: String) raises -> List[Int64]:
-    """The snapshots of `dataset` orca still needs (see the module doc)."""
+    """The snapshots of `dataset` morca still needs (see the module doc)."""
     var out = List[Int64]()
     for r in db.conn.query(
         (
@@ -63,7 +63,7 @@ def retained(mut db: State, dataset: String) raises -> List[Int64]:
 
 
 def expirable(mut db: State) raises -> List[String]:
-    """Every dataset orca has committed to, by name."""
+    """Every dataset morca has committed to, by name."""
     var out = List[String]()
     for r in db.conn.query(
         "SELECT DISTINCT dataset FROM orca.commits WHERE dataset IS NOT"
@@ -74,9 +74,9 @@ def expirable(mut db: State) raises -> List[String]:
 
 
 def maintain_binary() -> String:
-    """`$ORCA_MAINTAIN`, else `orca_maintain` beside this binary, else on
+    """`$MORCA_MAINTAIN`, else `morca_maintain` beside this binary, else on
     `PATH`; empty when there is none."""
-    var set = getenv("ORCA_MAINTAIN")
+    var set = getenv("MORCA_MAINTAIN")
     if set:
         return set
     var me = String(argv()[0])
@@ -103,9 +103,9 @@ def expire_argv(
     dry_run: Bool = False,
     report: Bool = False,
 ) raises -> List[String]:
-    """The `orca_maintain expire` command line for `dataset`: the policy
+    """The `morca_maintain expire` command line for `dataset`: the policy
     given, or the table's own (`--if-policy`, so a table without one is
-    left alone), and `--retain` with what orca still needs."""
+    left alone), and `--retain` with what morca still needs."""
     var a: List[String] = [binary, String("expire"), dataset]
     if older_than:
         a.append(String("--older-than"))

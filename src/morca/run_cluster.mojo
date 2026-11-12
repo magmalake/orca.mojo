@@ -4,7 +4,7 @@ side: the run's head, the members that join it, and when they stop.
 - **The head.** A pipeline placed `worker:<pool>` with `workers = N` set
   (its run spreads over up to N more machines) is started by the worker
   that claims it as a cluster of its own, when that worker says the
-  address the pool's machines reach it at (`orca worker --advertise`): a
+  address the pool's machines reach it at (`morca worker --advertise`): a
   dista head on a free port, a dista worker, and the run's driver. It
   reports the head's address and the run's cluster token
   (`/api/worker/cluster`, `report_head`), kept on the run
@@ -28,11 +28,11 @@ TLS, and is never in a log or a page.
 from json import Value
 from postgres import Params
 
-from orca.http_store import Body
-from orca.registered import registered, run_request
-from orca.cgroup import raised_request
-from orca.resources import Grant, Room, admit
-from orca.state import State
+from morca.http_store import Body
+from morca.registered import registered, run_request
+from morca.cgroup import raised_request
+from morca.resources import Grant, Room, admit
+from morca.state import State
 
 comptime MEMBER_GRANTS_SQL = (
     " + coalesce((SELECT sum(m.grant_cpus) FROM orca.run_members m WHERE"

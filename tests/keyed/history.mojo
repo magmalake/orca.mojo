@@ -3,9 +3,9 @@ tests/keyed/repos.mojo writes: a run for the names each new snapshot adds.
 `hist` reads keys.repos (so lineage goes through it) and writes a row per
 name to lake.history."""
 
-from orca import Ctx, Mapped, Name, Pipeline, Step, orca_main
-from orca.keyed import Keyed
-from orca.tables import append, table
+from morca import Ctx, Mapped, Name, Pipeline, Step, morca_main
+from morca.keyed import Keyed
+from morca.tables import append, table
 from repo_rows import repo_count, repo_dataset, repo_rows
 
 
@@ -35,4 +35,4 @@ comptime History = Pipeline[
 
 
 def main() raises:
-    orca_main[History]()
+    morca_main[History]()

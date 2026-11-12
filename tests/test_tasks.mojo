@@ -3,7 +3,7 @@
 from std.testing import TestSuite, assert_equal, assert_raises, assert_true
 
 from dista import ObjectRef, Seq, Task
-from orca import (
+from morca import (
     Ctx,
     Gather,
     Mapped,
@@ -90,7 +90,7 @@ def test_steps_fan_out_over_the_runs_workers() raises:
     assert_true(res.succeeded())
     assert_equal(res.output[Int]("fan", "2024-01"), _sum_squares(1))
     assert_equal(res.output[Int]("fan", "2024-02"), _sum_squares(2))
-    # ORCA_WORKERS defaults to 4.
+    # MORCA_WORKERS defaults to 4.
     assert_equal(res.output[Int]("seen"), 4)
 
 

@@ -1,9 +1,9 @@
-"""Pausing a pipeline: what `orca pause`, the UI's Pause button and the
-watchdog (`orca.watchdog`) all do."""
+"""Pausing a pipeline: what `morca pause`, the UI's Pause button and the
+watchdog (`morca.watchdog`) all do."""
 
 from postgres import Params
 
-from orca.state import State
+from morca.state import State
 
 
 def set_paused(mut db: State, pipeline: String, paused: Bool) raises -> String:

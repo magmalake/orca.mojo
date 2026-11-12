@@ -1,14 +1,14 @@
-"""What the scheduler raises alerts about (`orca.notify`, #184), each decided
-where the data is and sent through `orca.notify.alert`:
+"""What the scheduler raises alerts about (`morca.notify`, #184), each decided
+where the data is and sent through `morca.notify.alert`:
 
 | Kind | Subject | Priority | When |
 |---|---|---|---|
-| `watchdog` | the rule | high | a rule tripped (sent from `orca.watchdog.trip`); resolved, low, when no unacknowledged trip of it has a pipeline still paused |
+| `watchdog` | the rule | high | a rule tripped (sent from `morca.watchdog.trip`); resolved, low, when no unacknowledged trip of it has a pipeline still paused |
 | `run-failed` | run and start | default | a run failed with no retry left (`failed_runs`), once per run |
-| `fill-stalled` | the pipeline | high | `fill`: no fill run finished in `ORCA_NOTIFY_FILL_STALL_HOURS` (2) while the pipeline is unpaused, inside its window and not done; resolved when one finishes |
-| `disk` | the mount | high | `disk`: the control host's fullest disk is over `ORCA_NOTIFY_DISK_PERCENT` (85); resolved when it isn't |
-| `worker-lost` | worker and last seen | default | `lost_workers`: a worker that last said it was running runs, quiet for `ORCA_NOTIFY_WORKER_SECONDS` (300), once per loss |
-| `backup-failed` | `nightly` | high | `orca notify --kind backup-failed ...`, from orca-stack's backup |
+| `fill-stalled` | the pipeline | high | `fill`: no fill run finished in `MORCA_NOTIFY_FILL_STALL_HOURS` (2) while the pipeline is unpaused, inside its window and not done; resolved when one finishes |
+| `disk` | the mount | high | `disk`: the control host's fullest disk is over `MORCA_NOTIFY_DISK_PERCENT` (85); resolved when it isn't |
+| `worker-lost` | worker and last seen | default | `lost_workers`: a worker that last said it was running runs, quiet for `MORCA_NOTIFY_WORKER_SECONDS` (300), once per loss |
+| `backup-failed` | `nightly` | high | `morca notify --kind backup-failed ...`, from morca-stack's backup |
 
 The text is plain and short: names, numbers and the first line of an error,
 never a secret.
@@ -18,17 +18,17 @@ from std.os import getenv
 
 from postgres import Params
 
-from orca.fill import FillStatus
-from orca.notify import (
+from morca.fill import FillStatus
+from morca.notify import (
     alert,
     configured,
     firing_subjects,
     resolve,
     ui_link,
 )
-from orca.state import State
-from orca.system import system_now
-from orca.watchdog import active_trips
+from morca.state import State
+from morca.system import system_now
+from morca.watchdog import active_trips
 
 
 def _first_line(text: String, limit: Int = 200) -> String:
@@ -85,7 +85,7 @@ def watchdog_recovered(mut db: State) raises:
                 db,
                 "watchdog",
                 rule,
-                String("orca watchdog: ", rule, " resolved"),
+                String("morca watchdog: ", rule, " resolved"),
                 "Acknowledged, or its pipelines are unpaused.",
                 ui_link("/ops/control"),
             )
@@ -135,7 +135,7 @@ def failed_runs(
             subject,
             "default",
             "x",
-            String("orca: ", pipeline, " run ", id, " failed"),
+            String("morca: ", pipeline, " run ", id, " failed"),
             String(
                 pipeline,
                 " ",
@@ -179,11 +179,11 @@ def fill(
     in_window: Bool,
 ) raises:
     """Raises 'fill stalled' when no fill run of `pipeline` finished in
-    `ORCA_NOTIFY_FILL_STALL_HOURS` (2) although it is unpaused, inside its
+    `MORCA_NOTIFY_FILL_STALL_HOURS` (2) although it is unpaused, inside its
     window and not done; resolves it once one finishes."""
     if not configured() or not s.on:
         return
-    var limit = Int(_hours("ORCA_NOTIFY_FILL_STALL_HOURS", 2.0) * 3600.0)
+    var limit = Int(_hours("MORCA_NOTIFY_FILL_STALL_HOURS", 2.0) * 3600.0)
     # Since the last fill run that succeeded; else the first fill run, else
     # when the pipeline was first registered.
     var rows = db.conn.query(
@@ -210,7 +210,7 @@ def fill(
             db,
             "fill-stalled",
             pipeline,
-            String("orca: fill of ", pipeline, " is moving again"),
+            String("morca: fill of ", pipeline, " is moving again"),
             String(s.done, " of ", s.total, " partitions done."),
             ui_link(String("/pipelines/", pipeline)),
         )
@@ -223,7 +223,7 @@ def fill(
         pipeline,
         "high",
         "warning,hourglass",
-        String("orca: fill of ", pipeline, " stalled"),
+        String("morca: fill of ", pipeline, " stalled"),
         String(
             s.done,
             " of ",
@@ -247,14 +247,14 @@ def fill(
 
 def disk(mut db: State) raises:
     """Raises 'disk' when the control host's fullest disk, from the /system
-    sampler, is over `ORCA_NOTIFY_DISK_PERCENT` (85); resolves it when not."""
+    sampler, is over `MORCA_NOTIFY_DISK_PERCENT` (85); resolves it when not."""
     if not configured():
         return
     var now = system_now(db)
     if not now or now.value().stale():
         return
     ref n = now.value()
-    var limit = _hours("ORCA_NOTIFY_DISK_PERCENT", 85.0)
+    var limit = _hours("MORCA_NOTIFY_DISK_PERCENT", 85.0)
     if n.disk_pct > limit:
         var gb = n.disk_total // 1000000000
         _ = alert(
@@ -263,7 +263,7 @@ def disk(mut db: State) raises:
             n.disk_path,
             "high",
             "warning,floppy_disk",
-            "orca: control disk filling",
+            "morca: control disk filling",
             String(
                 n.disk_path,
                 " is ",
@@ -284,7 +284,7 @@ def disk(mut db: State) raises:
             db,
             "disk",
             mount,
-            "orca: control disk is fine again",
+            "morca: control disk is fine again",
             String(mount, " is ", Int(n.disk_pct + 0.5), "% full."),
             ui_link("/ops/control"),
         )
@@ -297,12 +297,12 @@ def disk(mut db: State) raises:
 
 def lost_workers(mut db: State) raises -> Int:
     """Alerts for the workers (`orca.workers`) that last said they were
-    running runs and haven't been heard from for `ORCA_NOTIFY_WORKER_SECONDS`
+    running runs and haven't been heard from for `MORCA_NOTIFY_WORKER_SECONDS`
     (300), once per loss. Their runs are requeued when their heartbeats go
-    stale (`orca.scheduler`). Returns how many were raised."""
+    stale (`morca.scheduler`). Returns how many were raised."""
     if not configured():
         return 0
-    var quiet = _hours("ORCA_NOTIFY_WORKER_SECONDS", 300.0)
+    var quiet = _hours("MORCA_NOTIFY_WORKER_SECONDS", 300.0)
     var n = 0
     for r in db.conn.query(
         (
@@ -328,7 +328,7 @@ def lost_workers(mut db: State) raises -> Int:
             subject,
             "default",
             "warning",
-            String("orca: worker ", r.text("label"), " lost"),
+            String("morca: worker ", r.text("label"), " lost"),
             String(
                 "Pool ",
                 r.text("pool"),

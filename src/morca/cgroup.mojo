@@ -1,20 +1,20 @@
 """Containment (#201): a cgroup v2 memory limit per run, and retrying bigger
 after an out-of-memory kill.
 
-A local or control-placed run (and a remote worker's, `orca.worker`) gets a
-cgroup of its own, `orca-run-<run>-<start>-<owner pid>`, beside the leaf
-`orca` the scheduler moved itself into. Its process is placed in it between
-`fork` and `exec` (`orca.proc.spawn`: the parent opens the cgroup's
+A local or control-placed run (and a remote worker's, `morca.worker`) gets a
+cgroup of its own, `morca-run-<run>-<start>-<owner pid>`, beside the leaf
+`morca` the scheduler moved itself into. Its process is placed in it between
+`fork` and `exec` (`morca.proc.spawn`: the parent opens the cgroup's
 `cgroup.procs` before forking, and the child only `write`s `0` to it, which
 is async-signal-safe; the descriptor closes at `exec`), so everything the
 run starts is in it from its first instruction.
 
-- `memory.high` is the run's **limit**: its grant (`orca.resources`), else
-  its request's maximum, else `ORCA_RUN_MEMORY_MB` (default: what this host
+- `memory.high` is the run's **limit**: its grant (`morca.resources`), else
+  its request's maximum, else `MORCA_RUN_MEMORY_MB` (default: what this host
   can grant, its capacity less the reserve); on the control placement at
-  most `ORCA_CONTROL_MEMORY_MB`. Past it the kernel throttles the run and
+  most `MORCA_CONTROL_MEMORY_MB`. Past it the kernel throttles the run and
   reclaims its memory before anything dies.
-- `memory.max` is the limit plus `ORCA_RUN_MEMORY_MARGIN` percent (25):
+- `memory.max` is the limit plus `MORCA_RUN_MEMORY_MARGIN` percent (25):
   past it the kernel kills the run's processes, all of them
   (`memory.oom.group`), and none of anything else's. `memory.swap.max` is 0,
   so the limit is one of memory, not of memory and swap.
@@ -24,14 +24,14 @@ run starts is in it from its first instruction.
   The scheduler checks its runs each tick: one at its limit (`at_limit`)
   with every task stalled on memory most of the time (the cgroup's
   `memory.pressure` `full avg10` at least `HELD_PRESSURE`) for
-  `ORCA_RUN_MEMORY_HELD_SECONDS` (120; 0: never) in a row is killed, and
+  `MORCA_RUN_MEMORY_HELD_SECONDS` (120; 0: never) in a row is killed, and
   counts as out of memory as below.
 - At the reap, `memory.events`' `oom_kill` says whether the kernel killed
   them for it: the attempts fail with `out of memory at <limit>` rather
   than signal 9.
 - **Retrying bigger.** Such a kill raises the pipeline's memory
   (`orca.pipelines.memory_raised_mb`) to the limit times
-  `ORCA_RUN_MEMORY_GROWTH` (1.5), at most its request's maximum (with no
+  `MORCA_RUN_MEMORY_GROWTH` (1.5), at most its request's maximum (with no
   request, what the host can grant; on the control placement, the control
   cap). The retry, and every later run of the pipeline, asks for at least
   that: it's its request's minimum, which admission waits for, or with no
@@ -45,10 +45,10 @@ run starts is in it from its first instruction.
   later tick; a scheduler that starts removes the empty ones a previous
   scheduler left (`stale`).
 
-Where orca can't make cgroups (macOS, cgroup v1, a container whose
-`/sys/fs/cgroup` is read-only or not delegated, `ORCA_CGROUPS=0`), it says
+Where morca can't make cgroups (macOS, cgroup v1, a container whose
+`/sys/fs/cgroup` is read-only or not delegated, `MORCA_CGROUPS=0`), it says
 why once and runs as before: `oom_score_adj` 1000 and, for control-placed
-runs, the sampled `ORCA_CONTROL_MEMORY_MB` cap. docs/hetzner.md says what
+runs, the sampled `MORCA_CONTROL_MEMORY_MB` cap. docs/hetzner.md says what
 the Hetzner deploy needs.
 """
 
@@ -58,8 +58,8 @@ from std.os.path import exists, isdir
 from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
-from orca.resources import gb_text
-from orca.sample import _read
+from morca.resources import gb_text
+from morca.sample import _read
 
 comptime ROOT = "/sys/fs/cgroup"
 comptime LEAF = "orca"
@@ -139,7 +139,7 @@ def oom_text(
     if stalled:
         t.write(
             "the run's processes were held at their cgroup's memory.high,",
-            " throttled, until orca killed them",
+            " throttled, until morca killed them",
         )
     else:
         t.write(
@@ -291,7 +291,7 @@ def _cstr(s: String) -> List[UInt8]:
 
 def put(path: String, text: String) -> Bool:
     """Writes `text` to a cgroup file at once; whether the kernel took it
-    (stdio, as `orca.proc`: `open` is declared elsewhere with another
+    (stdio, as `morca.proc`: `open` is declared elsewhere with another
     signature)."""
     var p = _cstr(path)
     var mode = _cstr("w")
@@ -327,11 +327,11 @@ def _env_int(name: StaticString, default: Int, least: Int) raises -> Int:
             return n
     except:
         pass
-    raise Error("orca: ", name, " must be a number from ", least, ", not ", s)
+    raise Error("morca: ", name, " must be a number from ", least, ", not ", s)
 
 
 def growth_pct_of(s: String) raises -> Int:
-    """`ORCA_RUN_MEMORY_GROWTH`'s factor, from 1 (`1.5`), as a percentage."""
+    """`MORCA_RUN_MEMORY_GROWTH`'s factor, from 1 (`1.5`), as a percentage."""
     try:
         var f = Float64(s)
         if f >= 1.0 and f <= 100.0:
@@ -339,7 +339,7 @@ def growth_pct_of(s: String) raises -> Int:
     except:
         pass
     raise Error(
-        "orca: ORCA_RUN_MEMORY_GROWTH must be a factor from 1 to 100, not ", s
+        "morca: MORCA_RUN_MEMORY_GROWTH must be a factor from 1 to 100, not ", s
     )
 
 
@@ -348,32 +348,32 @@ struct MemoryKnobs(ImplicitlyCopyable, Movable):
     """The scheduler's (or worker's) settings for its runs' limits."""
 
     var default_mb: Int
-    """`ORCA_RUN_MEMORY_MB`: the limit of a run without a request; 0 for
+    """`MORCA_RUN_MEMORY_MB`: the limit of a run without a request; 0 for
     what the host can grant."""
     var margin_pct: Int
-    """`ORCA_RUN_MEMORY_MARGIN` (25): `memory.max` this many percent over
+    """`MORCA_RUN_MEMORY_MARGIN` (25): `memory.max` this many percent over
     the limit."""
     var growth_pct: Int
-    """`ORCA_RUN_MEMORY_GROWTH` (1.5) as a percentage: a retry's memory
+    """`MORCA_RUN_MEMORY_GROWTH` (1.5) as a percentage: a retry's memory
     after an out-of-memory kill."""
     var held_s: Int
-    """`ORCA_RUN_MEMORY_HELD_SECONDS` (120): how long a run may be held at
+    """`MORCA_RUN_MEMORY_HELD_SECONDS` (120): how long a run may be held at
     its limit (`held`) before it's killed as out of memory; 0: never."""
 
     @staticmethod
     def from_env() raises -> MemoryKnobs:
-        var g = getenv("ORCA_RUN_MEMORY_GROWTH")
+        var g = getenv("MORCA_RUN_MEMORY_GROWTH")
         return MemoryKnobs(
-            _env_int("ORCA_RUN_MEMORY_MB", 0, 0),
-            _env_int("ORCA_RUN_MEMORY_MARGIN", 25, 0),
+            _env_int("MORCA_RUN_MEMORY_MB", 0, 0),
+            _env_int("MORCA_RUN_MEMORY_MARGIN", 25, 0),
             growth_pct_of(g) if g else 150,
-            _env_int("ORCA_RUN_MEMORY_HELD_SECONDS", 120, 0),
+            _env_int("MORCA_RUN_MEMORY_HELD_SECONDS", 120, 0),
         )
 
 
 struct HeldWatch(Copyable, Movable):
     """Since when each contained run has been held at its memory limit
-    (`held`), to say which have been held `ORCA_RUN_MEMORY_HELD_SECONDS`
+    (`held`), to say which have been held `MORCA_RUN_MEMORY_HELD_SECONDS`
     in a row: the scheduler's and a worker's runs alike."""
 
     var since: Dict[Int, Int]
@@ -470,7 +470,7 @@ struct Cgroups(Copyable, Movable):
     @staticmethod
     def setup(knobs: MemoryKnobs) -> Cgroups:
         """Finds or makes the cgroup runs' cgroups go in: this process's
-        own, after moving what's in it into a leaf `orca` (or, if it's in
+        own, after moving what's in it into a leaf `morca` (or, if it's in
         such a leaf already, the one above), with the memory controller on
         for its children. Never raises: off says why."""
         var c = Cgroups._setup()
@@ -479,8 +479,8 @@ struct Cgroups(Copyable, Movable):
 
     @staticmethod
     def _setup() -> Cgroups:
-        if getenv("ORCA_CGROUPS") == "0":
-            return Cgroups.off("off (ORCA_CGROUPS=0)")
+        if getenv("MORCA_CGROUPS") == "0":
+            return Cgroups.off("off (MORCA_CGROUPS=0)")
         comptime if not CompilationTarget.is_linux():
             return Cgroups.off("off: no cgroups on this system")
         var own = own_path(_read("/proc/self/cgroup"))
@@ -523,7 +523,7 @@ struct Cgroups(Copyable, Movable):
                         " (",
                         e,
                         "): /sys/fs/cgroup is read-only or not delegated",
-                        " to orca",
+                        " to morca",
                     )
                 )
             var me = Int(external_call["getpid", c_int]())
@@ -533,7 +533,7 @@ struct Cgroups(Copyable, Movable):
                 if not put(String(leaf, "/cgroup.procs"), pid):
                     if pid == String(me):
                         return Cgroups.off(
-                            String("off: can't move orca into ", leaf)
+                            String("off: can't move morca into ", leaf)
                         )
             if not put(String(base, "/cgroup.subtree_control"), "+memory"):
                 return Cgroups.off(

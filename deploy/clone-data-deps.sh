@@ -1,5 +1,5 @@
 #!/bin/sh
-# Clones, next to orca, every repository CI's `data` job checks out, at the
+# Clones, next to morca, every repository CI's `data` job checks out, at the
 # revision it pins there, so the data image builds what CI tests.
 #
 #     deploy/clone-data-deps.sh <workflow> <dir>

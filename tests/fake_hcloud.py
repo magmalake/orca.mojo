@@ -16,17 +16,17 @@ Hetzner refuses a type it's out of. A location not in hel1, nbg1, fsn1 is
 types are cax11..cax41, cx23..cx53, cpx12..cpx62 and ccx13..ccx63. A type named in <dir>/quota (words) is
 refused 403 `resource_limit_exceeded`, as a project over its core quota is.
 The one
-firewall is `orca-lab`, id 42. Networks are made by POST /v1/networks and
+firewall is `morca-lab`, id 42. Networks are made by POST /v1/networks and
 listed by name; a server attached to one shows a private address in it.
 
 Each server's user data runs as <dir>/server-<id>.sh with output in
 <dir>/server-<id>.log and SERVER_NAME (and HOSTNAME, which bash resets) set
 to its name, unless <dir>/no-run
 exists; deleting the server kills its process group. A server's address is
-127.0.0.1, and its ORCA_BOOT_DIR is <dir>/boot-<id> (orca.pool_boot's
+127.0.0.1, and its MORCA_BOOT_DIR is <dir>/boot-<id> (morca.pool_boot's
 script keeps its files there rather than /etc/orca).
 
-It's a container registry too, for orca.registry: GET /token gives the
+It's a container registry too, for morca.registry: GET /token gives the
 pull token `reg-token`, and GET /v2/<repo>/manifests/<tag> with it an OCI
 index whose Linux platforms are the words of <dir>/arches ("amd64 arm64"
 without the file).
@@ -131,7 +131,7 @@ def _create(body):
             f.write(body.get("user_data", ""))
         log = open(os.path.join(DIR, f"server-{sid}.log"), "w")
         env = dict(os.environ, HOSTNAME=name, SERVER_NAME=name,
-                   ORCA_BOOT_DIR=os.path.join(DIR, f"boot-{sid}"))
+                   MORCA_BOOT_DIR=os.path.join(DIR, f"boot-{sid}"))
         proc = subprocess.Popen(["sh", script], stdout=log, stderr=log, env=env, cwd=DIR,
                                 start_new_session=True)
     for n in body.get("networks", []):
@@ -204,7 +204,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._reply(200, {"server_types": types})
             if method == "GET" and path == "/v1/firewalls":
                 name = q.get("name", [""])[0]
-                fws = [{"id": 42, "name": "orca-lab"}] if name in ("", "orca-lab") else []
+                fws = [{"id": 42, "name": "morca-lab"}] if name in ("", "morca-lab") else []
                 return self._reply(200, {"firewalls": fws})
             if method == "GET" and path == "/v1/networks":
                 name = q.get("name", [""])[0]

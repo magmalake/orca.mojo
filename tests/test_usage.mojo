@@ -1,4 +1,4 @@
-"""What orca.usage does: a meter's samples shared out among a process's
+"""What morca.usage does: a meter's samples shared out among a process's
 attempts, the meter over the worker API, and the reading of /proc it is
 fed from."""
 
@@ -14,9 +14,9 @@ from std.testing import (
 
 from json import loads
 
-from orca.sample import parse_pid_usage, tree_usage
-from orca.store import Usage
-from orca.usage import (
+from morca.sample import parse_pid_usage, tree_usage
+from morca.store import Usage
+from morca.usage import (
     MAX_MARKS,
     AttemptSpan,
     Mark,

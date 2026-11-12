@@ -1,28 +1,28 @@
-"""`HttpStore`: a run's state over `orca ui`'s API, for a run on a remote
-worker (`orca worker`, `orca.worker`), which holds no database credentials.
+"""`HttpStore`: a run's state over `morca ui`'s API, for a run on a remote
+worker (`morca worker`, `morca.worker`), which holds no database credentials.
 
-A pipeline binary given `ORCA_STATE_URL` (the UI, `https://...`, or `http`
-to this machine only) and `ORCA_STATE_TOKEN` (a worker token,
-`orca.workers`) in place of `ORCA_DATABASE_URL` records its run through
+A pipeline binary given `MORCA_STATE_URL` (the UI, `https://...`, or `http`
+to this machine only) and `MORCA_STATE_TOKEN` (a worker token,
+`orca.workers`) in place of `MORCA_DATABASE_URL` records its run through
 this store: each `RunStore` call is a `POST` of JSON to
-`<ORCA_STATE_URL>/api/worker/store/<call>` with `Authorization: Bearer
-<token>`, which the UI answers by making the same call on `orca.state.PgStore`
+`<MORCA_STATE_URL>/api/worker/store/<call>` with `Authorization: Bearer
+<token>`, which the UI answers by making the same call on `morca.state.PgStore`
 (`orca.workers.store_call`), so what is recorded, and every check made on
 the way (the run still this process's, not cancelled, its heartbeat fresh
 enough to commit), is the same code as for a run that writes to Postgres
 itself. Encoded inputs and outputs travel as hex.
 
 **Retries.** A call that can't reach the UI, or that it answers with a 5xx,
-is retried as `PgStore` retries Postgres (`orca.store.Backoff`, for
-`ORCA_DB_RETRY_SECONDS`); one refused (401 or 403: the token was revoked,
+is retried as `PgStore` retries Postgres (`morca.store.Backoff`, for
+`MORCA_DB_RETRY_SECONDS`); one refused (401 or 403: the token was revoked,
 or the run is another worker's now; 409: the run was lost or cancelled) is
 final, and the run stops. A fence (`Store.fence`) that can't be made within
 half the stale limit refuses the commit, as over Postgres.
 
 **The heartbeat** is a `POST .../beat` from a thread every beat, which the UI
 answers with why the run must stop now, if the watchdog says so
-(`orca.state.beat_run`); the process then exits, as over Postgres. With
-`ORCA_WORKER_PID` set, the beat also checks that the worker that started
+(`morca.state.beat_run`); the process then exits, as over Postgres. With
+`MORCA_WORKER_PID` set, the beat also checks that the worker that started
 this process is still its parent: if it isn't (the worker was killed), the
 process exits rather than go on beating, so the server sees the run's
 heartbeat go stale and requeues it.
@@ -38,9 +38,9 @@ from std.os import getenv
 from json import Value, loads
 from objectstore.http import Header, HttpClient, Response
 
-from orca.heartbeat import Beater, Heartbeat
-from orca.json import quote
-from orca.store import (
+from morca.heartbeat import Beater, Heartbeat
+from morca.json import quote
+from morca.store import (
     FINAL,
     Backoff,
     Recorder,
@@ -85,13 +85,13 @@ def bytes_of_hex(s: String) raises -> List[UInt8]:
     """The bytes `hex_of` gave `s`; raises for anything else."""
     var b = s.as_bytes()
     if len(b) % 2 != 0:
-        raise Error("orca: an odd number of hex digits")
+        raise Error("morca: an odd number of hex digits")
     var out = List[UInt8](capacity=len(b) // 2)
     for i in range(0, len(b), 2):
         try:
             out.append((_nibble(b[i]) << 4) | _nibble(b[i + 1]))
         except:
-            raise Error("orca: not hex: ", s)
+            raise Error("morca: not hex: ", s)
     return out^
 
 
@@ -156,7 +156,7 @@ def _text(v: Value, key: String) raises -> String:
 
 def _int(v: Value, key: String) raises -> Int64:
     if key not in v:
-        raise Error("orca: the answer has no ", key)
+        raise Error("morca: the answer has no ", key)
     return v[key].int_value()
 
 
@@ -318,7 +318,7 @@ def check_state_url(url: String) raises -> String:
         if u.startswith(local) or u == local.rstrip(":"):
             return u^
     raise Error(
-        "orca: ORCA_STATE_URL is https://..., or http to this machine only,",
+        "morca: MORCA_STATE_URL is https://..., or http to this machine only,",
         " not ",
         url,
     )
@@ -337,7 +337,7 @@ struct StateApi(Copyable, Movable):
     def __init__(out self, url: String, token: String) raises:
         self.url = check_state_url(url)
         if not token:
-            raise Error("orca: ORCA_STATE_URL needs ORCA_STATE_TOKEN")
+            raise Error("morca: MORCA_STATE_URL needs MORCA_STATE_TOKEN")
         self.token = token
         self.http = HttpClient()
         # Retried here, as a whole, and never redirected: a redirect could
@@ -357,7 +357,7 @@ struct StateApi(Copyable, Movable):
         var headers: List[Header] = [
             Header("accept", "application/json"),
             Header("content-type", "application/json"),
-            Header("user-agent", "orca-worker"),
+            Header("user-agent", "morca-worker"),
             Header("authorization", String("Bearer ", self.token)),
         ]
         var resp: Response
@@ -369,7 +369,7 @@ struct StateApi(Copyable, Movable):
                 body.as_bytes(),
             )
         except e:
-            raise Error("orca: can't reach ", self.url, ": ", e)
+            raise Error("morca: can't reach ", self.url, ": ", e)
         var text = String(from_utf8_lossy=Span(resp.body))
         if resp.status == 200:
             return loads(text)
@@ -378,11 +378,11 @@ struct StateApi(Copyable, Movable):
             why = String(resp.status, " ", resp.body_excerpt(200))
         if resp.status == 401 or resp.status == 403 or resp.status == 409:
             raise Error(FINAL, why)
-        raise Error("orca: ", self.url, " answered ", why)
+        raise Error("morca: ", self.url, " answered ", why)
 
     def post(self, call: String, body: String) raises -> Value:
         """`call`, retried while it fails but isn't refused for good."""
-        var b = Backoff("orca ui")
+        var b = Backoff("morca ui")
         while True:
             try:
                 return self.post_once(call, body)
@@ -406,7 +406,7 @@ struct HttpBeat(Beater):
     var owner: String
     var timeouts: String
     var parent: Int
-    """`ORCA_WORKER_PID`: the worker that started this process, or 0."""
+    """`MORCA_WORKER_PID`: the worker that started this process, or 0."""
 
     def __init__(
         out self,
@@ -456,13 +456,13 @@ struct HttpBeat(Beater):
 
 def _worker_pid() -> Int:
     try:
-        return Int(getenv("ORCA_WORKER_PID", "0"))
+        return Int(getenv("MORCA_WORKER_PID", "0"))
     except:
         return 0
 
 
 struct HttpStore(Movable, RunStore):
-    """A run's state over `orca ui`'s API (`ORCA_STATE_URL`)."""
+    """A run's state over `morca ui`'s API (`MORCA_STATE_URL`)."""
 
     var api: StateApi
     var run: Int
@@ -487,9 +487,9 @@ struct HttpStore(Movable, RunStore):
     @staticmethod
     def _needs_db(what: StaticString) raises:
         raise Error(
-            "orca: ",
+            "morca: ",
             what,
-            " needs ORCA_DATABASE_URL: a worker's run (ORCA_STATE_URL) only",
+            " needs MORCA_DATABASE_URL: a worker's run (MORCA_STATE_URL) only",
             " resumes the run it was given",
         )
 
@@ -687,7 +687,7 @@ struct HttpStore(Movable, RunStore):
         return pins_of(got["pins"])
 
     def run_token(mut self) raises -> String:
-        # An `orca ui` from before run tokens refuses the call: then the
+        # An `morca ui` from before run tokens refuses the call: then the
         # run has none here, and its commits are recognised as before them.
         try:
             var got = self.api.post("run_token", self._for_run().finish())
@@ -712,10 +712,10 @@ struct HttpStore(Movable, RunStore):
         # heartbeat could still be fresh, then the commit is off.
         var stale: Float64
         try:
-            stale = Float64(getenv("ORCA_STALE_SECONDS", "30"))
+            stale = Float64(getenv("MORCA_STALE_SECONDS", "30"))
         except:
             stale = 30.0
-        var b = Backoff("orca ui")
+        var b = Backoff("morca ui")
         b.budget = stale / 2
         while True:
             try:
@@ -726,12 +726,12 @@ struct HttpStore(Movable, RunStore):
                 if msg.startswith(FINAL):
                     var bare = String(msg[byte = FINAL.byte_length() :])
                     msg = bare^
-                if msg.startswith("orca: not committing"):
+                if msg.startswith("morca: not committing"):
                     raise Error(msg)
                 try:
                     b.again(e)
                 except e2:
-                    raise Error("orca: not committing: ", e2)
+                    raise Error("morca: not committing: ", e2)
 
     def set_log(
         mut self, step: String, partition: String, attempt: Int, path: String

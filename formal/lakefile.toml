@@ -1,13 +1,13 @@
-name = "orca-formal"
+name = "morca-formal"
 version = "0.1.0"
-defaultTargets = ["Orca", "orca-oracle"]
+defaultTargets = ["Morca", "morca-oracle"]
 
 [leanOptions]
 autoImplicit = false
 relaxedAutoImplicit = false
 
 [[lean_lib]]
-name = "Orca"
+name = "Morca"
 
 # The models as a program: prints what each model says a sequence of events
 # leaves behind, for the Mojo tests that replay them (difftest/).
@@ -17,5 +17,5 @@ roots = ["Oracle.Main"]
 globs = ["Oracle.+"]
 
 [[lean_exe]]
-name = "orca-oracle"
+name = "morca-oracle"
 root = "Oracle.Main"

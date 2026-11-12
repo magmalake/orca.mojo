@@ -1,7 +1,7 @@
 """Where a pipeline's step functions and dista tasks are defined in its
-source, so `orca ui` can link each one to its line at the commit a run ran.
+source, so `morca ui` can link each one to its line at the commit a run ran.
 
-    orca locate ./build/taxi --root .     # writes ./build/taxi.source.json
+    morca locate ./build/taxi --root .     # writes ./build/taxi.source.json
 
 `describe` names each function by its module path, `taxi::trips(...)` or
 `lake::steps::parse(...)`; the module is a file, `taxi.mojo` or
@@ -10,7 +10,7 @@ finds the file whose path ends with it and the line of its top-level `def`
 (or `fn`), and the line declaring the pipeline itself (`Pipeline[` with its
 name first), kept as `"pipeline"`. The map, `{"pipeline":
 "examples/taxi/taxi.mojo#L243", "taxi::trips": "examples/taxi/taxi.mojo#L42",
-...}`, is written beside the binary, and `orca register` records it with the
+...}`, is written beside the binary, and `morca register` records it with the
 pipeline's version. Paths are relative to `--root`, which is the
 repository's root for the links to work.
 """
@@ -20,7 +20,7 @@ from std.os.path import isdir
 
 from json import loads
 
-from orca.json import quote
+from morca.json import quote
 
 
 def function_key(name: String) -> String:

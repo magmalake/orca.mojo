@@ -8,9 +8,9 @@ An image's tag names a manifest; a multi-architecture image's is an index
 (OCI) or a manifest list (Docker), whose entries each name a platform, and
 a single-architecture image's has its architecture in its config blob.
 This reads the registry's v2 API with a pull token: anonymous, or from
-`ORCA_REGISTRY_USER` and the secret `ORCA_REGISTRY_TOKEN_SECRET` names
-(`orca.control.fetch_secret`) for a private image, never in an error.
-`ORCA_REGISTRY_ENDPOINT` points every image's registry at one URL, for
+`MORCA_REGISTRY_USER` and the secret `MORCA_REGISTRY_TOKEN_SECRET` names
+(`morca.control.fetch_secret`) for a private image, never in an error.
+`MORCA_REGISTRY_ENDPOINT` points every image's registry at one URL, for
 tests' fake.
 """
 
@@ -20,7 +20,7 @@ from std.os import getenv
 from json import Value, loads
 from objectstore.http import Header, HttpClient, RetryPolicy
 
-from orca.control import fetch_secret
+from morca.control import fetch_secret
 
 comptime _ACCEPT = (
     "application/vnd.oci.image.index.v1+json,"
@@ -43,12 +43,12 @@ struct ImageRef(Copyable, Movable):
         """`ghcr.io/morca-dev/census:tag` (a tag is needed; a host too)."""
         var slash = image.find("/")
         if slash <= 0:
-            raise Error("orca: not an image with its registry: ", image)
+            raise Error("morca: not an image with its registry: ", image)
         var host = String(image[byte=:slash])
         var rest = String(image[byte = slash + 1 :])
         var colon = rest.rfind(":")
         if colon <= 0 or "@" in rest:
-            raise Error("orca: not an image with a tag: ", image)
+            raise Error("morca: not an image with a tag: ", image)
         return ImageRef(
             host^, String(rest[byte=:colon]), String(rest[byte = colon + 1 :])
         )
@@ -70,7 +70,7 @@ def _get(
         var r = _http().request("GET", url, headers)
         return (Int(r.status), String(from_utf8_lossy=Span(r.body)))
     except:
-        raise Error("orca: can't reach the registry for ", what)
+        raise Error("morca: can't reach the registry for ", what)
 
 
 def platform_arches(manifest: Value) raises -> List[String]:
@@ -108,12 +108,12 @@ struct Registry(Movable):
     @staticmethod
     def from_env() raises -> Registry:
         var token = String()
-        var id = getenv("ORCA_REGISTRY_TOKEN_SECRET")
+        var id = getenv("MORCA_REGISTRY_TOKEN_SECRET")
         if id:
             token = fetch_secret(id)
         return Registry(
-            getenv("ORCA_REGISTRY_ENDPOINT"),
-            getenv("ORCA_REGISTRY_USER"),
+            getenv("MORCA_REGISTRY_ENDPOINT"),
+            getenv("MORCA_REGISTRY_USER"),
             token,
         )
 
@@ -122,7 +122,7 @@ struct Registry(Movable):
 
     def credentials(self) -> Tuple[String, String]:
         """The user and token to log in to pull the image (the pool
-        machines' boot, `orca.pool_boot`); empty for none."""
+        machines' boot, `morca.pool_boot`); empty for none."""
         return (self.user, self._token)
 
     def _base(self, img: ImageRef) -> String:
@@ -150,7 +150,7 @@ struct Registry(Movable):
         )
         if got[0] != 200:
             raise Error(
-                "orca: the registry refused a pull token for ",
+                "morca: the registry refused a pull token for ",
                 img.repo,
                 ": HTTP ",
                 got[0],
@@ -160,7 +160,7 @@ struct Registry(Movable):
             return v["token"].string_value()
         if "access_token" in v and v["access_token"].is_string():
             return v["access_token"].string_value()
-        raise Error("orca: the registry's token answer has no token")
+        raise Error("morca: the registry's token answer has no token")
 
     def arches(self, image: String) raises -> List[String]:
         """The Linux architectures `image` has a variant for, Docker's names
@@ -177,7 +177,7 @@ struct Registry(Movable):
         )
         if got[0] != 200:
             raise Error(
-                "orca: the registry has no manifest for ",
+                "morca: the registry has no manifest for ",
                 image,
                 ": HTTP ",
                 got[0],
@@ -199,5 +199,5 @@ struct Registry(Movable):
                 if "architecture" in c and c["architecture"].is_string():
                     out.append(c["architecture"].string_value())
         if len(out) == 0:
-            raise Error("orca: can't tell the architectures of ", image)
+            raise Error("morca: can't tell the architectures of ", image)
         return out^

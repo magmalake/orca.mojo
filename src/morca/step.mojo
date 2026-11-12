@@ -29,7 +29,7 @@ reflected names, which include their module; the first step's input is
 checked by `Pipeline.check`, which knows the key.
 
 A step declares the datasets it reads and writes, as `namespace.table`
-names in the warehouse (`orca.tables`):
+names in the warehouse (`morca.tables`):
 
 ```mojo
 comptime Clean = Step[
@@ -39,10 +39,10 @@ comptime Clean = Step[
 ```
 
 A dataset in `replaces=` instead is one the step writes whose partitions a
-new run *replaces* rather than appends to: `orca.tables.append` and
+new run *replaces* rather than appends to: `morca.tables.append` and
 `append_files` to it make the run's first commit to each partition an
 `overwrite` that removes what earlier runs left there, so
-`orca backfill --rerun` leaves one copy of a key's rows (`orca.tables`,
+`morca backfill --rerun` leaves one copy of a key's rows (`morca.tables`,
 "Replacing partitions"). A dataset in `replaces=` counts as written; it
 needn't be in `writes=` as well.
 
@@ -65,15 +65,15 @@ A step that can't do its work yet, such as a download that isn't
 published or an API that's out of requests, raises `defer(seconds, why)`
 instead of failing: the attempt ends `deferred`, spending no retry, and its
 run ends `deferred` and is started again by the scheduler that many seconds
-later, without counting against `run_retries` (`orca.scheduler`).
+later, without counting against `run_retries` (`morca.scheduler`).
 
 `timeout_seconds=N` bounds an attempt: one still going N seconds after it
-started is stopped (`orca.heartbeat`), as a failed attempt, and its run
+started is stopped (`morca.heartbeat`), as a failed attempt, and its run
 fails, to be retried by the scheduler as any failed run is. A step can't be
 interrupted where it is, so the run's process exits: its other partitions
 and the step's own retries wait for the run's retry.
 
-`orca.tables` refuses a scan of a dataset the step didn't declare in
+`morca.tables` refuses a scan of a dataset the step didn't declare in
 `reads`, and a commit to one it didn't declare in `writes`, so the graph of
 pipelines and datasets that `describe` gives is what the steps do.
 """
@@ -83,9 +83,9 @@ from std.reflection import reflect, reflect_fn
 from dista.codec import decode, encode
 from dista.seq import Seq
 
-from orca.ctx import Ctx
+from morca.ctx import Ctx
 
-comptime _DEFER = "orca: defer "
+comptime _DEFER = "morca: defer "
 """Starts the message of the error `defer` makes."""
 
 

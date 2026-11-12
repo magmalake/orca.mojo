@@ -1,17 +1,17 @@
 #!/bin/sh
-# orca on a kind cluster (deploy/), each run on a cluster of its own
-# (orca.kube). Builds the image, loads it, applies the manifests, and with
+# morca on a kind cluster (deploy/), each run on a cluster of its own
+# (morca.kube). Builds the image, loads it, applies the manifests, and with
 # the scheduler's clock fixed just after a fire:
 #
 # - the toy, registered from the image, is fired, runs as a driver Job and
-#   succeeds, orca ui shows it and the driver log the scheduler kept, its
+#   succeeds, morca ui shows it and the driver log the scheduler kept, its
 #   driver pod's samples are kept apart from that log, and nothing
 #   labelled with it is left;
 # - fanout's runs get a head and 3 workers each, and the tasks of a run
 #   reach all 3; every pod's samples are kept;
 # - a fanout driver pod deleted mid-run is resumed on a new cluster (start
 #   2) and succeeds, and the first cluster is gone;
-# - with ORCA_VCPU_BUDGET room for one fanout cluster, a toy run queued
+# - with MORCA_VCPU_BUDGET room for one fanout cluster, a toy run queued
 #   beside two fanout runs never runs at the same time as either;
 # - a pod a killed scheduler left behind is deleted when it starts again.
 #
@@ -21,7 +21,7 @@ set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 mkdir -p build
-cluster=${KIND_CLUSTER:-orca}
+cluster=${KIND_CLUSTER:-morca}
 export KUBECONFIG="$PWD/build/kind-$cluster.yaml"
 fwd=
 made=
@@ -34,14 +34,14 @@ cleanup() {
 trap cleanup EXIT
 fail() {
     echo "FAIL: $*"
-    kubectl -n orca get pods -o wide || true
-    kubectl -n orca-runs get pods,jobs,services -o wide || true
-    kubectl -n orca logs deploy/orca-scheduler -c scheduler --tail=40 || true
+    kubectl -n morca get pods -o wide || true
+    kubectl -n morca-runs get pods,jobs,services -o wide || true
+    kubectl -n morca logs deploy/morca-scheduler -c scheduler --tail=40 || true
     exit 1
 }
-q() { kubectl -n orca exec statefulset/postgres -- psql -U orca -d orca -Atc "$1"; }
-runs() { kubectl -n orca-runs get pods,jobs,services -l "$1" -o name 2> /dev/null; }
-orca_cli() { kubectl -n orca exec deploy/orca-scheduler -c scheduler -- "$@"; }
+q() { kubectl -n morca exec statefulset/postgres -- psql -U orca -d orca -Atc "$1"; }
+runs() { kubectl -n morca-runs get pods,jobs,services -l "$1" -o name 2> /dev/null; }
+morca_cli() { kubectl -n morca exec deploy/morca-scheduler -c scheduler -- "$@"; }
 # Until the SQL says t, for up to $2 seconds.
 until_true() {
     i=0
@@ -56,32 +56,32 @@ gone() {
     done
 }
 
-docker build -f deploy/Dockerfile -t orca:dev .
+docker build -f deploy/Dockerfile -t morca:dev .
 if ! kind get clusters 2> /dev/null | grep -qx "$cluster"; then
     kind create cluster --name "$cluster" --kubeconfig "$KUBECONFIG" --wait 120s
     made=1
 else
     kind get kubeconfig --name "$cluster" > "$KUBECONFIG"
 fi
-kind load docker-image orca:dev --name "$cluster"
+kind load docker-image morca:dev --name "$cluster"
 
-kubectl delete namespace orca orca-runs --ignore-not-found --wait
-kubectl apply -f deploy/k8s/orca.yaml -f deploy/k8s/runs.yaml
-kubectl -n orca rollout status statefulset/postgres --timeout=180s || fail "postgres"
+kubectl delete namespace morca morca-runs --ignore-not-found --wait
+kubectl apply -f deploy/k8s/morca.yaml -f deploy/k8s/runs.yaml
+kubectl -n morca rollout status statefulset/postgres --timeout=180s || fail "postgres"
 # The clock just after the toy's fire for January (03:00 UTC on 2 February);
 # small pods, room for one fanout cluster (100m driver and head, 3 × 100m
 # workers) and no more; a run whose heartbeat stops is restarted soon.
-kubectl -n orca set env deployment/orca-scheduler -c scheduler \
-    ORCA_NOW=2024-02-02T03:00Z ORCA_STALE_SECONDS=10 \
-    ORCA_DRIVER_CPU=100m ORCA_HEAD_CPU=100m ORCA_WORKER_CPU=100m ORCA_POD_MEMORY=128Mi \
-    ORCA_VCPU_BUDGET=550m ORCA_FANOUT_SHOW_HOST=1 ORCA_FANOUT_SLEEP=1 \
-    ORCA_RUN_ENV=ORCA_FANOUT_SHOW_HOST,ORCA_FANOUT_SLEEP
-kubectl -n orca rollout status deployment/orca-scheduler --timeout=180s || fail "the scheduler"
-orca_cli env ORCA_NOW=2024-02-01T00:00Z orca register --image orca:dev /opt/orca/pipelines/toy \
+kubectl -n morca set env deployment/morca-scheduler -c scheduler \
+    MORCA_NOW=2024-02-02T03:00Z MORCA_STALE_SECONDS=10 \
+    MORCA_DRIVER_CPU=100m MORCA_HEAD_CPU=100m MORCA_WORKER_CPU=100m MORCA_POD_MEMORY=128Mi \
+    MORCA_VCPU_BUDGET=550m MORCA_FANOUT_SHOW_HOST=1 MORCA_FANOUT_SLEEP=1 \
+    MORCA_RUN_ENV=MORCA_FANOUT_SHOW_HOST,MORCA_FANOUT_SLEEP
+kubectl -n morca rollout status deployment/morca-scheduler --timeout=180s || fail "the scheduler"
+morca_cli env MORCA_NOW=2024-02-01T00:00Z morca register --image morca:dev /opt/morca/pipelines/toy \
     || fail "register the toy"
 
 free_port port
-kubectl -n orca port-forward svc/orca-ui "$port:8270" > build/kind-forward.log 2>&1 &
+kubectl -n morca port-forward svc/morca-ui "$port:8270" > build/kind-forward.log 2>&1 &
 fwd=$!
 base="http://127.0.0.1:$port"
 json() { curl -fsS -H 'Accept: application/json' "$base$1"; }
@@ -95,18 +95,18 @@ toy=$(json '/runs?pipeline=toy' | jq -r '.runs[0].id')
 [ "$(json "/runs/$toy" | jq .cpu_millis)" = 100 ] || fail "the toy's CPU: $(json "/runs/$toy" | jq .cpu_millis)"
 gone "orca.run=$toy"
 curl -fsS "$base/runs/$toy/driver.log" | grep -qx "run succeeded" || fail "the toy's driver log"
-# Its driver pod's samples (orca.sample), kept beside the driver log and
+# Its driver pod's samples (morca.sample), kept beside the driver log and
 # out of it.
-orca_cli sh -c "cat /var/orca/logs/toy/$toy/metrics/orca-$toy-1-*.jsonl" > build/kind-toy-metrics.jsonl \
+morca_cli sh -c "cat /var/orca/logs/toy/$toy/metrics/morca-$toy-1-*.jsonl" > build/kind-toy-metrics.jsonl \
     || fail "the toy's metrics"
 python3 tests/metrics_ok.py build/kind-toy-metrics.jsonl > /dev/null || fail "the toy's metrics"
 ! curl -fsS "$base/runs/$toy/driver.log" | grep -q "^orca-sample" || fail "samples in the toy's driver log"
 echo "ok   the toy ran as a driver Job, its driver log and metrics were kept, and nothing of it is left"
 
 # Two fanout runs, one at a time, and a toy run beside them.
-orca_cli orca register --image orca:dev /opt/orca/pipelines/fanout > /dev/null || fail "register fanout"
-orca_cli orca backfill fanout 2024-01..2024-02 > /dev/null || fail "backfill fanout"
-orca_cli orca backfill toy 2024-03 > /dev/null || fail "backfill the toy"
+morca_cli morca register --image morca:dev /opt/morca/pipelines/fanout > /dev/null || fail "register fanout"
+morca_cli morca backfill fanout 2024-01..2024-02 > /dev/null || fail "backfill fanout"
+morca_cli morca backfill toy 2024-03 > /dev/null || fail "backfill the toy"
 f1=$(q "SELECT min(id) FROM orca.runs WHERE pipeline = 'fanout'")
 f2=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
 
@@ -118,7 +118,7 @@ until_true "SELECT status = 'running' AND heartbeat IS NOT NULL FROM orca.runs W
 hosts=
 i=0
 while [ "$(q "SELECT status FROM orca.runs WHERE id = $f1")" = running ]; do
-    hosts=$( (echo "$hosts"; kubectl -n orca-runs logs -l "orca.run=$f1,orca.role=worker" --prefix --tail=-1 2> /dev/null \
+    hosts=$( (echo "$hosts"; kubectl -n morca-runs logs -l "orca.run=$f1,orca.role=worker" --prefix --tail=-1 2> /dev/null \
         | sed -n 's|^\[pod/\([^/]*\)/.*trips on .*|\1|p') | sort -u | grep . || true)
     i=$((i + 1)); [ "$i" -lt 300 ] || fail "run $f1 didn't end"; sleep 1
 done
@@ -129,15 +129,15 @@ done
 until_true "SELECT status = 'running' AND heartbeat IS NOT NULL FROM orca.runs WHERE id = $f2" 180
 sleep 3
 [ "$(q "SELECT status FROM orca.runs WHERE id = $f2")" = running ] || fail "run $f2 ended before its driver could be deleted"
-kubectl -n orca-runs delete pod -l "orca.run=$f2,orca.role=driver" --wait=false > /dev/null
+kubectl -n morca-runs delete pod -l "orca.run=$f2,orca.role=driver" --wait=false > /dev/null
 gone "orca.run=$f1"
 # A metrics file per pod: the driver's, the head's and the 3 workers'.
-pods=$(orca_cli sh -c "ls /var/orca/logs/fanout/$f1/metrics" | while read -r f; do
+pods=$(morca_cli sh -c "ls /var/orca/logs/fanout/$f1/metrics" | while read -r f; do
     case "$f" in (*-head.jsonl) echo head ;; (*-worker-*.jsonl) echo worker ;; (*) echo driver ;; esac
 done | sort | tr '\n' ' ')
 [ "$pods" = "driver head worker worker worker " ] || fail "run $f1's metrics: $pods"
-for f in $(orca_cli sh -c "cd /var/orca/logs/fanout/$f1/metrics && ls"); do
-    orca_cli cat "/var/orca/logs/fanout/$f1/metrics/$f" > "build/kind-$f"
+for f in $(morca_cli sh -c "cd /var/orca/logs/fanout/$f1/metrics && ls"); do
+    morca_cli cat "/var/orca/logs/fanout/$f1/metrics/$f" > "build/kind-$f"
     case "$f" in (*-head.jsonl | *-worker-*) rss=--rss ;; (*) rss= ;; esac
     python3 tests/metrics_ok.py $rss "build/kind-$f" > /dev/null || fail "run $f1's $f"
 done
@@ -155,27 +155,27 @@ echo "ok   the budget kept the toy waiting"
 
 # What a killed scheduler left behind.
 kill "$fwd"; fwd=
-kubectl -n orca scale deployment/orca-scheduler --replicas=0
-kubectl -n orca rollout status deployment/orca-scheduler --timeout=60s
+kubectl -n morca scale deployment/morca-scheduler --replicas=0
+kubectl -n morca rollout status deployment/morca-scheduler --timeout=60s
 # With requests, which the namespace's ResourceQuota insists on.
 kubectl apply -f - > /dev/null << 'EOF'
 apiVersion: v1
 kind: Pod
 metadata:
-  name: orca-999-1-worker-0
-  namespace: orca-runs
-  labels: {orca.run: "999", orca.start: "1", orca.role: worker}
+  name: morca-999-1-worker-0
+  namespace: morca-runs
+  labels: {morca.run: "999", morca.start: "1", morca.role: worker}
 spec:
   restartPolicy: Never
   containers:
     - name: main
-      image: orca:dev
+      image: morca:dev
       imagePullPolicy: IfNotPresent
       command: [sleep, "600"]
       resources: {requests: {cpu: 10m, memory: 16Mi}}
 EOF
-kubectl -n orca scale deployment/orca-scheduler --replicas=1
-kubectl -n orca rollout status deployment/orca-scheduler --timeout=180s || fail "the scheduler again"
+kubectl -n morca scale deployment/morca-scheduler --replicas=1
+kubectl -n morca rollout status deployment/morca-scheduler --timeout=180s || fail "the scheduler again"
 gone "orca.run=999"
-[ -z "$(runs orca.run)" ] || fail "left over: $(runs orca.run | tr '\n' ' ')"
+[ -z "$(runs morca.run)" ] || fail "left over: $(runs morca.run | tr '\n' ' ')"
 echo "ok   kind"

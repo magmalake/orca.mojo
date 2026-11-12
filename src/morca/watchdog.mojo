@@ -2,34 +2,34 @@
 
 On 2026-11-05 nothing noticed ~360 EC2 launches in 38 minutes, or a run
 waiting three hours for workers that never came. The scheduler evaluates
-these rules every `ORCA_WATCHDOG_SECONDS` (60; 0 turns the watchdog off),
+these rules every `MORCA_WATCHDOG_SECONDS` (60; 0 turns the watchdog off),
 each from Postgres only (never object storage), with the thresholds below
 (each rule's environment variable overrides its default):
 
 | Rule | Trips when | Scope |
 |---|---|---|
-| `launches` | more than `ORCA_WATCHDOG_LAUNCHES` (200) instances were launched in the last hour (pool handovers aren't launches) | all pipelines |
-| `cost` | the estimated cost of the instances up (`orca.fleet`'s price table) stayed over `ORCA_WATCHDOG_COST_HOUR` ($3) an hour for `ORCA_WATCHDOG_COST_MINUTES` (15) minutes, or the last 24 hours cost over `ORCA_WATCHDOG_COST_DAY` ($25) | all pipelines |
-| `idle` | at least `ORCA_WATCHDOG_IDLE_WORKERS` (4) workers, up for `ORCA_WATCHDOG_IDLE_MINUTES` (10, at most 30) minutes, averaged under `ORCA_WATCHDOG_IDLE_CPU` (15) percent CPU over them (pooled idle and draining workers aren't counted) | the pipelines owning those workers |
-| `failing` | a pipeline had more than `ORCA_WATCHDOG_FAILED` (20) failed attempts in the last hour, or at least `ORCA_WATCHDOG_FAILED_MIN` (10) attempts ended and more than `ORCA_WATCHDOG_FAILED_PERCENT` (50) percent failed | each such pipeline |
-| `stuck` | a run with a running attempt, on instances that are sampled, has had no attempt start or end, no instance launched or ended and no sampled host over `ORCA_WATCHDOG_STUCK_CPU` (5) percent CPU for `ORCA_WATCHDOG_STUCK_MINUTES` (30, at most 30, since samples are kept that long) minutes | that run's pipeline |
-| `control` | the control instance's newest minute has memory over `ORCA_WATCHDOG_MEMORY` (90) percent or its fullest disk over `ORCA_WATCHDOG_DISK` (85) | all pipelines |
+| `launches` | more than `MORCA_WATCHDOG_LAUNCHES` (200) instances were launched in the last hour (pool handovers aren't launches) | all pipelines |
+| `cost` | the estimated cost of the instances up (`morca.fleet`'s price table) stayed over `MORCA_WATCHDOG_COST_HOUR` ($3) an hour for `MORCA_WATCHDOG_COST_MINUTES` (15) minutes, or the last 24 hours cost over `MORCA_WATCHDOG_COST_DAY` ($25) | all pipelines |
+| `idle` | at least `MORCA_WATCHDOG_IDLE_WORKERS` (4) workers, up for `MORCA_WATCHDOG_IDLE_MINUTES` (10, at most 30) minutes, averaged under `MORCA_WATCHDOG_IDLE_CPU` (15) percent CPU over them (pooled idle and draining workers aren't counted) | the pipelines owning those workers |
+| `failing` | a pipeline had more than `MORCA_WATCHDOG_FAILED` (20) failed attempts in the last hour, or at least `MORCA_WATCHDOG_FAILED_MIN` (10) attempts ended and more than `MORCA_WATCHDOG_FAILED_PERCENT` (50) percent failed | each such pipeline |
+| `stuck` | a run with a running attempt, on instances that are sampled, has had no attempt start or end, no instance launched or ended and no sampled host over `MORCA_WATCHDOG_STUCK_CPU` (5) percent CPU for `MORCA_WATCHDOG_STUCK_MINUTES` (30, at most 30, since samples are kept that long) minutes | that run's pipeline |
+| `control` | the control instance's newest minute has memory over `MORCA_WATCHDOG_MEMORY` (90) percent or its fullest disk over `MORCA_WATCHDOG_DISK` (85) | all pipelines |
 
-A tripped rule **pauses** its scope through `orca.pause.set_paused`
+A tripped rule **pauses** its scope through `morca.pause.set_paused`
 (what the UI's Pause button does; pipelines already paused are left
 alone), writes an `orca.audit` row per pipeline (user `watchdog`, the
 rule's numbers), and a row of `orca.watchdog_trips`, which the banner on
 `/`, `/ops/pools` and `/ops/control`, `/watchdog` and `/metrics` show for as long as any of its
 pipelines is paused. It never resumes anything. A rule that is still over
 its limit when a pipeline is unpaused trips again on the next pass, so
-snooze it (`orca watchdog snooze <rule> 2h`, or on `/watchdog`) first;
+snooze it (`morca watchdog snooze <rule> 2h`, or on `/watchdog`) first;
 that is stored in `orca.watchdog_rules` and audited.
 
 A rule checks one threshold or more (`limits`: `control` checks memory
 and disk, `cost` the sustained rate and the day, `failing` the count and
 the share, `idle` the CPU and the number of workers). Each reading keeps
 every check's value and limit and whether it is past it, and so does each
-trip, so `orca watchdog status`, `/watchdog` and `/api/watchdog` show
+trip, so `morca watchdog status`, `/watchdog` and `/api/watchdog` show
 every threshold and which one tripped.
 
 Evaluation is pure (`eval_*`, over plain rows) apart from the gathering
@@ -41,14 +41,14 @@ from std.os import getenv
 from json import Value, loads
 from postgres import Params
 
-from orca.auth import audit
-from orca.fleet import hourly_price
-from orca.html import Html, url_encode
-from orca.json import quote
-from orca.notify import alert, ui_link
-from orca.pause import set_paused
-from orca.state import State
-from orca.system import system_now
+from morca.auth import audit
+from morca.fleet import hourly_price
+from morca.html import Html, url_encode
+from morca.json import quote
+from morca.notify import alert, ui_link
+from morca.pause import set_paused
+from morca.state import State
+from morca.system import system_now
 
 comptime SAMPLE_MINUTES = 30
 """How long fleet samples are kept, which bounds `idle` and `stuck`."""
@@ -95,9 +95,9 @@ struct Config(Copyable, Movable):
     var memory: Float64
     var disk: Float64
     var control_price: Float64
-    """Dollars an hour of the control instance (`ORCA_CONTROL_TYPE`), or 0."""
+    """Dollars an hour of the control instance (`MORCA_CONTROL_TYPE`), or 0."""
     var fixed_price: Bool
-    """The runner launches no instances (`ORCA_RUNNER=local`), so the cost
+    """The runner launches no instances (`MORCA_RUNNER=local`), so the cost
     rule has nothing to price: it reads "fixed price" and never trips."""
 
 
@@ -130,43 +130,43 @@ def _number(name: String, default: Float64) raises -> Float64:
     try:
         return Float64(v)
     except:
-        raise Error("orca: ", name, " is a number, not ", v)
+        raise Error("morca: ", name, " is a number, not ", v)
 
 
 def config() raises -> Config:
     """The thresholds, from the environment."""
     var c = default_config()
-    c.seconds = _number("ORCA_WATCHDOG_SECONDS", c.seconds)
-    c.launches = Int(_number("ORCA_WATCHDOG_LAUNCHES", Float64(c.launches)))
-    c.cost_hour = _number("ORCA_WATCHDOG_COST_HOUR", c.cost_hour)
+    c.seconds = _number("MORCA_WATCHDOG_SECONDS", c.seconds)
+    c.launches = Int(_number("MORCA_WATCHDOG_LAUNCHES", Float64(c.launches)))
+    c.cost_hour = _number("MORCA_WATCHDOG_COST_HOUR", c.cost_hour)
     c.cost_minutes = Int(
-        _number("ORCA_WATCHDOG_COST_MINUTES", Float64(c.cost_minutes))
+        _number("MORCA_WATCHDOG_COST_MINUTES", Float64(c.cost_minutes))
     )
-    c.cost_day = _number("ORCA_WATCHDOG_COST_DAY", c.cost_day)
-    c.idle_cpu = _number("ORCA_WATCHDOG_IDLE_CPU", c.idle_cpu)
+    c.cost_day = _number("MORCA_WATCHDOG_COST_DAY", c.cost_day)
+    c.idle_cpu = _number("MORCA_WATCHDOG_IDLE_CPU", c.idle_cpu)
     c.idle_minutes = min(
-        Int(_number("ORCA_WATCHDOG_IDLE_MINUTES", Float64(c.idle_minutes))),
+        Int(_number("MORCA_WATCHDOG_IDLE_MINUTES", Float64(c.idle_minutes))),
         SAMPLE_MINUTES,
     )
     c.idle_workers = Int(
-        _number("ORCA_WATCHDOG_IDLE_WORKERS", Float64(c.idle_workers))
+        _number("MORCA_WATCHDOG_IDLE_WORKERS", Float64(c.idle_workers))
     )
-    c.failed = Int(_number("ORCA_WATCHDOG_FAILED", Float64(c.failed)))
-    c.failed_percent = _number("ORCA_WATCHDOG_FAILED_PERCENT", c.failed_percent)
+    c.failed = Int(_number("MORCA_WATCHDOG_FAILED", Float64(c.failed)))
+    c.failed_percent = _number("MORCA_WATCHDOG_FAILED_PERCENT", c.failed_percent)
     c.failed_min = Int(
-        _number("ORCA_WATCHDOG_FAILED_MIN", Float64(c.failed_min))
+        _number("MORCA_WATCHDOG_FAILED_MIN", Float64(c.failed_min))
     )
     c.stuck_minutes = min(
-        Int(_number("ORCA_WATCHDOG_STUCK_MINUTES", Float64(c.stuck_minutes))),
+        Int(_number("MORCA_WATCHDOG_STUCK_MINUTES", Float64(c.stuck_minutes))),
         SAMPLE_MINUTES,
     )
-    c.stuck_cpu = _number("ORCA_WATCHDOG_STUCK_CPU", c.stuck_cpu)
-    c.memory = _number("ORCA_WATCHDOG_MEMORY", c.memory)
-    c.disk = _number("ORCA_WATCHDOG_DISK", c.disk)
-    var control = getenv("ORCA_CONTROL_TYPE")
+    c.stuck_cpu = _number("MORCA_WATCHDOG_STUCK_CPU", c.stuck_cpu)
+    c.memory = _number("MORCA_WATCHDOG_MEMORY", c.memory)
+    c.disk = _number("MORCA_WATCHDOG_DISK", c.disk)
+    var control = getenv("MORCA_CONTROL_TYPE")
     if control:
         c.control_price = max(hourly_price(control), 0.0)
-    c.fixed_price = getenv("ORCA_RUNNER") == "local"
+    c.fixed_price = getenv("MORCA_RUNNER") == "local"
     return c^
 
 
@@ -396,7 +396,7 @@ struct Lease(Copyable, Movable):
 
 def cost_rate(leases: List[Lease], ago: Float64, control: Float64) -> Float64:
     """Dollars an hour being spent `ago` seconds ago (unpriced types cost
-    nothing here, as in `orca.fleet`)."""
+    nothing here, as in `morca.fleet`)."""
     var total = control
     for l in leases:
         if l.start_ago >= ago and (l.end_ago < 0 or l.end_ago <= ago):
@@ -877,7 +877,7 @@ def trip(mut db: State, r: Reading) raises -> List[String]:
             .text(checks_json(r.checks)),
         )
         print(
-            "orca: watchdog rule",
+            "morca: watchdog rule",
             r.rule,
             "tripped:",
             r.detail,
@@ -891,7 +891,7 @@ def trip(mut db: State, r: Reading) raises -> List[String]:
                 r.rule,
                 "high",
                 "rotating_light,warning",
-                String("orca watchdog: ", r.rule, " tripped"),
+                String("morca watchdog: ", r.rule, " tripped"),
                 String(
                     "Rule ",
                     r.rule,
@@ -908,7 +908,7 @@ def trip(mut db: State, r: Reading) raises -> List[String]:
                 pipelines=joined,
             )
         except e:
-            print("orca: notify: can't record the watchdog alert:", e)
+            print("morca: notify: can't record the watchdog alert:", e)
     return paused^
 
 
@@ -940,13 +940,13 @@ def parse_duration(text: String) raises -> Int:
     if t == "off":
         return 0
     if t.byte_length() < 2:
-        raise Error("orca: not a duration (30m, 2h, 1d or off): ", text)
+        raise Error("morca: not a duration (30m, 2h, 1d or off): ", text)
     var unit = String(t[byte = t.byte_length() - 1 :])
     var n: Int
     try:
         n = Int(t[byte = : t.byte_length() - 1])
     except:
-        raise Error("orca: not a duration (30m, 2h, 1d or off): ", text)
+        raise Error("morca: not a duration (30m, 2h, 1d or off): ", text)
     var scale: Int
     if unit == "s":
         scale = 1
@@ -957,9 +957,9 @@ def parse_duration(text: String) raises -> Int:
     elif unit == "d":
         scale = 86400
     else:
-        raise Error("orca: not a duration (30m, 2h, 1d or off): ", text)
+        raise Error("morca: not a duration (30m, 2h, 1d or off): ", text)
     if n <= 0 or n * scale > MAX_SNOOZE_SECONDS:
-        raise Error("orca: a snooze is from 1s to 30d: ", text)
+        raise Error("morca: a snooze is from 1s to 30d: ", text)
     return n * scale
 
 
@@ -971,7 +971,7 @@ def snooze(
         var names = String()
         for n in rule_names():
             names.write(", " if names else "", n)
-        raise Error("orca: no rule ", rule, " (", names, ")")
+        raise Error("morca: no rule ", rule, " (", names, ")")
     var secs = parse_duration(duration)
     if secs == 0:
         _ = db.conn.execute(
@@ -1362,7 +1362,7 @@ def watchdog_html(mut h: Html, rows: List[RuleRow], trips: List[Trip]):
     h.raw(
         '<p class="muted">Pauses pipelines when a rule leaves its range;',
         " never resumes them. Checked by the scheduler every",
-        " <code>ORCA_WATCHDOG_SECONDS</code>.</p>",
+        " <code>MORCA_WATCHDOG_SECONDS</code>.</p>",
         '<section class="card"><div class="scroll"><table><thead><tr>',
         "<th>Rule</th><th>Checks</th><th>State</th><th>Snooze</th>",
         "</tr></thead><tbody>",
@@ -1408,41 +1408,41 @@ def _label(s: String) -> String:
 
 
 def prometheus(mut db: State, c: Config) raises -> String:
-    """`orca_watchdog_tripped{rule}` (1 while a trip of the rule has a
+    """`morca_watchdog_tripped{rule}` (1 while a trip of the rule has a
     pipeline paused), and the rule's last value and threshold."""
     var rows = rule_rows(db, c)
     var out = String(
-        "# HELP orca_watchdog_tripped 1 while a trip of the rule has a",
-        " pipeline still paused.\n# TYPE orca_watchdog_tripped gauge\n",
+        "# HELP morca_watchdog_tripped 1 while a trip of the rule has a",
+        " pipeline still paused.\n# TYPE morca_watchdog_tripped gauge\n",
     )
     for r in rows:
         out.write(
-            'orca_watchdog_tripped{rule="',
+            'morca_watchdog_tripped{rule="',
             r.rule,
             '"} ',
             1 if r.tripped else 0,
             "\n",
         )
     out.write(
-        "# HELP orca_watchdog_value The rule's value at its last check (see",
-        " /watchdog for units).\n# TYPE orca_watchdog_value gauge\n",
+        "# HELP morca_watchdog_value The rule's value at its last check (see",
+        " /watchdog for units).\n# TYPE morca_watchdog_value gauge\n",
     )
     for r in rows:
         if r.value >= 0:
             out.write(
-                'orca_watchdog_value{rule="',
+                'morca_watchdog_value{rule="',
                 r.rule,
                 '"} ',
                 _fx(r.value, 3),
                 "\n",
             )
     out.write(
-        "# HELP orca_watchdog_threshold The rule's limit.\n",
-        "# TYPE orca_watchdog_threshold gauge\n",
+        "# HELP morca_watchdog_threshold The rule's limit.\n",
+        "# TYPE morca_watchdog_threshold gauge\n",
     )
     for r in rows:
         out.write(
-            'orca_watchdog_threshold{rule="',
+            'morca_watchdog_threshold{rule="',
             r.rule,
             '"} ',
             _fx(r.threshold, 3),
@@ -1452,7 +1452,7 @@ def prometheus(mut db: State, c: Config) raises -> String:
 
 
 def status_lines(json: String) raises -> List[String]:
-    """`orca watchdog status`'s lines from `/api/watchdog`'s JSON."""
+    """`morca watchdog status`'s lines from `/api/watchdog`'s JSON."""
     var v = loads(json)
     var out = List[String]()
     for r in v["rules"].array_items():

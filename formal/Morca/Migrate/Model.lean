@@ -8,9 +8,9 @@ database runs on it only if it knows that many. Rows written before the
 column existed have none, until a binary that knows their version fills
 them in.
 
-Mirrors src/orca/migrations.mojo#migration_floor+schema_ahead and src/orca/state.mojo#State.migrate.
+Mirrors src/morca/migrations.mojo#migration_floor+schema_ahead and src/morca/state.mojo#State.migrate.
 -/
-namespace Orca.Migrate
+namespace Morca.Migrate
 
 /-- The larger of two numbers. -/
 def larger (a b : Nat) : Nat := if a < b then b else a
@@ -110,4 +110,4 @@ inductive Reachable (raisers : List Nat) : Db → Prop where
       Reachable raisers db'
   | byForget {db : Db} : Reachable raisers db → Reachable raisers (forget db)
 
-end Orca.Migrate
+end Morca.Migrate

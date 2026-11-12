@@ -2,12 +2,12 @@
 code version, and a run's machines with their metrics.
 """
 
-from orca.ui.cluster import cluster_json
-from orca.json import quote
-from orca.metrics import InstanceMetrics, peaks_json
-from orca.source import commit_url
-from orca.usage import usage_json
-from orca.views.runs import (
+from morca.ui.cluster import cluster_json
+from morca.json import quote
+from morca.metrics import InstanceMetrics, peaks_json
+from morca.source import commit_url
+from morca.usage import usage_json
+from morca.views.runs import (
     InstanceRow,
     RunRow,
     RunView,
@@ -52,7 +52,7 @@ def json_instances(
     xs: List[InstanceRow],
     metrics: List[InstanceMetrics],
 ):
-    """The run's instances, each with its samples' peaks (`orca.metrics`),
+    """The run's instances, each with its samples' peaks (`morca.metrics`),
     then those with samples and no instance row: a local run's machine and
     a Kubernetes run's pods."""
     out.write("[")
@@ -112,7 +112,7 @@ def json_instances(
 
 def _role_of(name: String) -> String:
     """A sampled instance's role, from its file's name: `local`, an ec2
-    `<role>-<id>`, or a pod's `orca-<run>-<start>-<role>[-<i>]`."""
+    `<role>-<id>`, or a pod's `morca-<run>-<start>-<role>[-<i>]`."""
     if name == "local":
         return "local"
     if name.startswith("head-") or name.endswith("-head"):

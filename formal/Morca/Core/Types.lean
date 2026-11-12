@@ -4,10 +4,10 @@
 A step's identity, the snapshots of one Iceberg table, the commits Postgres
 has on record, and a worker's memory while it runs one attempt of the step.
 -/
-namespace Orca
+namespace Morca
 
-/-- The part of a snapshot's `orca.*` summary that `Ctx.made` compares, minus
-the commit number: mirrors src/orca/ctx.mojo#Ctx.made. An in-memory run
+/-- The part of a snapshot's `morca.*` summary that `Ctx.made` compares, minus
+the commit number: mirrors src/morca/ctx.mojo#Ctx.made. An in-memory run
 (`run = 0`), which is never recognised, is outside the model. -/
 structure StepId where
   pipeline : String
@@ -61,4 +61,4 @@ structure State where
   done : Nat
   phase : Phase
 
-end Orca
+end Morca

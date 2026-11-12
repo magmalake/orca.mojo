@@ -1,37 +1,37 @@
-"""The `orca` command: the scheduler, the UI and registration, in a binary
+"""The `morca` command: the scheduler, the UI and registration, in a binary
 that links no pipeline. A project builds its own from two lines:
 
-    from orca.command import orca_command
+    from morca.command import morca_command
 
     def main() raises:
-        orca_command()
+        morca_command()
 
 Its commands:
 
-    pixi run orca
-    ./build/orca locate ./build/taxi --root .   # taxi.source.json, for the UI's links
-    ./build/orca register ./build/taxi [...]   # with ./orca.toml (orca.config)
-    ./build/orca config show taxi   # its settings, and where each came from
-    ./build/orca config export      # an orca.toml from the registrations
-    ./build/orca backfill taxi 2011-01..2024-12
-    ./build/orca backfill --rerun taxi 2024-03     # again, though it succeeded
-    ./build/orca cancel taxi @all   # its queued, running and retrying runs
-    ./build/orca pause taxi         # start none of its runs; orca unpause taxi
-    ./build/orca tick
-    ./build/orca scheduler
-    ./build/orca ui                 # http://127.0.0.1:8270, or ORCA_UI_ADDR
-                                    # (the worker API on ORCA_WORKER_ADDR too)
-    ./build/orca sample --out m.jsonl --pid 1234   # machine metrics
-    ./build/orca lineage lake.report [<snapshot>]
-    ./build/orca rebuild raw.events 2024-03
-    ./build/orca status taxi        # its state and latest runs
-    ./build/orca login https://orca.example.com   # then --remote, below
-    ./build/orca --remote orca.example.com backfill taxi 2024-03
+    pixi run morca
+    ./build/morca locate ./build/taxi --root .   # taxi.source.json, for the UI's links
+    ./build/morca register ./build/taxi [...]   # with ./morca.toml (morca.config)
+    ./build/morca config show taxi   # its settings, and where each came from
+    ./build/morca config export      # a morca.toml from the registrations
+    ./build/morca backfill taxi 2011-01..2024-12
+    ./build/morca backfill --rerun taxi 2024-03     # again, though it succeeded
+    ./build/morca cancel taxi @all   # its queued, running and retrying runs
+    ./build/morca pause taxi         # start none of its runs; morca unpause taxi
+    ./build/morca tick
+    ./build/morca scheduler
+    ./build/morca ui                 # http://127.0.0.1:8270, or MORCA_UI_ADDR
+                                    # (the worker API on MORCA_WORKER_ADDR too)
+    ./build/morca sample --out m.jsonl --pid 1234   # machine metrics
+    ./build/morca lineage lake.report [<snapshot>]
+    ./build/morca rebuild raw.events 2024-03
+    ./build/morca status taxi        # its state and latest runs
+    ./build/morca login https://morca.example.com   # then --remote, below
+    ./build/morca --remote morca.example.com backfill taxi 2024-03
 
-Needs `ORCA_DATABASE_URL`, but for the commands `--remote` (or
-`ORCA_REMOTE`) sends to a deployed `orca ui` instead (`orca.remote`). See
-`orca.scheduler` for what a tick does, and `orca.web` for the pages,
-`orca.lineage` for what `lineage` prints, and `orca.sensors` for what
+Needs `MORCA_DATABASE_URL`, but for the commands `--remote` (or
+`MORCA_REMOTE`) sends to a deployed `morca ui` instead (`morca.remote`). See
+`morca.scheduler` for what a tick does, and `morca.web` for the pages,
+`morca.lineage` for what `lineage` prints, and `morca.sensors` for what
 `rebuild` plans.
 Exit codes: 0, 2 for a usage error, 3 for any other error.
 """
@@ -43,23 +43,23 @@ from std.time import sleep
 
 from postgres import Params
 
-from orca.actions import cancel_runs, pause_pipeline
-from orca.auth import add_user, remove_user, users
-from orca.aws import aws_command
-from orca.aws_replace import replace_control
-from orca.civil import now
-from orca.expiry import expirable, expire_argv, maintain_binary
-from orca.lineage import Made, SnapshotRef, back, forward, latest
-from orca.locate import locate
-from orca.notify import (
+from morca.actions import cancel_runs, pause_pipeline
+from morca.auth import add_user, remove_user, users
+from morca.aws import aws_command
+from morca.aws_replace import replace_control
+from morca.civil import now
+from morca.expiry import expirable, expire_argv, maintain_binary
+from morca.lineage import Made, SnapshotRef, back, forward, latest
+from morca.locate import locate
+from morca.notify import (
     alert,
     configured as notify_configured,
     flush as flush_notify,
     resolve as resolve_alert,
     send_now,
 )
-from orca.proc import absolute, binary_seconds, capture
-from orca.remote import (
+from morca.proc import absolute, binary_seconds, capture
+from morca.remote import (
     Api,
     api_command,
     is_remote_command,
@@ -68,41 +68,42 @@ from orca.remote import (
     remote_api,
     remote_target,
 )
-from orca.sample import sample_main
-from orca.upgrade import upgrade_command
-from orca.config import (
+from morca.sample import sample_main
+from morca.upgrade import upgrade_command
+from morca.config import (
     ProjectConfig,
     RegisterFlags,
     canonical_flag,
+    refuse_orca_toml,
 )
-from orca.config_show import (
+from morca.config_show import (
     export_toml,
     show_json,
     shown,
 )
-from orca.instances import (
+from morca.instances import (
     ask_drain,
     instances,
     overlap_on,
     overlap_refusal,
     wait_for_lead,
 )
-from orca.pool_config import read_pools, record_pools
-from orca.registering import register_pipeline
-from orca.scheduler import Scheduler
-from orca.tick import tick
-from orca.control import fetch_secret
-from orca.ec2 import vcpus
-from orca.fleet import hourly_price
-from orca.secrets import secret_problem
-from orca.sensors import rebuild, rebuilds
-from orca.state import State
-from orca.watchdog import acknowledge, snooze as snooze_rule
-from orca.auth import audit
-from orca.tokens import revoke_user_tokens, user_tokens
-from orca.web.server import DEFAULT_ADDR, serve_ui
-from orca.worker import worker_command
-from orca.workers import (
+from morca.pool_config import read_pools, record_pools
+from morca.registering import register_pipeline
+from morca.scheduler import Scheduler
+from morca.tick import tick
+from morca.control import fetch_secret
+from morca.ec2 import vcpus
+from morca.fleet import hourly_price
+from morca.secrets import secret_problem
+from morca.sensors import rebuild, rebuilds
+from morca.state import State
+from morca.watchdog import acknowledge, snooze as snooze_rule
+from morca.auth import audit
+from morca.tokens import revoke_user_tokens, user_tokens
+from morca.web.server import DEFAULT_ADDR, serve_ui
+from morca.worker import worker_command
+from morca.workers import (
     create_worker_token,
     revoke_worker_token,
     worker_rows,
@@ -110,103 +111,103 @@ from orca.workers import (
 )
 
 comptime USAGE = """usage:
-  orca locate <pipeline binary> [...] [--root <dir>]
-  orca upgrade [--file <upgrade.toml>] [--from V] --to V [--when before|after]
+  morca locate <pipeline binary> [...] [--root <dir>]
+  morca upgrade [--file <upgrade.toml>] [--from V] --to V [--when before|after]
                 (a release's upgrade steps, a line each, for deploy.sh;
-                the file defaults to ORCA_UPGRADE or /opt/orca/upgrade.toml)
-  orca aws up|push|register|app|status|replace-control|down ...
-                                    (orca aws for more)
-  orca register [--image <image>] [--head-type T] [--worker-type T]
+                the file defaults to MORCA_UPGRADE or /opt/morca/upgrade.toml)
+  morca aws up|push|register|app|status|replace-control|down ...
+                                    (morca aws for more)
+  morca register [--image <image>] [--head-type T] [--worker-type T]
                 [--workers N|MIN..MAX] [--worker-procs N|auto] [--spot]
                 [--secret NAME=ID ...]
                 [--placement control|ec2|worker:<pool>|default]
                 [--max-runs N|auto] [--cpus N|MIN..MAX] [--memory-gb N|MIN..MAX]
-                [--config <orca.toml>|--no-config]
+                [--config <morca.toml>|--no-config]
                 [<pipeline binary> ...]
                 (no binaries: every [pipelines.<name>] of the file, in
-                ORCA_PIPELINES_DIR or pipelines/ next to it; how its runs run comes from orca.toml, ./orca.toml or
-                ORCA_CONFIG unless --config names another, flags over it;
-                orca config show)
+                MORCA_PIPELINES_DIR or pipelines/ next to it; how its runs run comes from morca.toml, ./morca.toml or
+                MORCA_CONFIG unless --config names another, flags over it;
+                morca config show)
                 (--worker-procs: dista worker processes per EC2 worker
                 instance, auto = one per vCPU; default 1. --placement
-                control: runs on the scheduler's own host, orca.control;
+                control: runs on the scheduler's own host, morca.control;
                 default: the scheduler's runner)
                 <pipeline binary> [...]
-  orca backfill [--rerun [--allow-append]] [--preview] <pipeline>
+  morca backfill [--rerun [--allow-append]] [--preview] <pipeline>
                 KEY[..KEY][,...]
                 (keyed: NAME[,...]|@all|@file:<path>; --rerun: done ones too,
                 refused for steps that append unless --allow-append;
                 --preview: what it would queue, queueing nothing)
-  orca start <pipeline> KEY[..KEY][,...]   (one run over them all)
-  orca cancel <pipeline> KEY[..KEY][,...]|@all
+  morca start <pipeline> KEY[..KEY][,...]   (one run over them all)
+  morca cancel <pipeline> KEY[..KEY][,...]|@all
                 (its queued, running and retrying runs over those keys)
-  orca cancel <run>
-  orca resume [--allow-new-code] <run>
-  orca rerun [--allow-append] <run> <step>
+  morca cancel <run>
+  morca resume [--allow-new-code] <run>
+  morca rerun [--allow-append] <run> <step>
                                     (a new run, from that step on)
-  orca pause|unpause <pipeline>     (the scheduler starts none of its runs)
-  orca status [<pipeline>] [--json]
-  orca config show [<pipeline>] [--json]
+  morca pause|unpause <pipeline>     (the scheduler starts none of its runs)
+  morca status [<pipeline>] [--json]
+  morca config show [<pipeline>] [--json]
                 (how each runs, and where each value came from: code
-                default, orca.toml, flag, environment)
-  orca config export [--out <path>|-] [--force]
-                (an orca.toml from what's registered; default ./orca.toml)
-  orca config check [<orca.toml>] [--secrets]
+                default, morca.toml, flag, environment)
+  morca config export [--out <path>|-] [--force]
+                (a morca.toml from what's registered; default ./morca.toml)
+  morca config check [<morca.toml>] [--secrets]
                 (checks a file as register does, and its instance types,
                 with no database; --secrets reads each secret too)
-  orca watchdog status [--json]     (rules, each threshold and value, trips)
-  orca watchdog snooze <rule> <duration>   (2h, 30m, 1d; off ends it)
-  orca watchdog ack [--all|<trip id>]   (keep a trip's pipelines paused and
+  morca watchdog status [--json]     (rules, each threshold and value, trips)
+  morca watchdog snooze <rule> <duration>   (2h, 30m, 1d; off ends it)
+  morca watchdog ack [--all|<trip id>]   (keep a trip's pipelines paused and
                                     clear its banner; status still lists it)
-  orca alerts [--kind K] [--open|--resolved] [--limit N] [--json]
+  morca alerts [--kind K] [--open|--resolved] [--limit N] [--json]
                                     (the alerts sent, newest first: Ops ›
                                     Alerts)
-  orca notify test                  (sends a test message to ORCA_NOTIFY_URL,
-                                    orca.notify)
-  orca notify --kind K [--subject S] [--title T] [--priority high|default|
+  morca notify test                  (sends a test message to MORCA_NOTIFY_URL,
+                                    morca.notify)
+  morca notify --kind K [--subject S] [--title T] [--priority high|default|
               low] [--tags a,b] [--click URL] [--resolved] [message ...]
                                     (an alert from a script, held back like
                                     the scheduler's: once per kind and subject
-                                    in ORCA_NOTIFY_MIN_SECONDS)
-  orca tick
-  orca scheduler                    (with ORCA_OVERLAP=on an instance that
+                                    in MORCA_NOTIFY_MIN_SECONDS)
+  morca tick
+  morca scheduler                    (with MORCA_OVERLAP=on an instance that
                                     leads, or drains once a newer one runs:
                                     docs/overlap.md)
-  orca scheduler status             (the instances: role, runs, last seen)
-  orca scheduler drain <id>         (asks instance <id> to drain and exit)
-  orca scheduler can-overlap        (exit 0 if this binary can start beside
+  morca scheduler status             (the instances: role, runs, last seen)
+  morca scheduler drain <id>         (asks instance <id> to drain and exit)
+  morca scheduler can-overlap        (exit 0 if this binary can start beside
                                     the scheduler going now, 1 if a deploy
                                     must stop it first; doesn't migrate)
-  orca scheduler wait-lead [--timeout S]   (until the newest instance leads)
-  orca ui
-  orca sample --out <location>|- [--pid PID] [--match PATH] [--dirs D,...]
+  morca scheduler wait-lead [--timeout S]   (until the newest instance leads)
+  morca ui
+  morca sample --out <location>|- [--pid PID] [--match PATH] [--dirs D,...]
               [--seconds S] [--count N] [--keep N]
-                                      (machine metrics, orca.sample)
-  orca lineage <dataset> [<snapshot>]
-  orca rebuild <dataset> KEY[..KEY][,...]
-  orca expire <dataset>|--all [--older-than 30d|12h|90m] [--keep N]
-              [--dry-run] [--report]   (snapshot expiry, via orca_maintain)
-  orca user add|remove <name>       (add reads the password from stdin)
-  orca user list
-  orca user tokens <name>           (its API tokens, from orca login)
-  orca user revoke <name> <id>|@all
-  orca worker-token create --pool <pool> [--days N] [--label L]
-  orca worker-token list
-  orca worker-token revoke <id>
-  orca worker --pool <pool> [--remote <url>] [--token-file <path>]
+                                      (machine metrics, morca.sample)
+  morca lineage <dataset> [<snapshot>]
+  morca rebuild <dataset> KEY[..KEY][,...]
+  morca expire <dataset>|--all [--older-than 30d|12h|90m] [--keep N]
+              [--dry-run] [--report]   (snapshot expiry, via morca_maintain)
+  morca user add|remove <name>       (add reads the password from stdin)
+  morca user list
+  morca user tokens <name>           (its API tokens, from morca login)
+  morca user revoke <name> <id>|@all
+  morca worker-token create --pool <pool> [--days N] [--label L]
+  morca worker-token list
+  morca worker-token revoke <id>
+  morca worker --pool <pool> [--remote <url>] [--token-file <path>]
               [--max-runs N] [--poll-seconds S] [--dir <dir>]
               [--image <image>] [--name <name>] [--advertise <address>]
-                (runs pool's runs here, over the UI's API: orca.worker)
-  orca login [<url>] [--user NAME] [--days N] [--label L]
-  orca logout [<url>]
-  orca --remote <url> backfill|start|cancel|pause|unpause|resume|rerun|
+                (runs pool's runs here, over the UI's API: morca.worker)
+  morca login [<url>] [--user NAME] [--days N] [--label L]
+  morca logout [<url>]
+  morca --remote <url> backfill|start|cancel|pause|unpause|resume|rerun|
                       rebuild|status|lineage|watchdog|alerts ...
-                (to a deployed orca ui, as the user orca login logged in;
-                or ORCA_REMOTE=<url>)"""
+                (to a deployed morca ui, as the user morca login logged in;
+                or MORCA_REMOTE=<url>)"""
 
 
 def _backfill_flags(args: List[String]) -> Bool:
-    """Whether `orca backfill` has its two arguments after flags it knows
+    """Whether `morca backfill` has its two arguments after flags it knows
     here: `--rerun`, and `--allow-append` with it."""
     if len(args) < 4:
         return False
@@ -230,7 +231,7 @@ def _usage(msg: String = ""):
 
 
 def _locate(args: List[String]) raises -> Int:
-    """`orca locate`: each binary's `<binary>.source.json`."""
+    """`morca locate`: each binary's `<binary>.source.json`."""
     var root = String(".")
     var binaries = List[String]()
     var i = 2
@@ -246,7 +247,7 @@ def _locate(args: List[String]) raises -> Int:
     for b in binaries:
         var got = capture([b, "describe"], binary_seconds())
         if got[0] != 0:
-            raise Error("orca: ", b, " describe exited ", got[0], ": ", got[1])
+            raise Error("morca: ", b, " describe exited ", got[0], ": ", got[1])
         var map = locate(got[1], root)
         with open(String(b, ".source.json"), "w") as f:
             f.write(map, "\n")
@@ -255,16 +256,16 @@ def _locate(args: List[String]) raises -> Int:
 
 
 def _notify(args: List[String]) raises -> Int:
-    """`orca notify`: a message to the person ORCA_NOTIFY_URL reaches
-    (`orca.notify`). `test` sends one at once. Otherwise it's an alert of a
+    """`morca notify`: a message to the person MORCA_NOTIFY_URL reaches
+    (`morca.notify`). `test` sends one at once. Otherwise it's an alert of a
     kind and subject: recorded in Postgres, so it isn't sent twice in
-    `ORCA_NOTIFY_MIN_SECONDS` and is tried again by the scheduler if ntfy is
+    `MORCA_NOTIFY_MIN_SECONDS` and is tried again by the scheduler if ntfy is
     down; or sent at once when there is no database."""
     if not notify_configured():
         print(
             (
-                "orca: alerts are off: set ORCA_NOTIFY_URL (and the topic's"
-                " secret with ORCA_NOTIFY_SECRET)"
+                "morca: alerts are off: set MORCA_NOTIFY_URL (and the topic's"
+                " secret with MORCA_NOTIFY_SECRET)"
             ),
             file=stderr,
         )
@@ -272,13 +273,13 @@ def _notify(args: List[String]) raises -> Int:
     if len(args) == 3 and args[2] == "test":
         try:
             send_now(
-                "orca: test alert",
-                "If you can read this, orca's alerts reach you.",
+                "morca: test alert",
+                "If you can read this, morca's alerts reach you.",
                 "default",
                 "white_check_mark",
             )
         except e:
-            print("orca: the test alert wasn't sent:", e, file=stderr)
+            print("morca: the test alert wasn't sent:", e, file=stderr)
             return 1
         print("sent")
         return 0
@@ -322,15 +323,15 @@ def _notify(args: List[String]) raises -> Int:
             words.append(a)
             i += 1
     if not kind:
-        _usage("orca notify needs test, or --kind")
+        _usage("morca notify needs test, or --kind")
     if priority not in ["high", "default", "low", "urgent", "min"]:
-        _usage("orca notify --priority is high, default or low")
+        _usage("morca notify --priority is high, default or low")
     var body = String()
     for k in range(len(words)):
         body.write(" " if k else "", words[k])
     if not title:
-        title = String("orca: ", kind)
-    var url = getenv("ORCA_DATABASE_URL")
+        title = String("morca: ", kind)
+    var url = getenv("MORCA_DATABASE_URL")
     if url:
         try:
             var db = State(url)
@@ -366,7 +367,7 @@ def _notify(args: List[String]) raises -> Int:
             return 0
         except e:
             print(
-                "orca: no database for the alert's record (",
+                "morca: no database for the alert's record (",
                 e,
                 ")",
                 file=stderr,
@@ -374,7 +375,7 @@ def _notify(args: List[String]) raises -> Int:
     try:
         send_now(title, body, priority, tags, click)
     except e:
-        print("orca: the alert wasn't sent:", e, file=stderr)
+        print("morca: the alert wasn't sent:", e, file=stderr)
         return 1
     print("sent")
     return 0
@@ -391,7 +392,7 @@ def _command(args: List[String], target: String) raises -> Int:
     if args[1] == "locate":
         return _locate(args)
     if args[1] == "upgrade":
-        # A file only, for deploy.sh: no database (orca.upgrade).
+        # A file only, for deploy.sh: no database (morca.upgrade).
         return upgrade_command(args)
     if args[1] == "aws":
         if len(args) > 2 and args[2] == "replace-control":
@@ -402,14 +403,14 @@ def _command(args: List[String], target: String) raises -> Int:
     if args[1] == "notify":
         return _notify(args)
     if args[1] == "worker":
-        # Talks only to the UI's API, with no database (orca.worker).
+        # Talks only to the UI's API, with no database (morca.worker).
         return worker_command(args, target)
     if args[1] == "config" and len(args) >= 3 and args[2] == "check":
         # A file only, for a project's CI: no database.
         return _config_check(args)
-    var url = getenv("ORCA_DATABASE_URL")
+    var url = getenv("MORCA_DATABASE_URL")
     if not url:
-        _usage("orca needs ORCA_DATABASE_URL")
+        _usage("morca needs MORCA_DATABASE_URL")
     var cmd = args[1]
     # Commands that print what a page of the UI shows, or do what its
     # buttons do, over the database here as `--remote` does over HTTPS.
@@ -428,7 +429,7 @@ def _command(args: List[String], target: String) raises -> Int:
             try:
                 trip = Int(which)
             except:
-                _usage("orca watchdog ack [--all|<trip id>]")
+                _usage("morca watchdog ack [--all|<trip id>]")
         var who = getenv("USER", "local")
         var n = acknowledge(db, trip, who)
         audit(db, who, String("/watchdog/", which, "/ack"), 0, "", "local")
@@ -492,7 +493,7 @@ def _command(args: List[String], target: String) raises -> Int:
         db.migrate()
         var o = cancel_runs(db, args[2], args[3])
         if o.refused:
-            raise Error("orca: ", o.refused)
+            raise Error("morca: ", o.refused)
         print("cancelled", o.queued, "runs")
         return 0
     if (cmd == "pause" or cmd == "unpause") and len(args) == 3:
@@ -500,7 +501,7 @@ def _command(args: List[String], target: String) raises -> Int:
         db.migrate()
         var o = pause_pipeline(db, args[2], cmd == "pause")
         if o.refused:
-            raise Error("orca: ", o.refused)
+            raise Error("morca: ", o.refused)
         print(cmd + "d", args[2])
         return 0
     if cmd == "tick" and len(args) == 2:
@@ -521,7 +522,7 @@ def _command(args: List[String], target: String) raises -> Int:
             try:
                 tick(s, now())
             except e:
-                print("orca: tick failed:", e)
+                print("morca: tick failed:", e)
                 try:
                     if s.instance > 0:
                         # Its processes stay its own (docs/overlap.md).
@@ -547,7 +548,7 @@ def _command(args: List[String], target: String) raises -> Int:
         else:
             id = latest(db, args[2])
             if id < 0:
-                raise Error("orca: no snapshot of ", args[2], " is recorded")
+                raise Error("morca: no snapshot of ", args[2], " is recorded")
         var start = SnapshotRef(args[2], id)
         print(start)
         print("made from:")
@@ -585,7 +586,7 @@ def _command(args: List[String], target: String) raises -> Int:
             return 0
         if args[2] == "remove" and len(args) == 4:
             if not remove_user(db, args[3]):
-                raise Error("orca: no user ", args[3])
+                raise Error("morca: no user ", args[3])
             print("removed", args[3])
             return 0
         if args[2] == "tokens" and len(args) == 4:
@@ -615,7 +616,7 @@ def _command(args: List[String], target: String) raises -> Int:
                     _usage(String("not a token's id, or @all: ", args[4]))
             var n = revoke_user_tokens(db, args[3], id)
             if n == 0 and id > 0:
-                raise Error("orca: ", args[3], " has no token ", id)
+                raise Error("morca: ", args[3], " has no token ", id)
             print("revoked", n, "tokens of" if n != 1 else "token of", args[3])
             return 0
     if cmd == "worker-token" and len(args) >= 3:
@@ -625,8 +626,8 @@ def _command(args: List[String], target: String) raises -> Int:
         db.migrate()
         serve_ui(
             url,
-            getenv("ORCA_UI_ADDR", DEFAULT_ADDR),
-            getenv("ORCA_WORKER_ADDR"),
+            getenv("MORCA_UI_ADDR", DEFAULT_ADDR),
+            getenv("MORCA_WORKER_ADDR"),
         )
         return 0
     _usage()
@@ -634,7 +635,7 @@ def _command(args: List[String], target: String) raises -> Int:
 
 
 def _worker_token(url: String, args: List[String]) raises -> Int:
-    """`orca worker-token create|list|revoke` (`orca.workers`)."""
+    """`morca worker-token create|list|revoke` (`orca.workers`)."""
     var db = State(url)
     db.migrate()
     var who = getenv("USER", "local")
@@ -701,7 +702,7 @@ def _worker_token(url: String, args: List[String]) raises -> Int:
             _usage(String("not a worker token's id: ", args[3]))
             return 2
         if not revoke_worker_token(db, id):
-            raise Error("orca: no live worker token ", id)
+            raise Error("morca: no live worker token ", id)
         audit(db, who, "worker-token revoke", 0, String("id=", id), "local")
         print("revoked worker token", id)
         return 0
@@ -710,8 +711,8 @@ def _worker_token(url: String, args: List[String]) raises -> Int:
 
 
 def _expire(url: String, args: List[String]) raises -> Int:
-    """`orca expire`: each dataset's `orca_maintain expire`, with the
-    snapshots orca still needs retained (`orca.expiry`)."""
+    """`morca expire`: each dataset's `morca_maintain expire`, with the
+    snapshots morca still needs retained (`morca.expiry`)."""
     var older = String()
     var keep = String()
     var dry_run = False
@@ -735,9 +736,9 @@ def _expire(url: String, args: List[String]) raises -> Int:
     var binary = maintain_binary()
     if not binary:
         raise Error(
-            "orca: no orca_maintain binary (set ORCA_MAINTAIN, or build"
-            " bin/orca_maintain.mojo calling orca.maintain.maintain_main"
-            " beside orca)"
+            "morca: no morca_maintain binary (set MORCA_MAINTAIN, or build"
+            " bin/morca_maintain.mojo calling morca.maintain.maintain_main"
+            " beside morca)"
         )
     var db = State(url)
     db.migrate()
@@ -752,7 +753,7 @@ def _expire(url: String, args: List[String]) raises -> Int:
         var got = capture(a, 0)
         var out = String(got[1].strip())
         if got[0] != 0:
-            print("orca: expiring", ds, "failed:", out, file=stderr)
+            print("morca: expiring", ds, "failed:", out, file=stderr)
             code = 1
         elif out:
             print(out)
@@ -769,18 +770,18 @@ comptime _FLAG_KEYS = [
     ("--cpus", "cpus"),
     ("--memory-gb", "memory_gb"),
 ]
-"""`orca register`'s flags for orca.toml's keys (`orca.config`)."""
+"""`morca register`'s flags for morca.toml's keys (`morca.config`)."""
 
 
 def _config_binaries(file: ProjectConfig) raises -> List[String]:
     """The binary of each `[pipelines.<name>]` in `file`, in the directory
-    ORCA_PIPELINES_DIR, else `pipelines/` next to the file. Raises, before
+    MORCA_PIPELINES_DIR, else `pipelines/` next to the file. Raises, before
     anything is registered, if there is no such directory or a binary is
     missing."""
     var names = file.pipelines()
     if len(names) == 0:
-        raise Error("orca: ", file.path, " names no [pipelines.<name>]")
-    var dir = getenv("ORCA_PIPELINES_DIR")
+        raise Error("morca: ", file.path, " names no [pipelines.<name>]")
+    var dir = getenv("MORCA_PIPELINES_DIR")
     if not dir:
         var full = absolute(file.path)
         var slash = full.rfind("/")
@@ -788,10 +789,10 @@ def _config_binaries(file: ProjectConfig) raises -> List[String]:
         dir = String(beside, "/pipelines")
         if not exists(dir):
             raise Error(
-                "orca: no pipeline binaries: set ORCA_PIPELINES_DIR, put them",
+                "morca: no pipeline binaries: set MORCA_PIPELINES_DIR, put them",
                 " in ",
                 dir,
-                ", or name them: orca register <binary>...",
+                ", or name them: morca register <binary>...",
             )
     var out = List[String]()
     var missing = String()
@@ -802,7 +803,7 @@ def _config_binaries(file: ProjectConfig) raises -> List[String]:
         out.append(p)
     if missing:
         raise Error(
-            "orca: ",
+            "morca: ",
             file.path,
             " names pipelines with no binary in ",
             dir,
@@ -813,7 +814,7 @@ def _config_binaries(file: ProjectConfig) raises -> List[String]:
 
 
 def _scheduler(url: String, args: List[String]) raises -> Int:
-    """`orca scheduler <status|drain|can-overlap|wait-lead>`: the scheduler
+    """`morca scheduler <status|drain|can-overlap|wait-lead>`: the scheduler
     instances (`orca.instances`, docs/overlap.md)."""
     var db = State(url)
     var sub = args[2]
@@ -838,7 +839,7 @@ def _scheduler(url: String, args: List[String]) raises -> Int:
             _usage(String("not an instance: ", args[3]))
             return 2
         if not ask_drain(db, id):
-            raise Error("orca: no live scheduler instance ", id)
+            raise Error("morca: no live scheduler instance ", id)
         print("asked scheduler instance", id, "to drain")
         return 0
     if sub == "wait-lead" and (len(args) == 3 or len(args) == 5):
@@ -849,7 +850,7 @@ def _scheduler(url: String, args: List[String]) raises -> Int:
             timeout = Float64(args[4])
         if not wait_for_lead(db, timeout):
             raise Error(
-                "orca: the newest scheduler instance doesn't lead after ",
+                "morca: the newest scheduler instance doesn't lead after ",
                 Int(timeout),
                 " s",
             )
@@ -860,15 +861,15 @@ def _scheduler(url: String, args: List[String]) raises -> Int:
 
 
 def _register(url: String, args: List[String]) raises -> Int:
-    """`orca register`: each binary's pipeline, with how its runs run from
-    the project's orca.toml and the flags (`orca.config`)."""
+    """`morca register`: each binary's pipeline, with how its runs run from
+    the project's morca.toml and the flags (`morca.config`)."""
     var flags = RegisterFlags()
     var config_path = String()
     var no_config = False
     var b64 = String()
     var commit = String()
     var dirty = False
-    var name = String("orca.toml")
+    var name = String("morca.toml")
     var i = 2
     while i < len(args) and args[i].startswith("--"):
         var a = args[i]
@@ -908,7 +909,7 @@ def _register(url: String, args: List[String]) raises -> Int:
         elif a == "--config":
             config_path = v
         elif a == "--config-b64":
-            # The file itself, from `orca aws register` on another machine.
+            # The file itself, from `morca aws register` on another machine.
             b64 = v
         elif a == "--config-commit":
             commit = v
@@ -925,15 +926,16 @@ def _register(url: String, args: List[String]) raises -> Int:
         file = ProjectConfig()
     elif config_path:
         file = ProjectConfig.load(config_path)
-    elif getenv("ORCA_CONFIG"):
-        file = ProjectConfig.load(getenv("ORCA_CONFIG"))
-    elif exists("orca.toml"):
-        file = ProjectConfig.load("orca.toml")
+    elif getenv("MORCA_CONFIG"):
+        file = ProjectConfig.load(getenv("MORCA_CONFIG"))
+    elif exists("morca.toml"):
+        file = ProjectConfig.load("morca.toml")
     else:
+        refuse_orca_toml()
         file = ProjectConfig()
     if file.is_file():
         print(
-            "orca: registering with",
+            "morca: registering with",
             file.path,
             "(sha256 " + String(file.hash[byte=:12]) + ")",
             file=stderr,
@@ -943,26 +945,26 @@ def _register(url: String, args: List[String]) raises -> Int:
         paths.append(args[k])
     if not explicit_paths:
         if not file.is_file():
-            _usage("register needs a pipeline binary, or an orca.toml")
+            _usage("register needs a pipeline binary, or a morca.toml")
         paths = _config_binaries(file)
     var s = Scheduler(url)
     # Registered under an instance that drains, the new code could start
-    # under the old image (docs/overlap.md#deploying): with ORCA_OVERLAP=on
-    # a handover going on is waited for, ORCA_REGISTER_WAIT_SECONDS (120).
-    var wait = Float64(getenv("ORCA_REGISTER_WAIT_SECONDS", "120"))
+    # under the old image (docs/overlap.md#deploying): with MORCA_OVERLAP=on
+    # a handover going on is waited for, MORCA_REGISTER_WAIT_SECONDS (120).
+    var wait = Float64(getenv("MORCA_REGISTER_WAIT_SECONDS", "120"))
     if overlap_on() and not wait_for_lead(s.db, wait):
         raise Error(
-            "orca: a scheduler handover is going on and the newest instance",
+            "morca: a scheduler handover is going on and the newest instance",
             " doesn't lead after ",
             Int(wait),
-            " s; register once it does (orca scheduler status)",
+            " s; register once it does (morca scheduler status)",
         )
     for k in range(len(paths)):
         var got = register_pipeline(s, paths[k], now(), flags, file)
         if file.is_file() and not file.has(got):
             print(
                 String(
-                    "orca: warning: ",
+                    "morca: warning: ",
                     got,
                     " isn't in ",
                     file.path,
@@ -972,7 +974,7 @@ def _register(url: String, args: List[String]) raises -> Int:
             )
         print("registered", got)
     if file.is_file():
-        # Its worker pools (orca.pool_config): the file's, and only those.
+        # Its worker pools (morca.pool_config): the file's, and only those.
         var pools = read_pools(file.doc)
         var gone = record_pools(s.db, pools)
         for p in pools:
@@ -982,13 +984,13 @@ def _register(url: String, args: List[String]) raises -> Int:
     return 0
 
 
-def _without_orca(e: String) -> String:
-    return String(e[byte=6:]) if e.startswith("orca: ") else e
+def _without_morca(e: String) -> String:
+    return String(e[byte=6:]) if e.startswith("morca: ") else e
 
 
 def _config_check(args: List[String]) raises -> Int:
-    """`orca config check [<file>] [--secrets]`: `file` (`$ORCA_CONFIG`,
-    else ./orca.toml) as registering checks it, and each instance type
+    """`morca config check [<file>] [--secrets]`: `file` (`$MORCA_CONFIG`,
+    else ./morca.toml) as registering checks it, and each instance type
     sized; with `--secrets`, each secret read. 1 if anything is wrong."""
     var path = String()
     var read_secrets = False
@@ -1000,7 +1002,9 @@ def _config_check(args: List[String]) raises -> Int:
         else:
             _usage(String("unknown argument: ", args[k]))
     if not path:
-        path = getenv("ORCA_CONFIG", "orca.toml")
+        if not getenv("MORCA_CONFIG"):
+            refuse_orca_toml()
+        path = getenv("MORCA_CONFIG", "morca.toml")
     var file: ProjectConfig
     try:
         file = ProjectConfig.load(path)
@@ -1014,17 +1018,17 @@ def _config_check(args: List[String]) raises -> Int:
                 _ = vcpus(e[1])
             except err:
                 print(
-                    e[0], ": ", _without_orca(String(err)), sep="", file=stderr
+                    e[0], ": ", _without_morca(String(err)), sep="", file=stderr
                 )
                 problems += 1
                 continue
             if hourly_price(e[1]) < 0:
                 print(
-                    "orca: warning: ",
+                    "morca: warning: ",
                     e[0],
                     ": ",
                     e[1],
-                    " isn't in orca's price table (orca.fleet), so Ops >",
+                    " isn't in morca's price table (morca.fleet), so Ops >",
                     " Fleet and the watchdog's cost rule count it as $0 an",
                     " hour",
                     sep="",
@@ -1037,11 +1041,11 @@ def _config_check(args: List[String]) raises -> Int:
                 _ = fetch_secret(e[1])
             except err:
                 print(
-                    e[0], ": ", _without_orca(String(err)), sep="", file=stderr
+                    e[0], ": ", _without_morca(String(err)), sep="", file=stderr
                 )
                 problems += 1
     if problems > 0:
-        print("orca:", path, "has", problems, "problem(s)", file=stderr)
+        print("morca:", path, "has", problems, "problem(s)", file=stderr)
         return 1
     var n = len(file.pipelines())
     var line = String(path, ": ok, ", n, " pipeline", "" if n == 1 else "s")
@@ -1052,7 +1056,7 @@ def _config_check(args: List[String]) raises -> Int:
 
 
 def _config(url: String, args: List[String]) raises -> Int:
-    """`orca config show [<pipeline>] [--json]` and `orca config export
+    """`morca config show [<pipeline>] [--json]` and `morca config export
     [--out <path>|-] [--force]`."""
     var db = State(url)
     db.migrate()
@@ -1068,7 +1072,7 @@ def _config(url: String, args: List[String]) raises -> Int:
                 _usage(String("unknown argument: ", args[k]))
         var items = shown(db, only)
         if only and len(items) == 0:
-            raise Error("orca: no pipeline ", only, " is registered")
+            raise Error("morca: no pipeline ", only, " is registered")
         if json:
             print(show_json(items, only != ""))
         else:
@@ -1076,7 +1080,7 @@ def _config(url: String, args: List[String]) raises -> Int:
                 print(("\n" if k > 0 else "") + items[k].text(), end="")
         return 0
     if args[2] == "export":
-        var out = String("orca.toml")
+        var out = String("morca.toml")
         var force = False
         var k = 3
         while k < len(args):
@@ -1093,7 +1097,7 @@ def _config(url: String, args: List[String]) raises -> Int:
             print(text, end="")
             return 0
         if exists(out) and not force:
-            raise Error("orca: ", out, " exists; --force replaces it")
+            raise Error("morca: ", out, " exists; --force replaces it")
         with open(out, "w") as f:
             f.write(text)
         print("wrote", out)
@@ -1119,9 +1123,9 @@ def _print_made(ms: List[Made]):
         print(line)
 
 
-def orca_command() raises:
-    """The `orca` command: reads the command line, runs it, and exits with
-    its code. A project's own `orca` binary is a `main` calling this."""
+def morca_command() raises:
+    """The `morca` command: reads the command line, runs it, and exits with
+    its code. A project's own `morca` binary is a `main` calling this."""
     var args = List[String]()
     for a in argv():
         args.append(String(a))
@@ -1141,9 +1145,9 @@ def orca_command() raises:
         if args[1] != "login" and args[1] != "logout":
             _usage(
                 String(
-                    "orca ",
+                    "morca ",
                     args[1],
-                    " needs the database (ORCA_DATABASE_URL); --remote is for",
+                    " needs the database (MORCA_DATABASE_URL); --remote is for",
                     " the commands below that it lists",
                 )
             )

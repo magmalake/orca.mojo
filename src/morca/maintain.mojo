@@ -1,23 +1,23 @@
 """Table maintenance for a project's datasets: snapshot expiry.
 
-The `orca` binary doesn't link iceberg, so expiry runs in a binary of the
-project's own that does: `bin/orca_maintain.mojo`,
+The `morca` binary doesn't link iceberg, so expiry runs in a binary of the
+project's own that does: `bin/morca_maintain.mojo`,
 
 ```mojo
-from orca.maintain import maintain_main
+from morca.maintain import maintain_main
 
 def main() raises:
     maintain_main()
 ```
 
-which `orca expire` and the scheduler's periodic expiry run (it is found as
-`$ORCA_MAINTAIN`, beside the `orca` binary, or on `PATH`). Run by hand it
-takes the snapshots to keep besides the policy's with `--retain`; `orca
-expire` works those out from Postgres (`orca.expiry.retained`) and passes
+which `morca expire` and the scheduler's periodic expiry run (it is found as
+`$MORCA_MAINTAIN`, beside the `morca` binary, or on `PATH`). Run by hand it
+takes the snapshots to keep besides the policy's with `--retain`; `morca
+expire` works those out from Postgres (`morca.expiry.retained`) and passes
 them, which is how a run that can still resume keeps the snapshots it read
 and the ones it committed.
 
-    orca_maintain expire <dataset> [--older-than 30d|12h|90m|<ms>]
+    morca_maintain expire <dataset> [--older-than 30d|12h|90m|<ms>]
         [--keep N] [--retain ID,...] [--if-policy] [--dry-run] [--report]
 
 Without `--older-than` and `--keep` the table's own
@@ -25,7 +25,7 @@ Without `--older-than` and `--keep` the table's own
 decide (iceberg's defaults where unset: five days, one snapshot);
 `--if-policy` expires nothing when the table has no
 `history.expire.max-snapshot-age-ms`, which is how the scheduler leaves
-tables orca didn't create alone. An expiry gives a table orca's metadata
+tables morca didn't create alone. An expiry gives a table morca's metadata
 defaults (`write.metadata.delete-after-commit.enabled`,
 `write.metadata.previous-versions-max`) when it lacks them, so its own
 commit already deletes the old metadata files it drops from the log. `--report` lists `metadata/` before and
@@ -43,18 +43,18 @@ from iceberg.maintain import (
     ExpireResult,
 )
 
-from orca.tables import load_dataset, table_defaults
+from morca.tables import load_dataset, table_defaults
 
 
 comptime USAGE = """usage:
-  orca_maintain expire <dataset> [--older-than 30d|12h|90m|<ms>] [--keep N]
+  morca_maintain expire <dataset> [--older-than 30d|12h|90m|<ms>] [--keep N]
       [--retain ID,...] [--if-policy] [--dry-run] [--report]"""
 
 
 def parse_duration_ms(text: String) raises -> Int64:
     """`30d`, `12h`, `90m`, `45s` or plain milliseconds."""
     if text.byte_length() == 0:
-        raise Error("orca: an empty duration")
+        raise Error("morca: an empty duration")
     var unit: Int64 = 1
     var digits = text
     if text.endswith("d"):
@@ -73,12 +73,12 @@ def parse_duration_ms(text: String) raises -> Int64:
             raise Error("negative")
         return n * unit
     except:
-        raise Error("orca: not a duration: ", text, " (30d, 12h, 90m, ms)")
+        raise Error("morca: not a duration: ", text, " (30d, 12h, 90m, ms)")
 
 
 @fieldwise_init
 struct Expiry(Copyable, Movable, Writable):
-    """What one dataset's expiry did, for the line `orca_maintain` prints."""
+    """What one dataset's expiry did, for the line `morca_maintain` prints."""
 
     var dataset: String
     var skipped: String
@@ -183,7 +183,7 @@ def expire_dataset(
         )
     # The expiry's commit trims the metadata log like any other; with the
     # files that fall off it deleted only under delete-after-commit, a table
-    # without orca's metadata defaults would leave them unreferenced for
+    # without morca's metadata defaults would leave them unreferenced for
     # good. So it gets them in the same commit.
     var defaults = table_defaults()
     for key in [
@@ -223,13 +223,13 @@ def _usage(msg: String = ""):
 
 
 def maintain_main() raises:
-    """The `orca_maintain` command (see the module doc)."""
+    """The `morca_maintain` command (see the module doc)."""
     var args = List[String]()
     for a in argv():
         args.append(String(a))
     if len(args) < 3 or args[1] != "expire":
         _usage()
-        raise Error("orca_maintain: expected `expire <dataset>`")
+        raise Error("morca_maintain: expected `expire <dataset>`")
     var dataset = args[2]
     var older: Int64 = -1
     var keep = -1
@@ -262,7 +262,7 @@ def maintain_main() raises:
             i += 1
         else:
             _usage()
-            raise Error("orca_maintain: unknown argument: ", a)
+            raise Error("morca_maintain: unknown argument: ", a)
     print(
         expire_dataset(dataset, older, keep, retain, if_policy, dry_run, report)
     )

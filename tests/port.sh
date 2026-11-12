@@ -1,4 +1,4 @@
-# Sourced by the tests that start a server (orca ui, the stand-ins for EC2
+# Sourced by the tests that start a server (morca ui, the stand-ins for EC2
 # and ntfy, a port-forward):
 #
 #   free_port port

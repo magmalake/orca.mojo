@@ -5,9 +5,9 @@ An hour is written `YYYY-MM-DDTHH` (`2024-01-31T07`, the hour from 07:00 to
 `2024-01-31T00..2024-01-31T23`, both ends included.
 """
 
-from orca.day import Day
-from orca.key import TimeKey
-from orca.month import Month
+from morca.day import Day
+from morca.key import TimeKey
+from morca.month import Month
 
 
 @fieldwise_init

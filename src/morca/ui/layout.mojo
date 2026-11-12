@@ -1,5 +1,5 @@
 """Every page's frame (`page_html`): its head, the nav, the slots the
-server fills in with who's logged in (`orca.web.server`), and the scripts
+server fills in with who's logged in (`morca.web.server`), and the scripts
 every page has (`_POLL` for live fragments, `_TABS`, `_TIPS`, `_PEEK` for
 code on hover); and what every page draws with: cards, facts, help, action
 buttons, and the 404 and 400 pages.
@@ -7,17 +7,17 @@ buttons, and the 404 and 400 pages.
 
 from std.os import getenv
 
-from orca.html import Html, escape
-from orca.json import quote
-from orca.ui.step_cards import LEAD_JS, STEP_CARDS_JS
-from orca.ui.terms import header_help
-from orca.views.pipelines import comma_list
-from orca.web.page import Page
+from morca.html import Html, escape
+from morca.json import quote
+from morca.ui.step_cards import LEAD_JS, STEP_CARDS_JS
+from morca.ui.terms import header_help
+from morca.views.pipelines import comma_list
+from morca.web.page import Page
 
 
 def docs_link(anchor: StaticString) -> String:
     """A small link to the docs' section, beside a heading."""
-    var base = getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/")
+    var base = getenv("MORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/")
     return String(
         ' <a class="doc" href="',
         escape(String(base, "#", anchor)),
@@ -93,7 +93,7 @@ for (const el of document.querySelectorAll("[data-poll]")) {
       if (tr) window.scrollBy(0, tr.getBoundingClientRect().top - seen[1]);
     }
     times(el);
-    el.dispatchEvent(new Event("orca:swap", { bubbles: true }));
+    el.dispatchEvent(new Event("morca:swap", { bubbles: true }));
   };
   const tick = async () => {
     timer = 0;
@@ -127,7 +127,7 @@ open `<details>` and scrolled boxes as they were, and the table row at the
 top of the window where it was when rows are added above it (a row is
 known by its first link) and the runs ticked for a bulk action ticked,
 and tells the page
-(an `orca:swap` event, so `_TABS` shows the tab chosen again). Each
+(an `morca:swap` event, so `_TABS` shows the tab chosen again). Each
 `<time class="rel">` reads as how long ago it was, in the viewer's locale,
 with the full local time in its tooltip; without scripts it stays UTC."""
 
@@ -326,7 +326,7 @@ comptime _TABS = """
     e.preventDefault();
     show(a.closest("[data-tabs]"), a.dataset.view, true);
   });
-  document.addEventListener("orca:swap", (e) => init(e.target));
+  document.addEventListener("morca:swap", (e) => init(e.target));
   init(document);
 })();
 """
@@ -384,7 +384,7 @@ comptime _TIPS = """
   document.addEventListener("focusin", help);
 })();
 """
-"""What a value from a fixed set means (`data-tip`, `orca.ui.terms`): one
+"""What a value from a fixed set means (`data-tip`, `morca.ui.terms`): one
 floating box, shown under the value on hover, keyboard focus (each such
 value is a tab stop) or a tap, above it where there's no room, and
 hidden on scroll or Escape; to a screen reader, the value's description.
@@ -400,7 +400,7 @@ comptime _PEEK = """
   const lead = (l) => l.length - l.trimStart().length;
   const Q3 = '"'.repeat(3);
   let box = null, cur = null, showT = 0, hideT = 0, shows = 0;
-  // The file, coloured by orca (/code): its lines and their HTML.
+  // The file, coloured by morca (/code): its lines and their HTML.
   const load = (url) => {
     if (!files.has(url)) files.set(url, fetch("/code?u=" + encodeURIComponent(url)).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }));
     return files.get(url);
@@ -502,7 +502,7 @@ comptime _PEEK = """
       const own = docAt(src.lines, at);
       const isDef = /^\\s*(def|fn)\\s/.test(src.lines[at - 1] || "");
       const doc = own || (isDef ? null : moduleDoc(src.lines));
-      const [first, rest] = orcaLead(doc && doc.text);
+      const [first, rest] = morcaLead(doc && doc.text);
       const out = own ? s.out.filter(([n]) => n < own.from || n > own.to) : s.out;
       body = (first ? '<p class="peek__lead">' + esc(first) + "</p>" : "") + (rest ? '<p class="peek__more">' + esc(rest) + "</p>" : "") +
         "<pre>" + out.map(([n, l]) => '<span class="peek__line' + (n === at ? " peek__line--at" : "") + '"><span class="peek__ln">' + n + "</span>" + (src.html[n - 1] ?? esc(l)) + "</span>").join("") + (s.more ? '<span class="peek__line"><span class="peek__ln"></span>…</span>' : "") + "</pre>";
@@ -541,7 +541,7 @@ comptime _PEEK = """
     if (a !== cur || !box || box.hidden) show(a);
   });
   // A live refresh that replaced the link shown: the box goes with it.
-  document.addEventListener("orca:swap", () => { if (cur && !cur.isConnected) hide(0); });
+  document.addEventListener("morca:swap", () => { if (cur && !cur.isConnected) hide(0); });
   document.addEventListener("mouseover", (e) => {
     const a = link(e.target);
     if (!a) return;
@@ -578,12 +578,12 @@ one in its `data-src` (a runs table's pipeline), shows, after a moment, on
 keyboard focus or on a first tap (a second follows the link), that
 function's source, from its def through
 its docstring, coloured, from `/code` (which fetches the file from
-raw.githubusercontent.com and colours it, `orca.highlight`) once per file; the
+raw.githubusercontent.com and colours it, `morca.highlight`) once per file; the
 link itself is unchanged, so without scripts (or for a private repository)
 it still opens the file. Escape closes it and any help shown."""
 
 
-comptime USER_SLOT = "<!--orca-user-->"
+comptime USER_SLOT = "<!--morca-user-->"
 """Where `serve` puts who's logged in, or a link to log in."""
 
 
@@ -595,14 +595,14 @@ comptime _MARK = (
     ' fill="var(--bg)"/><circle cx="11.5" cy="4.5" r="2" fill="var(--bg)"/>'
     '<circle cx="8" cy="11.5" r="2" fill="var(--bg)"/></svg>'
 )
-"""orca's icon, the tab's three connected nodes, in the theme's colours."""
+"""morca's icon, the tab's three connected nodes, in the theme's colours."""
 
 
 def _extra_links(mut h: Html):
-    """The deployment's own nav links after Docs, from `ORCA_UI_LINKS`:
+    """The deployment's own nav links after Docs, from `MORCA_UI_LINKS`:
     `label=url` entries separated by commas, e.g. `Census ↗=https://...`.
     Entries without an http(s) url are left out."""
-    for entry in comma_list(getenv("ORCA_UI_LINKS")):
+    for entry in comma_list(getenv("MORCA_UI_LINKS")):
         var eq = entry.find("=")
         if eq <= 0:
             continue
@@ -628,12 +628,12 @@ comptime _ICON = (
     " r='2' fill='%23fff'/%3E%3Ccircle cx='8' cy='11.5' r='2'"
     " fill='%23fff'/%3E%3C/svg%3E\">"
 )
-"""A blue DAG of three nodes as the tab icon, so orca's tab stands apart
+"""A blue DAG of three nodes as the tab icon, so morca's tab stands apart
 from the census's amber bar chart."""
 
 
 def _posthog(mut h: Html):
-    """PostHog product analytics in the page head when `ORCA_POSTHOG_KEY` is
+    """PostHog product analytics in the page head when `MORCA_POSTHOG_KEY` is
     a project key (`phc_` and letters, digits, `_` or `-`), nothing otherwise.
 
     The same snippet as the magmalake.org website: PostHog's `array.js` and
@@ -641,9 +641,9 @@ def _posthog(mut h: Html):
     (the mojourney-ph Worker in magmalake/magmalake.org; the UI itself
     doesn't serve it), so ad-blockers keep it. `persistence: 'memory'` sets
     no cookie and writes no `localStorage`, so there is nothing to consent
-    to. `site: "orca"` tells its events apart in a shared PostHog project.
+    to. `site: "morca"` tells its events apart in a shared PostHog project.
     """
-    var key = getenv("ORCA_POSTHOG_KEY")
+    var key = getenv("MORCA_POSTHOG_KEY")
     if not key.startswith("phc_"):
         return
     for byte in key.as_bytes():
@@ -664,7 +664,7 @@ def _posthog(mut h: Html):
         "\",{api_host:location.origin+'/ph',",
         "ui_host:'https://us.posthog.com',defaults:'2025-05-24',",
         "persistence:'memory',capture_exceptions:true});",
-        "posthog.register({site:'orca'});}});</script>",
+        "posthog.register({site:'morca'});}});</script>",
     )
 
 
@@ -676,9 +676,9 @@ def page_html(title: String, active: StaticString, body: Html) -> String:
         _ICON,
         "<title>",
     )
-    h.text(title, " · orca")
+    h.text(title, " · morca")
     h.raw(
-        '</title><link rel="stylesheet" href="/static/orca.css">',
+        '</title><link rel="stylesheet" href="/static/morca.css">',
     )
     _posthog(h)
     h.raw(
@@ -688,7 +688,7 @@ def page_html(title: String, active: StaticString, body: Html) -> String:
         '">',
         '<header class="top"><a class="top__brand" href="/">',
         _MARK,
-        "orca</a><nav>",
+        "morca</a><nav>",
     )
     for item in [
         ("/", "Pipelines"),
@@ -718,7 +718,7 @@ def page_html(title: String, active: StaticString, body: Html) -> String:
         h.raw(">", item[1], "</a>")
     h.raw("</div></div>")
     h.raw('<a href="')
-    h.text(getenv("ORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"))
+    h.text(getenv("MORCA_DOCS_URL", "https://mlake.dev/s/orca/docs/"))
     h.raw('" target="_blank" rel="noopener">Docs</a>')
     _extra_links(h)
     h.raw("</nav>", USER_SLOT, "</header><main>")
@@ -747,13 +747,13 @@ def page_html(title: String, active: StaticString, body: Html) -> String:
     return h^.finish()
 
 
-comptime AUTH_SLOT = "orca-auth"
+comptime AUTH_SLOT = "morca-auth"
 """The `<body>`'s class until the page is answered: `anon` when login is on
 and no one is logged in, which hides the inline action buttons and shows
 their "Log in to ..." links instead."""
 
 
-comptime HERE_SLOT = "__orca_here__"
+comptime HERE_SLOT = "__morca_here__"
 """Where a "Log in to ..." link comes back to: the page's own path and
 query, encoded, filled in when the page is answered."""
 
@@ -832,7 +832,7 @@ def _strip_tags(s: StringSlice) -> String:
 
 
 def with_header_help(html: String, prefix: String) -> String:
-    """`html` with a "?" in every table header `orca.ui.terms` has help for,
+    """`html` with a "?" in every table header `morca.ui.terms` has help for,
     by its text (and the table its `data-help` names), as `help_tip` writes
     one; ids `help-<prefix>-<n>`. One pass over the page, so every table,
     whoever wrote it, gets them."""

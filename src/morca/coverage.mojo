@@ -4,16 +4,16 @@ the home page's table, its page's Progress card and in their JSON.
 - A **daily or monthly** pipeline's is its partitions done of those in its
   range so far: from its first partition through the last one that has
   ended on the schedule's clock (UTC without a schedule), the range a fill
-  works through (`orca.fill.range_keys`). Today's day (this month) is
+  works through (`morca.fill.range_keys`). Today's day (this month) is
   still going, so it's in neither number, nor is one that ended less than
   the pipeline's `fill_lag` ago.
-- A **keyed** pipeline's is its keys done of the keys orca knows: those
+- A **keyed** pipeline's is its keys done of the keys morca knows: those
   `<binary> keys` last printed, as `orca.keys` keeps them (the scheduler's
   sensor and the pipeline's page read them; the home page never runs the
   binary).
 
 **Done** is what the calendar and a backfill count as done
-(`orca.scheduler.DONE_SQL`): every mapped step of the pipeline succeeded
+(`morca.scheduler.DONE_SQL`): every mapped step of the pipeline succeeded
 for the key in a run of its current code; with no mapped step, a run of
 its current code over the key succeeded. A step `skipped` because one
 before it failed isn't done, nor is a key done only by older code (the
@@ -31,15 +31,15 @@ mapped step). A keyed pipeline's adds the read of its row of `orca.keys`.
 Nothing is cached: the UI holds no state.
 """
 
-from orca.civil import now
-from orca.fill import parse_fill_lag, range_keys
-from orca.json import quote
-from orca.queueing import (
+from morca.civil import now
+from morca.fill import parse_fill_lag, range_keys
+from morca.json import quote
+from morca.queueing import (
     done_keys,
     kept_keys,
 )
-from orca.state import State
-from orca.timekeys import is_time_kind, unit_of
+from morca.state import State
+from morca.timekeys import is_time_kind, unit_of
 
 
 @fieldwise_init

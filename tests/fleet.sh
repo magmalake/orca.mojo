@@ -1,5 +1,5 @@
 #!/bin/sh
-# The fleet (orca.fleet) and Ops' Pools (orca.ui.pools): the scheduler keeps
+# The fleet (morca.fleet) and Ops' Pools (morca.ui.pools): the scheduler keeps
 # the last half hour of each live instance's samples, and the control
 # instance's, in Postgres (a pass again adds nothing, an instance whose file
 # is missing is skipped, old samples go); /api/fleet renders hosts, cost,
@@ -10,7 +10,7 @@
 # samples; /ops/fleet and /ops/workers redirect to it and keep their JSON;
 # on the Kubernetes runner a live run's pods are a machine; the home page
 # has a strip of the same.
-# Needs ORCA_DATABASE_URL (pixi run test-fleet starts a throwaway server),
+# Needs MORCA_DATABASE_URL (pixi run test-fleet starts a throwaway server),
 # curl, jq and python3.
 set -eu
 cd "$(dirname "$0")/.."
@@ -19,13 +19,13 @@ mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 
 log=build/fleet.log
 : > "$log"
-export ORCA_LOGS=build/fleet-logs
-rm -rf "$ORCA_LOGS"
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+export MORCA_LOGS=build/fleet-logs
+rm -rf "$MORCA_LOGS"
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 pid=
 fail() {
     echo "FAIL: $*"
@@ -36,9 +36,9 @@ fail() {
 
 # Two runs, one failing: they are what the instances belong to and what the
 # errors per hour count.
-ORCA_NOW=2024-01-15T00:00Z ./build/orca register ./build/toy >> "$log" 2>&1 || fail "register"
+MORCA_NOW=2024-01-15T00:00Z ./build/morca register ./build/toy >> "$log" 2>&1 || fail "register"
 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 || fail "the first run"
-ORCA_TOY_FAIL=2024-01 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 && fail "the second run didn't fail"
+MORCA_TOY_FAIL=2024-01 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 && fail "the second run didn't fail"
 run=$(q "SELECT max(id) FROM orca.runs")
 
 # A head, two workers (one drained), one that hasn't uploaded, one with a
@@ -51,7 +51,7 @@ q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, laun
 q "INSERT INTO orca.instances (id, run, start, role, instance_type, market, launched, ended, why) VALUES
    ('i-old', $run, 1, 'worker', 'c7g.large', 'spot', now() - interval '5 hours', now() - interval '4 hours', 'shut itself down')" > /dev/null
 
-m=$ORCA_LOGS/toy/$run/metrics
+m=$MORCA_LOGS/toy/$run/metrics
 mkdir -p "$m"
 python3 - "$m" << 'PY'
 import json, sys, time
@@ -75,10 +75,10 @@ with open(f"{out}/worker-i-old.jsonl", "w") as f:
 PY
 control=$PWD/build/fleet-control.jsonl
 rm -f "$control"
-./build/orca sample --out "$control" --count 6 --seconds 0.1 >> "$log" 2>&1 || fail "the control sampler"
-export ORCA_CONTROL_SAMPLES=$control ORCA_CONTROL_TYPE=t4g.medium
+./build/morca sample --out "$control" --count 6 --seconds 0.1 >> "$log" 2>&1 || fail "the control sampler"
+export MORCA_CONTROL_SAMPLES=$control MORCA_CONTROL_TYPE=t4g.medium
 
-tick() { ORCA_NOW=2024-01-15T00:00Z ORCA_RUNNER=local ORCA_FLEET_SECONDS=1 ./build/orca tick >> "$log" 2>&1 || fail "tick"; }
+tick() { MORCA_NOW=2024-01-15T00:00Z MORCA_RUNNER=local MORCA_FLEET_SECONDS=1 ./build/morca tick >> "$log" 2>&1 || fail "tick"; }
 tick
 [ "$(q "SELECT count(*) FROM orca.fleet_samples WHERE host = 'i-head'")" -eq 96 ] \
     || fail "the head's samples: $(q "SELECT host, count(*) FROM orca.fleet_samples GROUP BY host")"
@@ -102,23 +102,23 @@ echo "ok   the scheduler keeps the instances' samples, once, for 30 minutes"
 
 free_port port
 base="http://127.0.0.1:$port"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 pid=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 html() { curl -fsS "$base$1" || fail "GET $1"; }
 json() { curl -fsS -H 'Accept: application/json' "$base$1" || fail "GET $1 as JSON"; }
 
 # Self-hosted machines: a worker of pool bgent that has said who it is and
 # what it runs, and one of pool gh that never has.
-wtok=$(./build/orca worker-token create --pool bgent --label lap 2>> "$log") || fail "worker-token create"
-./build/orca worker-token create --pool gh --label box > /dev/null 2>> "$log" || fail "a second worker token"
+wtok=$(./build/morca worker-token create --pool bgent --label lap 2>> "$log") || fail "worker-token create"
+./build/morca worker-token create --pool gh --label box > /dev/null 2>> "$log" || fail "a second worker token"
 wid=$(q "SELECT id FROM orca.workers WHERE label = 'lap'")
 bid=$(q "SELECT id FROM orca.workers WHERE label = 'box'")
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $wtok" \
-    -d "{\"name\": \"w-lap\", \"slots\": 0, \"cpus\": 8, \"memory_mb\": 16384, \"image\": \"orca:t1\", \"running\": \"$run\"}" \
+    -d "{\"name\": \"w-lap\", \"slots\": 0, \"cpus\": 8, \"memory_mb\": 16384, \"image\": \"morca:t1\", \"running\": \"$run\"}" \
     "$base/api/worker/claim")
 [ "$code" = 200 ] || fail "the worker's heartbeat answered $code"
 
@@ -135,7 +135,7 @@ json /ops/pools/ec2/i-w1 | jq -e '.machine | .state == "live" and .kind == "ec2"
     || fail "the machine's JSON: $(json /ops/pools/ec2/i-w1)"
 wpage=$(html "/ops/pools/self-hosted/$wid")
 echo "$wpage" | grep -qF '<h1>w-lap <span data-tip=' || fail "the worker's page: $wpage"
-echo "$wpage" | grep -qF '<code>orca:t1</code>' || fail "the worker's image"
+echo "$wpage" | grep -qF '<code>morca:t1</code>' || fail "the worker's image"
 echo "$wpage" | grep -qF "It hasn't claimed a run." || fail "the worker's runs"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/ops/pools/ec2/i-nope")" = 404 ] || fail "an unknown instance"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/ops/pools/self-hosted/x")" = 404 ] || fail "a worker that isn't a number"
@@ -143,7 +143,7 @@ echo "$wpage" | grep -qF "It hasn't claimed a run." || fail "the worker's runs"
 echo "ok   a machine's page"
 
 # Remove the logs: the pages must not read a file or a bucket.
-rm -rf "$ORCA_LOGS" "$control"
+rm -rf "$MORCA_LOGS" "$control"
 
 api=$(curl -fsS "$base/api/fleet")
 echo "$api" | jq -e '.summary | .heads == 1 and .workers == 3 and .control == true and .hosts == 5
@@ -179,7 +179,7 @@ echo "$page" | grep -qF '<a href="/ops/pools" aria-current="page">Pools</a>' || 
 echo "$page" | grep -qF '<a href="/ops" aria-current="page" aria-haspopup="true">Ops</a>' || fail "Ops isn't current"
 echo "$page" | grep -qF '<a href="/ops/alerts">Alerts</a><a href="/ops/control">Control</a><a href="/ops/pools" aria-current="page">Pools</a><a href="/watchdog">Watchdog</a></div>' \
     || fail "the Ops menu isn't Alerts, Control, Pools and Watchdog"
-echo "$page" | grep -q 'the instances orca launches for runs' || fail "the Pools intro"
+echo "$page" | grep -q 'the instances morca launches for runs' || fail "the Pools intro"
 echo "$page" | grep -qF 'data-poll="/ops/pools/live" data-poll-every="10"' || fail "the machines don't poll every 10 s"
 # Fleet's cards and charts, with EC2 in view.
 echo "$page" | grep -qF '<span class="stat__v">5</span>' || fail "hosts running"
@@ -210,13 +210,13 @@ echo "$page" | grep -qF "<a href=\"/ops/pools/ec2/i-head\"><code>i-head</code></
     || fail "the head's row"
 echo "$page" | grep -qF "<a href=\"/ops/pools/self-hosted/$wid\"><code>w-lap</code></a></td><td><a href=\"/ops/pools?pool=worker%3Abgent\">worker:bgent</a>" \
     || fail "the worker's row"
-echo "$page" | grep -qF '<code>orca worker</code> <span class="muted" title="expires ' || fail "the worker process's columns"
+echo "$page" | grep -qF '<code>morca worker</code> <span class="muted" title="expires ' || fail "the worker process's columns"
 echo "$page" | grep -qF 'token '"$wid"' · lap' || fail "the worker's token in its row"
-echo "$page" | grep -qF '<td class="mono">orca:t1</td><td class="num">8</td><td class="num">16 GiB</td>' || fail "the worker's image, CPUs and memory"
+echo "$page" | grep -qF '<td class="mono">morca:t1</td><td class="num">8</td><td class="num">16 GiB</td>' || fail "the worker's image, CPUs and memory"
 echo "$page" | grep -q 'no samples yet' || fail "the starting host's row"
 [ "$(echo "$page" | grep -o '<svg class="spark" viewBox="0 0 80 22"[^>]*aria-label="CPU over the last 10 minutes"><polyline' | wc -l | tr -d ' ')" -eq 3 ] \
     || fail "not a CPU sparkline per sampled instance"
-# Help on every column, from orca.ui.terms.
+# Help on every column, from morca.ui.terms.
 for c in Machine Pool Kind State Image CPUs Memory Runs 'Last heartbeat' CPU Worker; do
     echo "$page" | grep -qF "aria-label=\"About $c\"" || fail "no help on the $c column"
 done
@@ -229,7 +229,7 @@ echo "$api" | jq -e '[.machines[] | {(.name): .state}] | add | .["i-head"] == "l
 echo "$api" | jq -e '[.machines[] | {(.name): .detail}] | add | .["i-w3"] == "starting" and .["i-head"] == "running" and .["i-gone"] == "ended" and .box == "not seen" and .["w-lap"] == "running"' > /dev/null \
     || fail "the details: $(echo "$api" | jq -c '[.machines[] | [.name, .detail]]')"
 echo "$api" | jq -e --argjson r "$run" '.machines[] | select(.name == "w-lap") | .pool == "worker:bgent" and .kind == "self-hosted" and .runs == [$r]
-    and .cpus == 8 and .memory_mb == 16384 and .image == "orca:t1" and .label == "lap" and .seen_seconds_ago >= 0' > /dev/null \
+    and .cpus == 8 and .memory_mb == 16384 and .image == "morca:t1" and .label == "lap" and .seen_seconds_ago >= 0' > /dev/null \
     || fail "the worker's machine: $(echo "$api" | jq -c '.machines[] | select(.name == "w-lap")')"
 echo "$api" | jq -e '.machines[] | select(.name == "i-gone") | .ended | test("Z: drained$")' > /dev/null || fail "the ended instance"
 echo "$api" | jq -e '.pools == [{"pool": "ec2", "kind": "ec2", "machines": 5, "live": 4}, {"pool": "worker:bgent", "kind": "self-hosted", "machines": 1, "live": 1}, {"pool": "worker:gh", "kind": "self-hosted", "machines": 1, "live": 0}]' > /dev/null \
@@ -356,11 +356,11 @@ html '/ops/pools?gone=1' | grep -qF '&lt;i&gt;w&lt;/i&gt;' || fail "the escaped 
 # it doesn't.
 html /ops/pools | grep -q 'launches no instances' && fail "the local-runner notice on a scheduler with no runner set"
 free_port lport
-ORCA_FIXED_COST="€8.49/month" ORCA_RUNNER=local ORCA_UI_ADDR="127.0.0.1:$lport" ./build/orca ui >> "$log" 2>&1 &
+MORCA_FIXED_COST="€8.49/month" MORCA_RUNNER=local MORCA_UI_ADDR="127.0.0.1:$lport" ./build/morca ui >> "$log" 2>&1 &
 lpid=$!
 i=0
 until curl -fs "http://127.0.0.1:$lport/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || { kill "$lpid"; fail "the second orca ui didn't start"; }; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || { kill "$lpid"; fail "the second morca ui didn't start"; }; sleep 0.1
 done
 lpage=$(curl -fsS "http://127.0.0.1:$lport/ops/pools")
 lhome=$(curl -fsS "http://127.0.0.1:$lport/")
@@ -381,20 +381,20 @@ echo "ok   Ops > Pools says the local runner launches no instances"
 q "UPDATE orca.runs SET status = 'running', started = now(), heartbeat = now(), cpu_millis = 1500 WHERE id = $run" > /dev/null
 starts=$(q "SELECT starts FROM orca.runs WHERE id = $run")
 free_port kport
-ORCA_RUNNER=kubernetes ORCA_UI_ADDR="127.0.0.1:$kport" ./build/orca ui >> "$log" 2>&1 &
+MORCA_RUNNER=kubernetes MORCA_UI_ADDR="127.0.0.1:$kport" ./build/morca ui >> "$log" 2>&1 &
 kpid=$!
 i=0
 until curl -fs "http://127.0.0.1:$kport/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || { kill "$kpid"; fail "the third orca ui didn't start"; }; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || { kill "$kpid"; fail "the third morca ui didn't start"; }; sleep 0.1
 done
 kapi=$(curl -fsS "http://127.0.0.1:$kport/api/pools?kind=k8s")
 kpage=$(curl -fsS "http://127.0.0.1:$kport/ops/pools?pool=kubernetes")
-kmachine=$(curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$kport/ops/pools/k8s/orca-$run-$starts")
+kmachine=$(curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$kport/ops/pools/k8s/morca-$run-$starts")
 kill "$kpid"
 wait "$kpid" 2> /dev/null || true
-echo "$kapi" | jq -e --arg n "orca-$run-$starts" --argjson r "$run" '(.machines | length) == 1 and (.machines[0] | .name == $n and .pool == "kubernetes"
+echo "$kapi" | jq -e --arg n "morca-$run-$starts" --argjson r "$run" '(.machines | length) == 1 and (.machines[0] | .name == $n and .pool == "kubernetes"
     and .state == "live" and .cpus == 2 and .runs == [$r] and .process == "pods")' > /dev/null || fail "the kubernetes pool: $kapi"
-echo "$kpage" | grep -qF "<code>orca-$run-$starts</code>" || fail "the pods' row"
+echo "$kpage" | grep -qF "<code>morca-$run-$starts</code>" || fail "the pods' row"
 [ "$kmachine" = 200 ] || fail "the pods' page answered $kmachine"
 [ "$(curl -fsS "$base/api/pools?kind=k8s" | jq '.machines | length')" = 0 ] || fail "pods on another runner"
 echo "ok   Pools lists a Kubernetes run's pods"

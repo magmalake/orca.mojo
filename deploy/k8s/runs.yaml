@@ -1,30 +1,30 @@
-# Where runs' clusters go (K8S.md, orca.kube): the `orca-runs` namespace,
+# Where runs' clusters go (K8S.md, morca.kube): the `morca-runs` namespace,
 # what the scheduler may do there and nothing else, the database its drivers
 # reach, and a hard cap on what all run pods together can ask for.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: orca-runs
+  name: morca-runs
 ---
-# For a local cluster, as orca.yaml's; anywhere else, make it yourself.
+# For a local cluster, as morca.yaml's; anywhere else, make it yourself.
 apiVersion: v1
 kind: Secret
 metadata:
-  name: orca-db
-  namespace: orca-runs
+  name: morca-db
+  namespace: morca-runs
 stringData:
-  url: postgresql://orca:orca-local@postgres.orca.svc:5432/orca
+  url: postgresql://orca:morca-local@postgres.morca.svc:5432/orca
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: orca-scheduler
-  namespace: orca-runs
+  name: morca-scheduler
+  namespace: morca-runs
 rules:
   - apiGroups: [""]
     resources: [pods, services]
     verbs: [create, get, list, watch, delete]
-  # A driver's log, kept under ORCA_LOGS before its Job is deleted.
+  # A driver's log, kept under MORCA_LOGS before its Job is deleted.
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]
@@ -35,23 +35,23 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: orca-scheduler
-  namespace: orca-runs
+  name: morca-scheduler
+  namespace: morca-runs
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: orca-scheduler
+  name: morca-scheduler
 subjects:
   - kind: ServiceAccount
-    name: orca-scheduler
-    namespace: orca
+    name: morca-scheduler
+    namespace: morca
 ---
-# If orca asks for more than this, the extra pods wait rather than run.
+# If morca asks for more than this, the extra pods wait rather than run.
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: orca-runs
-  namespace: orca-runs
+  name: morca-runs
+  namespace: morca-runs
 spec:
   hard:
     requests.cpu: "16"

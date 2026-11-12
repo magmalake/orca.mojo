@@ -2,7 +2,7 @@
 fire runs the hour it falls in, the step returning its hour (tests/hourly.sh).
 """
 
-from orca import (
+from morca import (
     Cron,
     Ctx,
     Current,
@@ -11,7 +11,7 @@ from orca import (
     Mapped,
     Pipeline,
     Step,
-    orca_main,
+    morca_main,
 )
 
 
@@ -31,4 +31,4 @@ comptime Hourly5 = Pipeline[
 
 
 def main() raises:
-    orca_main[Hourly5]()
+    morca_main[Hourly5]()

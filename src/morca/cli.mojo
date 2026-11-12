@@ -1,4 +1,4 @@
-"""`orca_main`: the command line every pipeline binary gets.
+"""`morca_main`: the command line every pipeline binary gets.
 
 ```
 taxi describe                              the DAG as JSON
@@ -12,36 +12,36 @@ taxi sense                                 the current snapshot of each dataset 
 labels keys                                a keyed pipeline's keys snapshot, then its keys
 ```
 
-For a keyed pipeline (`orca.keyed`), `--partitions` takes names: a list,
+For a keyed pipeline (`morca.keyed`), `--partitions` takes names: a list,
 `@all` or `@file:<path>`. A name its keys dataset doesn't have now is
 refused, as a malformed key is, with exit code 2.
 
-With `ORCA_DATABASE_URL` set, runs are recorded in Postgres and can be
+With `MORCA_DATABASE_URL` set, runs are recorded in Postgres and can be
 resumed, or, for `sqlite:<path>` (`sqlite:///abs/path` for an absolute
-one), in that SQLite file (`orca.sqlite_store`); without it, `run` records its run in memory (`MemoryStore`, run 0)
+one), in that SQLite file (`morca.sqlite_store`); without it, `run` records its run in memory (`MemoryStore`, run 0)
 on the same path, and `resume` and `status` aren't available. With
-`ORCA_STATE_URL` (and `ORCA_STATE_TOKEN`) instead, as `orca worker` starts
-a run, `resume`, `status <run>` and `keep-log` record over `orca ui`'s API
-(`orca.http_store`), and `run` is refused. `run` records the pipeline the first time; once `orca register`
+`MORCA_STATE_URL` (and `MORCA_STATE_TOKEN`) instead, as `morca worker` starts
+a run, `resume`, `status <run>` and `keep-log` record over `morca ui`'s API
+(`morca.http_store`), and `run` is refused. `run` records the pipeline the first time; once `morca register`
 has given it a binary, `run` leaves the registration as it is, since what
 the scheduler queues and counts as done is that code's. A binary whose code
 isn't the registered one's is refused (exit code 2) unless `run` is given
 `--allow-new-code`; its run then counts as that code's, not the
-pipeline's. `ORCA_STALE_SECONDS` (default 30) is how old a run's heartbeat must
+pipeline's. `MORCA_STALE_SECONDS` (default 30) is how old a run's heartbeat must
 be before another process may resume it.
 
 A pipeline with dista tasks gets a runtime per run, started before anything
 else so its forked processes inherit no connection or thread; run with
 `DISTA_ROLE` set, the binary is a dista head or worker instead (see
-`orca.tasks`). With `ORCA_LOGS` set, a directory or a location in object
-storage (`orca.logs`), attempts log there, the run's dista timeline is
+`morca.tasks`). With `MORCA_LOGS` set, a directory or a location in object
+storage (`morca.logs`), attempts log there, the run's dista timeline is
 written beside them, and `status <run>` shows each step's latest log.
 
 `sense` prints a line per dataset the pipeline reads and doesn't write,
-`<dataset> <snapshot> <orca|other> <partitions|->`: its table's current
-snapshot in `ORCA_WAREHOUSE` (-1 for none), whether an orca step made it,
+`<dataset> <snapshot> <morca|other> <partitions|->`: its table's current
+snapshot in `MORCA_WAREHOUSE` (-1 for none), whether a morca step made it,
 and the partition keys its summary says it holds. The scheduler polls it for
-a sensor pipeline (`orca.sensors`).
+a sensor pipeline (`morca.sensors`).
 
 `run` and `resume` print one line per step and partition, then the run's
 status. A run whose step raised `defer` (and none failed) ends `deferred`,
@@ -59,9 +59,9 @@ from std.sys import argv, exit
 
 from dista.client import Observer
 
-from orca.heartbeat import heartbeat_interval
-from orca.http_store import HttpStore
-from orca.logs import (
+from morca.heartbeat import heartbeat_interval
+from morca.http_store import HttpStore
+from morca.logs import (
     location_exists,
     publish,
     read_location,
@@ -69,15 +69,15 @@ from orca.logs import (
     stage_of,
     write_location,
 )
-from orca.tasks import workers
-from orca.civil import Civil, now, parse_time
-from orca.crash import crash_summary
-from orca.pipeline import Pipeline
-from orca.pool import pool_next_main, pool_wait_main
-from orca.sample import sample_main
-from orca.sqlite_store import SqliteStore, sqlite_path
-from orca.state import PgStore
-from orca.store import (
+from morca.tasks import workers
+from morca.civil import Civil, now, parse_time
+from morca.crash import crash_summary
+from morca.pipeline import Pipeline
+from morca.pool import pool_next_main, pool_wait_main
+from morca.sample import sample_main
+from morca.sqlite_store import SqliteStore, sqlite_path
+from morca.state import PgStore
+from morca.store import (
     CANCELLED,
     DEFERRED,
     FAILED,
@@ -88,8 +88,8 @@ from orca.store import (
     RunStore,
     process_owner,
 )
-from orca.usage import usage_text
-from orca.warehouse import Sensed, current_snapshot
+from morca.usage import usage_text
+from morca.warehouse import Sensed, current_snapshot
 
 comptime USAGE = """usage:
   <pipeline> describe
@@ -124,7 +124,7 @@ def seed_random():
     seed(Int(ts[0]) * 1_000_000_000 + Int(ts[1]) ^ (pid << 40))
 
 
-def orca_main[P: type_of(Pipeline)]() raises:
+def morca_main[P: type_of(Pipeline)]() raises:
     """Parses the command line and runs the command on `P`."""
     seed_random()
     comptime if P.tasks.HAS_RUNTIME:
@@ -148,13 +148,13 @@ def orca_main[P: type_of(Pipeline)]() raises:
 def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
     var cmd = args[1]
     if cmd == "sample":
-        # For the runners: this machine's metrics beside a run (orca.sample).
+        # For the runners: this machine's metrics beside a run (morca.sample).
         return sample_main(args)
-    var url = getenv("ORCA_DATABASE_URL")
-    # A worker's run records itself over orca ui's API (orca.http_store).
-    var state_url = getenv("ORCA_STATE_URL")
+    var url = getenv("MORCA_DATABASE_URL")
+    # A worker's run records itself over morca ui's API (morca.http_store).
+    var state_url = getenv("MORCA_STATE_URL")
     if url and state_url:
-        _usage("set ORCA_DATABASE_URL or ORCA_STATE_URL, not both")
+        _usage("set MORCA_DATABASE_URL or MORCA_STATE_URL, not both")
     # A schedule is checked on every command, so a binary whose cron
     # expression or zone is bad can't be registered or run.
     comptime if P.scheduled():
@@ -166,7 +166,7 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         return 0
     if cmd == "keep-log" and len(args) == 5:
         # For the ec2 runner's head instance: the driver's output, appended
-        # to the run's driver.log wherever ORCA_LOGS is (orca.ec2).
+        # to the run's driver.log wherever MORCA_LOGS is (morca.ec2).
         var data = read_location(args[2])
         var before = List[UInt8]()
         if location_exists(args[3]):
@@ -175,13 +175,13 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         before.extend(Span(data))
         write_location(args[3], Span(before))
         # A driver that crashed left its attempts running: they fail with
-        # the crash's first frames (orca.crash) while the run is running.
+        # the crash's first frames (morca.crash) while the run is running.
         var why = crash_summary(String(from_utf8_lossy=Span(data)))
-        var run = getenv("ORCA_RUN")
+        var run = getenv("MORCA_RUN")
         if why and run and (url or state_url):
             try:
                 if state_url:
-                    var api = HttpStore(state_url, getenv("ORCA_STATE_TOKEN"))
+                    var api = HttpStore(state_url, getenv("MORCA_STATE_TOKEN"))
                     _crashed(api, Int(run), why)
                 elif sqlite_path(url):
                     var file = SqliteStore(sqlite_path(url))
@@ -190,11 +190,11 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
                     var store = PgStore(url)
                     _crashed(store, Int(run), why)
             except e:
-                print("orca: can't record run", run, "crashing:", e)
+                print("morca: can't record run", run, "crashing:", e)
         return 0
     if cmd == "dista-status" and len(args) == 3:
-        # For the scheduler, scaling a run (orca.ec2): its head's demand.
-        # The pipeline's binary links dista; orca's own doesn't, since
+        # For the scheduler, scaling a run (morca.ec2): its head's demand.
+        # The pipeline's binary links dista; morca's own doesn't, since
         # dista's sockets and flare's can't share one binary.
         var o = Observer(args[2])
         print(o.status_json(), end="")
@@ -209,12 +209,12 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         return 0
     if cmd == "put-log" and len(args) == 4:
         # For the ec2 runner's instances: a head's or worker's output so
-        # far, replacing what was kept of it before (orca.ec2).
+        # far, replacing what was kept of it before (morca.ec2).
         var data = read_location(args[2])
         write_location(args[3], Span(data))
         return 0
     if cmd == "pool-wait" and len(args) == 5:
-        # For the ec2 runner's warm pool (orca.pool): a worker's run ending.
+        # For the ec2 runner's warm pool (morca.pool): a worker's run ending.
         return pool_wait_main(args)
     if cmd == "pool-next" and len(args) == 6:
         # ... and the next run an idle instance is handed.
@@ -230,20 +230,20 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
                 print(k)
             return 0
     if cmd == "sense" and len(args) == 2:
-        var wh = getenv("ORCA_WAREHOUSE")
+        var wh = getenv("MORCA_WAREHOUSE")
         var names = P.sensed_datasets()
         if len(names) > 0 and not wh:
-            raise Error("orca: sense needs ORCA_WAREHOUSE")
+            raise Error("morca: sense needs MORCA_WAREHOUSE")
         for d in names:
             var c: Sensed
             try:
                 c = current_snapshot(wh, d)
             except e:
-                raise Error("orca: can't read ", d, "'s snapshot: ", e)
+                raise Error("morca: can't read ", d, "'s snapshot: ", e)
             print(
                 c.dataset,
                 c.snapshot,
-                "orca" if c.by_orca else "other",
+                "orca" if c.by_morca else "other",
                 c.partitions if c.partitions else String("-"),
             )
         return 0
@@ -270,7 +270,7 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
             return 2
         if state_url:
             _usage(
-                "run needs ORCA_DATABASE_URL: a worker's run (ORCA_STATE_URL)"
+                "run needs MORCA_DATABASE_URL: a worker's run (MORCA_STATE_URL)"
                 " only resumes the run it was given"
             )
         var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
@@ -284,7 +284,7 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         return _run[P](rt, store, keys, new_code)
     if cmd == "resume":
         if not url and not state_url:
-            _usage("resume needs ORCA_DATABASE_URL (or ORCA_STATE_URL)")
+            _usage("resume needs MORCA_DATABASE_URL (or MORCA_STATE_URL)")
         var run = -1
         var allow_new_code = False
         for i in range(2, len(args)):
@@ -301,7 +301,7 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
             _usage("resume needs a run")
         var rt = P.tasks.start(workers() if P.tasks.HAS_RUNTIME else 0)
         if state_url:
-            var api = HttpStore(state_url, getenv("ORCA_STATE_TOKEN"))
+            var api = HttpStore(state_url, getenv("MORCA_STATE_TOKEN"))
             return _resume[P](rt, api, run, allow_new_code)
         if sqlite_path(url):
             var file = SqliteStore(sqlite_path(url))
@@ -310,10 +310,10 @@ def _command[P: type_of(Pipeline)](args: List[String]) raises -> Int:
         return _resume[P](rt, store, run, allow_new_code)
     if cmd == "status":
         if state_url:
-            var api = HttpStore(state_url, getenv("ORCA_STATE_TOKEN"))
+            var api = HttpStore(state_url, getenv("MORCA_STATE_TOKEN"))
             return _status(api, args)
         if not url:
-            _usage("status needs ORCA_DATABASE_URL")
+            _usage("status needs MORCA_DATABASE_URL")
         if sqlite_path(url):
             var file = SqliteStore(sqlite_path(url))
             return _status(file, args)
@@ -340,13 +340,13 @@ def _run[
     runs it."""
     var hash = hex(P.registry_hash())
     store.migrate()
-    # Only `orca register` moves a scheduled pipeline's code.
+    # Only `morca register` moves a scheduled pipeline's code.
     var current = store.scheduled_hash(P.name)
     if not current:
         store.register(P.name, hash, P.describe())
     elif current != hash and not new_code:
         print(
-            "orca: pipeline ",
+            "morca: pipeline ",
             P.name,
             " is registered with code ",
             current,
@@ -354,7 +354,7 @@ def _run[
             hash,
             "; its run wouldn't count as the pipeline's. Pass",
             " --allow-new-code to run it anyway, or register it with",
-            " `orca register`",
+            " `morca register`",
             sep="",
         )
         return 2
@@ -364,7 +364,7 @@ def _run[
         key.write("," if j > 0 else "", keys[j])
     var run = store.create_run(P.name, hash, key, "manual", owner)
     store.ran_version(
-        run, store.version(P.name, hash, P.describe(), getenv("ORCA_IMAGE"))
+        run, store.version(P.name, hash, P.describe(), getenv("MORCA_IMAGE"))
     )
     print("run", run)
     return _execute[P](rt, store, run, owner, keys, RunResult())
@@ -380,7 +380,7 @@ def _resume[
     var info = store.run_info(run)
     if info.pipeline != P.name:
         raise Error(
-            "orca: run ",
+            "morca: run ",
             run,
             " is of pipeline ",
             info.pipeline,
@@ -390,7 +390,7 @@ def _resume[
     var hash = hex(P.registry_hash())
     if info.registry_hash != hash and not allow_new_code:
         raise Error(
-            "orca: run ",
+            "morca: run ",
             run,
             " ran code ",
             info.registry_hash,
@@ -401,7 +401,7 @@ def _resume[
     var owner = process_owner()
     store.claim(run, owner, _stale_seconds())
     store.ran_version(
-        run, store.version(P.name, hash, P.describe(), getenv("ORCA_IMAGE"))
+        run, store.version(P.name, hash, P.describe(), getenv("MORCA_IMAGE"))
     )
     var interrupted = store.interrupt(run)
     var prior = store.prior(run)
@@ -515,11 +515,11 @@ def _parent(path: String) -> String:
 
 
 def _stale_seconds() raises -> Float64:
-    var s = getenv("ORCA_STALE_SECONDS", "30")
+    var s = getenv("MORCA_STALE_SECONDS", "30")
     try:
         return Float64(s)
     except:
-        raise Error("orca: ORCA_STALE_SECONDS is not a number: ", s)
+        raise Error("morca: MORCA_STALE_SECONDS is not a number: ", s)
 
 
 def _execute[
@@ -536,7 +536,7 @@ def _execute[
 
     A run asked to cancel stops before its next attempt and ends
     `cancelled`. The store retries its writes for the run (`PgStore`: on a
-    new connection for `ORCA_DB_RETRY_SECONDS`, `orca.state.DbRetry`). If
+    new connection for `MORCA_DB_RETRY_SECONDS`, `morca.state.DbRetry`). If
     this raises otherwise (the database stayed away, or another process took
     the run over), the run is left `running`; once its heartbeat is stale it
     can be resumed.
@@ -564,7 +564,7 @@ def _execute[
                 _ = P.tasks.timeline(rt, stage_of(at))
                 publish(at)
             except e:
-                print("orca: no timeline:", e)
+                print("morca: no timeline:", e)
     var outcome = res.outcome()
     if outcome == DEFERRED:
         store.defer_run(res.deferred_until())
@@ -584,7 +584,7 @@ def _print_steps_after[S: RunStore](mut store: S, run: Int):
     try:
         _print_steps(store, run)
     except e:
-        print("orca: can't list run", run, "steps:", e)
+        print("morca: can't list run", run, "steps:", e)
 
 
 def _print_steps[

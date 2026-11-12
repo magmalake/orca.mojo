@@ -1,8 +1,8 @@
 """Ops' Pools (`/ops/pools`): a row per machine of every pool runs are
-placed on (`orca.views.pools`), filtered by pool and kind with plain links,
+placed on (`morca.views.pools`), filtered by pool and kind with plain links,
 refreshed every 10 s from `/ops/pools/live`; a machine's own page
 (`/ops/pools/<kind>/<id>`); and `/api/pools`. With EC2 in view the page
-keeps Fleet's summary cards and charts (`orca.fleet`).
+keeps Fleet's summary cards and charts (`morca.fleet`).
 
 Pools replaced Fleet and Workers: `/ops/fleet` and `/ops/workers` redirect
 here (`?kind=ec2`, `?kind=self-hosted`), and answer their old JSON to a
@@ -11,27 +11,27 @@ script that asks for JSON, as `/api/fleet` and `/api/workers` still do.
 
 from std.os import getenv
 
-from orca.ui.pool_status import (
+from morca.ui.pool_status import (
     scaled_pools,
     scaled_pools_html,
     scaled_pools_json,
 )
-from orca.fleet import (
+from morca.fleet import (
     charts_html,
     fleet_charts,
     fleet_summary,
     sparkline,
     summary_html,
 )
-from orca.html import Html, url_encode
-from orca.json import quote
-from orca.metrics import metrics_html, parse_samples
-from orca.logs import read_location
-from orca.sample import machine_name, metrics_location
-from orca.state import State
-from orca.ui.layout import card_open, fact_item, not_found, page_html
-from orca.ui.terms import header_help, value_help
-from orca.views.pools import (
+from morca.html import Html, url_encode
+from morca.json import quote
+from morca.metrics import metrics_html, parse_samples
+from morca.logs import read_location
+from morca.sample import machine_name, metrics_location
+from morca.state import State
+from morca.ui.layout import card_open, fact_item, not_found, page_html
+from morca.ui.terms import header_help, value_help
+from morca.views.pools import (
     EC2,
     K8S,
     SELF_HOSTED,
@@ -47,9 +47,9 @@ from orca.views.pools import (
     run_pipeline,
     worker_runs,
 )
-from orca.views.runs import step_spans
-from orca.watchdog import active_trips, banner_html
-from orca.web.page import Page
+from morca.views.runs import step_spans
+from morca.watchdog import active_trips, banner_html
+from morca.web.page import Page
 
 
 comptime POOLS_EVERY = 10
@@ -168,7 +168,7 @@ def _runs_html(mut h: Html, runs: List[Int]):
 
 def _process_html(mut h: Html, m: Machine):
     if m.kind == SELF_HOSTED:
-        h.raw("<code>orca worker</code> ")
+        h.raw("<code>morca worker</code> ")
         h.raw('<span class="muted" title="expires ')
         h.text(m.expires)
         h.raw('">token ')
@@ -350,8 +350,8 @@ def _live_html(mut h: Html, mut db: State, ask: PoolsAsk) raises:
         "Machines",
         (
             "A row per machine of each pool runs are placed on: the EC2"
-            " instances orca launches, a Kubernetes run's pods, and the"
-            " machines running orca worker for a worker:&lt;pool&gt; pool,"
+            " instances morca launches, a Kubernetes run's pods, and the"
+            " machines running morca worker for a worker:&lt;pool&gt; pool,"
             " the worker in the row's last column. Refreshed every 10 s."
         ),
         "pools",
@@ -455,17 +455,17 @@ def pools_page(mut db: State, ask: PoolsAsk) raises -> Page:
     h.raw("<h1>Pools</h1>")
     h.raw(
         '<p class="muted">Every machine runs are placed on, by pool:',
-        " <code>ec2</code>, the instances orca launches for runs;",
+        " <code>ec2</code>, the instances morca launches for runs;",
         " <code>kubernetes</code>, a run's pods on the Kubernetes runner;",
         " and <code>worker:&lt;pool&gt;</code>, the machines of your own",
-        " running <code>orca worker</code>. The one machine that runs the",
+        " running <code>morca worker</code>. The one machine that runs the",
         ' scheduler, this UI and Postgres is <a href="/ops/control">',
         'Control</a>; <a href="/watchdog">Watchdog</a> lists the rules that',
         " pause pipelines.</p>",
     )
     var trips = active_trips(db)
     banner_html(h, trips)
-    if ask.ec2() and getenv("ORCA_RUNNER") == "local":
+    if ask.ec2() and getenv("MORCA_RUNNER") == "local":
         h.raw(
             '<p class="alert">This scheduler\'s runner is',
             " <code>local</code>: it runs every run on its own machine and",
@@ -551,7 +551,7 @@ def machine_page(mut db: State, kind: String, id: String) raises -> Page:
         "machine",
         "Machine",
         (
-            "What orca knows of this machine: its pool and kind, its size,"
+            "What morca knows of this machine: its pool and kind, its size,"
             " the runs on it now and when it was last heard from."
         ),
         "pools",
@@ -652,7 +652,7 @@ def _ec2_charts(mut h: Html, mut db: State, m: Machine) raises:
     if len(got.samples) == 0:
         h.raw(
             '<p class="card__none">No samples yet: the instance uploads them',
-            " every ORCA_CLUSTER_LOG_SECONDS once its sampler starts.</p>",
+            " every MORCA_CLUSTER_LOG_SECONDS once its sampler starts.</p>",
         )
     else:
         metrics_html(h, [got^], step_spans(db, run), m.live())
@@ -752,7 +752,7 @@ def _worker_charts(
     if len(got.samples) == 0:
         h.raw(
             '<p class="card__none">No samples for it: the worker needs',
-            " ORCA_LOGS, and ORCA_SAMPLE_SECONDS above 0.</p>",
+            " MORCA_LOGS, and MORCA_SAMPLE_SECONDS above 0.</p>",
         )
     else:
         metrics_html(h, [got^], step_spans(db, r.id), r.status == "running")

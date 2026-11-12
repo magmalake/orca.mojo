@@ -1,28 +1,28 @@
 """`/runs`, the runs list: newest first, filtered by pipeline, status
 (any of several, each with its count), trigger, when it was created, a run
-and its partitions, a page at a time (`orca.views.runs.RunsPage`), and its
+and its partitions, a page at a time (`morca.views.runs.RunsPage`), and its
 runs picked to cancel, retry or backfill again in one go
-(`orca.api.actions.bulk`); `/runs/table` is a list's page as the fragment
+(`morca.api.actions.bulk`); `/runs/table` is a list's page as the fragment
 it refreshes from, for `/runs`, a pipeline's Runs tab and the home page.
 """
 
-from orca.admission import held_warning, row_json, scheduler_pressure
-from orca.api.runs import json_runs, json_runs_page, runs_filters_json
-from orca.html import Html, query_param, url_encode
-from orca.json import quote
-from orca.state import State
-from orca.system import alert_html
-from orca.ui.layout import (
+from morca.admission import held_warning, row_json, scheduler_pressure
+from morca.api.runs import json_runs, json_runs_page, runs_filters_json
+from morca.html import Html, query_param, url_encode
+from morca.json import quote
+from morca.state import State
+from morca.system import alert_html
+from morca.ui.layout import (
     HERE_SLOT,
     IDLE_EVERY,
     LIVE_EVERY,
     ask_attrs,
     page_html,
 )
-from orca.ui.parts import runs_table_html
-from orca.ui.recent import recent_table
-from orca.views.code import runs_code
-from orca.views.runs import (
+from morca.ui.parts import runs_table_html
+from morca.ui.recent import recent_table
+from morca.views.code import runs_code
+from morca.views.runs import (
     RUNS_PAGE,
     RunsPage,
     RunsQuery,
@@ -30,8 +30,8 @@ from orca.views.runs import (
     runs_page,
     runs_query,
 )
-from orca.web.page import Page
-from orca.api.actions import BULK_MAX
+from morca.web.page import Page
+from morca.api.actions import BULK_MAX
 
 
 comptime RUN_STATUSES: List[String] = [
@@ -56,9 +56,9 @@ comptime RUN_TRIGGERS: List[String] = [
     "rebuild",
     "fill",
 ]
-"""The triggers orca writes (`orca.runs.trigger`): the scheduler's fires and
+"""The triggers morca writes (`orca.runs.trigger`): the scheduler's fires and
 sensors, `backfill`, a binary's `run`, the UI's start button, a rerun, a
-rebuild and a fill (`orca.fill`). The filter adds any others the table has."""
+rebuild and a fill (`morca.fill`). The filter adds any others the table has."""
 
 
 comptime _SUBMIT_ON_CHANGE = (
@@ -368,7 +368,7 @@ def _runs_word(n: Int) -> String:
 
 
 def runs_done_html(mut h: Html, url: String):
-    """What a bulk action did (`orca.api.actions.bulk`, which sends the
+    """What a bulk action did (`morca.api.actions.bulk`, which sends the
     browser back with `?did=` and its counts), said over the list."""
     var did = query_param(url, "did")
     if did != "cancel" and did != "retry" and did != "backfill":

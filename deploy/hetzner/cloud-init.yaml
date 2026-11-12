@@ -18,7 +18,7 @@ packages:
 write_files:
   # Docker, and so every container, waits for the Volume: Postgres must never
   # initialise a database on the root disk by starting before the mount.
-  - path: /etc/systemd/system/docker.service.d/orca-volume.conf
+  - path: /etc/systemd/system/docker.service.d/morca-volume.conf
     content: |
       [Unit]
       RequiresMountsFor=/mnt/orca-data

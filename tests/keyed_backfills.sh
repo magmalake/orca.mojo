@@ -3,7 +3,7 @@
 # generated names, with the scheduler running (tests/keyed/bulk.mojo: 100
 # keys to a run, at most 4 runs at once, never retried).
 #
-# - `orca backfill bulk @all` queues 200 runs and never more than 4 run; with
+# - `morca backfill bulk @all` queues 200 runs and never more than 4 run; with
 #   3 keys told to fail, every other key is done exactly once;
 # - the UI lists the 3 as failed, and a key's page agrees with the steps;
 # - a second backfill queues one run, of those 3, which then succeeds;
@@ -11,13 +11,13 @@
 # - 500 names appended to keys.bulk start 5 sensor runs, of the new names;
 # - a keyed pipeline writing what a monthly sensor reads isn't registered.
 #
-# Needs ORCA_DATABASE_URL (pixi run -e data test-keyed-backfills starts a
+# Needs MORCA_DATABASE_URL (pixi run -e data test-keyed-backfills starts a
 # throwaway server), curl and jq.
 set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 mkdir -p build
-# The pipelines and orca compile at once (scripts/mojo-build.sh).
+# The pipelines and morca compile at once (scripts/mojo-build.sh).
 pids=
 for p in names bulk events; do
     # shellcheck disable=SC2086
@@ -28,12 +28,12 @@ done
 scripts/mojo-build.sh -I src -I tests/lineage $DEP_INC tests/sensors/clean.mojo -o build/sn-clean &
 pids="$pids $!"
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 for pid in $pids $!; do wait "$pid"; done
 log=build/keyed-backfills.log
 : > "$log"
-export ORCA_WAREHOUSE=build/keyed-backfills-wh ORCA_SENSE_SECONDS=1 ORCA_STALE_SECONDS=10
-rm -rf "$ORCA_WAREHOUSE"
+export MORCA_WAREHOUSE=build/keyed-backfills-wh MORCA_SENSE_SECONDS=1 MORCA_STALE_SECONDS=10
+rm -rf "$MORCA_WAREHOUSE"
 sched=
 ui=
 stop() {
@@ -47,11 +47,11 @@ fail() {
     stop
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 # scheduler [<names to fail>]: the variable is set on the command, as one
 # set in front of a function call would outlive it.
 scheduler() {
-    ORCA_KEYED_FAIL=${1:-} ./build/orca scheduler >> "$log" 2>&1 &
+    MORCA_KEYED_FAIL=${1:-} ./build/morca scheduler >> "$log" 2>&1 &
     sched=$!
 }
 # Until no bulk run is queued or running, checking max_runs all along.
@@ -64,12 +64,12 @@ settle() {
         sleep 0.1
     done
 }
-backfill() { ./build/orca backfill bulk @all 2>> "$log" || fail "backfill exited $?"; }
+backfill() { ./build/morca backfill bulk @all 2>> "$log" || fail "backfill exited $?"; }
 done_once() { q "SELECT count(DISTINCT partition) FROM orca.steps WHERE step = 'work' AND status = 'succeeded'"; }
 
-./build/kd-names "$ORCA_WAREHOUSE" 20000 bulk 0 5 > /dev/null || fail "names"
+./build/kd-names "$MORCA_WAREHOUSE" 20000 bulk 0 5 > /dev/null || fail "names"
 [ "$(./build/kd-bulk keys | tail -n +2 | wc -l | tr -d ' ')" -eq 20000 ] || fail "20,000 keys"
-./build/orca register ./build/kd-bulk >> "$log" 2>&1 || fail "register"
+./build/morca register ./build/kd-bulk >> "$log" 2>&1 || fail "register"
 
 # Every key, with three told to fail.
 scheduler log-00007,log-01234,log-19999
@@ -86,11 +86,11 @@ stop
 # What the UI says of the keys, and of one.
 free_port port
 base="http://127.0.0.1:$port"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 ui=$!
 i=0
 until curl -fs "$base/" > /dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "orca ui didn't start"; sleep 0.1
+    i=$((i + 1)); [ "$i" -lt 100 ] || fail "morca ui didn't start"; sleep 0.1
 done
 json() { curl -fsS -H 'Accept: application/json' "$base$1" || fail "GET $1"; }
 [ "$(json /pipelines/bulk | jq -c '.keys | [.total, .done, .live, .failed]')" \
@@ -113,7 +113,7 @@ settle
 
 # 500 new names: the sensor runs them, and only them.
 before=$(q "SELECT coalesce(max(id), 0) FROM orca.runs")
-./build/kd-names "$ORCA_WAREHOUSE" 500 bulk 20000 5 > /dev/null || fail "500 more names"
+./build/kd-names "$MORCA_WAREHOUSE" 500 bulk 20000 5 > /dev/null || fail "500 more names"
 i=0
 until [ "$(q "SELECT count(*) FROM orca.runs WHERE id > $before AND status = 'succeeded'")" -eq 5 ]; do
     i=$((i + 1)); [ "$i" -lt 1200 ] || fail "the sensor's runs: $(q "SELECT id, trigger, status FROM orca.runs WHERE id > $before")"; sleep 0.1
@@ -127,8 +127,8 @@ sleep 3
 stop
 
 # A keyed writer of what a monthly sensor reads.
-./build/orca register ./build/sn-clean >> "$log" 2>&1 || fail "register clean"
+./build/morca register ./build/sn-clean >> "$log" 2>&1 || fail "register clean"
 code=0
-out=$(./build/orca register ./build/kd-events 2>&1) || code=$?
+out=$(./build/morca register ./build/kd-events 2>&1) || code=$?
 [ "$code" -eq 3 ] && echo "$out" | grep -q "no rule turns a name into a date" || fail "events registered: $out"
 echo "ok   keyed backfills"

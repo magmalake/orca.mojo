@@ -10,7 +10,7 @@ comptime Labels = Pipeline["labels", Label, partitions=Keyed["av2.logs", "log_id
 ```
 
 A pipeline's first step takes its key (`Month` for `Monthly`, `Day` for
-`Daily`, `Hour` for `Hourly`, `Name` for `orca.keyed.Keyed`), or a `Seq` of them for a first
+`Daily`, `Hour` for `Hourly`, `Name` for `morca.keyed.Keyed`), or a `Seq` of them for a first
 gather step. `start` is the first partition: keys before it are refused,
 and phase 2's scheduler and backfills count from it. A pipeline without
 `partitions=` is `Monthly[]`, with no start.
@@ -21,10 +21,10 @@ only they `fill` a schedule's partition, and only keyed partitions have
 current `keys`, read from their dataset.
 """
 
-from orca.day import Day
-from orca.hour import Hour
-from orca.key import Key, TimeKey, parse_keys
-from orca.month import Month
+from morca.day import Day
+from morca.hour import Hour
+from morca.key import Key, TimeKey, parse_keys
+from morca.month import Month
 
 
 trait Partitions:
@@ -113,7 +113,7 @@ struct Monthly[first: StaticString = ""](Partitions):
 
     @staticmethod
     def keys() raises -> Tuple[Int64, List[String]]:
-        raise Error("orca: monthly partitions have no keys dataset")
+        raise Error("morca: monthly partitions have no keys dataset")
 
 
 struct Daily[first: StaticString = ""](Partitions):
@@ -149,7 +149,7 @@ struct Daily[first: StaticString = ""](Partitions):
 
     @staticmethod
     def keys() raises -> Tuple[Int64, List[String]]:
-        raise Error("orca: daily partitions have no keys dataset")
+        raise Error("morca: daily partitions have no keys dataset")
 
 
 struct Hourly[first: StaticString = ""](Partitions):
@@ -186,7 +186,7 @@ struct Hourly[first: StaticString = ""](Partitions):
 
     @staticmethod
     def keys() raises -> Tuple[Int64, List[String]]:
-        raise Error("orca: hourly partitions have no keys dataset")
+        raise Error("morca: hourly partitions have no keys dataset")
 
 
 def parse_partitions[P: Partitions](s: StringSlice) raises -> List[P.K]:

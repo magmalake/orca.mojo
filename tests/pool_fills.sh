@@ -1,7 +1,7 @@
 #!/bin/sh
-# Fills on a worker pool (#177): orca ui, the scheduler and two `orca
+# Fills on a worker pool (#177): morca ui, the scheduler and two `morca
 # worker`s of pool t, with no database, over tests/pool/fillwk.mojo
-# (monthly from 2024-01; ORCA_NOW puts its range at 2024-01..2024-06),
+# (monthly from 2024-01; MORCA_NOW puts its range at 2024-01..2024-06),
 # placed worker:t with fills = "all", fill_order = "oldest" and
 # fill_max_runs = 2:
 #
@@ -21,7 +21,7 @@
 # - a pipeline at its max_runs with 60 queued runs doesn't hide another
 #   pipeline's queued run of the pool from a worker with room.
 #
-# Needs ORCA_DATABASE_URL (pixi run test-pool-fills starts a throwaway
+# Needs MORCA_DATABASE_URL (pixi run test-pool-fills starts a throwaway
 # server), curl, jq and python3.
 set -eu
 cd "$(dirname "$0")/.."
@@ -30,7 +30,7 @@ mkdir -p build
 scripts/mojo-build.sh -I src $DEP_INC tests/pool/fillwk.mojo -o build/fillwk &
 b1=$!
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/orca &
+scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 b2=$!
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy &
@@ -41,12 +41,12 @@ wait "$b3"
 log=build/pool-fills.log
 : > "$log"
 proj=$PWD/build/pool-fills-project
-export ORCA_LOGS="$PWD/build/pool-fills-logs"
-rm -rf "$proj" "$ORCA_LOGS" build/pool-fills-stage build/pool-fills-*.out
+export MORCA_LOGS="$PWD/build/pool-fills-logs"
+rm -rf "$proj" "$MORCA_LOGS" build/pool-fills-stage build/pool-fills-*.out
 mkdir -p "$proj"
-export ORCA_STALE_SECONDS=3 ORCA_START_SECONDS=10 ORCA_SAMPLE_SECONDS=1 ORCA_WATCHDOG_SECONDS=0
-export ORCA_NOW=2024-07-15T12:00Z
-unset ORCA_IMAGE
+export MORCA_STALE_SECONDS=3 MORCA_START_SECONDS=10 MORCA_SAMPLE_SECONDS=1 MORCA_WATCHDOG_SECONDS=0
+export MORCA_NOW=2024-07-15T12:00Z
+unset MORCA_IMAGE
 hold="$PWD/build/pool-fills-hold"
 pids=
 cleanup() {
@@ -60,7 +60,7 @@ fail() {
     for f in build/pool-fills-*.out; do [ -f "$f" ] && { echo "== $f"; tail -15 "$f"; }; done
     exit 1
 }
-q() { psql "$ORCA_DATABASE_URL" -Atc "$1"; }
+q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 # until_ SECONDS WHAT CONDITION...: waits for the condition, or fails.
 until_() {
     t=$1; what=$2; shift 2
@@ -76,24 +76,24 @@ base="http://127.0.0.1:$port"
 fills() { q "SELECT coalesce(string_agg(partitions, ',' ORDER BY id), '') FROM orca.runs WHERE trigger = 'fill'"; }
 fill() { curl -fsS "$base/api/pipelines/fillwk" | jq -r ".fill.$1" || fail "GET /api/pipelines/fillwk"; }
 
-cat > "$proj/orca.toml" << 'EOF'
+cat > "$proj/morca.toml" << 'EOF'
 [pipelines.fillwk]
 placement = "worker:t"
 fills = "all"
 fill_order = "oldest"
 fill_max_runs = 2
 EOF
-./build/orca register --config "$proj/orca.toml" ./build/fillwk >> "$log" 2>&1 || fail "register"
+./build/morca register --config "$proj/morca.toml" ./build/fillwk >> "$log" 2>&1 || fail "register"
 is "SELECT placement || ' ' || fills || ' ' || fill_max_runs FROM orca.pipelines WHERE name = 'fillwk'" "worker:t all 2" \
     || fail "the registration: $(q "SELECT placement, fills, fill_max_runs FROM orca.pipelines")"
-ORCA_UI_ADDR="127.0.0.1:$port" ./build/orca ui >> "$log" 2>&1 &
+MORCA_UI_ADDR="127.0.0.1:$port" ./build/morca ui >> "$log" 2>&1 &
 pids="$pids $!"
-until_ 10 "orca ui didn't start" curl -fs "$base/" -o /dev/null
-hetzner=$(./build/orca worker-token create --pool t --label hetzner 2>> "$log") || fail "worker-token create"
-bgent=$(./build/orca worker-token create --pool t --label bgent 2>> "$log") || fail "worker-token create"
+until_ 10 "morca ui didn't start" curl -fs "$base/" -o /dev/null
+hetzner=$(./build/morca worker-token create --pool t --label hetzner 2>> "$log") || fail "worker-token create"
+bgent=$(./build/morca worker-token create --pool t --label bgent 2>> "$log") || fail "worker-token create"
 
 # --- No worker yet: fill_max_runs fill runs, queued and held, no more ---
-./build/orca scheduler > build/pool-fills-sched.out 2>&1 &
+./build/morca scheduler > build/pool-fills-sched.out 2>&1 &
 sched=$!
 pids="$pids $sched"
 until_ 10 "no fill runs queued: $(q "SELECT id, status, trigger, held FROM orca.runs")" \
@@ -125,8 +125,8 @@ pids="$pids $watch"
 # worker OUT TOKEN NAME [MAX_RUNS]: a worker of pool t with no database,
 # one run at once unless MAX_RUNS, in the background; its pid in $w.
 worker() {
-    env -u ORCA_DATABASE_URL -u ORCA_PGDATA ORCA_WORKER_TOKEN="$2" FILLWK_HOLD="$hold" \
-        ./build/orca worker --pool t --remote "$base" --poll-seconds 0.3 \
+    env -u MORCA_DATABASE_URL -u MORCA_PGDATA MORCA_WORKER_TOKEN="$2" FILLWK_HOLD="$hold" \
+        ./build/morca worker --pool t --remote "$base" --poll-seconds 0.3 \
         --dir "$PWD/build/pool-fills-stage" --max-runs "${4:-1}" --name "$3" > "build/pool-fills-$1.out" 2>&1 &
     w=$!
     pids="$pids $w"
@@ -142,10 +142,10 @@ until_ 20 "the workers didn't start a fill run each: $(q "SELECT id, status, wor
     is "SELECT count(DISTINCT worker) FROM orca.runs WHERE trigger = 'fill' AND status = 'running' AND heartbeat IS NOT NULL" 2
 ra=$(q "SELECT r.id FROM orca.runs r JOIN orca.workers w ON w.id = r.worker WHERE w.label = 'hetzner' AND r.status = 'running'")
 rb=$(q "SELECT r.id FROM orca.runs r JOIN orca.workers w ON w.id = r.worker WHERE w.label = 'bgent' AND r.status = 'running'")
-sampled() { [ -s "$ORCA_LOGS/fillwk/$ra/metrics/worker-hetzner.jsonl" ]; }
-until_ 10 "no machine metrics for run $ra: $(ls -R "$ORCA_LOGS" 2>&1)" sampled
-jq -e '.cores > 0 and .mem.total > 0' "$ORCA_LOGS/fillwk/$ra/metrics/worker-hetzner.jsonl" > /dev/null \
-    || fail "the samples: $(head -2 "$ORCA_LOGS/fillwk/$ra/metrics/worker-hetzner.jsonl")"
+sampled() { [ -s "$MORCA_LOGS/fillwk/$ra/metrics/worker-hetzner.jsonl" ]; }
+until_ 10 "no machine metrics for run $ra: $(ls -R "$MORCA_LOGS" 2>&1)" sampled
+jq -e '.cores > 0 and .mem.total > 0' "$MORCA_LOGS/fillwk/$ra/metrics/worker-hetzner.jsonl" > /dev/null \
+    || fail "the samples: $(head -2 "$MORCA_LOGS/fillwk/$ra/metrics/worker-hetzner.jsonl")"
 sleep 1
 [ "$(fills)" = "2024-01,2024-02" ] || fail "a fill run was queued beyond fill_max_runs: $(fills)"
 [ "$(fill running)" = 2 ] && [ "$(fill queued)" = 0 ] || fail "the API: $(curl -fsS "$base/api/pipelines/fillwk" | jq -c .fill)"
@@ -227,8 +227,8 @@ echo "ok   a claim never started is queued again, its start given back"
 kill "$w4"
 touch "$hold"
 q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status) SELECT name, registry_hash, '2024-05', 'ui', 'queued' FROM orca.pipelines, generate_series(1, 60) WHERE name = 'fillwk'" > /dev/null
-./build/orca register --placement worker:t ./build/toy >> "$log" 2>&1 || fail "register toy"
-./build/orca backfill toy 2024-01 >> "$log" 2>&1 || fail "backfill toy"
+./build/morca register --placement worker:t ./build/toy >> "$log" 2>&1 || fail "register toy"
+./build/morca backfill toy 2024-01 >> "$log" 2>&1 || fail "backfill toy"
 rt=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'toy'")
 worker w5 "$bgent" bgent 3
 w5=$w

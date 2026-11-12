@@ -1,18 +1,18 @@
-"""What the step cards show (`orca.ui.step_cards`): each step's card,
+"""What the step cards show (`morca.ui.step_cards`): each step's card,
 with what its attempts in the pipeline's latest runs did, and on a run's
 page each attempt's.
 """
 
 from postgres import Params
 
-from orca.sample import fixed1
-from orca.state import State
-from orca.ui.step_cards import AttemptCard, StepCard, duration_text
-from orca.ui.terms import value_help
-from orca.usage import bytes_text, cpu_text
-from orca.views.code import CodeLinks
-from orca.views.pipelines import StepDef
-from orca.views.runs import int_or_zero, usage_columns, utc_sql
+from morca.sample import fixed1
+from morca.state import State
+from morca.ui.step_cards import AttemptCard, StepCard, duration_text
+from morca.ui.terms import value_help
+from morca.usage import bytes_text, cpu_text
+from morca.views.code import CodeLinks
+from morca.views.pipelines import StepDef
+from morca.views.runs import int_or_zero, usage_columns, utc_sql
 
 
 comptime STEP_RUNS = 20
@@ -26,7 +26,7 @@ def step_cards_of(
     links: CodeLinks,
     recent: Bool,
 ) raises -> List[StepCard]:
-    """Each step's card (`orca.ui.step_cards`); with `recent`, what its
+    """Each step's card (`morca.ui.step_cards`); with `recent`, what its
     attempts in the pipeline's latest `STEP_RUNS` runs did: how many failed,
     the p50 and most its succeeded ones took, and its peak memory's."""
     var got = Dict[String, StepCard]()

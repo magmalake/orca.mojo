@@ -1,14 +1,14 @@
 """Start runs, on a pipeline's Operate tab: the form, its date picker
-(`orca.ui.coverage`), and the preview of what it would queue
-(`orca.views.start`), updated as you type.
+(`morca.ui.coverage`), and the preview of what it would queue
+(`morca.views.start`), updated as you type.
 """
 
-from orca.html import Html, url_encode
-from orca.ui.layout import cmd_box, docs_link
-from orca.views.commands import backfill_cmd, remote_cmd, shell_quote
-from orca.views.pipelines import PipelineRow
-from orca.views.start import StartPreview, one_run_line, preview_line, unit_word
-from orca.timekeys import example_of
+from morca.html import Html, url_encode
+from morca.ui.layout import cmd_box, docs_link
+from morca.views.commands import backfill_cmd, remote_cmd, shell_quote
+from morca.views.pipelines import PipelineRow
+from morca.views.start import StartPreview, one_run_line, preview_line, unit_word
+from morca.timekeys import example_of
 
 
 comptime _CAL_SCRIPT = """
@@ -188,7 +188,7 @@ comptime _START_SCRIPT = """
     const rerun = f.elements.rerun.checked;
     const k = keys ? sh(keys) : "<range>";
     const u = location.origin;
-    f.querySelector("[data-cmd=backfill]").textContent = "orca login " + u + " && orca --remote " + u +
+    f.querySelector("[data-cmd=backfill]").textContent = "morca login " + u + " && morca --remote " + u +
       " backfill " + (rerun ? "--rerun " : "") + f.dataset.pipeline + " " + k;
     clearTimeout(timer);
     if (!keys) return;

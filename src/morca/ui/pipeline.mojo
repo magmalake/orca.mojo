@@ -7,23 +7,23 @@ pipeline in every run it was in.
 
 from postgres import Params
 
-from orca.civil import now
-from orca.config_show import config_html
-from orca.coverage import Coverage
-from orca.dag import DagStep, dag_svg
-from orca.fill import FillStatus, eta_text, lag_note, money
-from orca.follow import Follow, follow
-from orca.html import Html, url_encode
-from orca.json import quote
-from orca.recommend import Recommendation
-from orca.sample import fixed1
-from orca.queueing import done_keys
-from orca.registered import registered
-from orca.source import web_url
-from orca.state import State
-from orca.ui.coverage import coverage_href, coverage_html, follow_html
-from orca.ui.datasets import dataset_href, snapshot_href
-from orca.ui.layout import (
+from morca.civil import now
+from morca.config_show import config_html
+from morca.coverage import Coverage
+from morca.dag import DagStep, dag_svg
+from morca.fill import FillStatus, eta_text, lag_note, money
+from morca.follow import Follow, follow
+from morca.html import Html, url_encode
+from morca.json import quote
+from morca.recommend import Recommendation
+from morca.sample import fixed1
+from morca.queueing import done_keys
+from morca.registered import registered
+from morca.source import web_url
+from morca.state import State
+from morca.ui.coverage import coverage_href, coverage_html, follow_html
+from morca.ui.datasets import dataset_href, snapshot_href
+from morca.ui.layout import (
     ask_attrs,
     docs_link,
     fact_item,
@@ -31,7 +31,7 @@ from orca.ui.layout import (
     not_found,
     page_html,
 )
-from orca.ui.parts import (
+from morca.ui.parts import (
     CPU_HELP,
     PEAK_HELP,
     dataset_links,
@@ -41,18 +41,18 @@ from orca.ui.parts import (
     source_html,
     step_cell,
 )
-from orca.ui.runs import (
+from morca.ui.runs import (
     runs_bulk_html,
     runs_done_html,
     runs_filters_html,
     runs_list,
 )
-from orca.ui.start import start_html
-from orca.ui.step_cards import AttemptCard, cards_script
-from orca.ui.terms import COVERAGE_HELP
-from orca.usage import bytes_text, cpu_text
-from orca.views.code import CodeLinks, code_links
-from orca.views.pipelines import (
+from morca.ui.start import start_html
+from morca.ui.step_cards import AttemptCard, cards_script
+from morca.ui.terms import COVERAGE_HELP
+from morca.usage import bytes_text, cpu_text
+from morca.views.code import CodeLinks, code_links
+from morca.views.pipelines import (
     Fire,
     KeyCounts,
     PipelineAsk,
@@ -65,10 +65,10 @@ from orca.views.pipelines import (
     pipeline_coverage,
     pipeline_rows,
 )
-from orca.views.runs import VersionRow
-from orca.views.steps import step_cards_of
-from orca.web.page import Page
-from orca.timekeys import is_time_kind
+from morca.views.runs import VersionRow
+from morca.views.steps import step_cards_of
+from morca.web.page import Page
+from morca.timekeys import is_time_kind
 
 
 def _keys_html(mut h: Html, name: String, k: KeyCounts):
@@ -296,9 +296,9 @@ def _fill_html(mut h: Html, s: FillStatus):
 
 
 comptime _FILLS_DOCS = (
-    "https://github.com/morca-dev/morca/blob/main/docs/orca-toml.md#fills"
+    "https://github.com/morca-dev/morca/blob/main/docs/morca-toml.md#fills"
 )
-"""Fills are documented in orca.toml's reference, not on the docs page."""
+"""Fills are documented in morca.toml's reference, not on the docs page."""
 
 
 def _progress_html(
@@ -333,10 +333,10 @@ def _progress_html(
             "waiting",
             (
                 "Its next run waits on its host: for room, when what it asks"
-                " for at least (cpus, memory_gb in orca.toml) is more than the"
+                " for at least (cpus, memory_gb in morca.toml) is more than the"
                 " running runs weren't granted, less the host's reserve; or"
                 " for the host's memory pressure to ease"
-                " (ORCA_ADMIT_MEMORY_PRESSURE)."
+                " (MORCA_ADMIT_MEMORY_PRESSURE)."
             ),
             "runners",
         )
@@ -349,7 +349,7 @@ def _progress_html(
             "Fill",
             "fill",
             (
-                'With fills = "all" in orca.toml the scheduler works through'
+                'With fills = "all" in morca.toml the scheduler works through'
                 " the whole range by itself, one partition per fill run,"
                 " within a daily budget and a window. This is how far it got,"
                 " how fast, and what it spent today."
@@ -409,7 +409,7 @@ def _progress_html(
 
 
 def _coverage_fact(mut h: Html, p: PipelineRow, cov: Optional[Coverage]):
-    """The Progress card's Coverage (`orca.coverage`): done of total and
+    """The Progress card's Coverage (`morca.coverage`): done of total and
     the percent, linking to the year calendar (a monthly pipeline's year,
     a keyed one's Keys); "—" when there's nothing to count."""
     var dated = is_time_kind(p.kind)
@@ -518,9 +518,9 @@ def _config_html(mut h: Html, p: PipelineRow):
         "placement",
         (
             "Where its runs go: control is the scheduler's own host, ec2 an"
-            " instance launched for the run, worker:&lt;pool&gt; a remote orca"
+            " instance launched for the run, worker:&lt;pool&gt; a remote morca"
             " worker of that pool, and default the scheduler's runner"
-            " (ORCA_RUNNER)."
+            " (MORCA_RUNNER)."
         ),
         "runners",
     )
@@ -545,7 +545,7 @@ def _config_html(mut h: Html, p: PipelineRow):
         "binary",
         (
             "The program each run starts: the pipeline's Mojo code built into"
-            " one executable, as orca register recorded it."
+            " one executable, as morca register recorded it."
         ),
         "build",
     )
@@ -572,7 +572,7 @@ def _code_card(
     if not links.pipeline and not any_step and len(links.tasks) == 0:
         h.raw(
             '<p class="muted">No links to the code: the registered binary',
-            " has no source, or <code>orca locate</code> didn't map it.</p>",
+            " has no source, or <code>morca locate</code> didn't map it.</p>",
         )
     else:
         h.raw('<dl class="facts">')
@@ -647,7 +647,7 @@ def _steps_html(
     """The Steps card: Graph and Table tabs, links that work without
     scripts (`?steps=`); with them, the choice is kept in `localStorage`.
     Without one, a pipeline of one step shows its table and others their
-    graph. `cards` is its steps' cards' `<script>` (`orca.ui.step_cards`)."""
+    graph. `cards` is its steps' cards' `<script>` (`morca.ui.step_cards`)."""
     var graph = view == "graph" or (view != "table" and len(steps) > 1)
     var base = String("/pipelines/", url_encode(name))
     h.raw(
@@ -952,7 +952,7 @@ def _cards_html(
             "Requested",
             "usage-request",
             (
-                "What it asks for (cpus and memory_gb in orca.toml): its runs"
+                "What it asks for (cpus and memory_gb in morca.toml): its runs"
                 " start once the least of it fits on their host, each granted"
                 " up to the most. Set it from the peaks above."
             ),

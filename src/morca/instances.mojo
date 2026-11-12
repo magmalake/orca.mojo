@@ -1,15 +1,15 @@
-"""Scheduler instances: two `orca scheduler`s of different images overlapping
+"""Scheduler instances: two `morca scheduler`s of different images overlapping
 on one Postgres during a deploy (docs/overlap.md).
 
-With `ORCA_OVERLAP=on`, each `orca scheduler` has a row in
+With `MORCA_OVERLAP=on`, each `morca scheduler` has a row in
 `orca.schedulers`, kept fresh on every tick with the runs its processes
 are. One instance leads: it holds the session advisory lock `LEAD_LOCK`,
 and only it decides (fires, sensors, retries, starts, alerts, sweeps). The
 newest live instance takes the lead: an older one that sees a newer one
-live, or is asked to (`orca scheduler drain`), gives the lock up and
+live, or is asked to (`morca scheduler drain`), gives the lock up and
 drains: it starts nothing, keeps supervising the processes it started
 until they end, then ends its row and exits. A run an instance started
-records it (`runs.instance`), and `orca.live.held_sql` keeps it live while
+records it (`runs.instance`), and `morca.live.held_sql` keeps it live while
 the instance lists it, so the leader counts it and leaves it alone.
 
 An instance is live while it has been seen within the stale limit and
@@ -22,10 +22,10 @@ from std.time import sleep
 
 from postgres import Params
 
-from orca.live import stale_limit
-from orca.migrations import known_migrations, migration_floor
-from orca.state import State, live_older
-from orca.store import process_owner
+from morca.live import stale_limit
+from morca.migrations import known_migrations, migration_floor
+from morca.state import State, live_older
+from morca.store import process_owner
 
 
 comptime LEAD_LOCK = 0x6F726365  # "orce"
@@ -33,11 +33,11 @@ comptime LEAD_LOCK = 0x6F726365  # "orce"
 
 
 def overlap_on() raises -> Bool:
-    """`ORCA_OVERLAP`: `off` (the default: one scheduler at a time, as
+    """`MORCA_OVERLAP`: `off` (the default: one scheduler at a time, as
     before) or `on` (an instance row, a lead, and a drain)."""
-    var v = getenv("ORCA_OVERLAP", "off")
+    var v = getenv("MORCA_OVERLAP", "off")
     if v != "on" and v != "off":
-        raise Error("orca: ORCA_OVERLAP is on or off, not ", v)
+        raise Error("morca: MORCA_OVERLAP is on or off, not ", v)
     return v == "on"
 
 
@@ -53,7 +53,7 @@ def live_cond(stale: Float64) -> String:
 
 def join(mut db: State) raises -> Int:
     """Adds this process's row, waiting, with the migrations it knows and
-    its image (`ORCA_IMAGE`); returns its id."""
+    its image (`MORCA_IMAGE`); returns its id."""
     var me = process_owner()
     var at = me.rfind(":")
     return Int(
@@ -65,7 +65,7 @@ def join(mut db: State) raises -> Int:
             Params()
             .text(String(me[byte=:at]))
             .int64(Int64(Int(String(me[byte = at + 1 :]))))
-            .text(getenv("ORCA_IMAGE"))
+            .text(getenv("MORCA_IMAGE"))
             .int64(Int64(known_migrations())),
         )
         .row(0)
@@ -210,7 +210,7 @@ def overlap_refusal(mut db: State) raises -> String:
     """Why this binary can't start beside the scheduler going now, or
     empty if it can (docs/overlap.md#deploying): a live instance leads, and
     no live instance knows fewer migrations than this binary's floor
-    (`orca.state.migration_floor`), which its migrations would raise past
+    (`morca.state.migration_floor`), which its migrations would raise past
     it. Doesn't migrate."""
     var tx = db.conn.begin()
     var t = tx.query(
@@ -220,7 +220,7 @@ def overlap_refusal(mut db: State) raises -> String:
         tx.rollback()
         return String(
             "no scheduler instance has ever run on this database (one before",
-            " ORCA_OVERLAP, or with it off, keeps none)",
+            " MORCA_OVERLAP, or with it off, keeps none)",
         )
     var floor = migration_floor(known_migrations())
     var old = live_older(tx, floor)
@@ -247,7 +247,7 @@ def overlap_refusal(mut db: State) raises -> String:
     if leads.int64("n") == 0:
         return String(
             "no live scheduler instance leads (none is going, or it has",
-            " ORCA_OVERLAP off)",
+            " MORCA_OVERLAP off)",
         )
     return String()
 

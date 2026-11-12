@@ -4,7 +4,7 @@ what an uninterrupted attempt gives, and two runs replacing one partition at
 once don't both keep their rows. Over local Iceberg tables partitioned by
 month; run under scripts/with-postgres.sh, in the data environment.
 
-Each run writes ids from a base of its own (`ORCA_TEST_BASE`), so a table's
+Each run writes ids from a base of its own (`MORCA_TEST_BASE`), so a table's
 ids say which run each row came from.
 """
 
@@ -21,7 +21,7 @@ from iceberg.util import now_ms
 from iceberg.values import Datum
 from parquet import RecordBatch
 
-from orca import (
+from morca import (
     Ctx,
     Mapped,
     Month,
@@ -32,7 +32,7 @@ from orca import (
     Step,
     parse_months,
 )
-from orca.tables import (
+from morca.tables import (
     append,
     append_files,
     commit,
@@ -78,12 +78,12 @@ def _rows(month: String, start: Int, n: Int) raises -> List[RecordBatch]:
 
 
 def _create(name: String) raises:
-    var cat = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE"))
+    var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
     _ = cat.create_table("db", name, Schema.parse(SCHEMA), _spec())
 
 
 def _table(name: String) raises -> Table:
-    return Table.load_local(String(getenv("ORCA_WAREHOUSE"), "/db/", name))
+    return Table.load_local(String(getenv("MORCA_WAREHOUSE"), "/db/", name))
 
 
 def _ids(t: Table) raises -> List[Int64]:
@@ -108,10 +108,10 @@ def _expected(base: Int) -> List[Int64]:
 
 
 def _die_once(name: String) raises -> Bool:
-    """True the first time for `name` while ORCA_TEST_DIE is `once`."""
-    if getenv("ORCA_TEST_DIE") != "once":
+    """True the first time for `name` while MORCA_TEST_DIE is `once`."""
+    if getenv("MORCA_TEST_DIE") != "once":
         return False
-    var marker = String(getenv("ORCA_WAREHOUSE"), "/died-", name)
+    var marker = String(getenv("MORCA_WAREHOUSE"), "/died-", name)
     if exists(marker):
         return False
     with open(marker, "w") as f:
@@ -121,10 +121,10 @@ def _die_once(name: String) raises -> Bool:
 
 def load[dataset: StaticString](mut ctx: Ctx, m: Month) raises -> Int64:
     """`COMMITS` appends of `ROWS` rows for the month, ids from the month's
-    base: `ORCA_TEST_BASE` plus 100 per month after January. With
-    ORCA_TEST_DIE=once, the first attempt dies after its first commit."""
+    base: `MORCA_TEST_BASE` plus 100 per month after January. With
+    MORCA_TEST_DIE=once, the first attempt dies after its first commit."""
     var t = table(ctx, dataset)
-    var base = Int(getenv("ORCA_TEST_BASE", "0")) + 100 * (m.month - 1)
+    var base = Int(getenv("MORCA_TEST_BASE", "0")) + 100 * (m.month - 1)
     var id = Int64(-1)
     for c in range(COMMITS):
         id = append(ctx, t, _rows(String(m), base + c * ROWS, ROWS))
@@ -149,7 +149,7 @@ comptime Retries = Pipeline["replace_retry", Retried]
 
 def _store(run_name: String) raises -> PgStore:
     """A new run, numbered by Postgres."""
-    var url = getenv("ORCA_DATABASE_URL")
+    var url = getenv("MORCA_DATABASE_URL")
     var db = State(url)
     db.migrate()
     db.register(run_name, "h", "{}")
@@ -159,7 +159,7 @@ def _store(run_name: String) raises -> PgStore:
 
 def _new_run(base: Int, name: String) raises -> PgStore:
     """A new run whose rows start at `base`."""
-    _ = setenv("ORCA_TEST_BASE", String(base))
+    _ = setenv("MORCA_TEST_BASE", String(base))
     return _store(name)
 
 
@@ -179,7 +179,7 @@ def test_a_rerun_replaces_its_partition() raises:
     assert_true(res.succeeded(), _error(res))
     var first = _ids(_table("r"))
     assert_equal(len(first), 2 * COMMITS * ROWS)
-    # A new run of January, as `orca backfill --rerun` starts: January's rows
+    # A new run of January, as `morca backfill --rerun` starts: January's rows
     # are this run's, February's the first run's.
     for base in [2000, 3000]:
         store = _new_run(base, "replace_rerun")
@@ -240,12 +240,12 @@ def test_a_retry_within_a_run_is_the_uninterrupted_result() raises:
     assert_true(res.succeeded(), _error(res))
     # The new run's first attempt replaces January and dies; its retry
     # finds that commit, and appends the second without replacing it.
-    _ = setenv("ORCA_TEST_DIE", "once")
+    _ = setenv("MORCA_TEST_DIE", "once")
     store = _new_run(2000, "replace_retry")
     res = Retries.execute(
         store, RunResult(), parse_months("2024-01"), store.run
     )
-    _ = setenv("ORCA_TEST_DIE", "")
+    _ = setenv("MORCA_TEST_DIE", "")
     assert_true(res.succeeded(), _error(res))
     assert_equal(res.steps[0].attempt, 2)
     assert_equal(_ids(_table("t")), _expected(2000))
@@ -272,7 +272,7 @@ def _ctx(run: Int, dataset: String) -> Ctx:
 
 def test_two_runs_replacing_one_partition_keep_one_runs_rows() raises:
     _create("c")
-    var cat = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE"))
+    var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
     var t = cat.load_table("db", "c")
     # An earlier run's January.
     var old = _ctx(9000, "db.c")
@@ -306,7 +306,7 @@ def test_a_commit_refuses_a_stale_removal() raises:
     """GAPS #29: an overwrite planned before another writer removed some of
     its files isn't committed over the rest."""
     _create("s")
-    var cat = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE"))
+    var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
     var t = cat.load_table("db", "s")
     var first = _ctx(9101, "db.s")
     _ = replace_partitions(first, t, _rows("2024-01", 1000, ROWS))
@@ -357,7 +357,7 @@ def _expected_n(base: Int, n: Int) -> List[Int64]:
 
 
 def test_an_unpartitioned_table_is_replaced_whole() raises:
-    var cat = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE"))
+    var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
     _ = cat.create_table("db", "u", Schema.parse(SCHEMA))
     var t = cat.load_table("db", "u")
     var one = _ctx(9201, "db.u")
@@ -371,7 +371,7 @@ def test_an_unpartitioned_table_is_replaced_whole() raises:
 def test_append_to_a_replaced_dataset_replaces() raises:
     """`append` and `append_files` replace for a dataset in `replaces=`."""
     _create("d")
-    var cat = FilesystemCatalog.local(getenv("ORCA_WAREHOUSE"))
+    var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
     var t = cat.load_table("db", "d")
     var one = _ctx(9301, "db.d")
     _ = append(one, t, _rows("2024-01", 1000, ROWS))
@@ -382,7 +382,7 @@ def test_append_to_a_replaced_dataset_replaces() raises:
 
 def main() raises:
     var root = String("build/wh-replace-", now_ms())
-    _ = setenv("ORCA_WAREHOUSE", root)
+    _ = setenv("MORCA_WAREHOUSE", root)
     test_a_rerun_replaces_its_partition()
     print("PASS test_a_rerun_replaces_its_partition")
     test_append_mode_still_appends()

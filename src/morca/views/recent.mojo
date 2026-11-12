@@ -1,13 +1,13 @@
-"""The home page's recent runs (#354): one row per batch (`orca.batches`),
+"""The home page's recent runs (#354): one row per batch (`morca.batches`),
 so one backfill doesn't fill the list, and a run with none as its own row;
 what needs attention first.
 """
 
 from postgres import Params
 
-from orca.json import quote
-from orca.state import State
-from orca.views.runs import RunRow, runs_one, utc_sql
+from morca.json import quote
+from morca.state import State
+from morca.views.runs import RunRow, runs_one, utc_sql
 
 
 comptime FAILED_LATELY = "1 day"

@@ -17,12 +17,12 @@ so a pipeline that breaks a rule doesn't compile.
 
 `execute` is the executor: it runs the steps that haven't succeeded yet and
 reports each attempt to a `Store`, either `MemoryStore` (what `run` uses: a
-run lives as long as the process) or `orca.state.PgStore`, which makes a run
+run lives as long as the process) or `morca.state.PgStore`, which makes a run
 resumable by another process. Each step's output is kept encoded by dista's codec, as Postgres
 holds it. A step that raises is retried up to its `retries`, then fails its
 partition: the steps after it for that partition, and any gather step over
 it, are skipped, while other partitions carry on. One that raises
-`orca.step.defer` ends `deferred`, with no more retries, and its downstream
+`morca.step.defer` ends `deferred`, with no more retries, and its downstream
 steps are skipped likewise; the run is `deferred` if no step failed.
 """
 
@@ -32,14 +32,14 @@ from dista.task import fnv1a64
 from std.reflection import reflect
 from std.time import sleep
 
-from orca.ctx import Ctx
-from orca.json import quote
-from orca.civil import Civil, now
-from orca.partitions import Monthly, Partitions
-from orca.schedule import Fill, NoSchedule, Previous, Schedule, ScheduleLike
-from orca.source import source_commit, source_dirty, source_repo
-from orca.step import Gather, Mapped, StepLike, deferred_for, deferred_why
-from orca.store import (
+from morca.ctx import Ctx
+from morca.json import quote
+from morca.civil import Civil, now
+from morca.partitions import Monthly, Partitions
+from morca.schedule import Fill, NoSchedule, Previous, Schedule, ScheduleLike
+from morca.source import source_commit, source_dirty, source_repo
+from morca.step import Gather, Mapped, StepLike, deferred_for, deferred_why
+from morca.store import (
     DEFERRED,
     FAILED,
     SKIPPED,
@@ -49,9 +49,9 @@ from orca.store import (
     Store,
     StepRun,
 )
-from orca.logs import attempt_log, publish, stage_of
-from orca.tasks import NoTasks, TaskSet, task_list
-from orca.tasks import workers as local_workers
+from morca.logs import attempt_log, publish, stage_of
+from morca.tasks import NoTasks, TaskSet, task_list
+from morca.tasks import workers as local_workers
 
 
 def _names(names: List[String]) -> String:
@@ -81,20 +81,20 @@ struct Pipeline[
 ]:
     """A pipeline named `name` of the steps `Ts`, in run order, whose steps
     call the dista `tasks`, over the keys of `partitions`; run by
-    `schedule` for the partition its fires `fills` (`orca.schedule`), and,
+    `schedule` for the partition its fires `fills` (`morca.schedule`), and,
     with `sensor`, when a dataset it reads gets a new snapshot
-    (`orca.sensors`). A backfill puts `keys_per_run` keys in each run it
-    queues, and so do a fill and, above 1, a sensor (#240; orca.toml's
+    (`morca.sensors`). A backfill puts `keys_per_run` keys in each run it
+    queues, and so do a fill and, above 1, a sensor (#240; morca.toml's
     `keys_per_run` overrides it): one for time keys by default, tens to hundreds for keyed
-    partitions (`orca.keyed`), whose runs then each go through many keys.
+    partitions (`morca.keyed`), whose runs then each go through many keys.
     On Kubernetes, a run of a pipeline with `tasks` gets a cluster of
-    `workers` dista workers (`orca.kube`); locally it forks `ORCA_WORKERS`.
+    `workers` dista workers (`morca.kube`); locally it forks `MORCA_WORKERS`.
 
     The scheduler runs at most `max_runs` of its runs at once, and starts a
     failed scheduled or backfilled run again up to `run_retries` times, with
-    backoff: `retry_seconds` (0 for the scheduler's `ORCA_RETRY_SECONDS`)
+    backoff: `retry_seconds` (0 for the scheduler's `MORCA_RETRY_SECONDS`)
     doubling with each start, up to `max_retry_seconds` if it's set
-    (`orca.scheduler`). `run_retries=72, retry_seconds=3600,
+    (`morca.scheduler`). `run_retries=72, retry_seconds=3600,
     max_retry_seconds=3600` tries hourly for three days."""
 
     comptime K = Self.partitions.K
@@ -265,7 +265,7 @@ struct Pipeline[
             out.write('"reads": ', _names(S.dataset_reads()), ", ")
             out.write('"writes": ', _names(S.dataset_writes()))
             # Only when declared, as for the timeout: a step without them
-            # appends to what it writes (`orca.scheduler.appending_writes`).
+            # appends to what it writes (`morca.scheduler.appending_writes`).
             var replaces = S.dataset_replaces()
             if len(replaces) > 0:
                 out.write(', "replaces": ', _names(replaces))
@@ -282,7 +282,7 @@ struct Pipeline[
     @staticmethod
     def timeouts() -> String:
         """`step=seconds` for each step with `timeout_seconds`,
-        comma-separated, for the run's watchdog (`orca.heartbeat`)."""
+        comma-separated, for the run's watchdog (`morca.heartbeat`)."""
         var out = String()
         comptime for i in range(Self.Ts.length):
             comptime T = Self.Ts[i]
@@ -527,7 +527,7 @@ struct Pipeline[
                     try:
                         publish(log)
                     except e:
-                        print("orca: can't keep the log at", log, ":", e)
+                        print("morca: can't keep the log at", log, ":", e)
                 var later = deferred_for(error)
                 if later > 0:
                     var until = now() + Int64(later)

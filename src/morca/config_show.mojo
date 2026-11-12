@@ -1,6 +1,6 @@
-"""`orca config show` and `orca config export` (`orca.config`): each
+"""`morca config show` and `morca config export` (`morca.config`): each
 pipeline's settings with where each came from, as text, HTML and JSON, and
-the registered settings written back as an orca.toml.
+the registered settings written back as a morca.toml.
 """
 
 from std.os import getenv
@@ -12,27 +12,27 @@ from postgres import (
     Params,
     Row,
 )
-from orca.fill import fill_max_runs_text
-from orca.fill import SINCE_REGISTRATION
-from orca.html import Html
-from orca.json import quote
-from orca.recommend import (
+from morca.fill import fill_max_runs_text
+from morca.fill import SINCE_REGISTRATION
+from morca.html import Html
+from morca.json import quote
+from morca.recommend import (
     Recommendation,
     learned,
 )
-from orca.resources import Request
-from orca.secrets import parse_secrets
-from orca.source import (
+from morca.resources import Request
+from morca.secrets import parse_secrets
+from morca.source import (
     is_hex,
     web_url,
 )
-from orca.state import State
-from orca.ui.terms import key_help
-from orca.toml import (
+from morca.state import State
+from morca.ui.terms import key_help
+from morca.toml import (
     toml_key,
     toml_string,
 )
-from orca.config import (
+from morca.config import (
     CODE_DEFAULT,
     FROM_ENV,
     FROM_FILE,
@@ -65,7 +65,7 @@ struct Shown(Movable):
     var overrides: List[Tuple[String, String]]
     var rows: List[_Row]
     var learned: Optional[Recommendation]
-    """The request its runs' peaks suggest (`orca.recommend`), applied when
+    """The request its runs' peaks suggest (`morca.recommend`), applied when
     it asks for `auto` and learns."""
     var auto: Bool
     """Whether its `cpus` or `memory_gb` is `auto`."""
@@ -163,7 +163,7 @@ struct Shown(Movable):
                 self.hash[byte = : min(12, self.hash.byte_length())],
             )
         else:
-            out.write("  not registered from orca.toml")
+            out.write("  not registered from morca.toml")
         out.write("\n")
         if len(self.overrides) > 0:
             out.write("  overrides:")
@@ -202,17 +202,17 @@ struct Shown(Movable):
 
 
 comptime _VALUE_TERMS = ["placement", "fills", "fill_order", "spot"]
-"""The keys whose values are one of a fixed set (`orca.ui.terms`)."""
+"""The keys whose values are one of a fixed set (`morca.ui.terms`)."""
 
 
 def config_html(
     mut h: Html, s: Shown, repo: String = "", code_line: String = ""
 ):
-    """The pipeline page's Configuration (`id="config"`): what `orca config
+    """The pipeline page's Configuration (`id="config"`): what `morca config
     show` prints, where it was registered from, and the flags that
     overrode the file. Each key has its help, each value from a fixed set
     its meaning on hover, and From links to where the value is set where
-    that's known: an orca.toml line at the registration's commit in `repo`
+    that's known: a morca.toml line at the registration's commit in `repo`
     (a repository's web address), or for a default from the pipeline's
     code, `code_line`, its declaration."""
     h.raw('<h2 id="config">Configuration</h2><p class="muted">')
@@ -233,7 +233,7 @@ def config_html(
         h.raw("</code>.")
     else:
         h.raw(
-            "Not registered from orca.toml: from <code>orca register</code>'s",
+            "Not registered from morca.toml: from <code>morca register</code>'s",
             " flags, each left out keeping what was registered.",
         )
     h.raw("</p>")
@@ -324,7 +324,7 @@ def _source(
     sources: Optional[Value], key: String
 ) raises -> Tuple[String, String]:
     """Where the registration says `key` came from; a value registered
-    before orca kept that could only have come from a flag."""
+    before morca kept that could only have come from a flag."""
     if sources:
         var s = sources.value().get(key)
         if s:
@@ -348,7 +348,7 @@ def _line_of(sources: Optional[Value], key: String) raises -> Int:
 
 def _run_env_names() -> List[String]:
     var out = List[String]()
-    for n in getenv("ORCA_RUN_ENV").split(","):
+    for n in getenv("MORCA_RUN_ENV").split(","):
         if n.strip():
             out.append(String(n.strip()))
     return out^
@@ -356,9 +356,9 @@ def _run_env_names() -> List[String]:
 
 def shown(mut db: State, only: String = "") raises -> List[Shown]:
     """The effective configuration of each registered pipeline (or the one
-    named), with the source of every value. Values orca's runners take from
-    their environment when nothing is registered (`ORCA_EC2_HEAD_TYPE`,
-    `ORCA_EC2_WORKER_TYPE`, `ORCA_RUN_ENV`'s variables) are read from this
+    named), with the source of every value. Values morca's runners take from
+    their environment when nothing is registered (`MORCA_EC2_HEAD_TYPE`,
+    `MORCA_EC2_WORKER_TYPE`, `MORCA_RUN_ENV`'s variables) are read from this
     process's, which is the scheduler's when run beside it."""
     var out = List[Shown]()
     for r in db.conn.query(_SHOWN_SQL, Params().text(only)):
@@ -390,7 +390,7 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
                 "default",
                 CODE_DEFAULT,
                 String(
-                    "the scheduler's runner, ", getenv("ORCA_RUNNER", "local")
+                    "the scheduler's runner, ", getenv("MORCA_RUNNER", "local")
                 ),
             )
         else:
@@ -398,8 +398,8 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
             s.add("placement", r.text("placement"), w[0], w[1])
         for t in range(2):
             var key = String("head_type") if t == 0 else String("worker_type")
-            var var_name = String("ORCA_EC2_HEAD_TYPE") if t == 0 else String(
-                "ORCA_EC2_WORKER_TYPE"
+            var var_name = String("MORCA_EC2_HEAD_TYPE") if t == 0 else String(
+                "MORCA_EC2_WORKER_TYPE"
             )
             if not r.is_null(key):
                 var w = _source(sources, key)
@@ -473,7 +473,7 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
         else:
             var w = _source(sources, "keys_per_run")
             s.add("keys_per_run", String(r.int64("keys_per_run")), w[0], w[1])
-        # A request (orca.resources), only when it has one.
+        # A request (morca.resources), only when it has one.
         for key in ["cpus", "memory_gb"]:
             if r.text(key):
                 var w = _source(sources, key)
@@ -502,7 +502,7 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
                 if kv[0] == n:
                     mine = True
             if not mine and getenv(n):
-                s.add(String("env.", n), getenv(n), FROM_ENV, "ORCA_RUN_ENV")
+                s.add(String("env.", n), getenv(n), FROM_ENV, "MORCA_RUN_ENV")
         for ref row in s.rows:
             if row.setting.source == FROM_FILE:
                 row.setting.line = _line_of(sources, row.key)
@@ -516,7 +516,7 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
 
 
 def _show_fills(mut s: Shown, r: Row, sources: Optional[Value]) raises:
-    """The `fill*` keys (`orca.fill`): `fills` always, the others when the
+    """The `fill*` keys (`morca.fill`): `fills` always, the others when the
     pipeline fills or sets them."""
     var fills = r.text("fills")
     if fills:
@@ -576,7 +576,7 @@ def _show_fills(mut s: Shown, r: Row, sources: Optional[Value]) raises:
 
 
 def show_json(items: List[Shown], one: Bool) -> String:
-    """`orca config show --json`: the pipeline's object, or for all of them
+    """`morca config show --json`: the pipeline's object, or for all of them
     `{"pipelines": [...]}`."""
     if one and len(items) == 1:
         return items[0].json()
@@ -601,12 +601,12 @@ def _inline(pairs: List[Tuple[String, String]]) -> String:
 
 
 def export_toml(mut db: State) raises -> String:
-    """`orca config export`: an `orca.toml` with a `[pipelines.<name>]` for
+    """`morca config export`: an `morca.toml` with a `[pipelines.<name>]` for
     each registered pipeline holding what's registered for it beyond the
     defaults, which registering from it again gives back."""
     var out = String(
-        "# orca.toml, written by `orca config export` from the registrations\n",
-        "# in orca's database. `orca register` reads it (orca.config).\n",
+        "# morca.toml, written by `morca config export` from the registrations\n",
+        "# in morca's database. `morca register` reads it (morca.config).\n",
     )
     for r in db.conn.query(_SHOWN_SQL, Params().text("")):
         out.write("\n[pipelines.", toml_key(r.text("name")), "]\n")

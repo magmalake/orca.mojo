@@ -1,34 +1,34 @@
 """`/`, the home page: the pipelines, with their coverage
-(`orca.coverage`), schedules, next and last runs, the recent runs (a row
-per batch, `orca.ui.recent`), and
-the Timeline tab (`orca.ui.viz`);
+(`morca.coverage`), schedules, next and last runs, the recent runs (a row
+per batch, `morca.ui.recent`), and
+the Timeline tab (`morca.ui.viz`);
 `/home/pipelines` is its table of pipelines, as the fragment it refreshes
 from.
 """
 
 from postgres import Params
 
-from orca.admission import held_warning, row_json, scheduler_pressure
-from orca.api.pipelines import json_pipeline
-from orca.api.runs import json_runs
-from orca.chart import DayRuns, runs_chart
-from orca.coverage import Coverage
-from orca.fleet import fleet_summary, summary_html, summary_json
-from orca.html import Html, url_encode
-from orca.json import quote
-from orca.state import State
-from orca.system import alert_html, system_now, warnings, warnings_json
-from orca.ui.coverage import coverage_href
-from orca.ui.layout import IDLE_EVERY, LIVE_EVERY, page_html
-from orca.ui.parts import pause_button
-from orca.ui.recent import recent_list
-from orca.ui.viz import gantt_panel, gantt_tabs
-from orca.views.code import pipeline_srcs
-from orca.views.pipelines import PipelineRow, pipeline_coverage, pipeline_rows
-from orca.views.recent import json_recent, recent_rows
-from orca.views.runs import HOME_RUNS, RunsQuery, run_rows
-from orca.watchdog import active_trips, banner_html, trips_json
-from orca.web.page import Page
+from morca.admission import held_warning, row_json, scheduler_pressure
+from morca.api.pipelines import json_pipeline
+from morca.api.runs import json_runs
+from morca.chart import DayRuns, runs_chart
+from morca.coverage import Coverage
+from morca.fleet import fleet_summary, summary_html, summary_json
+from morca.html import Html, url_encode
+from morca.json import quote
+from morca.state import State
+from morca.system import alert_html, system_now, warnings, warnings_json
+from morca.ui.coverage import coverage_href
+from morca.ui.layout import IDLE_EVERY, LIVE_EVERY, page_html
+from morca.ui.parts import pause_button
+from morca.ui.recent import recent_list
+from morca.ui.viz import gantt_panel, gantt_tabs
+from morca.views.code import pipeline_srcs
+from morca.views.pipelines import PipelineRow, pipeline_coverage, pipeline_rows
+from morca.views.recent import json_recent, recent_rows
+from morca.views.runs import HOME_RUNS, RunsQuery, run_rows
+from morca.watchdog import active_trips, banner_html, trips_json
+from morca.web.page import Page
 
 
 def _runs_per_day(mut db: State, days: Int) raises -> List[DayRuns]:
@@ -70,7 +70,7 @@ def _pipelines_live(ps: List[PipelineRow]) -> Bool:
 def _coverages(
     mut db: State, ps: List[PipelineRow]
 ) -> List[Optional[Coverage]]:
-    """Each pipeline's coverage (`orca.coverage`): a query each."""
+    """Each pipeline's coverage (`morca.coverage`): a query each."""
     var out = List[Optional[Coverage]]()
     for p in ps:
         out.append(pipeline_coverage(db, p))
@@ -245,11 +245,11 @@ def home(mut db: State) raises -> Page:
     summary_html(h, fleet, True)
     if len(ps) == 0:
         h.raw(
-            '<p class="empty">No pipelines yet: <code>orca register',
+            '<p class="empty">No pipelines yet: <code>morca register',
             " &lt;binary&gt;</code> adds one.</p>",
         )
     else:
-        # List and Timeline tabs over the table (orca.ui.viz).
+        # List and Timeline tabs over the table (morca.ui.viz).
         gantt_tabs(h)
         # Refreshed while the page is open: often while a run is going on.
         var live = _pipelines_live(ps)

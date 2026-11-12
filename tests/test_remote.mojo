@@ -1,7 +1,7 @@
-"""`orca login`'s pieces that need no server: API tokens' form, digest and
-lifetime (`orca.tokens`), which URLs a token may be sent to, and the
-credentials file and its mode (`orca.remote`). tests/remote.sh runs the
-whole of it against `orca ui`."""
+"""`morca login`'s pieces that need no server: API tokens' form, digest and
+lifetime (`morca.tokens`), which URLs a token may be sent to, and the
+credentials file and its mode (`morca.remote`). tests/remote.sh runs the
+whole of it against `morca ui`."""
 
 from std.os import getenv, listdir, remove, setenv, stat
 from std.os.path import exists
@@ -13,14 +13,14 @@ from std.testing import (
     assert_true,
 )
 
-from orca.remote import (
+from morca.remote import (
     Credential,
     find_credential,
     read_credentials,
     remote_url,
     write_credentials,
 )
-from orca.tokens import (
+from morca.tokens import (
     TOKEN_PREFIX,
     clean_label,
     is_token,
@@ -34,7 +34,7 @@ def test_tokens_are_random_and_well_formed() raises:
     var a = new_token()
     var b = new_token()
     assert_true(a.startswith(TOKEN_PREFIX))
-    # orca_ and 32 bytes in hex: 256 bits.
+    # morca_ and 32 bytes in hex: 256 bits.
     assert_equal(a.byte_length(), 5 + 64)
     assert_true(is_token(a))
     assert_true(a != b)
@@ -64,21 +64,21 @@ def test_token_hash_is_sha256() raises:
 
 
 def test_token_days() raises:
-    var had = getenv("ORCA_API_TOKEN_DAYS")
-    _ = setenv("ORCA_API_TOKEN_DAYS", "30")
+    var had = getenv("MORCA_API_TOKEN_DAYS")
+    _ = setenv("MORCA_API_TOKEN_DAYS", "30")
     assert_equal(token_days(), 30)
     assert_equal(token_days(7), 7)
     assert_equal(token_days(31), 30)
     assert_equal(token_days(-1), 30)
-    _ = setenv("ORCA_API_TOKEN_DAYS", "1")
+    _ = setenv("MORCA_API_TOKEN_DAYS", "1")
     assert_equal(token_days(7), 1)
-    _ = setenv("ORCA_API_TOKEN_DAYS", "0")
-    with assert_raises(contains="ORCA_API_TOKEN_DAYS"):
+    _ = setenv("MORCA_API_TOKEN_DAYS", "0")
+    with assert_raises(contains="MORCA_API_TOKEN_DAYS"):
         _ = token_days()
-    _ = setenv("ORCA_API_TOKEN_DAYS", "a month")
-    with assert_raises(contains="ORCA_API_TOKEN_DAYS"):
+    _ = setenv("MORCA_API_TOKEN_DAYS", "a month")
+    with assert_raises(contains="MORCA_API_TOKEN_DAYS"):
         _ = token_days()
-    _ = setenv("ORCA_API_TOKEN_DAYS", had if had else "30")
+    _ = setenv("MORCA_API_TOKEN_DAYS", had if had else "30")
 
 
 def test_clean_label() raises:
@@ -93,7 +93,7 @@ def test_remote_url_https() raises:
     assert_equal(
         remote_url("https://orca.mlake.dev/"), "https://orca.mlake.dev"
     )
-    assert_equal(remote_url("HTTPS://Orca.Mlake.Dev"), "https://orca.mlake.dev")
+    assert_equal(remote_url("HTTPS://Morca.Mlake.Dev"), "https://orca.mlake.dev")
     assert_equal(
         remote_url("https://orca.mlake.dev:443"), "https://orca.mlake.dev"
     )
@@ -126,7 +126,7 @@ def test_remote_url_refuses_the_rest() raises:
         "https://orca.mlake.dev#x",
         "https://me@orca.mlake.dev",
         "https://127.0.0.1@evil.example",
-        "https://orca mlake.dev",
+        "https://morca mlake.dev",
         "https://orca.mlake.dev\\x",
     ]:
         with assert_raises(contains="no path"):

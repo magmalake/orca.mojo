@@ -1,7 +1,7 @@
 """A pipeline that reads and writes one dataset, as a compaction does: not
 a cycle, for tests/datasets.sh."""
 
-from orca import Ctx, Mapped, Month, Monthly, Pipeline, Step, orca_main
+from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
 
 
 def step(mut ctx: Ctx, m: Month) raises -> Int:
@@ -15,4 +15,4 @@ comptime P = Pipeline["compacts", S, partitions=Monthly["2024-01"]]
 
 
 def main() raises:
-    orca_main[P]()
+    morca_main[P]()

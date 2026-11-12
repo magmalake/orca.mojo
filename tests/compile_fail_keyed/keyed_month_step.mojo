@@ -1,6 +1,6 @@
 # expect: a first mapped step takes the pipeline's partition key
-from orca import Ctx, Mapped, Month, Pipeline, Step, orca_main
-from orca.keyed import Keyed
+from morca import Ctx, Mapped, Month, Pipeline, Step, morca_main
+from morca.keyed import Keyed
 
 
 def label(mut ctx: Ctx, m: Month) raises -> Int:
@@ -12,4 +12,4 @@ comptime P = Pipeline["p", Label, partitions=Keyed["keys.logs", "log_id"]]
 
 
 def main() raises:
-    orca_main[P]()
+    morca_main[P]()

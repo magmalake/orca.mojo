@@ -1,7 +1,7 @@
 """A dated pipeline's partitions on a calendar: what state each day (or, for
 a monthly pipeline, month) is in, read from the database alone.
 
-`orca ui` draws it twice, as the picker on the Start runs form and as the
+`morca ui` draws it twice, as the picker on the Start runs form and as the
 read-only coverage on a pipeline's page, and serves it as JSON at
 `/pipelines/<name>/calendar?month=2023-01`. Daily pipelines have a month of
 days at a time; monthly ones a year of months; hourly ones a day of hours
@@ -13,7 +13,7 @@ they win:
 - `done`: what a backfill counts as done (`DONE_SQL`).
 - `failed`: not done, and the last run over it failed.
 - `behind`: none of these, but a dataset the sensor pipeline follows has
-  it (`orca.follow`); only on the page's coverage.
+  it (`morca.follow`); only on the page's coverage.
 - `open`: none of the above, so a backfill would queue it.
 
 Hourly, daily and monthly keys are zero-padded, so they compare as text.
@@ -23,15 +23,15 @@ from std.collections import Dict
 
 from postgres import Params
 
-from orca.civil import Civil, now
-from orca.day import Day
-from orca.hour import Hour
-from orca.json import quote
-from orca.live import live_sql
-from orca.month import Month, days_in
-from orca.queueing import done_keys
-from orca.state import State
-from orca.timekeys import unit_of
+from morca.civil import Civil, now
+from morca.day import Day
+from morca.hour import Hour
+from morca.json import quote
+from morca.live import live_sql
+from morca.month import Month, days_in
+from morca.queueing import done_keys
+from morca.state import State
+from morca.timekeys import unit_of
 
 
 comptime _LAST_SQL = (
@@ -235,7 +235,7 @@ def _cells(
     upstream: Dict[String, Bool] = {},
 ) raises -> List[Cell]:
     """Each of `keys` with its state, given which are `done` and which the
-    datasets a sensor follows have (`upstream`, `orca.follow`): the live
+    datasets a sensor follows have (`upstream`, `morca.follow`): the live
     runs and the last run of each key are a query each, whatever the
     keys."""
     var joined = String()

@@ -1,25 +1,25 @@
 """Machines for a worker pool, from whichever provider the pool names (#267):
-what the autoscaler (`orca.pool_scale`) calls, so it never knows which.
+what the autoscaler (`morca.pool_scale`) calls, so it never knows which.
 
     var p = Provider.of("hetzner", owner)   # raises without its settings
     p.arch("cax31")                  # "arm64": Docker's name, for the image
-    var got = p.create(MachineSpec("orca-lab-7", "cax31", "hel1", data, "lab"))
+    var got = p.create(MachineSpec("morca-lab-7", "cax31", "hel1", data, "lab"))
     for m in p.machines("lab"): ...
     _ = p.delete(m.id)
 
-**Hetzner** (`orca.hcloud`): the token as there; a machine is a server of
-`ORCA_HCLOUD_IMAGE` (`ubuntu-24.04`), with the project's SSH keys
-`ORCA_HCLOUD_SSH_KEYS` (comma-separated names, none by default) and the
-firewall `ORCA_HCLOUD_FIREWALL` (none by default), labelled `orca=pool`,
+**Hetzner** (`morca.hcloud`): the token as there; a machine is a server of
+`MORCA_HCLOUD_IMAGE` (`ubuntu-24.04`), with the project's SSH keys
+`MORCA_HCLOUD_SSH_KEYS` (comma-separated names, none by default) and the
+firewall `MORCA_HCLOUD_FIREWALL` (none by default), labelled `morca=pool`,
 `orca-pool=<pool>` and `orca-owner=<owner>` (the stack's id, so stacks
 sharing a project keep their machines apart), which is how `machines`
 finds a pool's. Every machine joins the private network
-`ORCA_HCLOUD_NETWORK` (`orca-<owner>`, made in `ORCA_HCLOUD_NETWORK_ZONE`,
-`eu-central`, over `ORCA_HCLOUD_NETWORK_RANGE`, `10.77.0.0/16`, if it isn't
+`MORCA_HCLOUD_NETWORK` (`orca-<owner>`, made in `MORCA_HCLOUD_NETWORK_ZONE`,
+`eu-central`, over `MORCA_HCLOUD_NETWORK_RANGE`, `10.77.0.0/16`, if it isn't
 there; `none` for none): one run's dista cluster over several machines
 talks over it (#268), its public side only ssh.
 
-**EC2** (`orca.machines_ec2`): subnets for locations, the security group
+**EC2** (`morca.machines_ec2`): subnets for locations, the security group
 and instance profile from the scheduler's settings, Ubuntu for the type's
 architecture, the same labels as tags.
 
@@ -30,8 +30,8 @@ a type before it makes one.
 
 from std.os import getenv
 
-from orca.hcloud import Created, HCloud, ServerSpec
-from orca.machines_ec2 import Ec2Machines
+from morca.hcloud import Created, HCloud, ServerSpec
+from morca.machines_ec2 import Ec2Machines
 
 comptime POOL_LABEL = "orca-pool"
 comptime OWNER_LABEL = "orca-owner"
@@ -87,7 +87,7 @@ struct Provider(Movable):
     var ssh_keys: List[String]
     var firewall: String
     var network: String
-    """The private network its machines join (`ORCA_HCLOUD_NETWORK`, else
+    """The private network its machines join (`MORCA_HCLOUD_NETWORK`, else
     `orca-<owner>`; `none` for no network)."""
 
     def __init__(
@@ -97,10 +97,10 @@ struct Provider(Movable):
         self.owner = owner
         self._hcloud = hcloud^
         self._ec2 = None
-        self.image = getenv("ORCA_HCLOUD_IMAGE", "ubuntu-24.04")
-        self.ssh_keys = _list_env("ORCA_HCLOUD_SSH_KEYS")
-        self.firewall = getenv("ORCA_HCLOUD_FIREWALL")
-        self.network = getenv("ORCA_HCLOUD_NETWORK")
+        self.image = getenv("MORCA_HCLOUD_IMAGE", "ubuntu-24.04")
+        self.ssh_keys = _list_env("MORCA_HCLOUD_SSH_KEYS")
+        self.firewall = getenv("MORCA_HCLOUD_FIREWALL")
+        self.network = getenv("MORCA_HCLOUD_NETWORK")
         if not self.network and owner:
             self.network = String("orca-", owner)
         if self.network == "none":
@@ -117,7 +117,7 @@ struct Provider(Movable):
             var p = Provider(kind, owner, None)
             p._ec2 = Ec2Machines()
             return p^
-        raise Error("orca: no provider ", kind)
+        raise Error("morca: no provider ", kind)
 
     def arch(self, machine_type: String) raises -> String:
         """`machine_type`'s architecture, Docker's name for it."""
@@ -147,8 +147,8 @@ struct Provider(Movable):
         if self.network:
             network = self._hcloud.value().network_id(
                 self.network,
-                getenv("ORCA_HCLOUD_NETWORK_ZONE", "eu-central"),
-                getenv("ORCA_HCLOUD_NETWORK_RANGE", "10.77.0.0/16"),
+                getenv("MORCA_HCLOUD_NETWORK_ZONE", "eu-central"),
+                getenv("MORCA_HCLOUD_NETWORK_RANGE", "10.77.0.0/16"),
             )
         return self._hcloud.value().create(
             ServerSpec(

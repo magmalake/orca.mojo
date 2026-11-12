@@ -12,7 +12,7 @@ input decodes with bytes left over or two encodings decode alike.
 from harness import check, only_findings, run_harness, save_last
 
 from dista import Seq, encode
-from orca import Ctx, Mapped, Month, Step, StepLike
+from morca import Ctx, Mapped, Month, Step, StepLike
 
 
 @fieldwise_init

@@ -1,15 +1,15 @@
 """Ops > Control's Runs card: each local and control-placed run going on this
-host, with its cgroup's memory against its limit (`orca.cgroup`), which
-the scheduler records every 5 seconds, and its grant (`orca.resources`).
+host, with its cgroup's memory against its limit (`morca.cgroup`), which
+the scheduler records every 5 seconds, and its grant (`morca.resources`).
 """
 
 from postgres import Params
 
-from orca.html import Html
-from orca.json import quote
-from orca.state import State
-from orca.ui.parts import mb_text
-from orca.usage import bytes_text
+from morca.html import Html
+from morca.json import quote
+from morca.state import State
+from morca.ui.parts import mb_text
+from morca.usage import bytes_text
 
 
 @fieldwise_init
@@ -62,7 +62,7 @@ def host_runs_html(mut h: Html, runs: List[HostRun]):
         '<section class="card" id="runs"><h2><a class="anchor"'
         ' href="#runs">Runs</a></h2>'
         '<p class="muted">Local and control-placed runs going on this'
-        " machine, each in a cgroup of its own where orca can make one: its"
+        " machine, each in a cgroup of its own where morca can make one: its"
         " memory now against its limit (memory.high), and the line past"
         " which the kernel kills it (memory.max).</p>"
     )
@@ -74,7 +74,7 @@ def host_runs_html(mut h: Html, runs: List[HostRun]):
         (
             "Where the run's pipeline is placed: <code>default</code> is the"
             " scheduler's local runner, <code>control</code> this host under"
-            " ORCA_CONTROL_MEMORY_MB."
+            " MORCA_CONTROL_MEMORY_MB."
         ),
         "placement",
     )
@@ -104,8 +104,8 @@ def host_runs_html(mut h: Html, runs: List[HostRun]):
         "Killed past",
         (
             "The hard ceiling (memory.max): the limit plus"
-            " ORCA_RUN_MEMORY_MARGIN (25%). Past it the kernel kills the whole"
-            " run and nothing else; orca fails it as out of memory and its"
+            " MORCA_RUN_MEMORY_MARGIN (25%). Past it the kernel kills the whole"
+            " run and nothing else; morca fails it as out of memory and its"
             " retry asks for 1.5\u00d7 as much."
         ),
         "resources",
@@ -116,7 +116,7 @@ def host_runs_html(mut h: Html, runs: List[HostRun]):
         "Granted",
         (
             "The memory admission gave this run when it started"
-            " (ORCA_GRANT_MEMORY_MB), out of its pipeline's request"
+            " (MORCA_GRANT_MEMORY_MB), out of its pipeline's request"
             " (memory_gb). A dash: the pipeline asks for nothing, so it got no"
             " grant."
         ),

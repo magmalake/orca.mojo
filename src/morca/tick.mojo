@@ -1,32 +1,32 @@
-"""One pass of the scheduler (`orca tick`; `orca scheduler` makes one a
+"""One pass of the scheduler (`morca tick`; `morca scheduler` makes one a
 second): what each registered pipeline is due, started.
 """
 
 from std.time import perf_counter_ns
 from std.os import remove
 from postgres import Params
-from orca.alerts import failed_runs
-from orca.notify import configured as notify_configured
-from orca.logs import publish
-from orca.proc import reap
-from orca.sensors import advance_rebuilds
-from orca.recommend import (
+from morca.alerts import failed_runs
+from morca.notify import configured as notify_configured
+from morca.logs import publish
+from morca.proc import reap
+from morca.sensors import advance_rebuilds
+from morca.recommend import (
     LEARN_RUNS,
     expire_raised,
 )
-from orca.usage import record as record_usage
-from orca.scheduler import (
+from morca.usage import record as record_usage
+from morca.scheduler import (
     Scheduler,
     _ControlProc,
     _RETRIED,
 )
-from orca.starting import _start
-from orca.sensing import (
+from morca.starting import _start
+from morca.sensing import (
     _fire,
     _sense,
     _sensed,
 )
-from orca.registered import registered
+from morca.registered import registered
 
 
 def tick(mut self: Scheduler, now: Int64) raises:
@@ -45,7 +45,7 @@ def tick(mut self: Scheduler, now: Int64) raises:
         if done.pid in self._keeping:
             var stage = self._keeping.pop(done.pid)
             if done.code != 0:
-                print("orca: keep-log exited", done.code, "keeping", stage)
+                print("morca: keep-log exited", done.code, "keeping", stage)
             try:
                 remove(stage)
             except:
@@ -65,7 +65,7 @@ def tick(mut self: Scheduler, now: Int64) raises:
                 if spent:
                     self._fail_spent(spawned, over)
             except e:
-                print("orca: can't record run", spawned[0], "exiting:", e)
+                print("morca: can't record run", spawned[0], "exiting:", e)
         if done.pid in self._meters:
             var m = self._meters.pop(done.pid)
             m.end(done.max_rss, done.cpu_seconds)
@@ -74,7 +74,7 @@ def tick(mut self: Scheduler, now: Int64) raises:
                     self.db, spawned[0], done.pid, m.aged(), m.max_rss
                 )
             except e:
-                print("orca: can't record run", spawned[0], "usage:", e)
+                print("morca: can't record run", spawned[0], "usage:", e)
         if ctl:
             self._keep_control_log(ctl.value())
         if done.pid in self._kept:
@@ -84,13 +84,13 @@ def tick(mut self: Scheduler, now: Int64) raises:
             try:
                 publish(log)
             except e:
-                print("orca: can't keep the driver log at", log, ":", e)
+                print("morca: can't keep the driver log at", log, ":", e)
     var readings = self._sample()
     self._kill_held()
     try:
         self._kill_wedged()
     except e:
-        print("orca: can't check its runs' heartbeats:", e)
+        print("morca: can't check its runs' heartbeats:", e)
     if self.instance > 0:
         self._lead()
         if not self.leading:
@@ -99,7 +99,7 @@ def tick(mut self: Scheduler, now: Int64) raises:
             try:
                 self._check_control_memory(readings)
             except e:
-                print("orca: can't check control-placed runs' memory:", e)
+                print("morca: can't check control-placed runs' memory:", e)
             return
         try:
             self._going = Int(
@@ -116,11 +116,11 @@ def tick(mut self: Scheduler, now: Int64) raises:
                 .int64("n")
             )
         except e:
-            print("orca: can't count this host's runs:", e)
+            print("morca: can't count this host's runs:", e)
     try:
         self._pressure()
     except e:
-        print("orca: can't keep the memory pressure:", e)
+        print("morca: can't keep the memory pressure:", e)
     self._record_cgroups()
     if self.runner:
         try:
@@ -128,21 +128,21 @@ def tick(mut self: Scheduler, now: Int64) raises:
             if n:
                 print("deleted", n, "objects of runs that ended")
         except e:
-            print("orca: can't sweep run clusters:", e)
-    # Worker pools orca grows and shrinks (orca.pool_scale), every
-    # ORCA_POOL_SCALE_SECONDS.
+            print("morca: can't sweep run clusters:", e)
+    # Worker pools morca grows and shrinks (morca.pool_scale), every
+    # MORCA_POOL_SCALE_SECONDS.
     if self.pools.due(Float64(perf_counter_ns()) / 1e9):
         try:
             self.pools.scale(self.db)
         except e:
-            print("orca: can't scale worker pools:", e)
+            print("morca: can't scale worker pools:", e)
     if self.ec2:
         try:
             var n = self.ec2.value().sweep(self.db)
             if n:
                 print("terminated", n, "instances of runs that ended")
         except e:
-            print("orca: can't sweep run instances:", e)
+            print("morca: can't sweep run instances:", e)
         try:
             var moved = self.ec2.value().scale(self.db)
             if moved[0] or moved[1]:
@@ -154,32 +154,32 @@ def tick(mut self: Scheduler, now: Int64) raises:
                     "drained",
                 )
         except e:
-            print("orca: can't scale run workers:", e)
+            print("morca: can't scale run workers:", e)
     try:
         self._check_control_memory(readings)
     except e:
-        print("orca: can't check control-placed runs' memory:", e)
+        print("morca: can't check control-placed runs' memory:", e)
     try:
         self._fleet()
     except e:
-        print("orca: can't keep the fleet's samples:", e)
+        print("morca: can't keep the fleet's samples:", e)
     try:
         self._watchdog()
     except e:
-        print("orca: can't check the watchdog's rules:", e)
+        print("morca: can't check the watchdog's rules:", e)
     try:
         self._notify(now)
     except e:
-        print("orca: can't raise alerts:", e)
+        print("morca: can't raise alerts:", e)
     advance_rebuilds(self.db)
     try:
         self._expire()
     except e:
-        print("orca: can't expire snapshots:", e)
+        print("morca: can't expire snapshots:", e)
     try:
         for name in expire_raised(self.db):
             print(
-                "orca:",
+                "morca:",
                 name,
                 (
                     "no longer asks for the memory an out-of-memory kill"
@@ -189,13 +189,13 @@ def tick(mut self: Scheduler, now: Int64) raises:
                 "runs have succeeded since",
             )
     except e:
-        print("orca: can't expire out-of-memory raises:", e)
+        print("morca: can't expire out-of-memory raises:", e)
     for p in registered(self.db):
         if p.cron:
             try:
                 _fire(self, p, now)
             except e:
-                print("orca: pipeline", p.name, "can't fire:", e)
+                print("morca: pipeline", p.name, "can't fire:", e)
         if p.sensor:
             var error = String()
             try:
@@ -208,7 +208,7 @@ def tick(mut self: Scheduler, now: Int64) raises:
             try:
                 _ = failed_runs(self.db, p.name, p.run_retries, _RETRIED)
             except e:
-                print("orca: can't alert on", p.name, "failures:", e)
+                print("morca: can't alert on", p.name, "failures:", e)
         _start(self, p, now)
         # After its other runs, so a fill never takes their place.
         if p.fill.all:

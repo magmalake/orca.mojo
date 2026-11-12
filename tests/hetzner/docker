@@ -1,19 +1,19 @@
 #!/bin/sh
 # A fake docker for tests/hetzner.sh: logs each call to $FAKE/docker.log and
-# answers what orca-stack asks ($FAKE/docker.all keeps every call). $FAKE/running is the count of running runs
+# answers what morca-stack asks ($FAKE/docker.all keeps every call). $FAKE/running is the count of running runs
 # the scheduler holds, $FAKE/worker-running of those on remote workers (each
 # listed as run 9N mojo_history on bgent),
-# $FAKE/backup-fails makes pg_dump fail, $FAKE/register-fails orca register.
+# $FAKE/backup-fails makes pg_dump fail, $FAKE/register-fails morca register.
 # The pipelines are toy and manual1; $FAKE/paused lists the paused ones,
-# which orca pause/unpause and an UPDATE of paused change. The aws-cli
+# which morca pause/unpause and an UPDATE of paused change. The aws-cli
 # container's bucket is $FAKE/bucket, and its /b the -v directory.
 #
 # Containers are directories in $FAKE/containers/<name>: image (the
 # reference it was started with), id (that image's id), status, labels
-# (KEY=VALUE lines) and aliases (on the orca network: --network-alias, or
+# (KEY=VALUE lines) and aliases (on the morca network: --network-alias, or
 # network connect --alias after a disconnect). An image's id is a hash of its reference,
 # or $FAKE/images/<reference with / and : as _> if there is one (a tag
-# pushed again). orca-stack's health probe (exec NAME bash -c ... PORT
+# pushed again). morca-stack's health probe (exec NAME bash -c ... PORT
 # PATH) answers 200, or what $FAKE/health/<name without -next> says; a
 # container started while $FAKE/exits/<name without -next> exists exits at
 # once; `run -d --name NAME` fails while $FAKE/run-fails/NAME exists.
@@ -22,15 +22,15 @@
 #
 # Overlapping schedulers: `run --rm ... scheduler can-overlap` prints
 # $FAKE/can-overlap (exit 0 if it says yes; "no: ..." without the file);
-# `orca scheduler wait-lead` fails while $FAKE/no-lead exists; a
+# `morca scheduler wait-lead` fails while $FAKE/no-lead exists; a
 # container's hostname is h-<the name it was started with>; the instances
-# of a hostname are $FAKE/instances; `orca scheduler drain` makes
+# of a hostname are $FAKE/instances; `morca scheduler drain` makes
 # scheduler-old exit unless $FAKE/old-stays exists.
 #
-# orca-stack check: the registrations are toy and manual1, binaries
-# /opt/orca/pipelines/<name>, paused as $FAKE/paused says; $FAKE/unregistered
+# morca-stack check: the registrations are toy and manual1, binaries
+# /opt/morca/pipelines/<name>, paused as $FAKE/paused says; $FAKE/unregistered
 # makes there be none; `exec scheduler test -x PATH` fails for a path listed
-# in $FAKE/no-binary; `orca start P K` queues run 70N (N counts them, in
+# in $FAKE/no-binary; `morca start P K` queues run 70N (N counts them, in
 # $FAKE/canary.log), whose status is $FAKE/canary-status/<P> or succeeded.
 echo "docker $*" >> "$FAKE/docker.log"
 echo "docker $*" >> "$FAKE/docker.all"
@@ -62,11 +62,11 @@ case "$all" in
         [ ! -f "$FAKE/unregistered" ] || exit 0
         for p in manual1 toy; do
             if grep -qx "$p" "$FAKE/paused"; then pp=t; else pp=f; fi
-            echo "$p /opt/orca/pipelines/$p $pp"
+            echo "$p /opt/morca/pipelines/$p $pp"
         done
         ;;
     "exec scheduler test -x "*) if grep -qxF "${all##* }" "$FAKE/no-binary" 2> /dev/null; then exit 1; fi ;;
-    "exec scheduler orca start "*)
+    "exec scheduler morca start "*)
         echo "$5 $6" >> "$FAKE/canary.log"
         echo "queued run 70$(wc -l < "$FAKE/canary.log" | tr -d ' ')"
         ;;
@@ -83,8 +83,8 @@ case "$all" in
         n=${all#*WHERE name = \'}
         unpause "${n%%\'*}"
         ;;
-    "exec scheduler orca pause "*) echo "${all##* }" >> "$FAKE/paused" ;;
-    "exec scheduler orca unpause "*) unpause "${all##* }" ;;
+    "exec scheduler morca pause "*) echo "${all##* }" >> "$FAKE/paused" ;;
+    "exec scheduler morca unpause "*) unpause "${all##* }" ;;
     *pg_dump*)
         [ ! -f "$FAKE/backup-fails" ] || { echo "pg_dump: connection refused" >&2; exit 1; }
         echo dump
@@ -117,14 +117,14 @@ case "$all" in
         ;;
     *"FROM orca.schedulers WHERE ended IS NULL"*) cat "$FAKE/instances" 2> /dev/null || true ;;
     # The image's upgrade steps: $FAKE/steps's lines whose when matches;
-    # $FAKE/no-upgrade is an image whose orca has no `orca upgrade`.
+    # $FAKE/no-upgrade is an image whose morca has no `morca upgrade`.
     "run --rm "*" upgrade --from "*)
         [ ! -f "$FAKE/no-upgrade" ] || exit 2
         echo "upgrade $all" >> "$FAKE/docker.log"
         w=${all##*--when }
         [ ! -f "$FAKE/steps" ] || awk -F'\t' -v w="$w" '$3 == w' "$FAKE/steps"
         ;;
-    "exec scheduler orca backfill "*)
+    "exec scheduler morca backfill "*)
         echo "step $all" >> "$FAKE/docker.log"
         [ ! -f "$FAKE/step-fails" ] || exit 1
         ;;
@@ -132,11 +132,11 @@ case "$all" in
         if [ -f "$FAKE/can-overlap" ]; then cat "$FAKE/can-overlap"; else echo "no: no live scheduler instance leads"; fi
         grep -q '^yes' "$FAKE/can-overlap" 2> /dev/null || exit 1
         ;;
-    "exec scheduler orca scheduler wait-lead "*) [ ! -f "$FAKE/no-lead" ] || exit 1 ;;
-    "exec scheduler orca scheduler drain "*)
+    "exec scheduler morca scheduler wait-lead "*) [ ! -f "$FAKE/no-lead" ] || exit 1 ;;
+    "exec scheduler morca scheduler drain "*)
         [ -f "$FAKE/old-stays" ] || [ ! -d "$C/scheduler-old" ] || echo exited > "$C/scheduler-old/status"
         ;;
-    "exec scheduler orca scheduler status") echo "9 h:1 leading image= migrations=42 runs=0 seen=0s ago" ;;
+    "exec scheduler morca scheduler status") echo "9 h:1 leading image= migrations=42 runs=0 seen=0s ago" ;;
     "inspect -f {{.Config.Hostname}} "*)
         d=$C/${all##* }
         [ -d "$d" ] || exit 1
@@ -146,8 +146,8 @@ case "$all" in
         [ -d "$C/${all##* }" ] || exit 1
         echo "$3" > "$C/${all##* }/restart"
         ;;
-    *"exec scheduler orca register"*)
-        [ ! -f "$FAKE/register-fails" ] || { echo "orca: no orca.toml" >&2; exit 1; }
+    *"exec scheduler morca register"*)
+        [ ! -f "$FAKE/register-fails" ] || { echo "morca: no morca.toml" >&2; exit 1; }
         echo "registered toy"
         ;;
     "exec "*" bash -c "*)
@@ -236,7 +236,7 @@ case "$all" in
         [ -d "$C/$2" ] && [ ! -d "$C/$3" ] || exit 1
         mv "$C/$2" "$C/$3"
         ;;
-    "network disconnect orca "*)
+    "network disconnect morca "*)
         [ -d "$C/$4" ] || exit 1
         : > "$C/$4/aliases"
         ;;

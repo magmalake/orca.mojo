@@ -22,9 +22,9 @@ timers do. An expression that can never match, such as `0 0 30 2 *`, is
 refused when it's parsed.
 """
 
-from orca.civil import Civil
-from orca.month import days_in
-from orca.tz import Zone
+from morca.civil import Civil
+from morca.month import days_in
+from morca.tz import Zone
 
 comptime _MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec"
 comptime _DAYS = "sun mon tue wed thu fri sat"

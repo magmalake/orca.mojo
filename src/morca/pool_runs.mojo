@@ -7,19 +7,19 @@ from postgres import (
     Params,
     Transaction,
 )
-from orca.batches import mark_batch
-from orca.fill import fill_status
-from orca.live import (
+from morca.batches import mark_batch
+from morca.fill import fill_status
+from morca.live import (
     dead_sql,
     hold_behind,
     stale_sql,
 )
-from orca.scheduler import (
+from morca.scheduler import (
     Scheduler,
     _RETRIED,
     _WORKER_OWNER,
 )
-from orca.registered import (
+from morca.registered import (
     Registered,
     fill_pipeline,
 )
@@ -235,7 +235,7 @@ def _fill_for_workers(
 ) raises:
     """`_start`'s fill pass for a pipeline placed `worker:<pool>`: as
     for a local one, but what may start is queued for a worker of the
-    pool to claim rather than started. Within `orca.fill.fill_status`'s
+    pool to claim rather than started. Within `morca.fill.fill_status`'s
     slots (`fill_max_runs` less its fill runs running or queued, so the
     cap holds across the whole pool), the due retries, deferred runs
     and fill runs whose process died with retries left are queued

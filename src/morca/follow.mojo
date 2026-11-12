@@ -1,8 +1,8 @@
 """How far a dated sensor pipeline is behind the datasets it follows.
 
-A sensor (`orca.sensors`) runs when a dataset it reads, and doesn't write,
+A sensor (`morca.sensors`) runs when a dataset it reads, and doesn't write,
 gets a snapshot, over the snapshot's partitions. What it follows has, then,
-is every partition of those datasets that orca knows of:
+is every partition of those datasets that morca knows of:
 
 - each snapshot a succeeded attempt of another pipeline committed
   (`orca.commits`), holding its step's partition, or the run's partitions
@@ -12,7 +12,7 @@ is every partition of those datasets that orca knows of:
 
 Those keys, in the sensor's kind and range (from its start to today), are
 what it could have done; `follow` gives each its state as the calendar
-does (`orca.calendar`), so what's behind splits into running or queued,
+does (`morca.calendar`), so what's behind splits into running or queued,
 failed, and not queued yet. A single query reads the keys (through the
 `commits_snapshot` index), then the calendar's three.
 """
@@ -21,16 +21,16 @@ from std.collections import Dict
 
 from postgres import Params
 
-from orca.calendar import Cell, states_of
-from orca.civil import Civil, now
-from orca.day import Day
-from orca.estimate import Pace, pace
-from orca.json import quote
-from orca.month import Month
-from orca.name import sort_texts
-from orca.sensors import key_kind, map_keys, split_keys
-from orca.state import State
-from orca.timekeys import containing_key, is_time_kind, unit_of
+from morca.calendar import Cell, states_of
+from morca.civil import Civil, now
+from morca.day import Day
+from morca.estimate import Pace, pace
+from morca.json import quote
+from morca.month import Month
+from morca.name import sort_texts
+from morca.sensors import key_kind, map_keys, split_keys
+from morca.state import State
+from morca.timekeys import containing_key, is_time_kind, unit_of
 
 
 comptime _UPSTREAM_SQL = (
@@ -53,7 +53,7 @@ comptime _UPSTREAM_SQL = (
 )
 """For pipeline `$1` if it's a sensor: a row per dataset it follows (`keys`
 empty), then the keys of each snapshot of them, with the pipeline that
-committed it (empty if not orca's)."""
+committed it (empty if not morca's)."""
 
 
 comptime LISTED = 8

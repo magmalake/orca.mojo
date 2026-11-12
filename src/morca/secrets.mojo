@@ -1,16 +1,16 @@
-"""Secrets a pipeline's runs get: `orca register --secret NAME=ID`.
+"""Secrets a pipeline's runs get: `morca register --secret NAME=ID`.
 
 NAME is the environment variable a run reads; ID is the secret's ID in
 Secrets Manager, under `orca/`, which is all the stack's run role may read.
 On the ec2 runner each instance's script reads them at start with its role
 and exports them, so the driver, the head and the workers all have them, and
-`ORCA_SECRETS` lists their names for `orca.logs.mask`, which keeps their
-values out of every log orca writes. Postgres holds only the IDs.
+`MORCA_SECRETS` lists their names for `morca.logs.mask`, which keeps their
+values out of every log morca writes. Postgres holds only the IDs.
 """
 
 from json import loads
 
-from orca.json import quote
+from morca.json import quote
 
 
 def _name_ok(name: String) -> Bool:

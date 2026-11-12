@@ -1,4 +1,4 @@
-import Orca.Core.Types
+import Morca.Core.Types
 
 /-!
 # Trust base: environment assumptions
@@ -8,7 +8,7 @@ What the model takes on trust about Iceberg, Postgres and a crash. They are
 as an explicit hypothesis, so `#print axioms` stays clean and every
 dependency shows in a theorem's signature.
 -/
-namespace Orca.Assumptions
+namespace Morca.Assumptions
 
 /-- An Iceberg commit is all-or-nothing: a call with summary `s` either
 leaves the table as it was and reports failure, or adds exactly one snapshot
@@ -21,7 +21,7 @@ def IcebergAllOrNothing
 
 /-- A Postgres transaction is atomic: recording row `r` either writes nothing
 and fails, or writes exactly `r` and succeeds. For rows of any kind: the
-commits of `Orca/Retry`, the reads of `Orca/Pins`. -/
+commits of `Morca/Retry`, the reads of `Morca/Pins`. -/
 def PostgresAtomic {α : Type}
     (record : List α → α → List α → Bool → Prop) : Prop :=
   ∀ l r l' ok, record l r l' ok →
@@ -44,9 +44,9 @@ def ClockMonotone (advance : Nat → Nat → Prop) : Prop :=
 
 /-- A commit lands at most `half` after the fence check before it, where
 `half` is half the stale limit: `lands f t` reads "a commit fenced at `f`
-can land at `t`". This is the condition `orca.ctx` states for fencing: a run
+can land at `t`". This is the condition `morca.ctx` states for fencing: a run
 can't be claimed during a commit "unless the commit takes that long". -/
 def CommitLandsWithin (half : Nat) (lands : Nat → Nat → Prop) : Prop :=
   ∀ f t, lands f t → t ≤ f + half
 
-end Orca.Assumptions
+end Morca.Assumptions
