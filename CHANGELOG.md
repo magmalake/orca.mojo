@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.26.0 - 2026-11-12
+
+- **A stack's overlay on morca.toml**: a stack's own changes to the project's `morca.toml` (a dev stack's `fills`, a lab stack's pipelines) go in an overlay kept with the stack (`CONFIG_OVERLAY_FILE` in hetzner.env, `MORCA_CONFIG_OVERLAY`, `--overlay`), which deploy.sh sends and the image's morca checks before a deploy changes anything; `enabled = false` keeps a pipeline out of `morca register`, and `morca config show --file` prints the merged file. (#399)
+
+- **Apps declare what they get in morca.toml**: an app's `[apps.<name>]` (port, check, env, `lake`, secrets, memory_gb) is what morca-stack gives it, in an env file of its own, instead of a fixed env with the UI's PostHog key; app secrets are `secrets/orca/<id>` keys in `SECRETS_FILE`, `APPS=console` needs no port, and `POSTHOG_HOST` (`MORCA_POSTHOG_HOST`) names the UI's analytics proxy, PostHog's own host without it. (#400)
+
+- **Deploys don't wait for long runs:** a run can ask `morca.outdated()` (with `code_version()` and `desired_code_version()`) whether a newer version leads, and ends when its code decides, shown as outdated on its page and in `morca status`; an overlapping deploy returns once the new scheduler leads, the old one draining in the background with no limit unless `MORCA_DRAIN_SECONDS` is set. (#406)
+
 ## 0.25.1 - 2026-11-12
 
 - **The commit is read at run time:** a pipeline built without `-D MORCA_COMMIT`/`-D MORCA_SOURCE` reads them from its environment, and the project Dockerfiles set them with `ENV` instead of compiling them in. A new commit no longer changes every program, so Mojo's compile cache can serve a rebuild. (census #153)
