@@ -45,7 +45,7 @@ Each step is shippable on its own; none depends on a later one.
 
 ### 1. `Store` becomes the pipeline binary's whole view of persistence
 
-Tracked in [#82](https://github.com/magmalake/orca.mojo/issues/82).
+Tracked in [#82](https://github.com/morca-dev/morca/issues/82).
 
 - Extend `Store` (or add a `RunStore` that includes it) with the calls
   `cli.mojo` makes on `State`: `create_run`, `claim`, `interrupt`, `prior`,

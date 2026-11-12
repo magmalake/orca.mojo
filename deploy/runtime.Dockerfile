@@ -1,4 +1,4 @@
-# orca's runtime image, ghcr.io/magmalake/orca-runtime:<orca version>, which
+# orca's runtime image, ghcr.io/morca-dev/morca-runtime:<orca version>, which
 # a project's image builds FROM (deploy/project.Dockerfile): orca's own
 # `orca` (bin/scheduler.mojo) and `orca_maintain` (bin/orca_maintain.mojo),
 # git, libcurl, the CA bundles where libcurl, OpenSSL and flare look for

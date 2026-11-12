@@ -73,7 +73,7 @@ cat > pixi.lock << 'EOF'
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libpq-18.1-h1.conda
   sha256: 00
-- conda_source: orca-mojo[1ff61e40] @ git+https://github.com/magmalake/orca.mojo?rev=abc#abc
+- conda_source: orca-mojo[1ff61e40] @ git+https://github.com/morca-dev/morca?rev=abc#abc
   version: 0.24.0
   build: he8cfe8b_0
 - conda_source: other-mojo[11] @ git+https://example.com/other?rev=def#def

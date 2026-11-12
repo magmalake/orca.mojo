@@ -93,7 +93,7 @@ environments:
       - conda_source: brotli-mojo[945747e4] @ git+https://github.com/magmalake/brotli.mojo?rev=dcbf840d22e3deaf24c587d12d28570a9a882b7f#dcbf840d22e3deaf24c587d12d28570a9a882b7f
       - conda_source: brotli-shim[1e7fb7b6] @ git+https://github.com/magmalake/brotli.mojo?subdirectory=shim&rev=dcbf840d22e3deaf24c587d12d28570a9a882b7f#dcbf840d22e3deaf24c587d12d28570a9a882b7f
       - conda_source: deflate-mojo[b47535cf] @ git+https://github.com/magmalake/deflate.mojo?rev=c3dfb87f5b09fb2559449dcb8b748629da4908af#c3dfb87f5b09fb2559449dcb8b748629da4908af
-      - conda_source: dista-mojo[3dd3ead2] @ git+https://github.com/magmalake/dista.mojo?rev=df018565d71a8f7061350deeeb02f31555526429#df018565d71a8f7061350deeeb02f31555526429
+      - conda_source: dista-mojo[b7d7f4b0] @ git+https://github.com/morca-dev/dista?rev=3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30#3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
       - conda_source: flare_mlake[c79ff492] @ git+https://github.com/magmalake/flare_mlake?rev=b1371866a7844afefe86b25eb8af58aaa9d3fa6c#b1371866a7844afefe86b25eb8af58aaa9d3fa6c
       - conda_source: hashes-mojo[14743427] @ git+https://github.com/magmalake/hashes.mojo?rev=395aca597f9410bd0511df44d972f14b10a8b01d#395aca597f9410bd0511df44d972f14b10a8b01d
       - conda_source: iceberg-mojo[9d5a4923] @ git+https://github.com/magmalake/iceberg.mojo?rev=bb361f975f9f56d33218850a5f3d048202a85f02#bb361f975f9f56d33218850a5f3d048202a85f02
@@ -104,7 +104,7 @@ environments:
       - conda_source: memory-region-mojo[d5fe9a87] @ git+https://github.com/magmalake/memory-region.mojo?rev=40068c4f95ea659e9b78aa91ced45420b07e3e6e#40068c4f95ea659e9b78aa91ced45420b07e3e6e
       - conda_source: objectstore-mojo[7ed6da05] @ git+https://github.com/magmalake/objectstore.mojo?rev=ff66975c095f392695facc1b6dd56823dec914bc#ff66975c095f392695facc1b6dd56823dec914bc
       - conda_source: objectstore-shim[32e5b8f8] @ git+https://github.com/magmalake/objectstore.mojo?subdirectory=shim&rev=ff66975c095f392695facc1b6dd56823dec914bc#ff66975c095f392695facc1b6dd56823dec914bc
-      - conda_source: orca-mojo[8d778b1b] @ ../orca.mojo
+      - conda_source: orca-mojo[b2f1bc64] @ ../orca.mojo
       - conda_source: parquet-full-mojo[b2b9462d] @ git+https://github.com/magmalake/parquet.mojo?subdirectory=full&rev=5d265f9004fdad1522b80c8770c8a7a7f5f9f089#5d265f9004fdad1522b80c8770c8a7a7f5f9f089
       - conda_source: parquet-mojo[650e9846] @ git+https://github.com/magmalake/parquet.mojo?rev=5d265f9004fdad1522b80c8770c8a7a7f5f9f089#5d265f9004fdad1522b80c8770c8a7a7f5f9f089
       - conda_source: postgres-mojo[81949d59] @ git+https://github.com/magmalake/postgres.mojo?rev=324b2bb61e2e80327654abecf70fd4b2defbc50d#324b2bb61e2e80327654abecf70fd4b2defbc50d
@@ -191,7 +191,7 @@ environments:
       - conda_source: brotli-mojo[2c991858] @ git+https://github.com/magmalake/brotli.mojo?rev=dcbf840d22e3deaf24c587d12d28570a9a882b7f#dcbf840d22e3deaf24c587d12d28570a9a882b7f
       - conda_source: brotli-shim[e6ac61f8] @ git+https://github.com/magmalake/brotli.mojo?subdirectory=shim&rev=dcbf840d22e3deaf24c587d12d28570a9a882b7f#dcbf840d22e3deaf24c587d12d28570a9a882b7f
       - conda_source: deflate-mojo[29f08351] @ git+https://github.com/magmalake/deflate.mojo?rev=c3dfb87f5b09fb2559449dcb8b748629da4908af#c3dfb87f5b09fb2559449dcb8b748629da4908af
-      - conda_source: dista-mojo[4f509325] @ git+https://github.com/magmalake/dista.mojo?rev=df018565d71a8f7061350deeeb02f31555526429#df018565d71a8f7061350deeeb02f31555526429
+      - conda_source: dista-mojo[10cffb90] @ git+https://github.com/morca-dev/dista?rev=3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30#3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
       - conda_source: flare_mlake[0241b88c] @ git+https://github.com/magmalake/flare_mlake?rev=b1371866a7844afefe86b25eb8af58aaa9d3fa6c#b1371866a7844afefe86b25eb8af58aaa9d3fa6c
       - conda_source: hashes-mojo[b4d159d0] @ git+https://github.com/magmalake/hashes.mojo?rev=395aca597f9410bd0511df44d972f14b10a8b01d#395aca597f9410bd0511df44d972f14b10a8b01d
       - conda_source: iceberg-mojo[bf78d8ae] @ git+https://github.com/magmalake/iceberg.mojo?rev=bb361f975f9f56d33218850a5f3d048202a85f02#bb361f975f9f56d33218850a5f3d048202a85f02
@@ -202,7 +202,7 @@ environments:
       - conda_source: memory-region-mojo[c7f66760] @ git+https://github.com/magmalake/memory-region.mojo?rev=40068c4f95ea659e9b78aa91ced45420b07e3e6e#40068c4f95ea659e9b78aa91ced45420b07e3e6e
       - conda_source: objectstore-mojo[5a091bdd] @ git+https://github.com/magmalake/objectstore.mojo?rev=ff66975c095f392695facc1b6dd56823dec914bc#ff66975c095f392695facc1b6dd56823dec914bc
       - conda_source: objectstore-shim[2602ced2] @ git+https://github.com/magmalake/objectstore.mojo?subdirectory=shim&rev=ff66975c095f392695facc1b6dd56823dec914bc#ff66975c095f392695facc1b6dd56823dec914bc
-      - conda_source: orca-mojo[7d1f430f] @ ../orca.mojo
+      - conda_source: orca-mojo[012d5602] @ ../orca.mojo
       - conda_source: parquet-full-mojo[a236e67c] @ git+https://github.com/magmalake/parquet.mojo?subdirectory=full&rev=5d265f9004fdad1522b80c8770c8a7a7f5f9f089#5d265f9004fdad1522b80c8770c8a7a7f5f9f089
       - conda_source: parquet-mojo[66acb619] @ git+https://github.com/magmalake/parquet.mojo?rev=5d265f9004fdad1522b80c8770c8a7a7f5f9f089#5d265f9004fdad1522b80c8770c8a7a7f5f9f089
       - conda_source: postgres-mojo[8cbc6bf4] @ git+https://github.com/magmalake/postgres.mojo?rev=324b2bb61e2e80327654abecf70fd4b2defbc50d#324b2bb61e2e80327654abecf70fd4b2defbc50d
@@ -2994,99 +2994,8 @@ packages:
   - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026e-h5d301ff_0.conda
   - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0-release.conda
   - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0-release.conda
-- conda_source: dista-mojo[3dd3ead2] @ git+https://github.com/magmalake/dista.mojo?rev=df018565d71a8f7061350deeeb02f31555526429#df018565d71a8f7061350deeeb02f31555526429
-  version: 0.3.0
-  build: hb0f4dca_0
-  subdir: linux-64
-  variants:
-    target_platform: linux-64
-  depends:
-  - mojo-compiler >=1.2.0,<2
-  - arrow-mlake-mojo
-  - memory-region-mojo
-  - objectstore-mojo
-  - threads-mojo
-  source_depends:
-    arrow-mlake-mojo:
-      git: https://github.com/magmalake/arrow-mlake.mojo
-      rev: 178aae6e0da0dbe105f9cb02632a51cfd35b9dda
-    memory-region-mojo:
-      git: https://github.com/magmalake/memory-region.mojo
-      rev: 40068c4f95ea659e9b78aa91ced45420b07e3e6e
-    objectstore-mojo:
-      git: https://github.com/magmalake/objectstore.mojo
-      rev: ff66975c095f392695facc1b6dd56823dec914bc
-    threads-mojo:
-      git: https://github.com/magmalake/threads.mojo
-      rev: f45e780a8de77278c140cee36904e46e93e0ca1c
-  build_packages:
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_103.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.9.0-hd2095e1_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_7.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_7.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libmpdec-4.0.0-hb03c661_2.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libpython-3.14.10-hd51c5da_100_cp314.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.54.1-h0737f62_101.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.5-h781a0a9_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/python-3.14.10-hcd007b5_100_cp314.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.10.23-hbd8a1cb_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026e-h5d301ff_0.conda
-  - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0-release.conda
-  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0-release.conda
-  host_packages:
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/c-ares-1.34.9-hebe6cf0_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/icu-79.1-py314hb486520_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/keyutils-1.6.3-h7cc23a3_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/krb5-1.22.2-hbc21106_2.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_103.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libcurl-8.23.0-ha042cf0_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libedit-3.1.20260512-pl5321h373387f_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libev-4.33-h280c20c_3.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.9.0-hd2095e1_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_7.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_7.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libmpdec-4.0.0-hb03c661_2.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libnghttp2-1.71.0-hc5e5977_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libpsl-0.23.1-h7fe8442_2.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libpython-3.14.10-hd51c5da_100_cp314.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.54.1-hf739112_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libssh2-1.11.1-h6154650_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_7.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.5-h781a0a9_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/python-3.14.10-hcd007b5_100_cp314.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda
-  - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.10.23-hbd8a1cb_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026e-h5d301ff_0.conda
-  - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0-release.conda
-  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0-release.conda
-  - conda_source: arrow-mlake-mojo[0ea7d951] @ git+https://github.com/magmalake/arrow-mlake.mojo?rev=178aae6e0da0dbe105f9cb02632a51cfd35b9dda#178aae6e0da0dbe105f9cb02632a51cfd35b9dda
-  - conda_source: memory-region-mojo[d5fe9a87] @ git+https://github.com/magmalake/memory-region.mojo?rev=40068c4f95ea659e9b78aa91ced45420b07e3e6e#40068c4f95ea659e9b78aa91ced45420b07e3e6e
-  - conda_source: objectstore-mojo[7ed6da05] @ git+https://github.com/magmalake/objectstore.mojo?rev=ff66975c095f392695facc1b6dd56823dec914bc#ff66975c095f392695facc1b6dd56823dec914bc
-  - conda_source: objectstore-shim[32e5b8f8] @ git+https://github.com/magmalake/objectstore.mojo?subdirectory=shim&rev=ff66975c095f392695facc1b6dd56823dec914bc#ff66975c095f392695facc1b6dd56823dec914bc
-  - conda_source: threads-mojo[f8182f1e] @ git+https://github.com/magmalake/threads.mojo?rev=f45e780a8de77278c140cee36904e46e93e0ca1c#f45e780a8de77278c140cee36904e46e93e0ca1c
-- conda_source: dista-mojo[4f509325] @ git+https://github.com/magmalake/dista.mojo?rev=df018565d71a8f7061350deeeb02f31555526429#df018565d71a8f7061350deeeb02f31555526429
-  version: 0.3.0
+- conda_source: dista-mojo[10cffb90] @ git+https://github.com/morca-dev/dista?rev=3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30#3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
+  version: 0.4.0
   build: he8cfe8b_0
   subdir: linux-aarch64
   variants:
@@ -3176,6 +3085,97 @@ packages:
   - conda_source: objectstore-mojo[5a091bdd] @ git+https://github.com/magmalake/objectstore.mojo?rev=ff66975c095f392695facc1b6dd56823dec914bc#ff66975c095f392695facc1b6dd56823dec914bc
   - conda_source: objectstore-shim[2602ced2] @ git+https://github.com/magmalake/objectstore.mojo?subdirectory=shim&rev=ff66975c095f392695facc1b6dd56823dec914bc#ff66975c095f392695facc1b6dd56823dec914bc
   - conda_source: threads-mojo[a3647742] @ git+https://github.com/magmalake/threads.mojo?rev=f45e780a8de77278c140cee36904e46e93e0ca1c#f45e780a8de77278c140cee36904e46e93e0ca1c
+- conda_source: dista-mojo[b7d7f4b0] @ git+https://github.com/morca-dev/dista?rev=3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30#3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
+  version: 0.4.0
+  build: hb0f4dca_0
+  subdir: linux-64
+  variants:
+    target_platform: linux-64
+  depends:
+  - mojo-compiler >=1.2.0,<2
+  - arrow-mlake-mojo
+  - memory-region-mojo
+  - objectstore-mojo
+  - threads-mojo
+  source_depends:
+    arrow-mlake-mojo:
+      git: https://github.com/magmalake/arrow-mlake.mojo
+      rev: 178aae6e0da0dbe105f9cb02632a51cfd35b9dda
+    memory-region-mojo:
+      git: https://github.com/magmalake/memory-region.mojo
+      rev: 40068c4f95ea659e9b78aa91ced45420b07e3e6e
+    objectstore-mojo:
+      git: https://github.com/magmalake/objectstore.mojo
+      rev: ff66975c095f392695facc1b6dd56823dec914bc
+    threads-mojo:
+      git: https://github.com/magmalake/threads.mojo
+      rev: f45e780a8de77278c140cee36904e46e93e0ca1c
+  build_packages:
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_103.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.9.0-hd2095e1_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libmpdec-4.0.0-hb03c661_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libpython-3.14.10-hd51c5da_100_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.54.1-h0737f62_101.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.5-h781a0a9_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/python-3.14.10-hcd007b5_100_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.10.23-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026e-h5d301ff_0.conda
+  - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0-release.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0-release.conda
+  host_packages:
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/c-ares-1.34.9-hebe6cf0_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/icu-79.1-py314hb486520_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/keyutils-1.6.3-h7cc23a3_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/krb5-1.22.2-hbc21106_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_103.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libcurl-8.23.0-ha042cf0_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libedit-3.1.20260512-pl5321h373387f_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libev-4.33-h280c20c_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.9.0-hd2095e1_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libmpdec-4.0.0-hb03c661_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libnghttp2-1.71.0-hc5e5977_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libpsl-0.23.1-h7fe8442_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libpython-3.14.10-hd51c5da_100_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.54.1-hf739112_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libssh2-1.11.1-h6154650_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.5-h781a0a9_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/python-3.14.10-hcd007b5_100_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda
+  - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.10.23-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-9_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026e-h5d301ff_0.conda
+  - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.2.0-release.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.2.0-release.conda
+  - conda_source: arrow-mlake-mojo[0ea7d951] @ git+https://github.com/magmalake/arrow-mlake.mojo?rev=178aae6e0da0dbe105f9cb02632a51cfd35b9dda#178aae6e0da0dbe105f9cb02632a51cfd35b9dda
+  - conda_source: memory-region-mojo[d5fe9a87] @ git+https://github.com/magmalake/memory-region.mojo?rev=40068c4f95ea659e9b78aa91ced45420b07e3e6e#40068c4f95ea659e9b78aa91ced45420b07e3e6e
+  - conda_source: objectstore-mojo[7ed6da05] @ git+https://github.com/magmalake/objectstore.mojo?rev=ff66975c095f392695facc1b6dd56823dec914bc#ff66975c095f392695facc1b6dd56823dec914bc
+  - conda_source: objectstore-shim[32e5b8f8] @ git+https://github.com/magmalake/objectstore.mojo?subdirectory=shim&rev=ff66975c095f392695facc1b6dd56823dec914bc#ff66975c095f392695facc1b6dd56823dec914bc
+  - conda_source: threads-mojo[f8182f1e] @ git+https://github.com/magmalake/threads.mojo?rev=f45e780a8de77278c140cee36904e46e93e0ca1c#f45e780a8de77278c140cee36904e46e93e0ca1c
 - conda_source: flare_mlake[0241b88c] @ git+https://github.com/magmalake/flare_mlake?rev=b1371866a7844afefe86b25eb8af58aaa9d3fa6c#b1371866a7844afefe86b25eb8af58aaa9d3fa6c
   version: 0.13.2
   build: he8cfe8b_0
@@ -4633,7 +4633,7 @@ packages:
   - conda: https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.5-h781a0a9_0.conda
   - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda
   - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.10.23-hbd8a1cb_0.conda
-- conda_source: orca-mojo[7d1f430f] @ ../orca.mojo
+- conda_source: orca-mojo[012d5602] @ ../orca.mojo
   variants:
     target_platform: linux-aarch64
   depends:
@@ -4656,8 +4656,8 @@ packages:
       git: https://github.com/magmalake/arrow-mlake.mojo
       rev: 178aae6e0da0dbe105f9cb02632a51cfd35b9dda
     dista-mojo:
-      git: https://github.com/magmalake/dista.mojo
-      rev: df018565d71a8f7061350deeeb02f31555526429
+      git: https://github.com/morca-dev/dista
+      rev: 3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
     flare_mlake:
       git: https://github.com/magmalake/flare_mlake
       rev: b1371866a7844afefe86b25eb8af58aaa9d3fa6c
@@ -4786,7 +4786,7 @@ packages:
   - conda_source: brotli-mojo[2c991858] @ git+https://github.com/magmalake/brotli.mojo?rev=dcbf840d22e3deaf24c587d12d28570a9a882b7f#dcbf840d22e3deaf24c587d12d28570a9a882b7f
   - conda_source: brotli-shim[e6ac61f8] @ git+https://github.com/magmalake/brotli.mojo?subdirectory=shim&rev=dcbf840d22e3deaf24c587d12d28570a9a882b7f#dcbf840d22e3deaf24c587d12d28570a9a882b7f
   - conda_source: deflate-mojo[29f08351] @ git+https://github.com/magmalake/deflate.mojo?rev=c3dfb87f5b09fb2559449dcb8b748629da4908af#c3dfb87f5b09fb2559449dcb8b748629da4908af
-  - conda_source: dista-mojo[4f509325] @ git+https://github.com/magmalake/dista.mojo?rev=df018565d71a8f7061350deeeb02f31555526429#df018565d71a8f7061350deeeb02f31555526429
+  - conda_source: dista-mojo[10cffb90] @ git+https://github.com/morca-dev/dista?rev=3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30#3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
   - conda_source: flare_mlake[0241b88c] @ git+https://github.com/magmalake/flare_mlake?rev=b1371866a7844afefe86b25eb8af58aaa9d3fa6c#b1371866a7844afefe86b25eb8af58aaa9d3fa6c
   - conda_source: hashes-mojo[b4d159d0] @ git+https://github.com/magmalake/hashes.mojo?rev=395aca597f9410bd0511df44d972f14b10a8b01d#395aca597f9410bd0511df44d972f14b10a8b01d
   - conda_source: iceberg-mojo[bf78d8ae] @ git+https://github.com/magmalake/iceberg.mojo?rev=bb361f975f9f56d33218850a5f3d048202a85f02#bb361f975f9f56d33218850a5f3d048202a85f02
@@ -4807,7 +4807,7 @@ packages:
   - conda_source: thrift-mojo[776d8227] @ git+https://github.com/magmalake/thrift.mojo?rev=21cdbce67d22d72e88e88a60e2f168b05b4ef9fa#21cdbce67d22d72e88e88a60e2f168b05b4ef9fa
   - conda_source: zstd-mojo[e35036f8] @ git+https://github.com/magmalake/zstd.mojo?rev=76190bb31012cd2d2f6712c4e1724a66474215db#76190bb31012cd2d2f6712c4e1724a66474215db
   - conda_source: zstd-shim[d55ce47a] @ git+https://github.com/magmalake/zstd.mojo?subdirectory=shim&rev=76190bb31012cd2d2f6712c4e1724a66474215db#76190bb31012cd2d2f6712c4e1724a66474215db
-- conda_source: orca-mojo[8d778b1b] @ ../orca.mojo
+- conda_source: orca-mojo[b2f1bc64] @ ../orca.mojo
   variants:
     target_platform: linux-64
   depends:
@@ -4830,8 +4830,8 @@ packages:
       git: https://github.com/magmalake/arrow-mlake.mojo
       rev: 178aae6e0da0dbe105f9cb02632a51cfd35b9dda
     dista-mojo:
-      git: https://github.com/magmalake/dista.mojo
-      rev: df018565d71a8f7061350deeeb02f31555526429
+      git: https://github.com/morca-dev/dista
+      rev: 3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
     flare_mlake:
       git: https://github.com/magmalake/flare_mlake
       rev: b1371866a7844afefe86b25eb8af58aaa9d3fa6c
@@ -4959,7 +4959,7 @@ packages:
   - conda_source: brotli-mojo[945747e4] @ git+https://github.com/magmalake/brotli.mojo?rev=dcbf840d22e3deaf24c587d12d28570a9a882b7f#dcbf840d22e3deaf24c587d12d28570a9a882b7f
   - conda_source: brotli-shim[1e7fb7b6] @ git+https://github.com/magmalake/brotli.mojo?subdirectory=shim&rev=dcbf840d22e3deaf24c587d12d28570a9a882b7f#dcbf840d22e3deaf24c587d12d28570a9a882b7f
   - conda_source: deflate-mojo[b47535cf] @ git+https://github.com/magmalake/deflate.mojo?rev=c3dfb87f5b09fb2559449dcb8b748629da4908af#c3dfb87f5b09fb2559449dcb8b748629da4908af
-  - conda_source: dista-mojo[3dd3ead2] @ git+https://github.com/magmalake/dista.mojo?rev=df018565d71a8f7061350deeeb02f31555526429#df018565d71a8f7061350deeeb02f31555526429
+  - conda_source: dista-mojo[b7d7f4b0] @ git+https://github.com/morca-dev/dista?rev=3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30#3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30
   - conda_source: flare_mlake[c79ff492] @ git+https://github.com/magmalake/flare_mlake?rev=b1371866a7844afefe86b25eb8af58aaa9d3fa6c#b1371866a7844afefe86b25eb8af58aaa9d3fa6c
   - conda_source: hashes-mojo[14743427] @ git+https://github.com/magmalake/hashes.mojo?rev=395aca597f9410bd0511df44d972f14b10a8b01d#395aca597f9410bd0511df44d972f14b10a8b01d
   - conda_source: iceberg-mojo[9d5a4923] @ git+https://github.com/magmalake/iceberg.mojo?rev=bb361f975f9f56d33218850a5f3d048202a85f02#bb361f975f9f56d33218850a5f3d048202a85f02

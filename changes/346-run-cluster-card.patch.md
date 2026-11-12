@@ -1,1 +1,0 @@
-- **A run's Cluster card**: a run spread over pool workers shows its head and members on its page and in its JSON. (#346)

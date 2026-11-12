@@ -8,13 +8,13 @@ set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 mkdir -p build
-repo=https://github.com/magmalake/orca.mojo
+repo=https://github.com/morca-dev/morca
 c1=1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
 c2=2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC -D ORCA_SOURCE=$repo.git -D ORCA_COMMIT=$c1 examples/toy.mojo -o build/toy-c1
 # shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC -D ORCA_SOURCE=git@github.com:magmalake/orca.mojo.git -D ORCA_COMMIT=$c2 \
+scripts/mojo-build.sh -I src $DEP_INC -D ORCA_SOURCE=git@github.com:morca-dev/morca.git -D ORCA_COMMIT=$c2 \
     -D ORCA_DIRTY=1 examples/toy.mojo -o build/toy-c2
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
@@ -121,7 +121,7 @@ html '/pipelines/toy?tab=runs' | grep -q "<h2>Versions" || fail "the pipeline pa
 for c in 1 2; do
     eval "sha=\$c$c"
     src=$repo.git
-    [ "$c" = 2 ] && src=git@github.com:magmalake/orca.mojo.git
+    [ "$c" = 2 ] && src=git@github.com:morca-dev/morca.git
     # shellcheck disable=SC2086
     scripts/mojo-build.sh -I src $DEP_INC -D ORCA_SOURCE=$src -D ORCA_COMMIT="$sha" tests/datasets/first.mojo -o "build/ds-first-c$c"
     ./build/orca locate "./build/ds-first-c$c" --root . >> "$log" 2>&1 || fail "locate first c$c"

@@ -10,13 +10,13 @@ comptime SHA = "0123456789abcdef0123456789abcdef01234567"
 
 
 def test_web_url_forms() raises:
-    comptime want = "https://github.com/magmalake/orca.mojo"
-    assert_equal(web_url("https://github.com/magmalake/orca.mojo"), want)
-    assert_equal(web_url("https://github.com/magmalake/orca.mojo.git"), want)
-    assert_equal(web_url("https://github.com/magmalake/orca.mojo/"), want)
-    assert_equal(web_url("git@github.com:magmalake/orca.mojo.git"), want)
-    assert_equal(web_url("ssh://git@github.com/magmalake/orca.mojo"), want)
-    assert_equal(web_url(" https://github.com/magmalake/orca.mojo\n"), want)
+    comptime want = "https://github.com/morca-dev/morca"
+    assert_equal(web_url("https://github.com/morca-dev/morca"), want)
+    assert_equal(web_url("https://github.com/morca-dev/morca.git"), want)
+    assert_equal(web_url("https://github.com/morca-dev/morca/"), want)
+    assert_equal(web_url("git@github.com:morca-dev/morca.git"), want)
+    assert_equal(web_url("ssh://git@github.com/morca-dev/morca"), want)
+    assert_equal(web_url(" https://github.com/morca-dev/morca\n"), want)
 
 
 def test_web_url_refuses_others() raises:
