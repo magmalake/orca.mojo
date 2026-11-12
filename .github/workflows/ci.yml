@@ -74,19 +74,27 @@ jobs:
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
+  # The Linux legs run on sai, the self-hosted runner (16 threads, a disk of
+  # its own), for this repository's own branches, main and the nightly: its
+  # builds are reused from earlier jobs there, which halves the executor's
+  # tests (#342). A pull request from a fork never runs there (the runner
+  # would run its code), so its legs run on GitHub's runners instead. No
+  # secrets, and the token can only read.
   test:
-    name: ${{ matrix.env == 'default' && 'stable' || matrix.env }} / ${{ matrix.os }} / ${{ matrix.shard }}
+    name: ${{ matrix.env == 'default' && 'stable' || matrix.env }} / ${{ (matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 'sai' || matrix.os }} / ${{ matrix.shard }}
     needs: [changes, release]
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ (matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted", "sai"]') || matrix.os }}
+    permissions:
+      contents: read
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
         env: [default, nightly]
-        # pixi.toml's two halves of `test`, each on a runner of its own.
-        shard: [test-executor, test-scheduler-ui]
+        # pixi.toml's three parts of `test`, each on a runner of its own.
+        shard: [test-executor-core, test-executor-workers, test-scheduler-ui]
     defaults:
       run:
         working-directory: orca.mojo
@@ -176,6 +184,8 @@ jobs:
           pixi-version: v0.78.0
           environments: ${{ matrix.env }}
           manifest-path: orca.mojo/pixi.toml
+          # sai installs from the packages it keeps itself.
+          cache: ${{ runner.environment == 'github-hosted' }}
           # Only main and the nightly write the environment cache. Every PR
           # writing ~1 GB per environment kept the repository over GitHub's
           # 10 GB cap, which evicted main's entries: the only ones every PR can
@@ -191,7 +201,8 @@ jobs:
       # identical earlier build instead of compiling it (tens of MB; it
       # prunes entries unused for two days itself). Keeping it halved
       # test-executor on a warm runner (#342).
-      - uses: actions/cache/restore@v4
+      - if: runner.environment == 'github-hosted'
+        uses: actions/cache/restore@v4
         with:
           path: |
             orca.mojo/.pixi/envs/${{ matrix.env }}/share/max/cache
@@ -199,17 +210,50 @@ jobs:
           key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-${{ github.run_id }}
           restore-keys: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
 
+      # On sai both caches stay on its disk instead, outside the checkout
+      # (which starts clean), one pair per environment, shared by every job
+      # there and by jobs running at once: Mojo's is content-addressed, and
+      # mojo-build.sh renames each entry into place whole. Each job holds a
+      # shared lock on them while its tests run; pruning takes it alone, and
+      # skips when a job is running.
+      - if: runner.environment == 'self-hosted'
+        name: The build caches on sai's disk
+        env:
+          ENVNAME: ${{ matrix.env }}
+        run: |
+          keep="$HOME/.cache/morca-ci/$ENVNAME"
+          mkdir -p "$keep/max-cache" "$keep/mojo-build"
+          rm -rf ".pixi/envs/$ENVNAME/share/max/cache"
+          ln -s "$keep/max-cache" ".pixi/envs/$ENVNAME/share/max/cache"
+          {
+            echo "MOJO_BUILD_CACHE_DIR=$keep/mojo-build"
+            echo "MAX_CACHE=$keep/max-cache"
+            echo "CACHE_LOCK=$keep/lock"
+          } >> "$GITHUB_ENV"
+          du -sh "$keep/max-cache" "$keep/mojo-build"
+
       # The state and kill tests start a throwaway PostgreSQL server from
       # conda-forge's postgresql, on a Unix socket: no service container.
       - name: Tests
-        run: pixi run -e ${{ matrix.env }} ${{ matrix.shard }}
+        env:
+          TASK: ${{ matrix.shard }}
+          ENVNAME: ${{ matrix.env }}
+        run: |
+          if [ -n "${CACHE_LOCK:-}" ]; then
+            flock -s "$CACHE_LOCK" pixi run -e "$ENVNAME" "$TASK"
+          else
+            pixi run -e "$ENVNAME" "$TASK"
+          fi
 
       # Entries a week old go before saving, so the cache can't grow without
       # bound; one still in use is rebuilt once.
-      - if: always() && github.event_name != 'pull_request'
+      - if: always() && runner.environment == 'self-hosted'
+        name: Prune Mojo's compile cache
+        run: flock -n -x "$CACHE_LOCK" find "$MAX_CACHE" -type f -mtime +7 -delete || echo "not pruned, a job is using the cache"
+      - if: always() && runner.environment == 'github-hosted' && github.event_name != 'pull_request'
         name: Prune Mojo's compile cache
         run: find .pixi/envs/${{ matrix.env }}/share/max/cache -type f -mtime +7 -delete || true
-      - if: always() && github.event_name != 'pull_request'
+      - if: always() && runner.environment == 'github-hosted' && github.event_name != 'pull_request'
         uses: actions/cache/save@v4
         with:
           path: |

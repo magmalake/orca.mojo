@@ -6,15 +6,20 @@
 # This keys a build on everything it can read and keeps each result under
 # build/.mojo-build/, so a second build with the same key is a copy:
 #
-# - the arguments but -o's (sources, -I, -D and the rest), and the
-#   environment's packages (the file names in $CONDA_PREFIX/conda-meta name
-#   each one's version and build);
+# - the arguments but -o's (sources, -I, -D and the rest), the
+#   environment's path (a binary's rpath names it) and its packages (the
+#   file names in $CONDA_PREFIX/conda-meta name each one's version and
+#   build);
 # - the name and contents of every .mojo, .mojoc and .mojopkg file under the
 #   -I directories and under each source's directory, .git, .pixi and build
 #   left out.
 #
 # A build that fails keeps nothing. Entries unused for two days are removed;
 # rm -rf build/.mojo-build clears them all. MOJO_BUILD_CACHE=0 always builds.
+# MOJO_BUILD_CACHE_DIR keeps them elsewhere: CI's self-hosted runner keeps
+# them outside the checkout, shared by its jobs. Entries are written to a
+# temporary file and renamed, so builds running at once never see half of
+# one, and a hit removed under a build (by another's pruning) is built again.
 #
 # Usage: scripts/mojo-build.sh <mojo build arguments...> -o <out>
 set -eu
@@ -60,23 +65,24 @@ key=$({
             printf '%s\n' "$a"
         fi
     done
+    printf '%s\n' "${CONDA_PREFIX:-}"
     ls "${CONDA_PREFIX:-}/conda-meta" 2> /dev/null || true
     cat "${CONDA_PREFIX:-}/conda-meta/.pixi-environment-fingerprint" 2> /dev/null || true
     cat "$list"
     tr '\n' '\0' < "$list" | xargs -0 cat
 } | sha)
 
-cache=build/.mojo-build
+cache=${MOJO_BUILD_CACHE_DIR:-build/.mojo-build}
 hit=$cache/$key
 mkdir -p "$cache" "$(dirname "$out")"
-if [ -f "$hit" ]; then
-    # A copy moved into place: a binary that's running keeps its old file.
-    cp "$hit" "$out.tmp.$$"
+# A copy moved into place: a binary that's running keeps its old file.
+if [ -f "$hit" ] && cp "$hit" "$out.tmp.$$" 2> /dev/null; then
     mv -f "$out.tmp.$$" "$out"
-    touch "$hit"
+    touch "$hit" 2> /dev/null || true
     echo "mojo-build: $out reused" >&2
     exit 0
 fi
+rm -f "$out.tmp.$$"
 
 start=$(date +%s)
 mojo build "$@"
