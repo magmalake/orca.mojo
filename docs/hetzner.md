@@ -383,7 +383,7 @@ it back in `hetzner.env` and deploy (or roll back): the next one applies it.
 **Only what changed starts again.** `morca-stack apply` compares what each
 container would be started with against what it runs, and leaves it
 running when nothing differs: the image (the tag, and the image's id, so a
-tag pushed again counts), the env file it reads (`morca.env`, `app.env`,
+tag pushed again counts), the env file it reads (`morca.env`, `app-<name>.env`,
 `tunnel.env`, and `secret-fetch`), and its flags and mounts (`CGROUPS`'s
 among them). A hash of those is the container's `orca.stack.spec` label.
 It prints a line for each:
@@ -916,6 +916,41 @@ alert is sent at most once every 30 minutes (`MORCA_NOTIFY_MIN_SECONDS`), and
 one that could not be sent (ntfy down) waits in Postgres and goes later. The
 nightly backup runs `morca notify --kind backup-failed` on failure.
 
+## Apps
+
+An app beside the UI (the census console) is a binary of the image,
+`/opt/morca/bin/<name>`, on the stack's network, served through the
+tunnel. `APPS=console` in `hetzner.env` names the apps a stack runs, and
+the image's `morca.toml` says what each one gets (#331):
+
+```toml
+[apps.console]
+port = 8080                       # $PORT, where the tunnel's route points
+check = "/healthz"                # answers 200 once it's ready (default /)
+env = { CONSOLE_SEMANTIC = "1" }
+lake = true                       # the warehouse settings and the stack's S3 keys
+secrets = { POSTHOG_KEY = "orca/posthog-key" }
+memory_gb = 1                     # docker --memory (no limit without it)
+```
+
+`morca-stack plan` and `apply` read it from the app's own image (`morca
+config apps`, the [overlay](#a-stacks-overlay) laid on it) and write the
+app's env file, `/etc/orca/app-<name>.env` (mode 600), from it: its `env`,
+the lake with `lake = true` (`AWS_REGION`, `AWS_ENDPOINT_URL_S3`,
+`MORCA_WAREHOUSE`, `MORCA_PUBLIC_WAREHOUSE` and `s3.env`; never morca's
+database), each secret's value from `/etc/orca/secrets/<id>`, and `PORT`.
+A secret is a key `secrets/orca/<id>` in `SECRETS_FILE`, sent as the
+others are; one the server hasn't stops the deploy at the plan, before
+anything is paused. Values are never printed, and a change to one replaces
+the app (without downtime).
+
+`APPS=console:8080` still works: the port is then the one for an app
+whose `[apps.console]` gives none, and one that differs from it is
+refused. An app the image's `morca.toml` doesn't declare, or an image
+whose morca has no `config apps` (before 0.25), gets the fixed env of
+before (the lake, and `MORCA_POSTHOG_KEY` as `POSTHOG_KEY`), and the plan
+says so.
+
 ## Analytics (PostHog)
 
 The UI and the census console can load PostHog the way the magmalake.org
@@ -924,22 +959,29 @@ origin, memory-only persistence (no cookies, no `localStorage`, so no consent
 banner), and a `site` property on every event (`morca` or `mojourney`) so one
 PostHog project can hold both. Once:
 
-1. Deploy the `/ph` proxy, a Cloudflare Worker on the mojourney.dev zone's
+1. Optionally, a first-party proxy, so ad-blockers keep the events: the
+   census's is `/ph`, a Cloudflare Worker on the mojourney.dev zone's
    `mojourney.dev/ph/*` and `orca.mojourney.dev/ph/*` routes. It lives in
    magmalake/magmalake.org: `npx wrangler deploy -c worker/mojourney-ph/wrangler.jsonc`.
    The tunnel serves everything else; nothing on the server serves `/ph`.
+   Set `POSTHOG_HOST=/ph` in `hetzner.env` (`MORCA_POSTHOG_HOST`: a path on
+   the UI's origin or an `https://` origin). Without it the UI talks to
+   PostHog's own US hosts.
 2. Put the project key (`phc_...`, public, the website's `POSTHOG_KEY` in its
    `src/data/site.ts`) in `hetzner.env` as `POSTHOG_KEY`. `up.sh` writes it
-   to `settings.env` as `MORCA_POSTHOG_KEY`, which the UI reads, and
-   `morca-stack apply` passes it to the apps as `POSTHOG_KEY`, which the
-   census console reads. On a server set up before, the next `./deploy.sh`
-   (the tag that runs will do) writes it and replaces the UI and the
-   console ([Settings](#settings-from-hetznerenv)).
-3. Open https://orca.mojourney.dev and https://mojourney.dev: each page's
+   to `settings.env` as `MORCA_POSTHOG_KEY`, which the UI reads. On a
+   server set up before, the next `./deploy.sh` (the tag that runs will do)
+   writes it and replaces the UI ([Settings](#settings-from-hetznerenv)).
+3. An app gets the key only if it asks: `secrets = { POSTHOG_KEY =
+   "orca/posthog-key" }` in its `[apps.<name>]` ([Apps](#apps)), and the
+   key in `SECRETS_FILE` as `secrets/orca/posthog-key`. (An app morca.toml
+   doesn't declare still gets `MORCA_POSTHOG_KEY` as `POSTHOG_KEY`, as
+   before.)
+4. Open https://orca.mojourney.dev and https://mojourney.dev: each page's
    head has `/ph/static/array.js`, and PostHog's Activity shows `$pageview`
    events with `site` set.
 
-Leave `POSTHOG_KEY` empty and nothing is added to either site's pages.
+Leave `POSTHOG_KEY` empty and nothing is added to the UI's pages.
 
 ## Teardown
 

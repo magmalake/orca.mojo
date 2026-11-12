@@ -268,7 +268,8 @@ need_settings() {
 
 # --- SECRETS_FILE: every secret in one SOPS file, one `sops -d` ----------------
 # Its top-level keys are these, the files' names under /etc/orca, and each
-# value is the file's content (a string). One decrypt per run: a Secure
+# value is the file's content (a string). It may have more secrets/orca/<id>
+# keys, the secrets the apps' [apps.<name>] secrets name (#331), sent the same way. One decrypt per run: a Secure
 # Enclave age key (age-plugin-se) asks for Touch ID once, not per file.
 SECRET_NAMES="s3.env tunnel.env secrets/orca/github-token secrets/orca/ntfy-topic secrets/orca/ntfy-token ghcr-token secrets/orca/hcloud-token"
 SECRETS_JSON=
@@ -330,7 +331,8 @@ load_secrets() {
         if type != "object" then "it is not a mapping of file names to their contents"
         else ($known | split(" ")) as $k | to_entries[]
             | if (.key | startswith("/") or contains("..")) then "\(.key | @json): a name has no leading / and no .."
-              elif (.key | IN($k[]) | not) then "\(.key | @json) is not one of: \($known)"
+              elif (.key | IN($k[]) | not) and (.key | test("^secrets/orca/[A-Za-z0-9_+=.@-]+(/[A-Za-z0-9_+=.@-]+)*$") | not)
+                then "\(.key | @json) is not one of: \($known), or secrets/orca/<id>"
               elif (.value | type) != "string" then "\(.key | @json): the value is a \(.value | type), not a string (quote it, or use |)"
               else empty end
         end') || {
@@ -404,6 +406,8 @@ write_settings() {
         fi
         [ -z "${FIXED_COST:-}" ] || echo "MORCA_FIXED_COST=$FIXED_COST"
         [ -z "${POSTHOG_KEY:-}" ] || echo "MORCA_POSTHOG_KEY=$POSTHOG_KEY"
+        # Where the UI's analytics go: a proxy such as /ph; PostHog's own without.
+        [ -z "${POSTHOG_HOST:-}" ] || echo "MORCA_POSTHOG_HOST=$POSTHOG_HOST"
         # The stack's overlay on morca.toml (#332): sync_settings sends the
         # file, and the scheduler has it here (morca-stack's OVERLAY).
         [ -z "${CONFIG_OVERLAY_FILE:-}" ] || echo "MORCA_CONFIG_OVERLAY=/etc/orca/overlay/morca.overlay.toml"
@@ -474,6 +478,11 @@ sync_settings_() {
         [ "$name" != ghcr-token ] || [ -n "${GHCR_USER:-}" ] || continue
         sync_file "$name" "$val" || return 1
     done
+    # The apps' secrets: SECRETS_FILE's other secrets/orca/<id> keys.
+    for name in $SECRETS_KEYS; do
+        case " $SECRET_NAMES " in *" $name "*) continue ;; esac
+        sync_secret "$name" || return 1
+    done
     # The overlay, or none: one taken out of hetzner.env is removed.
     if [ -n "${CONFIG_OVERLAY_FILE:-}" ]; then
         sync_file overlay/morca.overlay.toml "$CONFIG_OVERLAY_FILE" || return 1
@@ -483,7 +492,12 @@ sync_settings_() {
     # GHCR_USER= (none in hetzner.env) removes it from stack.conf.
     remote morca-stack configure MORCA_IMAGE="$MORCA_IMAGE" CLOUDFLARED_IMAGE="$CLOUDFLARED_IMAGE" \
         BUCKET="$BUCKET" BACKUP_KEEP="$BACKUP_KEEP" GHCR_USER="${GHCR_USER:-}" || return 1
+    # APPS=console names an app; console:8080 also gives its port, for an
+    # app whose morca.toml has no [apps.console] port.
     for app in $APPS; do
-        remote morca-stack app "${app%%:*}" "${app#*:}" || return 1
+        case $app in
+            *:*) remote morca-stack app "${app%%:*}" "${app#*:}" || return 1 ;;
+            *) remote morca-stack app "$app" || return 1 ;;
+        esac
     done
 }

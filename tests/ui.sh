@@ -75,11 +75,12 @@ echo "$nav" | grep -qF '<div class="menu"><a href="/ops" aria-haspopup="true">Op
 echo "$nav" | grep -qE '<a href="/(system|fleet|ops/fleet|ops/workers)"' && fail "the old System, Fleet or Workers nav item is still there"
 curl -fsS "$base/static/morca.css" | grep -qF '.menu:focus-within .menu__sub' || fail "the Ops menu doesn't open on keyboard focus"
 # PostHog: no snippet without MORCA_POSTHOG_KEY; with a phc_ key, every page's
-# head has it, with the key and site "morca"; a key that isn't one adds nothing.
+# head has it, with the key and site "morca", through MORCA_POSTHOG_HOST's
+# proxy (/ph here); a key that isn't one adds nothing.
 echo "$nav" | grep -q 'ph/static/array.js' && fail "the PostHog snippet is there without MORCA_POSTHOG_KEY"
 for key in phc_TestKey_123 'phc_x");alert(1);//' not_a_key; do
     free_port php
-    MORCA_POSTHOG_KEY=$key MORCA_UI_ADDR="127.0.0.1:$php" ./build/morca ui >> "$log" 2>&1 &
+    MORCA_POSTHOG_KEY=$key MORCA_POSTHOG_HOST=/ph MORCA_UI_ADDR="127.0.0.1:$php" ./build/morca ui >> "$log" 2>&1 &
     phpid=$!
     i=0
     until curl -fs "http://127.0.0.1:$php/" > /dev/null 2>&1; do
@@ -101,7 +102,29 @@ for key in phc_TestKey_123 'phc_x");alert(1);//' not_a_key; do
     kill "$phpid"
     wait "$phpid" 2> /dev/null || true
 done
-echo "ok   PostHog only with a phc_ MORCA_POSTHOG_KEY"
+# Without MORCA_POSTHOG_HOST, PostHog's own hosts (#331); with one that isn't
+# a path or an https:// origin, no snippet.
+for host in "" 'javascript:alert(1)'; do
+    free_port php
+    MORCA_POSTHOG_KEY=phc_TestKey_123 MORCA_POSTHOG_HOST=$host MORCA_UI_ADDR="127.0.0.1:$php" ./build/morca ui >> "$log" 2>&1 &
+    phpid=$!
+    i=0
+    until curl -fs "http://127.0.0.1:$php/" > /dev/null 2>&1; do
+        i=$((i + 1)); [ "$i" -lt 100 ] || { kill "$phpid"; fail "morca ui with MORCA_POSTHOG_HOST=$host didn't start"; }; sleep 0.1
+    done
+    head=$(curl -sS "http://127.0.0.1:$php/")
+    head=${head%%</head>*}
+    if [ -z "$host" ]; then
+        echo "$head" | grep -qF '<script defer src="https://us-assets.i.posthog.com/static/array.js"></script>' \
+            && echo "$head" | grep -qF "api_host:'https://us.i.posthog.com'," \
+            || { kill "$phpid"; fail "the snippet without MORCA_POSTHOG_HOST isn't PostHog's own host"; }
+    else
+        echo "$head" | grep -q posthog && { kill "$phpid"; fail "MORCA_POSTHOG_HOST=$host added a snippet"; }
+    fi
+    kill "$phpid"
+    wait "$phpid" 2> /dev/null || true
+done
+echo "ok   PostHog only with a phc_ MORCA_POSTHOG_KEY, at MORCA_POSTHOG_HOST or PostHog's own host"
 # Runs per day on the home page: 30 days, today's with both runs.
 json / | jq -e '(.runs_per_day | length) == 30 and .runs_per_day[-1].succeeded == 1 and .runs_per_day[-1].failed == 1' > /dev/null \
     || fail "runs per day: $(json / | jq -c '.runs_per_day[-1]')"

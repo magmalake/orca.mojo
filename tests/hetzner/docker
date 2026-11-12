@@ -203,6 +203,13 @@ case "$all" in
         if [ "$(cat "$d/status")" = running ]; then echo true; else echo false; fi
         ;;
     "inspect "*) [ -d "$C/${all##* }" ] || exit 1 ;;
+    # morca config apps: $FAKE/apps-decl's lines (none without it); exit 2,
+    # a morca without it, while $FAKE/no-config-apps exists.
+    "run --rm --env-file "*" config apps")
+        echo "config-apps $all" >> "$FAKE/docker.log"
+        [ ! -f "$FAKE/no-config-apps" ] || { echo "morca needs MORCA_DATABASE_URL"; exit 2; }
+        [ ! -f "$FAKE/apps-decl" ] || cat "$FAKE/apps-decl"
+        ;;
     # morca config check with the stack's overlay (morca-stack's
     # check_overlay): fails while $FAKE/overlay-bad exists; $FAKE/no-overlays
     # is an image whose morca doesn't read overlays.
@@ -226,7 +233,7 @@ case "$all" in
                 --label) labels="$labels$2
 "; shift 2 ;;
                 --network-alias) aliases="$aliases $2"; shift 2 ;;
-                --restart | --network | --env-file | -e | -v | --entrypoint | --cap-add | --security-opt | --pid) shift 2 ;;
+                --restart | --network | --env-file | -e | -v | --entrypoint | --cap-add | --security-opt | --pid | --memory) shift 2 ;;
                 -*) shift ;;
                 *) break ;;
             esac

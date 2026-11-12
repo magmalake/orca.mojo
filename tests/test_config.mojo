@@ -15,6 +15,7 @@ from morca.config import (
     parse_workers,
     resolve,
 )
+from morca.apps_config import apps_text
 from morca.pool_config import NO_WAIT, read_pools
 
 comptime EXAMPLE = """[defaults]
@@ -543,11 +544,85 @@ enabled = true
         "build/test-config-overlay.toml:2: [defaults] enabled is true or false",
     )
     _load_refused("[defaults\n", "build/test-config-overlay.toml:1")
+    _load_refused(
+        "[apps.console]\nport = 1\n",
+        "[apps.console] isn't an app of build/test-config.toml",
+    )
     try:
         _ = ProjectConfig.load("build/test-config.toml", "build/no-such.toml")
         raise Error("accepted a missing overlay")
     except e:
         assert_true("no build/no-such.toml" in String(e))
+
+
+def test_apps() raises:
+    # [apps.<name>] (#331): what an app gets, checked, and the lines
+    # `morca config apps` prints for the stack's script.
+    var f = ProjectConfig(
+        """[apps.console]
+port = 8080
+check = "/healthz"
+env = { CONSOLE_SEMANTIC = "1", N = 2 }
+lake = true
+secrets = { POSTHOG_KEY = "orca/posthog-key" }
+memory_gb = 1.5
+
+[apps.bare]
+""",
+        "morca.toml",
+    )
+    var apps = f.apps()
+    assert_equal(len(apps), 2)
+    assert_equal(apps[0].port, 8080)
+    assert_equal(apps[0].memory_mb, 1536)
+    assert_true(apps[0].lake)
+    assert_equal(apps[1].port, 0)
+    assert_equal(apps[1].check, "/")
+    assert_false(apps[1].lake)
+    assert_equal(
+        apps_text(apps),
+        String(
+            "console port 8080\nconsole check /healthz\nconsole lake true\n",
+            "console memory_mb 1536\nconsole env CONSOLE_SEMANTIC=1\n",
+            "console env N=2\nconsole secret POSTHOG_KEY orca/posthog-key\n",
+            "bare port 0\nbare check /\nbare lake false\nbare memory_mb 0\n",
+        ),
+    )
+    _refused(
+        "[apps.console]\nprt = 1\n",
+        "morca.toml:2: [apps.console] has no key prt",
+    )
+    _refused("[apps.console]\nport = 0\n", "port is a number from 1 to 65535")
+    _refused('[apps.console]\nport = "8080"\n', "port is a number")
+    _refused('[apps.console]\ncheck = "healthz"\n', "check is a path")
+    _refused("[apps.console]\nlake = 1\n", "lake is true or false")
+    _refused("[apps.console]\nmemory_gb = 0\n", "memory_gb is a number of GB")
+    _refused(
+        '[apps.console]\nenv = { PORT = "1" }\n',
+        "env: PORT is set by the stack",
+    )
+    _refused(
+        '[apps.console]\nenv = { AWS_ACCESS_KEY_ID = "x" }\n',
+        "env: AWS_ACCESS_KEY_ID comes with lake = true",
+    )
+    _refused(
+        '[apps.console]\nenv = { API_TOKEN = "x" }\n',
+        "env: API_TOKEN looks like a secret",
+    )
+    _refused(
+        '[apps.console]\nenv = { A = "x\\ny" }\n', "env: a value is one line"
+    )
+    _refused(
+        '[apps.console]\nsecrets = { K = "posthog-key" }\n',
+        "secrets: ID is a Secrets Manager secret under orca/",
+    )
+    _refused(
+        '[apps.console]\nsecrets = { K = "orca/../db-password" }\n',
+        "secrets: K: an ID has no .. or //",
+    )
+    _refused("[apps.ui]\n", "ui is one of the stack's own containers")
+    _refused("[apps.Console]\n", "an app's name is lower-case")
+    _refused("apps = 1\n", "is a key at the top")
 
 
 def main() raises:

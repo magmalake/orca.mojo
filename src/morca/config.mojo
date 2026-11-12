@@ -85,6 +85,7 @@ from morca.secrets import (
     parse_secrets,
     secret_problem,
 )
+from morca.apps_config import AppConfig, apps_problem, read_apps
 from morca.pool_config import read_pools
 from morca.toml import (
     BOOLEAN,
@@ -572,19 +573,23 @@ struct ProjectConfig(Movable):
             over = parse_toml(text)
         except e:
             raise Error(path, ":", e)
-        for name in over.tables(["pipelines"]):
-            if not self.has(name):
-                raise Error(
-                    path,
-                    ":",
-                    over.get(["pipelines", name]).value().line,
-                    ": [pipelines.",
-                    toml_key(name),
-                    "] isn't a pipeline of ",
-                    self.path,
-                    ": an overlay changes the file's pipelines, it can't add",
-                    " one",
-                )
+        for top in ["pipelines", "apps"]:
+            for name in over.tables([String(top)]):
+                if not self.doc.has_table([String(top), name]):
+                    raise Error(
+                        path,
+                        ":",
+                        over.get([String(top), name]).value().line,
+                        ": [",
+                        top,
+                        ".",
+                        toml_key(name),
+                        "] isn't ",
+                        "a pipeline" if top == "pipelines" else "an app",
+                        " of ",
+                        self.path,
+                        ": an overlay changes the file's, it can't add one",
+                    )
         for p in self.doc.merge(over):
             self._overlaid[path_key(p)] = over.get(p).value().line
         self.overlay = path
@@ -622,6 +627,10 @@ struct ProjectConfig(Movable):
         if self.overlay:
             head.write(", with the overlay ", self.overlay, " laid on it")
         return String(head, "\n\n", self.doc.pretty(notes))
+
+    def apps(self) raises -> List[AppConfig]:
+        """Its `[apps.<name>]` tables (`morca config apps`)."""
+        return read_apps(self.doc)
 
     def enabled(self, pipeline: String) -> Bool:
         """Whether `morca register` with no binaries registers `pipeline`:
@@ -728,7 +737,8 @@ struct ProjectConfig(Movable):
                     top,
                     (
                         "is a key at the top; the file has [defaults],"
-                        " [pipelines.<name>], [pools.<name>] and [stack]"
+                        " [pipelines.<name>], [pools.<name>], [apps.<name>]"
+                        " and [stack]"
                     ),
                 )
             if top == "defaults":
@@ -756,6 +766,12 @@ struct ProjectConfig(Movable):
                     if self.overlay:
                         raise Error(self.path, " with ", self.overlay, ":", e)
                     raise Error(self.path, ":", e)
+            elif top == "apps":
+                # Apps beside the UI (morca.apps_config).
+                var why = apps_problem(self.doc)
+                if why:
+                    var w = why.value().copy()
+                    self._fail(w.path, w.table, w.msg)
             elif top != "stack":
                 # [stack] is for `morca aws up`, which doesn't read it yet.
                 self._fail(
@@ -763,7 +779,8 @@ struct ProjectConfig(Movable):
                     String("[", toml_key(top), "]"),
                     (
                         "isn't a table morca knows: [defaults],"
-                        " [pipelines.<name>], [pools.<name>] or [stack]"
+                        " [pipelines.<name>], [pools.<name>], [apps.<name>]"
+                        " or [stack]"
                     ),
                 )
 

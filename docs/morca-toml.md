@@ -41,6 +41,7 @@ hostname = "orca.mlake.dev"
 | `[defaults]` | Values for every pipeline the file names. It doesn't apply to pipelines the file leaves out. |
 | `[pipelines.<name>]` | One pipeline's own values, by the name its `describe` gives. An empty table is allowed: the pipeline is then "in the file" and gets `[defaults]`. |
 | `[pools.<name>]` | A pool of workers morca grows and shrinks itself: [Worker pools](#worker-pools). |
+| `[apps.<name>]` | An app beside the UI and what it gets: [Apps](#apps). |
 | `[stack]` | Reserved for `morca aws up`, which doesn't read it yet. It is accepted and not checked. |
 
 Any other table, and any key at the top level, is refused.
@@ -514,6 +515,49 @@ The export has a table for every registered pipeline, holding what is registered
 5. Check with `morca config show <pipeline>`. Every value should say `morca.toml`, and the header should name the commit.
 
 From then on a flag is a one-off, such as `--workers 0..8` for a backfill. The next registration without it goes back to the file.
+
+## Apps
+
+An app is a long-running binary of the project's image beside the UI (the
+census console), `/opt/morca/bin/<name>`. Its table says what the stack
+gives it, as a pipeline's says how its runs run; the stack names which apps
+it runs ([hetzner.md](hetzner.md#apps)).
+
+```toml
+[apps.console]
+port = 8080
+check = "/healthz"
+env = { CONSOLE_SEMANTIC = "1" }
+lake = true
+secrets = { POSTHOG_KEY = "orca/posthog-key" }
+memory_gb = 1
+```
+
+| Key | Type | Default | What it is |
+|---|---|---|---|
+| `port` | integer from 1 to 65535 | none: the stack's must | Where it listens, as `PORT`. |
+| `check` | string, a path | `/` | Answers 200 once the app is ready; a new one serves only then. |
+| `env` | table of `NAME = "value"` | none | Its variables. Not `PORT`, the lake's, or a name that looks like a secret's (`PASSWORD`, `SECRET`, `TOKEN`); one line each. |
+| `lake` | boolean | `false` | `true`: the warehouse settings (`MORCA_WAREHOUSE`, `MORCA_PUBLIC_WAREHOUSE`, `AWS_REGION`, `AWS_ENDPOINT_URL_S3`) and the stack's S3 keys. |
+| `secrets` | table of `NAME = "orca/<id>"` | none | Each secret's value as `NAME`. IDs only, never values. |
+| `memory_gb` | number over 0 | none: no limit | Its memory limit. |
+
+An app gets nothing it doesn't ask for: never morca's database. The name
+is lower-case letters, digits, `_` and `-`, and not one of the stack's own
+containers (`scheduler`, `ui`, `sampler`, `cloudflared`, `postgres`). An
+overlay can change an app the file has, not add one.
+
+`morca config apps [<file>] [--overlay F]` prints them a line per fact, as
+the stack's script reads them, with secrets by ID:
+
+```text
+console port 8080
+console check /healthz
+console lake true
+console memory_mb 1024
+console env CONSOLE_SEMANTIC=1
+console secret POSTHOG_KEY orca/posthog-key
+```
 
 ## Worker pools
 
