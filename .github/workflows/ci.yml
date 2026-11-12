@@ -184,8 +184,10 @@ jobs:
           pixi-version: v0.78.0
           environments: ${{ matrix.env }}
           manifest-path: orca.mojo/pixi.toml
-          # sai installs from the packages it keeps itself.
+          # sai installs from the packages it keeps itself, with a pixi of
+          # the job's own (setup-pixi won't replace one in ~/.pixi/bin).
           cache: ${{ runner.environment == 'github-hosted' }}
+          pixi-bin-path: ${{ runner.temp }}/pixi/bin/pixi
           # Only main and the nightly write the environment cache. Every PR
           # writing ~1 GB per environment kept the repository over GitHub's
           # 10 GB cap, which evicted main's entries: the only ones every PR can
