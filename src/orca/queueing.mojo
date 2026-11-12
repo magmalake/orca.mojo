@@ -7,6 +7,7 @@ from postgres import (
     Params,
     Transaction,
 )
+from orca.batches import mark_batch
 from orca.live import live_runs
 from orca.timekeys import parse_time_keys
 from orca.name import (
@@ -443,6 +444,10 @@ def _queue(
             )
         )
         i = j
+    var ids = List[Int64]()
+    for r in runs:
+        ids.append(Int64(r))
+    mark_batch(tx, ids)
     return got^
 
 

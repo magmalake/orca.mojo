@@ -616,11 +616,14 @@ struct RunsQuery(Copyable, Movable):
     """`?key=`: runs with a partition that matches it: a glob (`2023-08-*`,
     `?` for one character) matched against each of its partitions, or else
     any part of them (`modular/` for a keyed pipeline's repositories)."""
+    var batch: Int
+    """`?batch=`: the runs queued together in that batch
+    (`orca.batches`)."""
 
     @staticmethod
     def newest(view: String, size: Int) -> Self:
         """The newest page of `view`'s runs, unfiltered."""
-        return Self(view, "", "", "", size, 0, 0, "", "", "", 0, "")
+        return Self(view, "", "", "", size, 0, 0, "", "", "", 0, "", 0)
 
     def first(self) -> Bool:
         """Whether this is the newest page, which new runs join."""
@@ -654,6 +657,7 @@ struct RunsQuery(Copyable, Movable):
             or self.end != ""
             or self.run > 0
             or self.key != ""
+            or self.batch > 0
         )
 
     def unfiltered(self) -> Self:
@@ -685,6 +689,10 @@ struct RunsQuery(Copyable, Movable):
             (
                 String("run"),
                 String(self.run) if self.run > 0 else String(),
+            ),
+            (
+                String("batch"),
+                String(self.batch) if self.batch > 0 else String(),
             ),
         ]:
             if f[1]:
@@ -844,7 +852,7 @@ def key_like(key: String) -> String:
 def runs_query(url: String, view: String, pipeline: String = "") -> RunsQuery:
     """The list `url` asks for: `view`'s, filtered by `?pipeline=` (or, for a
     pipeline's tab, `pipeline`), `?status=` (one or more), `?trigger=`,
-    `?since=`, `?from=`, `?to=`, `?run=` and `?key=`, `?limit=` (or `?n=`)
+    `?since=`, `?from=`, `?to=`, `?run=`, `?key=` and `?batch=`, `?limit=` (or `?n=`)
     to a page, at `?before=` or `?after=`. A time or `since` that isn't one
     is left out."""
     var v = view if (view == "pipeline" or view == "home") else String("list")
@@ -867,6 +875,7 @@ def runs_query(url: String, view: String, pipeline: String = "") -> RunsQuery:
             0, int_or_zero(String(query_param(url, "run").strip().lstrip("#")))
         )
         q.key = String(query_param(url, "key").strip())
+        q.batch = max(0, int_or_zero(String(query_param(url, "batch").strip())))
     var n = int_or_zero(query_param(url, "limit"))
     if n <= 0:
         n = int_or_zero(query_param(url, "n"))
@@ -927,6 +936,8 @@ def runs_where(q: RunsQuery, with_status: Bool = True) -> RunsWhere:
         w.text("trigger = ?", q.trigger)
     if q.run > 0:
         w.int("id = ?", q.run)
+    if q.batch > 0:
+        w.int("batch = ?", q.batch)
     if q.since == "today":
         w.sql.write(
             " AND created >= date_trunc('day', now() AT TIME ZONE 'UTC') AT"
@@ -1279,6 +1290,10 @@ struct RunView(Movable):
     """Whether its pipeline is still registered with that code."""
     var rebuild: Int
     """The rebuild it's part of, or 0."""
+    var batch: Int
+    """The batch it was queued in (`orca.batches`), or 0."""
+    var batch_runs: Int
+    """How many runs that batch has."""
     var version: Optional[VersionRow]
     var cpu_millis: Int
     """What its pods asked for, on Kubernetes (0 elsewhere)."""
@@ -1303,6 +1318,8 @@ struct RunView(Movable):
         self.registry_hash = String()
         self.current_code = False
         self.rebuild = 0
+        self.batch = 0
+        self.batch_runs = 0
         self.version = None
         self.cpu_millis = 0
         self.seconds = 0
@@ -1337,16 +1354,20 @@ def run_view(mut db: State, id: Int) raises -> Optional[RunView]:
     var row = db.conn.query(
         (
             "SELECT registry_hash, coalesce(rebuild, 0) AS rebuild,"
+            " coalesce(batch, 0) AS batch, (SELECT count(*) FROM orca.runs b"
+            " WHERE b.batch = r.batch) AS batch_runs,"
             " coalesce(version, 0) AS version,"
             " coalesce(cpu_millis, 0) AS cpu, coalesce(extract(epoch FROM"
             " coalesce(ended, now()) - started)::bigint, 0) AS secs FROM"
-            " orca.runs WHERE id = $1"
+            " orca.runs r WHERE id = $1"
         ),
         Params().int64(Int64(id)),
     ).row(0)
     v.registry_hash = row.text("registry_hash")
     v.current_code = v.registry_hash == current
     v.rebuild = Int(row.int64("rebuild"))
+    v.batch = Int(row.int64("batch"))
+    v.batch_runs = Int(row.int64("batch_runs"))
     if row.int64("version"):
         var vs = version_rows(db, id=Int(row.int64("version")))
         if len(vs) > 0:

@@ -73,6 +73,10 @@ source_commit 2024-06,2024-07,2024-08,2024-09,2024-10,2024-11
 tick
 [ "$(sensed)" = "2024-02,2024-03,2024-04 2024-05,2024-06,2024-07 2024-08,2024-09,2024-10 2024-11" ] \
     || fail "batches of a big snapshot: $(sensed)"
+# The pass's new runs are one batch (#354); the one topped up isn't in it.
+b=$(q "SELECT id FROM orca.runs WHERE pipeline = 'clean' AND partitions = '2024-08,2024-09,2024-10'")
+[ "$(q "SELECT string_agg(coalesce(batch::text, '-'), ' ' ORDER BY id) FROM orca.runs WHERE pipeline = 'clean' AND trigger = 'sensor'")" = "- - $b $b" ] \
+    || fail "the sensor pass's batch: $(q "SELECT string_agg(id || ':' || coalesce(batch::text, '-'), ' ' ORDER BY id) FROM orca.runs WHERE pipeline = 'clean'")"
 # A started run isn't topped up: the next key gets a run of its own.
 q "UPDATE orca.runs SET starts = 1 WHERE pipeline = 'clean' AND partitions = '2024-11'" > /dev/null
 source_commit 2024-12
