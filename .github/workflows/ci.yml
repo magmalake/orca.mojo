@@ -213,17 +213,19 @@ jobs:
           restore-keys: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('orca.mojo/pixi.lock') }}-
 
       # On sai both caches stay on its disk instead, outside the checkout
-      # (which starts clean), one pair per environment, shared by every job
-      # there and by jobs running at once: Mojo's is content-addressed, and
-      # mojo-build.sh renames each entry into place whole. Each job holds a
-      # shared lock on them while its tests run; pruning takes it alone, and
-      # skips when a job is running.
+      # (which starts clean), one pair per runner and environment. A runner
+      # of its own: each of sai's runners checks out at a path of its own,
+      # and a binary names its environment's path (mojo-build.sh keys on
+      # it). They're safe to share anyway: Mojo's is content-addressed,
+      # mojo-build.sh renames each entry into place whole, and each job
+      # holds a shared lock on them while its tests run, which pruning
+      # takes alone, skipping when a job is running.
       - if: runner.environment == 'self-hosted'
         name: The build caches on sai's disk
         env:
           ENVNAME: ${{ matrix.env }}
         run: |
-          keep="$HOME/.cache/morca-ci/$ENVNAME"
+          keep="$HOME/.cache/morca-ci/$RUNNER_NAME/$ENVNAME"
           mkdir -p "$keep/max-cache" "$keep/mojo-build"
           rm -rf ".pixi/envs/$ENVNAME/share/max/cache"
           ln -s "$keep/max-cache" ".pixi/envs/$ENVNAME/share/max/cache"
