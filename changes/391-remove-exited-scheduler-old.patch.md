@@ -1,0 +1,1 @@
+- **An exited scheduler-old no longer fails the deploy:** `orca-stack apply` first removes a `scheduler-old` or `scheduler-next` left behind that isn't running, saying so, so the overlap and the check go ahead; a running one still waits for `orca-stack drain-old`. (#391)

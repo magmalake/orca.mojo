@@ -227,6 +227,12 @@ default) the containers get `ORCA_OVERLAP=on`, and:
 - the deploy registers the pipelines, then `orca-stack drain-old` asks the
   old instance to drain, waits for its container to exit (bounded by the
   deploy's `--timeout`, then stopped), and removes it;
+- a `scheduler-old` or `scheduler-next` left behind that isn't running any
+  more (one that exited when `drain-old` didn't follow) holds no runs: the
+  next `orca-stack apply` removes it first, naming its image and how long
+  ago it exited, and `can-overlap` doesn't count it (#352). A running one
+  stays until `drain-old`, and `can-overlap` says no and `orca-stack check`
+  fails while it's there;
 - `orca-stack status` lists the instances (`orca scheduler status`).
 
 Each container stages its own runs' output in the shared stage volume

@@ -17,6 +17,8 @@
 # PATH) answers 200, or what $FAKE/health/<name without -next> says; a
 # container started while $FAKE/exits/<name without -next> exists exits at
 # once; `run -d --name NAME` fails while $FAKE/run-fails/NAME exists.
+# A container's FinishedAt is its finished file (docker's
+# 2026-11-09T10:00:00.123456789Z form), else 0001-01-01T00:00:00Z (never ran).
 #
 # Overlapping schedulers: `run --rm ... scheduler can-overlap` prints
 # $FAKE/can-overlap (exit 0 if it says yes; "no: ..." without the file);
@@ -163,6 +165,11 @@ case "$all" in
         [ -d "$d" ] || { echo "Error: No such object: ${all##* }" >&2; exit 1; }
         label() { sed -n "s/^$1=//p" "$d/labels"; }
         echo "$(cat "$d/status") $(cat "$d/image") $(cat "$d/id") $(label orca.stack.spec) $(label orca.stack.args) $(label orca.stack.files)"
+        ;;
+    "inspect -f {{.Config.Image}} {{.State.Status}} {{.State.FinishedAt}} "*)
+        d=$C/${all##* }
+        [ -d "$d" ] || exit 1
+        echo "$(cat "$d/image") $(cat "$d/status") $(cat "$d/finished" 2> /dev/null || echo 0001-01-01T00:00:00Z)"
         ;;
     "inspect -f {{.State.Status}} "*)
         d=$C/${all##* }

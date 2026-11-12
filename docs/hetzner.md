@@ -529,8 +529,16 @@ raise the schema's floor past it. On yes, nothing is paused or killed:
   timeout it is stopped instead: its runs are killed, and the new
   scheduler queues them again.
 
+A `scheduler-old` (or `scheduler-next`) that a deploy before left behind
+and that isn't running any more, say one that drained and exited when
+`drain-old` didn't follow, holds no runs: every `orca-stack apply` first
+removes it, with a line naming its image and how long ago it exited, and
+`can-overlap` doesn't count it. A running one is left alone until `ssh
+root@<ip> orca-stack drain-old`: only that may end a scheduler that may
+still hold runs.
+
 On no (overlap off, a migration that raises the floor, no scheduler going,
-or a `scheduler-old` still draining from a deploy before), the deploy
+or a running `scheduler-old` still draining from a deploy before), the deploy
 pauses and waits as above, and says why. So does the deploy that turns
 `OVERLAP` on: the scheduler it replaces has overlap off. A rollback,
 `--force` and a dry run don't overlap. `orca-stack status` lists the
@@ -546,8 +554,9 @@ way back. It checks:
 - Postgres answers, and each container (scheduler, ui, sampler, the apps,
   cloudflared) is running the image `stack.conf` says, the UI and the apps
   healthy as apply probes them;
-- one scheduler: no `scheduler-next` or `scheduler-old` is left, and with
-  `OVERLAP=1` exactly one instance leads;
+- one scheduler: no `scheduler-next` or `scheduler-old` is left (an
+  exited one the apply has removed; a running one fails, until `orca-stack
+  drain-old`), and with `OVERLAP=1` exactly one instance leads;
 - the pipelines: at least one registered, and each one's binary is in the
   scheduler's image (`orca-stack register` fixes a stale one); the paused
   ones are listed;

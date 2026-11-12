@@ -84,7 +84,10 @@
 # scheduler wait-lead, HEALTH_TIMEOUT). The old one has seen it and drains:
 # it starts nothing and exits once its runs have ended. drain-old asks it
 # to drain, waits for that (bounded), and removes it. Runs aren't paused or
-# killed.
+# killed. A scheduler-old (or scheduler-next) left behind that isn't
+# running any more, say when drain-old didn't follow, holds no runs: the
+# next apply removes it first, naming its image and when it exited. A
+# running one stays until drain-old: can-overlap says no, and check fails.
 #
 # Each apply that changes a tag keeps what was deployed before it:
 # $CONF/deployed has the tags the last apply started ("orca TAG", then "app
@@ -750,6 +753,43 @@ cmd_plan() {
     rm -rf "$ENVDIR" "$APPS"
 }
 
+ago() { # TIME (docker's FinishedAt, UTC): how long ago, as "2d 23h", "4h 5m", "7m" or "9s"
+    g_t=${1%%.*}
+    g_t=${g_t%Z}
+    g_s=$(date -u -d "$g_t" +%s 2> /dev/null || date -u -j -f %Y-%m-%dT%H:%M:%S "$g_t" +%s 2> /dev/null) \
+        || { echo "at $1"; return 0; }
+    g_s=$(($(date -u +%s) - g_s))
+    if [ "$g_s" -ge 86400 ]; then
+        echo "$((g_s / 86400))d $((g_s % 86400 / 3600))h ago"
+    elif [ "$g_s" -ge 3600 ]; then
+        echo "$((g_s / 3600))h $((g_s % 3600 / 60))m ago"
+    elif [ "$g_s" -ge 60 ]; then
+        echo "$((g_s / 60))m ago"
+    else
+        echo "${g_s}s ago"
+    fi
+}
+
+# remove_exited: a scheduler-old or scheduler-next an earlier deploy left
+# behind that isn't running any more (an overlap's old scheduler that
+# drained and exited, but wasn't removed) holds no runs: removed, saying
+# so. A running one is left alone; only drain-old ends it.
+remove_exited() {
+    for r_name in scheduler-old scheduler-next; do
+        r_info=$(docker inspect -f '{{.Config.Image}} {{.State.Status}} {{.State.FinishedAt}}' "$r_name" 2> /dev/null) || continue
+        read -r r_image r_status r_finished << EOF
+$r_info
+EOF
+        case "$r_status" in running | restarting | paused) continue ;; esac
+        case "$r_finished" in
+            "" | 0001-*) r_when="never ran" ;;
+            *) r_when="exited $(ago "$r_finished")" ;;
+        esac
+        docker rm -f "$r_name" > /dev/null
+        echo "orca-stack: removed $r_name, left by a deploy before ($r_image, $r_status, $r_when)"
+    done
+}
+
 cmd_apply() {
     # A stack applied before deployed was kept: what it runs is its conf.
     if [ ! -f "$CONF/deployed" ] && [ -f "$STATE/applied" ] && [ -n "$(conf_get ORCA_TAG)" ]; then
@@ -757,6 +797,8 @@ cmd_apply() {
     fi
     apply_args "$@"
     [ "${ORCA_STACK_TEST:-}" = 1 ] || mountpoint -q "$DATA" || die "$DATA (the Volume) isn't mounted; Postgres must not start on the root disk"
+    # Before the overlap's check for a scheduler-old still draining.
+    remove_exited
     desired
     mkdir -p "$DATA/pg" "$STATE/stage" "$STATE/backup" "$CONF/secrets"
     write_env "$CONF"
@@ -925,7 +967,8 @@ cmd_rollback() {
 
 # can-overlap [--tag T]: whether the image at T (the conf's tag without
 # it) may start its scheduler beside the running one: OVERLAP=1, the
-# scheduler running, none draining from a deploy before, and the new
+# scheduler running, none draining from a deploy before (a scheduler-old
+# that has exited doesn't count: apply removes it), and the new
 # binary's `orca scheduler can-overlap` (a migration that raises the floor
 # says no). Prints "yes" or "no: why"; exit 0 or 1.
 cmd_can_overlap() {
@@ -938,7 +981,8 @@ cmd_can_overlap() {
     [ "$(conf_get OVERLAP)" = 1 ] || { echo "no: OVERLAP isn't 1 in stack.conf"; return 1; }
     [ "$(docker inspect -f '{{.State.Running}}' scheduler 2> /dev/null)" = true ] \
         || { echo "no: no scheduler is running"; return 1; }
-    ! docker inspect scheduler-old > /dev/null 2>&1 \
+    # One that has exited holds no runs, and apply removes it first.
+    [ "$(docker inspect -f '{{.State.Running}}' scheduler-old 2> /dev/null)" != true ] \
         || { echo "no: scheduler-old is still draining (orca-stack drain-old)"; return 1; }
     image=$(conf_get ORCA_IMAGE)
     login
