@@ -2,7 +2,7 @@
 runs the Rust worker in src/lib.rs (docs/rust-workers.md).
 
 The pipeline declares what any pipeline does: partitions, the dataset the
-step writes, and the table's schema, from schemas/numbers.json, the file
+step writes (partitioned by its `partition` column), and the table's schema, from schemas/numbers.json, the file
 the worker embeds as well (`include_str!`). This side embeds it at build
 time (scripts/embed-json.sh writes the `numbers_schema` module), so the
 binary needs no file next to it:
@@ -14,7 +14,8 @@ binary needs no file next to it:
     MORCA_WAREHOUSE=/tmp/wh NUMBERS_LIB=$PWD/build/cargo/release/libnumbers_worker.so \\
         ./numbers run --partitions 2024-01
 
-    numbers check [run]   the table's rows, the snapshots of `run`, the sum of ids
+    numbers check [run]   the table's rows, the snapshots of `run`, all
+                          snapshots, the sum of ids
 
 What tests/rust_worker.sh sets: NUMBERS_LIB, the library (by default
 `numbers_worker`, found as `libnumbers_worker.so` in `$CONDA_PREFIX/lib`,
@@ -29,6 +30,7 @@ from std.os.path import exists
 from std.sys import argv
 
 from iceberg.schema import Schema
+from iceberg.transforms import PartitionField, PartitionSpec, parse_transform
 from morca import (
     Ctx,
     Mapped,
@@ -53,8 +55,22 @@ def _stop() -> Bool:
     return outdated() or (Bool(f) and exists(f))
 
 
+def by_partition() raises -> PartitionSpec:
+    """The table's spec: the worker's files hold one partition each."""
+    return PartitionSpec(
+        0,
+        [
+            PartitionField.single(
+                2, 1000, "partition", parse_transform("identity")
+            )
+        ],
+    )
+
+
 def numbers(mut ctx: Ctx, m: Month) raises -> Int:
-    var t = ensure_table(ctx, NUMBERS, Schema.parse(NUMBERS_SCHEMA))
+    var t = ensure_table(
+        ctx, NUMBERS, Schema.parse(NUMBERS_SCHEMA), by_partition()
+    )
     var r = rust_step(
         ctx,
         getenv("NUMBERS_LIB", "numbers_worker"),
@@ -66,7 +82,9 @@ def numbers(mut ctx: Ctx, m: Month) raises -> Int:
         String(
             "numbers: ",
             r.rows,
-            " rows, snapshot ",
+            " rows, ",
+            r.worker_files,
+            " files of its own, snapshot ",
             r.snapshot_id,
             ", stopped=",
             r.stopped,
@@ -104,6 +122,7 @@ def _check(run: String) raises:
         if run and s.summary.get("orca.run", "") == run:
             snaps += 1
     print("rows", rows, "snapshots", snaps)
+    print("all snapshots", len(t.metadata.snapshots))
     print("ids", ids)
 
 

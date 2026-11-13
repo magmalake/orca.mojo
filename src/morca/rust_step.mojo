@@ -1,5 +1,6 @@
 """Steps written in Rust: a worker library, called from a step of a Mojo
-proxy pipeline, whose record batches morca writes into the step's table.
+proxy pipeline, whose record batches morca writes into the step's table,
+and whose own Parquet files it commits with them.
 
 ```mojo
 from iceberg.schema import Schema
@@ -45,10 +46,21 @@ the contract, and the `morca-worker` crate its Rust side):
    schema, gathering small batches into files of about `flush_bytes`, so
    the output never sits in memory whole and the worker produces at the
    rate the writer consumes.
-6. At the end of the stream it **commits once**: `append_files`, which is
+6. It **takes the worker's own Parquet files**, if it writes any: files
+   the worker wrote into the directory the context names, and reported
+   (`ctx.add_file` in the crate). When `run` returns and after each batch,
+   morca checks each reported file against the table (every column with
+   the table's field id and a type iceberg reads as the table's, and its
+   rows in one partition, from its statistics), naming the column, uploads
+   it under the table's `data/` with the table's `FileIO`, and keeps its
+   entry. A worker may stream, write files, or both; a stream of no
+   columns says it only writes files. A file reported that isn't there
+   fails the attempt.
+7. At the end of the stream it **commits once**: `append_files`, which is
    `replace_partition_files` for a dataset the step declared in
    `replaces=`. A step's commits keep their numbers, so a crash after this
-   commit is recognised by the retry (1).
+   commit is recognised by the retry (1). The worker's files and those
+   morca wrote from the stream are in the same commit.
 
 **Stopping.** While the worker runs, a thread polls `stop_when()` (by
 default `morca.outdated()`: a newer version of the pipeline leads) every
@@ -58,9 +70,10 @@ honours it ends its stream early; what came is committed, and
 means, as with `outdated()` in Mojo.
 
 A failure anywhere (the library, the worker's error or panic, a schema
-that doesn't fit, a batch that can't be aligned) fails the attempt before
-the commit; files already written are left unreferenced in `data/`, as
-with an interrupted `append`.
+or a file that doesn't fit, a batch that can't be aligned) fails the
+attempt before the commit; files already written or uploaded are left
+unreferenced in `data/`, as with an interrupted `append`. The output
+directory goes with the call, whatever's in it.
 
 Not yet: a step's input stream (the worker gets none), several outputs,
 and Rust steps as dista tasks (`Mapped` over tasks); see
@@ -68,46 +81,16 @@ docs/rust-workers.md. This module imports iceberg, like `morca.tables`.
 """
 
 from iceberg.catalog.filesystem import Table
-from iceberg.nested import ColumnTree, arrow_type_of, concat_tree, subtree_copy
-from iceberg.schema import Schema
-from iceberg.types import (
-    TK_LIST,
-    TK_MAP,
-    TK_PRIMITIVE,
-    TK_STRUCT,
-    NestedField,
-    TypeStore,
-    primitive_name,
-)
+from iceberg.nested import ColumnTree, concat_tree, subtree_copy
 from iceberg.write import align_batch
-from arrow_mlake.arrow import (
-    AT_BINARY,
-    AT_DECIMAL128,
-    AT_FIXED_SIZE_BINARY,
-    AT_FLOAT32,
-    AT_FLOAT64,
-    AT_INT8,
-    AT_INT16,
-    AT_INT32,
-    AT_INT64,
-    AT_LARGE_BINARY,
-    AT_LARGE_LIST,
-    AT_LARGE_UTF8,
-    AT_LIST,
-    AT_MAP,
-    AT_STRUCT,
-    AT_TIME64,
-    AT_TIMESTAMP,
-    AT_UTF8,
-    ArrowType,
-)
-from arrow_mlake.carrow import ARROW_FLAG_NULLABLE, CArrowSchema
-from arrow_mlake.carrow_import import parquet_field_id, parse_format
+from arrow_mlake.carrow import CArrowSchema
 from parquet import RecordBatch
 
 from morca.ctx import Ctx
 from morca._internal.handover import outdated
 from morca._internal.rust_ffi import StopFn, WorkerCall, WorkerLib
+from morca._internal.rust_files import WorkerFiles
+from morca._internal.rust_schema import check_schema, prim_fits
 from morca.tables import (
     DataFiles,
     FileWriter,
@@ -129,7 +112,10 @@ struct RustRun(Copyable, Movable, Writable):
     var rows: Int
     """The rows written; 0 when `resumed`."""
     var files: Int
-    """The data files written."""
+    """The data files committed: those morca wrote from the stream, and
+    the worker's own."""
+    var worker_files: Int
+    """Of `files`, those the worker wrote itself."""
     var stopped: Bool
     """Whether the stop flag was set when the stream ended."""
     var resumed: Bool
@@ -154,7 +140,7 @@ def rust_step(
         ctx.log(
             "the worker's output is committed already; it doesn't run again"
         )
-        return RustRun(id, 0, 0, False, True)
+        return RustRun(id, 0, 0, 0, False, True)
     var dataset = dataset_of(table.metadata.location)
     var name = dataset if dataset else table.metadata.location
     var schema = table.metadata.schema()
@@ -167,14 +153,24 @@ def rust_step(
             "running the Rust worker ", call.lib.path, " ", call.lib.describe
         )
     )
-    call.start()
-    ref stream = call.stream.value()
+    var own = WorkerFiles(table, name, call.output_dir)
     try:
-        check_schema(stream.schema_address(), schema)
+        call.start()
     except e:
-        raise Error(
-            "morca: the Rust worker's output doesn't fit ", name, ": ", e
-        )
+        # A file morca refused is why the worker failed; say it first.
+        _refused(call)
+        raise e^
+    _take(call, own)
+    ref stream = call.stream.value()
+    # A stream of no columns carries no rows: the worker's are in files.
+    var streams = _columns(stream.schema_address()) > 0
+    if streams:
+        try:
+            check_schema(stream.schema_address(), schema)
+        except e:
+            raise Error(
+                "morca: the Rust worker's output doesn't fit ", name, ": ", e
+            )
 
     var writer = FileWriter(table)
     var pending = List[ColumnTree]()
@@ -186,14 +182,24 @@ def rust_step(
         try:
             got = stream.next()
         except e:
+            _refused(call)
+            var plain = call.last_error()
             raise Error(
-                "morca: the Rust worker ", call.lib.path, " failed: ", e
+                "morca: the Rust worker ",
+                call.lib.path,
+                " failed: ",
+                plain if plain else String(e),
             )
+        _take(call, own)
         if not got:
             break
         var batch = got.take()
         if batch.num_rows == 0:
             continue
+        if not streams:
+            raise Error(
+                "morca: the Rust worker streamed rows of no columns to ", name
+            )
         var cols: List[ColumnTree]
         try:
             cols = align_batch(batch, schema)
@@ -224,6 +230,9 @@ def rust_step(
     var stopped = call.stopping()
     _ = call^
     var files = writer^.finish()
+    var n_own = len(own.files)
+    files.add(DataFiles(own.files.copy()))
+    rows += own.rows
     var n_files = len(files)
     var id = append_files(ctx, table, files)
     ctx.log(
@@ -233,12 +242,36 @@ def rust_step(
             " rows in ",
             n_files,
             " data file" if n_files == 1 else " data files",
+            String(" (", n_own, " of its own)") if n_own else String(),
             " to ",
             name,
             " (stopped early)" if stopped else "",
         )
     )
-    return RustRun(id, rows, n_files, stopped, False)
+    return RustRun(id, rows, n_files, n_own, stopped, False)
+
+
+def _refused(call: WorkerCall) raises:
+    """Raises why morca refused a file the worker reported, if it did."""
+    var why = call.refused()
+    if why:
+        raise Error(why)
+
+
+def _take(mut call: WorkerCall, mut own: WorkerFiles) raises:
+    """Takes the files the worker reported since last time."""
+    _refused(call)
+    for p in call.take_files():
+        own.take(p)
+
+
+def _columns(schema: Int) -> Int:
+    """How many columns the `ArrowSchema` at `schema` has."""
+    return Int(
+        Pointer[CArrowSchema, MutUntrackedOrigin](
+            unsafe_from_address=schema
+        )[].n_children
+    )
 
 
 def _bytes(batch: RecordBatch) -> Int:
@@ -257,201 +290,3 @@ def _batch_of(cols: List[ColumnTree], rows: Int) raises -> RecordBatch:
         b.roots.append(subtree_copy(c.arena, c.root, b.arena))
     b.num_rows = rows
     return b^
-
-
-# --- the stream's schema against the table's ---
-
-
-@fieldwise_init
-struct _Field(Copyable, Movable):
-    var name: String
-    var type: ArrowType
-    var nullable: Bool
-    var field_id: Int
-    var children: List[Int]
-    """The children's `ArrowSchema` addresses."""
-
-
-def _cstr(addr: Int) -> String:
-    if addr == 0:
-        return String()
-    return String(
-        unsafe_from_utf8_ptr=Pointer[UInt8, ImmUntrackedOrigin](
-            unsafe_from_address=addr
-        )
-    )
-
-
-def _read(addr: Int, path: String) raises -> _Field:
-    var s = Pointer[CArrowSchema, MutUntrackedOrigin](unsafe_from_address=addr)
-    var name = _cstr(s[].name)
-    var at = String(path, ".", name) if path else name
-    var fmt = _cstr(s[].format)
-    var t: ArrowType
-    try:
-        t = parse_format(fmt)
-    except e:
-        raise Error("column ", at, " has a type morca can't read: ", e)
-    var kids = List[Int]()
-    for i in range(Int(s[].n_children)):
-        kids.append(
-            Pointer[Int, MutUntrackedOrigin](
-                unsafe_from_address=s[].children + 8 * i
-            )[]
-        )
-    return _Field(
-        name,
-        t^,
-        (s[].flags & ARROW_FLAG_NULLABLE) != 0,
-        Int(parquet_field_id(s[].metadata)),
-        kids^,
-    )
-
-
-def check_schema(stream_schema: Int, table: Schema) raises:
-    """Raises, naming the column, unless the stream's schema (an
-    `ArrowSchema` address) fits `table` by the rule in the module's doc."""
-    var root = _read(stream_schema, "")
-    if root.type.id != AT_STRUCT:
-        raise Error("the stream's schema isn't a struct of columns")
-    _fields_fit(table.store, table.columns(), root.children, "")
-
-
-def _fields_fit(
-    store: TypeStore, want: List[NestedField], kids: List[Int], path: String
-) raises:
-    var got = List[_Field]()
-    for k in kids:
-        got.append(_read(k, path))
-    for f in want:
-        var at = String(path, ".", f.name) if path else f.name
-        var found = -1
-        for i in range(len(got)):
-            if got[i].name == f.name:
-                found = i
-                break
-        if found < 0:
-            raise Error(
-                "column ", at, " is in the table but not in the worker's schema"
-            )
-        ref g = got[found]
-        if g.field_id >= 0 and g.field_id != f.id:
-            raise Error(
-                "column ",
-                at,
-                " has field id ",
-                g.field_id,
-                ", and the table's is ",
-                f.id,
-            )
-        _nullable_fits(f.required, g.nullable, at)
-        _fits(store, f.type, g, at)
-    for g in got:
-        var known = False
-        for f in want:
-            if f.name == g.name:
-                known = True
-                break
-        if not known:
-            var at = String(path, ".", g.name) if path else g.name
-            raise Error(
-                "column ", at, " is in the worker's schema but not in the table"
-            )
-
-
-def _nullable_fits(required: Bool, nullable: Bool, at: String) raises:
-    if required and nullable:
-        raise Error(
-            "column ",
-            at,
-            " is required in the table but nullable in the worker's schema",
-        )
-
-
-def _fits(store: TypeStore, ti: Int, g: _Field, at: String) raises:
-    ref t = store.nodes[ti]
-    if t.kind == TK_PRIMITIVE:
-        if not prim_fits(arrow_type_of(store, ti), g.type):
-            raise Error(
-                "column ",
-                at,
-                " is ",
-                g.type,
-                " in the worker's schema, which doesn't fit the table's ",
-                primitive_name(t.prim),
-            )
-        return
-    if t.kind == TK_STRUCT:
-        if g.type.id != AT_STRUCT:
-            raise Error(
-                "column ",
-                at,
-                " is ",
-                g.type,
-                " in the worker's schema, not a struct",
-            )
-        _fields_fit(store, t.fields, g.children, at)
-        return
-    if t.kind == TK_LIST:
-        if (g.type.id != AT_LIST and g.type.id != AT_LARGE_LIST) or len(
-            g.children
-        ) != 1:
-            raise Error(
-                "column ",
-                at,
-                " is ",
-                g.type,
-                " in the worker's schema, not a list",
-            )
-        var el = _read(g.children[0], at)
-        var p = String(at, ".element")
-        _nullable_fits(t.element_required, el.nullable, p)
-        _fits(store, t.element, el, p)
-        return
-    if g.type.id != AT_MAP or len(g.children) != 1:
-        raise Error(
-            "column ", at, " is ", g.type, " in the worker's schema, not a map"
-        )
-    var kv = _read(g.children[0], at)
-    if len(kv.children) != 2:
-        raise Error(
-            "column ", at, " is a map whose entries aren't key and value"
-        )
-    var k = _read(kv.children[0], at)
-    var v = _read(kv.children[1], at)
-    _nullable_fits(True, k.nullable, String(at, ".key"))
-    _fits(store, t.key, k, String(at, ".key"))
-    _nullable_fits(t.value_required, v.nullable, String(at, ".value"))
-    _fits(store, t.value, v, String(at, ".value"))
-
-
-def prim_fits(want: ArrowType, got: ArrowType) -> Bool:
-    """Whether a primitive column of type `got` can be written to one the
-    table stores as `want`: the same type, or one Iceberg widens to it."""
-    var w = want.id
-    var g = got.id
-    if w == AT_INT32:
-        return g == AT_INT8 or g == AT_INT16 or g == AT_INT32
-    if w == AT_INT64:
-        return g == AT_INT8 or g == AT_INT16 or g == AT_INT32 or g == AT_INT64
-    if w == AT_FLOAT64:
-        return g == AT_FLOAT32 or g == AT_FLOAT64
-    if w == AT_UTF8:
-        return g == AT_UTF8 or g == AT_LARGE_UTF8
-    if w == AT_BINARY:
-        return g == AT_BINARY or g == AT_LARGE_BINARY
-    if w == AT_DECIMAL128:
-        return (
-            g == AT_DECIMAL128
-            and got.scale == want.scale
-            and got.precision <= want.precision
-        )
-    if w == AT_TIMESTAMP:
-        return g == AT_TIMESTAMP and (got.tz.byte_length() > 0) == (
-            want.tz.byte_length() > 0
-        )
-    if w == AT_TIME64:
-        return g == AT_TIME64
-    if w == AT_FIXED_SIZE_BINARY:
-        return g == AT_FIXED_SIZE_BINARY and got.byte_width == want.byte_width
-    return g == w

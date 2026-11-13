@@ -1,0 +1,1 @@
+- **Parquet files from Rust workers**: a worker can write Parquet itself and report each file (`ctx.add_file`), and `morca.rust_step` commits them with any streamed rows in one commit; see docs/rust-workers.md. (#PR)

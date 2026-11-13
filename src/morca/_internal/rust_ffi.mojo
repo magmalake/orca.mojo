@@ -16,6 +16,12 @@ functions that the worker calls on the thread that called it, which is the
 step's; they write to the step's log through its `Ctx`, whose address the
 host block holds.
 
+**Files.** Each call has an output directory of its own, under `$TMPDIR`
+(else `/tmp`), for the Parquet files a worker writes; `_on_add_file`
+records each file the worker reports (and refuses one that doesn't exist),
+and `morca.rust_step` takes them with `take_files` between pulls. The
+directory, and whatever is left in it, goes when the call does.
+
 **The stop flag** is an `int32` the worker polls. A thread of
 `WorkerCall`'s own sets it once `stop_when()` (by default
 `morca.outdated()`) says so, polling every 50 ms, because while the worker
@@ -24,8 +30,11 @@ runs, the step's thread is inside it.
 
 from std.atomic import Atomic, Ordering
 from std.ffi import OwnedDLHandle, RTLD
+from std.memory import OwnedPointer
 from std.memory.alloc import unsafe_alloc
-from std.os import getenv
+from std.ffi import external_call
+from std.os import getenv, listdir, makedirs, remove, rmdir
+from std.os.path import exists, isdir, islink
 from std.sys import CompilationTarget
 from std.time import monotonic, sleep
 
@@ -41,8 +50,10 @@ from morca._internal.json import quote
 comptime ABI_VERSION: UInt32 = 1
 """The ABI version this morca speaks; a library with another is refused."""
 
-comptime CONTEXT_SIZE = 120
-"""`sizeof(MorcaRunContext)` in ABI version 1."""
+comptime CONTEXT_SIZE = 136
+"""`sizeof(MorcaRunContext)`: ABI version 1 with `output_dir` and
+`add_file`, which a worker built before them doesn't read (its context was
+120 bytes)."""
 
 comptime StopFn = def() thin -> Bool
 """What says a worker should stop: called on a thread of its own."""
@@ -54,6 +65,8 @@ comptime _DescribeFn = def() thin abi("C") -> Int
 comptime _LogFn = def(Int, Int, Int) thin abi("C") -> None
 comptime _ProgressFn = def(Int, Int64, Int64) thin abi("C") -> None
 comptime _MetricFn = def(Int, Int, Int, Float64) thin abi("C") -> None
+comptime _AddFileFn = def(Int, Int, Int) thin abi("C") -> Int32
+comptime _LastErrorFn = def(Int) thin abi("C") -> Int
 
 comptime _PROGRESS_EVERY_NS = 10_000_000_000
 """Progress is logged at most every 10 s, and when it's done."""
@@ -215,6 +228,68 @@ def _on_metric(host: Int, name: Int, n: Int, value: Float64) abi("C") -> None:
     _ctx_of(host)[].log(String("metric ", _text(name, n), "=", value))
 
 
+struct Reported(Movable):
+    """The files a worker reported, which `take_files` hasn't taken yet,
+    and those refused: reported, but not there."""
+
+    var dir: String
+    var files: List[String]
+    var missing: List[String]
+
+    def __init__(out self, var dir: String):
+        self.dir = dir^
+        self.files = List[String]()
+        self.missing = List[String]()
+
+
+def _reported_of(host: Int) -> Pointer[Reported, MutAnyOrigin]:
+    return Pointer[Reported, MutAnyOrigin](
+        unsafe_from_address=_get_int(host, 16)
+    )
+
+
+def _on_add_file(host: Int, path: Int, n: Int) abi("C") -> Int32:
+    var given = _text(path, n)
+    ref r = _reported_of(host)[]
+    var p = given if given.startswith("/") else String(r.dir, "/", given)
+    if not exists(p):
+        r.missing.append(p^)
+        return 1
+    r.files.append(p^)
+    return 0
+
+
+def _remove_tree(path: String):
+    """Removes `path` and what's in it, as far as it can; a link is removed,
+    not followed."""
+    try:
+        if isdir(path) and not islink(path):
+            for name in listdir(path):
+                _remove_tree(String(path, "/", name))
+            rmdir(path)
+        else:
+            remove(path)
+    except:
+        pass
+
+
+def _output_dir() raises -> String:
+    """A new, empty directory for one call's files."""
+    var tmp = getenv("TMPDIR", "/tmp")
+    while tmp.endswith("/") and tmp.byte_length() > 1:
+        var cut = String(tmp[byte = : tmp.byte_length() - 1])
+        tmp = cut^
+    var dir = String(
+        tmp,
+        "/morca-rust-",
+        external_call["getpid", Int32](),
+        "-",
+        Int(monotonic()),
+    )
+    makedirs(dir, exist_ok=False)
+    return dir^
+
+
 # --- the stop flag's thread ---
 
 
@@ -248,7 +323,11 @@ struct WorkerCall(Movable):
     var context: Int
     """The `MorcaRunContext` block."""
     var host: Int
-    """What the callbacks get: the `Ctx`'s address, the last progress time."""
+    """What the callbacks get: the `Ctx`'s address, the last progress time,
+    and `reported`'s address."""
+    var output_dir: String
+    """The directory the worker writes its files in."""
+    var reported: OwnedPointer[Reported]
     var watch: Int
     """The stop flag, the thread's done flag and the `StopFn`, one cell each."""
     var watcher: ThreadHandle
@@ -264,14 +343,17 @@ struct WorkerCall(Movable):
         step_version: Int,
         stop_when: StopFn,
     ) raises:
+        self.output_dir = _output_dir()
         self.lib = lib^
         self.strings = List[List[UInt8]]()
         self.context = _zeroed(CONTEXT_SIZE)
-        self.host = _zeroed(16)
+        self.host = _zeroed(24)
         self.watch = _zeroed(24)
         self.stream_block = 0
         self.stream = None
+        self.reported = OwnedPointer(Reported(self.output_dir.copy()))
         _put_int(self.host, 0, Int(Pointer(to=ctx)))
+        _put_int(self.host, 16, Int(Pointer(to=self.reported[])))
         Pointer[StopFn, MutUntrackedOrigin](
             unsafe_from_address=self.watch + 16
         )[] = stop_when
@@ -302,6 +384,11 @@ struct WorkerCall(Movable):
         Pointer[_MetricFn, MutUntrackedOrigin](
             unsafe_from_address=c + 112
         )[] = _on_metric
+        self.strings.append(_c(self.output_dir))
+        _put_int(c, 120, Int(self.strings[len(texts)].unsafe_ptr()))
+        Pointer[_AddFileFn, MutUntrackedOrigin](
+            unsafe_from_address=c + 128
+        )[] = _on_add_file
         self.watcher = ThreadHandle.spawn[_watch](opaque_ptr(self.watch))
 
     def __init__(out self, *, deinit move: Self):
@@ -309,6 +396,8 @@ struct WorkerCall(Movable):
         self.strings = move.strings^
         self.context = move.context
         self.host = move.host
+        self.output_dir = move.output_dir^
+        self.reported = move.reported^
         self.watch = move.watch
         self.watcher = move.watcher^
         self.stream_block = move.stream_block
@@ -317,6 +406,35 @@ struct WorkerCall(Movable):
     def stopping(self) -> Bool:
         """Whether the stop flag is set."""
         return _flag(self.watch)[].load[ordering=Ordering.ACQUIRE]() != 0
+
+    def take_files(mut self) -> List[String]:
+        """The files reported since the last call, in order."""
+        var out = List[String]()
+        swap(out, self.reported[].files)
+        return out^
+
+    def refused(self) -> String:
+        """Why morca refused a file the worker reported, or empty."""
+        if len(self.reported[].missing) == 0:
+            return String()
+        return String(
+            "morca: the Rust worker reported the file ",
+            self.reported[].missing[0],
+            ", which doesn't exist",
+        )
+
+    def last_error(self) -> String:
+        """The stream's `get_last_error`, after `get_next` failed: the
+        worker's own message."""
+        if self.stream_block == 0:
+            return String()
+        var f = _get_int(self.stream_block, 16)
+        if f == 0:
+            return String()
+        var msg = Pointer(to=f).unsafe_bitcast[_LastErrorFn]()[](
+            self.stream_block
+        )
+        return _cstring(msg)
 
     def start(mut self) raises:
         """Calls `morca_worker_run` and takes the stream it returns; raises
@@ -350,9 +468,11 @@ struct WorkerCall(Movable):
             print(
                 "morca: the Rust worker's stop thread didn't join: ", e, sep=""
             )
+        _remove_tree(self.output_dir)
         _free(self.stream_block)
         _free(self.context)
         _free(self.host)
         _free(self.watch)
         _ = self.strings^
+        _ = self.reported^
         _ = self.lib^

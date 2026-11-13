@@ -47,6 +47,11 @@
 //! - **The stop flag**: [`RunContext::stopping`] reads an atomic morca sets
 //!   when the run should end early (its code is outdated: a newer version
 //!   leads). Poll it between units of work, from any thread.
+//! - **Parquet files** instead of, or as well as, a stream: a worker that
+//!   writes Parquet itself puts the files in [`RunContext::output_dir`] and
+//!   reports each with [`RunContext::add_file`] (or returns
+//!   [`Output::from_files`]); morca checks them against the table and
+//!   commits them with the stream's rows, in the same one commit.
 //!
 //! The cdylib exports only the four `morca_worker_*` functions
 //! [`export_worker!`] defines, and Rust's standard library is linked into
@@ -54,19 +59,20 @@
 
 use std::any::Any;
 use std::ffi::{c_char, c_void, CStr, CString};
+use std::path::{Path, PathBuf};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, ThreadId};
 
 pub use arrow_array;
 pub use arrow_schema;
 pub use serde_json;
 
-use arrow_array::ffi_stream::RecordBatchStreamReader;
-use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow_array::ffi_stream::{FFI_ArrowArrayStream, RecordBatchStreamReader};
+use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader};
+use arrow_schema::{ArrowError, Schema, SchemaRef};
 
 pub mod schema;
 pub mod testing;
@@ -74,6 +80,16 @@ pub mod testing;
 /// The version of the C ABI this crate implements. morca refuses a library
 /// whose `morca_worker_abi_version()` is another.
 pub const ABI_VERSION: u32 = 1;
+
+/// The smallest context this crate reads: ABI version 1 as first shipped,
+/// without the fields for Parquet files. A worker built with this crate
+/// runs under such a morca, and only [`RunContext::output_dir`] and
+/// [`RunContext::add_file`] fail.
+pub const CONTEXT_SIZE_V1: u64 = 120;
+
+/// The context with `output_dir` and `add_file`: what morca passes since it
+/// takes Parquet files from workers.
+pub const CONTEXT_SIZE_FILES: u64 = 136;
 
 /// Any error a worker returns; its `Display` is the attempt's error.
 pub type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -89,15 +105,21 @@ pub type ProgressFn = unsafe extern "C" fn(host: *mut c_void, done: i64, total: 
 /// `metric(host, name, name_len, value)`: a named number, such as a peak.
 pub type MetricFn =
     unsafe extern "C" fn(host: *mut c_void, name: *const u8, name_len: usize, value: f64);
+/// `add_file(host, path, len)`: a Parquet file the worker wrote, an absolute
+/// UTF-8 path; 0 when morca takes it, non-zero when it refuses it (its
+/// reason fails the attempt).
+pub type AddFileFn = unsafe extern "C" fn(host: *mut c_void, path: *const u8, len: usize) -> i32;
 
 /// What morca passes to `morca_worker_run`, field for field
 /// (docs/rust-workers.md has the C declaration).
 ///
 /// `size` comes first and is `sizeof` the struct as morca built it, so a
 /// later morca can add fields at the end without a new ABI version: a
-/// worker reads only the fields it knows, and refuses a context smaller
-/// than this one. Strings are NUL-terminated UTF-8. The context and what it
-/// points to stay valid until morca releases the output stream.
+/// worker reads only the fields it knows. This crate reads a context of
+/// [`CONTEXT_SIZE_V1`] bytes or more, and the file fields only when it's
+/// [`CONTEXT_SIZE_FILES`] or more. Strings are NUL-terminated UTF-8. The
+/// context and what it points to stay valid until morca releases the output
+/// stream.
 #[repr(C)]
 pub struct MorcaRunContext {
     pub size: u64,
@@ -121,6 +143,11 @@ pub struct MorcaRunContext {
     pub log: Option<LogFn>,
     pub progress: Option<ProgressFn>,
     pub metric: Option<MetricFn>,
+    /// From [`CONTEXT_SIZE_FILES`]: a local directory, empty, for the
+    /// Parquet files the worker writes. morca removes it after the attempt.
+    pub output_dir: *const c_char,
+    /// From [`CONTEXT_SIZE_FILES`]: reports a file the worker wrote.
+    pub add_file: Option<AddFileFn>,
 }
 
 /// A worker: one step's work, run once per attempt.
@@ -172,16 +199,45 @@ impl Output {
             .map(|r| r.map_err(ArrowError::ExternalError));
         Self::from_reader(RecordBatchIterator::new(it, schema))
     }
+
+    /// No stream: the worker's rows are all in the Parquet files it reported
+    /// with [`RunContext::add_file`] before returning.
+    pub fn files() -> Self {
+        Self::from_batches(Arc::new(Schema::empty()), Vec::new())
+    }
+
+    /// Parquet files written one at a time as morca asks for them: each item
+    /// is a file the iterator has just written (relative paths are in
+    /// [`RunContext::output_dir`]). morca checks and uploads each before it
+    /// pulls the next, so the worker's disk holds one file at a time, and
+    /// an `Err` fails the attempt with its message.
+    pub fn from_files<I>(ctx: &RunContext, files: I) -> Self
+    where
+        I: IntoIterator<Item = Result<PathBuf>>,
+        I::IntoIter: Send + 'static,
+    {
+        let ctx = ctx.clone();
+        let schema = Arc::new(Schema::empty());
+        let s = schema.clone();
+        let it = files.into_iter().map(move |f| {
+            let path = f?;
+            ctx.add_file(&path)?;
+            // A batch of no columns and no rows: morca's cue to take the file.
+            let none = RecordBatchOptions::new().with_row_count(Some(0));
+            Ok(RecordBatch::try_new_with_options(s.clone(), Vec::new(), &none)?)
+        });
+        Self::from_iter(schema, it)
+    }
 }
 
 enum Msg {
     Log(String),
     Progress(i64, i64),
     Metric(String, f64),
+    AddFile(PathBuf),
 }
 
 struct Shared {
-    raw: *const MorcaRunContext,
     thread: ThreadId,
     /// Set once the output stream is released (or `run` failed): from then
     /// on nothing calls into morca or reads the stop flag.
@@ -197,6 +253,15 @@ struct Shared {
     run: i64,
     attempt: i64,
     step_version: i64,
+    stop: *const AtomicI32,
+    host: *mut c_void,
+    log: Option<LogFn>,
+    progress: Option<ProgressFn>,
+    metric: Option<MetricFn>,
+    add_file: Option<AddFileFn>,
+    output_dir: Option<PathBuf>,
+    /// How big morca's context was, for the error when a field is missing.
+    context_size: u64,
 }
 
 // The raw pointers are morca's, valid until `closed`; every call into morca
@@ -252,31 +317,49 @@ impl RunContext {
         if raw.is_null() {
             return Err("morca-worker: morca passed no context".into());
         }
-        let c = unsafe { &*raw };
-        let want = std::mem::size_of::<MorcaRunContext>() as u64;
-        if c.size < want {
+        // Only `size` is read before it says how much of the struct is there.
+        let size = unsafe { std::ptr::addr_of!((*raw).size).read() };
+        if size < CONTEXT_SIZE_V1 {
             return Err(format!(
-                "morca-worker: morca's context is {} bytes, smaller than the {want} this worker reads",
-                c.size
+                "morca-worker: morca's context is {size} bytes, smaller than the {CONTEXT_SIZE_V1} this worker reads"
             ));
         }
+        macro_rules! field {
+            ($f:ident) => {
+                std::ptr::addr_of!((*raw).$f).read()
+            };
+        }
+        let (output_dir, add_file) = if size >= CONTEXT_SIZE_FILES {
+            let dir = c_str(field!(output_dir), "output_dir")?;
+            let dir = (!dir.is_empty()).then(|| PathBuf::from(dir));
+            (dir, field!(add_file))
+        } else {
+            (None, None)
+        };
         let (tx, rx) = channel();
         let shared = unsafe {
             Shared {
-                raw,
                 thread: thread::current().id(),
                 closed: AtomicBool::new(false),
                 tx,
                 rx: Mutex::new(rx),
-                pipeline: c_str(c.pipeline, "pipeline")?,
-                step: c_str(c.step, "step")?,
-                partition: c_str(c.partition, "partition")?,
-                params: json_object(&c_str(c.params, "params")?, "params")?,
-                secrets: json_object(&c_str(c.secrets, "secrets")?, "secrets")?,
-                code: c_str(c.code, "code")?,
-                run: c.run,
-                attempt: c.attempt,
-                step_version: c.step_version,
+                pipeline: c_str(field!(pipeline), "pipeline")?,
+                step: c_str(field!(step), "step")?,
+                partition: c_str(field!(partition), "partition")?,
+                params: json_object(&c_str(field!(params), "params")?, "params")?,
+                secrets: json_object(&c_str(field!(secrets), "secrets")?, "secrets")?,
+                code: c_str(field!(code), "code")?,
+                run: field!(run),
+                attempt: field!(attempt),
+                step_version: field!(step_version),
+                stop: field!(stop),
+                host: field!(host),
+                log: field!(log),
+                progress: field!(progress),
+                metric: field!(metric),
+                add_file,
+                output_dir,
+                context_size: size,
             }
         };
         Ok(RunContext {
@@ -339,7 +422,7 @@ impl RunContext {
         if self.shared.closed.load(Ordering::Acquire) {
             return true;
         }
-        let p = unsafe { (*self.shared.raw).stop };
+        let p = self.shared.stop;
         !p.is_null() && unsafe { (*p).load(Ordering::Acquire) } != 0
     }
 
@@ -362,13 +445,62 @@ impl RunContext {
         self.send(Msg::Metric(name.into(), value));
     }
 
+    /// The local directory, empty and this attempt's own, to write Parquet
+    /// files into before reporting them with [`RunContext::add_file`]. morca
+    /// removes it, and what's left in it, after the attempt. An error if
+    /// the morca running the worker predates files from workers.
+    pub fn output_dir(&self) -> Result<&Path> {
+        match &self.shared.output_dir {
+            Some(d) => Ok(d),
+            None => Err(self.no_files().into()),
+        }
+    }
+
+    fn no_files(&self) -> String {
+        format!(
+            "morca-worker: this morca takes no Parquet files from workers (its context is {} bytes, not {CONTEXT_SIZE_FILES}); upgrade morca, or return a stream",
+            self.shared.context_size
+        )
+    }
+
+    /// Reports a Parquet file the worker wrote, to be committed to the
+    /// step's table with the rest of its output. A relative path is in
+    /// [`RunContext::output_dir`]. The file must be complete: morca reads
+    /// it the next time it has control (when `run` returns, or before it
+    /// pulls the next batch), checks it against the table, uploads it, and
+    /// deletes it if it's in the output directory.
+    ///
+    /// On the run thread, an `Err` says morca refused the file (it doesn't
+    /// exist); the attempt fails with morca's reason either way. From
+    /// another thread the report is queued and delivered on the run thread,
+    /// and this returns `Ok`.
+    pub fn add_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        let dir = self.output_dir()?;
+        let path = dir.join(path.as_ref());
+        if path.to_str().is_none() {
+            return Err(format!("morca-worker: the file path {} isn't UTF-8", path.display()).into());
+        }
+        if self.shared.closed.load(Ordering::Acquire) {
+            return Err("morca-worker: the run is over; morca takes no more files".into());
+        }
+        if !self.on_run_thread() {
+            let _ = self.shared.tx.send(Msg::AddFile(path));
+            return Ok(());
+        }
+        self.drain();
+        if self.deliver(Msg::AddFile(path.clone())) != 0 {
+            return Err(format!("morca refused the file {}", path.display()).into());
+        }
+        Ok(())
+    }
+
     fn send(&self, m: Msg) {
         if self.shared.closed.load(Ordering::Acquire) {
             return;
         }
         if self.on_run_thread() {
             self.drain();
-            self.deliver(m);
+            let _ = self.deliver(m);
         } else {
             let _ = self.shared.tx.send(m);
         }
@@ -388,8 +520,9 @@ impl RunContext {
         }
     }
 
-    fn deliver(&self, m: Msg) {
-        let c = unsafe { &*self.shared.raw };
+    /// Calls morca back; the `add_file` callback's result, else 0.
+    fn deliver(&self, m: Msg) -> i32 {
+        let c = &*self.shared;
         unsafe {
             match m {
                 Msg::Log(s) => {
@@ -407,8 +540,17 @@ impl RunContext {
                         f(c.host, n.as_ptr(), n.len(), v);
                     }
                 }
+                Msg::AddFile(p) => {
+                    // UTF-8: `add_file` checked before queueing it.
+                    let s = p.to_string_lossy();
+                    if let Some(f) = c.add_file {
+                        return f(c.host, s.as_ptr(), s.len());
+                    }
+                    return 1;
+                }
             }
         }
+        0
     }
 
     /// Delivers what's queued and closes the context: nothing calls into
@@ -486,6 +628,52 @@ impl Drop for Guarded {
     }
 }
 
+type LastErrorFn = unsafe extern "C" fn(*mut FFI_ArrowArrayStream) -> *const c_char;
+
+/// arrow-rs's own `get_last_error`, which every stream it exports shares.
+static ARROW_LAST_ERROR: OnceLock<LastErrorFn> = OnceLock::new();
+
+/// `get_last_error` without arrow's `External error: ` in front, so the
+/// step's log says the worker's message as the worker wrote it.
+unsafe extern "C" fn plain_last_error(s: *mut FFI_ArrowArrayStream) -> *const c_char {
+    let Some(f) = ARROW_LAST_ERROR.get() else {
+        return std::ptr::null();
+    };
+    let p = unsafe { f(s) };
+    if p.is_null() {
+        return p;
+    }
+    const PREFIX: &[u8] = b"External error: ";
+    if unsafe { CStr::from_ptr(p) }.to_bytes().starts_with(PREFIX) {
+        unsafe { p.add(PREFIX.len()) }
+    } else {
+        p
+    }
+}
+
+/// The C struct `ArrowArrayStream`, field for field, for the one field
+/// arrow-rs doesn't let us set.
+#[repr(C)]
+struct CStream {
+    get_schema: *const c_void,
+    get_next: *const c_void,
+    get_last_error: Option<LastErrorFn>,
+    release: *const c_void,
+    private_data: *mut c_void,
+}
+
+/// The stream morca gets: arrow-rs's export of `reader`, its error plain.
+fn export_stream(reader: Box<dyn RecordBatchReader + Send>) -> FFI_ArrowArrayStream {
+    let mut s = FFI_ArrowArrayStream::new(reader);
+    // `FFI_ArrowArrayStream` is `#[repr(C)]`, the C struct itself.
+    let c = unsafe { &mut *(&mut s as *mut FFI_ArrowArrayStream as *mut CStream) };
+    if let Some(f) = c.get_last_error {
+        let _ = ARROW_LAST_ERROR.set(f);
+        c.get_last_error = Some(plain_last_error);
+    }
+    s
+}
+
 fn set_error(error: *mut *mut c_char, msg: String) {
     if error.is_null() {
         return;
@@ -547,7 +735,7 @@ pub mod __private {
                 done: false,
             };
             rc.drain();
-            unsafe { std::ptr::write(out, FFI_ArrowArrayStream::new(Box::new(guarded))) };
+            unsafe { std::ptr::write(out, export_stream(Box::new(guarded))) };
             Ok(())
         }));
         let failed = |msg: String, code: i32| {
