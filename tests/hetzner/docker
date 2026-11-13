@@ -35,6 +35,9 @@
 # `exec scheduler test -x PATH` fails for a path listed
 # in $FAKE/no-binary; `morca start P K` queues run 70N (N counts them, in
 # $FAKE/canary.log), whose status is $FAKE/canary-status/<P> or succeeded.
+#
+# The pipelines' peaks (morca-stack's PEAKS_SQL) are $FAKE/peaks's lines,
+# NAME|P95_MB|RUNS|MEMORY_GB.
 echo "docker $*" >> "$FAKE/docker.log"
 echo "docker $*" >> "$FAKE/docker.all"
 touch "$FAKE/paused"
@@ -62,6 +65,7 @@ done
 case "$all" in "exec scheduler orca "*) all="exec scheduler morca ${all#exec scheduler orca }" ;; esac
 case "$all" in
     *"pg_isready"*) exit 0 ;;
+    *"percentile_disc(0.95)"*) cat "$FAKE/peaks" 2> /dev/null || true ;;
     "run --rm --entrypoint test "*" -x /opt/morca/bin/morca")
         ref=${all#run --rm --entrypoint test }
         ! grep -qxF "${ref%% *}" "$FAKE/pre-rename" 2> /dev/null || exit 1

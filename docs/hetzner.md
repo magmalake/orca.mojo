@@ -345,9 +345,9 @@ in `lib.sh`, which both run):
 - the stack settings `MORCA_IMAGE`, `CLOUDFLARED_IMAGE`, `BUCKET`,
   `BACKUP_KEEP` and `GHCR_USER` (`morca-stack configure`), and the apps
   (`morca-stack app`). Not the tags: those are `deploy.sh`'s, and
-  `MORCA_TAG` in `hetzner.env` is only the first `up.sh`'s. `CGROUPS`,
-  `OVERLAP` and `HEALTH_TIMEOUT`, set on the server by hand, aren't in
-  `hetzner.env` and are left alone.
+  `MORCA_TAG` in `hetzner.env` is only the first `up.sh`'s. `CGROUPS`
+  (on unless set to 0), `OVERLAP` and `HEALTH_TIMEOUT`, set on the server
+  by hand, aren't in `hetzner.env` and are left alone.
 
 It prints what changed, never a value: for `settings.env` the keys added,
 removed or changed, for a secret file only that it changed, for a stack
@@ -815,26 +815,28 @@ the retry and the pipeline's later runs ask for 1.5 times as much
 that runs away can push the machine into the kernel's OOM killer, which picks
 the run's processes first (`oom_score_adj`) but may take others too.
 
-The scheduler runs in a container, whose `/sys/fs/cgroup` docker mounts
-read-only. To turn it on:
+**On by default** (since #239). The scheduler runs in a container, whose
+`/sys/fs/cgroup` docker mounts read-only, so `morca-stack apply` starts it
+with the flags below unless `CGROUPS=0` (in `/etc/orca/stack.conf`, set with
+`morca-stack configure`). To see that it took:
 
 ```sh
-ssh root@<ip> morca-stack configure CGROUPS=1
-ssh root@<ip> morca-stack apply           # replaces the scheduler only; pause first, or --force
 ssh root@<ip> docker logs scheduler 2>&1 | grep 'run cgroups'
 # morca: run cgroups on: runs' cgroups go in /sys/fs/cgroup
 ```
 
-What `CGROUPS=1` changes in the scheduler's `docker run` (nothing else's):
+What it changes in the scheduler's `docker run` (nothing else's):
 
 - `--cgroupns=private`: the container sees its own cgroup as
   `/sys/fs/cgroup` (docker's default on cgroup v2, said explicitly).
 - `--cap-add SYS_ADMIN --security-opt apparmor=unconfined` and an entrypoint
-  of `mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set
+  of `mount -o remount,rw /sys/fs/cgroup; exec setpriv --bounding-set
   -sys_admin --inh-caps -sys_admin morca scheduler`: the remount needs the
   capability and AppArmor's leave, and the capability is dropped from the
   bounding set before morca starts, so neither morca nor any run it starts has
-  it. (`--privileged` would work too, and gives far more.)
+  it. (`--privileged` would work too, and gives far more.) A remount that
+  fails doesn't stop the scheduler: it says so on its log and starts with
+  `/sys/fs/cgroup` read-only, where morca turns run cgroups off (below).
 
 morca then moves itself into `/sys/fs/cgroup/morca` (a cgroup that gives its
 children controllers can hold no processes), turns on the memory controller
@@ -845,22 +847,53 @@ container's root cgroup's `memory.max` isn't writable from inside, and nothing
 above it is visible. `docker exec scheduler ...` (morca-stack's quiesce,
 `morca pause`) still works: runc puts it in `morca`.
 
-**Safe to turn on, but not on by default.** For the machine, it only adds a
-boundary; the capability is gone before morca runs, so the one thing given up
-for good is docker's AppArmor profile on the scheduler's container. What
-changes is what runs may use: a run is throttled past its grant and killed 25%
-above it, where today it may take what's free. Before turning it on, check on
-each pipeline's page (Resources: the max of its peaks, #203) that its peak
-fits under `memory_gb`'s maximum, and raise the maximum where it doesn't; a
-pipeline without a request is limited only to what the host can grant (its
-memory less `MORCA_RESERVE_MEMORY_MB`). Off again: `morca-stack configure
-CGROUPS=0` and `apply`.
+**A host that can't.** On a host without cgroup v2 (`/sys/fs/cgroup/cgroup.controllers`),
+or whose cgroup v2 has no memory controller, `apply` and `plan` start the
+scheduler without the flags, as with `CGROUPS=0`, and say why:
 
-Where morca can't make cgroups (this option off, macOS, cgroup v1), the
-scheduler says why once (`morca: run cgroups off: ...`) and runs as before:
-`first_to_go`, and control-placed runs killed over `MORCA_CONTROL_MEMORY_MB`.
-`MORCA_CGROUPS=0` in `settings.env` (a line of `EXTRA_ENV_FILE`) turns it off from morca's side. Ops >
-Control lists each run going with its memory against its limit.
+```
+morca-stack: run cgroups off: this host has no cgroup v2 at /sys/fs/cgroup (cgroup v1?), so the scheduler runs as with CGROUPS=0
+```
+
+The servers `up.sh` makes (Ubuntu 24.04) have both.
+
+**What changes for runs.** For the machine, it only adds a boundary; the
+capability is gone before morca runs, so the one thing given up for good is
+docker's AppArmor profile on the scheduler's container. What changes is what
+runs may use: a run is throttled past its grant and killed 25% above it,
+where without it, it may take what's free. With run cgroups on, `apply`
+(and `plan`, on standard error) warns for each pipeline whose runs here
+peak above the most a cgroup lets them have: the 95th percentile of the
+peaks of its last 20 successful runs (at least 3) against its `memory_gb`'s
+maximum, else what the host can grant (its memory less
+`MORCA_RESERVE_MEMORY_MB`). It doesn't stop the apply:
+
+```
+morca-stack: warning: gharchive peaks at 9000 MB (95th percentile of its last 20 runs), over memory_gb's maximum, 8 GB: its runs will be throttled there and killed 25% above (raise memory_gb's maximum, or CGROUPS=0)
+```
+
+The pipeline's page shows the same peaks (Resources: the max of its peaks,
+#203). Raise the maximum where they don't fit; a pipeline without a request
+is limited only to what the host can grant.
+
+**Turning it off.** For the stack:
+
+```sh
+ssh root@<ip> morca-stack configure CGROUPS=0
+ssh root@<ip> morca-stack apply           # replaces the scheduler only; pause first, or --force
+```
+
+`CGROUPS=1` (or the line removed from `stack.conf`) turns it on again.
+`MORCA_CGROUPS=0` in `settings.env` (a line of `EXTRA_ENV_FILE`) turns it
+off from morca's side, leaving the flags. There is no switch for one
+pipeline: give it room instead, a `memory_gb` whose maximum is over its
+peaks, or none, so its runs may grow to what the host can grant.
+
+Where morca can't make cgroups (`CGROUPS=0`, a host as above, macOS, cgroup
+v1), the scheduler says why once (`morca: run cgroups off: ...`) and runs as
+before: `first_to_go`, and control-placed runs killed over
+`MORCA_CONTROL_MEMORY_MB`. Ops > Control lists each run going with its
+memory against its limit.
 
 ## Worker pools that grow themselves
 

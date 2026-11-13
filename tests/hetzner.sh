@@ -23,6 +23,11 @@
 #   flags, CGROUPS) changed, and says why; it refuses over running runs
 #   only when the scheduler would be replaced; --only and --all; plan
 #   changes nothing; Postgres is started once and never again;
+# - run cgroups are on by default (#239): CGROUPS=0 drops the scheduler's
+#   cgroup flags, a host without cgroup v2 or its memory controller runs it
+#   without them, saying so, a failed remount doesn't stop the scheduler,
+#   and with them on, apply warns for each pipeline whose peak is over its
+#   memory_gb's maximum or what the host can grant;
 # - deploy.sh (and --rollback) first brings the server's settings in line
 #   with hetzner.env: a key added there reaches settings.env, one emptied is
 #   removed, a secret file is rewritten (mode 600), a stack setting set,
@@ -97,6 +102,11 @@ trap 'rm -rf "$FAKE"' EXIT INT TERM
 export PATH="$PWD/tests/hetzner:$PATH"
 export MORCA_STACK_TEST=1 MORCA_STACK_REGISTER_TRIES=1 MORCA_CONF="$FAKE/conf" MORCA_DATA="$FAKE/data" MORCA_STATE="$FAKE/state"
 mkdir -p "$MORCA_CONF"
+# The host: cgroup v2 with the memory controller, and 8 GB.
+export MORCA_HOST_CGROUP="$FAKE/cgroup" MORCA_MEMINFO="$FAKE/meminfo"
+mkdir -p "$MORCA_HOST_CGROUP"
+echo "cpuset cpu io memory hugetlb pids rdma misc" > "$MORCA_HOST_CGROUP/cgroup.controllers"
+echo "MemTotal:        8192000 kB" > "$MORCA_MEMINFO"
 # The server's settings as up.sh writes them from hetzner.env (deploy.sh
 # brings them in line with it; no tunnel: an empty tunnel.env).
 cat > "$MORCA_CONF/settings.env" << 'EOS'
@@ -618,10 +628,52 @@ has "scheduler: replaced (settings: its env file changed)"
 has "ui: replaced (settings: its env file changed)"
 has "console: unchanged"
 has "sampler: unchanged"
+# Run cgroups are on by default (#239): the scheduler already has them.
+grep 'run -d --name scheduler ' "$FAKE/docker.all" | tail -n 1 | grep -q -- '--cgroupns=private --cap-add SYS_ADMIN' \
+    || fail "the scheduler has no cgroup flags by default"
+stack configure CGROUPS=0
+stack apply > "$FAKE/out" 2>&1 || fail "apply with CGROUPS=0"
+has "scheduler: replaced (options: its flags, mounts or CGROUPS changed)"
+has "ui: unchanged"
+grep 'run -d --name scheduler ' "$FAKE/docker.all" | tail -n 1 | grep -q -- '--cgroupns' && fail "CGROUPS=0 kept the cgroup flags"
+grep -q 'run cgroups' "$FAKE/out" && fail "CGROUPS=0 said why there are no cgroups"
 stack configure CGROUPS=1
 stack apply > "$FAKE/out" 2>&1 || fail "apply with CGROUPS=1"
 has "scheduler: replaced (options: its flags, mounts or CGROUPS changed)"
-has "ui: unchanged"
+grep 'run -d --name scheduler ' "$FAKE/docker.all" | tail -n 1 | grep -q -- 'remount,rw /sys/fs/cgroup || echo' \
+    || fail "a failed remount stops the scheduler"
+stack configure CGROUPS=2 > "$FAKE/out" 2>&1 && fail "configured CGROUPS=2"
+has "CGROUPS is 1 (the default) or 0, not 2"
+# A host without cgroup v2 (or its memory controller): the scheduler runs
+# without, saying why, in the plan and the apply.
+mv "$MORCA_HOST_CGROUP/cgroup.controllers" "$FAKE/controllers"
+stack plan > "$FAKE/out" 2>&1 || fail "plan on a cgroup v1 host"
+has "morca-stack: run cgroups off: this host has no cgroup v2 at $MORCA_HOST_CGROUP"
+has "scheduler replace options: its flags, mounts or CGROUPS changed"
+stack apply > "$FAKE/out" 2>&1 || fail "apply on a cgroup v1 host"
+has "morca-stack: run cgroups off: this host has no cgroup v2"
+grep 'run -d --name scheduler ' "$FAKE/docker.all" | tail -n 1 | grep -q -- '--cgroupns' && fail "cgroup flags on a cgroup v1 host"
+echo "cpu io pids" > "$MORCA_HOST_CGROUP/cgroup.controllers"
+stack plan > "$FAKE/out" 2>&1 || fail "plan without a memory controller"
+has "run cgroups off: this host's cgroup v2 has no memory controller"
+has "scheduler keep unchanged"
+mv "$FAKE/controllers" "$MORCA_HOST_CGROUP/cgroup.controllers"
+# The pre-flight: a warning for each pipeline whose peak is over its
+# memory_gb's maximum, or what the host can grant (8000 - 1536 MB).
+printf 'big|9000|20|2..8\nfits|3000|20|2..4\nwild|7000|5|\nlearned|7000|20|auto\ncapped|5000|20|auto..4\n' > "$FAKE/peaks"
+stack apply > "$FAKE/out" 2>&1 || fail "apply with peaks over their limits"
+has "scheduler: replaced (options: its flags, mounts or CGROUPS changed)"
+has "warning: big peaks at 9000 MB (95th percentile of its last 20 runs), over memory_gb's maximum, 8 GB"
+has "warning: wild peaks at 7000 MB (95th percentile of its last 5 runs), over what the host can grant, 6464 MB"
+has "warning: learned peaks at 7000 MB"
+has "warning: capped peaks at 5000 MB (95th percentile of its last 20 runs), over memory_gb's maximum, 4 GB"
+grep -q 'warning: fits' "$FAKE/out" && fail "warned for a pipeline that fits"
+stack configure CGROUPS=0
+stack apply > "$FAKE/out" 2>&1 || fail "apply with CGROUPS=0 and peaks"
+grep -q 'warning:' "$FAKE/out" && fail "warned about peaks with CGROUPS=0"
+stack configure CGROUPS=1
+stack apply > /dev/null 2>&1 || fail "apply with CGROUPS=1 again"
+rm "$FAKE/peaks"
 echo sha256:0123456789abcdef0123 > "$FAKE/images/img_eee5555"
 stack apply > "$FAKE/out" 2>&1 || fail "apply after a push"
 has "scheduler: replaced (image eee5555 pushed again ("
