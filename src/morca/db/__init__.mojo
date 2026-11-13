@@ -45,6 +45,18 @@ query run both ways has a function for each, over one SQL text.
 | `morca.db.watchdog` | `orca.watchdog_rules`, `orca.watchdog_trips` and the rules' readings |
 | `morca.db.workers` | `orca.workers`, the worker tokens, and workers' claims |
 
+The run stores (`morca.state`'s `State` and `PgStore`, `morca.sqlite_store`'s
+`SqliteStore`), a module per dialect and table, over the same rows:
+
+| Module | Owns |
+|---|---|
+| `morca.db.run_rows` | the rows both dialects return (`RunInfo`, `StepInfo`, `Usage`, ...) |
+| `morca.db.schema` | `State.migrate`'s advisory lock and `orca.schema_version` |
+| `morca.db.runs` | a pipeline binary's registration, `orca.runs`: claims, heartbeats, ends, the watchdog's stops |
+| `morca.db.steps` | `orca.steps`, `orca.attempts`, `orca.reads` and `orca.commits` |
+| `morca.db.sqlite_schema` | the SQLite file's migrations and `schema_version` |
+| `morca.db.sqlite_runs` | the SQLite file's runs, steps and attempts: `runs` and `steps`, in its dialect |
+
 The web UI's read models, a module per page (`morca.views`, `morca.ui`):
 
 | Module | Reads for |
@@ -59,11 +71,13 @@ The web UI's read models, a module per page (`morca.views`, `morca.ui`):
 | `morca.db.alerts_view` | Ops' Alerts: a page of `orca.alerts` and its counts |
 
 **Layering.** These modules import only the standard library, `postgres`
-and each other: never a module of morca's that runs queries through them,
-so nothing above can import its way back in. The rows a query returns are
-declared here, and the modules that used to declare them import them from
-here (so `from morca.watchdog import Lease` keeps working), and
-`morca.live` and `morca.batches` re-export what moved from them.
+(`sqlite` for the SQLite ones), `morca.migrations` (the schema, which
+imports nothing of morca's) and each other: never a module of morca's that
+runs queries through them, so nothing above can import its way back in.
+The rows a query returns are declared here, and the modules that used to
+declare them import them from here (so `from morca.watchdog import Lease`
+and `from morca.store import RunInfo` keep working), and `morca.live` and
+`morca.batches` re-export what moved from them.
 
 `tests/sql_in_db.sh` (CI's format job) fails when SQL appears in a string
 outside `src/morca/db/` and `src/morca/migrations.mojo`, but in the files

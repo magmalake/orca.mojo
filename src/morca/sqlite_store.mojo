@@ -10,7 +10,8 @@ commands stay on Postgres (`morca.state.State` refuses a SQLite URL).
 
 The tables are Postgres's, under the same names without the `orca.` schema,
 holding what a pipeline binary writes: steps' inputs and outputs are hex
-text, times are Unix seconds (`julianday` based, to the millisecond).
+text, times are Unix seconds (`julianday` based, to the millisecond). The
+schema is `morca.db.sqlite_schema`'s, the queries `morca.db.sqlite_runs`'.
 
 **Concurrency.** The file is in WAL mode, so readers (`status`, `sqlite3`)
 don't block the writer and the writer doesn't block them. There is one
@@ -33,8 +34,11 @@ loss, not only a killed process, keeps every recorded attempt.
 from std.ffi import external_call
 from std.os import getenv
 
-from sqlite import Database, Statement
+from sqlite import Database
 
+import morca.db.sqlite_runs as sql
+import morca.db.sqlite_schema as schema
+from morca.db.sqlite_runs import to_hex
 from morca.heartbeat import Beater, Heartbeat
 from morca.store import (
     DEFERRED,
@@ -55,9 +59,6 @@ from morca.store import (
     Usage,
 )
 
-comptime _NOW = "((julianday('now') - 2440587.5) * 86400.0)"
-"""Unix seconds, to the millisecond, in SQL."""
-
 comptime _BUSY_MS = 1000
 """How long a write waits for another writer's lock before it fails (and,
 for the owned run, is retried on the file opened again)."""
@@ -74,121 +75,6 @@ def sqlite_path(url: String) -> String:
     return rest^
 
 
-# SQL for a new UUID version 7, as text: the milliseconds since 1970 in its
-# first 48 bits, then the version, the variant and random bits. A run's
-# token, as Postgres's `orca.uuidv7()` makes it.
-comptime _UUID7 = (
-    "(SELECT lower(substr(t.ms, 1, 8) || '-' || substr(t.ms, 9, 4) || '-7' ||"
-    " substr(hex(randomblob(2)), 2, 3) || '-' || substr('89ab', 1 + (random()"
-    " & 3), 1) || substr(hex(randomblob(2)), 2, 3) || '-' ||"
-    " hex(randomblob(6))) FROM (SELECT printf('%012x', CAST((julianday('now')"
-    " - 2440587.5) * 86400000 AS INTEGER)) AS ms) t)"
-)
-
-
-def _migrations() -> List[List[String]]:
-    """Each migration is a list of statements; its version is its index + 1."""
-    return [
-        [
-            """CREATE TABLE pipelines (
-            name TEXT PRIMARY KEY,
-            registry_hash TEXT NOT NULL,
-            describe TEXT NOT NULL,
-            binary_path TEXT,
-            version INTEGER,
-            first_seen REAL NOT NULL,
-            last_seen REAL NOT NULL)""",
-            """CREATE TABLE pipeline_versions (
-            id INTEGER PRIMARY KEY,
-            pipeline TEXT NOT NULL REFERENCES pipelines (name),
-            registry_hash TEXT NOT NULL,
-            source TEXT NOT NULL,
-            commit_sha TEXT NOT NULL,
-            dirty INTEGER NOT NULL,
-            image TEXT NOT NULL,
-            first_seen REAL NOT NULL,
-            last_seen REAL NOT NULL,
-            UNIQUE (pipeline, registry_hash, source, commit_sha, dirty,
-                image))""",
-            # AUTOINCREMENT: a run's number is in the summaries of the
-            # snapshots it commits, so it's never given out twice.
-            """CREATE TABLE runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            pipeline TEXT NOT NULL,
-            registry_hash TEXT NOT NULL,
-            partitions TEXT NOT NULL,
-            trigger TEXT NOT NULL,
-            status TEXT NOT NULL,
-            owner TEXT,
-            heartbeat REAL,
-            created REAL NOT NULL,
-            started REAL,
-            ended REAL,
-            cancel_requested INTEGER NOT NULL DEFAULT 0,
-            version INTEGER REFERENCES pipeline_versions (id),
-            error TEXT)""",
-            """CREATE TABLE steps (
-            id INTEGER PRIMARY KEY,
-            run INTEGER NOT NULL REFERENCES runs (id),
-            step TEXT NOT NULL,
-            partition TEXT NOT NULL,
-            ord INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            input TEXT,
-            output TEXT,
-            error TEXT,
-            UNIQUE (run, step, partition))""",
-            """CREATE TABLE attempts (
-            id INTEGER PRIMARY KEY,
-            step INTEGER NOT NULL REFERENCES steps (id),
-            attempt INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            host TEXT NOT NULL,
-            registry_hash TEXT NOT NULL,
-            started REAL NOT NULL,
-            ended REAL,
-            error TEXT,
-            log TEXT,
-            UNIQUE (step, attempt))""",
-            """CREATE TABLE reads (
-            attempt INTEGER NOT NULL REFERENCES attempts (id),
-            table_name TEXT NOT NULL,
-            snapshot_id INTEGER NOT NULL,
-            dataset TEXT)""",
-            """CREATE TABLE commits (
-            attempt INTEGER NOT NULL REFERENCES attempts (id),
-            table_name TEXT NOT NULL,
-            snapshot_id INTEGER NOT NULL,
-            dataset TEXT)""",
-            "CREATE INDEX reads_attempt ON reads (attempt)",
-            "CREATE INDEX commits_attempt ON commits (attempt)",
-            "CREATE INDEX steps_run ON steps (run, ord)",
-        ],
-        # A run a step deferred (#66): when it may go on, and how many
-        # times it was, as Postgres's migration 18 keeps them.
-        [
-            "ALTER TABLE runs ADD COLUMN retry_at INTEGER",
-            "ALTER TABLE runs ADD COLUMN deferrals INTEGER NOT NULL DEFAULT 0",
-        ],
-        # What each attempt's processes used, as Postgres's migration 35
-        # keeps it (morca.usage); a run in a file has no scheduler or worker
-        # to measure it, so they stay null unless copied in.
-        [
-            "ALTER TABLE attempts ADD COLUMN peak_rss_bytes INTEGER",
-            "ALTER TABLE attempts ADD COLUMN cpu_seconds REAL",
-            "ALTER TABLE attempts ADD COLUMN peak_cpus REAL",
-        ],
-        # A random token per run, as Postgres's migration 47 keeps it
-        # (#292): a file that was deleted and made again gives out the same
-        # run numbers. SQLite adds no column with a default that isn't
-        # constant, so `create_run` sets it (`_UUID7`), and older runs have
-        # none.
-        [
-            "ALTER TABLE runs ADD COLUMN token TEXT",
-        ],
-    ]
-
-
 def _open(path: String) raises -> Database:
     var db = Database(path)
     db.execute(String("PRAGMA busy_timeout = ", _BUSY_MS))
@@ -196,32 +82,6 @@ def _open(path: String) raises -> Database:
     db.execute("PRAGMA synchronous = FULL")
     db.execute("PRAGMA foreign_keys = ON")
     return db^
-
-
-comptime _HEX = "0123456789abcdef"
-
-
-def _hex(b: Span[UInt8, _]) -> String:
-    var out = String(capacity_bytes=2 * len(b))
-    for x in b:
-        out.write(_HEX[byte=Int(x >> 4)], _HEX[byte=Int(x & 15)])
-    return out^
-
-
-def _nibble(c: UInt8) raises -> UInt8:
-    if c >= 48 and c <= 57:
-        return c - 48
-    if c >= 97 and c <= 102:
-        return c - 87
-    raise Error("morca: not hex in the SQLite store")
-
-
-def _unhex(s: String) raises -> List[UInt8]:
-    var b = s.as_bytes()
-    var out = List[UInt8](capacity=len(b) // 2)
-    for i in range(0, len(b) - 1, 2):
-        out.append(_nibble(b[i]) << 4 | _nibble(b[i + 1]))
-    return out^
 
 
 def _rollback(db: Database):
@@ -253,16 +113,7 @@ struct SqliteBeat(Beater):
     def beat(mut self) raises:
         if not self._db:
             self._db = _open(self.path)
-        var st = self._db.value().prepare(
-            String(
-                "UPDATE runs SET heartbeat = ",
-                _NOW,
-                " WHERE id = ?1 AND owner = ?2 AND status = 'running'",
-            )
-        )
-        st.bind_int(1, self.run)
-        st.bind_text(2, self.owner)
-        _ = st.step()
+        sql.beat(self._db.value(), self.run, self.owner)
         # The watchdog (morca.heartbeat): an attempt past its step's
         # timeout stops the process. There's no cancel to time out here:
         # `morca cancel` is the scheduler's, on Postgres.
@@ -283,25 +134,11 @@ struct SqliteBeat(Beater):
                 continue
             var step = String(pair[byte=:eq])
             var secs = Float64(String(pair[byte = eq + 1 :]))
-            var st = db.prepare(
-                String(
-                    "SELECT a.id, s.partition FROM attempts a JOIN steps s ON",
-                    " s.id = a.step JOIN runs r ON r.id = s.run WHERE s.run =",
-                    " ?1 AND s.step = ?2 AND r.owner = ?3 AND r.status =",
-                    " 'running' AND a.status = 'running' AND a.started <= ",
-                    _NOW,
-                    " - ?4 LIMIT 1",
-                )
-            )
-            st.bind_int(1, self.run)
-            st.bind_text(2, step)
-            st.bind_text(3, self.owner)
-            st.bind_float(4, secs)
-            var got = st.step()
+            var got = sql.timed_out(db, self.run, step, self.owner, secs)
             if not got:
                 continue
-            var attempt = got.value().int_val(0)
-            var partition = got.value().text_val(1)
+            var attempt = got.value().attempt
+            var partition = got.value().partition
             var why = String(
                 "timed out after ",
                 Int(secs),
@@ -309,42 +146,14 @@ struct SqliteBeat(Beater):
             )
             db.execute("BEGIN IMMEDIATE")
             try:
-                var a = db.prepare(
-                    String(
-                        "UPDATE attempts SET status = 'failed', ended = ",
-                        _NOW,
-                        ", error = ?2 WHERE id = ?1 AND status = 'running'",
-                    )
-                )
-                a.bind_int(1, attempt)
-                a.bind_text(2, why)
-                _ = a.step()
-                if db.changes() != 1:
+                if not sql.fail_attempt(db, attempt, why):
                     _rollback(db)
                     return ""  # it ended as we looked
-                var s = db.prepare(
-                    "UPDATE steps SET status = 'failed', error = ?2 WHERE id ="
-                    " (SELECT step FROM attempts WHERE id = ?1)"
-                )
-                s.bind_int(1, attempt)
-                s.bind_text(2, why)
-                _ = s.step()
                 var named = String("step ", step)
                 if partition:
                     named.write(" ", partition)
                 var run_why = String(named, " ", why)
-                var r = db.prepare(
-                    String(
-                        "UPDATE runs SET status = 'failed', ended = ",
-                        _NOW,
-                        ", heartbeat = NULL, error = ?3 WHERE id = ?1 AND",
-                        " owner = ?2",
-                    )
-                )
-                r.bind_int(1, self.run)
-                r.bind_text(2, self.owner)
-                r.bind_text(3, run_why)
-                _ = r.step()
+                sql.fail(db, self.run, self.owner, run_why)
                 db.execute("COMMIT")
                 return run_why^
             except e:
@@ -387,9 +196,6 @@ struct SqliteStore(Movable, RunStore):
         except:
             pass  # the next try fails too, and comes back here
 
-    def _stmt(self, sql: String) raises -> Statement:
-        return self.db.prepare(sql)
-
     # --- RunStore ---
 
     def migrate(mut self) raises:
@@ -397,19 +203,9 @@ struct SqliteStore(Movable, RunStore):
         # once apply each migration once.
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            self.db.execute(
-                "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER"
-                " NOT NULL)"
-            )
-            var have = (
-                self._stmt(
-                    "SELECT coalesce(max(version), 0) FROM schema_version"
-                )
-                .step()
-                .value()
-                .int_val(0)
-            )
-            var migrations = _migrations()
+            schema.ensure(self.db)
+            var have = schema.current(self.db)
+            var migrations = schema.migrations()
             if have > len(migrations):
                 raise Error(
                     "morca: the SQLite file is at schema version ",
@@ -420,9 +216,7 @@ struct SqliteStore(Movable, RunStore):
             for v in range(have, len(migrations)):
                 for stmt in migrations[v]:
                     self.db.execute(stmt)
-                self.db.execute(
-                    String("INSERT INTO schema_version VALUES (", v + 1, ")")
-                )
+                schema.applied(self.db, v + 1)
             self.db.execute("COMMIT")
         except e:
             _rollback(self.db)
@@ -431,38 +225,14 @@ struct SqliteStore(Movable, RunStore):
     def register(
         mut self, pipeline: String, registry_hash: String, describe: String
     ) raises:
-        var st = self._stmt(
-            String(
-                "INSERT INTO pipelines (name, registry_hash, describe,",
-                " first_seen, last_seen) VALUES (?1, ?2, ?3, ",
-                _NOW,
-                ", ",
-                _NOW,
-                ") ON CONFLICT (name) DO UPDATE SET registry_hash =",
-                " excluded.registry_hash, describe = excluded.describe,",
-                " last_seen = excluded.last_seen",
-            )
-        )
-        st.bind_text(1, pipeline)
-        st.bind_text(2, registry_hash)
-        st.bind_text(3, describe)
-        _ = st.step()
+        sql.register(self.db, pipeline, registry_hash, describe)
         var v = self.version(
             pipeline, registry_hash, describe, getenv("MORCA_IMAGE")
         )
-        var up = self._stmt("UPDATE pipelines SET version = ?2 WHERE name = ?1")
-        up.bind_text(1, pipeline)
-        up.bind_int(2, v)
-        _ = up.step()
+        sql.set_version(self.db, pipeline, v)
 
     def scheduled_hash(mut self, pipeline: String) raises -> String:
-        var st = self._stmt(
-            "SELECT registry_hash FROM pipelines WHERE name = ?1 AND"
-            " binary_path IS NOT NULL"
-        )
-        st.bind_text(1, pipeline)
-        var r = st.step()
-        return r.value().text_val(0) if r else String()
+        return sql.scheduled_hash(self.db, pipeline)
 
     def version(
         mut self,
@@ -471,27 +241,7 @@ struct SqliteStore(Movable, RunStore):
         describe: String,
         image: String,
     ) raises -> Int:
-        var st = self._stmt(
-            String(
-                "INSERT INTO pipeline_versions (pipeline, registry_hash,",
-                " source, commit_sha, dirty, image, first_seen, last_seen)",
-                " VALUES (?1, ?2, coalesce(json_extract(?3,",
-                " '$.source.repo'), ''), coalesce(json_extract(?3,",
-                " '$.source.commit'), ''), coalesce(json_extract(?3,",
-                " '$.source.dirty'), 0), ?4, ",
-                _NOW,
-                ", ",
-                _NOW,
-                ") ON CONFLICT (pipeline, registry_hash, source, commit_sha,",
-                " dirty, image) DO UPDATE SET last_seen = excluded.last_seen",
-                " RETURNING id",
-            )
-        )
-        st.bind_text(1, pipeline)
-        st.bind_text(2, registry_hash)
-        st.bind_text(3, describe)
-        st.bind_text(4, image)
-        return st.step().value().int_val(0)
+        return sql.version(self.db, pipeline, registry_hash, describe, image)
 
     def create_run(
         mut self,
@@ -501,47 +251,12 @@ struct SqliteStore(Movable, RunStore):
         trigger: String,
         owner: String,
     ) raises -> Int:
-        var st = self._stmt(
-            String(
-                "INSERT INTO runs (pipeline, registry_hash, partitions,",
-                " trigger, status, owner, heartbeat, created, started, token)",
-                " VALUES (?1, ?2, ?3, ?4, 'running', ?5, ",
-                _NOW,
-                ", ",
-                _NOW,
-                ", ",
-                _NOW,
-                ", ",
-                _UUID7,
-                ") RETURNING id",
-            )
+        return sql.create(
+            self.db, pipeline, registry_hash, partitions, trigger, owner
         )
-        st.bind_text(1, pipeline)
-        st.bind_text(2, registry_hash)
-        st.bind_text(3, partitions)
-        st.bind_text(4, trigger)
-        st.bind_text(5, owner)
-        return st.step().value().int_val(0)
 
     def claim(mut self, run: Int, owner: String, stale_seconds: Float64) raises:
-        var st = self._stmt(
-            String(
-                "UPDATE runs SET status = 'running', owner = ?2, heartbeat = ",
-                _NOW,
-                ", ended = NULL, error = NULL WHERE id = ?1 AND status IN",
-                (
-                    " ('queued', 'running', 'failed', 'deferred') AND"
-                    " (heartbeat IS NULL OR"
-                ),
-                " heartbeat < ",
-                _NOW,
-                " - ?3) RETURNING id",
-            )
-        )
-        st.bind_int(1, run)
-        st.bind_text(2, owner)
-        st.bind_float(3, stale_seconds)
-        if st.step():
+        if sql.claim(self.db, run, owner, stale_seconds):
             return
         var info = self.run_info(run)
         if (
@@ -562,33 +277,17 @@ struct SqliteStore(Movable, RunStore):
         )
 
     def ran_version(mut self, run: Int, version: Int) raises:
-        var st = self._stmt("UPDATE runs SET version = ?2 WHERE id = ?1")
-        st.bind_int(1, run)
-        st.bind_int(2, version)
-        _ = st.step()
+        sql.ran_version(self.db, run, version)
 
     def interrupt(mut self, run: Int, why: String = "") raises -> Int:
         self.db.execute("BEGIN IMMEDIATE")
         try:
-            var st = self._stmt(
-                String(
-                    "UPDATE attempts SET status = 'failed', ended = ",
-                    _NOW,
-                    ", error = ?2 WHERE status = 'running' AND step IN",
-                    " (SELECT id FROM steps WHERE run = ?1)",
-                )
+            var n = sql.fail_running_attempts(
+                self.db, run, why if why else INTERRUPTED
             )
-            st.bind_int(1, run)
-            st.bind_text(2, why if why else INTERRUPTED)
-            _ = st.step()
-            var n = self.db.changes()
-            var steps = self._stmt(
-                "UPDATE steps SET status = 'failed', error = ?2"
-                " WHERE run = ?1 AND status = 'running'"
+            sql.fail_running_steps(
+                self.db, run, why if why else String("interrupted")
             )
-            steps.bind_int(1, run)
-            steps.bind_text(2, why if why else String("interrupted"))
-            _ = steps.step()
             self.db.execute("COMMIT")
             return n
         except e:
@@ -597,105 +296,27 @@ struct SqliteStore(Movable, RunStore):
 
     def prior(mut self, run: Int) raises -> RunResult:
         var res = RunResult()
-        var st = self._stmt(
-            "SELECT step, partition, coalesce(output, '') FROM steps WHERE"
-            " run = ?1 AND status = 'succeeded' ORDER BY id"
-        )
-        st.bind_int(1, run)
-        while True:
-            var r = st.step()
-            if not r:
-                break
-            ref row = r.value()
+        for r in sql.succeeded(self.db, run):
             res.steps.append(
-                StepRun(
-                    row.text_val(0),
-                    row.text_val(1),
-                    SUCCEEDED,
-                    _unhex(row.text_val(2)),
-                    "",
-                )
+                StepRun(r.step, r.partition, SUCCEEDED, r.output.copy(), "")
             )
         return res^
 
-    def _run_infos(mut self, mut st: Statement) raises -> List[RunInfo]:
-        var out = List[RunInfo]()
-        while True:
-            var r = st.step()
-            if not r:
-                break
-            ref row = r.value()
-            out.append(
-                RunInfo(
-                    row.int_val(0),
-                    row.text_val(1),
-                    row.text_val(2),
-                    row.text_val(3),
-                    row.text_val(4),
-                    row.text_val(5),
-                    row.text_val(6),
-                )
-            )
-        return out^
-
-    comptime _RUN_COLUMNS = (
-        "SELECT id, pipeline, registry_hash, partitions, status,"
-        " coalesce(owner, ''), coalesce(error, '') FROM runs"
-    )
-
     def run_info(mut self, run: Int) raises -> RunInfo:
-        var st = self._stmt(String(Self._RUN_COLUMNS, " WHERE id = ?1"))
-        st.bind_int(1, run)
-        var got = self._run_infos(st)
-        if len(got) == 0:
+        var got = sql.info(self.db, run)
+        if not got:
             raise Error("morca: no run ", run)
-        return got[0].copy()
+        return got.take()
 
     def runs(
         mut self, limit: Int, before: Int = 0, status: String = ""
     ) raises -> List[RunInfo]:
-        # By the rowid, a range of the table's own b-tree.
-        var st = self._stmt(
-            String(
-                Self._RUN_COLUMNS,
-                " WHERE (?2 = 0 OR id < ?2) AND (?3 = '' OR instr(',' || ?3",
-                " || ',', ',' || status || ',') > 0) ORDER BY id DESC LIMIT ?1",
-            )
+        return sql.latest(
+            self.db, limit, before, String(",").join(status_list(status))
         )
-        st.bind_int(1, limit)
-        st.bind_int(2, before)
-        st.bind_text(3, String(",").join(status_list(status)))
-        return self._run_infos(st)
 
     def steps(mut self, run: Int) raises -> List[StepInfo]:
-        var out = List[StepInfo]()
-        var st = self._stmt(
-            "SELECT s.step, s.partition, s.status, coalesce(s.error, ''),"
-            " (SELECT count(*) FROM attempts a WHERE a.step = s.id),"
-            " coalesce(l.log, ''), coalesce(l.peak_rss_bytes, -1),"
-            " coalesce(l.cpu_seconds, -1.0), coalesce(l.peak_cpus, -1.0)"
-            " FROM steps s LEFT JOIN attempts l ON l.id = (SELECT a.id FROM"
-            " attempts a WHERE a.step = s.id ORDER BY a.attempt DESC LIMIT 1)"
-            " WHERE s.run = ?1 ORDER BY s.ord, s.id"
-        )
-        st.bind_int(1, run)
-        while True:
-            var r = st.step()
-            if not r:
-                break
-            ref row = r.value()
-            out.append(
-                StepInfo(
-                    row.text_val(0),
-                    row.text_val(1),
-                    row.text_val(2),
-                    row.int_val(4),
-                    row.text_val(3),
-                    row.text_val(5),
-                    Usage(row.int_val(6), row.float_val(7), row.float_val(8)),
-                )
-            )
-        return out^
+        return sql.of_run(self.db, run)
 
     def own(mut self, run: Int, owner: String, registry_hash: String) raises:
         self.run = run
@@ -716,17 +337,7 @@ struct SqliteStore(Movable, RunStore):
         var r = Backoff("SQLite")
         while True:
             try:
-                var st = self._stmt(
-                    String(
-                        "UPDATE runs SET status = ?2, ended = ",
-                        _NOW,
-                        ", heartbeat = NULL WHERE id = ?1 AND owner = ?3",
-                    )
-                )
-                st.bind_int(1, self.run)
-                st.bind_text(2, status)
-                st.bind_text(3, self.owner)
-                _ = st.step()
+                sql.finish(self.db, self.run, self.owner, status)
                 return
             except e:
                 r.again(e)
@@ -736,18 +347,7 @@ struct SqliteStore(Movable, RunStore):
         var r = Backoff("SQLite")
         while True:
             try:
-                var st = self._stmt(
-                    String(
-                        "UPDATE runs SET status = 'deferred', ended = ",
-                        _NOW,
-                        ", heartbeat = NULL, retry_at = ?3, deferrals =",
-                        " deferrals + 1 WHERE id = ?1 AND owner = ?2",
-                    )
-                )
-                st.bind_int(1, self.run)
-                st.bind_text(2, self.owner)
-                st.bind_int(3, Int(until))
-                _ = st.step()
+                sql.defer_run(self.db, self.run, self.owner, until)
                 return
             except e:
                 r.again(e)
@@ -757,11 +357,7 @@ struct SqliteStore(Movable, RunStore):
         var r = Backoff("SQLite")
         while True:
             try:
-                var st = self._stmt(
-                    "SELECT cancel_requested FROM runs WHERE id = ?1"
-                )
-                st.bind_int(1, self.run)
-                return st.step().value().int_val(0) != 0
+                return sql.cancel_requested(self.db, self.run)
             except e:
                 r.again(e)
                 self._reopen()
@@ -771,25 +367,15 @@ struct SqliteStore(Movable, RunStore):
     def _still_owner(mut self, starting: Bool) raises:
         """Raises unless this process still owns the run, or, when a step is
         `starting`, if the run was asked to cancel. In the transaction."""
-        var st = self._stmt(
-            String(
-                "UPDATE runs SET heartbeat = ",
-                _NOW,
-                " WHERE id = ?1 AND owner = ?2 AND status = 'running'",
-                " RETURNING cancel_requested",
-            )
-        )
-        st.bind_int(1, self.run)
-        st.bind_text(2, self.owner)
-        var r = st.step()
-        if not r:
+        var o = sql.still_owner(self.db, self.run, self.owner)
+        if not o.owned:
             raise Error(
                 FINAL,
                 "morca: lost run ",
                 self.run,
                 " to another process; stopping",
             )
-        if starting and r.value().int_val(0) != 0:
+        if starting and o.cancel_requested:
             raise Error(
                 FINAL, "morca: run ", self.run, " was cancelled; stopping"
             )
@@ -802,7 +388,7 @@ struct SqliteStore(Movable, RunStore):
         input: Span[UInt8, _],
     ) raises -> Int:
         var r = Backoff("SQLite")
-        var hex_input = _hex(input)
+        var hex_input = to_hex(input)
         while True:
             try:
                 return self._start_attempt(step, partition, ord, hex_input)
@@ -816,38 +402,11 @@ struct SqliteStore(Movable, RunStore):
         self.db.execute("BEGIN IMMEDIATE")
         try:
             self._still_owner(starting=True)
-            var up = self._stmt(
-                "INSERT INTO steps (run, step, partition, ord, status, input)"
-                " VALUES (?1, ?2, ?3, ?4, 'running', ?5) ON CONFLICT (run,"
-                " step, partition) DO UPDATE SET status = 'running', input ="
-                " excluded.input, error = NULL RETURNING id"
+            var id = sql.start(self.db, self.run, step, partition, ord, input)
+            var n = sql.next_attempt(self.db, id)
+            var attempt_id = sql.add_attempt(
+                self.db, id, n, self.owner, self.registry_hash
             )
-            up.bind_int(1, self.run)
-            up.bind_text(2, step)
-            up.bind_text(3, partition)
-            up.bind_int(4, ord)
-            up.bind_text(5, input)
-            var id = up.step().value().int_val(0)
-            var nq = self._stmt(
-                "SELECT coalesce(max(attempt), 0) + 1 FROM attempts WHERE step"
-                " = ?1"
-            )
-            nq.bind_int(1, id)
-            var n = nq.step().value().int_val(0)
-            var ins = self._stmt(
-                String(
-                    "INSERT INTO attempts (step, attempt, status, host,",
-                    " registry_hash, started) VALUES (?1, ?2, 'running', ?3,",
-                    " ?4, ",
-                    _NOW,
-                    ") RETURNING id",
-                )
-            )
-            ins.bind_int(1, id)
-            ins.bind_int(2, n)
-            ins.bind_text(3, self.owner)
-            ins.bind_text(4, self.registry_hash)
-            var attempt_id = ins.step().value().int_val(0)
             self.db.execute("COMMIT")
             self._attempt_id = attempt_id
             return n
@@ -867,7 +426,7 @@ struct SqliteStore(Movable, RunStore):
         # Retried whole: it sets the attempt's and the step's rows, so
         # doing it twice leaves what doing it once does.
         var r = Backoff("SQLite")
-        var hex_output = _hex(output)
+        var hex_output = to_hex(output)
         while True:
             try:
                 self._finish_attempt(
@@ -890,38 +449,9 @@ struct SqliteStore(Movable, RunStore):
         self.db.execute("BEGIN IMMEDIATE")
         try:
             self._still_owner(starting=False)
-            var q = self._stmt(
-                "SELECT id FROM steps WHERE run = ?1 AND step = ?2 AND"
-                " partition = ?3"
-            )
-            q.bind_int(1, self.run)
-            q.bind_text(2, step)
-            q.bind_text(3, partition)
-            var id = q.step().value().int_val(0)
-            var a = self._stmt(
-                String(
-                    "UPDATE attempts SET status = ?3, ended = ",
-                    _NOW,
-                    ", error = nullif(?4, '') WHERE step = ?1 AND attempt = ?2",
-                )
-            )
-            a.bind_int(1, id)
-            a.bind_int(2, attempt)
-            a.bind_text(3, status)
-            a.bind_text(4, error)
-            _ = a.step()
-            var s = self._stmt(
-                "UPDATE steps SET status = ?2, output = ?3, error = nullif(?4,"
-                " '') WHERE id = ?1"
-            )
-            s.bind_int(1, id)
-            s.bind_text(2, status)
-            if status == SUCCEEDED:
-                s.bind_text(3, output)
-            else:
-                s.bind_null(3)
-            s.bind_text(4, error)
-            _ = s.step()
+            var id = sql.step_id(self.db, self.run, step, partition)
+            sql.finish_attempt(self.db, id, attempt, status, error)
+            sql.finish(self.db, id, status, output, status == SUCCEEDED, error)
             self.db.execute("COMMIT")
         except e:
             _rollback(self.db)
@@ -945,32 +475,14 @@ struct SqliteStore(Movable, RunStore):
         self.db.execute("BEGIN IMMEDIATE")
         try:
             self._still_owner(starting=True)
-            var st = self._stmt(
-                "INSERT INTO steps (run, step, partition, ord, status, error)"
-                " VALUES (?1, ?2, ?3, ?4, 'skipped', ?5) ON CONFLICT (run,"
-                " step, partition) DO UPDATE SET status = 'skipped', error ="
-                " excluded.error, output = NULL"
-            )
-            st.bind_int(1, self.run)
-            st.bind_text(2, step)
-            st.bind_text(3, partition)
-            st.bind_int(4, ord)
-            st.bind_text(5, reason)
-            _ = st.step()
+            sql.skip(self.db, self.run, step, partition, ord, reason)
             self.db.execute("COMMIT")
         except e:
             _rollback(self.db)
             raise e^
 
     def run_token(mut self) raises -> String:
-        var st = self._stmt(
-            "SELECT coalesce(token, '') FROM runs WHERE id = ?1"
-        )
-        st.bind_int(1, self.run)
-        var got = st.step()
-        if not got:
-            return String()
-        return got.value().text_val(0)
+        return sql.token(self.db, self.run)
 
     def pinned_reads(
         mut self, step: String, partition: String
@@ -978,24 +490,7 @@ struct SqliteStore(Movable, RunStore):
         var r = Backoff("SQLite")
         while True:
             try:
-                var out = Dict[String, Int64]()
-                var st = self._stmt(
-                    "SELECT r.table_name, r.snapshot_id FROM reads r JOIN"
-                    " attempts a ON a.id = r.attempt JOIN steps s ON s.id ="
-                    " a.step WHERE s.run = ?1 AND s.step = ?2 AND s.partition"
-                    " = ?3 ORDER BY a.attempt DESC"
-                )
-                st.bind_int(1, self.run)
-                st.bind_text(2, step)
-                st.bind_text(3, partition)
-                # Newest first, so the first attempt's snapshot is the one
-                # left.
-                while True:
-                    var row = st.step()
-                    if not row:
-                        break
-                    out[row.value().text_val(0)] = Int64(row.value().int_val(1))
-                return out^
+                return sql.pinned_reads(self.db, self.run, step, partition)
             except e:
                 r.again(e)
                 self._reopen()
@@ -1006,19 +501,14 @@ struct SqliteStore(Movable, RunStore):
         var r = Backoff("SQLite")
         while True:
             try:
-                var st = self._stmt(
-                    String(
-                        "INSERT INTO ",
-                        "commits" if commit else "reads",
-                        " (attempt, table_name, snapshot_id, dataset) VALUES",
-                        " (?1, ?2, ?3, nullif(?4, ''))",
-                    )
+                sql.record(
+                    self.db,
+                    commit,
+                    self._attempt_id,
+                    t.table,
+                    t.snapshot_id,
+                    t.dataset,
                 )
-                st.bind_int(1, self._attempt_id)
-                st.bind_text(2, t.table)
-                st.bind_int(3, Int(t.snapshot_id))
-                st.bind_text(4, t.dataset)
-                _ = st.step()
                 return
             except e:
                 r.again(e)
@@ -1037,25 +527,14 @@ struct SqliteStore(Movable, RunStore):
         r.budget = stale / 2
         while True:
             try:
-                var st = self._stmt(
-                    String(
-                        "SELECT coalesce(owner, ''), status, coalesce(",
-                        "heartbeat > ",
-                        _NOW,
-                        " - ?2, 0) FROM runs WHERE id = ?1",
-                    )
-                )
-                st.bind_int(1, self.run)
-                st.bind_float(2, stale / 2)
-                var got = st.step()
+                var got = sql.fence(self.db, self.run, stale / 2)
                 if not got:
                     raise Error(
                         "morca: not committing: run ", self.run, " is gone"
                     )
-                ref row = got.value()
-                var owner = row.text_val(0)
-                var status = row.text_val(1)
-                var fresh = row.int_val(2) != 0
+                var owner = got.value().owner
+                var status = got.value().status
+                var fresh = got.value().fresh
                 if owner != self.owner or status != RUNNING:
                     raise Error(
                         "morca: not committing: run ",
@@ -1092,12 +571,7 @@ struct SqliteStore(Movable, RunStore):
         var r = Backoff("SQLite")
         while True:
             try:
-                var st = self._stmt(
-                    "UPDATE attempts SET log = ?2 WHERE id = ?1"
-                )
-                st.bind_int(1, self._attempt_id)
-                st.bind_text(2, path)
-                _ = st.step()
+                sql.set_log(self.db, self._attempt_id, path)
                 return
             except e:
                 r.again(e)
