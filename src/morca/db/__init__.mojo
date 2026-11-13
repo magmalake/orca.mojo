@@ -14,18 +14,23 @@ query run both ways has a function for each, over one SQL text.
 | `morca.db.audit` | `orca.audit` |
 | `morca.db.auth` | `orca.users`, `orca.sessions`, `orca.api_tokens` |
 | `morca.db.batches` | `orca.runs.batch` |
+| `morca.db.calendar` | the calendar's live and failed keys |
 | `morca.db.ec2` | the EC2 runner's runs and instances, and its warm pool |
+| `morca.db.expiry` | the snapshots snapshot expiry keeps |
 | `morca.db.fleet` | `orca.fleet_samples`, `orca.fleet_hourly` and the fleet page's reads |
 | `morca.db.health` | whether the database answers |
 | `morca.db.kube` | the Kubernetes runner's reads of which runs' objects to keep |
+| `morca.db.lineage` | lineage walks over `orca.reads` and `orca.commits`, and declared datasets |
 | `morca.db.notify` | `orca.notifications`, `orca.alerts` and the alert rules' reads |
 | `morca.db.pool_runs` | runs queued for a worker pool |
 | `morca.db.pools` | `orca.pools`, `orca.pool_machines` and the pool autoscaler |
 | `morca.db.queueing` | backfills: the keys done, `orca.keys`, the runs queued |
+| `morca.db.rebuilds` | `orca.rebuilds`, `orca.rebuild_pipelines` and the runs they queue |
 | `morca.db.registering` | `morca register`'s row of `orca.pipelines` |
 | `morca.db.run_cluster` | a run's cluster over a pool: its head, `orca.run_members` |
 | `morca.db.scheduler` | the scheduler's retries, dead runs and cgroup memory |
 | `morca.db.schedulers` | `orca.schedulers`, the scheduler instances |
+| `morca.db.sensing` | `orca.sensed`, `orca.fires`, the runs they queue, and what a sensor follows |
 | `morca.db.starting` | a pass that starts a pipeline's runs |
 | `morca.db.system` | `orca.system_minutes`, `orca.system_containers` |
 | `morca.db.watchdog` | `orca.watchdog_rules`, `orca.watchdog_trips` and the rules' readings |

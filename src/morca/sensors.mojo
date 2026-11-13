@@ -39,7 +39,9 @@ continues. A rebuild's commits don't start sensors in pipelines the rebuild
 runs itself.
 """
 
-from postgres import Params
+import morca.db.rebuilds as rebuilds_db
+import morca.db.starting as starting_db
+from morca.db.rebuilds import Planned, Rebuild
 
 from morca.day import Day
 from morca.hour import Hour
@@ -155,30 +157,6 @@ def parse_sense(text: StringSlice) raises -> List[Sensed]:
 # ── rebuilds ─────────────────────────────────────────────────────────────────
 
 
-@fieldwise_init
-struct Planned(Copyable, Movable):
-    """A pipeline a rebuild runs: its level, partitions and run."""
-
-    var pipeline: String
-    var level: Int
-    var partitions: String
-    var run: Int
-    """0 until queued."""
-    var status: String
-    """The run's status, or empty."""
-
-
-@fieldwise_init
-struct Rebuild(Copyable, Movable):
-    var id: Int
-    var dataset: String
-    var partitions: String
-    var status: String
-    var created: String
-    var ended: String
-    var plan: List[Planned]
-
-
 def _levels(mut db: State, dataset: String) raises -> Dict[String, Int]:
     """Each pipeline downstream of `dataset`, at its longest distance."""
     var readers = Dict[String, List[String]]()
@@ -277,20 +255,11 @@ def plan_rebuild(
     if len(level) == 0:
         raise Error("morca: no registered pipeline reads ", dataset)
     var plan = List[Planned]()
-    var rows = db.conn.query(
-        (
-            "SELECT name, binary_path IS NOT NULL AS has_binary,"
-            " coalesce(describe->'partitions'->>'kind', 'monthly') AS kind,"
-            " coalesce(describe->'partitions'->>'start', '') AS start FROM"
-            " orca.pipelines ORDER BY name"
-        ),
-        Params(),
-    )
-    for r in rows:
-        var name = r.text("name")
+    for r in rebuilds_db.pipeline_keys(db.conn):
+        var name = r.name
         if name not in level:
             continue
-        if not r.bool("has_binary"):
+        if not r.has_binary:
             raise Error(
                 "morca: pipeline ",
                 name,
@@ -298,7 +267,7 @@ def plan_rebuild(
                 dataset,
                 " but isn't registered with a binary (morca register)",
             )
-        var ks = map_keys(given, r.text("kind"), r.text("start"))
+        var ks = map_keys(given, r.kind, r.start)
         if len(ks) > 0:
             plan.append(Planned(name, level[name], join_keys(ks), 0, ""))
     if len(plan) == 0:
@@ -318,29 +287,9 @@ def rebuild(mut db: State, dataset: String, keys: String) raises -> Int:
     ref given = planned[0]
     ref plan = planned[1]
     var tx = db.conn.begin()
-    var id = (
-        tx.query(
-            (
-                "INSERT INTO orca.rebuilds (dataset, partitions, status) VALUES"
-                " ($1, $2, 'running') RETURNING id"
-            ),
-            Params().text(dataset).text(join_keys(given)),
-        )
-        .row(0)
-        .int64("id")
-    )
+    var id = rebuilds_db.add_rebuild(tx, dataset, join_keys(given))
     for p in plan:
-        _ = tx.execute(
-            (
-                "INSERT INTO orca.rebuild_pipelines (rebuild, pipeline, level,"
-                " partitions) VALUES ($1, $2, $3, $4)"
-            ),
-            Params()
-            .int64(id)
-            .text(p.pipeline)
-            .int64(Int64(p.level))
-            .text(p.partitions),
-        )
+        rebuilds_db.add_planned(tx, id, p.pipeline, p.level, p.partitions)
     tx.commit()
     return Int(id)
 
@@ -350,97 +299,29 @@ def rebuilds(
 ) raises -> List[Rebuild]:
     """Rebuilds, newest first: the one `id` names, or those of `dataset`, or
     all; each with its plan in run order."""
-    var out = List[Rebuild]()
-    var rows = db.conn.query(
-        (
-            "SELECT id, dataset, partitions, status, to_char(created AT TIME"
-            " ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created,"
-            " coalesce(to_char(ended AT TIME ZONE 'UTC',"
-            " 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') AS ended FROM"
-            " orca.rebuilds WHERE ($1 = 0 OR id = $1) AND ($2 = '' OR dataset"
-            " = $2) ORDER BY id DESC LIMIT $3"
-        ),
-        Params().int64(Int64(id)).text(dataset).int64(Int64(limit)),
-    )
-    for r in rows:
-        var rid = r.int64("id")
-        var plan = List[Planned]()
-        for p in db.conn.query(
-            (
-                "SELECT rp.pipeline, rp.level, rp.partitions, coalesce(rp.run,"
-                " 0) AS run, coalesce(x.status, '') AS status FROM"
-                " orca.rebuild_pipelines rp LEFT JOIN orca.runs x ON x.id ="
-                " rp.run WHERE rp.rebuild = $1 ORDER BY rp.level, rp.pipeline"
-            ),
-            Params().int64(rid),
-        ):
-            plan.append(
-                Planned(
-                    p.text("pipeline"),
-                    Int(p.int64("level")),
-                    p.text("partitions"),
-                    Int(p.int64("run")),
-                    p.text("status"),
-                )
-            )
-        out.append(
-            Rebuild(
-                Int(rid),
-                r.text("dataset"),
-                r.text("partitions"),
-                r.text("status"),
-                r.text("created"),
-                r.text("ended"),
-                plan^,
-            )
-        )
-    return out^
+    return rebuilds_db.rebuilds(db.conn, id, dataset, limit)
 
 
 def advance_rebuilds(mut db: State) raises:
     """Queues the next level of each rebuild whose levels before it have
     all succeeded, and brings each rebuild's status up to date."""
-    var ids = List[Int64]()
-    for r in db.conn.query(
-        (
-            "SELECT id FROM orca.rebuilds WHERE status IN ('running',"
-            " 'failed') ORDER BY id"
-        ),
-        Params(),
-    ):
-        ids.append(r.int64("id"))
+    var ids = rebuilds_db.unfinished(db.conn)
     for id in ids:
         var tx = db.conn.begin()
-        var still = tx.query(
-            (
-                "SELECT id FROM orca.rebuilds WHERE id = $1 AND status IN"
-                " ('running', 'failed') FOR UPDATE"
-            ),
-            Params().int64(id),
-        )
-        if len(still) == 0:
+        if not rebuilds_db.lock_unfinished(tx, id):
             tx.commit()
             continue
-        var rows = tx.query(
-            (
-                "SELECT rp.pipeline, rp.level, rp.partitions, rp.run IS NULL AS"
-                " unqueued, coalesce(x.status, '') AS status FROM"
-                " orca.rebuild_pipelines rp LEFT JOIN orca.runs x ON x.id ="
-                " rp.run WHERE rp.rebuild = $1 ORDER BY rp.level, rp.pipeline"
-            ),
-            Params().int64(id),
-        )
         var pipeline = List[String]()
         var level = List[Int]()
         var keys = List[String]()
         var unqueued = List[Bool]()
         var status = List[String]()
-        for r in rows:
-            pipeline.append(r.text("pipeline"))
-            level.append(Int(r.int64("level")))
-            keys.append(r.text("partitions"))
-            unqueued.append(r.bool("unqueued"))
-            status.append(r.text("status"))
+        for r in rebuilds_db.plan(tx, id):
+            pipeline.append(r.pipeline)
+            level.append(r.level)
+            keys.append(r.partitions)
+            unqueued.append(r.unqueued)
+            status.append(r.status)
         var now_status = String("succeeded")
         var i = 0
         while i < len(pipeline):
@@ -460,13 +341,7 @@ def advance_rebuilds(mut db: State) raises:
             for k in queue:
                 # A live run of one of its keys runs first: the level's run
                 # waits for it instead of running beside it.
-                _ = tx.query(
-                    (
-                        "SELECT name FROM orca.pipelines WHERE name = $1 FOR"
-                        " UPDATE"
-                    ),
-                    Params().text(pipeline[k]),
-                )
+                starting_db.lock_pipeline(tx, pipeline[k])
                 var live = live_runs(tx, pipeline[k])
                 var busy = False
                 for key in split_keys(keys[k]):
@@ -475,26 +350,8 @@ def advance_rebuilds(mut db: State) raises:
                 if busy:
                     waiting = True
                     continue
-                var run = (
-                    tx.query(
-                        (
-                            "INSERT INTO orca.runs (pipeline, registry_hash,"
-                            " partitions, trigger, status, rebuild) SELECT"
-                            " name, registry_hash, $2, 'rebuild', 'queued', $3"
-                            " FROM orca.pipelines WHERE name = $1 RETURNING id"
-                        ),
-                        Params().text(pipeline[k]).text(keys[k]).int64(id),
-                    )
-                    .row(0)
-                    .int64("id")
-                )
-                _ = tx.execute(
-                    (
-                        "UPDATE orca.rebuild_pipelines SET run = $3 WHERE"
-                        " rebuild = $1 AND pipeline = $2"
-                    ),
-                    Params().int64(id).text(pipeline[k]).int64(run),
-                )
+                var run = rebuilds_db.queue_run(tx, pipeline[k], keys[k], id)
+                rebuilds_db.set_run(tx, id, pipeline[k], run)
                 print(
                     "rebuild",
                     id,
@@ -512,11 +369,5 @@ def advance_rebuilds(mut db: State) raises:
                 now_status = "running"
                 break
             i = j
-        _ = tx.execute(
-            (
-                "UPDATE orca.rebuilds SET status = $2, ended = CASE WHEN $2 ="
-                " 'succeeded' THEN now() END WHERE id = $1"
-            ),
-            Params().int64(id).text(now_status),
-        )
+        rebuilds_db.set_status(tx, id, now_status)
         tx.commit()
