@@ -26,7 +26,8 @@
 # $FAKE/can-overlap (exit 0 if it says yes; "no: ..." without the file);
 # `morca scheduler wait-lead` fails while $FAKE/no-lead exists; a
 # container's hostname is h-<the name it was started with>; the instances
-# of a hostname are $FAKE/instances; `morca scheduler drain` makes every
+# of a hostname are $FAKE/instances; `morca scheduler status` gives the
+# image its env file's MORCA_IMAGE; `morca scheduler drain` makes every
 # old scheduler (scheduler-old, scheduler-old-<time>) exit unless
 # $FAKE/old-stays exists; the runs one holds are $FAKE/old-running.
 #
@@ -179,7 +180,9 @@ case "$all" in
             [ ! -d "$d" ] || echo exited > "$d/status"
         done
         ;;
-    "exec scheduler morca scheduler status") echo "9 h:1 leading image= migrations=42 runs=0 seen=0s ago" ;;
+    "exec scheduler morca scheduler status")
+        echo "9 h:1 leading image=$(cat "$C/scheduler/env-image" 2> /dev/null) migrations=42 runs=0 seen=0s ago"
+        ;;
     "inspect -f {{.Config.Hostname}} "*)
         d=$C/${all##* }
         [ -d "$d" ] || exit 1
@@ -250,13 +253,15 @@ case "$all" in
         name=""
         labels=""
         aliases=""
+        envimage=""
         while [ $# -gt 0 ]; do
             case "$1" in
                 --name) name=$2; shift 2 ;;
+                --env-file) envimage=$(sed -n 's/^MORCA_IMAGE=//p' "$2" 2> /dev/null); shift 2 ;;
                 --label) labels="$labels$2
 "; shift 2 ;;
                 --network-alias) aliases="$aliases $2"; shift 2 ;;
-                --restart | --network | --env-file | -e | -v | --entrypoint | --cap-add | --security-opt | --pid | --memory) shift 2 ;;
+                --restart | --network | -e | -v | --entrypoint | --cap-add | --security-opt | --pid | --memory) shift 2 ;;
                 -*) shift ;;
                 *) break ;;
             esac
@@ -271,6 +276,7 @@ case "$all" in
         printf '%s' "$labels" > "$C/$name/labels"
         echo "$aliases" > "$C/$name/aliases"
         echo "h-$name" > "$C/$name/hostname"
+        echo "$envimage" > "$C/$name/env-image"
         echo "fake-id-$name"
         ;;
     "start "*)

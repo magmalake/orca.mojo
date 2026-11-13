@@ -1,0 +1,1 @@
+- **Scheduler instances show their image** on the Hetzner stack (`MORCA_IMAGE` in morca.env), and the dead-run limits are documented. (#PR)

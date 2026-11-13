@@ -405,6 +405,20 @@ reads its own host's.
   `morca_admission_memory_pressure_held` on `/metrics`, labelled by `host`;
   and a line of `morca status`.
 
+### When a run counts as dead
+
+The scheduler takes a running run's process for dead when its heartbeat is
+too old, or, before its first beat, when the run was started too long ago.
+A dead run is queued again if its trigger retries (within `run_retries`),
+else it fails `interrupted: its process stopped`. A run on a machine or pod
+that starts slowly is taken for dead once the start grace runs out, so raise
+it there.
+
+| Variable | Default | |
+|---|---|---|
+| `MORCA_STALE_SECONDS` | 30 | how old a running run's heartbeat can be |
+| `MORCA_START_SECONDS` | the stale limit; 300 when `MORCA_RUNNER` is `kubernetes` or `ec2` | the grace before a run's first heartbeat |
+
 ### "auto" from the grant
 
 An `env` value `"auto"` is passed to the run as it is, for the pipeline to

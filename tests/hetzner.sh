@@ -58,7 +58,8 @@
 #   the old one is set not to restart and renamed scheduler-old-<time>, the
 #   new one leads and registers, then the old one is asked to drain and the
 #   deploy returns without waiting for its runs (#397): check and status
-#   say it's draining N run(s), as information, and a reaper removes it
+#   say it's draining N run(s), as information (status giving each
+#   instance's image, morca.env's MORCA_IMAGE, #270), and a reaper removes it
 #   once it exits. A second deploy while one drains overlaps again, its old
 #   scheduler under a name of its own beside the first; drain-old
 #   --timeout waits and stops one after it; can-overlap says no with
@@ -1002,6 +1003,9 @@ grep -q "stop .*$first" "$FAKE/docker.all" && fail "the old scheduler was stoppe
 [ -f "$MORCA_STATE/reap-$first.pid" ] || fail "no reaper for $first"
 stack status > "$FAKE/out" 2>&1 || fail "status beside a draining old scheduler"
 has "^$first: draining 2 run(s) (outdated)$"
+# Each scheduler instance says its image: morca.env's MORCA_IMAGE (#270).
+grep -qx MORCA_IMAGE=img:rrr8888 "$MORCA_CONF/morca.env" || fail "no MORCA_IMAGE in morca.env"
+has "leading image=img:rrr8888 "
 # A second deploy while it drains overlaps again: the scheduler it replaces
 # drains under a name of its own, beside the first, which keeps its own.
 sleep 1
