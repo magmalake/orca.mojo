@@ -571,8 +571,10 @@ jobs:
 
   # Rust workers (docs/rust-workers.md): the morca-worker crate's tests and
   # examples/rust-worker, a worker and its proxy pipeline over a local
-  # warehouse (tests/rust_worker.sh), in the rust environment: the data
-  # environment's tins plus conda-forge's rust. On sai for this
+  # warehouse (tests/rust_worker.sh), then examples/hindcast over its
+  # committed GRIB2 fixtures, offline (tests/hindcast.sh). In the rust
+  # environment: the data environment's tins plus conda-forge's rust (cargo
+  # fetches crates; nothing fetches NOAA data). On sai for this
   # repository's own branches, as the test legs are, and on GitHub's
   # runners for a fork's. No secrets, and the token can only read.
   rust-worker:
@@ -643,6 +645,8 @@ jobs:
           cache-write: ${{ github.event_name != 'pull_request' }}
       - name: Rust workers
         run: pixi run -e rust test-rust-worker
+      - name: Hindcast (examples/hindcast, on fixtures)
+        run: pixi run -e rust test-hindcast
 
   # The tests that apply on macOS, on the Mac mini runner (m4-mini, an isolated
   # `ci` user; no Docker, no sudo), for the repo's own code only: a fork's
