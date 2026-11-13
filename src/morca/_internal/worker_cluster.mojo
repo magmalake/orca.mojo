@@ -51,6 +51,15 @@ def start_head(
     )
 
 
+def worker_slots(env: List[String], slots: Int) -> String:
+    """A cluster worker's `DISTA_WORKER_SLOTS=`: `auto` if `env` asks for
+    it, else `slots`."""
+    for e in env:
+        if e == "DISTA_WORKER_SLOTS=auto":
+            return String("DISTA_WORKER_SLOTS=auto")
+    return String("DISTA_WORKER_SLOTS=", slots)
+
+
 def start_dista_worker(
     binary: String,
     env: List[String],
@@ -62,14 +71,16 @@ def start_dista_worker(
     member: Bool,
 ) raises -> Int:
     """A dista worker of the run's cluster at `head`, reached at
-    `advertise`, with `slots` (0: one per core); its pid. A member's gives up
-    on a head that's gone within `MEMBER_CONNECT_SECONDS`."""
+    `advertise`, with `slots` (0: one per core), or `auto` when `env` has
+    `DISTA_WORKER_SLOTS=auto` (dista then sizes it from the grant in `env`,
+    all of it its own); its pid. A member's gives up on a head that's gone
+    within `MEMBER_CONNECT_SECONDS`."""
     var extra: List[String] = [
         String("DISTA_ROLE=worker"),
         String("DISTA_HEAD=", head),
         String("DISTA_ADVERTISE=", advertise),
         String("DISTA_TOKEN=", token),
-        String("DISTA_WORKER_SLOTS=", slots),
+        worker_slots(env, slots),
     ]
     if member:
         extra.append(String("DISTA_CONNECT_TIMEOUT=", MEMBER_CONNECT_SECONDS))

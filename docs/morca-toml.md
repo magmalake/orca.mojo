@@ -414,12 +414,15 @@ memory_mb_each=1500)` reads a number as given, 16 when unset, and for
 pipeline keeps its per-unit estimate in its own code); without a grant,
 the host's cores.
 
-`DISTA_WORKER_SLOTS`, which dista reads as a number, is the exception: for
-`"auto"` morca gives the run the granted CPUs over its local dista workers
-(`MORCA_WORKERS`), at least 1, or `0` (dista's one per core) when the run
-has no CPU grant, as on EC2 and Kubernetes. Sizing slots by memory too, from
-each task's estimate, is dista's to do from `MORCA_GRANT_*`
-(magmalake/dista.mojo#123).
+`DISTA_WORKER_SLOTS = "auto"` is passed through the same way, and dista
+(0.5.0 on) sizes its workers from the grant: slots from `MORCA_GRANT_CPUS`
+and a memory budget from `MORCA_GRANT_MEMORY_MB`, divided among the run's
+local workers (`MORCA_WORKERS`), with the tasks in flight adapting to
+throughput and memory pressure (morca-dev/dista#123). A run cluster's
+worker on another host takes that host's whole grant; a run with no grant,
+as on EC2 and Kubernetes, gets a slot per core and no budget. A number, such
+as `"4"`, is passed as it is and works as before: that many slots, no
+budget, no adapting.
 
 ## Secrets without Secrets Manager
 
