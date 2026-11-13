@@ -582,12 +582,10 @@ struct Scheduler(Movable):
         )
 
     def stop(mut self) raises:
-        """On SIGTERM or SIGINT (`docker stop`, #426), `morca scheduler`
-        exits. An instance first kills what it started, as a drain that
-        runs out does, and ends its row at once, so it isn't counted
-        leading until its heartbeat goes stale; the leader queues its runs
-        again. A scheduler that isn't one leaves its children as they
-        were."""
+        """An instance's SIGTERM or SIGINT (`docker stop`, #426): kills what
+        it started, as a drain that runs out does, and ends its row at
+        once, so it isn't counted leading until its heartbeat goes stale;
+        the leader queues its runs again. `morca scheduler` then exits."""
         self.finished = True
         if self.instance == 0:
             return

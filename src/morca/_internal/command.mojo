@@ -36,6 +36,7 @@ Needs `MORCA_DATABASE_URL`, but for the commands `--remote` (or
 Exit codes: 0, 2 for a usage error, 3 for any other error.
 """
 
+from std.ffi import c_int
 from std.os import getenv
 from std.os.path import exists
 from std.sys import argv, exit, stderr
@@ -534,8 +535,12 @@ def _command(args: List[String], target: String) raises -> Int:
         s.say_pressure()
         s.contain()
         s.join()
-        # SIGTERM (docker stop) or SIGINT ends the instance before exiting.
-        var stop_fd = stop_signals()
+        # An instance ends its row on SIGTERM (docker stop) or SIGINT
+        # before it exits (#426). A scheduler that isn't one dies on them
+        # at once, as before, mid-tick included.
+        var stop_fd = c_int(-1)
+        if s.instance > 0:
+            stop_fd = stop_signals()
         while not s.finished:
             # A tick that fails (the database is down) is tried again; the
             # state it would have changed is all in Postgres.
