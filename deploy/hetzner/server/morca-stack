@@ -149,6 +149,10 @@ STATE=${MORCA_STATE:-/var/lib/orca}
 PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # The overlay inside the scheduler, as settings.env's MORCA_CONFIG_OVERLAY says.
 OVERLAY=/etc/orca/overlay/morca.overlay.toml
+# The host's cgroup root and memory (cgroups_mode, cgroup_notes); a trial run
+# gives its own.
+HOST_CGROUP=${MORCA_HOST_CGROUP:-/sys/fs/cgroup}
+MEMINFO=${MORCA_MEMINFO:-/proc/meminfo}
 
 die() {
     echo "morca-stack: $*" >&2
@@ -311,6 +315,7 @@ cmd_configure() {
             DRAIN_SECONDS=*) drain_ok "$v" || die "DRAIN_SECONDS is a whole number of seconds above 0, not '$v'" ;;
         esac
         [ "$k=" = "$kv" ] && [ "$k" = GHCR_USER ] || safe "$v"
+        [ "$k" != CGROUPS ] || [ "$v" = 0 ] || [ "$v" = 1 ] || die "CGROUPS is 1 (the default) or 0, not $v"
         old=$(conf_get "$k")
         if [ "$keep" = 1 ] && [ -n "$old" ]; then
             continue
@@ -730,6 +735,60 @@ pull_all() {
     [ ! -s "$CONF/tunnel.env" ] || pull "$cf"
 }
 
+# cgroups_mode: whether the scheduler gives each run a cgroup
+# (docs/hetzner.md#a-cgroup-per-run): on unless stack.conf says CGROUPS=0,
+# and only on a host with cgroup v2 and its memory controller ($HOST_CGROUP's
+# cgroup.controllers; Ubuntu 22.04 and later have both). Sets cg to 1 or 0
+# and, off, cg_why.
+cgroups_mode() {
+    cg=0
+    if [ "$(conf_get CGROUPS)" = 0 ]; then
+        cg_why="off (CGROUPS=0)"
+    elif [ ! -f "$HOST_CGROUP/cgroup.controllers" ]; then
+        cg_why="off: this host has no cgroup v2 at $HOST_CGROUP (cgroup v1?), so the scheduler runs as with CGROUPS=0"
+    elif ! grep -qw memory "$HOST_CGROUP/cgroup.controllers"; then
+        cg_why="off: this host's cgroup v2 has no memory controller ($HOST_CGROUP/cgroup.controllers), so the scheduler runs as with CGROUPS=0"
+    else
+        cg=1
+        cg_why=
+    fi
+}
+
+# The pipelines whose runs here peak at more than a cgroup would let them
+# have: the 95th percentile of the peaks of their last 20 successful runs
+# placed here (at least 3, as morca.recommend counts them), in MB, and
+# their memory_gb. "NAME|P95_MB|RUNS|MEMORY_GB" lines.
+PEAKS_SQL="SELECT k.pipeline, ceil(percentile_disc(0.95) WITHIN GROUP (ORDER BY k.peak) / 1048576.0)::bigint, count(*), coalesce(p.memory_gb, '') FROM (SELECT r.pipeline, max(a.peak_rss_bytes) AS peak, row_number() OVER (PARTITION BY r.pipeline ORDER BY r.id DESC) AS n FROM orca.runs r JOIN orca.steps s ON s.run = r.id JOIN orca.attempts a ON a.step = s.id WHERE r.status = 'succeeded' AND coalesce(r.placement, 'local') = 'local' GROUP BY r.pipeline, r.id HAVING max(a.peak_rss_bytes) IS NOT NULL) k JOIN orca.pipelines p ON p.name = k.pipeline WHERE k.n <= 20 GROUP BY k.pipeline, p.memory_gb HAVING count(*) >= 3 ORDER BY k.pipeline"
+
+# cgroup_notes (after containers, which sets cg): why the runs get no
+# cgroups when the host can't, and with cgroups on, a warning for each
+# pipeline whose runs' peak (PEAKS_SQL) is over the most a cgroup lets it
+# have: its memory_gb's maximum, else what the host can grant (its memory
+# less MORCA_RESERVE_MEMORY_MB). Such a run is throttled there and killed
+# 25% above; it doesn't stop the apply.
+cgroup_notes() {
+    if [ "$cg" = 0 ]; then
+        [ "$(conf_get CGROUPS)" = 0 ] || echo "morca-stack: run cgroups $cg_why"
+        return 0
+    fi
+    n_room=
+    n_total=$(awk '/^MemTotal:/ { print int($2 / 1024) }' "$MEMINFO" 2> /dev/null) || n_total=
+    n_reserve=$(setting MORCA_RESERVE_MEMORY_MB)
+    [ -z "$n_total" ] || n_room=$((n_total - ${n_reserve:-1536}))
+    psql_q "$PEAKS_SQL" 2> /dev/null | awk -F'|' -v room="$n_room" '
+        NF < 4 { next }
+        {
+            v = $4; max = ""
+            if (index(v, "..") > 0) max = substr(v, index(v, "..") + 2)
+            else if (v != "" && v != "auto") max = v
+            if (max != "") { lim = max * 1024; what = "memory_gb'"'"'s maximum, " max " GB" }
+            else if (room != "") { lim = room; what = "what the host can grant, " room " MB" }
+            else next
+            if ($2 + 0 > lim + 0)
+                printf "morca-stack: warning: %s peaks at %d MB (95th percentile of its last %d runs), over %s: its runs will be throttled there and killed 25%% above (raise memory_gb'"'"'s maximum, or CGROUPS=0)\n", $1, $2, $3, what
+        }'
+}
+
 # Each container but Postgres, in the order apply starts them: calls
 # CALLBACK NAME FILES HEALTH IMAGE ARGS..., with FILES the files it's started
 # with (its env file and the like, read from ENVDIR; - for none), HEALTH the
@@ -754,21 +813,24 @@ containers() {
     uihealth=8270:/healthz:200,404
     waddr=$(setting MORCA_WORKER_ADDR)
     [ -z "$waddr" ] || uihealth="$uihealth ${waddr##*:}:/:any"
-    # CGROUPS=1: a cgroup per run (docs/hetzner.md#a-cgroup-per-run).
-    # The scheduler's cgroup namespace is its own, and its /sys/fs/cgroup,
-    # which docker mounts read-only, is made writable before morca starts:
-    # remounting needs CAP_SYS_ADMIN, outside docker's AppArmor profile,
-    # and the capability is dropped (setpriv) before morca, and every run
-    # it starts, gets it. Its own cgroup is the container's: it can't
-    # touch any other container's or the host's.
-    if [ "$(conf_get CGROUPS)" = 1 ]; then
+    # A cgroup per run (docs/hetzner.md#a-cgroup-per-run), unless CGROUPS=0
+    # or the host can't (cgroups_mode). The scheduler's cgroup namespace is
+    # its own, and its /sys/fs/cgroup, which docker mounts read-only, is
+    # made writable before morca starts: remounting needs CAP_SYS_ADMIN,
+    # outside docker's AppArmor profile, and the capability is dropped
+    # (setpriv) before morca, and every run it starts, gets it. Its own
+    # cgroup is the container's: it can't touch any other container's or
+    # the host's. A remount that fails leaves it read-only: morca then says
+    # "run cgroups off" and runs as with CGROUPS=0, rather than not start.
+    cgroups_mode
+    if [ "$cg" = 1 ]; then
         # shellcheck disable=SC2086
         $cb scheduler "$sfiles" - "$image:$tag" --network orca --env-file "$CONF/morca.env" \
             -v "$STATE/stage:/var/lib/orca/stage" $ovmount \
             -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
             --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
             --entrypoint /bin/sh "$image:$tag" -c \
-            'mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/morca/bin/morca scheduler'
+            'mount -o remount,rw /sys/fs/cgroup || echo "morca-stack: /sys/fs/cgroup stays read-only, so no run cgroups (docs/hetzner.md#a-cgroup-per-run)" >&2; exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/morca/bin/morca scheduler'
     else
         # shellcheck disable=SC2086
         $cb scheduler "$sfiles" - "$image:$tag" --network orca --env-file "$CONF/morca.env" \
@@ -1052,6 +1114,8 @@ cmd_plan() {
     PLAN=$ENVDIR/plan
     : > "$PLAN"
     containers plan_one
+    # On standard error: deploy.sh reads the plan's lines.
+    cgroup_notes >&2
     awk '{ printf "%s %s", $1, $2; for (i = 6; i <= NF; i++) printf " %s", $i; print "" }' "$PLAN"
     rm -rf "$ENVDIR" "$APPS"
 }
@@ -1139,6 +1203,7 @@ cmd_apply() {
         PLAN=$CONF/plan
         : > "$PLAN"
         containers plan_one
+        cgroup_notes
         # Only the scheduler's restart kills runs (not an overlap's).
         if grep -q '^scheduler replace ' "$PLAN" && [ "$force" = 0 ] && [ "$overlap" = 0 ] && [ "$(running_runs)" -gt 0 ]; then
             why=$(plan_why scheduler)
