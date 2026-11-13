@@ -1,8 +1,8 @@
-"""The runs lists' queries (`morca.views.runs`): `/runs`, a pipeline's Runs
+"""The runs lists' queries (`morca._internal.views.runs`): `/runs`, a pipeline's Runs
 tab and the home page's recent runs read a page of `orca.runs` through a
 `RunsFilter`, keyset by run id, and count what matches it.
 
-`morca.views.runs` parses a list's URL into its `RunsQuery` and hands its
+`morca._internal.views.runs` parses a list's URL into its `RunsQuery` and hands its
 filters over as a `RunsFilter`; `runs_where` turns those into the SQL
 fragments and parameters each filter has always had, so nothing a URL says
 reaches the SQL but as a bound parameter.
@@ -31,7 +31,7 @@ def _int_or_zero(s: String) -> Int:
 
 @fieldwise_init
 struct RunRecord(Copyable, Movable):
-    """A run as the lists and its page read it (`morca.views.runs.RunRow`):
+    """A run as the lists and its page read it (`morca._internal.views.runs.RunRow`):
     its row, what its attempts used and its latest start's request and
     grant."""
 
@@ -171,7 +171,7 @@ def _record(r: Row, id: Int) raises -> RunRecord:
 
 @fieldwise_init
 struct RunsFilter(Copyable, Movable):
-    """A runs list's filters (`morca.views.runs.RunsQuery.filter`), each
+    """A runs list's filters (`morca._internal.views.runs.RunsQuery.filter`), each
     empty or 0 when it isn't set, as `runs_where` binds them."""
 
     var pipeline: String

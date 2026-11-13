@@ -25,7 +25,7 @@ from morca.source import (
     web_url,
 )
 from morca.state import State
-from morca.ui.terms import key_help
+from morca._internal.ui.terms import key_help
 from morca.toml import (
     toml_key,
     toml_string,
@@ -207,7 +207,7 @@ struct Shown(Movable):
 
 
 comptime _VALUE_TERMS = ["placement", "fills", "fill_order", "spot"]
-"""The keys whose values are one of a fixed set (`morca.ui.terms`)."""
+"""The keys whose values are one of a fixed set (`morca._internal.ui.terms`)."""
 
 
 def config_html(

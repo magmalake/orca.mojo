@@ -1,4 +1,4 @@
-"""What the code links read (`morca.views.code`): which version of a
+"""What the code links read (`morca._internal.views.code`): which version of a
 pipeline's code a run ran or the pipeline is registered with, its
 `describe`, and a runs table's runs' versions and failed steps.
 """

@@ -55,7 +55,7 @@ comptime DEFAULT = "default"
 
 comptime LEARN_RUNS = 20
 """How many of the latest runs it learns from: the window the Resources card
-summarizes (`morca.views.pipelines.USAGE_RUNS`)."""
+summarizes (`morca._internal.views.pipelines.USAGE_RUNS`)."""
 comptime MIN_RUNS = 3
 """Fewer runs than this and one odd run would be the whole percentile."""
 comptime MEMORY_PERCENTILE: Float64 = 0.95

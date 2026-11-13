@@ -1,5 +1,5 @@
-"""Ops' machines' queries (`morca.views.pools`, `morca.ui.pool_status`,
-`morca.ui.contained`): the EC2 instances, a Kubernetes run's pods and the
+"""Ops' machines' queries (`morca._internal.views.pools`, `morca._internal.ui.pool_status`,
+`morca._internal.ui.contained`): the EC2 instances, a Kubernetes run's pods and the
 workers' tokens Pools lists, the runs a worker claimed, the pools morca
 scales (`orca.pools`), and the runs on the control host.
 """

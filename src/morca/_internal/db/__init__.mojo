@@ -57,7 +57,7 @@ The run stores (`morca.state`'s `State` and `PgStore`, `morca.sqlite_store`'s
 | `morca._internal.db.sqlite_schema` | the SQLite file's migrations and `schema_version` |
 | `morca._internal.db.sqlite_runs` | the SQLite file's runs, steps and attempts: `runs` and `steps`, in its dialect |
 
-The web UI's read models, a module per page (`morca.views`, `morca.ui`):
+The web UI's read models, a module per page (`morca._internal.views`, `morca._internal.ui`):
 
 | Module | Reads for |
 |---|---|

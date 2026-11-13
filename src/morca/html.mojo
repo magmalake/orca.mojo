@@ -15,7 +15,7 @@ until the moment it's escaped.
 
 from std.os import getenv
 
-from morca.ui.terms import value_help
+from morca._internal.ui.terms import value_help
 
 
 def escape(s: StringSlice) -> String:
@@ -237,7 +237,7 @@ struct Html(Movable, Writable):
     def status(mut self, s: StringSlice):
         """A status as a badge, its class named after it (a space in the
         status is a hyphen in the class), with what it means on hover or
-        keyboard focus (`morca.ui.terms`)."""
+        keyboard focus (`morca._internal.ui.terms`)."""
         var e = escape(s)
         self.out.write("<span")
         self._tip(value_help("status", s))
@@ -286,7 +286,7 @@ struct Html(Movable, Writable):
         self.raw("</span></span>")
 
     def term(mut self, kind: StringSlice, value: StringSlice):
-        """`value`, one of a fixed set (`kind` in `morca.ui.terms`): dotted
+        """`value`, one of a fixed set (`kind` in `morca._internal.ui.terms`): dotted
         underlined, with what it means on hover, keyboard focus or a tap;
         plain text if the set doesn't know it."""
         var tip = value_help(kind, value)

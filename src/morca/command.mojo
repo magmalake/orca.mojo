@@ -30,7 +30,7 @@ Its commands:
 
 Needs `MORCA_DATABASE_URL`, but for the commands `--remote` (or
 `MORCA_REMOTE`) sends to a deployed `morca ui` instead (`morca.remote`). See
-`morca.scheduler` for what a tick does, and `morca.web` for the pages,
+`morca.scheduler` for what a tick does, and `morca._internal.web` for the pages,
 `morca.lineage` for what `lineage` prints, and `morca.sensors` for what
 `rebuild` plans.
 Exit codes: 0, 2 for a usage error, 3 for any other error.
@@ -102,7 +102,7 @@ from morca.state import State
 from morca.watchdog import acknowledge, snooze as snooze_rule
 from morca.auth import audit
 from morca.tokens import revoke_user_tokens, user_tokens
-from morca.web.server import DEFAULT_ADDR, serve_ui
+from morca._internal.web.server import DEFAULT_ADDR, serve_ui
 from morca.worker import worker_command
 from morca.workers import (
     create_worker_token,

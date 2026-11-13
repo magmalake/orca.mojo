@@ -124,7 +124,7 @@ def dag_svg(steps: List[DagStep]) -> String:
             out.write(
                 '<a href="', escape(s.href), '" target="_blank" rel="noopener">'
             )
-        # Its card (`morca.ui.step_cards`) on hover, focus or a tap: the link is
+        # Its card (`morca._internal.ui.step_cards`) on hover, focus or a tap: the link is
         # the tab stop where there is one, the box where there isn't.
         out.write(
             '<g class="',

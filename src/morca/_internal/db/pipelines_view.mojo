@@ -1,5 +1,5 @@
-"""The pipelines' pages' queries (`morca.views.pipelines`,
-`morca.views.steps`, `morca.ui.pipeline`): a registration with its schedule
+"""The pipelines' pages' queries (`morca._internal.views.pipelines`,
+`morca._internal.views.steps`, `morca._internal.ui.pipeline`): a registration with its schedule
 and live runs (`PipelineRow`), its steps (`StepDef`), what its latest runs'
 steps did, its sensor's errors, a keyed pipeline's failed keys and a key's
 steps, and what its runs used (`UsageSummary`).
@@ -69,7 +69,7 @@ def pipeline_rows(
     mut conn: Connection, name: String = ""
 ) raises -> List[PipelineRow]:
     """Every registered pipeline, or the one named, with no next fire
-    (`morca.views.pipelines` works that out)."""
+    (`morca._internal.views.pipelines` works that out)."""
     var rows = conn.query(
         String(
             (
@@ -368,7 +368,7 @@ def key_steps(
 @fieldwise_init
 struct StepStats(Copyable, Movable):
     """What a step's attempts in a pipeline's latest runs did
-    (`morca.views.steps`); -1 for a time or a peak none had."""
+    (`morca._internal.views.steps`); -1 for a time or a peak none had."""
 
     var step: String
     var runs: Int

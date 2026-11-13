@@ -1,5 +1,5 @@
-"""The run page's queries (`morca.views.runs`, `morca.ui.run`,
-`morca.ui.attempt`): a run's steps, attempts, the tables they touched, its
+"""The run page's queries (`morca._internal.views.runs`, `morca._internal.ui.run`,
+`morca._internal.ui.attempt`): a run's steps, attempts, the tables they touched, its
 machines, its dista cluster, its code's versions, who acted on it, and what
 its cards show of its row of `orca.runs`.
 """
@@ -295,7 +295,7 @@ def step_spans(mut conn: Connection, run: Int) raises -> List[AttemptSpan]:
 
 @fieldwise_init
 struct StepRecord(Copyable, Movable):
-    """A run's step as `morca.views.runs.StepRow` shows it, with its latest
+    """A run's step as `morca._internal.views.runs.StepRow` shows it, with its latest
     attempt's usage as columns (-1 where unknown)."""
 
     var step: String
@@ -430,7 +430,7 @@ def first_log(mut conn: Connection, run: Int) raises -> Optional[String]:
 
 @fieldwise_init
 struct AttemptRecord(Copyable, Movable):
-    """An attempt as `morca.views.runs.AttemptRow` shows it, with its usage
+    """An attempt as `morca._internal.views.runs.AttemptRow` shows it, with its usage
     as columns (-1 where unknown)."""
 
     var id: Int
@@ -518,7 +518,7 @@ def step_attempt_records(
 @fieldwise_init
 struct AttemptCardRecord(Copyable, Movable):
     """What a run's attempt adds to its step's card
-    (`morca.views.steps.attempt_cards`)."""
+    (`morca._internal.views.steps.attempt_cards`)."""
 
     var id: Int
     var step: String

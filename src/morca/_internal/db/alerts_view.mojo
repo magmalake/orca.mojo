@@ -1,4 +1,4 @@
-"""Ops › Alerts' queries (`morca.ui.alerts`): a page of `orca.alerts`,
+"""Ops › Alerts' queries (`morca._internal.ui.alerts`): a page of `orca.alerts`,
 newest first by id, filtered by kind and state, and its counts.
 """
 

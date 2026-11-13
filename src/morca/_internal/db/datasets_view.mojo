@@ -1,5 +1,5 @@
-"""The datasets' pages' queries (`morca.views.datasets`,
-`morca.ui.datasets`): the steps that write and read a dataset, and whether
+"""The datasets' pages' queries (`morca._internal.views.datasets`,
+`morca._internal.ui.datasets`): the steps that write and read a dataset, and whether
 morca knows a snapshot of it.
 """
 

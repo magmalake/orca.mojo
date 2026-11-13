@@ -1,5 +1,5 @@
-"""The home page's queries (`morca.views.recent`, `morca.ui.home`,
-`morca.ui.viz`): its recent runs a row per batch, its runs per day, and
+"""The home page's queries (`morca._internal.views.recent`, `morca._internal.ui.home`,
+`morca._internal.ui.viz`): its recent runs a row per batch, its runs per day, and
 the pipelines' timeline (`/api/gantt`).
 """
 
@@ -19,7 +19,7 @@ run's and every recent failure's."""
 
 @fieldwise_init
 struct RecentRecord(Copyable, Movable):
-    """A row of the home page's recent runs (`morca.views.recent.RecentRow`):
+    """A row of the home page's recent runs (`morca._internal.views.recent.RecentRow`):
     a batch, or one run."""
 
     var batch: Int

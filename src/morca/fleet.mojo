@@ -1,5 +1,5 @@
 """The fleet: every machine morca is paying for, as Ops' Pools shows the
-EC2 ones (`/ops/pools?kind=ec2`, `morca.ui.pools`) and `/api/fleet` has them
+EC2 ones (`/ops/pools?kind=ec2`, `morca._internal.ui.pools`) and `/api/fleet` has them
 as JSON.
 
 What the page shows comes from three places, none of which reads the

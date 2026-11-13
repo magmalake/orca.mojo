@@ -27,7 +27,7 @@ token gets nothing here, and a worker token gets nothing elsewhere. It
 lasts `--days` (default and at most `MORCA_WORKER_TOKEN_DAYS`, 365). A
 revoked token stays listed, as revoked, and is answered 401.
 
-**The API** (`morca.api.worker`): `/api/worker/claim`, the worker's
+**The API** (`morca._internal.api.worker`): `/api/worker/claim`, the worker's
 heartbeat and its claims; `/api/worker/release`, a run it won't start;
 `/api/worker/exited`, a run's process ended; `/api/worker/store/<call>`,
 `store_call`, a `RunStore` call of a run it claimed.

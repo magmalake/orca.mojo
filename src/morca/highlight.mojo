@@ -1,5 +1,5 @@
 """Mojo source coloured for the UI's code-on-hover (`_PEEK` in
-`morca.ui.layout`), on the server, with no library: `tokens` splits source
+`morca._internal.ui.layout`), on the server, with no library: `tokens` splits source
 into runs of one kind, and `highlight` turns those into HTML lines with a
 `<span>` per coloured run.
 

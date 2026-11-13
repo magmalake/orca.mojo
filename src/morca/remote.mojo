@@ -53,10 +53,10 @@ from morca.lineage import SnapshotRef
 from morca.pressure import pct_text
 from morca.queueing import file_names
 from morca.state import State
-from morca.ui.parts import took_text
+from morca._internal.ui.parts import took_text
 from morca.usage import usage_of, usage_text
 from morca.watchdog import status_lines
-from morca.web.server import act, read_page
+from morca._internal.web.server import act, read_page
 
 
 def is_remote_command(cmd: String) -> Bool:

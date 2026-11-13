@@ -340,7 +340,7 @@ def _unregistered(pipeline: String) -> String:
 
 @fieldwise_init
 struct Bulk(Movable):
-    """What an action on runs picked from a list did (`morca.api.actions.bulk`).
+    """What an action on runs picked from a list did (`morca._internal.api.actions.bulk`).
     """
 
     var done: List[Int]
