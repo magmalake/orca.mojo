@@ -126,8 +126,10 @@ def test_merge_runs() raises:
     assert_equal(m[1].when, "before")
     assert_equal(
         step_line(m[2]),
-        "step\t1.2.0-reread,1.3.0-reread,1.3.1-reread\tafter\trun\tmorca"
-        " backfill --rerun mojo_retool @all",
+        (
+            "step\t1.2.0-reread,1.3.0-reread,1.3.1-reread\tafter\trun\tmorca"
+            " backfill --rerun mojo_retool @all"
+        ),
     )
     assert_equal(m[3].id, "1.3.1-narrow")
     # Different commands: each, in order.
