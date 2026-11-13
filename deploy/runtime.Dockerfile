@@ -105,7 +105,8 @@ RUN curl -fsSL https://mirrors.edge.kernel.org/pub/software/scm/git/git-$GIT_VER
 #   scheduler with cgroups through `/bin/sh -c 'mount -o remount,rw ... &&
 #   exec setpriv ...'`, checks images with `test`, and probes the UI and
 #   apps with `nc`; operators `docker exec scheduler sh`. Every applet is
-#   linked where Debian puts it (/bin/sh, /usr/bin/env, ...).
+#   linked where busybox puts it (/bin/sh, /usr/bin/env, ...), except
+#   where a file below already is (setpriv, ldd).
 # - util-linux's setpriv: busybox's has no --bounding-set, which the
 #   scheduler's cgroup start drops CAP_SYS_ADMIN with.
 # - ldd (deploy/runtime/ldd; glibc's is bash), for the image tests.
@@ -126,6 +127,8 @@ COPY --from=git /opt/morca /opt/morca
 COPY deploy/runtime/ldd /out/usr/bin/ldd
 RUN t=$(cd /usr/lib && echo *-linux-gnu) && mkdir -p /out/bin /out/usr/lib/$t \
     && cp /bin/busybox /out/bin/busybox && cp "$(command -v setpriv)" /out/usr/bin/setpriv && chmod 755 /out/usr/bin/ldd \
+    && for a in $(/bin/busybox --list-full); do case $a in */busybox | */setpriv | */ldd | linuxrc) continue ;; esac; \
+            mkdir -p "/out/${a%/*}" && ln -s /bin/busybox "/out/$a" || exit 1; done \
     && for f in /opt/morca/bin/* /opt/morca/libexec/llvm-symbolizer /opt/morca/libexec/git/git* \
             /opt/morca/lib/*.so* /out/usr/bin/setpriv; do LD_LIBRARY_PATH=/opt/morca/lib ldd "$f" 2> /dev/null; done \
         | awk '$2 == "=>" && $3 ~ /^\// && $3 !~ /^\/opt\/morca\// {print $1, $3}' | sort -u \
@@ -135,10 +138,6 @@ RUN t=$(cd /usr/lib && echo *-linux-gnu) && mkdir -p /out/bin /out/usr/lib/$t \
 
 FROM base
 COPY --from=sys /out /
-# The applets at Debian's paths, except setpriv (util-linux's, above).
-RUN ["/bin/busybox", "--install", "-s"]
-RUN for d in /bin /sbin /usr/bin /usr/sbin; do [ ! -L $d/setpriv ] || rm $d/setpriv; done \
-    && [ "$(command -v setpriv)" = /usr/bin/setpriv ]
 COPY --from=build /out/lib /opt/morca/lib
 COPY --from=build /out/bin /opt/morca/bin
 COPY --from=build /out/libexec /opt/morca/libexec
