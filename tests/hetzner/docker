@@ -13,8 +13,8 @@
 # (KEY=VALUE lines) and aliases (on the orca network: --network-alias, or
 # network connect --alias after a disconnect). An image's id is a hash of its reference,
 # or $FAKE/images/<reference with / and : as _> if there is one (a tag
-# pushed again). morca-stack's health probe (exec NAME bash -c ... PORT
-# PATH) answers 200, or what $FAKE/health/<name without -next> says; a
+# pushed again). morca-stack's health probe (exec NAME sh -c ... PORT
+# PATH, or bash -c, its fallback) answers 200, or what $FAKE/health/<name without -next> says; a
 # container started while $FAKE/exits/<name without -next> exists exits at
 # once; `run -d --name NAME` fails while $FAKE/run-fails/NAME exists.
 # A container's FinishedAt is its finished file (docker's
@@ -176,7 +176,7 @@ case "$all" in
         [ ! -f "$FAKE/register-fails" ] || { echo "morca: no morca.toml" >&2; exit 1; }
         echo "registered toy"
         ;;
-    "exec "*" bash -c "*)
+    "exec "*" sh -c "* | "exec "*" bash -c "*)
         n=$2
         shift 5
         echo "probe $n $1 $2" >> "$FAKE/docker.log"

@@ -1,0 +1,29 @@
+#!/bin/sh
+# ldd FILE...: the shared libraries each FILE links, as the dynamic loader
+# resolves them, in glibc's ldd's format. The runtime image is distroless,
+# without glibc's ldd (a bash script): this is it for busybox sh, which
+# deploy/runtime.Dockerfile installs at /usr/bin/ldd. CI's image tests and
+# operators run it (`docker exec scheduler ldd /opt/morca/bin/morca`).
+for ld in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1; do
+    [ -x "$ld" ] && break
+done
+[ $# -gt 0 ] || { echo "ldd: missing file arguments" >&2; exit 1; }
+rc=0
+for f in "$@"; do
+    [ $# -eq 1 ] || echo "$f:"
+    if [ ! -f "$f" ]; then
+        echo "ldd: $f: No such file" >&2
+        rc=1
+        continue
+    fi
+    # 0: dynamic, 2: ELF the loader can still list; else not dynamic.
+    "$ld" --verify "$f" > /dev/null 2>&1
+    case $? in
+        0 | 2) "$ld" --list "$f" || rc=1 ;;
+        *)
+            echo "	not a dynamic executable" >&2
+            rc=1
+            ;;
+    esac
+done
+exit $rc

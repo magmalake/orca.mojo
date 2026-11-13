@@ -7,7 +7,9 @@
 #     sh tests/runtime-image.sh morca-runtime:ci --project [CPU] # and a project on it
 #
 # The runtime: morca, morca_maintain, git over HTTPS (libcurl and the CA
-# bundle), llvm-symbolizer, and every binary's libraries found. The
+# bundle), llvm-symbolizer, every binary's libraries found, and what the
+# Hetzner stacks run in it on busybox: sh, the scheduler's cgroup start
+# (mount, setpriv), the health probe (nc) and a secret fetch. The
 # project: a scratch project that adds this commit of morca-mojo, with
 # examples/toy.mojo as its one pipeline and no bin/ of its own, built on the
 # runtime; its toy has its source map and runs a partition, and its `morca`
@@ -31,6 +33,46 @@ missing=$(run --entrypoint sh "$img" -c \
 [ -z "$missing" ] || fail "libraries not found: $missing"
 run --entrypoint sh "$img" -c '[ -s /opt/morca/ssl/cacert.pem ] && [ -s /src/project/.pixi/envs/default/ssl/cacert.pem ] \
     && [ -s /opt/morca/share/pixi.lock ] && [ -d /opt/morca/pipelines ]' || fail "the CA bundles, pixi.lock or the layout"
+# On distroless with busybox (#337): sh and the tools morca-stack and these
+# tests run in the containers, util-linux's setpriv, and the base's time
+# zones and CA certificates.
+run --entrypoint test "$img" -x /opt/morca/bin/morca || fail "test -x, as morca-stack checks an image"
+run --entrypoint sh "$img" -c 'for t in sh cat test timeout nc printf tr mount setpriv ldd grep sed awk cut sha256sum env; do
+    command -v "$t" > /dev/null || { echo "no $t"; exit 1; }; done
+    [ "$(command -v setpriv)" = /usr/bin/setpriv ] && [ -x /usr/bin/env ] && [ -x /bin/sh ] \
+        && [ -s /usr/share/zoneinfo/Europe/Berlin ] && [ -s /etc/ssl/certs/ca-certificates.crt ]' \
+    || fail "busybox's tools, setpriv, the time zones or the CA certificates"
+# The scheduler's start with cgroups (morca-stack's containers()): /sys/fs/cgroup
+# remounted writable, CAP_SYS_ADMIN dropped, and a cgroup made under it.
+out=$(run --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --entrypoint /bin/sh "$img" -c \
+    'mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /bin/sh -c '"'"'
+        mkdir /sys/fs/cgroup/probe && rmdir /sys/fs/cgroup/probe || exit 1
+        b=$(sed -n "s/^CapBnd:[[:space:]]*//p" /proc/self/status)
+        [ $((0x$b & 0x200000)) = 0 ] && echo dropped'"'"'' 2>&1) || fail "the scheduler's cgroup start: $out"
+[ "$out" = dropped ] || fail "the scheduler's cgroup start kept CAP_SYS_ADMIN: $out"
+# morca-stack's health probe (probe()), at a listener in the image.
+code=$(run --entrypoint sh "$img" -c 'mkdir -p /tmp/www && echo ok > /tmp/www/index.html && httpd -p 127.0.0.1:8270 -h /tmp/www && sleep 1
+printf "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" "$1" \
+    | timeout 5 nc 127.0.0.1 "$0" | { read -r _ code _ && echo "$code" | tr -d "\r"; }' 8270 /index.html) || code=
+[ "$code" = 200 ] || fail "morca-stack's health probe: '$code'"
+# A secret through MORCA_SECRET_FETCH as the Hetzner stacks set it (sh
+# /etc/orca/secret-fetch, run through sh -c), read by `config check --secrets`.
+sec=$PWD/build/runtime-secrets
+rm -rf "$sec"
+mkdir -p "$sec/secrets/orca"
+printf 'a token\n' > "$sec/secrets/orca/test-token"
+for id in orca/test-token orca/missing; do
+    printf '[defaults]\nplacement = "control"\n\n[pipelines.toy]\nsecrets = { TOKEN = "%s" }\n' "$id" \
+        > "$sec/$(basename "$id").toml"
+done
+fetch() {
+    run -v "$sec:/work:ro" -v "$PWD/deploy/hetzner/server/secret-fetch:/etc/orca/secret-fetch:ro" \
+        -v "$sec/secrets:/etc/orca/secrets:ro" -e "MORCA_SECRET_FETCH=sh /etc/orca/secret-fetch" "$img" \
+        config check "/work/$1.toml" --secrets
+}
+out=$(fetch test-token 2>&1) || fail "a secret through MORCA_SECRET_FETCH: $out"
+out=$(fetch missing 2>&1) && fail "a missing secret read: $out"
+echo "$out" | grep -q "can't read secret orca/missing" || fail "a missing secret's error: $out"
 echo "ok   runtime image"
 
 [ "${2:-}" = --project ] || exit 0
