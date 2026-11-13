@@ -26,10 +26,13 @@ export MORCA_LOGS=build/ui-logs
 rm -rf "$MORCA_LOGS"
 q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }
 pid=
+toy=
 fail() {
     echo "FAIL: $*"
     tail -30 "$log"
     [ -z "$pid" ] || kill "$pid" 2> /dev/null || true
+    # The slow run below may be held stopped: let it go, then end it.
+    [ -z "$toy" ] || { kill -CONT "$toy"; kill "$toy"; } 2> /dev/null || true
     exit 1
 }
 
@@ -370,14 +373,24 @@ json "/runs/$ok_run" | jq -e '.instances[0].peaks | .samples == 2 and .mem_total
 echo "ok   a run's machines: charts, peaks and warnings, and none without samples"
 
 # A run going on: its page polls, its fragment and its running attempt's log
-# answer 200 until they end, then 286 with the end in them.
+# answer 200 until they end, then 286 with the end in them. The run (one
+# process) is held stopped with one of its attempts running while the test
+# asks, and let go after: on a slow or busy machine the questions took longer
+# than the run, which then answered 286 to a question about it running (#360).
 MORCA_TOY_SLEEP=1 ./build/toy run --partitions 2024-03 >> "$log" 2>&1 &
 toy=$!
+running_attempt() {
+    q "SELECT a.id FROM orca.attempts a JOIN orca.steps s ON s.id = a.step JOIN orca.runs r ON r.id = s.run
+       WHERE r.pipeline = 'toy' AND r.status = 'running' AND a.status = 'running' LIMIT 1"
+}
+# Stop it first, then look: an attempt seen running stays running.
 i=0
-until [ "$(q "SELECT count(*) FROM orca.runs WHERE status = 'running'")" -eq 1 ]; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "the slow run didn't start"; sleep 0.05
+until kill -STOP "$toy" && a=$(running_attempt) && [ -n "$a" ]; do
+    kill -CONT "$toy" 2> /dev/null || fail "the slow run ended before an attempt was seen running"
+    i=$((i + 1)); [ "$i" -lt 200 ] || fail "no running attempt"; sleep 0.05
 done
-live=$(q "SELECT id FROM orca.runs WHERE status = 'running'")
+live=$(q "SELECT s.run FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE a.id = $a")
+[ "$(q "SELECT count(*) FROM orca.runs WHERE status = 'running'")" -eq 1 ] || fail "not one running run"
 html "/runs/$live" | grep -q "data-poll=\"/runs/$live/live\" data-poll-every=\"5\"" || fail "a running run's page doesn't poll"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/live")
 [ "$code" = 200 ] || fail "a running run's fragment answered $code"
@@ -395,10 +408,6 @@ mkdir -p "$MORCA_LOGS/toy/$live/metrics"
 code=$(curl -s -o "$log.mx" -w '%{http_code}' "$base/runs/$live/live")
 [ "$code" = 200 ] || fail "a running run's metrics fragment answered $code"
 grep -q 'class="mx__now"' "$log.mx" || fail "the live fragment doesn't chart the samples"
-i=0
-until a=$(q "SELECT a.id FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $live AND a.status = 'running' LIMIT 1") && [ -n "$a" ]; do
-    i=$((i + 1)); [ "$i" -lt 100 ] || fail "no running attempt"; sleep 0.05
-done
 html "/runs/$live/attempts/$a" | grep -q "data-poll=\"/runs/$live/attempts/$a/log\"" \
     || fail "a running attempt's page doesn't poll"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$base/runs/$live/attempts/$a/log")
@@ -409,7 +418,9 @@ html "/runs/$live/attempts/$a" | grep -q "data-poll=\"/runs/$live/attempts/$a/fa
 code=$(curl -s -o "$log.af" -w '%{http_code}' "$base/runs/$live/attempts/$a/facts")
 [ "$code" = 200 ] || fail "a running attempt's facts answered $code"
 grep -qF '<dl class="facts"><dt>Host</dt>' "$log.af" || fail "the facts fragment hasn't the facts"
+kill -CONT "$toy"
 wait "$toy" || fail "the slow run failed"
+toy=
 code=$(curl -s -o "$log.frag" -w '%{http_code}' "$base/runs/$live/live")
 [ "$code" = 286 ] || fail "the ended run's fragment answered $code"
 grep -q 'status--succeeded">succeeded</span></h2>' "$log.frag" || fail "the fragment doesn't show the run succeeded"
