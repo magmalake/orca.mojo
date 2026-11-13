@@ -49,11 +49,12 @@ worker checks the spec again before it starts anything (`morca.worker`).
 from std.os import getenv
 
 from json import Value, loads
-from postgres import Params
+import morca.db.audit as audit_db
+import morca.db.scheduler as scheduler_db
+import morca.db.starting as starting_db
+import morca.db.workers as workers_db
 
 from morca.run_cluster import (
-    MEMBER_GRANTS_SQL,
-    MEMBER_MB_SQL,
     join_claim,
     member_spec_json,
     members_of,
@@ -82,7 +83,7 @@ from morca.http_store import (
 )
 from morca.civil import now
 from morca.json import quote
-from morca.db.live import behind_sql, dead_sql, stale_limit, start_grace
+from morca.db.live import dead_sql, stale_limit, start_grace
 from morca.cgroup import growth_pct_of, oom_text, raised_mb, raised_request
 from morca.recommend import RunRequest
 from morca.resources import Grant, Request, Room, admit
@@ -151,39 +152,20 @@ def create_worker_token(
     if why:
         raise Error("morca: ", why)
     var token = new_token()
-    var expires = (
-        db.conn.query(
-            (
-                "INSERT INTO orca.workers (token_hash, pool, label, created_by,"
-                " expires) VALUES ($1, $2, $3, $4, now() + make_interval(days"
-                " => $5)) RETURNING to_char(expires AT TIME ZONE 'UTC',"
-                ' \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') AS expires'
-            ),
-            Params()
-            .text(token_hash(token))
-            .text(pool)
-            .text(clean_label(label if label else pool))
-            .text(by)
-            .int32(Int32(days)),
-        )
-        .row(0)
-        .text("expires")
+    var expires = workers_db.add_token(
+        db.conn,
+        token_hash(token),
+        pool,
+        clean_label(label if label else pool),
+        by,
+        days,
     )
     return Issued(token^, expires^)
 
 
 def revoke_worker_token(mut db: State, id: Int) raises -> Bool:
     """Revokes worker token `id`; False if it's no live one."""
-    return (
-        db.conn.execute(
-            (
-                "UPDATE orca.workers SET revoked = now() WHERE id = $1 AND"
-                " revoked IS NULL"
-            ),
-            Params().int64(Int64(id)),
-        )
-        == 1
-    )
+    return workers_db.revoke(db.conn, id)
 
 
 @fieldwise_init
@@ -206,17 +188,11 @@ def worker_of(mut db: State, token: String) raises -> Optional[WorkerAuth]:
     """The live worker token `token` is, marked seen; None for any other."""
     if not is_token(token):
         return None
-    var rows = db.conn.query(
-        (
-            "UPDATE orca.workers SET last_seen = now() WHERE token_hash = $1"
-            " AND revoked IS NULL AND expires > now() RETURNING id, pool, label"
-        ),
-        Params().text(token_hash(token)),
-    )
-    if len(rows) != 1:
+    var got = workers_db.seen(db.conn, token_hash(token))
+    if not got:
         return None
-    var r = rows.row(0)
-    return WorkerAuth(Int(r.int64("id")), r.text("pool"), r.text("label"))
+    ref t = got.value()
+    return WorkerAuth(t.id, t.pool, t.label)
 
 
 @fieldwise_init
@@ -246,41 +222,26 @@ struct WorkerRow(Copyable, Movable):
 
 def worker_rows(mut db: State) raises -> List[WorkerRow]:
     """Every worker token, newest first."""
-    comptime ts = '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\''
     var out = List[WorkerRow]()
     var pressure = Dict[String, PressureRow]()
     for p in pressure_rows(db):
         pressure[p.host] = p.copy()
-    for r in db.conn.query(
-        String(
-            "SELECT id, pool, label, CASE WHEN revoked IS NOT NULL THEN",
-            " 'revoked' WHEN expires <= now() THEN 'expired' ELSE 'live' END",
-            " AS state, coalesce(name, '') AS name, coalesce(image, '') AS",
-            " image, coalesce(to_char(last_seen AT TIME ZONE 'UTC', ",
-            ts,
-            "), '') AS last_seen, coalesce(extract(epoch FROM now() -",
-            " last_seen)::bigint, -1) AS ago, coalesce(cpus, 0) AS cpus,",
-            " coalesce(memory_mb, 0) AS mem, coalesce(running, '') AS running,",
-            " to_char(expires AT TIME ZONE 'UTC', ",
-            ts,
-            ") AS expires FROM orca.workers ORDER BY id DESC",
-        )
-    ):
+    for r in workers_db.tokens(db.conn):
         out.append(
             WorkerRow(
-                Int(r.int64("id")),
-                r.text("pool"),
-                r.text("label"),
-                r.text("state"),
-                r.text("name"),
-                r.text("image"),
-                r.text("last_seen"),
-                Int(r.int64("ago")),
-                Int(r.int64("cpus")),
-                Int(r.int64("mem")),
-                r.text("running"),
-                r.text("expires"),
-                pressure.get(worker_host(Int(r.int64("id")))),
+                r.id,
+                r.pool,
+                r.label,
+                r.state,
+                r.name,
+                r.image,
+                r.last_seen,
+                r.seen_ago,
+                r.cpus,
+                r.memory_mb,
+                r.running,
+                r.expires,
+                pressure.get(worker_host(r.id)),
             )
         )
     return out^
@@ -289,23 +250,16 @@ def worker_rows(mut db: State) raises -> List[WorkerRow]:
 def ran_on(mut db: State, run: Int) raises -> String:
     """The worker a run's latest start was claimed by, as `<name> (token
     <id>, <label>)`, or empty for a run no worker claimed."""
-    var rows = db.conn.query(
-        (
-            "SELECT w.id, w.label, coalesce(w.name, '') AS name FROM orca.runs"
-            " r JOIN orca.workers w ON w.id = r.worker WHERE r.id = $1 AND"
-            " r.placement LIKE 'worker:%'"
-        ),
-        Params().int64(Int64(run)),
-    )
-    if len(rows) == 0:
+    var got = workers_db.ran_on(db.conn, run)
+    if not got:
         return ""
-    var r = rows.row(0)
+    ref r = got.value()
     return String(
-        r.text("name") if r.text("name") else String("a worker"),
+        r.name if r.name else String("a worker"),
         " (token ",
-        r.int64("id"),
+        r.id,
         ", ",
-        r.text("label"),
+        r.label,
         ")",
     )
 
@@ -410,19 +364,14 @@ def _seen(mut db: State, w: WorkerAuth, v: Value) raises:
         cpus = v["cpus"].int_value()
     if String("memory_mb") in v and v["memory_mb"].is_int():
         mem = v["memory_mb"].int_value()
-    _ = db.conn.execute(
-        (
-            "UPDATE orca.workers SET name = nullif($2, ''), image ="
-            " nullif($3, ''), cpus = nullif($4, 0), memory_mb = nullif($5, 0),"
-            " running = nullif($6, '') WHERE id = $1"
-        ),
-        Params()
-        .int64(Int64(w.id))
-        .text(text_field(v, "name"))
-        .text(text_field(v, "image"))
-        .int32(Int32(cpus))
-        .int64(mem)
-        .text(text_field(v, "running")),
+    workers_db.set_seen(
+        db.conn,
+        w.id,
+        text_field(v, "name"),
+        text_field(v, "image"),
+        Int(cpus),
+        Int(mem),
+        text_field(v, "running"),
     )
     if String("pressure") in v and v["pressure"].is_object():
         _pressure_seen(db, w, v, Report.from_json(v["pressure"]))
@@ -437,35 +386,17 @@ def _pressure_seen(mut db: State, w: WorkerAuth, v: Value, r: Report) raises:
     var who = String("worker ", name) if name else w.user()
     var suffix = String(" on ", who)
     if r.held:
-        _ = db.conn.execute(
-            (
-                "UPDATE orca.runs r SET held = $2 FROM orca.pipelines p WHERE"
-                " p.name = r.pipeline AND p.placement = $1 AND r.status ="
-                " 'queued' AND r.trigger <> 'fill' AND (r.held IS NULL OR"
-                " starts_with(r.held, 'held: waiting for a worker of pool ')"
-                " OR (starts_with(r.held, 'waiting: memory pressure ') AND"
-                " right(r.held, length($3)) = $3)) AND r.held IS DISTINCT FROM"
-                " $2"
-            ),
-            Params()
-            .text(w.placement())
-            .text(String(r.held, suffix))
-            .text(suffix),
+        workers_db.hold_for_pressure(
+            db.conn, w.placement(), String(r.held, suffix), suffix
         )
         if r.stuck:
             alert_stuck(db, who, r)
         return
-    _ = db.conn.execute(
-        (
-            "UPDATE orca.runs r SET held = $2 FROM orca.pipelines p WHERE"
-            " p.name = r.pipeline AND p.placement = $1 AND r.status = 'queued'"
-            " AND starts_with(r.held, 'waiting: memory pressure ') AND"
-            " right(r.held, length($3)) = $3"
-        ),
-        Params()
-        .text(w.placement())
-        .text(String("held: waiting for a worker of pool ", w.pool))
-        .text(suffix),
+    workers_db.unhold_pressure(
+        db.conn,
+        w.placement(),
+        String("held: waiting for a worker of pool ", w.pool),
+        suffix,
     )
     resolve_stuck(db, who, r)
 
@@ -502,17 +433,7 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
         if String("room_cpus") in v and String("room_memory_mb") in v:
             room_cpus = Int(v["room_cpus"].int_value())
             room_mb = Int(v["room_memory_mb"].int_value())
-        var g = db.conn.query(
-            String(
-                "SELECT coalesce(sum(grant_cpus), 0)",
-                MEMBER_GRANTS_SQL,
-                " AS cpus, coalesce(sum(grant_memory_mb), 0)",
-                MEMBER_MB_SQL,
-                " AS mb FROM orca.runs WHERE worker = $1 AND status =",
-                " 'running'",
-            ),
-            Params().int64(Int64(w.id)),
-        ).row(0)
+        var g = workers_db.granted(db.conn, w.id)
         var name = text_field(v, "name")
         var joined = join_claim(
             db,
@@ -520,8 +441,8 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
             w.placement(),
             room_cpus,
             room_mb,
-            Int(g.int64("cpus")),
-            Int(g.int64("mb")),
+            g[0],
+            g[1],
             String("worker ", name) if name else w.user(),
         )
         if joined:
@@ -565,40 +486,25 @@ def _claim_run(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     # max_runs mustn't hide the runs of the others behind it. The other
     # runs first, then the fill runs, each oldest first. One behind an
     # older run of its keys waits for it (morca.live.behind_sql).
-    var candidates = db.conn.query(
-        "SELECT id, pipeline, trigger FROM (SELECT DISTINCT ON"
-        " (r.pipeline, r.trigger = 'fill') r.id, r.pipeline, r.trigger"
-        " FROM orca.runs r JOIN orca.pipelines p ON p.name = r.pipeline"
-        " WHERE r.status = 'queued' AND p.placement = $1 AND NOT p.paused"
-        " AND p.binary_path IS NOT NULL AND (r.trigger <> 'fill' OR"
-        " p.fills = 'all') AND NOT "
-        + behind_sql("r")
-        + " ORDER BY r.pipeline, r.trigger = 'fill', r.id) AS c ORDER BY"
-        " trigger = 'fill', id",
-        Params().text(w.placement()),
-    )
+    var candidates = workers_db.candidates(db.conn, w.placement())
     var hour = Int((now() % 86400) // 3600)
     for c in candidates:
-        var id = c.int64("id")
-        var ps = registered(db, c.text("pipeline"))
+        var id = c.id
+        var ps = registered(db, c.pipeline)
         if len(ps) == 0:
             continue
         ref p = ps[0]
-        var fill = c.text("trigger") == "fill"
+        var fill = c.trigger == "fill"
         if fill and not p.fill.in_window(hour):
             continue  # it waits for its fill_window, as a local one does
         var why = version_refusal(p.image, image)
         if why:
             refused = why
-            _ = db.conn.execute(
-                (
-                    "UPDATE orca.runs SET held = $2 WHERE pipeline = $1 AND"
-                    " status = 'queued' AND (trigger = 'fill') = $3"
-                ),
-                Params()
-                .text(p.name)
-                .text(String("held: ", w.user(), " can't run it: ", why))
-                .bool(fill),
+            workers_db.hold_queued(
+                db.conn,
+                p.name,
+                String("held: ", w.user(), " can't run it: ", why),
+                fill,
             )
             continue
         # Its request (morca.resources), `auto` learned from its runs
@@ -607,29 +513,11 @@ def _claim_run(mut db: State, w: WorkerAuth, v: Value) raises -> String:
         if room_cpus >= 0:
             sized = run_request(db, p)
         var tx = db.conn.begin()
-        _ = tx.query(
-            "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
-            Params().text(p.name),
-        )
+        starting_db.lock_pipeline(tx, p.name)
         # Its fill runs and its others are capped apart, as on the local
         # runner: `fill_max_runs` (the scheduler queues no more than that,
         # and this holds it if it was lowered since), `max_runs`.
-        var which = String(" AND trigger = 'fill'") if fill else String(
-            " AND trigger <> 'fill'"
-        )
-        var live = Int(
-            tx.query(
-                String(
-                    "SELECT count(*) AS n FROM orca.runs WHERE pipeline = $1",
-                    " AND status = 'running' AND NOT ",
-                    dead,
-                    which,
-                ),
-                Params().text(p.name).float64(stale),
-            )
-            .row(0)
-            .int64("n")
-        )
+        var live = starting_db.live_count(tx, p.name, stale, dead, fill)
         if live >= (p.fill.max_runs if fill else p.max_runs):
             tx.rollback()
             continue
@@ -644,99 +532,66 @@ def _claim_run(mut db: State, w: WorkerAuth, v: Value) raises -> String:
         var grant = Grant.none()
         var admitted = request.any() and room_cpus >= 0
         if admitted:
-            var g = tx.query(
-                String(
-                    "SELECT coalesce(sum(grant_cpus), 0)",
-                    MEMBER_GRANTS_SQL,
-                    " AS cpus, coalesce(sum(grant_memory_mb), 0)",
-                    MEMBER_MB_SQL,
-                    " AS mb FROM orca.runs",
-                    " WHERE worker = $1 AND status = 'running' AND NOT ",
-                    dead,
-                ),
-                Params().int64(Int64(w.id)).float64(stale),
-            ).row(0)
+            var g = workers_db.granted_live(tx, w.id, stale, dead)
             var fit = admit(
                 request,
                 Room(room_cpus, room_mb, room_cpus, room_mb),
-                Int(g.int64("cpus")),
-                Int(g.int64("mb")),
+                g[0],
+                g[1],
                 1,
                 String("worker ", name) if name else w.user(),
             )
             if len(fit[0]) == 0:
                 tx.rollback()
                 refused = fit[1]
-                _ = db.conn.execute(
-                    (
-                        "UPDATE orca.runs SET held = $2 WHERE pipeline = $1"
-                        " AND status = 'queued' AND (trigger = 'fill') = $3"
-                    ),
-                    Params().text(p.name).text(fit[1]).bool(fill),
-                )
+                workers_db.hold_queued(db.conn, p.name, fit[1], fill)
                 continue
             grant = fit[0][0]
-        var got = tx.query(
-            (
-                "UPDATE orca.runs SET status = 'running', owner = $2, heartbeat"
-                " = NULL, started = clock_timestamp(), ended = NULL, starts ="
-                " starts + 1,"
-                " retry_at = NULL, error = NULL, waiting_since = NULL,"
-                " cpu_millis = 0, placement = $3, held = NULL, worker = $4,"
-                " request_cpus = nullif($5, ''), request_memory_gb ="
-                " nullif($6, ''), grant_cpus = nullif($7, 0), grant_memory_mb"
-                " = nullif($8, 0), request_source = nullif($9, ''),"
-                " request_runs = nullif($10, 0) WHERE id = $1 AND status ="
-                " 'queued' RETURNING starts, allow_new_code, partitions"
-            ),
-            Params()
-            .int64(id)
-            .text(WORKER_OWNER)
-            .text(w.placement())
-            .int64(Int64(w.id))
-            .text(recorded_cpus(p, sized) if admitted else String())
-            .text(recorded_memory_gb(p, sized) if admitted else String())
-            .int64(Int64(grant.cpus))
-            .int64(Int64(grant.memory_mb))
-            .text(sized.source)
-            .int64(Int64(sized.runs)),
+        var got = workers_db.start_claimed(
+            tx,
+            id,
+            WORKER_OWNER,
+            w.placement(),
+            w.id,
+            recorded_cpus(p, sized) if admitted else String(),
+            recorded_memory_gb(p, sized) if admitted else String(),
+            grant.cpus,
+            grant.memory_mb,
+            sized.source,
+            sized.runs,
         )
-        if len(got) != 1:
+        if not got:
             tx.rollback()
             continue
-        var r = got.row(0)
+        ref r = got.value()
         var spec = WorkerRun(
             Int(id),
-            Int(r.int64("starts")),
+            r.start,
             p.name,
             p.binary,
             p.registry_hash,
-            r.text("partitions"),
-            r.bool("allow_new_code"),
+            r.partitions,
+            r.allow_new_code,
             p.image,
             p.env.copy(),
             p.secrets.copy(),
             grant,
             members_of(db, p.name) if p.workers > 0 else 0,
         )
-        _ = tx.execute(
-            (
-                "INSERT INTO orca.audit (username, action, run, detail,"
-                " source) VALUES ($1, '/api/worker/claim', $2, $3, 'worker')"
+        audit_db.add(
+            tx,
+            w.user(),
+            "/api/worker/claim",
+            Int(id),
+            String(
+                "start ",
+                spec.start,
+                " on ",
+                name if name else String("a worker"),
+                ", pool ",
+                w.pool,
             ),
-            Params()
-            .text(w.user())
-            .int64(id)
-            .text(
-                String(
-                    "start ",
-                    spec.start,
-                    " on ",
-                    name if name else String("a worker"),
-                    ", pool ",
-                    w.pool,
-                )
-            ),
+            "worker",
         )
         tx.commit()
         return String('{"run": ', worker_run_json(spec), "}")
@@ -749,19 +604,13 @@ def release(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     """`/api/worker/release`: puts back a run the worker was given and won't
     start (its spec isn't for this worker's image), held saying why."""
     var why = text_field(v, "why")
-    var n = db.conn.execute(
-        (
-            "UPDATE orca.runs SET status = 'queued', owner = NULL, heartbeat ="
-            " NULL, starts = starts - 1, worker = NULL, held = $4 WHERE id ="
-            " $1 AND status = 'running' AND owner = $5 AND starts = $2 AND"
-            " worker = $3"
-        ),
-        Params()
-        .int64(_num(v, "run"))
-        .int64(_num(v, "start"))
-        .int64(Int64(w.id))
-        .text(String("held: ", w.user(), " refused it: ", why))
-        .text(WORKER_OWNER),
+    var n = workers_db.give_back(
+        db.conn,
+        _num(v, "run"),
+        _num(v, "start"),
+        w.id,
+        String("held: ", w.user(), " refused it: ", why),
+        WORKER_OWNER,
     )
     return String('{"released": ', "true" if n == 1 else "false", "}")
 
@@ -778,18 +627,10 @@ def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
     var kill = (
         Int(_num(v, "memory_max_mb")) if String("memory_max_mb") in v else limit
     )
-    var rows = db.conn.query(
-        (
-            "SELECT r.pipeline, coalesce(r.grant_memory_mb, 0) AS grant_mb,"
-            " coalesce(p.memory_gb, '') AS memory_gb, r.status = 'running' AS"
-            " running FROM orca.runs r JOIN orca.pipelines p ON p.name ="
-            " r.pipeline WHERE r.id = $1 AND r.worker = $2 AND r.starts = $3"
-        ),
-        Params().int64(run).int64(Int64(w.id)).int64(start),
-    )
-    if len(rows) != 1:
+    var got = workers_db.contained(db.conn, run, w.id, start)
+    if not got:
         return
-    var r = rows.row(0)
+    ref r = got.value()
     # Stall times from a worker that measures them (an older one doesn't).
     var stall = (
         _num(v, "memory_stall_ms") if String("memory_stall_ms") in v else -1
@@ -798,54 +639,32 @@ def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
         _num(v, "memory_stall_full_ms") if String("memory_stall_full_ms")
         in v else -1
     )
-    _ = db.conn.execute(
-        (
-            "UPDATE orca.attempts a SET memory_limit_mb = $3, grant_memory_mb"
-            " = nullif($4, 0), memory_stall_ms = nullif($5, -1),"
-            " memory_stall_full_ms = nullif($6, -1) FROM orca.steps st WHERE"
-            " st.id = a.step AND st.run = $1 AND a.host LIKE '%:' || $2 AND"
-            " a.memory_limit_mb IS NULL"
-        ),
-        Params()
-        .int64(run)
-        .text(String(_num(v, "pid")))
-        .int64(Int64(limit))
-        .int64(r.int64("grant_mb"))
-        .int64(stall)
-        .int64(stall_full),
+    workers_db.set_attempt_limits(
+        db.conn,
+        run,
+        String(_num(v, "pid")),
+        limit,
+        r.grant_mb,
+        stall,
+        stall_full,
     )
-    if _num(v, "oom") != 1 or not r.bool("running"):
+    if _num(v, "oom") != 1 or not r.running:
         return
     var ceiling = limit
-    if r.text("memory_gb"):
-        ceiling = Request.of("", r.text("memory_gb")).memory_max_mb
+    if r.memory_gb:
+        ceiling = Request.of("", r.memory_gb).memory_max_mb
     var g = getenv("MORCA_RUN_MEMORY_GROWTH")
     var next = raised_mb(limit, growth_pct_of(g) if g else 150, ceiling)
     # `held` from a worker that knows it (an older one doesn't send it).
     var held = String("held") in v and _num(v, "held") == 1
     var why = oom_text(limit, kill, next, held)
     _ = db.interrupt(Int(run), why)
-    _ = db.conn.execute(
-        (
-            "UPDATE orca.pipelines SET memory_raised_mb ="
-            " greatest(coalesce(memory_raised_mb, 0), $2), memory_raised_run"
-            " = $3 WHERE name = $1"
-        ),
-        Params().text(r.text("pipeline")).int64(Int64(next)).int64(run),
-    )
+    scheduler_db.raise_memory(db.conn, r.pipeline, next, Int(run))
     print("run", run, "on", w.user(), why)
     # At the most it may ask for, a retry would be killed again: the run
     # fails now, with the kill as its error.
     if next <= limit:
-        _ = db.conn.execute(
-            (
-                "UPDATE orca.runs SET status = 'failed', ended = now(),"
-                " heartbeat = NULL, retry_at = NULL, error = $4,"
-                " unretried_start = starts WHERE id = $1"
-                " AND status = 'running' AND worker = $2 AND starts = $3"
-            ),
-            Params().int64(run).int64(Int64(w.id)).int64(start).text(why),
-        )
+        workers_db.fail_killed(db.conn, run, w.id, start, why)
 
 
 def exited(mut db: State, w: WorkerAuth, v: Value) raises -> String:
@@ -863,18 +682,8 @@ def exited(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     var last = text_field(v, "last")
     if last:
         why.write(": ", last)
-    var n = db.conn.execute(
-        (
-            "UPDATE orca.runs SET status = 'failed', ended = now(), heartbeat ="
-            " NULL, error = $4 WHERE id = $1 AND status = 'running' AND owner"
-            " = $5 AND starts = $2 AND worker = $3"
-        ),
-        Params()
-        .int64(run)
-        .int64(_num(v, "start"))
-        .int64(Int64(w.id))
-        .text(why)
-        .text(WORKER_OWNER),
+    var n = workers_db.fail_unclaimed(
+        db.conn, run, _num(v, "start"), w.id, why, WORKER_OWNER
     )
     var used = 0
     if String("marks") in v and String("pid") in v:
@@ -900,14 +709,8 @@ def exited(mut db: State, w: WorkerAuth, v: Value) raises -> String:
 def _run_of(mut db: State, w: WorkerAuth, run: Int64) raises -> String:
     """The pipeline of `run` if this worker claimed its latest start; else
     raises, final."""
-    var rows = db.conn.query(
-        (
-            "SELECT pipeline FROM orca.runs WHERE id = $1 AND worker = $2 AND"
-            " placement = $3"
-        ),
-        Params().int64(run).int64(Int64(w.id)).text(w.placement()),
-    )
-    if len(rows) != 1:
+    var got = workers_db.claimed_pipeline(db.conn, run, w.id, w.placement())
+    if not got:
         raise Error(
             FINAL,
             "morca: run ",
@@ -916,22 +719,11 @@ def _run_of(mut db: State, w: WorkerAuth, run: Int64) raises -> String:
             w.user(),
             " claimed; stopping",
         )
-    return rows.row(0).text("pipeline")
+    return got.value()
 
 
 def _check_attempt(mut db: State, run: Int64, attempt_id: Int64) raises:
-    if (
-        len(
-            db.conn.query(
-                (
-                    "SELECT 1 FROM orca.attempts a JOIN orca.steps s ON s.id ="
-                    " a.step WHERE a.id = $1 AND s.run = $2"
-                ),
-                Params().int64(attempt_id).int64(run),
-            )
-        )
-        != 1
-    ):
+    if not workers_db.attempt_of(db.conn, attempt_id, run):
         raise Error(
             FINAL, "morca: attempt ", attempt_id, " isn't run ", run, "'s"
         )

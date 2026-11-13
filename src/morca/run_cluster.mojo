@@ -26,7 +26,8 @@ TLS, and is never in a log or a page.
 """
 
 from json import Value
-from postgres import Params
+import morca.db.run_cluster as cluster_db
+from morca.db.run_cluster import MEMBER_GRANTS_SQL, MEMBER_MB_SQL
 
 from morca.http_store import Body
 from morca.registered import registered, run_request
@@ -34,46 +35,23 @@ from morca.cgroup import raised_request
 from morca.resources import Grant, Room, admit
 from morca.state import State
 
-comptime MEMBER_GRANTS_SQL = (
-    " + coalesce((SELECT sum(m.grant_cpus) FROM orca.run_members m WHERE"
-    " m.worker = $1 AND m.ended IS NULL), 0)"
-)
-"""Added to a worker's runs' granted CPUs: its live members'."""
-comptime MEMBER_MB_SQL = (
-    " + coalesce((SELECT sum(m.grant_memory_mb) FROM orca.run_members m"
-    " WHERE m.worker = $1 AND m.ended IS NULL), 0)"
-)
-
 
 def members_of(mut db: State, pipeline: String) raises -> Int:
     """How many more machines `pipeline`'s runs may spread over: its
     `workers`, when set for it; 0 (one machine) when not."""
-    var rows = db.conn.query(
-        (
-            "SELECT coalesce(ec2_workers, 0) AS n FROM orca.pipelines WHERE"
-            " name = $1"
-        ),
-        Params().text(pipeline),
-    )
-    if len(rows) == 0:
-        return 0
-    return Int(rows.row(0).int64("n"))
+    return cluster_db.spread(db.conn, pipeline)
 
 
 def report_head(mut db: State, worker: Int, v: Value) raises -> String:
     """`/api/worker/cluster`: the run's head is at `head`, with `token`; kept
     if the run is still this worker's at that start."""
-    var n = db.conn.execute(
-        (
-            "UPDATE orca.runs SET cluster_head = $4, cluster_token = $5 WHERE"
-            " id = $1 AND starts = $2 AND worker = $3 AND status = 'running'"
-        ),
-        Params()
-        .int64(v["run"].int_value())
-        .int64(v["start"].int_value())
-        .int64(Int64(worker))
-        .text(v["head"].string_value())
-        .text(v["token"].string_value()),
+    var n = cluster_db.set_head(
+        db.conn,
+        Int(v["run"].int_value()),
+        Int(v["start"].int_value()),
+        worker,
+        v["head"].string_value(),
+        v["token"].string_value(),
     )
     return String('{"ok": ', "true" if n == 1 else "false", "}")
 
@@ -81,15 +59,11 @@ def report_head(mut db: State, worker: Int, v: Value) raises -> String:
 def member_left(mut db: State, worker: Int, v: Value) raises -> String:
     """`/api/worker/left`: member `member`'s process ended, `code`."""
     var code = v["code"].int_value() if String("code") in v else Int64(0)
-    _ = db.conn.execute(
-        (
-            "UPDATE orca.run_members SET ended = now(), why = coalesce(why,"
-            " $3) WHERE id = $1 AND worker = $2 AND ended IS NULL"
-        ),
-        Params()
-        .int64(v["member"].int_value())
-        .int64(Int64(worker))
-        .text(String("its process exited ", code)),
+    cluster_db.end_member(
+        db.conn,
+        Int(v["member"].int_value()),
+        worker,
+        String("its process exited ", code),
     )
     return String('{"ok": true}')
 
@@ -97,18 +71,7 @@ def member_left(mut db: State, worker: Int, v: Value) raises -> String:
 def members_to_stop(mut db: State, worker: Int) raises -> List[Int]:
     """This worker's live members whose run isn't running at their start
     any more, ended "its run ended": the worker kills them."""
-    var out = List[Int]()
-    for r in db.conn.query(
-        (
-            "UPDATE orca.run_members m SET ended = now(), why = 'its run ended'"
-            " FROM orca.runs r WHERE m.run = r.id AND m.worker = $1 AND"
-            " m.ended IS NULL AND (r.status <> 'running' OR r.starts <>"
-            " m.start) RETURNING m.id"
-        ),
-        Params().int64(Int64(worker)),
-    ):
-        out.append(Int(r.int64("id")))
-    return out^
+    return cluster_db.end_stale_members(db.conn, worker)
 
 
 @fieldwise_init
@@ -199,22 +162,9 @@ def join_claim(
     oldest running run of the pool with its head known, fewer live members
     than its `workers`, none of them or its head this worker, whose request
     fits what this machine hasn't granted (`used_*`)."""
-    var rows = db.conn.query(
-        (
-            "SELECT r.id, r.starts, r.pipeline, r.cluster_head,"
-            " r.cluster_token FROM orca.runs r JOIN orca.pipelines p ON p.name"
-            " = r.pipeline WHERE r.status = 'running' AND p.placement = $1 AND"
-            " r.cluster_head IS NOT NULL AND r.worker <> $2 AND"
-            " coalesce(p.ec2_workers, 0) > (SELECT count(*) FROM"
-            " orca.run_members m WHERE m.run = r.id AND m.start = r.starts AND"
-            " m.ended IS NULL) AND NOT EXISTS (SELECT 1 FROM orca.run_members m"
-            " WHERE m.run = r.id AND m.start = r.starts AND m.worker = $2 AND"
-            " m.ended IS NULL) ORDER BY r.id"
-        ),
-        Params().text(placement).int64(Int64(worker)),
-    )
+    var rows = cluster_db.joinable(db.conn, placement, worker)
     for c in rows:
-        var ps = registered(db, c.text("pipeline"))
+        var ps = registered(db, c.pipeline)
         if len(ps) == 0:
             continue
         ref p = ps[0]
@@ -237,31 +187,19 @@ def join_claim(
             if len(fit[0]) == 0:
                 continue
             grant = fit[0][0]
-        var got = db.conn.query(
-            (
-                "INSERT INTO orca.run_members (run, start, worker, grant_cpus,"
-                " grant_memory_mb) SELECT $1, $2, $3, nullif($4, 0), nullif($5,"
-                " 0) WHERE NOT EXISTS (SELECT 1 FROM orca.run_members WHERE run"
-                " = $1 AND start = $2 AND worker = $3 AND ended IS NULL)"
-                " RETURNING id"
-            ),
-            Params()
-            .int64(c.int64("id"))
-            .int64(c.int64("starts"))
-            .int64(Int64(worker))
-            .int64(Int64(grant.cpus))
-            .int64(Int64(grant.memory_mb)),
+        var got = cluster_db.add_member(
+            db.conn, c.run, c.start, worker, grant.cpus, grant.memory_mb
         )
-        if len(got) != 1:
+        if not got:
             continue
         return MemberSpec(
-            Int(got.row(0).int64("id")),
-            Int(c.int64("id")),
-            Int(c.int64("starts")),
+            got.value(),
+            c.run,
+            c.start,
             p.name,
             p.binary,
-            c.text("cluster_head"),
-            c.text("cluster_token"),
+            c.head,
+            c.token,
             p.env.copy(),
             p.secrets.copy(),
             grant,

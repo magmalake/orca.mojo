@@ -17,15 +17,19 @@ query run both ways has a function for each, over one SQL text.
 | `morca.db.ec2` | the EC2 runner's runs and instances, and its warm pool |
 | `morca.db.fleet` | `orca.fleet_samples`, `orca.fleet_hourly` and the fleet page's reads |
 | `morca.db.health` | whether the database answers |
+| `morca.db.kube` | the Kubernetes runner's reads of which runs' objects to keep |
 | `morca.db.notify` | `orca.notifications`, `orca.alerts` and the alert rules' reads |
 | `morca.db.pool_runs` | runs queued for a worker pool |
+| `morca.db.pools` | `orca.pools`, `orca.pool_machines` and the pool autoscaler |
 | `morca.db.queueing` | backfills: the keys done, `orca.keys`, the runs queued |
 | `morca.db.registering` | `morca register`'s row of `orca.pipelines` |
+| `morca.db.run_cluster` | a run's cluster over a pool: its head, `orca.run_members` |
 | `morca.db.scheduler` | the scheduler's retries, dead runs and cgroup memory |
 | `morca.db.schedulers` | `orca.schedulers`, the scheduler instances |
 | `morca.db.starting` | a pass that starts a pipeline's runs |
 | `morca.db.system` | `orca.system_minutes`, `orca.system_containers` |
 | `morca.db.watchdog` | `orca.watchdog_rules`, `orca.watchdog_trips` and the rules' readings |
+| `morca.db.workers` | `orca.workers`, the worker tokens, and workers' claims |
 
 **Layering.** These modules import only the standard library, `postgres`
 and each other: never a module of morca's that runs queries through them,

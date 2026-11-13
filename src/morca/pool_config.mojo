@@ -21,7 +21,7 @@ last type has no `wait`: morca keeps trying it. A machine that's running is
 never replaced by a type higher in the list.
 """
 
-from postgres import Params
+import morca.db.pools as pools_db
 
 from morca.control import pool_problem
 from morca.json import quote
@@ -289,35 +289,19 @@ def record_pools(mut db: State, pools: List[PoolConfig]) raises -> List[String]:
     var keep = List[String]()
     for p in pools:
         keep.append(p.name)
-        _ = tx.execute(
-            (
-                "INSERT INTO orca.pools (name, provider, machines, locations,"
-                " max_machines, idle_seconds) VALUES ($1, $2, $3::jsonb,"
-                " $4::jsonb, $5, $6) ON CONFLICT (name) DO UPDATE SET provider"
-                " = EXCLUDED.provider, machines = EXCLUDED.machines, locations"
-                " = EXCLUDED.locations, max_machines = EXCLUDED.max_machines,"
-                " idle_seconds = EXCLUDED.idle_seconds, updated = now()"
-            ),
-            Params()
-            .text(p.name)
-            .text(p.provider)
-            .text(p.machines_json())
-            .text(p.locations_json())
-            .int64(Int64(p.max_machines))
-            .int64(Int64(p.idle_seconds)),
+        pools_db.upsert_pool(
+            tx,
+            p.name,
+            p.provider,
+            p.machines_json(),
+            p.locations_json(),
+            p.max_machines,
+            p.idle_seconds,
         )
     var names = String("[")
     for i in range(len(keep)):
         names.write(", " if i > 0 else "", quote(keep[i]))
     names.write("]")
-    var gone = List[String]()
-    for r in tx.query(
-        (
-            "DELETE FROM orca.pools WHERE NOT name = ANY (SELECT"
-            " jsonb_array_elements_text($1::jsonb)) RETURNING name"
-        ),
-        Params().text(names),
-    ):
-        gone.append(r.text("name"))
+    var gone = pools_db.delete_pools_but(tx, names)
     tx.commit()
     return gone^

@@ -10,15 +10,9 @@ src/morca/expiry.mojo
 src/morca/fill.mojo
 src/morca/follow.mojo
 src/morca/handover.mojo
-src/morca/kube.mojo
 src/morca/lineage.mojo
-src/morca/pool.mojo
-src/morca/pool_boot.mojo
-src/morca/pool_config.mojo
-src/morca/pool_scale.mojo
 src/morca/recommend.mojo
 src/morca/registered.mojo
-src/morca/run_cluster.mojo
 src/morca/sensing.mojo
 src/morca/sensors.mojo
 src/morca/sqlite_store.mojo
@@ -43,4 +37,3 @@ src/morca/views/pools.mojo
 src/morca/views/recent.mojo
 src/morca/views/runs.mojo
 src/morca/views/steps.mojo
-src/morca/workers.mojo
