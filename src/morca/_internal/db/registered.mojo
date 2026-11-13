@@ -60,13 +60,14 @@ struct Registration(Copyable, Movable):
     var learned_key: String
     """What `learned` was learned from (`learn_key` then)."""
     var max_runs_auto: Bool
+    var priority: Int
 
 
 def registrations(
     mut conn: Connection, only: String
 ) raises -> List[Registration]:
     """Every pipeline registered with a binary, or the one named (empty for
-    every one), by name."""
+    every one): the highest `priority` first, then by name (#421)."""
     var rows = conn.query(
         (
             "SELECT name, binary_path, registry_hash, coalesce(since, 0) AS"
@@ -114,8 +115,9 @@ def registrations(
             " coalesce((learned->>'runs')::bigint, 0) AS learned_runs,"
             " coalesce((learned->>'memory_mb')::bigint, 0) AS"
             " learned_memory_mb, coalesce((learned->>'cpus')::bigint, 0) AS"
-            " learned_cpus FROM orca.pipelines WHERE binary_path IS NOT NULL"
-            " AND ($1 = '' OR name = $1) ORDER BY name"
+            " learned_cpus, priority FROM orca.pipelines WHERE binary_path IS"
+            " NOT NULL AND ($1 = '' OR name = $1) ORDER BY priority DESC,"
+            " name"
         ),
         Params().text(only),
     )
@@ -168,6 +170,7 @@ def registrations(
                 Int(r.int64("learned_cpus")),
                 r.text("learned_key"),
                 r.bool("max_runs_auto"),
+                Int(r.int64("priority")),
             )
         )
     return out^

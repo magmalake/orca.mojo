@@ -586,6 +586,11 @@ def _key(key: String) -> StaticString:
         return "The hours of the day, UTC, in which fill runs start."
     if key == "fill_lag":
         return "How long after its end a partition is filled."
+    if key == "priority":
+        return (
+            "Higher starts first when room is short: the scheduler takes the "
+            "pipelines highest first, then by name."
+        )
     if key == "image":
         return "The container image its runs use."
     if key == "spot":

@@ -322,6 +322,14 @@ def _source(
     return (String(FROM_FLAG), String(""))
 
 
+def _has_source(sources: Optional[Value], key: String) raises -> Bool:
+    """Whether the registration says where `key` came from."""
+    if sources:
+        if sources.value().get(key):
+            return True
+    return False
+
+
 def _line_of(sources: Optional[Value], key: String) raises -> Int:
     """The file's line the registration says `key` is set on, or 0."""
     if sources:
@@ -462,6 +470,12 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
         else:
             var w = _source(sources, "keys_per_run")
             s.add("keys_per_run", String(r.keys_per_run.value()), w[0], w[1])
+        # The scheduler's order across pipelines (#421): always shown.
+        if r.priority == 0 and not _has_source(sources, "priority"):
+            s.add("priority", "0", CODE_DEFAULT, "")
+        else:
+            var w = _source(sources, "priority")
+            s.add("priority", String(r.priority), w[0], w[1])
         # A request (morca.resources), only when it has one.
         for key in ["cpus", "memory_gb"]:
             if r.cpus if key == "cpus" else r.memory_gb:
@@ -633,6 +647,8 @@ def export_toml(mut db: State) raises -> String:
                 out.write("max_runs = ", r.max_runs.value(), "\n")
         if r.keys_per_run:
             out.write("keys_per_run = ", r.keys_per_run.value(), "\n")
+        if r.priority != 0:
+            out.write("priority = ", r.priority, "\n")
         for key in ["cpus", "memory_gb"]:
             if r.cpus if key == "cpus" else r.memory_gb:
                 out.write(

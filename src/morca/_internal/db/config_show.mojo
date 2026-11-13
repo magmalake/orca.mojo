@@ -20,7 +20,7 @@ comptime _SHOWN_SQL = (
     " coalesce(fill_budget_per_day, -1) AS fill_budget,"
     " coalesce(fill_window, '') AS fill_window, coalesce(fill_lag, '') AS"
     " fill_lag, coalesce(cpus, '') AS cpus, coalesce(memory_gb, '') AS"
-    " memory_gb, learn FROM orca.pipelines WHERE binary_path IS NOT NULL AND"
+    " memory_gb, learn, priority FROM orca.pipelines WHERE binary_path IS NOT NULL AND"
     " ($1 = '' OR name = $1) ORDER BY name"
 )
 
@@ -61,6 +61,7 @@ struct Settings(Copyable, Movable):
     var cpus: String
     var memory_gb: String
     var learn: Optional[Bool]
+    var priority: Int64
 
 
 def _text(r: Row, c: String) raises -> Optional[String]:
@@ -117,6 +118,7 @@ def settings(mut conn: Connection, only: String) raises -> List[Settings]:
                 r.text("cpus"),
                 r.text("memory_gb"),
                 _bool(r, "learn"),
+                r.int64("priority"),
             )
         )
     return out^

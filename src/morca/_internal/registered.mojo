@@ -111,6 +111,9 @@ struct Registered(Copyable, Movable):
     var max_runs_auto: Bool
     """`max_runs = "auto"` (#266): as many runs at once as this host has
     room for, `max_runs` the ceiling."""
+    var priority: Int
+    """`priority` in morca.toml (#421), 0 by default: the scheduler's pass
+    starts the pipelines highest first."""
 
     def request(self) raises -> Request:
         """As declared: `auto` not resolved (`run_request` does)."""
@@ -219,7 +222,9 @@ def repeated_fill(p: Registered, after: Int64) raises -> String:
 
 
 def registered(mut db: State, only: String = "") raises -> List[Registered]:
-    """Every pipeline registered with a binary, or the one named."""
+    """Every pipeline registered with a binary, or the one named: the
+    highest `priority` first, then by name, the order the scheduler's pass
+    starts them in."""
     var out = List[Registered]()
     var rows = registered_db.registrations(db.conn, only)
     for r in rows:
@@ -278,6 +283,7 @@ def registered(mut db: State, only: String = "") raises -> List[Registered]:
                 ),
                 r.learned_key,
                 r.max_runs_auto,
+                r.priority,
             )
         )
     # A fixed count, or no tasks: no scaling.

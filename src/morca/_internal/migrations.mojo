@@ -841,6 +841,15 @@ def _migrations() -> List[List[String]]:
                 " NOT NULL"
             ),
         ],
+        # A pipeline's priority from morca.toml (#421): the scheduler's
+        # pass goes highest first. Additive: an older binary's INSERTs
+        # leave it 0, and it starts pipelines by name, as it did.
+        [
+            (
+                "ALTER TABLE orca.pipelines ADD COLUMN priority integer NOT"
+                " NULL DEFAULT 0"
+            )
+        ],
     ]
 
 
@@ -869,6 +878,11 @@ def _floor_raisers() -> List[Int]:
     44 (learned requests, `morca._internal.recommend`) is additive: new nullable
     columns the binaries before it neither read nor write. A start they make
     leaves `request_source` and `request_runs` as an earlier start set them.
+
+    57 (`pipelines.priority`, #421) is additive: a column with a default,
+    which the binaries before it neither read nor write; they start the
+    pipelines by name, as they did, and a registration they make leaves it
+    as it was.
     """
     return [1, 24]
 

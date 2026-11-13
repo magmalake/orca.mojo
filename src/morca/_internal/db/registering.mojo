@@ -92,6 +92,8 @@ struct Registration(Copyable, Movable):
     var keys_per_run: Int
     """-1: not given."""
     var fill_max_runs_auto: Bool
+    var priority: Int
+    """0 when not given: kept for a pipeline the file doesn't name."""
 
 
 def register(
@@ -107,7 +109,7 @@ def register(
             " worker_procs, placement, max_runs, env, config, fills,"
             " fill_order, fill_max_runs, fill_budget_per_day, fill_window,"
             " cpus, memory_gb, fill_lag, learn, max_runs_auto, keys_per_run,"
-            " fill_max_runs_auto)"
+            " fill_max_runs_auto, priority)"
             " SELECT"
             " d->>'pipeline',"
             " d->>'registry_hash',"
@@ -119,7 +121,8 @@ def register(
             " nullif($19, ''), nullif($20, -1), nullif($21, -1::float8),"
             " nullif($22, ''), nullif($23, ''), nullif($24, ''),"
             " nullif($25, ''), nullif($26, '')::boolean, CASE WHEN $15 > 0"
-            " THEN $27 END, nullif($28, -1), CASE WHEN $20 > 0 THEN $29 END"
+            " THEN $27 END, nullif($28, -1), CASE WHEN $20 > 0 THEN $29 END,"
+            " $30"
             " FROM"
             " (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO UPDATE SET"
             " registry_hash = EXCLUDED.registry_hash, describe ="
@@ -168,7 +171,9 @@ def register(
             " EXCLUDED.fill_lag ELSE orca.pipelines.fill_lag END, learn ="
             " CASE WHEN $14 THEN EXCLUDED.learn ELSE orca.pipelines.learn"
             " END, keys_per_run = CASE WHEN $14 THEN EXCLUDED.keys_per_run"
-            " ELSE orca.pipelines.keys_per_run END, cpus ="
+            " ELSE orca.pipelines.keys_per_run END, priority = CASE WHEN"
+            " $14 THEN EXCLUDED.priority ELSE orca.pipelines.priority END,"
+            " cpus ="
             " CASE WHEN $14 OR $23"
             " <> '' THEN EXCLUDED.cpus ELSE orca.pipelines.cpus END,"
             " memory_gb = CASE WHEN $14 OR $24 <> '' THEN"
@@ -210,7 +215,8 @@ def register(
         .text(r.learn)
         .bool(r.max_runs_auto)
         .int64(Int64(r.keys_per_run))
-        .bool(r.fill_max_runs_auto),
+        .bool(r.fill_max_runs_auto)
+        .int64(Int64(r.priority)),
     )
     var row = res.row(0)
     return (row.text("name"), row.text("registry_hash"), row.text("image"))

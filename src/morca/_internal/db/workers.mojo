@@ -284,19 +284,21 @@ def candidates(
 ) raises -> List[Candidate]:
     """The oldest queued run of each of the unpaused, registered pipelines
     placed `placement`, and of its fill runs (with fills on), but those
-    behind an older run of their keys: the others first, then the fill
-    runs, each oldest first."""
+    behind an older run of their keys: the highest `priority` first
+    (#421), and within one, the others first, then the fill runs, each
+    oldest first."""
     var out = List[Candidate]()
     for c in conn.query(
         "SELECT id, pipeline, trigger FROM (SELECT DISTINCT ON"
-        " (r.pipeline, r.trigger = 'fill') r.id, r.pipeline, r.trigger"
-        " FROM orca.runs r JOIN orca.pipelines p ON p.name = r.pipeline"
+        " (r.pipeline, r.trigger = 'fill') r.id, r.pipeline, r.trigger,"
+        " p.priority FROM orca.runs r JOIN orca.pipelines p ON p.name ="
+        " r.pipeline"
         " WHERE r.status = 'queued' AND p.placement = $1 AND NOT p.paused"
         " AND p.binary_path IS NOT NULL AND (r.trigger <> 'fill' OR"
         " p.fills = 'all') AND NOT "
         + behind_sql("r")
         + " ORDER BY r.pipeline, r.trigger = 'fill', r.id) AS c ORDER BY"
-        " trigger = 'fill', id",
+        " priority DESC, trigger = 'fill', id",
         Params().text(placement),
     ):
         out.append(

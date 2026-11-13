@@ -92,6 +92,36 @@ def granted(
     return (Int(g.int64("cpus")), Int(g.int64("mb")))
 
 
+def ahead_on_host(
+    mut tx: Transaction,
+    priority: Int,
+    control: Bool,
+    stale: Float64,
+    dead: String,
+) raises -> Optional[Tuple[String, Int]]:
+    """The pipeline of the highest `priority` above `priority` (then the
+    first by name) with a run running on this host with its process alive
+    (`dead` with the stale limit as `$1`), and its priority: of the
+    control-placed runs with `control`, else of those holding a grant. None
+    if there is none (#421)."""
+    var rows = tx.query(
+        String(
+            "SELECT name, priority FROM orca.pipelines WHERE priority > $2",
+            " AND name IN (SELECT pipeline FROM orca.runs WHERE status =",
+            " 'running' AND CASE WHEN $3 THEN placement = 'control' ELSE",
+            " placement IN ('local', 'control') AND (grant_cpus IS NOT NULL",
+            " OR grant_memory_mb IS NOT NULL) END AND NOT ",
+            dead,
+            ") ORDER BY priority DESC, name LIMIT 1",
+        ),
+        Params().float64(stale).int64(Int64(priority)).bool(control),
+    )
+    if len(rows) == 0:
+        return None
+    var r = rows.row(0)
+    return (r.text("name"), Int(r.int64("priority")))
+
+
 def say_held(
     mut tx: Transaction, pipeline: String, hold: String, fill: Bool
 ) raises:

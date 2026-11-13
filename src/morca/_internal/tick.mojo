@@ -1,5 +1,7 @@
 """One pass of the scheduler (`morca tick`; `morca scheduler` makes one a
-second): what each registered pipeline is due, started.
+second): what each registered pipeline is due, started, the highest
+`priority` first and, within one priority, every pipeline's other runs
+before any pipeline's fill runs (#421).
 """
 
 from std.time import perf_counter_ns
@@ -189,7 +191,12 @@ def tick(mut self: Scheduler, now: Int64) raises:
             )
     except e:
         print("morca: can't expire out-of-memory raises:", e)
-    for p in registered(self.db):
+    # Highest priority first (#421): fires, sensors and retries queue
+    # what each pipeline is due, then each priority's pipelines start
+    # their other runs, by name, before any of them starts a fill run, so
+    # a fill takes only the room the others left.
+    var ps = registered(self.db)
+    for p in ps:
         if p.cron:
             try:
                 _fire(self, p, now)
@@ -208,7 +215,14 @@ def tick(mut self: Scheduler, now: Int64) raises:
                 _ = failed_runs(self.db, p.name, p.run_retries, _RETRIED)
             except e:
                 print("morca: can't alert on", p.name, "failures:", e)
-        _start(self, p, now)
-        # After its other runs, so a fill never takes their place.
-        if p.fill.all:
-            _start(self, p, now, fill=True)
+    var i = 0
+    while i < len(ps):
+        var j = i
+        while j < len(ps) and ps[j].priority == ps[i].priority:
+            j += 1
+        for k in range(i, j):
+            _start(self, ps[k], now)
+        for k in range(i, j):
+            if ps[k].fill.all:
+                _start(self, ps[k], now, fill=True)
+        i = j

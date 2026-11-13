@@ -174,6 +174,7 @@ test-resources = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_resou
 # Requests learned from the measured peaks (morca.recommend), shown only.
 test-recommend = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_recommend.mojo -o build/test-recommend && ./build/test-recommend" }
 test-grants = { cmd = "scripts/with-postgres.sh tests/grants.sh" }
+test-priority = { cmd = "scripts/with-postgres.sh tests/priority.sh" }
 # Admission by memory pressure (orca.pressure, morca.admission): PSI parsing
 # and the hold's hysteresis, then runs waiting on a fixture PSI file.
 test-pressure = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_pressure.mojo -o build/test-pressure && ./build/test-pressure && scripts/with-postgres.sh tests/pressure.sh" }
@@ -205,7 +206,7 @@ test-executor-core = { depends-on = ["build-shared", "test-sample", "test-steps"
 test-executor-workers = { depends-on = ["build-shared", "test-ec2", "test-autoscale", "test-worker-procs", "test-no-workers", "test-pool", "test-hcloud", "test-pool-scale", "test-pool-scale-ec2", "test-run-cluster", "test-pool-spread", "test-secrets", "test-placement", "test-grants", "test-pressure", "test-lost-workers"] }
 test-executor = { depends-on = ["test-executor-core", "test-executor-workers"] }
 # The scheduler, the UI, and what a registration and its code control:
-test-scheduler-ui = { depends-on = ["build-shared", "test-toml", "test-upgrade", "test-config", "test-fill", "test-fill-version", "test-pool-fills", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-system", "test-actions", "test-calendar", "test-ui-login", "test-ui-drain", "test-remote", "test-worker-api", "test-pause", "test-older-binary", "test-watchdog", "test-notify", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-adopt", "test-overlap", "test-outdated", "test-one-run-per-key", "test-hourly", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
+test-scheduler-ui = { depends-on = ["build-shared", "test-toml", "test-upgrade", "test-config", "test-fill", "test-fill-version", "test-priority", "test-pool-fills", "test-metrics", "test-scheduler", "test-ui", "test-fleet", "test-system", "test-actions", "test-calendar", "test-ui-login", "test-ui-drain", "test-remote", "test-worker-api", "test-pause", "test-older-binary", "test-watchdog", "test-notify", "test-versions", "test-manual-run", "test-new-code", "test-defer", "test-dead-runs", "test-adopt", "test-overlap", "test-outdated", "test-one-run-per-key", "test-hourly", "test-sense-errors", "test-stop", "test-binary-timeouts"] }
 test = { depends-on = ["test-executor", "test-scheduler-ui"] }
 toy = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy" }
 fanout = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout" }

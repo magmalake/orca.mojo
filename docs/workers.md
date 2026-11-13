@@ -49,7 +49,9 @@ one. So a fill never has more than `fill_max_runs` runs going, however many
 workers the pool has, and the scheduler queues a new one only as one ends.
 What one machine takes is that worker's own `--max-runs` and, for a
 pipeline with a request, what its host can grant. Fill runs don't count
-against `max_runs`, and the pipeline's other runs are claimed first. A
+against `max_runs`, and the pipeline's other runs are claimed first; across
+the pool's pipelines, the highest [`priority`](morca-toml.md#priority)
+first, then every pipeline's other runs before any fill runs. A
 worker's machine runs anyway, so a pool's fill runs cost nothing against
 `fill_budget_per_day`. The pipeline page's Fill line and the coverage
 calendar count the queued fill runs as live.

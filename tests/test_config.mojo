@@ -224,6 +224,41 @@ def test_fill_keys() raises:
     )
 
 
+def test_priority() raises:
+    # `priority` (#421): an integer, from [defaults] or the pipeline's
+    # table, laid over by a stack's overlay; no flag sets it.
+    var f = ProjectConfig(
+        String(
+            "[defaults]\npriority = 5\n",
+            "[pipelines.a]\npriority = -3\n",
+            "[pipelines.b]\n",
+        ),
+        "morca.toml",
+    )
+    var a = resolve("a", RegisterFlags(), f)
+    assert_equal(a.text("priority"), "-3")
+    assert_equal(a.values["priority"].copy().detail, "[pipelines.a]")
+    var b = resolve("b", RegisterFlags(), f)
+    assert_equal(b.text("priority"), "5")
+    assert_equal(b.values["priority"].copy().detail, "[defaults]")
+    _write("build/test-config-priority.toml", "[pipelines.a]\npriority = 1\n")
+    _write(
+        "build/test-config-priority-overlay.toml",
+        "[pipelines.a]\npriority = 10\n",
+    )
+    var o = ProjectConfig.load(
+        "build/test-config-priority.toml",
+        "build/test-config-priority-overlay.toml",
+    )
+    var ao = resolve("a", RegisterFlags(), o)
+    assert_equal(ao.text("priority"), "10")
+    assert_true("overlay" in ao.values["priority"].copy().detail)
+    _refused('[pipelines.a]\npriority = "high"\n', "is an integer, not")
+    _refused("[pipelines.a]\npriority = 1.5\n", "is an integer, not")
+    _refused("[pipelines.a]\npriority = true\n", "is an integer, not")
+    _refused("[pipelines.a]\npriority = 1001\n", "from -1000 to 1000")
+
+
 def test_learned_requests() raises:
     # `auto` and `auto..MAX` (morca.recommend), and `learn`.
     var f = ProjectConfig(
