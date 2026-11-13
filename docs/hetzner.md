@@ -682,7 +682,14 @@ When the morca tag changes (not for a rollback), `deploy.sh`:
 
 What makes a step run once is the range: a deploy from 1.1.0 to 1.2.0 takes
 1.2.0's steps, the next one from 1.2.0 doesn't, and a deploy that skips a
-version takes the skipped version's steps too. Nothing is recorded in the
+version takes the skipped version's steps too. A command that several of
+those versions ask for (the same `run` and `when`, after trimming spaces)
+runs once, where its last version has it, for all their ids: `ran 'morca
+backfill --rerun mojo_retool @all' for 1.2.0-retool, 1.3.0-retool`, and a
+failure fails them all. A narrower command isn't merged into a wider one.
+A `before` command named in `--confirmed` needs all its ids there.
+`morca upgrade --from <deployed> --to <new>`, run in the new image, prints
+that plan. Nothing is recorded in the
 database, so a deploy of the same tag again (`--all`) runs none, and a
 rollback and a deploy forward again run them again. A dry run prints the
 `morca-stack upgrade-steps` commands but can't list the steps: it doesn't

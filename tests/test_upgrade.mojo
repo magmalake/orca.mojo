@@ -8,6 +8,7 @@ from std.testing import (
 
 from morca._internal.upgrade import (
     UpgradeStep,
+    merge_runs,
     parse_upgrade,
     select_steps,
     step_line,
@@ -75,6 +76,68 @@ def test_range() raises:
         step_line(c[1]),
         "step\t1.1.0-embed\tafter\trun\tmorca backfill mojo_embed 2026-11-10",
     )
+
+
+comptime SHARED = """
+[[version]]
+version = "1.2.0"
+
+[[version.step]]
+id = "1.2.0-reread"
+run = "morca backfill --rerun mojo_retool @all"
+
+[[version.step]]
+id = "1.2.0-embed"
+run = "morca backfill mojo_embed @all"
+
+[[version]]
+version = "1.3.0"
+
+[[version.step]]
+id = "1.3.0-check"
+when = "before"
+run = "morca backfill --rerun mojo_retool @all"
+
+[[version.step]]
+id = "1.3.0-reread"
+run = "morca backfill --rerun mojo_retool @all  "
+
+[[version]]
+version = "1.3.1"
+
+[[version.step]]
+id = "1.3.1-reread"
+run = "morca backfill --rerun mojo_retool @all"
+
+[[version.step]]
+id = "1.3.1-narrow"
+run = "morca backfill --rerun mojo_retool 2026-11-01"
+"""
+
+
+def test_merge_runs() raises:
+    var steps = parse_upgrade(SHARED)
+    # One deploy crossing all three: the shared command once, at its last
+    # place, for every id; the before step and a narrower range stay.
+    var m = merge_runs(select_steps(steps, "1.1.0", "1.3.1"))
+    assert_equal(len(m), 4)
+    assert_equal(m[0].id, "1.2.0-embed")
+    assert_equal(m[1].id, "1.3.0-check")
+    assert_equal(m[1].when, "before")
+    assert_equal(
+        step_line(m[2]),
+        "step\t1.2.0-reread,1.3.0-reread,1.3.1-reread\tafter\trun\tmorca"
+        " backfill --rerun mojo_retool @all",
+    )
+    assert_equal(m[3].id, "1.3.1-narrow")
+    # Different commands: each, in order.
+    var one = merge_runs(select_steps(steps, "1.1.0", "1.2.0"))
+    assert_equal(len(one), 2)
+    assert_equal(one[0].id, "1.2.0-reread")
+    assert_equal(one[1].id, "1.2.0-embed")
+    # Manual steps aren't merged.
+    var f = merge_runs(select_steps(parse_upgrade(FILE), "1.0.0", "1.3.0"))
+    assert_equal(len(f), 4)
 
 
 def test_refused() raises:

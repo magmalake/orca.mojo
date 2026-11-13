@@ -88,7 +88,8 @@
 # --confirmed id,...; with --yes an unconfirmed instruction stops the deploy);
 # the "after" ones run once the pipelines are registered, before they're
 # unpaused (commands asked about, or run with --yes; instructions printed),
-# and a failed one fails the deploy at the end, the rest deployed.
+# and a failed one fails the deploy at the end, the rest deployed. A command
+# several of the versions ask for runs once, for all their ids (#343).
 #
 # It ends with morca-stack check (docs/hetzner.md#the-check-after-each-deploy):
 # the containers, one scheduler, the pipelines' binaries, and a canary run
@@ -210,9 +211,31 @@ ask() {
 }
 
 # upgrade_steps WHEN: the steps' lines, an empty list in a dry run (which
-# prints the command).
+# prints the command), each command once (merge_steps).
 upgrade_steps() {
-    remote_out "" morca-stack upgrade-steps --tag "$tag" --from "$from" --when "$1"
+    out_=$(remote_out "" morca-stack upgrade-steps --tag "$tag" --from "$from" --when "$1") || return 1
+    [ -z "$out_" ] || printf '%s\n' "$out_" | merge_steps
+}
+
+# merge_steps: step lines with each run command (trimmed) once, where it
+# last comes, its id the ids of all that asked for it, comma-separated
+# (#343). The new image's morca upgrade does this already; an older one's
+# doesn't.
+merge_steps() {
+    awk -F '\t' -v OFS='\t' '
+        { l[NR] = $0; k[NR] = $4; t = $5; gsub(/^ +| +$/, "", t); c[NR] = $3 OFS t
+          if ($4 == "run") { last[c[NR]] = NR; ids[c[NR]] = (c[NR] in ids) ? ids[c[NR]] "," $2 : $2 } }
+        END { for (i = 1; i <= NR; i++) {
+            if (k[i] != "run") print l[i]
+            else if (last[c[i]] == i) { split(c[i], p, OFS); print "step", ids[c[i]], p[1], "run", p[2] }
+        } }'
+}
+
+# confirmed_all IDS: every one of IDS (a,b) is in --confirmed.
+confirmed_all() {
+    for i_ in $(echo "$1" | tr , ' '); do
+        case "$confirmed" in *",$i_,"*) ;; *) return 1 ;; esac
+    done
 }
 
 tab=$(printf '\t')
@@ -225,11 +248,12 @@ if [ "$steps" = 1 ]; then
         done
         # Each one done, or confirmed, before anything changes.
         while IFS="$tab" read -r _ id _ kind text; do
-            case "$confirmed" in *",$id,"*) log "[$id] confirmed (--confirmed)"; continue ;; esac
+            if confirmed_all "$id"; then log "[$id] confirmed (--confirmed)"; continue; fi
             if [ "$kind" = run ]; then
                 if [ "$YES" = 1 ] || ask "run '$text' now?" < /dev/tty; then
                     # shellcheck disable=SC2086
                     remote morca-stack upgrade-run $text < /dev/null || die "[$id] '$text' failed; nothing was deployed"
+                    log "ran '$text' for $(echo "$id" | sed 's/,/, /g')"
                 else
                     die "[$id] not run; nothing was deployed (run it, then deploy with --confirmed $id)"
                 fi
@@ -397,7 +421,11 @@ if [ "$steps" = 1 ]; then
             elif [ "$YES" = 1 ] || ask "[$id] run '$text' now?" < /dev/tty; then
                 log "[$id] $text"
                 # shellcheck disable=SC2086
-                remote morca-stack upgrade-run $text < /dev/null || step_failed="$step_failed $id"
+                if remote morca-stack upgrade-run $text < /dev/null; then
+                    log "ran '$text' for $(echo "$id" | sed 's/,/, /g')"
+                else
+                    step_failed="$step_failed $(echo "$id" | tr , ' ')"
+                fi
             else
                 echo "  [$id] not run; run it later: ssh root@$IP docker exec scheduler $text"
             fi
