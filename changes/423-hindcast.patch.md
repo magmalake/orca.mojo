@@ -1,0 +1,1 @@
+- **Hindcast example**: examples/hindcast scores NOAA GFS 2 m temperature forecasts, fetched and decoded by a Rust worker and scored by Mojo steps; see its README. (#423)
