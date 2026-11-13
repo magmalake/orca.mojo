@@ -845,10 +845,8 @@ def _migrations() -> List[List[String]]:
         # pass goes highest first. Additive: an older binary's INSERTs
         # leave it 0, and it starts pipelines by name, as it did.
         [
-            (
-                "ALTER TABLE orca.pipelines ADD COLUMN priority integer NOT"
-                " NULL DEFAULT 0"
-            )
+            "ALTER TABLE orca.pipelines ADD COLUMN priority integer NOT"
+            " NULL DEFAULT 0"
         ],
     ]
 
