@@ -707,15 +707,11 @@ jobs:
           du -sh .pixi 2> /dev/null || echo "no .pixi yet: this job builds the environment"
 
       # pixi 0.78.0 is installed for the runner's `ci` user, as the lock
-      # needs. The runner service's PATH should have it, from the
-      # LaunchDaemon's EnvironmentVariables; until it does, it's added here.
-      - name: pixi on PATH
+      # needs, and the runner service's PATH has it (the LaunchDaemon's
+      # EnvironmentVariables, #360).
+      - name: pixi
         run: |
-          if ! command -v pixi > /dev/null; then
-            echo "::warning::pixi isn't on the runner's PATH: add $HOME/.pixi/bin to PATH in the LaunchDaemon's EnvironmentVariables (#360)"
-            echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
-            PATH="$HOME/.pixi/bin:$PATH"
-          fi
+          command -v pixi > /dev/null || { echo "::error::pixi isn't on the runner's PATH: add $HOME/.pixi/bin to PATH in /Library/LaunchDaemons/dev.magmalake.ci-runner.plist's EnvironmentVariables (#360)"; exit 1; }
           echo "user: $(id -un), pixi: $(command -v pixi), $(pixi --version)"
 
       # An environment a cancelled job left half-installed is built again
