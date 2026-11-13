@@ -106,6 +106,7 @@ pixi run morca && ./build/morca register ./build/toy && ./build/morca scheduler 
 ./build/morca backfill --rerun --allow-append taxi 2024-03   # queue a month again, though it succeeded; taxi's load appends, so say so
 ./build/morca cancel taxi @all  # cancel its queued, running and retrying runs (or KEYS)
 ./build/morca pause taxi        # the scheduler starts none of its runs until morca unpause taxi
+./build/morca retire taxi       # no longer registered, its runs and tables kept; morca register brings it back
 ./build/morca watchdog status   # the watchdog pauses pipelines on a launch storm, runaway cost, idle workers,
                                # failures, stuck runs or a full control host (docs/watchdog.md);
                                # morca watchdog snooze launches 2h silences a rule, morca watchdog ack keeps a trip's pipelines paused

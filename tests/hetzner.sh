@@ -90,7 +90,7 @@
 # - morca-stack check: ok on a healthy stack, and FAIL naming what's wrong (a
 #   stopped container, an unhealthy UI, a scheduler-next left (a draining
 #   old scheduler is information, and an exited one apply removes), a pipeline
-#   whose binary isn't in the image, none registered, a canary run that
+#   whose binary isn't in the image (a retired one left out), none registered, a canary run that
 #   failed or didn't end in time); checked keeps the result, kind and tags;
 #   deploy.sh ends with it (hetzner.env's CANARY as --canary) and fails
 #   when it fails;
@@ -1204,7 +1204,11 @@ stack check > "$FAKE/out" 2>&1 || fail "check after apply removed an exited sche
 echo /opt/morca/pipelines/toy > "$FAKE/no-binary"
 why_="FAIL  pipelines: not in the scheduler's image: toy (/opt/morca/pipelines/toy)"
 check_fails
-rm "$FAKE/no-binary"
+# A retired pipeline (morca retire, #427) is left out.
+echo toy > "$FAKE/retired"
+stack check > "$FAKE/out" 2>&1 || { cat "$FAKE/out"; fail "check with the binary-less toy retired"; }
+has "check: ok    pipelines: 1 registered"
+rm "$FAKE/no-binary" "$FAKE/retired"
 touch "$FAKE/unregistered"
 why_="FAIL  pipelines: none registered"
 check_fails

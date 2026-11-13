@@ -11,7 +11,10 @@
 #   a running run is asked to stop before its next step; a failed run that
 #   won't be retried, and a succeeded one, are left alone;
 # - the pipeline page's cancel form, empty for all of them;
-# - paused, a run whose process stopped is queued again.
+# - paused, a run whose process stopped is queued again;
+# - `morca retire` (#427): a queued run stays queued through ticks, the
+#   home page's JSON and `morca status` leave it out (its own page still
+#   answers), its runs are kept; `morca register` brings it back.
 #
 # Needs MORCA_DATABASE_URL (pixi run test-pause starts a throwaway server),
 # curl and jq.
@@ -155,6 +158,27 @@ tick 2024-02-02T03:10Z
 [ "$(status_of 2023-12)" = queued ] || fail "a paused pipeline's dead run is $(status_of 2023-12), not queued"
 [ "$(q "SELECT starts FROM orca.runs WHERE partitions = '2023-12'")" = 1 ] || fail "the requeue reset its starts"
 morca cancel toy @all > /dev/null && morca unpause toy > /dev/null || fail "cancel, unpause"
+
+# Retired: nothing starts, the lists leave it out, register brings it back.
+runs_before=$(q "SELECT count(*) FROM orca.runs WHERE pipeline = 'toy'")
+[ "$(morca retire toy)" = "retired toy" ] || fail "morca retire"
+morca retire toy > /dev/null && fail "retiring a retired pipeline"
+morca retire nope > /dev/null && fail "retiring no pipeline"
+q "INSERT INTO orca.runs (pipeline, registry_hash, partitions, trigger, status)
+   SELECT 'toy', registry_hash, '2023-11', 'ui', 'queued' FROM orca.pipelines WHERE name = 'toy'" > /dev/null
+tick 2024-02-02T03:20Z
+tick 2024-02-02T03:21Z
+[ "$(status_of 2023-11)" = queued ] || fail "a retired pipeline's run is $(status_of 2023-11), not queued"
+[ "$(json / | jq '[.pipelines[] | select(.name == "toy")] | length')" = 0 ] || fail "the home page lists a retired pipeline"
+morca status > "$log.status" || fail "morca status"
+grep -q toy "$log.status" && fail "morca status lists a retired pipeline: $(cat "$log.status")"
+[ "$(json /pipelines/toy | jq -r .pipeline.name)" = toy ] || fail "a retired pipeline's page"
+[ "$(q "SELECT count(*) FROM orca.runs WHERE pipeline = 'toy'")" = $((runs_before + 1)) ] || fail "retiring lost runs"
+MORCA_NOW=2024-02-02T03:22Z ./build/morca register ./build/toy > "$log.reg" 2>&1 || fail "register again"
+grep -q "toy was retired: registered again" "$log.reg" || fail "register didn't say it brought toy back: $(cat "$log.reg")"
+[ "$(q "SELECT retired IS NULL FROM orca.pipelines WHERE name = 'toy'")" = t ] || fail "still retired"
+[ "$(json / | jq '[.pipelines[] | select(.name == "toy")] | length')" = 1 ] || fail "the home page leaves out a registered pipeline"
+morca cancel toy @all > /dev/null || fail "cancel after retire"
 
 stop
 echo "ok   pause"

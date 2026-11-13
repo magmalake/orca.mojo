@@ -34,6 +34,26 @@ def change_paused(
     )
 
 
+def change_retired(
+    mut conn: Connection, pipeline: String, retired: Bool
+) raises -> Bool:
+    """Retires `pipeline` (`retired` now) or brings it back (null), if it
+    isn't so already; whether it changed (#427)."""
+    return (
+        len(
+            conn.query(
+                (
+                    "UPDATE orca.pipelines SET retired = CASE WHEN $2 THEN"
+                    " now() END WHERE name = $1 AND (retired IS NULL) = $2"
+                    " RETURNING name"
+                ),
+                Params().text(pipeline).bool(retired),
+            )
+        )
+        == 1
+    )
+
+
 def names(mut conn: Connection) raises -> List[String]:
     """Every pipeline's name, in order."""
     var out = List[String]()

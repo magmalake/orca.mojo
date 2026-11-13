@@ -623,8 +623,9 @@ way back. It checks:
   scheduler still draining is an `info` line, not a failure:
   `scheduler-old-<time>: draining N run(s) (outdated)`;
 - the pipelines: at least one registered, and each one's binary is in the
-  scheduler's image (`morca-stack register` fixes a stale one); the paused
-  ones are listed;
+  scheduler's image (`morca-stack register` fixes a stale one; for one the
+  image no longer has, `docker exec scheduler morca retire <pipeline>`); the
+  paused ones are listed, the retired ones left out;
 - canary runs, if `hetzner.env` has `CANARY="PIPELINE=KEY ..."`: a run each
   (`morca start`), one at a time, waited for up to `CANARY_TIMEOUT` seconds
   (default 1800), each of which must succeed. For a dev stack, not

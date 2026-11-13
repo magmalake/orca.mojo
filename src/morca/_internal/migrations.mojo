@@ -851,6 +851,10 @@ def _migrations() -> List[List[String]]:
                 " NOT NULL DEFAULT now())"
             ),
         ],
+        # When a pipeline was retired (#427, `morca retire`): the scheduler
+        # starts none of its runs, and lists skip it; `morca register`
+        # clears it. Additive: an older binary neither reads nor writes it.
+        ["ALTER TABLE orca.pipelines ADD COLUMN retired timestamptz"],
     ]
 
 
@@ -879,6 +883,11 @@ def _floor_raisers() -> List[Int]:
     44 (learned requests, `morca._internal.recommend`) is additive: new nullable
     columns the binaries before it neither read nor write. A start they make
     leaves `request_source` and `request_runs` as an earlier start set them.
+
+    58 (`pipelines.retired`, #427) is additive: a nullable column the
+    binaries before it neither read nor write. While one overlaps a newer
+    one it would still start a retired pipeline's runs, but only the
+    instance that leads starts runs, and the newer one leads.
     """
     return [1, 24]
 
