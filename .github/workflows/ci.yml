@@ -585,6 +585,11 @@ jobs:
   # warehouse and MinIO, and local mode over an S3 warehouse crashes forked
   # workers on macOS, morca #135). The nightly leg's macos-latest runs the two
   # halves of `test` in full.
+  #
+  # Also left out, for time: test-versions (5 minutes here), test-hetzner (6,
+  # and its hetzner-stacks.sh once failed here, an old scheduler not yet
+  # removed once it exited), test-pool-scale, test-pool-scale-ec2 and
+  # test-placement. With them the job would pass 45 minutes.
   macos:
     name: macOS (m4)
     needs: [changes, release]
@@ -652,8 +657,7 @@ jobs:
             test-formal-fence test-cli test-logs test-remote test-kill \
             test-scheduler test-chaos test-hcloud test-aws test-worker-procs \
             test-compile-fail test-config test-fill test-chaos-sqlite test-crash \
-            test-versions test-ec2 test-hetzner test-pool-scale test-pool-scale-ec2 \
-            test-placement test-ui; do
+            test-ec2 test-ui; do
             echo "::group::$t"
             pixi run -e default "$t"
             echo "::endgroup::"
