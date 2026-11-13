@@ -37,6 +37,7 @@ HCLOUD_CONTEXT=morca-dev
 BUCKET=morca-dev-bkt
 S3_ENDPOINT=https://fsn1.example.invalid
 S3_REGION=fsn1
+DRAIN_SECONDS=86400
 ADMIN_IP=203.0.113.7/32
 SSH_PUBLIC_KEY_FILE=$FAKE/k.pub
 S3_CREDENTIALS_FILE=$FAKE/s3.env
@@ -61,7 +62,7 @@ has "+ ssh root@<server-ip> morca-stack sync --keys settings.env < "
 has "+ ssh root@<server-ip> morca-stack sync tunnel.env < $FAKE/tunnel.env"
 # The stack's overlay, named relative to its settings file (#332).
 has "+ ssh root@<server-ip> morca-stack sync overlay/morca.overlay.toml < $FAKE/dev.overlay.toml"
-has "+ ssh root@<server-ip> morca-stack configure MORCA_IMAGE=ghcr.io/morca-dev/census .*BUCKET=morca-dev-bkt BACKUP_KEEP=14 GHCR_USER=$"
+has "+ ssh root@<server-ip> morca-stack configure MORCA_IMAGE=ghcr.io/morca-dev/census .*BUCKET=morca-dev-bkt BACKUP_KEEP=14 GHCR_USER= OVERLAP=1 DRAIN_SECONDS=86400$"
 has "+ ssh root@<server-ip> morca-stack configure --keep-existing MORCA_TAG=latest"
 has "# settings.env from $FAKE/dev.env: AWS_REGION .* MORCA_CONFIG_OVERLAY MORCA_CONFIG "
 # down.sh --all: the same.
@@ -98,7 +99,7 @@ mkdir -p "$MORCA_CONF"
 } > "$MORCA_CONF/settings.env"
 printf 'AWS_ACCESS_KEY_ID=x\nAWS_SECRET_ACCESS_KEY=y\n' > "$MORCA_CONF/s3.env"
 stack() { sh deploy/hetzner/server/morca-stack "$@"; }
-stack configure MORCA_IMAGE=img MORCA_TAG=aaa1111 BUCKET=morca-dev-bkt > /dev/null
+stack configure MORCA_IMAGE=img MORCA_TAG=aaa1111 BUCKET=morca-dev-bkt DRAIN_SECONDS=86400 > /dev/null
 stack apply > "$FAKE/out" 2>&1 || fail "morca-stack apply"
 grep -qx 'MORCA_CONFIG=/opt/morca/morca.dev.toml' "$MORCA_CONF/morca.env" || fail "no MORCA_CONFIG in morca.env"
 grep -q "run -d --name scheduler .*--env-file $MORCA_CONF/morca.env" "$FAKE/docker.log" || fail "the scheduler doesn't get morca.env"

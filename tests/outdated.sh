@@ -11,7 +11,8 @@
 #   after beat, is shown outdated ("newer version bbbb2222bbbb is leading")
 #   in `morca status`, its JSON and its page, and succeeds once it returns,
 #   with one start and one attempt; nothing was killed, cancelled or queued
-#   again. Only then does A exit, without MORCA_DRAIN_SECONDS (no limit);
+#   again. Only then does A exit, its drain limit (MORCA_DRAIN_SECONDS, an
+#   hour) far off;
 # - C joins with the same code (a deploy of new settings, say): B's run is
 #   outdated because its scheduler drains, the same version on both sides.
 #
@@ -45,7 +46,8 @@ out=$PWD/build/outdated-runs.out
 export MORCA_STALE_SECONDS=2 MORCA_SAMPLE_SECONDS=0 MORCA_WATCHDOG_SECONDS=0
 export MORCA_NOW=2024-01-15T00:00Z MORCA_OVERLAP=on
 export OUTDATED_OUT=$out OUTDATED_STOP=$PWD/build/outdated-stop OUTDATED_HANDOVER=2024-04
-unset MORCA_LOGS MORCA_DRAIN_SECONDS
+export MORCA_DRAIN_SECONDS=3600
+unset MORCA_LOGS
 pids=
 cleanup() {
     for p in $pids; do kill "$p" 2> /dev/null || true; done
