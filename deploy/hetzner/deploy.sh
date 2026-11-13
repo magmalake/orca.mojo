@@ -224,7 +224,8 @@ upgrade_steps() {
 merge_steps() {
     awk -F '\t' -v OFS='\t' '
         { l[NR] = $0; k[NR] = $4; t = $5; gsub(/^ +| +$/, "", t); c[NR] = $3 OFS t
-          if ($4 == "run") { last[c[NR]] = NR; ids[c[NR]] = (c[NR] in ids) ? ids[c[NR]] "," $2 : $2 } }
+          # Not ids[x] = (x in ids) ? ...: mawk makes ids[x] before the test.
+          if ($4 == "run") { last[c[NR]] = NR; if (c[NR] in ids) ids[c[NR]] = ids[c[NR]] "," $2; else ids[c[NR]] = $2 } }
         END { for (i = 1; i <= NR; i++) {
             if (k[i] != "run") print l[i]
             else if (last[c[i]] == i) { split(c[i], p, OFS); print "step", ids[c[i]], p[1], "run", p[2] }
