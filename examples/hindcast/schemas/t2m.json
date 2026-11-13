@@ -1,0 +1,12 @@
+{
+  "type": "struct",
+  "schema-id": 0,
+  "fields": [
+    {"id": 1, "name": "cycle", "required": true, "type": "date"},
+    {"id": 2, "name": "lead_hours", "required": true, "type": "int"},
+    {"id": 3, "name": "valid_time", "required": true, "type": "timestamptz"},
+    {"id": 4, "name": "lat", "required": true, "type": "float"},
+    {"id": 5, "name": "lon", "required": true, "type": "float"},
+    {"id": 6, "name": "t2m_k", "required": true, "type": "float"}
+  ]
+}

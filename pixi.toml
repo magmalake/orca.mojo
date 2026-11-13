@@ -356,6 +356,7 @@ rust = ">=1.85"
 
 [feature.rust.tasks]
 test-rust-worker = { cmd = "tests/rust_worker.sh" }
+test-hindcast = { cmd = "tests/hindcast.sh" }
 
 # MinIO for the tests over object storage (scripts/with-minio.sh). conda-forge
 # builds it for these two platforms only.
