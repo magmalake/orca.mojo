@@ -1,0 +1,1 @@
+- **Per-run cgroups on by default on Hetzner:** `morca-stack apply` gives each run a memory-limited cgroup unless `CGROUPS=0`, warning for pipelines whose peaks exceed their limit; the next deploy replaces the scheduler, so check those warnings first. (#410)
