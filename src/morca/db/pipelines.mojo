@@ -52,3 +52,11 @@ def unpaused(mut conn: Connection) raises -> List[String]:
     ):
         out.append(row.text("name"))
     return out^
+
+
+def set_version(mut conn: Connection, pipeline: String, version: Int) raises:
+    """Records that `pipeline`'s code now is `version`."""
+    _ = conn.execute(
+        "UPDATE orca.pipelines SET version = $2 WHERE name = $1",
+        Params().text(pipeline).int64(Int64(version)),
+    )

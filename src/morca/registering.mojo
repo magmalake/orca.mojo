@@ -3,7 +3,8 @@
 """
 
 from std.os.path import exists
-from postgres import Params
+import morca.db.pipelines as pipelines_db
+import morca.db.registering as registering_db
 from morca.config import (
     ProjectConfig,
     RegisterFlags,
@@ -27,10 +28,7 @@ from morca.proc import (
 )
 from morca.secrets import secrets_json
 from morca.sensors import parse_sense
-from morca.scheduler import (
-    Scheduler,
-    _RETRIED,
-)
+from morca.scheduler import Scheduler
 from morca.registered import (
     registered,
     repeated_fill,
@@ -72,20 +70,9 @@ def register_pipeline(
     var mismatch = kind_mismatch(self.db, got[1])
     if mismatch:
         raise Error("morca: ", path, " can't be registered: ", mismatch)
-    var info = self.db.conn.query(
-        (
-            "SELECT $1::jsonb->>'pipeline' AS name,"
-            " coalesce(($1::jsonb->>'sensor')::boolean, false) AS"
-            " sensor, NOT EXISTS (SELECT 1 FROM orca.pipelines WHERE name"
-            " = $1::jsonb->>'pipeline' AND sensing_since IS NOT NULL) AS"
-            " new_sensor, coalesce($1::jsonb->'partitions'->>'kind',"
-            " 'monthly') AS kind, coalesce($1::jsonb->'partitions'->>"
-            "'start', '') AS start"
-        ),
-        Params().text(got[1]),
-    ).row(0)
-    var sensor = info.bool("sensor")
-    var r = resolve(info.text("name"), flags, file)
+    var info = registering_db.described(self.db.conn, got[1])
+    var sensor = info.sensor
+    var r = resolve(info.name, flags, file)
     var workers = 0
     var min_workers = -1
     if r.text("workers"):
@@ -102,9 +89,7 @@ def register_pipeline(
         auto_runs = max_runs_auto(r.text("max_runs"))
     # Fills (morca.fill): only from the file.
     if r.text("fills") == "all":
-        var why = fill_refusal(
-            info.text("kind"), info.text("start"), sensor, r.name
-        )
+        var why = fill_refusal(info.kind, info.start, sensor, r.name)
         if why:
             var at = file.where(r.name, "fills", r.values["fills"].copy())
             raise Error(
@@ -139,174 +124,63 @@ def register_pipeline(
                 path,
                 " is a sensor, but reads no dataset it doesn't write",
             )
-        if info.bool("new_sensor"):
+        if info.new_sensor:
             seen = sensed[1]
-    # $14: the file names it, so what it and the flags say is all of
+    # in_file: the file names it, so what it and the flags say is all of
     # it; otherwise a value not given keeps what was registered.
-    var res = self.db.conn.query(
-        (
-            "INSERT INTO orca.pipelines (name, registry_hash, describe,"
-            " binary_path, since, sensing_since, image, head_type,"
-            " worker_type, ec2_workers, spot, ec2_min_workers, secrets,"
-            " worker_procs, placement, max_runs, env, config, fills,"
-            " fill_order, fill_max_runs, fill_budget_per_day, fill_window,"
-            " cpus, memory_gb, fill_lag, learn, max_runs_auto, keys_per_run,"
-            " fill_max_runs_auto)"
-            " SELECT"
-            " d->>'pipeline',"
-            " d->>'registry_hash',"
-            " d, $2, $3, CASE WHEN $4 THEN now() END, nullif($5, ''),"
-            " nullif($6, ''), nullif($7, ''), nullif($8, 0), $9,"
-            " nullif($10, -1), nullif($11, '')::jsonb, nullif($12, -1),"
-            " nullif(nullif($13, ''), 'default'), nullif($15, -1),"
-            " nullif($16, '')::jsonb, $17::jsonb, nullif($18, ''),"
-            " nullif($19, ''), nullif($20, -1), nullif($21, -1::float8),"
-            " nullif($22, ''), nullif($23, ''), nullif($24, ''),"
-            " nullif($25, ''), nullif($26, '')::boolean, CASE WHEN $15 > 0"
-            " THEN $27 END, nullif($28, -1), CASE WHEN $20 > 0 THEN $29 END"
-            " FROM"
-            " (SELECT $1::jsonb AS d) AS x ON CONFLICT (name) DO UPDATE SET"
-            " registry_hash = EXCLUDED.registry_hash, describe ="
-            " EXCLUDED.describe, binary_path = EXCLUDED.binary_path, since"
-            " = coalesce(orca.pipelines.since, EXCLUDED.since),"
-            " sensing_since = CASE WHEN $4 THEN"
-            " coalesce(orca.pipelines.sensing_since, now()) END, image ="
-            " coalesce(EXCLUDED.image, orca.pipelines.image), head_type ="
-            " CASE WHEN $14 THEN EXCLUDED.head_type ELSE"
-            " coalesce(EXCLUDED.head_type, orca.pipelines.head_type) END,"
-            " worker_type = CASE WHEN $14 THEN EXCLUDED.worker_type ELSE"
-            " coalesce(EXCLUDED.worker_type, orca.pipelines.worker_type)"
-            " END, ec2_workers = CASE WHEN $14 THEN EXCLUDED.ec2_workers"
-            " ELSE coalesce(EXCLUDED.ec2_workers,"
-            " orca.pipelines.ec2_workers) END, ec2_min_workers = CASE WHEN"
-            " $14 OR $8 > 0 THEN EXCLUDED.ec2_min_workers ELSE"
-            " orca.pipelines.ec2_min_workers END, secrets = CASE WHEN $14"
-            " THEN EXCLUDED.secrets ELSE coalesce(EXCLUDED.secrets,"
-            " orca.pipelines.secrets) END, worker_procs = CASE WHEN $14"
-            " THEN EXCLUDED.worker_procs WHEN $12 >= 0 THEN $12 ELSE"
-            " orca.pipelines.worker_procs END, placement = CASE WHEN $14"
-            " THEN EXCLUDED.placement WHEN $13 = '' THEN"
-            " orca.pipelines.placement ELSE nullif($13, 'default') END,"
-            " max_runs = CASE WHEN $14 OR $15 > 0 THEN EXCLUDED.max_runs"
-            " ELSE orca.pipelines.max_runs END, max_runs_auto = CASE WHEN"
-            " $14 OR $15 > 0 THEN EXCLUDED.max_runs_auto ELSE"
-            " orca.pipelines.max_runs_auto END, env = CASE WHEN $14 THEN"
-            " EXCLUDED.env ELSE orca.pipelines.env END, config = CASE WHEN"
-            " $14 THEN EXCLUDED.config ELSE jsonb_build_object('sources',"
-            " coalesce(orca.pipelines.config->'sources', '{}'::jsonb) ||"
-            " coalesce(EXCLUDED.config->'sources', '{}'::jsonb)) END, spot"
-            " = CASE WHEN $6 <> '' OR $7 <> '' OR $8 > 0 OR $9 THEN $9 ELSE"
-            " orca.pipelines.spot END, fills = CASE WHEN $14 THEN"
-            " EXCLUDED.fills ELSE orca.pipelines.fills END, fill_order ="
-            " CASE WHEN $14 THEN EXCLUDED.fill_order ELSE"
-            " orca.pipelines.fill_order END, fill_max_runs = CASE WHEN $14"
-            " THEN EXCLUDED.fill_max_runs ELSE orca.pipelines.fill_max_runs"
-            " END, fill_max_runs_auto = CASE WHEN $14 THEN"
-            " EXCLUDED.fill_max_runs_auto ELSE"
-            " orca.pipelines.fill_max_runs_auto"
-            " END, fill_budget_per_day = CASE WHEN $14 THEN"
-            " EXCLUDED.fill_budget_per_day ELSE"
-            " orca.pipelines.fill_budget_per_day END, fill_window = CASE"
-            " WHEN $14 THEN EXCLUDED.fill_window ELSE"
-            " orca.pipelines.fill_window END, fill_lag = CASE WHEN $14 THEN"
-            " EXCLUDED.fill_lag ELSE orca.pipelines.fill_lag END, learn ="
-            " CASE WHEN $14 THEN EXCLUDED.learn ELSE orca.pipelines.learn"
-            " END, keys_per_run = CASE WHEN $14 THEN EXCLUDED.keys_per_run"
-            " ELSE orca.pipelines.keys_per_run END, cpus ="
-            " CASE WHEN $14 OR $23"
-            " <> '' THEN EXCLUDED.cpus ELSE orca.pipelines.cpus END,"
-            " memory_gb = CASE WHEN $14 OR $24 <> '' THEN"
-            " EXCLUDED.memory_gb ELSE orca.pipelines.memory_gb END,"
-            # A new request forgets what out-of-memory kills raised.
-            " memory_raised_mb = CASE WHEN (CASE WHEN $14 OR $24 <> ''"
-            " THEN EXCLUDED.memory_gb ELSE orca.pipelines.memory_gb END)"
-            " IS DISTINCT FROM orca.pipelines.memory_gb THEN NULL ELSE"
-            " orca.pipelines.memory_raised_mb END,"
-            " last_seen = now() RETURNING name, registry_hash,"
-            " coalesce(image, '') AS image"
+    var res = registering_db.register(
+        self.db.conn,
+        registering_db.Registration(
+            got[1],
+            path,
+            now,
+            sensor,
+            flags.image,
+            r.text("head_type"),
+            r.text("worker_type"),
+            workers,
+            flags.spot,
+            min_workers,
+            secrets_json(r.secret_specs()),
+            worker_procs,
+            r.text("placement"),
+            r.in_file,
+            max_runs,
+            r.env_json(),
+            r.config_json(file),
+            r.text("fills"),
+            r.text("fill_order"),
+            fill_max_runs,
+            fill_budget,
+            r.text("fill_window"),
+            r.text("cpus"),
+            r.text("memory_gb"),
+            r.text("fill_lag"),
+            r.text("learn"),
+            auto_runs,
+            keys_per_run,
+            fill_auto,
         ),
-        Params()
-        .text(got[1])
-        .text(path)
-        .int64(now)
-        .bool(sensor)
-        .text(flags.image)
-        .text(r.text("head_type"))
-        .text(r.text("worker_type"))
-        .int64(Int64(workers))
-        .bool(flags.spot)
-        .int64(Int64(min_workers))
-        .text(secrets_json(r.secret_specs()))
-        .int64(Int64(worker_procs))
-        .text(r.text("placement"))
-        .bool(r.in_file)
-        .int64(Int64(max_runs))
-        .text(r.env_json())
-        .text(r.config_json(file))
-        .text(r.text("fills"))
-        .text(r.text("fill_order"))
-        .int64(Int64(fill_max_runs))
-        .float64(fill_budget)
-        .text(r.text("fill_window"))
-        .text(r.text("cpus"))
-        .text(r.text("memory_gb"))
-        .text(r.text("fill_lag"))
-        .text(r.text("learn"))
-        .bool(auto_runs)
-        .int64(Int64(keys_per_run))
-        .bool(fill_auto),
     )
-    var name = res.row(0).text("name")
-    var version = self.db.version(
-        name,
-        res.row(0).text("registry_hash"),
-        got[1],
-        res.row(0).text("image"),
-    )
+    var name = res[0]
+    var version = self.db.version(name, res[1], got[1], res[2])
     # The data version before and after (#297), for the notice below:
     # a first registration has no before.
-    var dv = self.db.conn.query(
-        (
-            "SELECT p.version IS NOT NULL AS was, coalesce((SELECT"
-            " data_version FROM orca.pipeline_versions WHERE id ="
-            " p.version), '') AS old, coalesce((SELECT data_version FROM"
-            " orca.pipeline_versions WHERE id = $2), '') AS new FROM"
-            " orca.pipelines p WHERE p.name = $1"
-        ),
-        Params().text(name).int64(Int64(version)),
-    )
-    var data_changed = dv.row(0).bool("was") and dv.row(0).text(
-        "old"
-    ) != dv.row(0).text("new")
-    var data_version = dv.row(0).text("new")
-    _ = self.db.conn.execute(
-        "UPDATE orca.pipelines SET version = $2 WHERE name = $1",
-        Params().text(name).int64(Int64(version)),
-    )
+    var dv = registering_db.data_versions(self.db.conn, name, version)
+    var data_changed = dv[0] and dv[1] != dv[2]
+    var data_version = dv[2]
+    pipelines_db.set_version(self.db.conn, name, version)
     # Where its functions are, if `morca locate` left a map beside it.
     var map = String(path, ".source.json")
     if exists(map):
         var text: String
         with open(map, "r") as f:
             text = f.read()
-        _ = self.db.conn.execute(
-            (
-                "UPDATE orca.pipeline_versions SET locations = $2::jsonb"
-                " WHERE id = $1"
-            ),
-            Params().int64(Int64(version)).text(text),
-        )
+        registering_db.set_locations(self.db.conn, version, text)
     # What its datasets hold now isn't new to it.
     for c in parse_sense(seen):
         if c.snapshot >= 0:
-            _ = self.db.conn.execute(
-                (
-                    "INSERT INTO orca.sensed (pipeline, dataset,"
-                    " snapshot_id) VALUES ($1, $2, $3) ON CONFLICT DO"
-                    " NOTHING"
-                ),
-                Params().text(name).text(c.dataset).int64(c.snapshot),
-            )
+            registering_db.seen(self.db.conn, name, c.dataset, c.snapshot)
     for q in registered(self.db, name):
         if data_changed:
             var what = String(
@@ -345,18 +219,5 @@ def register_pipeline(
             )
     # A retry of a run with steps done would run the new code over the
     # old code's outputs, which only a resume that says so may do.
-    _ = self.db.conn.execute(
-        String(
-            "UPDATE orca.runs r SET registry_hash = $2 WHERE pipeline =",
-            " $1 AND registry_hash <> $2 AND (status = 'queued' OR",
-            " ((status = 'deferred' OR (status = 'failed' AND ",
-            _RETRIED,
-            " AND starts - deferrals BETWEEN 1 AND (SELECT",
-            " coalesce((describe->>'run_retries')::bigint, 3) FROM",
-            " orca.pipelines WHERE name = $1))) AND NOT EXISTS (SELECT 1",
-            " FROM orca.steps s WHERE s.run = r.id AND s.status =",
-            " 'succeeded')))",
-        ),
-        Params().text(name).text(res.row(0).text("registry_hash")),
-    )
+    registering_db.move_to_code(self.db.conn, name, res[1])
     return name^

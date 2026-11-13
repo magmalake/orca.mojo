@@ -4,7 +4,6 @@ control-placed run's process.
 """
 
 from std.os import makedirs
-from postgres import Params
 from morca.cgroup import (
     Cgroups,
     raised_request,
@@ -25,7 +24,8 @@ from morca.fill import (
 )
 from morca.system import system_now
 from morca.batches import mark_batch
-from morca.db.live import behind_sql, hold_behind
+import morca.db.starting as starting_db
+from morca.db.live import hold_behind
 from morca.kube import (
     RunSpec,
     cpu_millis,
@@ -60,7 +60,6 @@ from morca.scheduler import (
     _CONTROL_LOCK,
     _ControlProc,
     _HOST_LOCK,
-    _RETRIED,
 )
 from morca.registered import (
     Registered,
@@ -100,10 +99,6 @@ def _start(
             _requeue_for_workers(self, p, now, pool)
         return
     var dead = self._dead("$2")
-    # Which runs this pass is for: its fill runs, or all the others.
-    var which = String(" AND trigger = 'fill'") if fill else String(
-        " AND trigger <> 'fill'"
-    )
     var control = p.placement == CONTROL
     var placed = String(CONTROL) if control else (
         String("ec2") if self.ec2 else (
@@ -148,10 +143,7 @@ def _start(
     if control or placed == "local":
         sized = run_request(self.db, p, self.room.cpus)
     var tx = self.db.conn.begin()
-    _ = tx.query(
-        "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
-        Params().text(p.name),
-    )
+    starting_db.lock_pipeline(tx, p.name)
     # A run of a scheduler instance that's gone, whose heartbeat is
     # stale, is queued again whatever its trigger, as a dead worker's
     # is; one its live instance still holds isn't dead
@@ -161,19 +153,7 @@ def _start(
     if not fill:
         lost = _requeue_orphans(self, tx, p)
         self._end_dead(tx, p, dead)
-    var live = Int(
-        tx.query(
-            String(
-                "SELECT count(*) AS n FROM orca.runs WHERE pipeline = $1",
-                " AND status = 'running' AND NOT ",
-                dead,
-                which,
-            ),
-            Params().text(p.name).float64(self.stale),
-        )
-        .row(0)
-        .int64("n")
-    )
+    var live = starting_db.live_count(tx, p.name, self.stale, dead, fill)
     var free = 0 if p.paused or settling or hold else p.max_runs - live
     var status = Optional[FillStatus](None)
     if fill:
@@ -203,21 +183,9 @@ def _start(
             free = 0
         else:
             # Across pipelines: one start at a time counts the slots.
-            _ = tx.execute(
-                "SELECT pg_advisory_xact_lock($1)",
-                Params().int64(_CONTROL_LOCK),
-            )
-            var used = Int(
-                tx.query(
-                    String(
-                        "SELECT count(*) AS n FROM orca.runs WHERE status",
-                        " = 'running' AND placement = 'control' AND NOT ",
-                        self._dead("$1"),
-                    ),
-                    Params().float64(self.stale),
-                )
-                .row(0)
-                .int64("n")
+            starting_db.xact_lock(tx, _CONTROL_LOCK)
+            var used = starting_db.control_running(
+                tx, self.stale, self._dead("$1")
             )
             if used >= self.limits.max_runs:
                 hold = slots_reason(used, self.limits.max_runs)
@@ -264,27 +232,9 @@ def _start(
     var admitted = request.any() and (control or placed == "local")
     if admitted and free > 0:
         # Across pipelines: one start at a time weighs the grants.
-        _ = tx.execute(
-            "SELECT pg_advisory_xact_lock($1)",
-            Params().int64(_HOST_LOCK),
-        )
-        var g = tx.query(
-            String(
-                "SELECT coalesce(sum(grant_cpus), 0) AS cpus,",
-                " coalesce(sum(grant_memory_mb), 0) AS mb FROM orca.runs",
-                " WHERE status = 'running' AND placement IN ('local',",
-                " 'control') AND NOT ",
-                self._dead("$1"),
-            ),
-            Params().float64(self.stale),
-        ).row(0)
-        var got = admit(
-            request,
-            self.room,
-            Int(g.int64("cpus")),
-            Int(g.int64("mb")),
-            free,
-        )
+        starting_db.xact_lock(tx, _HOST_LOCK)
+        var g = starting_db.granted(tx, self.stale, self._dead("$1"))
+        var got = admit(request, self.room, g[0], g[1], free)
         grants = got[0].copy()
         if len(grants) < free:
             # The ones that don't start say why; those that do, not.
@@ -292,35 +242,12 @@ def _start(
         free = len(grants)
     # Its queued runs say why they wait, or no longer do; one behind an
     # older live run of its keys, which run.
-    _ = tx.execute(
-        String(
-            "UPDATE orca.runs SET held = nullif($2, '') WHERE pipeline = $1",
-            " AND status = 'queued' AND held IS DISTINCT FROM nullif($2,",
-            " '') AND NOT ",
-            behind_sql(),
-            which,
-        ),
-        Params().text(p.name).text(hold),
-    )
+    starting_db.say_held(tx, p.name, hold, fill)
     hold_behind(tx, p.name)
     if self.budget > 0 and free > 0 and not control:
         # Across pipelines: one start at a time weighs the budget.
-        _ = tx.execute(
-            "SELECT pg_advisory_xact_lock($1)",
-            Params().int64(_BUDGET_LOCK),
-        )
-        var used = Int(
-            tx.query(
-                String(
-                    "SELECT coalesce(sum(cpu_millis), 0) AS n FROM",
-                    " orca.runs WHERE status = 'running' AND NOT ",
-                    self._dead("$1"),
-                ),
-                Params().float64(self.stale),
-            )
-            .row(0)
-            .int64("n")
-        )
+        starting_db.xact_lock(tx, _BUDGET_LOCK)
+        var used = starting_db.cpu_in_use(tx, self.stale, self._dead("$1"))
         # The pool's idle instances count too, but those a run of `p`
         # would take are its own: k runs fit if the budget holds the
         # others and k runs' worth or those, whichever is more.
@@ -328,19 +255,9 @@ def _start(
         var mine = 0
         if len(keys) > 0:
             var b = keys[1] if len(keys) > 1 else keys[0]
-            var pr = tx.query(
-                (
-                    "SELECT coalesce(sum(i.cpu_millis), 0) AS n,"
-                    " coalesce(sum(i.cpu_millis) FILTER (WHERE i.pool_key"
-                    " IN ($1, $2)), 0) AS mine FROM orca.instances i JOIN"
-                    " orca.runs r ON r.id = i.run WHERE i.ended IS NULL AND"
-                    " i.pool_key IS NOT NULL AND NOT (r.status = 'running'"
-                    " AND r.starts = i.start)"
-                ),
-                Params().text(keys[0]).text(b),
-            ).row(0)
-            mine = Int(pr.int64("mine"))
-            others = Int(pr.int64("n")) - mine
+            var pr = starting_db.pool_cpu(tx, keys[0], b)
+            mine = pr[1]
+            others = pr[0] - mine
         var room = self.budget - used - others
         if room < mine:
             free = 0
@@ -350,55 +267,25 @@ def _start(
     var new_code = List[Bool]()
     var starts = List[Int]()
     if free > 0:
-        var rows = tx.query(
-            String(
-                (
-                    "SELECT id, allow_new_code FROM orca.runs WHERE"
-                    " pipeline = $1 AND ((status"
-                ),
-                " = 'queued' AND NOT ",
-                behind_sql(),
-                ") OR (status = 'deferred' AND retry_at <= $4) OR",
-                " (status = 'failed' AND ",
-                _RETRIED,
-                " AND retry_at <= $4) OR (status = 'running' AND ",
-                _RETRIED,
-                " AND ",
-                dead,
-                " AND starts - deferrals <= $3))",
-                which,
-                " ORDER BY id LIMIT $5",
-            ),
-            Params()
-            .text(p.name)
-            .float64(self.stale)
-            .int64(Int64(p.run_retries))
-            .int64(now)
-            .int64(Int64(free)),
-        )
-        for r in rows:
-            ids.append(r.int64("id"))
-            new_code.append(r.bool("allow_new_code"))
+        for r in starting_db.startable(
+            tx,
+            p.name,
+            self.stale,
+            p.run_retries,
+            now,
+            free,
+            dead,
+            fill,
+        ):
+            ids.append(r[0])
+            new_code.append(r[1])
         if status:
             # New fill runs, over the partitions nothing has filled.
             ref next = status.value().next_keys
             var filled = List[Int64]()
             for i in range(min(free - len(ids), len(next))):
                 ids.append(
-                    tx.query(
-                        (
-                            "INSERT INTO orca.runs (pipeline,"
-                            " registry_hash, partitions, trigger, status)"
-                            " VALUES ($1, $2, $3, 'fill', 'queued')"
-                            " RETURNING id"
-                        ),
-                        Params()
-                        .text(p.name)
-                        .text(p.registry_hash)
-                        .text(next[i]),
-                    )
-                    .row(0)
-                    .int64("id")
+                    starting_db.queue_fill(tx, p.name, p.registry_hash, next[i])
                 )
                 new_code.append(False)
                 filled.append(ids[len(ids) - 1])
@@ -412,42 +299,18 @@ def _start(
             # counted the slots and the budget, so a run that waited for
             # another to end could be recorded as started before it did.
             starts.append(
-                Int(
-                    tx.query(
-                        (
-                            "UPDATE orca.runs SET status = 'running', owner"
-                            " = 'scheduler', heartbeat = NULL, started ="
-                            " clock_timestamp(), ended = NULL, starts ="
-                            " starts + 1,"
-                            " retry_at = NULL, error = NULL, waiting_since"
-                            " = NULL, cpu_millis = $2, placement = $3, held"
-                            " = NULL, request_cpus = nullif($4, ''),"
-                            " request_memory_gb = nullif($5, ''),"
-                            " grant_cpus = nullif($6, 0), grant_memory_mb ="
-                            " nullif($7, 0), memory_limit_mb = NULL,"
-                            " memory_max_mb = NULL, memory_bytes = NULL,"
-                            " instance = nullif($8, 0), request_source ="
-                            " nullif($9, ''), request_runs = nullif($10,"
-                            " 0) WHERE id = $1 RETURNING starts"
-                        ),
-                        Params()
-                        .int64(id)
-                        .int64(Int64(need))
-                        .text(placed)
-                        .text(recorded_cpus(p, sized) if admitted else String())
-                        .text(
-                            recorded_memory_gb(
-                                p, sized
-                            ) if admitted else String()
-                        )
-                        .int64(Int64(grant.cpus))
-                        .int64(Int64(grant.memory_mb))
-                        .int64(Int64(self.instance if local else 0))
-                        .text(sized.source)
-                        .int64(Int64(sized.runs)),
-                    )
-                    .row(0)
-                    .int64("starts")
+                starting_db.mark_started(
+                    tx,
+                    id,
+                    need,
+                    placed,
+                    recorded_cpus(p, sized) if admitted else String(),
+                    recorded_memory_gb(p, sized) if admitted else String(),
+                    grant.cpus,
+                    grant.memory_mb,
+                    self.instance if local else 0,
+                    sized.source,
+                    sized.runs,
                 )
             )
     tx.commit()
@@ -495,13 +358,8 @@ def _start(
                 print("started", p.name, "run", id, "on its cluster")
             except e:
                 print("morca: run", id, "of", p.name, "can't start:", e)
-                _ = self.db.conn.execute(
-                    (
-                        "UPDATE orca.runs SET status = 'failed', ended ="
-                        " now(), error = $2 WHERE id = $1 AND status ="
-                        " 'running' AND heartbeat IS NULL"
-                    ),
-                    Params().int64(id).text(String("can't start: ", e)),
+                starting_db.fail_start(
+                    self.db.conn, id, String("can't start: ", e)
                 )
             continue
         if self.ec2:
@@ -513,13 +371,8 @@ def _start(
             except e:
                 # Retried as a run whose process failed is.
                 print("morca: run", id, "of", p.name, "can't start:", e)
-                _ = self.db.conn.execute(
-                    (
-                        "UPDATE orca.runs SET status = 'failed', ended ="
-                        " now(), error = $2 WHERE id = $1 AND status ="
-                        " 'running' AND heartbeat IS NULL"
-                    ),
-                    Params().int64(id).text(String("can't start: ", e)),
+                starting_db.fail_start(
+                    self.db.conn, id, String("can't start: ", e)
                 )
             continue
         # Its own variables, from morca.toml, its grant
@@ -534,14 +387,7 @@ def _start(
         except e:
             # Retried as a run whose process failed is.
             print("morca: run", id, "of", p.name, "can't start:", e)
-            _ = self.db.conn.execute(
-                (
-                    "UPDATE orca.runs SET status = 'failed', ended ="
-                    " now(), error = $2 WHERE id = $1 AND status ="
-                    " 'running' AND heartbeat IS NULL"
-                ),
-                Params().int64(id).text(String("can't start: ", e)),
-            )
+            starting_db.fail_start(self.db.conn, id, String("can't start: ", e))
             continue
         var log = String()
         var stage = String()
@@ -650,13 +496,8 @@ def _start_control(
         if cg.path and not Cgroups.remove(cg.path):
             self._unswept.append(cg.path)
         try:
-            _ = self.db.conn.execute(
-                (
-                    "UPDATE orca.runs SET status = 'failed', ended ="
-                    " now(), error = $2 WHERE id = $1 AND status ="
-                    " 'running' AND heartbeat IS NULL"
-                ),
-                Params().int64(Int64(id)).text(String("can't start: ", e)),
+            starting_db.fail_start(
+                self.db.conn, Int64(id), String("can't start: ", e)
             )
         except e2:
             print("morca: can't record run", id, "failing:", e2)
