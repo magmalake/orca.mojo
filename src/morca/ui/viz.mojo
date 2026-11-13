@@ -35,7 +35,7 @@ GET /api/gantt?window=24h      # 1h, 6h, 24h or 7d
 
 from std.os import getenv
 
-from postgres import Params
+import morca.db.home_view as home_db
 
 from morca.html import Html, url_encode
 from morca.json import quote
@@ -110,40 +110,25 @@ def _json_list(mut out: String, xs: List[String]):
     out.write("]")
 
 
-comptime _WINDOW_RUNS = (
-    "(r.ended >= now() - make_interval(secs => $1) OR (r.ended IS NULL AND"
-    " r.status IN ('queued', 'running', 'deferred')))"
-)
-"""SQL: a run `r` the window shows: one that ended in it, or still going."""
-
-
 def gantt_json(mut db: State, window: String) raises -> String:
     """`/api/gantt`: the pipelines in dataset order, with their runs in the
     window and the runs each started."""
     var seconds = window_seconds(window)
     var pipes = List[_Pipe]()
     var at = Dict[String, Int]()
-    for r in db.conn.query(
-        (
-            "SELECT name, paused, coalesce((describe->>'sensor')::boolean,"
-            " false) AS sensor, coalesce(describe->'partitions'->>'dataset',"
-            " '') AS keys, coalesce(describe->'schedule'->>'cron', '') AS cron"
-            " FROM orca.pipelines ORDER BY name"
-        ),
-        Params(),
-    ):
+    for r in home_db.gantt_pipelines(db.conn):
         var how = String("manual")
-        if r.bool("sensor"):
+        if r.sensor:
             how = "sensor"
-        elif r.text("keys"):
+        elif r.keys:
             how = "keyed"
-        elif r.text("cron"):
+        elif r.cron:
             how = "schedule"
-        var name = r.text("name")
+        var name = r.name
         at[name] = len(pipes)
-        pipes.append(_Pipe(name, r.bool("paused"), how))
-        if r.text("keys"):
-            pipes[len(pipes) - 1].reads.append(r.text("keys"))
+        pipes.append(_Pipe(name, r.paused, how))
+        if r.keys:
+            pipes[len(pipes) - 1].reads.append(r.keys)
     # Declared reads and writes, and a keyed pipeline's keys as a read.
     for f in flows(db):
         var i = at.get(f.pipeline, -1)
@@ -223,13 +208,7 @@ def gantt_json(mut db: State, window: String) raises -> String:
                 if not placed[downs[k]]:
                     stack.append(downs[k])
 
-    var now = (
-        db.conn.query(
-            "SELECT extract(epoch FROM now())::float8 AS now", Params()
-        )
-        .row(0)
-        .float64("now")
-    )
+    var now = home_db.db_now(db.conn)
     var out = String(
         '{"window": ',
         quote(_window_name(window)),
@@ -276,17 +255,7 @@ def gantt_json(mut db: State, window: String) raises -> String:
             "}",
         )
     out.write('], "runs": [')
-    var runs = db.conn.query(
-        String(
-            "SELECT * FROM (SELECT r.id, r.pipeline, r.status, r.trigger,",
-            " r.starts, r.partitions, extract(epoch FROM coalesce(r.started,",
-            " r.created))::float8 AS t0, coalesce(extract(epoch FROM",
-            " r.ended)::float8, -1) AS t1 FROM orca.runs r WHERE ",
-            _WINDOW_RUNS,
-            " ORDER BY r.id DESC LIMIT $2) x ORDER BY id",
-        ),
-        Params().int64(Int64(seconds)).int64(Int64(MAX_RUNS + 1)),
-    )
+    var runs = home_db.window_runs(db.conn, seconds, MAX_RUNS + 1)
     var n = min(len(runs), MAX_RUNS)
     var skip = len(runs) - n
     var written = 0
@@ -295,23 +264,23 @@ def gantt_json(mut db: State, window: String) raises -> String:
         if skip > 0:
             skip -= 1
             continue
-        var t1 = r.float64("t1")
+        var t1 = r.end
         out.write(
             ", " if written else "",
             '{"id": ',
-            r.int64("id"),
+            r.id,
             ', "pipeline": ',
-            quote(r.text("pipeline")),
+            quote(r.pipeline),
             ', "status": ',
-            quote(r.text("status")),
+            quote(r.status),
             ', "trigger": ',
-            quote(r.text("trigger")),
+            quote(r.trigger),
             ', "starts": ',
-            r.int64("starts"),
+            r.starts,
             ', "partitions": ',
-            quote(r.text("partitions")),
+            quote(r.partitions),
             ', "start": ',
-            r.float64("t0"),
+            r.start,
             ', "end": ',
         )
         if t1 < 0:
@@ -326,28 +295,17 @@ def gantt_json(mut db: State, window: String) raises -> String:
         ', "triggers": [',
     )
     var k = 0
-    for r in db.conn.query(
-        String(
-            "SELECT DISTINCT s.run AS up, se.run AS down, se.dataset,",
-            " se.snapshot_id FROM orca.sensed se JOIN orca.runs r ON r.id =",
-            " se.run JOIN orca.commits c ON c.dataset = se.dataset AND",
-            " c.snapshot_id = se.snapshot_id JOIN orca.attempts a ON a.id =",
-            " c.attempt JOIN orca.steps s ON s.id = a.step WHERE ",
-            _WINDOW_RUNS,
-            " AND s.run <> se.run ORDER BY se.run, s.run LIMIT $2",
-        ),
-        Params().int64(Int64(seconds)).int64(Int64(MAX_TRIGGERS)),
-    ):
+    for r in home_db.window_triggers(db.conn, seconds, MAX_TRIGGERS):
         out.write(
             ", " if k else "",
             '{"from": ',
-            r.int64("up"),
+            r.up,
             ', "to": ',
-            r.int64("down"),
+            r.down,
             ', "dataset": ',
-            quote(r.text("dataset")),
+            quote(r.dataset),
             ', "snapshot": ',
-            r.int64("snapshot_id"),
+            r.snapshot,
             "}",
         )
         k += 1

@@ -20,9 +20,9 @@ never a sampler's file.
 
 from std.os import getenv
 
-from postgres import Params
-
-from morca.db.live import dead_sql, stale_limit, start_grace
+import morca.db.machines_view as machines_db
+from morca.db.live import stale_limit
+from morca.db.machines_view import WorkerRun
 from morca.state import State
 
 
@@ -122,74 +122,47 @@ def type_size(instance_type: String) -> Tuple[Int, Int]:
     return (0, 0)
 
 
-comptime _TS = '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\''
-
-
 def _sparks(
     mut db: State,
 ) raises -> Tuple[Dict[String, List[Float64]], Dict[String, List[Float64]]]:
     var xs = Dict[String, List[Float64]]()
     var ys = Dict[String, List[Float64]]()
-    for r in db.conn.query(
-        (
-            "SELECT host, extract(epoch FROM now() - t)::float8 AS ago, cpu"
-            " FROM orca.fleet_samples WHERE t > now() - make_interval(secs =>"
-            " $1::int) ORDER BY host, t"
-        ),
-        Params().int32(Int32(_SPARK_SECONDS)),
-    ):
-        var h = r.text("host")
+    for r in machines_db.spark_samples(db.conn, _SPARK_SECONDS):
+        var h = r.host
         if h not in xs:
             xs[h] = List[Float64]()
             ys[h] = List[Float64]()
-        xs[h].append(1.0 - r.float64("ago") / Float64(_SPARK_SECONDS))
-        ys[h].append(r.float64("cpu"))
+        xs[h].append(1.0 - r.ago / Float64(_SPARK_SECONDS))
+        ys[h].append(r.cpu)
     return (xs^, ys^)
 
 
 def _ec2(mut db: State, mut out: List[Machine], one: String) raises:
     """The instances: live, then those that ended in the last hour."""
     var sparks = _sparks(db)
-    var sql = String(
-        "SELECT i.id, i.role, i.instance_type, i.market, i.run, i.start,",
-        " extract(epoch FROM now() - i.launched)::bigint AS up, i.ended IS",
-        " NOT NULL AS gone, i.drained IS NOT NULL AS draining, i.idle IS NOT",
-        " NULL AS idle, coalesce(to_char(i.ended AT TIME ZONE 'UTC', ",
-        _TS,
-        "), '') AS ended, coalesce(i.why, '') AS why, coalesce(p.image, '')",
-        " AS image, s.cores, s.cpu, s.mem, s.ago FROM orca.instances i JOIN",
-        " orca.runs r ON r.id = i.run LEFT JOIN orca.pipelines p ON p.name =",
-        " r.pipeline LEFT JOIN LATERAL (SELECT cores, cpu, mem,",
-        " extract(epoch FROM now() - t)::bigint AS ago FROM",
-        " orca.fleet_samples WHERE host = i.id ORDER BY t DESC LIMIT 1) s ON",
-        " true WHERE (i.ended IS NULL OR i.ended > now() - make_interval(mins",
-        " => $1::int))",
-        " AND i.id = $2" if one else " AND $2 = ''",
-        " ORDER BY i.ended IS NOT NULL, i.launched, i.id",
-    )
-    for r in db.conn.query(sql, Params().int32(Int32(GONE_MINUTES)).text(one)):
-        var id = r.text("id")
-        var sampled = not r.is_null("cpu")
-        var size = type_size(r.text("instance_type"))
+    for r in machines_db.ec2_instances(db.conn, GONE_MINUTES, one):
+        var id = r.id
+        var sampled = r.sampled
+        var size = type_size(r.instance_type)
         var cpus = size[0]
         if cpus == 0 and sampled:
-            cpus = Int(r.int64("cores"))
-        var gone = r.bool("gone")
+            cpus = r.cores
+        var gone = r.gone
         var state = String("gone") if gone else (
-            String("draining") if r.bool("draining") else String("live")
+            String("draining") if r.draining else String("live")
         )
         var detail = String("ended") if gone else (
-            String("idle (pooled)") if r.bool("idle") else (
-                String("draining") if r.bool("draining") else (
+            String("idle (pooled)") if r.idle else (
+                String("draining") if r.draining else (
                     String("running") if sampled else String("starting")
                 )
             )
         )
         var ended = String()
         if gone:
-            ended = String(r.text("ended"))
-            if r.text("why"):
-                ended.write(": ", r.text("why"))
+            ended = String(r.ended)
+            if r.why:
+                ended.write(": ", r.why)
         out.append(
             Machine(
                 pool=EC2,
@@ -198,24 +171,24 @@ def _ec2(mut db: State, mut out: List[Machine], one: String) raises:
                 name=id,
                 state=state^,
                 detail=detail^,
-                image=r.text("image"),
+                image=r.image,
                 cpus=cpus,
                 memory_mb=size[1],
-                runs=[Int(r.int64("run"))],
-                seen_ago=Int(r.int64("ago")) if sampled else -1,
-                process=r.text("role"),
-                instance_type=r.text("instance_type"),
-                market=r.text("market"),
-                uptime=Int(r.int64("up")),
-                cpu=r.float64("cpu") if sampled else -1.0,
-                mem_pct=r.float64("mem") if sampled else -1.0,
+                runs=[r.run],
+                seen_ago=r.ago,
+                process=r.role,
+                instance_type=r.instance_type,
+                market=r.market,
+                uptime=r.up,
+                cpu=r.cpu,
+                mem_pct=r.mem,
                 spark_x=sparks[0].pop(id, List[Float64]()),
                 spark_y=sparks[1].pop(id, List[Float64]()),
                 token=0,
                 label=String(),
                 expires=String(),
                 ended=ended^,
-                run_start=Int(r.int64("start")),
+                run_start=r.start,
             )
         )
 
@@ -225,26 +198,11 @@ def _kubernetes(mut db: State, mut out: List[Machine], one: String) raises:
     placement: its pods, which the runner names `morca-<run>-<start>`."""
     if getenv("MORCA_RUNNER") != KUBERNETES:
         return
-    var stale = stale_limit()
-    var sql = String(
-        "SELECT r.id, r.starts, coalesce(r.cpu_millis, 0) AS cpu_millis,",
-        " coalesce(p.image, '') AS image, coalesce(extract(epoch FROM now()",
-        " - r.heartbeat)::bigint, -1) AS ago, coalesce(extract(epoch FROM",
-        " now() - r.started)::bigint, -1) AS up FROM orca.runs r LEFT JOIN",
-        " orca.pipelines p ON p.name = r.pipeline WHERE r.status =",
-        " 'running' AND coalesce(r.placement, 'default') IN ('default', '')",
-        " AND NOT ",
-        dead_sql(String(stale), start_grace(stale), "r"),
-        " AND ('morca-' || r.id || '-' || r.starts) = $1" if one else (
-            " AND $1 = ''"
-        ),
-        " ORDER BY r.id",
-    )
-    for r in db.conn.query(sql, Params().text(one)):
-        var run = Int(r.int64("id"))
-        var start = Int(r.int64("starts"))
+    for r in machines_db.pod_runs(db.conn, one):
+        var run = r.id
+        var start = r.starts
         var pod = String("morca-", run, "-", start)
-        var millis = Int(r.int64("cpu_millis"))
+        var millis = r.cpu_millis
         out.append(
             Machine(
                 pool=KUBERNETES,
@@ -252,16 +210,16 @@ def _kubernetes(mut db: State, mut out: List[Machine], one: String) raises:
                 id=pod.copy(),
                 name=pod^,
                 state="live",
-                detail="running" if r.int64("ago") >= 0 else "starting",
-                image=r.text("image"),
+                detail="running" if r.ago >= 0 else "starting",
+                image=r.image,
                 cpus=(millis + 999) // 1000,
                 memory_mb=0,
                 runs=[run],
-                seen_ago=Int(r.int64("ago")),
+                seen_ago=r.ago,
                 process="pods",
                 instance_type=String(),
                 market=String(),
-                uptime=Int(r.int64("up")),
+                uptime=r.up,
                 cpu=-1.0,
                 mem_pct=-1.0,
                 spark_x=List[Float64](),
@@ -278,46 +236,32 @@ def _kubernetes(mut db: State, mut out: List[Machine], one: String) raises:
 def _workers(mut db: State, mut out: List[Machine], one: Int) raises:
     """A row per worker token: the machine its worker runs on."""
     var stale = Int(stale_limit())
-    var sql = String(
-        "SELECT id, pool, label, CASE WHEN revoked IS NOT NULL THEN",
-        " 'revoked' WHEN expires <= now() THEN 'expired' WHEN last_seen IS",
-        " NULL OR last_seen <= now() - make_interval(secs => $1::int) THEN",
-        " 'not seen' ELSE 'live' END AS state, coalesce(name, '') AS name,",
-        " coalesce(image, '') AS image, coalesce(extract(epoch FROM now() -",
-        " last_seen)::bigint, -1) AS ago, coalesce(cpus, 0) AS cpus,",
-        " coalesce(memory_mb, 0) AS mem, coalesce(running, '') AS running,",
-        " to_char(expires AT TIME ZONE 'UTC', ",
-        _TS,
-        ") AS expires FROM orca.workers",
-        " WHERE id = $2" if one else " WHERE $2 = 0",
-        " ORDER BY pool, id DESC",
-    )
-    for r in db.conn.query(sql, Params().int32(Int32(stale)).int64(Int64(one))):
-        var s = r.text("state")
+    for r in machines_db.worker_tokens(db.conn, stale, one):
+        var s = r.state
         var runs = List[Int]()
-        if r.text("running"):
-            for x in r.text("running").split(","):
+        if r.running:
+            for x in r.running.split(","):
                 try:
                     runs.append(Int(String(x).strip()))
                 except:
                     pass
-        var name = r.text("name")
+        var name = r.name
         out.append(
             Machine(
-                pool=String("worker:", r.text("pool")),
+                pool=String("worker:", r.pool),
                 kind=SELF_HOSTED,
-                id=String(r.int64("id")),
-                name=name if name else r.text("label"),
+                id=String(r.id),
+                name=name if name else r.label,
                 state="live" if s == "live" else "gone",
                 detail=(
                     String("running") if len(runs) > 0 else String("idle")
                 ) if s
                 == "live" else s,
-                image=r.text("image"),
-                cpus=Int(r.int64("cpus")),
-                memory_mb=Int(r.int64("mem")),
+                image=r.image,
+                cpus=r.cpus,
+                memory_mb=r.memory_mb,
                 runs=runs^,
-                seen_ago=Int(r.int64("ago")),
+                seen_ago=r.ago,
                 process="morca worker",
                 instance_type=String(),
                 market=String(),
@@ -326,9 +270,9 @@ def _workers(mut db: State, mut out: List[Machine], one: Int) raises:
                 mem_pct=-1.0,
                 spark_x=List[Float64](),
                 spark_y=List[Float64](),
-                token=Int(r.int64("id")),
-                label=r.text("label"),
-                expires=r.text("expires"),
+                token=r.id,
+                label=r.label,
+                expires=r.expires,
                 ended=String(),
                 run_start=0,
             )
@@ -427,55 +371,14 @@ def old_gone(ms: List[Machine]) -> Tuple[Int, Int]:
     return (n, seen)
 
 
-@fieldwise_init
-struct WorkerRun(Copyable, Movable):
-    """A run a worker claimed: for its machine's page."""
-
-    var id: Int
-    var pipeline: String
-    var status: String
-    var partitions: String
-    var started: String
-    var ended: String
-
-
 def worker_runs(
     mut db: State, token: Int, n: Int = 20
 ) raises -> List[WorkerRun]:
     """The runs a worker token's latest starts were claimed by, newest
     first."""
-    var out = List[WorkerRun]()
-    for r in db.conn.query(
-        String(
-            "SELECT id, pipeline, status, partitions, coalesce(to_char(started",
-            " AT TIME ZONE 'UTC', ",
-            _TS,
-            "), '') AS started, coalesce(to_char(ended AT TIME ZONE 'UTC', ",
-            _TS,
-            "), '') AS ended FROM orca.runs WHERE worker = $1 ORDER BY id DESC",
-            " LIMIT $2",
-        ),
-        Params().int64(Int64(token)).int32(Int32(n)),
-    ):
-        out.append(
-            WorkerRun(
-                Int(r.int64("id")),
-                r.text("pipeline"),
-                r.text("status"),
-                r.text("partitions"),
-                r.text("started"),
-                r.text("ended"),
-            )
-        )
-    return out^
+    return machines_db.worker_runs(db.conn, token, n)
 
 
 def run_pipeline(mut db: State, run: Int) raises -> String:
     """The pipeline of a run, or empty."""
-    var rows = db.conn.query(
-        "SELECT pipeline FROM orca.runs WHERE id = $1",
-        Params().int64(Int64(run)),
-    )
-    if len(rows) == 0:
-        return ""
-    return rows.row(0).text("pipeline")
+    return machines_db.run_pipeline(db.conn, run)

@@ -41,7 +41,8 @@ records where its request came from (`orca.runs.request_source`: `declared`,
 
 from std.math import ceil
 
-from postgres import Params
+import morca.db.recommend as recommend_db
+from morca.db.recommend import RunPeaks
 
 from morca.json import quote
 from morca.resources import Request, gb_hundredths
@@ -72,15 +73,6 @@ than memory's."""
 comptime CPU_SLACK: Float64 = 0.1
 """Peak cores a sample's second over-counts by: 2.05 cores is two busy
 ones, not three."""
-
-
-@fieldwise_init
-struct RunPeaks(Copyable, Movable):
-    """One run's peaks: its attempts' largest memory, in bytes, and peak
-    cores; -1 for what wasn't measured."""
-
-    var peak_rss_bytes: Float64
-    var peak_cpus: Float64
 
 
 @fieldwise_init
@@ -240,20 +232,7 @@ def expire_raised(mut db: State) raises -> List[String]:
     `LEARN_RUNS` of its runs after the one that caused it
     (`memory_raised_run`) have succeeded, and returns their names. The
     scheduler calls it each pass."""
-    var out = List[String]()
-    for r in db.conn.query(
-        (
-            "UPDATE orca.pipelines p SET memory_raised_mb = NULL,"
-            " memory_raised_run = NULL WHERE p.memory_raised_mb IS NOT NULL"
-            " AND p.memory_raised_run IS NOT NULL AND (SELECT count(*) FROM"
-            " orca.runs r WHERE r.pipeline = p.name AND r.status ="
-            " 'succeeded' AND r.id > p.memory_raised_run) >= $1 RETURNING"
-            " p.name"
-        ),
-        Params().int64(Int64(LEARN_RUNS)),
-    ):
-        out.append(r.text("name"))
-    return out^
+    return recommend_db.expire_raised(db.conn, LEARN_RUNS)
 
 
 def learned(
@@ -262,27 +241,8 @@ def learned(
     """What pipeline `name`'s latest successful measured runs suggest it
     asks for, within its declared `cpus` and `memory_gb` (as registered,
     each empty for none)."""
-    var peaks = List[RunPeaks]()
-    for r in db.conn.query(
-        (
-            "SELECT max(a.peak_rss_bytes)::float8 AS peak,"
-            " coalesce(max(a.peak_cpus), -1)::float8 AS cpus FROM orca.runs r"
-            " JOIN orca.steps s ON s.run = r.id JOIN orca.attempts a ON a.step"
-            " = s.id WHERE r.pipeline = $1 AND r.status = 'succeeded' GROUP BY"
-            " r.id HAVING max(a.peak_rss_bytes) IS NOT NULL ORDER BY r.id DESC"
-            " LIMIT $2"
-        ),
-        Params().text(name).int64(Int64(LEARN_RUNS)),
-    ):
-        peaks.append(RunPeaks(r.float64("peak"), r.float64("cpus")))
-    var raised = db.conn.query(
-        (
-            "SELECT coalesce(memory_raised_mb, 0) AS raised FROM"
-            " orca.pipelines WHERE name = $1"
-        ),
-        Params().text(name),
-    )
-    var raised_mb = Int(raised.row(0).int64("raised")) if len(raised) else 0
+    var peaks = recommend_db.peaks(db.conn, name, LEARN_RUNS)
+    var raised_mb = recommend_db.raised_mb(db.conn, name)
     return recommend(peaks, raised_mb, Request.of(cpus, memory_gb))
 
 

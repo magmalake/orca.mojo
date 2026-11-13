@@ -6,6 +6,7 @@ runs picked to cancel, retry or backfill again in one go
 it refreshes from, for `/runs`, a pipeline's Runs tab and the home page.
 """
 
+import morca.db.runs_view as runs_db
 from morca.admission import held_warning, row_json, scheduler_pressure
 from morca.api.runs import json_runs, json_runs_page, runs_filters_json
 from morca.html import Html, query_param, url_encode
@@ -217,13 +218,10 @@ def _select(
     h.raw("</select></label>")
 
 
-def _with_seen(
-    known: List[String], mut db: State, sql: String
-) raises -> List[String]:
-    """`known`, then the values `sql` returns (as `v`) that aren't in it."""
+def _with_seen(known: List[String], seen: List[String]) -> List[String]:
+    """`known`, then the values `seen` that aren't in it."""
     var out = known.copy()
-    for r in db.conn.query(sql):
-        var v = r.text("v")
+    for v in seen:
         if v and v not in out:
             out.append(v)
     return out^
@@ -312,9 +310,7 @@ def runs_filters_html(
         h.raw(' <span class="pick__n">', grouped(n), "</span></label>")
     h.raw("</div></details>")
     var triggers = _with_seen(
-        materialize[RUN_TRIGGERS](),
-        db,
-        "SELECT DISTINCT trigger AS v FROM orca.runs ORDER BY v",
+        materialize[RUN_TRIGGERS](), runs_db.triggers_seen(db.conn)
     )
     _select(h, "trigger", triggers, q.trigger)
     _moment_input(h, "from", "from", q.start)
@@ -480,9 +476,7 @@ def runs(mut db: State, var q: RunsQuery, url: String = "") raises -> Page:
     var pressure = scheduler_pressure(db)
     j.write(', "memory_pressure": ', row_json(pressure), "}")
 
-    var pipelines = List[String]()
-    for r in db.conn.query("SELECT name FROM orca.pipelines ORDER BY name"):
-        pipelines.append(r.text("name"))
+    var pipelines = runs_db.pipeline_names(db.conn)
 
     var h = Html()
     h.raw("<h1>Runs</h1>")

@@ -3,7 +3,8 @@ host, with its cgroup's memory against its limit (`morca.cgroup`), which
 the scheduler records every 5 seconds, and its grant (`morca.resources`).
 """
 
-from postgres import Params
+import morca.db.machines_view as machines_db
+from morca.db.machines_view import HostRun
 
 from morca.html import Html
 from morca.json import quote
@@ -12,46 +13,9 @@ from morca.ui.parts import mb_text
 from morca.usage import bytes_text
 
 
-@fieldwise_init
-struct HostRun(Copyable, Movable):
-    var id: Int
-    var pipeline: String
-    var placement: String
-    var grant_mb: Int
-    var limit_mb: Int
-    """`memory.high`; 0 for a run without a cgroup."""
-    var max_mb: Int
-    var memory_bytes: Int
-    """Its cgroup's memory when last recorded; -1 before that."""
-
-
 def host_runs(mut db: State) raises -> List[HostRun]:
     """The running runs placed on the scheduler's host."""
-    var out = List[HostRun]()
-    for r in db.conn.query(
-        (
-            "SELECT id, pipeline, coalesce(placement, 'local') AS placement,"
-            " coalesce(grant_memory_mb, 0)::bigint AS grant_mb,"
-            " coalesce(memory_limit_mb, 0)::bigint AS limit_mb,"
-            " coalesce(memory_max_mb, 0)::bigint AS max_mb,"
-            " coalesce(memory_bytes, -1)::bigint AS memory_bytes FROM"
-            " orca.runs WHERE status = 'running' AND coalesce(placement,"
-            " 'local') IN ('local', 'control') ORDER BY id"
-        ),
-        Params(),
-    ):
-        out.append(
-            HostRun(
-                Int(r.int64("id")),
-                r.text("pipeline"),
-                r.text("placement"),
-                Int(r.int64("grant_mb")),
-                Int(r.int64("limit_mb")),
-                Int(r.int64("max_mb")),
-                Int(r.int64("memory_bytes")),
-            )
-        )
-    return out^
+    return machines_db.host_runs(db.conn)
 
 
 def host_runs_html(mut h: Html, runs: List[HostRun]):

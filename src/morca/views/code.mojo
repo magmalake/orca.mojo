@@ -4,7 +4,7 @@ step a page shows.
 """
 
 from json import loads
-from postgres import Params
+import morca.db.code_view as code_db
 
 from morca.locate import function_key
 from morca.source import is_hex, web_url
@@ -76,17 +76,7 @@ def code_links(
     ref ver = v.value()
     try:
         var fn_step = Dict[String, String]()
-        var d = loads(
-            db.conn.query(
-                (
-                    "SELECT describe::text AS d FROM orca.pipelines WHERE name"
-                    " = $1"
-                ),
-                Params().text(pipeline),
-            )
-            .row(0)
-            .text("d")
-        )
+        var d = loads(code_db.describe(db.conn, pipeline))
         for st in d["steps"].array_items():
             fn_step[function_key(st["function"].string_value())] = st[
                 "name"
@@ -119,24 +109,13 @@ def code_of(
     no run, of the version `pipeline` is registered with; each version's
     worked out once per `cache`."""
     try:
-        var rows = db.conn.query(
-            (
-                "SELECT r.pipeline, coalesce(r.version, p.version, 0) AS v"
-                " FROM orca.runs r LEFT JOIN orca.pipelines p ON p.name ="
-                " r.pipeline WHERE r.id = $1"
-            ),
-            Params().int64(Int64(run)),
-        ) if run else db.conn.query(
-            (
-                "SELECT name AS pipeline, coalesce(version, 0) AS v FROM"
-                " orca.pipelines WHERE name = $1"
-            ),
-            Params().text(pipeline),
-        )
-        if len(rows) == 0 or not rows.row(0).int64("v"):
+        var found = code_db.run_code_version(
+            db.conn, run
+        ) if run else code_db.pipeline_code_version(db.conn, pipeline)
+        if not found or not found.value()[1]:
             return CodeLinks()
-        var name = rows.row(0).text("pipeline")
-        var id = Int(rows.row(0).int64("v"))
+        var name = found.value()[0]
+        var id = found.value()[1]
         var key = String(name, "\0", id)
         if key not in cache:
             var vs = version_rows(db, id=id)
@@ -173,23 +152,13 @@ def runs_code(mut db: State, runs: List[RunRow]) -> Dict[Int, RunCode]:
     for r in runs:
         ids.write("," if ids else "", r.id)
     try:
-        var rows = db.conn.query(
-            (
-                "SELECT r.id, r.pipeline, coalesce(r.version, p.version, 0) AS"
-                " v, coalesce((SELECT s.step FROM orca.steps s WHERE s.run ="
-                " r.id AND s.status = 'failed' ORDER BY s.id LIMIT 1), '') AS"
-                " failed FROM orca.runs r LEFT JOIN orca.pipelines p ON p.name"
-                " = r.pipeline WHERE r.id = ANY(string_to_array($1,"
-                " ',')::bigint[])"
-            ),
-            Params().text(ids),
-        )
+        var rows = code_db.run_versions(db.conn, ids)
         var cache = Dict[String, CodeLinks]()
         for row in rows:
-            var v = Int(row.int64("v"))
+            var v = row.version
             if not v:
                 continue
-            var name = row.text("pipeline")
+            var name = row.pipeline
             var key = String(name, "\0", v)
             if key not in cache:
                 var vs = version_rows(db, id=v)
@@ -199,8 +168,8 @@ def runs_code(mut db: State, runs: List[RunRow]) -> Dict[Int, RunCode]:
                     vs[0].copy() if len(vs) > 0 else Optional[VersionRow](None),
                 )
             ref links = cache[key]
-            var failed = row.text("failed")
-            out[Int(row.int64("id"))] = RunCode(
+            var failed = row.failed
+            out[row.id] = RunCode(
                 links.pipeline.copy(), failed, links.step(failed)
             )
     except:

@@ -9,7 +9,8 @@ writes them to Postgres, so a run can be resumed by another process.
 `RunStore` is a `Store` that also keeps runs: the rest of what a pipeline
 binary (`morca.cli`) asks of persistence, from registering the pipeline to
 ending its run, so the binary depends on this trait and nothing else.
-The scheduler and the UI query `morca.state.State`'s SQL directly.
+Both backends' SQL is in `morca.db` (`morca.db.runs`, `morca.db.steps`,
+`morca.db.sqlite_runs`), as is the scheduler's and the UI's.
 """
 
 from std.ffi import external_call
@@ -17,6 +18,8 @@ from std.os import getenv
 from std.time import perf_counter_ns, sleep
 
 from dista.codec import decode
+
+from morca.db.run_rows import RunInfo, StepInfo, Usage
 
 comptime RUNNING = "running"
 comptime CANCELLED = "cancelled"
@@ -186,51 +189,6 @@ struct Backoff(Movable):
         )
         sleep(self.wait)
         self.wait = min(self.wait * 2, 4.0)
-
-
-@fieldwise_init
-struct RunInfo(Copyable, Movable):
-    var id: Int
-    var pipeline: String
-    var registry_hash: String
-    var partitions: String
-    var status: String
-    var owner: String
-    var error: String
-    """Why the run ended without its steps saying so, or empty."""
-
-
-@fieldwise_init
-struct Usage(ImplicitlyCopyable, Movable):
-    """What an attempt's processes used (`morca.usage`): the peak resident
-    bytes of its process tree, its CPU seconds, and the most cores it kept
-    busy over a sample's interval. Each is -1 where it isn't known: a run
-    on EC2 or Kubernetes, one no scheduler or worker started, or on macOS
-    the peak cores, which only samples give."""
-
-    var peak_rss_bytes: Int
-    var cpu_seconds: Float64
-    var peak_cpus: Float64
-
-    @staticmethod
-    def unknown() -> Usage:
-        return Usage(-1, -1.0, -1.0)
-
-    def known(self) -> Bool:
-        return self.peak_rss_bytes >= 0 or self.cpu_seconds >= 0
-
-
-@fieldwise_init
-struct StepInfo(Copyable, Movable):
-    var step: String
-    var partition: String
-    var status: String
-    var attempts: Int
-    var error: String
-    var log: String
-    """The latest attempt's log file, or empty."""
-    var usage: Usage
-    """What the latest attempt used, as far as it's known."""
 
 
 def process_owner() -> String:

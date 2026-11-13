@@ -581,3 +581,77 @@ def ended(mut conn: Connection, id: String, why: String) raises:
         ),
         Params().text(id).text(why),
     )
+
+
+# ---------------------------------------------------------------------------
+# The instance's side of the warm pool (`morca.pool`)
+# ---------------------------------------------------------------------------
+
+
+def run_over(
+    mut conn: Connection, id: String, run: Int, start: Int
+) raises -> Bool:
+    """Whether `run` isn't running at `start` any more, or instance `id`'s
+    row for it has ended (or there's no such run)."""
+    var rows = conn.query(
+        (
+            "SELECT r.status <> 'running' OR r.starts <> $3 OR i.id IS NULL OR"
+            " i.ended IS NOT NULL AS over FROM orca.runs r LEFT JOIN"
+            " orca.instances i ON i.id = $1 AND i.run = r.id AND i.start = $3"
+            " WHERE r.id = $2"
+        ),
+        Params().text(id).int64(Int64(run)).int64(Int64(start)),
+    )
+    return len(rows) == 0 or rows.row(0).bool("over")
+
+
+def beat_idle(
+    mut conn: Connection, id: String, run: Int, start: Int
+) raises -> Int:
+    """Marks instance `id`'s live row for `run` at `start` idle (from the
+    first time) and polled now; returns how many rows (0 once it's ended)."""
+    return conn.execute(
+        (
+            "UPDATE orca.instances SET idle = coalesce(idle, now()),"
+            " polled = now() WHERE id = $1 AND run = $2 AND start = $3"
+            " AND ended IS NULL"
+        ),
+        Params().text(id).int64(Int64(run)).int64(Int64(start)),
+    )
+
+
+@fieldwise_init
+struct Handed(Copyable, Movable):
+    """The run the pool handed an instance, as it joins it."""
+
+    var run: Int
+    var start: Int
+    var allow_new_code: Bool
+    var head: String
+    """The run's live head's address, or empty."""
+
+
+def join_handed(mut conn: Connection, id: String) raises -> Optional[Handed]:
+    """Records that instance `id` joined the run its live pooled row is
+    for, and returns that run; None when it has no such row."""
+    var got = conn.query(
+        (
+            "UPDATE orca.instances i SET joined = now() FROM"
+            " orca.runs r WHERE r.id = i.run AND i.id = $1 AND"
+            " i.ended IS NULL AND i.pooled RETURNING i.run,"
+            " i.start, r.allow_new_code, coalesce((SELECT"
+            " h.address FROM orca.instances h WHERE h.run = i.run"
+            " AND h.start = i.start AND h.role = 'head' AND"
+            " h.ended IS NULL), '') AS head"
+        ),
+        Params().text(id),
+    )
+    if len(got) == 0:
+        return None
+    var r = got.row(0)
+    return Handed(
+        Int(r.int64("run")),
+        Int(r.int64("start")),
+        r.bool("allow_new_code"),
+        r.text("head"),
+    )

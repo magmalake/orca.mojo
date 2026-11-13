@@ -5,7 +5,7 @@ to (`orca.pools.status`), and as JSON for `/api/pools`.
 """
 
 from json import loads
-from postgres import Params
+import morca.db.machines_view as machines_db
 
 from morca.html import Html
 from morca.json import quote
@@ -36,36 +36,27 @@ struct ScaledPool(Copyable, Movable):
 
 def scaled_pools(mut db: State) raises -> List[ScaledPool]:
     var out = List[ScaledPool]()
-    for r in db.conn.query(
-        (
-            "SELECT p.name, p.provider, p.machines::text AS machines,"
-            " p.locations::text AS locations, p.max_machines, p.idle_seconds,"
-            " p.trying, coalesce(p.status, '') AS status, (SELECT count(*) FROM"
-            " orca.pool_machines m WHERE m.pool = p.name AND m.ended IS NULL)"
-            " AS live FROM orca.pools p ORDER BY p.name"
-        ),
-        Params(),
-    ):
+    for r in machines_db.scaled_pools(db.conn):
         var ms = List[Tuple[String, Int]]()
-        for m in loads(r.text("machines")).array_items():
+        for m in loads(r.machines).array_items():
             var wait = -1
             if "wait" in m and m["wait"].is_int():
                 wait = Int(m["wait"].int_value())
             ms.append((m["type"].string_value(), wait))
         var ls = List[String]()
-        for l in loads(r.text("locations")).array_items():
+        for l in loads(r.locations).array_items():
             ls.append(l.string_value())
         out.append(
             ScaledPool(
-                r.text("name"),
-                r.text("provider"),
+                r.name,
+                r.provider,
                 ms^,
                 ls^,
-                Int(r.int64("max_machines")),
-                Int(r.int64("idle_seconds")),
-                Int(r.int64("live")),
-                Int(r.int64("trying")),
-                r.text("status"),
+                r.max_machines,
+                r.idle_seconds,
+                r.live,
+                r.trying,
+                r.status,
             )
         )
     return out^

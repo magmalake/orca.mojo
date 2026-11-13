@@ -1,0 +1,2 @@
+# Files in src/ allowed over 1,500 lines (tests/file_size.sh, #363).
+# It only shrinks: split a file instead of adding it here.

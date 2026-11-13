@@ -6,7 +6,7 @@ the Timeline tab (`morca.ui.viz`);
 from.
 """
 
-from postgres import Params
+import morca.db.home_view as home_db
 
 from morca.admission import held_warning, row_json, scheduler_pressure
 from morca.api.pipelines import json_pipeline
@@ -35,27 +35,8 @@ def _runs_per_day(mut db: State, days: Int) raises -> List[DayRuns]:
     """Runs by the UTC day they started (or were made, if they haven't),
     for the last `days` days up to today."""
     var out = List[DayRuns]()
-    for r in db.conn.query(
-        (
-            "SELECT d::date::text AS day, count(r.id) FILTER (WHERE r.status ="
-            " 'succeeded') AS ok, count(r.id) FILTER (WHERE r.status ="
-            " 'failed') AS bad, count(r.id) FILTER (WHERE r.status NOT IN"
-            " ('succeeded', 'failed')) AS other FROM generate_series((now() AT"
-            " TIME ZONE 'UTC')::date - ($1::int - 1), (now() AT TIME ZONE"
-            " 'UTC')::date, interval '1 day') AS d LEFT JOIN orca.runs r ON"
-            " (coalesce(r.started, r.created) AT TIME ZONE 'UTC')::date ="
-            " d::date GROUP BY d ORDER BY d"
-        ),
-        Params().int64(Int64(days)),
-    ):
-        out.append(
-            DayRuns(
-                r.text("day"),
-                Int(r.int64("ok")),
-                Int(r.int64("bad")),
-                Int(r.int64("other")),
-            )
-        )
+    for r in home_db.runs_per_day(db.conn, days):
+        out.append(DayRuns(r.day, r.succeeded, r.failed, r.other))
     return out^
 
 

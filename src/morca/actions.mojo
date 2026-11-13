@@ -18,9 +18,9 @@ still going) rather than an error.
 
 from std.os import getenv
 
-from postgres import Params
-
-from morca.db.live import live_runs
+import morca.db.actions as actions_db
+import morca.db.starting as starting_db
+from morca.db.live import live_runs, stale_seconds, stalled_sql
 from morca.name import parse_names
 from morca.pause import set_paused
 from morca.queueing import (
@@ -35,7 +35,6 @@ from morca.registered import (
     Registered,
     registered,
 )
-from morca.scheduler import RETRIED_SQL
 from morca.sensors import rebuild
 from morca.state import State
 from morca.timekeys import parse_time_keys
@@ -63,15 +62,6 @@ struct Outcome(Movable):
         return Self(0, 0, why^, confirm, List[String]())
 
 
-def stale_seconds() -> Float64:
-    """`MORCA_STALE_SECONDS` (default 30): how old a running run's heartbeat
-    is when its process is taken to have died."""
-    try:
-        return Float64(getenv("MORCA_STALE_SECONDS", "30"))
-    except:
-        return 30.0
-
-
 def cancel_kill_seconds() -> Float64:
     """`MORCA_CANCEL_KILL_SECONDS` (default 60): how long a running run
     asked to cancel has to finish its step before it's stopped."""
@@ -79,17 +69,6 @@ def cancel_kill_seconds() -> Float64:
         return Float64(getenv("MORCA_CANCEL_KILL_SECONDS", "60"))
     except:
         return 60.0
-
-
-def stalled_sql() -> String:
-    """True for a run that's `running` with no live process: its heartbeat,
-    or its start when it has none yet, is older than the stale limit."""
-    return String(
-        "(status = 'running' AND coalesce(heartbeat, started, created) <",
-        " now() - make_interval(secs => ",
-        stale_seconds(),
-        "))",
-    )
 
 
 def _pipeline(mut db: State, name: String) raises -> Optional[Registered]:
@@ -117,10 +96,7 @@ def start_run(mut db: State, pipeline: String, keys: String) raises -> Outcome:
     for i in range(len(texts)):
         joined.write("," if i else "", texts[i])
     var tx = db.conn.begin()
-    _ = tx.query(
-        "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
-        Params().text(pipeline),
-    )
+    starting_db.lock_pipeline(tx, pipeline)
     var live = live_runs(tx, pipeline)
     for k in texts:
         var run = live.get(k)
@@ -135,17 +111,8 @@ def start_run(mut db: State, pipeline: String, keys: String) raises -> Outcome:
                     " cancel it",
                 )
             )
-    var id = (
-        tx.query(
-            (
-                "INSERT INTO orca.runs (pipeline, registry_hash, partitions,"
-                " trigger, status) VALUES ($1, $2, $3, 'ui', 'queued')"
-                " RETURNING id"
-            ),
-            Params().text(pipeline).text(p.value().registry_hash).text(joined),
-        )
-        .row(0)
-        .int64("id")
+    var id = actions_db.add_ui_run(
+        tx, pipeline, p.value().registry_hash, joined
     )
     tx.commit()
     return Outcome.done(Int(id))
@@ -186,26 +153,16 @@ def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
     than when it asked). A run whose pipeline's code has changed
     since is refused until `allow_new_code`, which the scheduler passes on
     as `--allow-new-code`."""
-    var rows = db.conn.query(
-        String(
-            "SELECT r.pipeline, r.status, r.registry_hash, p.registry_hash AS",
-            " current,",
-            " p.binary_path IS NOT NULL AS has_binary, ",
-            stalled_sql(),
-            " AS stalled FROM orca.runs r JOIN orca.pipelines p ON p.name =",
-            " r.pipeline WHERE r.id = $1",
-        ),
-        Params().int64(Int64(run)),
-    )
-    if len(rows) == 0:
+    var got = actions_db.resumable(db.conn, run)
+    if not got:
         return Outcome.no(String("no run ", run))
-    var r = rows.row(0)
-    var status = r.text("status")
+    ref r = got.value()
+    var status = r.status
     if (
         status != "failed"
         and status != "cancelled"
         and status != "deferred"
-        and not r.bool("stalled")
+        and not r.stalled
     ):
         return Outcome.no(
             String(
@@ -219,36 +176,23 @@ def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
                 ),
             )
         )
-    if not r.bool("has_binary"):
-        return Outcome.no(_unregistered(r.text("pipeline")))
-    if r.text("registry_hash") != r.text("current") and not allow_new_code:
+    if not r.has_binary:
+        return Outcome.no(_unregistered(r.pipeline))
+    if r.registry_hash != r.current and not allow_new_code:
         return Outcome.no(
             String(
                 "run ",
                 run,
                 " ran code ",
-                r.text("registry_hash"),
+                r.registry_hash,
                 ", and the pipeline's binary is now ",
-                r.text("current"),
+                r.current,
                 ". Resuming runs the new code on the steps that haven't",
                 " succeeded, over the outputs of the old code's that have.",
             ),
             confirm=True,
         )
-    var n = db.conn.execute(
-        String(
-            "UPDATE orca.runs SET status = 'queued', owner = NULL, heartbeat =",
-            " NULL, ended = NULL, retry_at = NULL, cancel_requested = false,",
-            (
-                " error = NULL, allow_new_code = $2 WHERE id = $1 AND (status"
-                " IN ('failed',"
-            ),
-            " 'cancelled', 'deferred') OR ",
-            stalled_sql(),
-            ")",
-        ),
-        Params().int64(Int64(run)).bool(allow_new_code),
-    )
+    var n = actions_db.requeue(db.conn, run, allow_new_code)
     if n != 1:
         return Outcome.no(String("run ", run, " changed; look again"))
     return Outcome.done(run)
@@ -266,28 +210,19 @@ def rerun_from(
     Refused until `allow_append` confirms it if `step` or one after it
     appends to a dataset (`appending_writes`): the new run would append
     again beside what `run` committed."""
-    var rows = db.conn.query(
-        (
-            "SELECT r.pipeline, r.partitions, r.status, r.registry_hash,"
-            " p.registry_hash AS current, (SELECT x.n - 1 FROM"
-            " jsonb_array_elements(p.describe->'steps') WITH ORDINALITY AS"
-            " x(s, n) WHERE x.s->>'name' = $2) AS ord FROM orca.runs r JOIN"
-            " orca.pipelines p ON p.name = r.pipeline WHERE r.id = $1"
-        ),
-        Params().int64(Int64(run)).text(step),
-    )
-    if len(rows) == 0:
+    var got = actions_db.rerunnable(db.conn, run, step)
+    if not got:
         return Outcome.no(String("no run ", run))
-    var r = rows.row(0)
-    var pipeline = r.text("pipeline")
-    var status = r.text("status")
+    ref r = got.value()
+    var pipeline = r.pipeline
+    var status = r.status
     if status == "queued" or status == "running":
         return Outcome.no(
             String("run ", run, " is ", status, "; rerun it once it has ended")
         )
-    if r.is_null("ord"):
+    if r.ord < 0:
         return Outcome.no(String("pipeline ", pipeline, " has no step ", step))
-    var ord = r.int64("ord")
+    var ord = r.ord
     if not _pipeline(db, pipeline):
         return Outcome.no(_unregistered(pipeline))
     if not allow_append:
@@ -302,62 +237,24 @@ def rerun_from(
                 ),
                 confirm=True,
             )
-    if ord > 0 and r.text("registry_hash") != r.text("current"):
+    if ord > 0 and r.registry_hash != r.current:
         return Outcome.no(
             String(
                 "run ",
                 run,
                 " ran code ",
-                r.text("registry_hash"),
+                r.registry_hash,
                 ", and the pipeline's binary is now ",
-                r.text("current"),
+                r.current,
                 "; its outputs may not be what the new code reads, so rerun",
                 " it from the first step",
             )
         )
     var tx = db.conn.begin()
-    var id = (
-        tx.query(
-            (
-                "INSERT INTO orca.runs (pipeline, registry_hash, partitions,"
-                " trigger, status) VALUES ($1, $2, $3, 'rerun', 'queued')"
-                " RETURNING id"
-            ),
-            Params()
-            .text(pipeline)
-            .text(r.text("current"))
-            .text(r.text("partitions")),
-        )
-        .row(0)
-        .int64("id")
-    )
-    _ = tx.execute(
-        (
-            "INSERT INTO orca.steps (run, step, partition, ord, status, input,"
-            " output, copied_from) SELECT $2, step, partition, ord,"
-            " 'succeeded', input, output, coalesce(copied_from, id) FROM"
-            " orca.steps WHERE run = $1 AND ord < $3 AND status = 'succeeded'"
-        ),
-        Params().int64(Int64(run)).int64(id).int64(ord),
-    )
+    var id = actions_db.add_rerun(tx, pipeline, r.current, r.partitions)
+    actions_db.copy_steps(tx, run, id, ord)
     tx.commit()
     return Outcome.done(Int(id))
-
-
-def _cancel_set(kill_seconds: StaticString) -> String:
-    """`UPDATE orca.runs SET ...` for cancelling the runs its `WHERE` names:
-    one not running is `cancelled` at once, a running one gets
-    `cancel_requested` and, at `kill_seconds` (a parameter) from now, its
-    `cancel_at`."""
-    return String(
-        "UPDATE orca.runs SET cancel_requested = true, status = CASE WHEN",
-        " status = 'running' THEN status ELSE 'cancelled' END, ended = CASE",
-        " WHEN status = 'running' THEN ended ELSE now() END, cancel_at = CASE",
-        " WHEN status = 'running' THEN coalesce(cancel_at, now() +",
-        " make_interval(secs => ",
-        kill_seconds,
-        ")) END",
-    )
 
 
 def cancel_run(mut db: State, run: Int) raises -> Outcome:
@@ -365,25 +262,12 @@ def cancel_run(mut db: State, run: Int) raises -> Outcome:
     started again), a running one before its next attempt, or, if its step
     is still going `MORCA_CANCEL_KILL_SECONDS` later, by stopping its process
     (`morca.heartbeat`)."""
-    var rows = db.conn.query(
-        String(
-            _cancel_set("$2"),
-            " WHERE id = $1 AND status IN ('queued', 'running', 'failed',",
-            " 'deferred') RETURNING id",
-        ),
-        Params().int64(Int64(run)).float64(cancel_kill_seconds()),
-    )
-    if len(rows) == 1:
+    if actions_db.cancel(db.conn, run, cancel_kill_seconds()):
         return Outcome.done(run)
-    var st = db.conn.query(
-        "SELECT status FROM orca.runs WHERE id = $1",
-        Params().int64(Int64(run)),
-    )
-    if len(st) == 0:
+    var st = actions_db.status_of(db.conn, run)
+    if not st:
         return Outcome.no(String("no run ", run))
-    return Outcome.no(
-        String("run ", run, " is ", st.row(0).text("status"), " already")
-    )
+    return Outcome.no(String("run ", run, " is ", st.value(), " already"))
 
 
 def cancel_runs(
@@ -393,20 +277,12 @@ def cancel_runs(
     pipeline's runs that are queued, deferred, running, or failed and due
     to be retried, over any of `keys` (a run of several keys is cancelled whole),
     or all of them for `@all`. The outcome's `queued` is how many."""
-    var rows = db.conn.query(
-        (
-            "SELECT coalesce(describe->'partitions'->>'kind', 'monthly') AS"
-            " kind, coalesce(describe->'partitions'->>'start', '') AS start,"
-            " coalesce((describe->>'run_retries')::bigint, 3) AS run_retries"
-            " FROM orca.pipelines WHERE name = $1"
-        ),
-        Params().text(pipeline),
-    )
-    if len(rows) == 0:
+    var got = actions_db.partitioning(db.conn, pipeline)
+    if not got:
         return Outcome.no(String("no pipeline ", pipeline))
-    var kind = rows.row(0).text("kind")
-    var start = rows.row(0).text("start")
-    var retries = rows.row(0).int64("run_retries")
+    var kind = got.value().kind
+    var start = got.value().start
+    var retries = got.value().run_retries
     var all = keys.strip() == "@all"
     var joined = String()
     if not all:
@@ -419,25 +295,10 @@ def cancel_runs(
                     joined.write("," if joined else "", k)
         except e:
             return Outcome.no(String(e))
-    var done = db.conn.query(
-        String(
-            _cancel_set("$5"),
-            " WHERE",
-            " pipeline = $1 AND ($2 OR string_to_array(partitions, ',') &&",
-            " string_to_array($3, ',')) AND (status IN ('queued', 'deferred')",
-            " OR (status = 'running' AND NOT cancel_requested) OR (status =",
-            " 'failed' AND ",
-            RETRIED_SQL,
-            " AND starts - deferrals <= $4)) RETURNING id",
-        ),
-        Params()
-        .text(pipeline)
-        .bool(all)
-        .text(joined)
-        .int64(retries)
-        .float64(cancel_kill_seconds()),
+    var done = actions_db.cancel_over(
+        db.conn, pipeline, all, joined, retries, cancel_kill_seconds()
     )
-    return Outcome.done(0, len(done))
+    return Outcome.done(0, done)
 
 
 def pause_pipeline(
@@ -524,16 +385,9 @@ def cancel_runs_picked(mut db: State, runs: List[Int]) raises -> Bulk:
     var b = Bulk.none()
     if len(runs) == 0:
         return b^
-    for r in db.conn.query(
-        String(
-            _cancel_set("$2"),
-            " WHERE id = ANY(string_to_array($1, ',')::bigint[]) AND (status",
-            " IN ('queued', 'deferred') OR (status = 'running' AND NOT",
-            " cancel_requested)) RETURNING id::bigint AS id",
-        ),
-        Params().text(_id_list(runs)).float64(cancel_kill_seconds()),
-    ):
-        b.done.append(Int(r.int64("id")))
+    b.done = actions_db.cancel_picked(
+        db.conn, _id_list(runs), cancel_kill_seconds()
+    )
     for id in runs:
         if id not in b.done and id not in b.skipped:
             b.skipped.append(id)
@@ -547,18 +401,7 @@ def resume_failed(mut db: State, runs: List[Int]) raises -> Bulk:
     var b = Bulk.none()
     if len(runs) == 0:
         return b^
-    var failed = List[Int]()
-    for r in db.conn.query(
-        String(
-            "SELECT id::bigint AS id FROM orca.runs WHERE id =",
-            " ANY(string_to_array($1, ',')::bigint[]) AND (status = 'failed'",
-            " OR ",
-            stalled_sql(),
-            ")",
-        ),
-        Params().text(_id_list(runs)),
-    ):
-        failed.append(Int(r.int64("id")))
+    var failed = actions_db.failed_or_stalled(db.conn, _id_list(runs))
     for id in runs:
         if id not in failed:
             if id not in b.skipped:
@@ -586,14 +429,8 @@ def backfill_picked(
     var names = List[String]()
     var keys = List[List[String]]()
     var of = List[List[Int]]()
-    for r in db.conn.query(
-        (
-            "SELECT id::bigint AS id, pipeline, partitions FROM orca.runs"
-            " WHERE id = ANY(string_to_array($1, ',')::bigint[]) ORDER BY id"
-        ),
-        Params().text(_id_list(runs)),
-    ):
-        var name = r.text("pipeline")
+    for r in actions_db.runs_keys(db.conn, _id_list(runs)):
+        var name = r.pipeline
         var i = -1
         for j in range(len(names)):
             if names[j] == name:
@@ -603,8 +440,8 @@ def backfill_picked(
             keys.append(List[String]())
             of.append(List[Int]())
             i = len(names) - 1
-        of[i].append(Int(r.int64("id")))
-        for k in r.text("partitions").split(","):
+        of[i].append(r.id)
+        for k in r.partitions.split(","):
             var key = String(k.strip())
             if key and key not in keys[i]:
                 keys[i].append(key^)

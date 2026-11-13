@@ -21,26 +21,17 @@ Hourly, daily and monthly keys are zero-padded, so they compare as text.
 
 from std.collections import Dict
 
-from postgres import Params
+import morca.db.calendar as calendar_db
+from morca.db.live import live_runs
 
 from morca.civil import Civil, now
 from morca.day import Day
 from morca.hour import Hour
 from morca.json import quote
-from morca.db.live import live_sql
 from morca.month import Month, days_in
 from morca.queueing import done_keys
 from morca.state import State
 from morca.timekeys import unit_of
-
-
-comptime _LAST_SQL = (
-    "SELECT DISTINCT ON (k.key) k.key, r.status FROM orca.runs r,"
-    " unnest(string_to_array(r.partitions, ',')) AS k(key) WHERE r.pipeline ="
-    " $1 AND k.key = ANY (string_to_array($2, ',')) ORDER BY k.key, r.id DESC"
-)
-"""Of the comma-separated keys `$2`, the status of the last run of pipeline
-`$1` that had each (`key`, `status`)."""
 
 
 @fieldwise_init
@@ -242,12 +233,11 @@ def _cells(
     for i in range(len(keys)):
         joined.write("," if i else "", keys[i])
     var live = Dict[String, Bool]()
-    for r in db.conn.query(live_sql(), Params().text(pipeline)):
-        live[r.text("key")] = True
+    for e in live_runs(db.conn, pipeline).items():
+        live[e.key] = True
     var failed = Dict[String, Bool]()
-    for r in db.conn.query(_LAST_SQL, Params().text(pipeline).text(joined)):
-        if r.text("status") == "failed":
-            failed[r.text("key")] = True
+    for k in calendar_db.failed_keys(db.conn, pipeline, joined):
+        failed[k] = True
     var cells = List[Cell]()
     for k in keys:
         var state: String

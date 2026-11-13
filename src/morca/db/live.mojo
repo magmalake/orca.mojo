@@ -20,7 +20,7 @@ counts the draining one's runs and leaves them alone.
 
 from std.os import getenv
 
-from postgres import Params, Transaction
+from postgres import Connection, Params, Transaction
 
 
 def stale_limit() raises -> Float64:
@@ -41,6 +41,26 @@ def start_grace(stale: Float64) raises -> Float64:
             "300" if runner == "kubernetes"
             or runner == "ec2" else String(stale),
         )
+    )
+
+
+def stale_seconds() -> Float64:
+    """`MORCA_STALE_SECONDS` (default 30): how old a running run's heartbeat
+    is when its process is taken to have died."""
+    try:
+        return Float64(getenv("MORCA_STALE_SECONDS", "30"))
+    except:
+        return 30.0
+
+
+def stalled_sql() -> String:
+    """True for a run that's `running` with no live process: its heartbeat,
+    or its start when it has none yet, is older than the stale limit."""
+    return String(
+        "(status = 'running' AND coalesce(heartbeat, started, created) <",
+        " now() - make_interval(secs => ",
+        stale_seconds(),
+        "))",
     )
 
 
@@ -192,5 +212,15 @@ def live_runs(
     `morca.scheduler` does, so two can't both see a key free."""
     var out = Dict[String, Int]()
     for r in tx.query(live_sql(), Params().text(pipeline)):
+        out[r.text("key")] = Int(r.int64("id"))
+    return out^
+
+
+def live_runs(
+    mut conn: Connection, pipeline: String
+) raises -> Dict[String, Int]:
+    """`live_runs`, outside a transaction: for a page, which locks nothing."""
+    var out = Dict[String, Int]()
+    for r in conn.query(live_sql(), Params().text(pipeline)):
         out[r.text("key")] = Int(r.int64("id"))
     return out^

@@ -30,22 +30,13 @@ a database that can't be reached for a while, retrying every second.
 from std.os import getenv
 from std.time import perf_counter_ns, sleep
 
-from postgres import Params
+import morca.db.ec2 as ec2_db
 
 from morca.state import State
 
 
 def _over(mut db: State, iid: String, run: Int, start: Int) raises -> Bool:
-    var rows = db.conn.query(
-        (
-            "SELECT r.status <> 'running' OR r.starts <> $3 OR i.id IS NULL OR"
-            " i.ended IS NOT NULL AS over FROM orca.runs r LEFT JOIN"
-            " orca.instances i ON i.id = $1 AND i.run = r.id AND i.start = $3"
-            " WHERE r.id = $2"
-        ),
-        Params().text(iid).int64(Int64(run)).int64(Int64(start)),
-    )
-    return len(rows) == 0 or rows.row(0).bool("over")
+    return ec2_db.run_over(db.conn, iid, run, start)
 
 
 def pool_wait_main(args: List[String]) raises -> Int:
@@ -87,36 +78,17 @@ def pool_next_main(args: List[String]) raises -> Int:
             if not db:
                 db = State(url)
             ref c = db.value().conn
-            var mine = c.execute(
-                (
-                    "UPDATE orca.instances SET idle = coalesce(idle, now()),"
-                    " polled = now() WHERE id = $1 AND run = $2 AND start = $3"
-                    " AND ended IS NULL"
-                ),
-                Params().text(iid).int64(Int64(run)).int64(Int64(start)),
-            )
-            if mine == 0:
-                var got = c.query(
-                    (
-                        "UPDATE orca.instances i SET joined = now() FROM"
-                        " orca.runs r WHERE r.id = i.run AND i.id = $1 AND"
-                        " i.ended IS NULL AND i.pooled RETURNING i.run,"
-                        " i.start, r.allow_new_code, coalesce((SELECT"
-                        " h.address FROM orca.instances h WHERE h.run = i.run"
-                        " AND h.start = i.start AND h.role = 'head' AND"
-                        " h.ended IS NULL), '') AS head"
-                    ),
-                    Params().text(iid),
-                )
-                if len(got) == 0:
+            if ec2_db.beat_idle(c, iid, run, start) == 0:
+                var got = ec2_db.join_handed(c, iid)
+                if not got:
                     return 1  # ended: the scheduler shut it down
-                var r = got.row(0)
+                ref h = got.value()
                 print(
                     "next",
-                    r.int64("run"),
-                    r.int64("start"),
-                    r.text("head") if r.text("head") else String("-"),
-                    1 if r.bool("allow_new_code") else 0,
+                    h.run,
+                    h.start,
+                    h.head if h.head else String("-"),
+                    1 if h.allow_new_code else 0,
                 )
                 return 0
         except e:
