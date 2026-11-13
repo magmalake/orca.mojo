@@ -107,8 +107,10 @@ RUN curl -fsSL https://mirrors.edge.kernel.org/pub/software/scm/git/git-$GIT_VER
 #   apps with `nc`; operators `docker exec scheduler sh`. Every applet is
 #   linked where busybox puts it (/bin/sh, /usr/bin/env, ...), except
 #   where a file below already is (setpriv, ldd).
-# - util-linux's setpriv: busybox's has no --bounding-set, which the
-#   scheduler's cgroup start drops CAP_SYS_ADMIN with.
+# - util-linux's setpriv, at /usr/bin/setpriv: busybox's has no
+#   --bounding-set, which the scheduler's cgroup start drops CAP_SYS_ADMIN
+#   with. Call it by that path: busybox's sh runs its own applet for a
+#   bare `setpriv` (Debian builds it standalone), whatever PATH says.
 # - ldd (deploy/runtime/ldd; glibc's is bash), for the image tests.
 # - the Debian libraries the binaries, git, setpriv and /opt/morca/lib link
 #   that the base hasn't: libpsl5 for libcurl (see above) with what it

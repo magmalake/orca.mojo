@@ -831,7 +831,7 @@ What `CGROUPS=1` changes in the scheduler's `docker run` (nothing else's):
 - `--cgroupns=private`: the container sees its own cgroup as
   `/sys/fs/cgroup` (docker's default on cgroup v2, said explicitly).
 - `--cap-add SYS_ADMIN --security-opt apparmor=unconfined` and an entrypoint
-  of `mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set
+  of `mount -o remount,rw /sys/fs/cgroup && exec /usr/bin/setpriv --bounding-set
   -sys_admin --inh-caps -sys_admin morca scheduler`: the remount needs the
   capability and AppArmor's leave, and the capability is dropped from the
   bounding set before morca starts, so neither morca nor any run it starts has

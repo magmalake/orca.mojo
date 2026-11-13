@@ -725,7 +725,8 @@ containers() {
     # which docker mounts read-only, is made writable before morca starts:
     # remounting needs CAP_SYS_ADMIN, outside docker's AppArmor profile,
     # and the capability is dropped (setpriv) before morca, and every run
-    # it starts, gets it. Its own cgroup is the container's: it can't
+    # it starts, gets it. util-linux's setpriv by its path: busybox's sh
+    # runs its own applet for a bare `setpriv`, which has no --bounding-set. Its own cgroup is the container's: it can't
     # touch any other container's or the host's.
     if [ "$(conf_get CGROUPS)" = 1 ]; then
         # shellcheck disable=SC2086
@@ -734,7 +735,7 @@ containers() {
             -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
             --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
             --entrypoint /bin/sh "$image:$tag" -c \
-            'mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/morca/bin/morca scheduler'
+            'mount -o remount,rw /sys/fs/cgroup && exec /usr/bin/setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/morca/bin/morca scheduler'
     else
         # shellcheck disable=SC2086
         $cb scheduler "$sfiles" - "$image:$tag" --network orca --env-file "$CONF/morca.env" \

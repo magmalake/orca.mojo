@@ -39,7 +39,7 @@ run --entrypoint sh "$img" -c '[ -s /opt/morca/ssl/cacert.pem ] && [ -s /src/pro
 run --entrypoint test "$img" -x /opt/morca/bin/morca || fail "test -x, as morca-stack checks an image"
 out=$(run --entrypoint sh "$img" -c 'for t in sh cat test timeout nc printf tr mount setpriv ldd grep sed awk cut sha256sum env; do
     command -v "$t" > /dev/null || echo "no $t"; done
-    [ "$(command -v setpriv)" = /usr/bin/setpriv ] || echo "setpriv is $(command -v setpriv), not util-linux'"'"'s /usr/bin/setpriv"
+    /usr/bin/setpriv --help 2>&1 | grep -q -e --bounding-set || echo "/usr/bin/setpriv has no --bounding-set"
     for f in /bin/sh /usr/bin/env; do [ -x "$f" ] || echo "no $f"; done
     for f in /usr/share/zoneinfo/Europe/Berlin /etc/ssl/certs/ca-certificates.crt; do [ -s "$f" ] || echo "no $f"; done' 2>&1) \
     || fail "busybox's tools: $out"
@@ -47,7 +47,7 @@ out=$(run --entrypoint sh "$img" -c 'for t in sh cat test timeout nc printf tr m
 # The scheduler's start with cgroups (morca-stack's containers()): /sys/fs/cgroup
 # remounted writable, CAP_SYS_ADMIN dropped, and a cgroup made under it.
 out=$(run --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --entrypoint /bin/sh "$img" -c \
-    'mount -o remount,rw /sys/fs/cgroup && exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /bin/sh -c '"'"'
+    'mount -o remount,rw /sys/fs/cgroup && exec /usr/bin/setpriv --bounding-set -sys_admin --inh-caps -sys_admin /bin/sh -c '"'"'
         mkdir /sys/fs/cgroup/probe && rmdir /sys/fs/cgroup/probe || exit 1
         b=$(sed -n "s/^CapBnd:[[:space:]]*//p" /proc/self/status)
         [ $((0x$b & 0x200000)) = 0 ] && echo dropped'"'"'' 2>&1) || fail "the scheduler's cgroup start: $out"
