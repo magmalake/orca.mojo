@@ -24,9 +24,16 @@ never replaced by a type higher in the list.
 import morca._internal.db.pools as pools_db
 
 from morca._internal.control import pool_problem
-from morca.json import quote
-from morca.state import State
-from morca.toml import ARRAY, INTEGER, STRING, TABLE, TomlDoc, toml_key
+from morca._internal.json import quote
+from morca._internal.state import State
+from morca._internal.toml import (
+    ARRAY,
+    INTEGER,
+    STRING,
+    TABLE,
+    TomlDoc,
+    toml_key,
+)
 
 comptime PROVIDERS = ["hetzner", "ec2"]
 comptime POOL_KEYS = [

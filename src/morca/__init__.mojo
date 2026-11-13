@@ -27,7 +27,7 @@ def main() raises:
 See DESIGN.md for how it works and where it's going.
 """
 
-from morca.cli import morca_main, report
+from morca._internal.cli import morca_main, report
 from morca.ctx import Ctx
 from morca.civil import Civil, now, parse_time, utc
 from morca.cron import CronExpr
@@ -35,7 +35,7 @@ from morca.day import Day
 from morca.hour import Hour
 from morca.key import Key, TimeKey, parse_keys
 from morca.month import Month, days_in, parse_months
-from morca.handover import (
+from morca._internal.handover import (
     code_version,
     desired_code_version,
     outdated,
@@ -57,8 +57,8 @@ from morca.pipeline import (
     RunResult,
     StepRun,
 )
-from morca.pressure import Psi, Stall, memory_pressure
-from morca.resources import Grant, auto_count
+from morca._internal.pressure import Psi, Stall, memory_pressure
+from morca._internal.resources import Grant, auto_count
 from morca.schedule import (
     Cron,
     Current,
@@ -68,9 +68,9 @@ from morca.schedule import (
     Schedule,
     ScheduleLike,
 )
-from morca.sqlite_store import SqliteStore, sqlite_path
-from morca.state import PgStore, State
-from morca.store import (
+from morca._internal.sqlite_store import SqliteStore, sqlite_path
+from morca._internal.state import PgStore, State
+from morca._internal.store import (
     MemoryStore,
     Recorder,
     RunInfo,

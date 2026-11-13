@@ -1,4 +1,4 @@
-"""The scheduler's queries on `orca.runs` (`morca.scheduler`): retries,
+"""The scheduler's queries on `orca.runs` (`morca._internal.scheduler`): retries,
 runs whose process died, the processes it started, and the memory its
 cgroups gave them."""
 

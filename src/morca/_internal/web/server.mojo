@@ -40,10 +40,10 @@ import morca._internal.db.health as health_db
 from threads import AtomicFlag
 
 from morca._internal.api import worker as worker_api
-from morca.auth import audit, login_required
-from morca.html import Html, query_param, url_encode
-from morca.json import quote
-from morca.state import State
+from morca._internal.auth import audit, login_required
+from morca._internal.html import Html, query_param, url_encode
+from morca._internal.json import quote
+from morca._internal.state import State
 from morca._internal.ui.coverage import COVERAGE_STYLE
 from morca._internal.ui.layout import (
     AUTH_SLOT,

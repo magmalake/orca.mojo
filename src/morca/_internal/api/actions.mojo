@@ -1,5 +1,5 @@
 """The actions: each a `POST` of a form (or of JSON, from `morca --remote`)
-that changes something, through `morca.actions`.
+that changes something, through `morca._internal.actions`.
 
 | `POST` | |
 |---|---|
@@ -21,7 +21,7 @@ to confirm when it asks for one. `morca._internal.web.server` checks the session
 audits each one done as its user's.
 """
 
-from morca.actions import (
+from morca._internal.actions import (
     Bulk,
     Outcome,
     backfill_picked,
@@ -37,10 +37,10 @@ from morca.actions import (
     start_run,
 )
 from morca._internal.api.pipelines import json_strings
-from morca.auth import audit
-from morca.html import Html, query_values, url_encode
-from morca.json import quote
-from morca.state import State
+from morca._internal.auth import audit
+from morca._internal.html import Html, query_values, url_encode
+from morca._internal.json import quote
+from morca._internal.state import State
 from morca._internal.ui.datasets import dataset_href
 from morca._internal.ui.layout import bad_request, page_html
 from morca._internal.views.runs import (
@@ -49,7 +49,7 @@ from morca._internal.views.runs import (
     run_ids,
     runs_query,
 )
-from morca.watchdog import acknowledge, snooze as snooze_rule
+from morca._internal.watchdog import acknowledge, snooze as snooze_rule
 from morca._internal.web.page import Page
 from morca._internal.web.router import Call
 

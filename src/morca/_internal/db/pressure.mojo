@@ -1,4 +1,4 @@
-"""Memory pressure's queries (`morca.admission`): `orca.pressure`, each
+"""Memory pressure's queries (`morca._internal.admission`): `orca.pressure`, each
 host's newest reading."""
 
 from postgres import Connection, Params

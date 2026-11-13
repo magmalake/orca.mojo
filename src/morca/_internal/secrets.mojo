@@ -4,13 +4,13 @@ NAME is the environment variable a run reads; ID is the secret's ID in
 Secrets Manager, under `orca/`, which is all the stack's run role may read.
 On the ec2 runner each instance's script reads them at start with its role
 and exports them, so the driver, the head and the workers all have them, and
-`MORCA_SECRETS` lists their names for `morca.logs.mask`, which keeps their
+`MORCA_SECRETS` lists their names for `morca._internal.logs.mask`, which keeps their
 values out of every log morca writes. Postgres holds only the IDs.
 """
 
 from json import loads
 
-from morca.json import quote
+from morca._internal.json import quote
 
 
 def _name_ok(name: String) -> Bool:

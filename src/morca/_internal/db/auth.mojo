@@ -1,4 +1,4 @@
-"""Who may use morca ui and its API (`morca.auth`, `morca.tokens`):
+"""Who may use morca ui and its API (`morca._internal.auth`, `morca._internal.tokens`):
 `orca.users`, `orca.sessions`, `orca.api_tokens`, and the failed logins
 `orca.audit` keeps."""
 

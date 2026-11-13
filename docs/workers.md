@@ -257,7 +257,7 @@ it is given nothing until it matches.
 ## The run's state over HTTPS
 
 A pipeline binary with `MORCA_STATE_URL` records its run through
-`morca.http_store.HttpStore`, the HTTP implementation of the `RunStore`
+`morca._internal.http_store.HttpStore`, the HTTP implementation of the `RunStore`
 trait that `PgStore` and `SqliteStore` implement. Each call is a `POST
 /api/worker/store/<call>` of JSON. The UI makes the same call on `PgStore`,
 so every check is the same code as for a run that writes to Postgres

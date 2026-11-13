@@ -15,8 +15,8 @@ once per step per page; until it comes, or where the code can't be had, the
 signature is the one `describe` records, its argument names morca's.
 """
 
-from morca.highlight import highlight
-from morca.json import quote
+from morca._internal.highlight import highlight
+from morca._internal.json import quote
 
 
 def _lower(b: UInt8) -> Bool:
@@ -113,7 +113,7 @@ def signature(
 
 
 def signature_html(sig: StringSlice) -> String:
-    """`sig`, coloured (`morca.highlight`)."""
+    """`sig`, coloured (`morca._internal.highlight`)."""
     var lines = highlight(sig)
     var out = String()
     for i in range(len(lines)):

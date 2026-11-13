@@ -17,7 +17,7 @@ like a password, never crosses a network in the clear.
 
 `morca login` posts the name and password to `/api/login`, which checks
 them as `/login` does, under the same limit on failures, and answers an API
-token (`morca.tokens`). The password is read without echo from the terminal,
+token (`morca._internal.tokens`). The password is read without echo from the terminal,
 or as a line of standard input when that isn't one (`--user` names the
 user then). The token is kept in `MORCA_CREDENTIALS`, by default
 `~/.config/morca/credentials` (`$XDG_CONFIG_HOME/morca` if set), a line per
@@ -47,15 +47,15 @@ from json import Value, loads
 from objectstore.http import Header, HttpClient, Response
 
 from morca.civil import now, parse_time
-from morca.html import url_encode
-from morca.json import quote
-from morca.lineage import SnapshotRef
-from morca.pressure import pct_text
-from morca.queueing import file_names
-from morca.state import State
+from morca._internal.html import url_encode
+from morca._internal.json import quote
+from morca._internal.lineage import SnapshotRef
+from morca._internal.pressure import pct_text
+from morca._internal.queueing import file_names
+from morca._internal.state import State
 from morca._internal.ui.parts import took_text
-from morca.usage import usage_of, usage_text
-from morca.watchdog import status_lines
+from morca._internal.usage import usage_of, usage_text
+from morca._internal.watchdog import status_lines
 from morca._internal.web.server import act, read_page
 
 
@@ -669,7 +669,7 @@ def _status_line(p: Value) raises -> String:
 
 def pressure_status(v: Value) raises -> String:
     """`morca status`'s line for the scheduler's host's memory pressure
-    (`memory_pressure` in `/`'s JSON, `morca.admission`), or empty for
+    (`memory_pressure` in `/`'s JSON, `morca._internal.admission`), or empty for
     none."""
     if String("memory_pressure") not in v or v["memory_pressure"].is_null():
         return ""

@@ -14,10 +14,10 @@ from std.testing import (
 from postgres import Connection, Params
 
 from morca import PgStore, RunResult, State, parse_months
-from morca.config import ProjectConfig
+from morca._internal.config import ProjectConfig
 from morca._internal.pool_config import PoolConfig, read_pools, record_pools
-from morca.recommend import LEARN_RUNS, expire_raised
-from morca.migrations import migration_floor, schema_ahead
+from morca._internal.recommend import LEARN_RUNS, expire_raised
+from morca._internal.migrations import migration_floor, schema_ahead
 from store_suite import (
     Touching,
     check_a_store_that_lost_its_run_stops,

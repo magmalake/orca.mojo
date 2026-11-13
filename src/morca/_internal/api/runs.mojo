@@ -3,10 +3,10 @@ code version, and a run's machines with their metrics.
 """
 
 from morca._internal.ui.cluster import cluster_json
-from morca.json import quote
-from morca.metrics import InstanceMetrics, peaks_json
-from morca.source import commit_url
-from morca.usage import usage_json
+from morca._internal.json import quote
+from morca._internal.metrics import InstanceMetrics, peaks_json
+from morca._internal.source import commit_url
+from morca._internal.usage import usage_json
 from morca._internal.views.runs import (
     InstanceRow,
     RunRow,
@@ -52,7 +52,7 @@ def json_instances(
     xs: List[InstanceRow],
     metrics: List[InstanceMetrics],
 ):
-    """The run's instances, each with its samples' peaks (`morca.metrics`),
+    """The run's instances, each with its samples' peaks (`morca._internal.metrics`),
     then those with samples and no instance row: a local run's machine and
     a Kubernetes run's pods."""
     out.write("[")

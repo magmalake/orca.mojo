@@ -1,4 +1,4 @@
-"""Queueing's queries (`morca.queueing`): the datasets pipelines write and
+"""Queueing's queries (`morca._internal.queueing`): the datasets pipelines write and
 read, the keys a pipeline has done, a keyed pipeline's keys
 (`orca.keys`), and the runs a backfill queues."""
 

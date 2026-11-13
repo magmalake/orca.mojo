@@ -16,8 +16,8 @@ the actions take one, unless it's an action's but for its number, which
 is 404.
 """
 
-from morca.html import query_param, url_decode
-from morca.state import State
+from morca._internal.html import query_param, url_decode
+from morca._internal.state import State
 from morca._internal.ui.layout import not_found
 from morca._internal.web.page import Page
 

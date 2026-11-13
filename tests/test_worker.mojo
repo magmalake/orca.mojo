@@ -15,7 +15,7 @@ from json import loads
 
 from morca._internal.control import pool_of, pool_problem
 from morca.resources import Grant
-from morca.http_store import (
+from morca._internal.http_store import (
     Body,
     bytes_of_hex,
     check_state_url,
@@ -30,7 +30,7 @@ from morca.http_store import (
     steps_json,
     steps_of,
 )
-from morca.store import (
+from morca._internal.store import (
     RunInfo,
     RunResult,
     StepInfo,
@@ -38,7 +38,7 @@ from morca.store import (
     SUCCEEDED,
     Usage,
 )
-from morca.sample import machine_name
+from morca._internal.sample import machine_name
 from morca._internal.workers import (
     WorkerRun,
     version_refusal,

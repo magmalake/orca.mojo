@@ -1,4 +1,4 @@
-"""Fills' queries (`morca.fill`): a pipeline's fill runs, what they've
+"""Fills' queries (`morca._internal.fill`): a pipeline's fill runs, what they've
 done and cost, and why more may not start. Read in the transaction the
 scheduler holds with the pipeline's row locked."""
 
@@ -14,7 +14,7 @@ comptime _SAME_DATA = (
     " v.id = p.version WHERE p.name = $1), '')"
 )
 """The runs of pipeline `$1` whose code has its current data version
-(`morca.state.data_version_sql`): the same steps' `version=`. A run's is its
+(`morca._internal.state.data_version_sql`): the same steps' `version=`. A run's is its
 registry hash's, since a step's version is in the hash; a hash recorded
 before data versions, or none, has none."""
 
@@ -34,7 +34,7 @@ comptime _DONE_ANY_CODE = (
 )
 """The keys done for pipeline `$1` in a run of any of its code with its
 current data version: every mapped step succeeded for the key; with no
-mapped step, a run over it succeeded. (`morca.scheduler.DONE_SQL` asks the
+mapped step, a run over it succeeded. (`morca._internal.scheduler.DONE_SQL` asks the
 same of the current code.) A raised `version=` is a new data version, so
 the fill runs the partitions again (#297)."""
 

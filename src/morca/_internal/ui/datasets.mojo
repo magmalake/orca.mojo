@@ -1,17 +1,17 @@
 """`/datasets`, the datasets and the graph of pipelines and datasets;
 `/datasets/<name>`, a dataset's writers, readers, snapshots and what a
 rebuild of it runs; `/datasets/<name>/snapshots/<id>`, a snapshot's
-lineage (`morca.lineage`); `/rebuilds/<id>`, a rebuild's runs by level.
+lineage (`morca._internal.lineage`); `/rebuilds/<id>`, a rebuild's runs by level.
 """
 
 import morca._internal.db.datasets_view as datasets_db
 
 from morca._internal.api.datasets import json_made, json_rebuild
 from morca._internal.api.pipelines import json_strings
-from morca.graph import Edge, Node, graph_svg
-from morca.html import Html, query_param, url_encode
-from morca.json import quote
-from morca.lineage import (
+from morca._internal.graph import Edge, Node, graph_svg
+from morca._internal.html import Html, query_param, url_encode
+from morca._internal.json import quote
+from morca._internal.lineage import (
     Commit,
     Made,
     SnapshotCursor,
@@ -23,8 +23,8 @@ from morca.lineage import (
     forward,
     latest as latest_snapshot,
 )
-from morca.sensors import Link, Rebuild, downstream, rebuilds
-from morca.state import State
+from morca._internal.sensors import Link, Rebuild, downstream, rebuilds
+from morca._internal.state import State
 from morca._internal.ui.layout import (
     HERE_SLOT,
     ask_attrs,

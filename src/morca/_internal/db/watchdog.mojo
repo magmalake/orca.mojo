@@ -1,4 +1,4 @@
-"""The watchdog's queries (`morca.watchdog`): what its rules read, and
+"""The watchdog's queries (`morca._internal.watchdog`): what its rules read, and
 `orca.watchdog_rules` (each rule's last reading and snooze) and
 `orca.watchdog_trips` (each trip)."""
 

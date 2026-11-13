@@ -23,12 +23,12 @@ from morca._internal.fleet import (
     sparkline,
     summary_html,
 )
-from morca.html import Html, url_encode
-from morca.json import quote
-from morca.metrics import metrics_html, parse_samples
-from morca.logs import read_location
-from morca.sample import machine_name, metrics_location
-from morca.state import State
+from morca._internal.html import Html, url_encode
+from morca._internal.json import quote
+from morca._internal.metrics import metrics_html, parse_samples
+from morca._internal.logs import read_location
+from morca._internal.sample import machine_name, metrics_location
+from morca._internal.state import State
 from morca._internal.ui.layout import card_open, fact_item, not_found, page_html
 from morca._internal.ui.terms import header_help, value_help
 from morca._internal.views.pools import (
@@ -48,7 +48,7 @@ from morca._internal.views.pools import (
     worker_runs,
 )
 from morca._internal.views.runs import step_spans
-from morca.watchdog import active_trips, banner_html
+from morca._internal.watchdog import active_trips, banner_html
 from morca._internal.web.page import Page
 
 

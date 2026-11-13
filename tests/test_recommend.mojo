@@ -4,7 +4,7 @@ out-of-memory raised, and the clamp to the declared range."""
 
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
-from morca.recommend import (
+from morca._internal.recommend import (
     DECLARED,
     DEFAULT,
     LEARNED,
@@ -16,7 +16,7 @@ from morca.recommend import (
     recommend,
     resolve_request,
 )
-from morca.resources import Request
+from morca._internal.resources import Request
 
 comptime MB = 1048576.0
 

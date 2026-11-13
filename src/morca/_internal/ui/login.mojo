@@ -1,7 +1,7 @@
 """The login page (`/login`, `morca._internal.web.auth`)."""
 
-from morca.html import Html
-from morca.json import quote
+from morca._internal.html import Html
+from morca._internal.json import quote
 from morca._internal.ui.layout import page_html
 from morca._internal.web.page import Page
 

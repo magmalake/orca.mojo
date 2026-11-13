@@ -9,12 +9,12 @@ import morca._internal.db.run_view as run_db
 
 from morca._internal.ui.cluster import cluster_html
 from morca._internal.views.cluster import cluster_rows
-from morca.dag import DagStep, aggregate, dag_svg
-from morca.html import Html, url_encode
-from morca.lineage import SnapshotRef
-from morca.logs import location_exists, read_location, run_dir
-from morca.metrics import InstanceMetrics, metrics_svg, read_metrics
-from morca.state import State
+from morca._internal.dag import DagStep, aggregate, dag_svg
+from morca._internal.html import Html, url_encode
+from morca._internal.lineage import SnapshotRef
+from morca._internal.logs import location_exists, read_location, run_dir
+from morca._internal.metrics import InstanceMetrics, metrics_svg, read_metrics
+from morca._internal.state import State
 from morca._internal.ui.attempt import read_log
 from morca._internal.ui.datasets import snapshot_href
 from morca._internal.ui.layout import (
@@ -43,7 +43,7 @@ from morca._internal.ui.parts import (
 )
 from morca._internal.ui.step_cards import cards_script
 from morca._internal.ui.viz import timeline_section
-from morca.usage import cpu_text
+from morca._internal.usage import cpu_text
 from morca._internal.views.code import code_links
 from morca._internal.views.pipelines import StepDef, step_defs
 from morca._internal.views.runs import (
@@ -412,7 +412,7 @@ def _status_card(mut h: Html, r: RunRow, defs: List[StepDef]):
 def _trigger_card(mut h: Html, mut db: State, r: RunRow) raises:
     """The Partitions & trigger card: what the run does and what started
     it, with the rebuild or the snapshots a sensor saw, and the batch it
-    was queued in (`morca.batches`) with how many runs that has."""
+    was queued in (`morca._internal.batches`) with how many runs that has."""
     var row = run_db.run_batch(db.conn, r.id)
     var rebuild = row.rebuild
     var batch = row.batch

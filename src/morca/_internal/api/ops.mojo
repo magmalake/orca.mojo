@@ -13,10 +13,10 @@ from morca._internal.fleet import (
     sort_hosts,
     summary_json,
 )
-from morca.state import State
+from morca._internal.state import State
 from morca._internal.ui.ops import system_page
 from morca._internal.ui.viz import gantt_json
-from morca.watchdog import (
+from morca._internal.watchdog import (
     active_trips,
     config as watchdog_config,
     trips_json,

@@ -5,16 +5,16 @@ instances, and fill runs queued for the pool.
 
 from postgres import Transaction
 from morca._internal.db.batches import mark_batch
-from morca.fill import fill_status
+from morca._internal.fill import fill_status
 import morca._internal.db.audit as audit_db
 import morca._internal.db.pool_runs as pool_runs_db
 import morca._internal.db.starting as starting_db
 from morca._internal.db.live import hold_behind
-from morca.scheduler import (
+from morca._internal.scheduler import (
     Scheduler,
     _WORKER_OWNER,
 )
-from morca.registered import (
+from morca._internal.registered import (
     Registered,
     fill_pipeline,
 )
@@ -150,7 +150,7 @@ def _fill_for_workers(
 ) raises:
     """`_start`'s fill pass for a pipeline placed `worker:<pool>`: as
     for a local one, but what may start is queued for a worker of the
-    pool to claim rather than started. Within `morca.fill.fill_status`'s
+    pool to claim rather than started. Within `morca._internal.fill.fill_status`'s
     slots (`fill_max_runs` less its fill runs running or queued, so the
     cap holds across the whole pool), the due retries, deferred runs
     and fill runs whose process died with retries left are queued

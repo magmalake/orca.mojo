@@ -1,5 +1,5 @@
 """Remote workers, the server's side: worker tokens, claims, and the store
-calls a worker's runs make over `morca ui` (`morca.http_store`).
+calls a worker's runs make over `morca ui` (`morca._internal.http_store`).
 
 ```
 morca worker-token create --pool bgent [--days N] [--label L]   prints the token once
@@ -17,9 +17,9 @@ retries left. A run whose worker is gone (not seen for half the stale
 limit, or seen since without it) is queued again whatever its trigger. A
 pipeline with `fills = "all"` has its fill runs queued the same way, held
 for a worker, at most `fill_max_runs` of them queued or running across the
-pool (`morca.fill`).
+pool (`morca._internal.fill`).
 
-**Tokens.** A worker token is an API token (`morca.tokens`: `orca_` and 64
+**Tokens.** A worker token is an API token (`morca._internal.tokens`: `orca_` and 64
 hex digits, kept only as its SHA-256), in `orca.workers` rather than
 `orca.api_tokens`, scoped to one pool: it can claim that pool's runs and
 make the store calls of the runs it claimed, and nothing else; a user's
@@ -61,7 +61,7 @@ from morca._internal.run_cluster import (
     members_to_stop,
     stop_json,
 )
-from morca.admission import (
+from morca._internal.admission import (
     PressureRow,
     Report,
     alert_stuck,
@@ -72,7 +72,7 @@ from morca.admission import (
     worker_host,
 )
 from morca._internal.control import WORKER_PREFIX, pool_of, pool_problem
-from morca.http_store import (
+from morca._internal.http_store import (
     STORE_PATH,
     Body,
     bytes_of_hex,
@@ -82,7 +82,7 @@ from morca.http_store import (
     steps_json,
 )
 from morca.civil import now
-from morca.json import quote
+from morca._internal.json import quote
 from morca._internal.db.live import dead_sql, stale_limit, start_grace
 from morca._internal.cgroup import (
     growth_pct_of,
@@ -90,25 +90,25 @@ from morca._internal.cgroup import (
     raised_mb,
     raised_request,
 )
-from morca.recommend import RunRequest
-from morca.resources import Grant, Request, Room, admit
-from morca.registered import (
+from morca._internal.recommend import RunRequest
+from morca._internal.resources import Grant, Request, Room, admit
+from morca._internal.registered import (
     recorded_cpus,
     recorded_memory_gb,
     registered,
     run_request,
 )
-from morca.handover import RunOutdated, run_outdated
-from morca.state import PgStore, State, beat_run
-from morca.store import FINAL, TableSnapshot
-from morca.tokens import (
+from morca._internal.handover import RunOutdated, run_outdated
+from morca._internal.state import PgStore, State, beat_run
+from morca._internal.store import FINAL, TableSnapshot
+from morca._internal.tokens import (
     Issued,
     clean_label,
     is_token,
     new_token,
     token_hash,
 )
-from morca.usage import marks_of, record as record_usage
+from morca._internal.usage import marks_of, record as record_usage
 
 comptime WORKER_OWNER = "worker"
 """A run's owner once a worker claimed it, until its process does."""
@@ -221,7 +221,7 @@ struct WorkerRow(Copyable, Movable):
     """The runs it's running, comma-separated, as it said."""
     var expires: String
     var pressure: Optional[PressureRow]
-    """Its host's newest memory pressure reading (`morca.admission`), if
+    """Its host's newest memory pressure reading (`morca._internal.admission`), if
     it sent one."""
 
 
@@ -291,7 +291,7 @@ struct WorkerRun(Copyable, Movable):
     """Its secrets: the variable and the ID the worker reads it by, with its
     own `MORCA_SECRET_FETCH`."""
     var grant: Grant
-    """What this start was granted of the worker's host (`morca.resources`);
+    """What this start was granted of the worker's host (`morca._internal.resources`);
     none for a pipeline without a request, or a worker that didn't say
     what it can grant."""
     var members: Int
@@ -383,7 +383,7 @@ def _seen(mut db: State, w: WorkerAuth, v: Value) raises:
 
 
 def _pressure_seen(mut db: State, w: WorkerAuth, v: Value, r: Report) raises:
-    """Keeps a worker's memory pressure (`morca.admission`), says on its
+    """Keeps a worker's memory pressure (`morca._internal.admission`), says on its
     pool's queued runs that they wait for it while it claims none, and
     alerts once a hold has nothing of morca's to wait for."""
     record_pressure(db, worker_host(w.id), r)

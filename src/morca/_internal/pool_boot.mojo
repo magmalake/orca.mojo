@@ -5,7 +5,7 @@ The script (`boot_script`, the machine's cloud-init user data) holds one
 secret, the machine's own worker token, which morca revokes when it removes
 the machine. With it the machine asks the UI for the rest, over TLS:
 `boot_answer` gives the worker image (`MORCA_WORKER_IMAGE`, the server's
-own), the login to pull it (`morca.registry`), and the variables a worker
+own), the login to pull it (`morca._internal.registry`), and the variables a worker
 needs to reach the bucket (`MORCA_WAREHOUSE`, `MORCA_LOGS`, the `AWS_*`
 ones), as the UI's own environment has them. It answers only a token the
 autoscaler made for a machine that's live, so a token someone made with
@@ -22,9 +22,9 @@ from std.os import getenv
 
 import morca._internal.db.pools as pools_db
 
-from morca.json import quote
-from morca.registry import ImageRef, Registry
-from morca.state import State
+from morca._internal.json import quote
+from morca._internal.registry import ImageRef, Registry
+from morca._internal.state import State
 
 comptime BOOT_PATH = "/api/worker/boot"
 comptime CREATED_BY = "pool:"

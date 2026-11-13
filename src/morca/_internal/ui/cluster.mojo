@@ -1,8 +1,8 @@
 """The Cluster card on a run's page (#268): the workers its dista cluster
 spread over (`morca._internal.views.cluster`)."""
 
-from morca.html import Html
-from morca.json import quote
+from morca._internal.html import Html
+from morca._internal.json import quote
 from morca._internal.ui.layout import card_open
 from morca._internal.views.cluster import ClusterRow
 

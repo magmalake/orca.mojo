@@ -1,15 +1,15 @@
 """A run's machines on its page: each instance with its role, its
-metrics' peaks and warnings (`morca.metrics`), and the steps that ran on
+metrics' peaks and warnings (`morca._internal.metrics`), and the steps that ran on
 it.
 """
 
 import morca._internal.db.run_view as run_db
 
 from morca._internal.control import CONTROL
-from morca.html import Html
-from morca.metrics import InstanceMetrics, metrics_html
-from morca.state import State
-from morca.timeline import workers_svg
+from morca._internal.html import Html
+from morca._internal.metrics import InstanceMetrics, metrics_html
+from morca._internal.state import State
+from morca._internal.timeline import workers_svg
 from morca._internal.ui.layout import card_open
 from morca._internal.views.runs import (
     InstanceRow,
@@ -82,7 +82,7 @@ def _machines_of(
 def machines_html(
     mut h: Html, mut db: State, r: RunRow, metrics: List[InstanceMetrics]
 ) raises:
-    """The Machines card (`morca.metrics`), saying what its numbers are:
+    """The Machines card (`morca._internal.metrics`), saying what its numbers are:
     nothing for a run without samples."""
     if len(metrics) == 0:
         return

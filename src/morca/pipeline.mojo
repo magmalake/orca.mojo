@@ -17,7 +17,7 @@ so a pipeline that breaks a rule doesn't compile.
 
 `execute` is the executor: it runs the steps that haven't succeeded yet and
 reports each attempt to a `Store`, either `MemoryStore` (what `run` uses: a
-run lives as long as the process) or `morca.state.PgStore`, which makes a run
+run lives as long as the process) or `morca._internal.state.PgStore`, which makes a run
 resumable by another process. Each step's output is kept encoded by dista's codec, as Postgres
 holds it. A step that raises is retried up to its `retries`, then fails its
 partition: the steps after it for that partition, and any gather step over
@@ -33,13 +33,13 @@ from std.reflection import reflect
 from std.time import sleep
 
 from morca.ctx import Ctx
-from morca.json import quote
+from morca._internal.json import quote
 from morca.civil import Civil, now
 from morca.partitions import Monthly, Partitions
 from morca.schedule import Fill, NoSchedule, Previous, Schedule, ScheduleLike
-from morca.source import source_commit, source_dirty, source_repo
+from morca._internal.source import source_commit, source_dirty, source_repo
 from morca.step import Gather, Mapped, StepLike, deferred_for, deferred_why
-from morca.store import (
+from morca._internal.store import (
     DEFERRED,
     FAILED,
     SKIPPED,
@@ -49,7 +49,7 @@ from morca.store import (
     Store,
     StepRun,
 )
-from morca.logs import attempt_log, publish, stage_of
+from morca._internal.logs import attempt_log, publish, stage_of
 from morca.tasks import NoTasks, TaskSet, task_list
 from morca.tasks import workers as local_workers
 
@@ -83,7 +83,7 @@ struct Pipeline[
     call the dista `tasks`, over the keys of `partitions`; run by
     `schedule` for the partition its fires `fills` (`morca.schedule`), and,
     with `sensor`, when a dataset it reads gets a new snapshot
-    (`morca.sensors`). A backfill puts `keys_per_run` keys in each run it
+    (`morca._internal.sensors`). A backfill puts `keys_per_run` keys in each run it
     queues, and so do a fill and, above 1, a sensor (#240; morca.toml's
     `keys_per_run` overrides it): one for time keys by default, tens to hundreds for keyed
     partitions (`morca.keyed`), whose runs then each go through many keys.
@@ -94,7 +94,7 @@ struct Pipeline[
     failed scheduled or backfilled run again up to `run_retries` times, with
     backoff: `retry_seconds` (0 for the scheduler's `MORCA_RETRY_SECONDS`)
     doubling with each start, up to `max_retry_seconds` if it's set
-    (`morca.scheduler`). `run_retries=72, retry_seconds=3600,
+    (`morca._internal.scheduler`). `run_retries=72, retry_seconds=3600,
     max_retry_seconds=3600` tries hourly for three days."""
 
     comptime K = Self.partitions.K
@@ -265,7 +265,7 @@ struct Pipeline[
             out.write('"reads": ', _names(S.dataset_reads()), ", ")
             out.write('"writes": ', _names(S.dataset_writes()))
             # Only when declared, as for the timeout: a step without them
-            # appends to what it writes (`morca.scheduler.appending_writes`).
+            # appends to what it writes (`morca._internal.scheduler.appending_writes`).
             var replaces = S.dataset_replaces()
             if len(replaces) > 0:
                 out.write(', "replaces": ', _names(replaces))
@@ -282,7 +282,8 @@ struct Pipeline[
     @staticmethod
     def timeouts() -> String:
         """`step=seconds` for each step with `timeout_seconds`,
-        comma-separated, for the run's watchdog (`morca.heartbeat`)."""
+        comma-separated, for the run's watchdog (`morca._internal.heartbeat`).
+        """
         var out = String()
         comptime for i in range(Self.Ts.length):
             comptime T = Self.Ts[i]

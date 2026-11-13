@@ -1,8 +1,8 @@
 """The queries of a scheduler pass that starts a pipeline's runs
-(`morca.starting`): what is live, what the host and the budget have
+(`morca._internal.starting`): what is live, what the host and the budget have
 granted, which runs to start, and starting them. `dead` in these is SQL
 for a run whose process died, with the stale limit as the parameter
-`morca.starting` says (`Scheduler._dead`)."""
+`morca._internal.starting` says (`Scheduler._dead`)."""
 
 from postgres import Connection, Params, Transaction
 

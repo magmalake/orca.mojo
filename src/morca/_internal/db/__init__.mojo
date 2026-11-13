@@ -45,7 +45,7 @@ query run both ways has a function for each, over one SQL text.
 | `morca._internal.db.watchdog` | `orca.watchdog_rules`, `orca.watchdog_trips` and the rules' readings |
 | `morca._internal.db.workers` | `orca.workers`, the worker tokens, and workers' claims |
 
-The run stores (`morca.state`'s `State` and `PgStore`, `morca.sqlite_store`'s
+The run stores (`morca._internal.state`'s `State` and `PgStore`, `morca._internal.sqlite_store`'s
 `SqliteStore`), a module per dialect and table, over the same rows:
 
 | Module | Owns |
@@ -71,15 +71,15 @@ The web UI's read models, a module per page (`morca._internal.views`, `morca._in
 | `morca._internal.db.alerts_view` | Ops' Alerts: a page of `orca.alerts` and its counts |
 
 **Layering.** These modules import only the standard library, `postgres`
-(`sqlite` for the SQLite ones), `morca.migrations` (the schema, which
+(`sqlite` for the SQLite ones), `morca._internal.migrations` (the schema, which
 imports nothing of morca's) and each other: never a module of morca's that
 runs queries through them, so nothing above can import its way back in.
 The rows a query returns are declared here, and the modules that used to
 declare them import them from here (so `from morca.watchdog import Lease`
-and `from morca.store import RunInfo` keep working), and `morca.live` and
-`morca.batches` re-export what moved from them.
+and `from morca.store import RunInfo` keep working), and `morca._internal.live` and
+`morca._internal.batches` re-export what moved from them.
 
 `tests/sql_in_db.sh` (CI's format job) fails when SQL appears in a string
-outside `src/morca/_internal/db/` and `src/morca/migrations.mojo`, but in the files
+outside `src/morca/_internal/db/` and `src/morca/_internal/migrations.mojo`, but in the files
 `tests/sql_allow.txt` still lists; that list only shrinks.
 """

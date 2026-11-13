@@ -29,7 +29,7 @@ from json import loads
 from morca._internal.awsec2 import Ec2
 from morca._internal.awsjson import aws_json
 from morca._internal.hcloud import Created
-from morca.json import quote
+from morca._internal.json import quote
 
 comptime NO_CAPACITY = [
     "InsufficientInstanceCapacity",

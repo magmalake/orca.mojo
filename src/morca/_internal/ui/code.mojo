@@ -1,13 +1,13 @@
 """`/code?u=`: a file at a commit on GitHub, its lines coloured as HTML
-(`morca.highlight`), for the code shown on hover; the UI fetches it, so a
+(`morca._internal.highlight`), for the code shown on hover; the UI fetches it, so a
 browser needn't reach GitHub.
 """
 
 from objectstore.http import Header, HttpClient
 
-from morca.highlight import highlight
-from morca.json import quote
-from morca.source import is_hex
+from morca._internal.highlight import highlight
+from morca._internal.json import quote
+from morca._internal.source import is_hex
 from morca._internal.ui.step_cards import def_json
 from morca._internal.web.page import Page
 
@@ -74,7 +74,7 @@ def raw_code_url(href: String) -> String:
 
 def code_page(href: String, at: String = "") -> Page:
     """`/code?u=<a GitHub link to a file at a commit>`: the file's lines and
-    each coloured as HTML (`morca.highlight`), as JSON, for the code shown on
+    each coloured as HTML (`morca._internal.highlight`), as JSON, for the code shown on
     hover. 400 for any other URL, 502 when GitHub doesn't give it (a
     private repository), 413 past `_CODE_MAX`. With `at`, a line, only
     the signature of the `def` there and its docstring's first paragraph

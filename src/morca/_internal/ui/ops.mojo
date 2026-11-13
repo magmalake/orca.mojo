@@ -1,6 +1,6 @@
 """The Ops pages: Control (`/ops/control`, the machine running the
 scheduler, the UI and Postgres; `morca._internal.system`), the watchdog (`/watchdog`;
-`morca.watchdog`) and Prometheus' `/metrics`, with the fragments each
+`morca._internal.watchdog`) and Prometheus' `/metrics`, with the fragments each
 refreshes from; Alerts (`/ops/alerts`, where `/ops` goes) is
 `morca._internal.ui.alerts` and Pools (`/ops/pools`) is `morca._internal.ui.pools`. Fleet and
 Workers' old paths redirect to Pools (`moved`, `to_pools`).
@@ -8,7 +8,7 @@ Workers' old paths redirect to Pools (`moved`, `to_pools`).
 
 from std.os import getenv
 
-from morca.admission import (
+from morca._internal.admission import (
     pressure_html,
     pressure_prometheus,
     pressure_rows,
@@ -16,14 +16,14 @@ from morca.admission import (
     scheduler_pressure,
 )
 from morca._internal.fleet import fleet_summary
-from morca.html import Html
-from morca.notify import (
+from morca._internal.html import Html
+from morca._internal.notify import (
     configured as notify_configured,
     notify_html,
     notify_json,
     recent as recent_alerts,
 )
-from morca.state import State
+from morca._internal.state import State
 from morca._internal.system import (
     prometheus,
     range_hours,
@@ -38,7 +38,7 @@ from morca._internal.ui.contained import (
     host_runs_json,
 )
 from morca._internal.ui.layout import page_html
-from morca.watchdog import (
+from morca._internal.watchdog import (
     active_trips,
     banner_html,
     config as watchdog_config,

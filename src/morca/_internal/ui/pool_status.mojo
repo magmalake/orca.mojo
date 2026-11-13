@@ -7,9 +7,9 @@ to (`orca.pools.status`), and as JSON for `/api/pools`.
 from json import loads
 import morca._internal.db.machines_view as machines_db
 
-from morca.html import Html
-from morca.json import quote
-from morca.state import State
+from morca._internal.html import Html
+from morca._internal.json import quote
+from morca._internal.state import State
 from morca._internal.ui.layout import card_open
 
 comptime _HELP = (

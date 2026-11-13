@@ -4,12 +4,12 @@ after an out-of-memory kill.
 A local or control-placed run (and a remote worker's, `morca._internal.worker`) gets a
 cgroup of its own, `morca-run-<run>-<start>-<owner pid>`, beside the leaf
 `morca` the scheduler moved itself into. Its process is placed in it between
-`fork` and `exec` (`morca.proc.spawn`: the parent opens the cgroup's
+`fork` and `exec` (`morca._internal.proc.spawn`: the parent opens the cgroup's
 `cgroup.procs` before forking, and the child only `write`s `0` to it, which
 is async-signal-safe; the descriptor closes at `exec`), so everything the
 run starts is in it from its first instruction.
 
-- `memory.high` is the run's **limit**: its grant (`morca.resources`), else
+- `memory.high` is the run's **limit**: its grant (`morca._internal.resources`), else
   its request's maximum, else `MORCA_RUN_MEMORY_MB` (default: what this host
   can grant, its capacity less the reserve); on the control placement at
   most `MORCA_CONTROL_MEMORY_MB`. Past it the kernel throttles the run and
@@ -58,8 +58,8 @@ from std.os.path import exists, isdir
 from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
-from morca.resources import gb_text
-from morca.sample import _read
+from morca._internal.resources import gb_text
+from morca._internal.sample import _read
 
 comptime ROOT = "/sys/fs/cgroup"
 comptime LEAF = "orca"
@@ -291,7 +291,7 @@ def _cstr(s: String) -> List[UInt8]:
 
 def put(path: String, text: String) -> Bool:
     """Writes `text` to a cgroup file at once; whether the kernel took it
-    (stdio, as `morca.proc`: `open` is declared elsewhere with another
+    (stdio, as `morca._internal.proc`: `open` is declared elsewhere with another
     signature)."""
     var p = _cstr(path)
     var mode = _cstr("w")

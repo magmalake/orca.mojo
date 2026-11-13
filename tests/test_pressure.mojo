@@ -10,7 +10,7 @@ from std.testing import (
     assert_true,
 )
 
-from morca.pressure import (
+from morca._internal.pressure import (
     Admission,
     Psi,
     Stall,

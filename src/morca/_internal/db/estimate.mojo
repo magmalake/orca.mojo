@@ -1,4 +1,4 @@
-"""Estimates' queries (`morca.estimate`): how long a pipeline's recent runs
+"""Estimates' queries (`morca._internal.estimate`): how long a pipeline's recent runs
 took."""
 
 from postgres import Connection, Params

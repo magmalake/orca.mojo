@@ -26,7 +26,7 @@ start any more, and those of a Job that has finished, first appending its
 driver pod's log to the run's `driver.log` under `MORCA_LOGS`: what's left after a
 run ends, a run restarted on a new cluster, and what a scheduler that was
 killed left behind. Each pod's command runs with the sampler beside it
-(`morca.sample`, unless `MORCA_SAMPLE_SECONDS=0`), whose lines go to the
+(`morca._internal.sample`, unless `MORCA_SAMPLE_SECONDS=0`), whose lines go to the
 pod's log prefixed `orca-sample `; before a finished Job is deleted, each
 of its pods' lines are kept in the run's `metrics/<pod>.jsonl` and left out
 of `driver.log`. A run ends when its driver says so, before its pods
@@ -45,11 +45,16 @@ from json import Value
 from k8s import JOBS, PODS, SERVICES, Client, Config
 import morca._internal.db.kube as kube_db
 
-from morca.crash import crash_summary
-from morca.json import quote
-from morca.logs import location_exists, read_location, run_dir, write_location
-from morca.sample import PREFIX, metrics_location, sample_seconds
-from morca.state import State
+from morca._internal.crash import crash_summary
+from morca._internal.json import quote
+from morca._internal.logs import (
+    location_exists,
+    read_location,
+    run_dir,
+    write_location,
+)
+from morca._internal.sample import PREFIX, metrics_location, sample_seconds
+from morca._internal.state import State
 
 comptime DISTA_PORT = 6390
 
@@ -64,7 +69,7 @@ sampler has written its last line."""
 
 
 def _command(var argv: List[String]) -> String:
-    """A container's `command`: `argv`, with the sampler (`morca.sample`)
+    """A container's `command`: `argv`, with the sampler (`morca._internal.sample`)
     beside it unless `MORCA_SAMPLE_SECONDS=0`. Its lines go to the pod's
     log, prefixed, and the scheduler moves them to the run's metrics."""
     var out = String("[")
@@ -370,7 +375,8 @@ struct KubeRunner(Movable):
         under `MORCA_LOGS`, and keeps each of its pods' samples in the run's
         `metrics/<pod>.jsonl`, as the pods are about to go. A driver that
         crashed has the attempts it left running failed with the crash's
-        first frames (`morca.crash`), if the run is still at that start."""
+        first frames (`morca._internal.crash`), if the run is still at that start.
+        """
         try:
             var run = Int(job.at("/metadata/labels/orca.run").string_value())
             var pipeline = job.at(

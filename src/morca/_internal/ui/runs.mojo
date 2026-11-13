@@ -7,15 +7,15 @@ it refreshes from, for `/runs`, a pipeline's Runs tab and the home page.
 """
 
 import morca._internal.db.runs_view as runs_db
-from morca.admission import held_warning, row_json, scheduler_pressure
+from morca._internal.admission import held_warning, row_json, scheduler_pressure
 from morca._internal.api.runs import (
     json_runs,
     json_runs_page,
     runs_filters_json,
 )
-from morca.html import Html, query_param, url_encode
-from morca.json import quote
-from morca.state import State
+from morca._internal.html import Html, query_param, url_encode
+from morca._internal.json import quote
+from morca._internal.state import State
 from morca._internal.system import alert_html
 from morca._internal.ui.layout import (
     HERE_SLOT,
@@ -63,7 +63,7 @@ comptime RUN_TRIGGERS: List[String] = [
 ]
 """The triggers morca writes (`orca.runs.trigger`): the scheduler's fires and
 sensors, `backfill`, a binary's `run`, the UI's start button, a rerun, a
-rebuild and a fill (`morca.fill`). The filter adds any others the table has."""
+rebuild and a fill (`morca._internal.fill`). The filter adds any others the table has."""
 
 
 comptime _SUBMIT_ON_CHANGE = (

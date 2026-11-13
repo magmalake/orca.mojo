@@ -3,7 +3,7 @@
 (`morca._internal.views.start`), updated as you type.
 """
 
-from morca.html import Html, url_encode
+from morca._internal.html import Html, url_encode
 from morca._internal.ui.layout import cmd_box, docs_link
 from morca._internal.views.commands import backfill_cmd, remote_cmd, shell_quote
 from morca._internal.views.pipelines import PipelineRow
@@ -13,7 +13,7 @@ from morca._internal.views.start import (
     preview_line,
     unit_word,
 )
-from morca.timekeys import example_of
+from morca._internal.timekeys import example_of
 
 
 comptime _CAL_SCRIPT = """

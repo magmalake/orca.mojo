@@ -1,4 +1,4 @@
-"""`morca register`'s queries (`morca.registering`): what a binary's
+"""`morca register`'s queries (`morca._internal.registering`): what a binary's
 `describe` says, and recording the pipeline it describes."""
 
 from postgres import Connection, Params

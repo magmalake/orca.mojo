@@ -1,5 +1,5 @@
 """The Postgres run store's queries on a run's steps and attempts
-(`morca.state`): `orca.steps`, `orca.attempts`, and what each attempt read
+(`morca._internal.state`): `orca.steps`, `orca.attempts`, and what each attempt read
 and committed (`orca.reads`, `orca.commits`).
 
 An attempt's start and end, a skip, and an interrupted run's clean-up are

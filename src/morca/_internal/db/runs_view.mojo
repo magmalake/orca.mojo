@@ -100,8 +100,8 @@ comptime _GRANT_COLUMNS = (
     " memory_bytes, coalesce(request_source, '') AS request_source,"
     " coalesce(request_runs, 0)::bigint AS request_runs,"
 )
-"""SQL for a run's request and grant (`morca.resources`), and where the
-request came from (`morca.recommend`)."""
+"""SQL for a run's request and grant (`morca._internal.resources`), and where the
+request came from (`morca._internal.recommend`)."""
 
 
 comptime _SECONDS = (

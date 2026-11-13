@@ -1,5 +1,5 @@
 """The worker API: what `morca worker` (`morca._internal.worker`) and the runs it starts
-(`morca.http_store.HttpStore`) call, each a `POST` of JSON with
+(`morca._internal.http_store.HttpStore`) call, each a `POST` of JSON with
 `Authorization: Bearer <worker token>`. What each call does is
 `orca.workers`; this is how a request reaches it.
 
@@ -11,7 +11,7 @@
 | `/api/worker/cluster` | a run this worker started as a cluster: its head's address and token (`morca._internal.run_cluster`) |
 | `/api/worker/left` | a member's process ended |
 | `/api/worker/boot` | a machine the pool autoscaler made, booting: the image, its login and the bucket's variables (`morca._internal.pool_boot`) |
-| `/api/worker/store/<call>` | a `RunStore` call of a run this worker claimed (`morca.state.PgStore`) |
+| `/api/worker/store/<call>` | a `RunStore` call of a run this worker claimed (`morca._internal.state.PgStore`) |
 
 Every call is checked the same way first: the token is a live worker
 token (401), the body a JSON object (400), and a `pool` it names the
@@ -35,10 +35,10 @@ from threads.ffi import OpaquePtr, opaque_ptr
 
 from morca._internal.run_cluster import member_left, report_head
 from morca._internal.pool_boot import BOOT_PATH, boot_answer
-from morca.http_store import STORE_PATH
-from morca.json import quote
-from morca.state import State
-from morca.store import FINAL
+from morca._internal.http_store import STORE_PATH
+from morca._internal.json import quote
+from morca._internal.state import State
+from morca._internal.store import FINAL
 from morca._internal.web.auth import bearer
 from morca._internal.web.page import Page, respond
 from morca._internal.workers import (

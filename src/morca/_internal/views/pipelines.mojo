@@ -15,30 +15,30 @@ from morca._internal.db.pipelines_view import (
 )
 
 from morca.civil import Civil, now
-from morca.config_show import (
+from morca._internal.config_show import (
     Shown,
     shown,
 )
-from morca.coverage import Coverage, coverage
+from morca._internal.coverage import Coverage, coverage
 from morca.cron import CronExpr
-from morca.fill import FillStatus, fill_status
-from morca.follow import Follow, follow
-from morca.lineage import SnapshotRef
+from morca._internal.fill import FillStatus, fill_status
+from morca._internal.follow import Follow, follow
+from morca._internal.lineage import SnapshotRef
 from morca._internal.db.live import live_runs
-from morca.recommend import Recommendation
+from morca._internal.recommend import Recommendation
 from morca.schedule import Schedule
-from morca.queueing import (
+from morca._internal.queueing import (
     current_keys,
     done_keys,
     keep_keys,
     kept_keys,
 )
-from morca.registered import (
+from morca._internal.registered import (
     fill_key,
     fill_pipeline,
     registered,
 )
-from morca.state import State
+from morca._internal.state import State
 from morca.tz import Zone
 from morca._internal.views.runs import (
     RunsPage,
@@ -189,7 +189,7 @@ def key_counts(mut db: State, name: String) raises -> KeyCounts:
 
 
 def pipeline_coverage(mut db: State, p: PipelineRow) -> Optional[Coverage]:
-    """`p`'s coverage (`morca.coverage`), None if it has none or it can't
+    """`p`'s coverage (`morca._internal.coverage`), None if it has none or it can't
     be read: a list of pipelines still shows the rest."""
     try:
         return coverage(db, p.name, p.kind, p.start, p.tz, p.fill_lag)
@@ -198,7 +198,7 @@ def pipeline_coverage(mut db: State, p: PipelineRow) -> Optional[Coverage]:
 
 
 def fill_of(mut db: State, name: String) raises -> Optional[FillStatus]:
-    """`name`'s fill (`morca.fill`), if it fills its range or has fill runs
+    """`name`'s fill (`morca._internal.fill`), if it fills its range or has fill runs
     from when it did."""
     var regs = registered(db, name)
     if len(regs) == 0:
@@ -277,19 +277,19 @@ struct PipelineView(Movable):
     """The page of its runs `url` asks for."""
     var fill: Optional[FillStatus]
     var following: Optional[Follow]
-    """How far a sensor is behind what it follows (`morca.follow`)."""
+    """How far a sensor is behind what it follows (`morca._internal.follow`)."""
     var usage: UsageSummary
     var learned: Optional[Recommendation]
-    """The request its runs' peaks suggest (`morca.recommend`), from its
+    """The request its runs' peaks suggest (`morca._internal.recommend`), from its
     `morca config show`, applied where it asks for `auto`."""
     var versions: List[VersionRow]
     """The code it's run, newest first."""
     var configs: List[Shown]
-    """What `morca config show <name>` prints (`morca.config`)."""
+    """What `morca config show <name>` prints (`morca._internal.config`)."""
     var keys: Optional[KeyCounts]
     """A keyed pipeline's counts."""
     var coverage: Optional[Coverage]
-    """Its partitions or keys done of those it has (`morca.coverage`)."""
+    """Its partitions or keys done of those it has (`morca._internal.coverage`)."""
     var not_run: List[NotRun]
     """The snapshots its sensor saw and couldn't run, latest first."""
     var start: Optional[StartPreview]

@@ -26,7 +26,7 @@ from json import Value, loads
 from objectstore.http import Header, HttpClient, RetryPolicy
 
 from morca._internal.control import fetch_secret
-from morca.json import quote
+from morca._internal.json import quote
 
 comptime DEFAULT_ENDPOINT = "https://api.hetzner.cloud/v1"
 comptime TOKEN = "MORCA_HCLOUD_TOKEN"

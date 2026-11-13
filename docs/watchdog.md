@@ -5,7 +5,7 @@ storm, runaway cost, idle workers, failing attempts, stuck runs or a full
 control host. It runs inside `morca scheduler`, every `MORCA_WATCHDOG_SECONDS`
 (60; 0 turns it off), and reads Postgres only. It pauses and never resumes
 anything: a person decides when a pipeline runs again. The code is
-`src/morca/watchdog.mojo`.
+`src/morca/_internal/watchdog.mojo`.
 
 ```sh
 morca watchdog status             # each rule, each threshold and value, and the trips

@@ -1,4 +1,4 @@
-"""The calendar's query (`morca.calendar`): how each key's last run
+"""The calendar's query (`morca._internal.calendar`): how each key's last run
 ended."""
 
 from postgres import Connection, Params

@@ -1,4 +1,4 @@
-"""The actions' queries (`morca.actions`): runs started, resumed, rerun
+"""The actions' queries (`morca._internal.actions`): runs started, resumed, rerun
 and cancelled from the UI and the command line."""
 
 from postgres import Connection, Params, Transaction

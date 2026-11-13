@@ -1,4 +1,4 @@
-"""The home page's recent runs (#354): one row per batch (`morca.batches`),
+"""The home page's recent runs (#354): one row per batch (`morca._internal.batches`),
 so one backfill doesn't fill the list, and a run with none as its own row;
 what needs attention first.
 """
@@ -6,8 +6,8 @@ what needs attention first.
 import morca._internal.db.home_view as home_db
 from morca._internal.db.home_view import FAILED_LATELY
 
-from morca.json import quote
-from morca.state import State
+from morca._internal.json import quote
+from morca._internal.state import State
 from morca._internal.views.runs import RunRow, runs_one
 
 

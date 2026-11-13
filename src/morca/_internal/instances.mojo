@@ -9,7 +9,7 @@ newest live instance takes the lead: an older one that sees a newer one
 live, or is asked to (`morca scheduler drain`), gives the lock up and
 drains: it starts nothing, keeps supervising the processes it started
 until they end, then ends its row and exits. A run an instance started
-records it (`runs.instance`), and `morca.live.held_sql` keeps it live while
+records it (`runs.instance`), and `morca._internal.live.held_sql` keeps it live while
 the instance lists it, so the leader counts it and leaves it alone.
 
 An instance is live while it has been seen within the stale limit and
@@ -24,9 +24,9 @@ import morca._internal.db.schedulers as schedulers_db
 from morca._internal.db.schedulers import live_cond
 
 from morca._internal.db.live import stale_limit
-from morca.migrations import known_migrations, migration_floor
-from morca.state import State
-from morca.store import process_owner
+from morca._internal.migrations import known_migrations, migration_floor
+from morca._internal.state import State
+from morca._internal.store import process_owner
 
 
 comptime LEAD_LOCK = 0x6F726365  # "orce"
@@ -121,7 +121,7 @@ def overlap_refusal(mut db: State) raises -> String:
     """Why this binary can't start beside the scheduler going now, or
     empty if it can (docs/overlap.md#deploying): a live instance leads, and
     no live instance knows fewer migrations than this binary's floor
-    (`morca.state.migration_floor`), which its migrations would raise past
+    (`morca._internal.state.migration_floor`), which its migrations would raise past
     it. Doesn't migrate."""
     var floor = migration_floor(known_migrations())
     var got = schedulers_db.overlap_state(db.conn, floor, stale_limit())

@@ -7,7 +7,7 @@ and when and why each ended (`morca._internal.db.run_view.cluster_rows`).
 import morca._internal.db.run_view as run_db
 from morca._internal.db.run_view import ClusterRow
 
-from morca.state import State
+from morca._internal.state import State
 
 
 def cluster_rows(mut db: State, run: Int) raises -> List[ClusterRow]:

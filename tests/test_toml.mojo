@@ -3,7 +3,7 @@ refuses, and that what it writes reads back."""
 
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
-from morca.toml import (
+from morca._internal.toml import (
     ARRAY,
     BOOLEAN,
     FLOAT,

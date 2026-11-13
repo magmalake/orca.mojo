@@ -1,5 +1,5 @@
 """The Lean model of the schema floor (formal/Morca/Migrate) against
-`morca.state`: every line of formal/difftest/migrate.cases, which the model's
+`morca._internal.state`: every line of formal/difftest/migrate.cases, which the model's
 oracle printed (formal/Oracle/Migrate.lean; the `formal` CI job checks the
 file is its output), is checked against the code.
 
@@ -23,7 +23,7 @@ from std.testing import assert_equal
 from postgres import Connection
 
 from morca import State
-from morca.migrations import migration_floor, schema_ahead
+from morca._internal.migrations import migration_floor, schema_ahead
 
 comptime CASES = "formal/difftest/migrate.cases"
 

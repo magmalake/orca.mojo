@@ -1,5 +1,5 @@
 """A registered pipeline's row of `orca.pipelines`, as the scheduler reads
-it (`morca.registered`), and the request learned for it."""
+it (`morca._internal.registered`), and the request learned for it."""
 
 from postgres import Connection, Params
 

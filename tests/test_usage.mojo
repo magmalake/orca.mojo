@@ -14,9 +14,9 @@ from std.testing import (
 
 from json import loads
 
-from morca.sample import parse_pid_usage, tree_usage
-from morca.store import Usage
-from morca.usage import (
+from morca._internal.sample import parse_pid_usage, tree_usage
+from morca._internal.store import Usage
+from morca._internal.usage import (
     MAX_MARKS,
     AttemptSpan,
     Mark,

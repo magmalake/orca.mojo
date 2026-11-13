@@ -4,8 +4,8 @@ with no batch as the runs lists show it; refreshed from
 `/runs/table?view=home`.
 """
 
-from morca.html import Html, url_encode
-from morca.state import State
+from morca._internal.html import Html, url_encode
+from morca._internal.state import State
 from morca._internal.ui.layout import IDLE_EVERY, LIVE_EVERY
 from morca._internal.ui.parts import (
     run_row_html,

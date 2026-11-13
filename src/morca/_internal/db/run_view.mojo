@@ -25,7 +25,7 @@ def _int_or_zero(s: String) -> Int:
 
 @fieldwise_init
 struct VersionRow(Copyable, Movable):
-    """A version of a pipeline's code (`morca.source`)."""
+    """A version of a pipeline's code (`morca._internal.source`)."""
 
     var id: Int
     var registry_hash: String
@@ -37,7 +37,7 @@ struct VersionRow(Copyable, Movable):
     var last_seen: String
     var runs: Int
     var locations: String
-    """Where its functions are (`morca.locate`), as JSON, or empty."""
+    """Where its functions are (`morca._internal.locate`), as JSON, or empty."""
 
 
 def version_rows(
@@ -257,7 +257,7 @@ def cluster_rows(mut conn: Connection, run: Int) raises -> List[ClusterRow]:
 
 @fieldwise_init
 struct AttemptSpan(Copyable, Movable):
-    """An attempt on the wall clock (`morca.metrics.StepSpan`)."""
+    """An attempt on the wall clock (`morca._internal.metrics.StepSpan`)."""
 
     var step: String
     var partition: String
@@ -726,7 +726,7 @@ def neighbours(
 @fieldwise_init
 struct AuditRow(Copyable, Movable):
     """Who did something to a run, from the UI or the `morca` command
-    (`morca.auth`)."""
+    (`morca._internal.auth`)."""
 
     var at: String
     var user: String

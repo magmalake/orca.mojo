@@ -5,9 +5,9 @@ and what a rebuild of it would queue (`RebuildPreview`).
 import morca._internal.db.datasets_view as datasets_db
 from morca._internal.db.datasets_view import StepUse
 
-from morca.html import Html, url_encode
-from morca.sensors import plan_rebuild
-from morca.state import State
+from morca._internal.html import Html, url_encode
+from morca._internal.sensors import plan_rebuild
+from morca._internal.state import State
 from morca._internal.ui.parts import code_link
 from morca._internal.views.code import CodeLinks, code_of
 

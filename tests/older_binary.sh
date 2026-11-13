@@ -2,7 +2,7 @@
 # Rolling back: a morca that knows fewer migrations than the database has
 # had (MORCA_TEST_MIGRATIONS=N acts as one) runs on it while the migrations
 # it doesn't know are additive, and refuses once one raised the floor
-# (src/morca/state.mojo's `_floor_raisers`; 24 is one):
+# (src/morca/_internal/state.mojo's `_floor_raisers`; 24 is one):
 #
 # - a binary that knows 39 of 41 registers, ticks and runs a run, says once
 #   that the database is ahead, and leaves the schema version alone;

@@ -10,7 +10,7 @@ from std.testing import (
     assert_true,
 )
 
-from morca.resources import (
+from morca._internal.resources import (
     Grant,
     Request,
     Room,

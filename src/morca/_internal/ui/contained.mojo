@@ -1,16 +1,16 @@
 """Ops > Control's Runs card: each local and control-placed run going on this
 host, with its cgroup's memory against its limit (`morca._internal.cgroup`), which
-the scheduler records every 5 seconds, and its grant (`morca.resources`).
+the scheduler records every 5 seconds, and its grant (`morca._internal.resources`).
 """
 
 import morca._internal.db.machines_view as machines_db
 from morca._internal.db.machines_view import HostRun
 
-from morca.html import Html
-from morca.json import quote
-from morca.state import State
+from morca._internal.html import Html
+from morca._internal.json import quote
+from morca._internal.state import State
 from morca._internal.ui.parts import mb_text
-from morca.usage import bytes_text
+from morca._internal.usage import bytes_text
 
 
 def host_runs(mut db: State) raises -> List[HostRun]:

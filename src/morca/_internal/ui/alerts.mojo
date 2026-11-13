@@ -1,4 +1,4 @@
-"""Ops › Alerts (`/ops/alerts`): every alert `morca.notify` sent or is
+"""Ops › Alerts (`/ops/alerts`): every alert `morca._internal.notify` sent or is
 sending, newest first, from `orca.alerts`: when, its kind, its title and
 message as sent, links to what it is about (the run, the pipelines, the
 watchdog's rules, a worker, Control), whether ntfy took it, and for those
@@ -14,10 +14,10 @@ the runs list. The newest page refreshes from `/ops/alerts/live` every
 import morca._internal.db.alerts_view as alerts_db
 from morca._internal.db.alerts_view import AlertRow
 
-from morca.html import Html, query_param, url_encode
-from morca.json import quote
-from morca.notify import configured as notify_configured, min_seconds
-from morca.state import State
+from morca._internal.html import Html, query_param, url_encode
+from morca._internal.json import quote
+from morca._internal.notify import configured as notify_configured, min_seconds
+from morca._internal.state import State
 from morca._internal.ui.layout import IDLE_EVERY, page_html
 from morca._internal.ui.runs import grouped, pager_link
 from morca._internal.web.page import Page
@@ -35,7 +35,7 @@ comptime ALERT_KINDS: List[String] = [
     "memory-pressure",
     "backup-failed",
 ]
-"""The kinds morca raises (`orca.alerts`, `morca.admission`) and the one the
+"""The kinds morca raises (`orca.alerts`, `morca._internal.admission`) and the one the
 Hetzner server's backup sends; the filter adds any others the table has."""
 
 

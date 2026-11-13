@@ -1,5 +1,5 @@
 """`morca login`'s pieces that need no server: API tokens' form, digest and
-lifetime (`morca.tokens`), which URLs a token may be sent to, and the
+lifetime (`morca._internal.tokens`), which URLs a token may be sent to, and the
 credentials file and its mode (`morca._internal.remote`). tests/remote.sh runs the
 whole of it against `morca ui`."""
 
@@ -20,7 +20,7 @@ from morca._internal.remote import (
     remote_url,
     write_credentials,
 )
-from morca.tokens import (
+from morca._internal.tokens import (
     TOKEN_PREFIX,
     clean_label,
     is_token,

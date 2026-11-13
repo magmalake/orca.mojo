@@ -3,7 +3,7 @@ printed on Linux (in the project image) and macOS."""
 
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
-from morca.crash import crash_summary, crashed_by_signal
+from morca._internal.crash import crash_summary, crashed_by_signal
 
 comptime SEGV = """resuming run 7 with 0 steps done and 0 interrupted
 [measure 2024-02] attempt 1 started

@@ -37,10 +37,10 @@ from std.os import getenv
 
 import morca._internal.db.home_view as home_db
 
-from morca.html import Html, url_encode
-from morca.json import quote
-from morca.lineage import flows
-from morca.state import State
+from morca._internal.html import Html, url_encode
+from morca._internal.json import quote
+from morca._internal.lineage import flows
+from morca._internal.state import State
 from morca._internal.views.code import pipeline_srcs
 
 comptime MAX_RUNS = 20_000

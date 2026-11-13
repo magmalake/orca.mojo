@@ -22,22 +22,27 @@ from morca._internal.db.run_view import (
 from morca._internal.db.runs_view import RunRecord, RunsFilter, utc_sql
 
 from morca._internal.views.cluster import ClusterRow, cluster_rows
-from morca.handover import run_outdated
-from morca.html import query_param, query_values, url_decode, url_encode
-from morca.json import quote
-from morca.lineage import SnapshotRef
-from morca.logs import location_exists, run_dir
-from morca.metrics import InstanceMetrics, StepSpan, read_metrics
-from morca.resources import Grant
-from morca.state import State
-from morca.store import Usage
+from morca._internal.handover import run_outdated
+from morca._internal.html import (
+    query_param,
+    query_values,
+    url_decode,
+    url_encode,
+)
+from morca._internal.json import quote
+from morca._internal.lineage import SnapshotRef
+from morca._internal.logs import location_exists, run_dir
+from morca._internal.metrics import InstanceMetrics, StepSpan, read_metrics
+from morca._internal.resources import Grant
+from morca._internal.state import State
+from morca._internal.store import Usage
 from morca._internal.views.pipelines import utc_text
 
 
 @fieldwise_init
 struct RunResources(Copyable, Movable):
     """What a run's latest start asked for and was granted
-    (`morca.resources`); empty and 0 for none."""
+    (`morca._internal.resources`); empty and 0 for none."""
 
     var cpus: String
     var memory_gb: String
@@ -50,7 +55,7 @@ struct RunResources(Copyable, Movable):
     var memory_bytes: Int
     """Its cgroup's memory a few seconds ago while it runs; -1 else."""
     var source: String
-    """Where its request came from (`morca.recommend`): `declared`,
+    """Where its request came from (`morca._internal.recommend`): `declared`,
     `learned` or `default`; empty for none, or a start before morca kept
     it."""
     var runs: Int
@@ -151,17 +156,17 @@ struct RunRow(Copyable, Movable):
     var held: String
     """Why the scheduler keeps it queued (`morca._internal.control`), or empty."""
     var usage: Usage
-    """What its attempts used (`morca.usage`): the largest peak, the CPU
+    """What its attempts used (`morca._internal.usage`): the largest peak, the CPU
     seconds summed and the most cores."""
     var resources: RunResources
-    """What its latest start asked for and was granted (`morca.resources`)."""
+    """What its latest start asked for and was granted (`morca._internal.resources`)."""
     var code_version: String
-    """While it runs, the version it runs (`morca.handover.version_label`);
+    """While it runs, the version it runs (`morca._internal.handover.version_label`);
     else empty."""
     var desired_code_version: String
     """While it runs, the version its pipeline is registered with now."""
     var outdated: String
-    """While it runs on outdated code (`morca.handover`), why: "newer
+    """While it runs on outdated code (`morca._internal.handover`), why: "newer
     version X is leading"; else empty."""
 
 
@@ -184,7 +189,7 @@ struct StepRow(Copyable, Movable):
     var limit_mb: Int
     """The latest attempt's memory limit (`morca._internal.cgroup`); 0 for none."""
     var grant_mb: Int
-    """Its start's memory grant (`morca.resources`); 0 for none."""
+    """Its start's memory grant (`morca._internal.resources`); 0 for none."""
 
 
 def int_or_zero(s: String) -> Int:
@@ -255,7 +260,7 @@ def run_rows(
 
 def with_versions(mut db: State, mut r: RunRow) raises:
     """Fills a running run's versions, and whether it's outdated
-    (`morca.handover`): one query per running run."""
+    (`morca._internal.handover`): one query per running run."""
     if r.status != "running":
         return
     var o = run_outdated(db.conn, r.id)
@@ -377,7 +382,7 @@ struct RunsQuery(Copyable, Movable):
     any part of them (`modular/` for a keyed pipeline's repositories)."""
     var batch: Int
     """`?batch=`: the runs queued together in that batch
-    (`morca.batches`)."""
+    (`morca._internal.batches`)."""
 
     @staticmethod
     def newest(view: String, size: Int) -> Self:
@@ -817,7 +822,7 @@ struct AttemptRow(Copyable, Movable):
     var limit_mb: Int
     """Its memory limit (`morca._internal.cgroup`); 0 for none."""
     var grant_mb: Int
-    """Its start's memory grant (`morca.resources`); 0 for none."""
+    """Its start's memory grant (`morca._internal.resources`); 0 for none."""
 
 
 def _attempt_rows(run: Int, rs: List[AttemptRecord]) -> List[AttemptRow]:
@@ -880,7 +885,7 @@ struct RunView(Movable):
     var rebuild: Int
     """The rebuild it's part of, or 0."""
     var batch: Int
-    """The batch it was queued in (`morca.batches`), or 0."""
+    """The batch it was queued in (`morca._internal.batches`), or 0."""
     var batch_runs: Int
     """How many runs that batch has."""
     var version: Optional[VersionRow]

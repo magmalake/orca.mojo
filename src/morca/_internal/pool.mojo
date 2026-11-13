@@ -32,7 +32,7 @@ from std.time import perf_counter_ns, sleep
 
 import morca._internal.db.ec2 as ec2_db
 
-from morca.state import State
+from morca._internal.state import State
 
 
 def _over(mut db: State, iid: String, run: Int, start: Int) raises -> Bool:

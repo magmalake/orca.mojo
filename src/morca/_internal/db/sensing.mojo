@@ -1,4 +1,4 @@
-"""Fires and sensors' queries (`morca.sensing`): `orca.sensed`, the
+"""Fires and sensors' queries (`morca._internal.sensing`): `orca.sensed`, the
 snapshots a sensor has seen, `orca.fires`, a schedule's, the runs they
 queue, and a pipeline's `sense_error`."""
 
@@ -329,7 +329,8 @@ struct Upstream(Copyable, Movable):
 
 def upstream(mut conn: Connection, pipeline: String) raises -> List[Upstream]:
     """For `pipeline` if it's a sensor: a row per dataset it follows, then
-    the keys of each snapshot of them (`morca.follow`); none if it isn't."""
+    the keys of each snapshot of them (`morca._internal.follow`); none if it isn't.
+    """
     var out = List[Upstream]()
     for r in conn.query(_UPSTREAM_SQL, Params().text(pipeline)):
         out.append(

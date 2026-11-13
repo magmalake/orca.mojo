@@ -8,12 +8,12 @@ from morca._internal.api.runs import (
     json_version,
     runs_filters_json,
 )
-from morca.calendar import calendar, calendar_json
-from morca.coverage import Coverage, coverage_json
-from morca.fill import status_json
-from morca.follow import follow_json
-from morca.json import quote
-from morca.state import State
+from morca._internal.calendar import calendar, calendar_json
+from morca._internal.coverage import Coverage, coverage_json
+from morca._internal.fill import status_json
+from morca._internal.follow import follow_json
+from morca._internal.json import quote
+from morca._internal.state import State
 from morca._internal.ui.layout import bad_request, not_found
 from morca._internal.views.commands import backfill_cmd, run_cmd
 from morca._internal.views.pipelines import (
@@ -37,7 +37,8 @@ def json_strings(mut out: String, names: List[String]):
 def json_pipeline(
     mut out: String, p: PipelineRow, cov: Optional[Coverage] = None
 ):
-    """`p` as JSON, with its coverage (`morca.coverage`; null for none)."""
+    """`p` as JSON, with its coverage (`morca._internal.coverage`; null for none).
+    """
     out.write(
         '{"name": ',
         quote(p.name),

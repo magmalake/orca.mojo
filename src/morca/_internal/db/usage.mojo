@@ -1,4 +1,4 @@
-"""Usage's queries (`morca.usage`): which attempts a process made, and
+"""Usage's queries (`morca._internal.usage`): which attempts a process made, and
 what each used."""
 
 from postgres import Connection, Params

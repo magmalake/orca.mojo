@@ -8,7 +8,7 @@ from std.os import getenv, listdir, makedirs, remove
 from std.os.path import exists
 from std.testing import TestSuite, assert_equal, assert_false
 
-from morca.logs import read_location, write_location
+from morca._internal.logs import read_location, write_location
 
 
 def _dir() raises -> String:

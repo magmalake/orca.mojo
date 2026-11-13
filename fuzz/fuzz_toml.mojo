@@ -10,7 +10,7 @@ of the second reading the same as the first.
 
 from harness import bytes_of, check, only_findings, run_harness, save_last
 
-from morca.toml import parse_toml
+from morca._internal.toml import parse_toml
 
 
 def target(data: List[UInt8]) raises:

@@ -4,7 +4,7 @@
 pipeline runs. The pipeline's code still says what it does (steps, partitions,
 schedule, reads and writes); the file says where it runs and how much it uses.
 `morca register` and `morca aws register` read it. The code that reads it is in
-`src/morca/config.mojo`, and the TOML parser is in `src/morca/toml.mojo`.
+`src/morca/_internal/config.mojo`, and the TOML parser is in `src/morca/_internal/toml.mojo`.
 
 ```toml
 [defaults]
@@ -228,7 +228,7 @@ A project's image sets `MORCA_CONFIG`, `MORCA_PIPELINES_DIR`, `MORCA_COMMIT` and
 
 `cpus` and `memory_gb` are a pipeline's **request**: the least it needs to
 start and the most it can use, `"MIN..MAX"` (a single number is both). Its
-runs are then sized to their share of the machine (#171, `src/morca/resources.mojo`):
+runs are then sized to their share of the machine (#171, `src/morca/_internal/resources.mojo`):
 
 ```toml
 [pipelines.gharchive]
@@ -290,7 +290,7 @@ env = { DISTA_WORKER_SLOTS = "auto", GHARCHIVE_PARALLEL = "auto" }
 
 From the peaks of a pipeline's last 20 successful measured runs ([What a
 run uses](ui.md#what-a-run-uses)), morca works out the request they suggest
-(#269, `src/morca/recommend.mojo`): memory is the 95th percentile of their
+(#269, `src/morca/_internal/recommend.mojo`): memory is the 95th percentile of their
 peak memory plus 15%, rounded up to a quarter GB and never below what an
 out-of-memory kill raised the pipeline to; CPUs are the 90th percentile of
 their peak cores, rounded up, at least 1 (none on macOS, which doesn't
@@ -650,7 +650,7 @@ resumes with the steps already done skipped.
 
 ## Fills
 
-With `fills = "all"` a pipeline fills its whole range by itself, within limits (#155, `src/morca/fill.mojo`). People change the limits; nobody has to drive a long backfill by hand.
+With `fills = "all"` a pipeline fills its whole range by itself, within limits (#155, `src/morca/_internal/fill.mojo`). People change the limits; nobody has to drive a long backfill by hand.
 
 The default, `fills = "since_registration"`, is what morca did before. A schedule fills from the pipeline's registration on, and `morca backfill` fills the rest by hand.
 

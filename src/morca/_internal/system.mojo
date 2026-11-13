@@ -4,7 +4,7 @@ and the warning on the home page.
 The control instance (Postgres, the scheduler, the UI, Caddy, the apps) runs
 a sampler of its own: a container the stack's user data starts beside the
 scheduler, with the host's process and network namespaces and the host's
-cgroup files and Docker's config files mounted read-only (`morca.sample`
+cgroup files and Docker's config files mounted read-only (`morca._internal.sample`
 `--cgroup` and `--names`). It keeps its last hour of lines in the file
 `MORCA_CONTROL_SAMPLES` names. Every `MORCA_FLEET_SECONDS` the scheduler reads
 the file (`morca._internal.fleet.ingest`) and, here:
@@ -38,9 +38,9 @@ from morca._internal.db.system import Container, Minute
 
 from morca.civil import Civil
 from morca._internal.fleet import Series, Summary, _chart, _fixed
-from morca.html import Html, escape
-from morca.json import quote
-from morca.logs import (
+from morca._internal.html import Html, escape
+from morca._internal.json import quote
+from morca._internal.logs import (
     is_remote,
     location_exists,
     logs_dir,
@@ -48,9 +48,9 @@ from morca.logs import (
     read_location,
     stage_of,
 )
-from morca.metrics import bytes_text
-from morca.sample import append_line
-from morca.state import State
+from morca._internal.metrics import bytes_text
+from morca._internal.sample import append_line
+from morca._internal.state import State
 
 comptime KEEP_DAYS = 14
 """How long the minutes, the containers' and the day files are kept."""

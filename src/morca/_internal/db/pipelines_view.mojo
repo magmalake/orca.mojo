@@ -55,14 +55,14 @@ struct PipelineRow(Copyable, Movable):
     """`morca register --placement`: `control`, `ec2`, or empty for the
     scheduler's runner."""
     var cpus: String
-    """The CPUs it asks for (`morca.resources`), or empty."""
+    """The CPUs it asks for (`morca._internal.resources`), or empty."""
     var memory_gb: String
     """The memory it asks for, in GB, or empty."""
     var waiting: String
     """Why its oldest queued run that waits for room on its host waits
-    (`morca.resources`), or empty."""
+    (`morca._internal.resources`), or empty."""
     var fill_lag: String
-    """`fill_lag` as registered (`morca.fill`), or empty."""
+    """`fill_lag` as registered (`morca._internal.fill`), or empty."""
 
 
 def pipeline_rows(
@@ -205,7 +205,7 @@ def failed_keys(
 
 
 def has_fill_runs(mut conn: Connection, pipeline: String) raises -> Bool:
-    """Whether `pipeline` has a fill run (`morca.fill`)."""
+    """Whether `pipeline` has a fill run (`morca._internal.fill`)."""
     var any = conn.query(
         (
             "SELECT 1 FROM orca.runs WHERE pipeline = $1 AND trigger ="

@@ -18,8 +18,8 @@ binary itself (`direct`, for the tests' stand-in EC2), then shuts down
 (`MORCA_EC2_SHUTDOWN`). The head keeps the driver's output in the run's
 `driver.log` (`<binary> keep-log`) before it does, and if the driver
 crashed, fails the attempts it left running with the crash's first frames
-(`morca.crash`). Beside its work each
-instance runs `<binary> sample` (`morca.sample`; in docker mode as a
+(`morca._internal.crash`). Beside its work each
+instance runs `<binary> sample` (`morca._internal.sample`; in docker mode as a
 container with `--pid host`), whose lines its script uploads to the run's
 `metrics/<role>-<instance>.jsonl` with its log (`<binary> put-log`), every
 `MORCA_CLUSTER_LOG_SECONDS` and once when it ends, after telling the
@@ -128,15 +128,15 @@ from objectstore.crypto import sha256_hex
 from morca._internal.awsec2 import Ec2, Instance
 import morca._internal.db.ec2 as ec2_db
 from morca._internal.db.ec2 import SpecRow
-from morca.config import (
+from morca._internal.config import (
     env_json,
     parse_env,
 )
-from morca.json import quote
-from morca.proc import capture
-from morca.sample import sample_seconds
+from morca._internal.json import quote
+from morca._internal.proc import capture
+from morca._internal.sample import sample_seconds
 from morca._internal.secrets import parse_secrets
-from morca.state import State
+from morca._internal.state import State
 
 comptime HEAD_PORT = 6390
 """The port of a run's dista head on its head instance, unless

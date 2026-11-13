@@ -1,4 +1,4 @@
-"""Rebuilds' queries (`morca.sensors`): `orca.rebuilds`, their plans in
+"""Rebuilds' queries (`morca._internal.sensors`): `orca.rebuilds`, their plans in
 `orca.rebuild_pipelines`, and the runs they queue."""
 
 from postgres import Connection, Params, Transaction

@@ -23,7 +23,7 @@ from std.os import getenv
 import morca._internal.db.machines_view as machines_db
 from morca._internal.db.live import stale_limit
 from morca._internal.db.machines_view import WorkerRun
-from morca.state import State
+from morca._internal.state import State
 
 
 comptime EC2 = "ec2"

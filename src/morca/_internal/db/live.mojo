@@ -209,7 +209,7 @@ def live_runs(
 ) raises -> Dict[String, Int]:
     """The keys of `pipeline` in a live run, each with the first such run.
     Callers that then queue a run hold the pipeline's row `FOR UPDATE`, as
-    `morca.scheduler` does, so two can't both see a key free."""
+    `morca._internal.scheduler` does, so two can't both see a key free."""
     var out = Dict[String, Int]()
     for r in tx.query(live_sql(), Params().text(pipeline)):
         out[r.text("key")] = Int(r.int64("id"))

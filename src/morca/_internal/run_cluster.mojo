@@ -29,11 +29,11 @@ from json import Value
 import morca._internal.db.run_cluster as cluster_db
 from morca._internal.db.run_cluster import MEMBER_GRANTS_SQL, MEMBER_MB_SQL
 
-from morca.http_store import Body
-from morca.registered import registered, run_request
+from morca._internal.http_store import Body
+from morca._internal.registered import registered, run_request
 from morca._internal.cgroup import raised_request
-from morca.resources import Grant, Room, admit
-from morca.state import State
+from morca._internal.resources import Grant, Room, admit
+from morca._internal.state import State
 
 
 def members_of(mut db: State, pipeline: String) raises -> Int:

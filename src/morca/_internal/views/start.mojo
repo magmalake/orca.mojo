@@ -2,12 +2,12 @@
 the command that queues it, for a pipeline's Operate tab and its JSON.
 """
 
-from morca.estimate import Pace, estimate_text, pace
-from morca.queueing import preview_backfill
-from morca.registered import registered
-from morca.state import State
+from morca._internal.estimate import Pace, estimate_text, pace
+from morca._internal.queueing import preview_backfill
+from morca._internal.registered import registered
+from morca._internal.state import State
 from morca._internal.views.pipelines import PipelineRow
-from morca.timekeys import unit_of
+from morca._internal.timekeys import unit_of
 
 
 @fieldwise_init

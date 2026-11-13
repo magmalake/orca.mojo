@@ -1,4 +1,4 @@
-"""Alerts' queries (`morca.notify`): `orca.notifications`, an alert's
+"""Alerts' queries (`morca._internal.notify`): `orca.notifications`, an alert's
 state per kind and subject and what is still to send, and `orca.alerts`,
 a row per alert raised or resolved, as Ops › Alerts lists them."""
 

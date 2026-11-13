@@ -13,7 +13,7 @@ samplers' files when a page is viewed:
 
 The scheduler fills both tables (`ingest`, every `MORCA_FLEET_SECONDS`, 30; 0
 turns it off). Run instances upload their samples to the run's `metrics/`
-folder (`morca.sample`) every `MORCA_CLUSTER_LOG_SECONDS`, so `ingest` reads
+folder (`morca._internal.sample`) every `MORCA_CLUSTER_LOG_SECONDS`, so `ingest` reads
 the last lines of each live instance's file from there, a few hundred bytes
 of it per instance per pass in effect, and keeps those it hasn't got. The
 control instance's sampler (`morca sample --out <file> --keep N`, started by
@@ -35,13 +35,13 @@ from std.os import getenv
 from json import Value, loads
 import morca._internal.db.fleet as fleet_db
 
-from morca.html import Html, escape, url_encode
-from morca.json import quote
+from morca._internal.html import Html, escape, url_encode
+from morca._internal.json import quote
 from morca._internal.db.live import stale_limit, start_grace
-from morca.logs import read_location
-from morca.metrics import bytes_text
-from morca.sample import metrics_location
-from morca.state import State
+from morca._internal.logs import read_location
+from morca._internal.metrics import bytes_text
+from morca._internal.sample import metrics_location
+from morca._internal.state import State
 
 comptime SAMPLE_KEEP_MINUTES = 30
 """How long a host's samples are kept in `orca.fleet_samples`."""

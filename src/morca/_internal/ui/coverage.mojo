@@ -1,5 +1,5 @@
 """The Coverage card on a dated pipeline's Operate tab: its partitions'
-states (`morca.calendar`) as plain HTML, read-only.
+states (`morca._internal.calendar`) as plain HTML, read-only.
 
 A daily pipeline's card has two tabs, **Month** (a month of days) and
 **Year** (twelve small months, each with how many of its days are done, and
@@ -10,14 +10,14 @@ is kept in `localStorage`, as the Steps tabs are. Year is the default. A
 monthly pipeline's card is its year of months, as before, and an hourly
 one's a day of hours (`?cal=YYYY-MM-DD`). For a sensor,
 the days what it follows has but it hasn't done, failed or started are
-`behind` (`morca.follow`), and `follow_html` is its Progress card's
+`behind` (`morca._internal.follow`), and `follow_html` is its Progress card's
 Following line.
 
 One calendar is read for both tabs (`year_calendar`): the month is cut out
 of the year, so the card costs the same three queries as a month did.
 """
 
-from morca.calendar import (
+from morca._internal.calendar import (
     Calendar,
     Year,
     calendar,
@@ -26,15 +26,15 @@ from morca.calendar import (
     year_of,
 )
 from morca.civil import Civil, now
-from morca.estimate import estimate_text
-from morca.follow import Follow, LISTED
-from morca.html import Html, url_encode
+from morca._internal.estimate import estimate_text
+from morca._internal.follow import Follow, LISTED
+from morca._internal.html import Html, url_encode
 from morca._internal.ui.layout import act_button
 from morca.day import Day
 from morca.hour import Hour
 from morca.month import Month, days_in
 from morca._internal.views.commands import shell_quote
-from morca.state import State
+from morca._internal.state import State
 
 
 def states() -> List[String]:
@@ -381,7 +381,7 @@ def coverage_html(
 
 
 def coverage_href(name: String, kind: String) -> String:
-    """Where a pipeline's coverage number links (`morca.coverage`): its
+    """Where a pipeline's coverage number links (`morca._internal.coverage`): its
     Coverage card, a daily one's on the Year tab, or a keyed one's Keys
     on the Overview."""
     var href = String("/pipelines/", url_encode(name))

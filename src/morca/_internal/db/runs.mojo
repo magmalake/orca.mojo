@@ -1,4 +1,4 @@
-"""The Postgres run store's queries on runs (`morca.state`): a pipeline
+"""The Postgres run store's queries on runs (`morca._internal.state`): a pipeline
 binary's registration and versions, its runs' rows in `orca.runs`, their
 claims, heartbeats and ends, and the watchdog's look at a running run.
 
@@ -9,7 +9,7 @@ dialects share no statement text (module doc there). Steps and attempts are
 from postgres import Connection, Params, Transaction
 
 from morca._internal.db.run_rows import Fence, Owned, RunInfo
-from morca.migrations import data_version_sql
+from morca._internal.migrations import data_version_sql
 
 
 # --- Pipelines, as a pipeline binary registers itself ---
@@ -298,7 +298,7 @@ def beat(mut conn: Connection, run: Int, owner: String) raises:
     )
 
 
-# --- The watchdog's look at a running run (`morca.state.beat_run`) ---
+# --- The watchdog's look at a running run (`morca._internal.state.beat_run`) ---
 
 
 @fieldwise_init

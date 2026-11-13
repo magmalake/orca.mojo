@@ -25,7 +25,7 @@ from std.testing import assert_equal
 from postgres import Connection, Params
 
 from morca import PgStore
-from morca.state import beat_run
+from morca._internal.state import beat_run
 
 comptime CASES = "formal/difftest/fence.cases"
 comptime PIPELINE = "formal_fence"

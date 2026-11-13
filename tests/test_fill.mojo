@@ -1,10 +1,10 @@
-"""Fills (`morca.fill`): what the keys take, the window, the range a fill
+"""Fills (`morca._internal.fill`): what the keys take, the window, the range a fill
 covers, the price of a run, and which pipelines can't fill."""
 
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
 from morca.civil import parse_time
-from morca.fill import (
+from morca._internal.fill import (
     Fill,
     eta_text,
     FillStatus,

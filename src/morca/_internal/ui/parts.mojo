@@ -3,14 +3,14 @@ table's cells, a runs table with each row's actions, links to code, and a
 run's grant and usage as facts.
 """
 
-from morca.actions import cancel_kill_seconds
-from morca.html import Html, url_encode
-from morca.resources import gb_text
-from morca.sample import fixed1
-from morca.source import commit_url, web_url
-from morca.store import Usage
+from morca._internal.actions import cancel_kill_seconds
+from morca._internal.html import Html, url_encode
+from morca._internal.resources import gb_text
+from morca._internal.sample import fixed1
+from morca._internal.source import commit_url, web_url
+from morca._internal.store import Usage
 from morca._internal.ui.layout import act_button, fact_item
-from morca.usage import bytes_text, cpu_text, usage_text
+from morca._internal.usage import bytes_text, cpu_text, usage_text
 from morca._internal.views.code import CodeLinks, CodeRef, RunCode
 from morca._internal.views.commands import cancel_cli, retry_cli, shell_quote
 from morca._internal.views.runs import RunResources, RunRow, VersionRow
@@ -211,7 +211,7 @@ def pause_button(mut h: Html, name: String, paused: Bool):
 
 def cancel_tell(r: RunRow) -> String:
     """What cancelling `r` does, as its Cancel's dialog says it
-    (`morca.actions.cancel_run`)."""
+    (`morca._internal.actions.cancel_run`)."""
     if r.status == "running":
         return String(
             "It stops before its next step; the step running now has ",
@@ -471,7 +471,7 @@ def limit_facts(mut h: Html, limit_mb: Int, max_mb: Int, grant_mb: Int = 0):
 
 
 def grant_facts(mut h: Html, r: RunResources):
-    """A run's Requested and Granted facts (`morca.resources`), when its
+    """A run's Requested and Granted facts (`morca._internal.resources`), when its
     pipeline asked for any, and its memory limit (`morca._internal.cgroup`) when it
     had one."""
     if not r.any():
@@ -505,7 +505,7 @@ def grant_facts(mut h: Html, r: RunResources):
 
 
 def usage_facts(mut h: Html, u: Usage, live: Bool):
-    """A run's or an attempt's Peak memory and CPU used facts (`morca.usage`).
+    """A run's or an attempt's Peak memory and CPU used facts (`morca._internal.usage`).
     """
     var none = String(
         "recorded when its process ends" if live else "not measured"

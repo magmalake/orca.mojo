@@ -1,5 +1,5 @@
 """`morca config show` and `morca config export`'s query
-(`morca.config_show`): each registered pipeline's settings as registered,
+(`morca._internal.config_show`): each registered pipeline's settings as registered,
 null where nothing was, beside what its code declares."""
 
 from postgres import Connection, Params, Row

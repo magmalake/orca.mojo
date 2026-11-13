@@ -1,8 +1,8 @@
-"""The SQLite file's schema (`morca.sqlite_store`): its migrations and
+"""The SQLite file's schema (`morca._internal.sqlite_store`): its migrations and
 `schema_version`, which `SqliteStore.migrate` applies and reads in one
 `BEGIN IMMEDIATE` transaction of its own.
 
-The tables are Postgres's (`morca.migrations`), under the same names without
+The tables are Postgres's (`morca._internal.migrations`), under the same names without
 the `orca.` schema, holding what a pipeline binary writes: steps' inputs and
 outputs are hex text, times are Unix seconds."""
 

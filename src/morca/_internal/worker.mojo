@@ -14,19 +14,19 @@ image has too) with `resume <run>`, in a process group of its own, its
 output staged under `--dir` (`$TMPDIR/morca-worker`), with the pipeline's
 `env`, its secrets read here with `MORCA_SECRET_FETCH` and named in
 `MORCA_SECRETS`, and `MORCA_STATE_URL` and `MORCA_STATE_TOKEN` in place of a
-database: the run records itself over the API (`morca.http_store`). Its
+database: the run records itself over the API (`morca._internal.http_store`). Its
 data and logs go where the worker's own `MORCA_WAREHOUSE` and `MORCA_LOGS`
 say, as any run's do. When the process ends, its output is appended to
 the run's `driver.log` by `<binary> keep-log`, which also fails the
 attempts a crash left running; a process that ended before claiming its
 run has the run failed, saying why (`/api/worker/exited`). Beside each
-run's process it starts `<binary> sample` (`morca.sample`, unless
+run's process it starts `<binary> sample` (`morca._internal.sample`, unless
 `MORCA_SAMPLE_SECONDS=0`), which writes this machine's metrics to
 `<MORCA_LOGS>/<pipeline>/<run>/metrics/worker-<name>.jsonl`, so the run's
 page has its Machines card, as a local run's does. Each poll the
 worker samples its runs' process trees, as the scheduler samples a local
 run's, and sends the samples with `/api/worker/exited`, so their attempts
-get their peak memory and CPU (`morca.usage`). Where the worker can make
+get their peak memory and CPU (`morca._internal.usage`). Where the worker can make
 cgroups (`morca._internal.cgroup`), each run gets one at its grant, and an
 out-of-memory kill is reported with `/api/worker/exited`, which fails the
 attempts saying so and raises what the pipeline asks for.
@@ -46,7 +46,7 @@ rather than started, though the UI shouldn't hand it one
 heartbeat thread exits its process once its parent isn't the worker
 (`MORCA_WORKER_PID`), so the run's heartbeat goes stale and the scheduler
 queues it again, for this worker or another, whatever its trigger
-(`morca.scheduler`'s `_requeue_lost`); a run this worker claimed and never
+(`morca._internal.scheduler`'s `_requeue_lost`); a run this worker claimed and never
 started has its start given back.
 """
 
@@ -59,14 +59,14 @@ from std.time import perf_counter_ns, sleep
 from json import Value
 
 from morca._internal.run_cluster import MemberSpec, member_spec_of
-from morca.tokens import new_token
+from morca._internal.tokens import new_token
 from morca._internal.worker_cluster import (
     free_port,
     start_dista_worker,
     start_head,
     stop_group,
 )
-from morca.admission import Report
+from morca._internal.admission import Report
 from morca._internal.cgroup import (
     Cgroups,
     Contained,
@@ -78,9 +78,9 @@ from morca._internal.cgroup import (
 from morca._internal.cgroup import put as put_cgroup
 from morca._internal.cgroup import start_limit_mb
 from morca._internal.control import fetch_secret
-from morca.http_store import Body, StateApi
-from morca.logs import run_dir
-from morca.pressure import (
+from morca._internal.http_store import Body, StateApi
+from morca._internal.logs import run_dir
+from morca._internal.pressure import (
     Admission,
     Source,
     find_source,
@@ -88,9 +88,9 @@ from morca.pressure import (
     pressure_env,
     read_psi,
 )
-from morca.proc import Reaped, reap, spawn
-from morca.resources import host_room, run_env as grant_env
-from morca.sample import (
+from morca._internal.proc import Reaped, reap, spawn
+from morca._internal.resources import host_room, run_env as grant_env
+from morca._internal.sample import (
     _hostname,
     _sysctl_u64,
     machine_name,
@@ -99,8 +99,8 @@ from morca.sample import (
     sample_seconds,
     tree_usage,
 )
-from morca.store import FINAL
-from morca.usage import Meter, marks_json
+from morca._internal.store import FINAL
+from morca._internal.usage import Meter, marks_json
 from morca._internal.workers import (
     WorkerRun,
     pool_problem,
@@ -171,7 +171,7 @@ struct Worker(Movable):
     """`keep-log`s going, by pid, with the stage they're keeping."""
     var meters: Dict[Int, Meter]
     """The runs' processes' samples, by pid, sent when each ends
-    (`morca.usage`)."""
+    (`morca._internal.usage`)."""
     var psi: Source
     """Where this host's memory pressure is read from (`orca.pressure`)."""
     var admission: Admission

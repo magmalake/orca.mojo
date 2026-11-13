@@ -1,4 +1,4 @@
-"""Learning a request's queries (`morca.recommend`): a pipeline's runs'
+"""Learning a request's queries (`morca._internal.recommend`): a pipeline's runs'
 peaks, and its out-of-memory raise."""
 
 from postgres import Connection, Params

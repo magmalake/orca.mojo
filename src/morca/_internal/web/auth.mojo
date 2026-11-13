@@ -2,7 +2,7 @@
 browser, the API token of a script (`morca --remote`), and the checks that
 keep another site's page from posting to the UI. Also the endpoints that
 log in and out. The users, sessions and audit rows themselves are
-`morca.auth`; API tokens are `morca.tokens`; a worker's token is checked by
+`morca._internal.auth`; API tokens are `morca._internal.tokens`; a worker's token is checked by
 `morca._internal.api.worker` instead, and gets nothing here.
 
 | Path | |
@@ -25,7 +25,7 @@ from std.os import getenv
 from flare.http import Request, Response
 from json import loads
 
-from morca.auth import (
+from morca._internal.auth import (
     SESSION_COOKIE,
     audit,
     close_session,
@@ -35,10 +35,10 @@ from morca.auth import (
     session_user,
     too_many_failures,
 )
-from morca.html import Html, url_encode
-from morca.json import quote
-from morca.state import State
-from morca.tokens import (
+from morca._internal.html import Html, url_encode
+from morca._internal.json import quote
+from morca._internal.state import State
+from morca._internal.tokens import (
     clean_label,
     issue_token,
     revoke_token,

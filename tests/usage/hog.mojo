@@ -16,7 +16,7 @@ from std.sys import argv
 from std.time import perf_counter_ns
 
 from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
-from morca.proc import absolute, spawn
+from morca._internal.proc import absolute, spawn
 
 
 def _hold(mb: Int, seconds: Float64) -> Int:

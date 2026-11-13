@@ -26,7 +26,7 @@ to the stack's repository.
 moves the scheduler and the UI to the image (`orca-refresh`) and registers
 each pipeline, `/opt/morca/pipelines/<pipeline>`, with the flags given, as
 `morca register` takes them, and the project's `morca.toml` (or `--config`'s
-file; `morca.config`), which it checks and sends whole with its git commit; `app` runs the image's `/opt/morca/bin/<name>`
+file; `morca._internal.config`), which it checks and sends whole with its git commit; `app` runs the image's `/opt/morca/bin/<name>`
 beside the UI, at `https://<host>` (for `console`, the stack's
 `ConsoleHostname`). `--env KEY=VALUE` (repeated) sets the control
 instance's settings beyond the template's (`ControlEnv`, all of them at
@@ -50,9 +50,9 @@ from std.time import sleep
 from json import loads
 
 from morca._internal.aws_assets import PROJECT_DOCKERFILE, STACK_TEMPLATE
-from morca.config import ProjectConfig, refuse_orca_toml
-from morca.json import quote
-from morca.proc import capture
+from morca._internal.config import ProjectConfig, refuse_orca_toml
+from morca._internal.json import quote
+from morca._internal.proc import capture
 
 comptime _DIR = "build/morca-aws"
 comptime AWS_USAGE = """usage:

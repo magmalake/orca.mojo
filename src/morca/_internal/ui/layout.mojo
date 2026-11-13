@@ -7,8 +7,8 @@ buttons, and the 404 and 400 pages.
 
 from std.os import getenv
 
-from morca.html import Html, escape
-from morca.json import quote
+from morca._internal.html import Html, escape
+from morca._internal.json import quote
 from morca._internal.ui.step_cards import LEAD_JS, STEP_CARDS_JS
 from morca._internal.ui.terms import header_help
 from morca._internal.views.pipelines import comma_list
@@ -578,7 +578,7 @@ one in its `data-src` (a runs table's pipeline), shows, after a moment, on
 keyboard focus or on a first tap (a second follows the link), that
 function's source, from its def through
 its docstring, coloured, from `/code` (which fetches the file from
-raw.githubusercontent.com and colours it, `morca.highlight`) once per file; the
+raw.githubusercontent.com and colours it, `morca._internal.highlight`) once per file; the
 link itself is unchanged, so without scripts (or for a private repository)
 it still opens the file. Escape closes it and any help shown."""
 

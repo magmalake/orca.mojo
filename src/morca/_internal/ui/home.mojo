@@ -1,5 +1,5 @@
 """`/`, the home page: the pipelines, with their coverage
-(`morca.coverage`), schedules, next and last runs, the recent runs (a row
+(`morca._internal.coverage`), schedules, next and last runs, the recent runs (a row
 per batch, `morca._internal.ui.recent`), and
 the Timeline tab (`morca._internal.ui.viz`);
 `/home/pipelines` is its table of pipelines, as the fragment it refreshes
@@ -8,15 +8,15 @@ from.
 
 import morca._internal.db.home_view as home_db
 
-from morca.admission import held_warning, row_json, scheduler_pressure
+from morca._internal.admission import held_warning, row_json, scheduler_pressure
 from morca._internal.api.pipelines import json_pipeline
 from morca._internal.api.runs import json_runs
-from morca.chart import DayRuns, runs_chart
-from morca.coverage import Coverage
+from morca._internal.chart import DayRuns, runs_chart
+from morca._internal.coverage import Coverage
 from morca._internal.fleet import fleet_summary, summary_html, summary_json
-from morca.html import Html, url_encode
-from morca.json import quote
-from morca.state import State
+from morca._internal.html import Html, url_encode
+from morca._internal.json import quote
+from morca._internal.state import State
 from morca._internal.system import (
     alert_html,
     system_now,
@@ -36,7 +36,7 @@ from morca._internal.views.pipelines import (
 )
 from morca._internal.views.recent import json_recent, recent_rows
 from morca._internal.views.runs import HOME_RUNS, RunsQuery, run_rows
-from morca.watchdog import active_trips, banner_html, trips_json
+from morca._internal.watchdog import active_trips, banner_html, trips_json
 from morca._internal.web.page import Page
 
 
@@ -60,7 +60,7 @@ def _pipelines_live(ps: List[PipelineRow]) -> Bool:
 def _coverages(
     mut db: State, ps: List[PipelineRow]
 ) -> List[Optional[Coverage]]:
-    """Each pipeline's coverage (`morca.coverage`): a query each."""
+    """Each pipeline's coverage (`morca._internal.coverage`): a query each."""
     var out = List[Optional[Coverage]]()
     for p in ps:
         out.append(pipeline_coverage(db, p))

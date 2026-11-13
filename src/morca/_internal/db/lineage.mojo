@@ -1,4 +1,4 @@
-"""Lineage's queries (`morca.lineage`): walks over the snapshots attempts
+"""Lineage's queries (`morca._internal.lineage`): walks over the snapshots attempts
 read and committed (`orca.reads`, `orca.commits`), and the datasets
 pipelines declare."""
 

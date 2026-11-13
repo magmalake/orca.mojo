@@ -1,4 +1,4 @@
-"""The SQLite run store's queries (`morca.sqlite_store`): the dialect of
+"""The SQLite run store's queries (`morca._internal.sqlite_store`): the dialect of
 `morca._internal.db.runs` and `morca._internal.db.steps` for a file, function for function,
 over the same rows (`morca._internal.db.run_rows`).
 
@@ -23,7 +23,7 @@ it rather than substituted into one text:
   `fail_running_attempts` uses `step IN (...)`, not `UPDATE ... FROM`;
 - a NULL error is `nullif(?4, '')` in the SQL, where Postgres binds a null.
 
-Locking is the caller's, as on Postgres: `morca.sqlite_store` brackets each
+Locking is the caller's, as on Postgres: `morca._internal.sqlite_store` brackets each
 change in `BEGIN IMMEDIATE` ... `COMMIT`, which takes the file's write lock
 up front, where Postgres takes its row locks in the transaction. A claim
 is a single guarded `UPDATE`, as there.

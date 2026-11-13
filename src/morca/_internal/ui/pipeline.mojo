@@ -8,19 +8,19 @@ pipeline in every run it was in.
 import morca._internal.db.pipelines_view as pipelines_db
 
 from morca.civil import now
-from morca.config_show import config_html
-from morca.coverage import Coverage
-from morca.dag import DagStep, dag_svg
-from morca.fill import FillStatus, eta_text, lag_note, money
-from morca.follow import Follow, follow
-from morca.html import Html, url_encode
-from morca.json import quote
-from morca.recommend import Recommendation
-from morca.sample import fixed1
-from morca.queueing import done_keys
-from morca.registered import registered
-from morca.source import web_url
-from morca.state import State
+from morca._internal.config_show import config_html
+from morca._internal.coverage import Coverage
+from morca._internal.dag import DagStep, dag_svg
+from morca._internal.fill import FillStatus, eta_text, lag_note, money
+from morca._internal.follow import Follow, follow
+from morca._internal.html import Html, url_encode
+from morca._internal.json import quote
+from morca._internal.recommend import Recommendation
+from morca._internal.sample import fixed1
+from morca._internal.queueing import done_keys
+from morca._internal.registered import registered
+from morca._internal.source import web_url
+from morca._internal.state import State
 from morca._internal.ui.coverage import (
     coverage_href,
     coverage_html,
@@ -54,7 +54,7 @@ from morca._internal.ui.runs import (
 from morca._internal.ui.start import start_html
 from morca._internal.ui.step_cards import AttemptCard, cards_script
 from morca._internal.ui.terms import COVERAGE_HELP
-from morca.usage import bytes_text, cpu_text
+from morca._internal.usage import bytes_text, cpu_text
 from morca._internal.views.code import CodeLinks, code_links
 from morca._internal.views.pipelines import (
     Fire,
@@ -72,7 +72,7 @@ from morca._internal.views.pipelines import (
 from morca._internal.views.runs import VersionRow
 from morca._internal.views.steps import step_cards_of
 from morca._internal.web.page import Page
-from morca.timekeys import is_time_kind
+from morca._internal.timekeys import is_time_kind
 
 
 def _keys_html(mut h: Html, name: String, k: KeyCounts):
@@ -402,7 +402,7 @@ def _progress_html(
 
 
 def _coverage_fact(mut h: Html, p: PipelineRow, cov: Optional[Coverage]):
-    """The Progress card's Coverage (`morca.coverage`): done of total and
+    """The Progress card's Coverage (`morca._internal.coverage`): done of total and
     the percent, linking to the year calendar (a monthly pipeline's year,
     a keyed one's Keys); "—" when there's nothing to count."""
     var dated = is_time_kind(p.kind)

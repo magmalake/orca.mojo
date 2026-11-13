@@ -1,9 +1,9 @@
-"""The run page's drawings (`morca.timeline`): a dista timeline read into
+"""The run page's drawings (`morca._internal.timeline`): a dista timeline read into
 lanes and bars, and the workers over a run."""
 
 from std.testing import TestSuite, assert_equal, assert_true
 
-from morca.timeline import read_timeline, timeline_svg, workers_svg
+from morca._internal.timeline import read_timeline, timeline_svg, workers_svg
 
 
 def _fixture() raises -> String:

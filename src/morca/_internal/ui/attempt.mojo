@@ -4,10 +4,10 @@ error, and its facts, which refresh from `/facts` while it runs.
 
 import morca._internal.db.run_view as run_db
 
-from morca.html import Html
-from morca.json import quote
-from morca.logs import read_location
-from morca.state import State
+from morca._internal.html import Html
+from morca._internal.json import quote
+from morca._internal.logs import read_location
+from morca._internal.state import State
 from morca._internal.ui.layout import (
     LIVE_EVERY,
     act_button,
@@ -15,7 +15,7 @@ from morca._internal.ui.layout import (
     page_html,
 )
 from morca._internal.ui.parts import code_link, limit_facts, usage_facts
-from morca.usage import bytes_text, usage_json
+from morca._internal.usage import bytes_text, usage_json
 from morca._internal.views.code import CodeLinks, code_of
 from morca._internal.views.runs import (
     AttemptRow,

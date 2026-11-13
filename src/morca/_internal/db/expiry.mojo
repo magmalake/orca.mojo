@@ -1,4 +1,4 @@
-"""Snapshot expiry's queries (`morca.expiry`): which datasets morca
+"""Snapshot expiry's queries (`morca._internal.expiry`): which datasets morca
 committed to, and which of their snapshots it still needs."""
 
 from postgres import Connection, Params

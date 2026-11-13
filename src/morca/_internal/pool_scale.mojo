@@ -15,7 +15,7 @@ autoscaler makes one, at most once every `MORCA_POOL_TRY_SECONDS` (60):
 
 - it tries the type it's on (the first, to start with) in each location in
   turn; the first that the provider has is made;
-- a type the worker image has no variant for (`morca.registry`: the
+- a type the worker image has no variant for (`morca._internal.registry`: the
   machine's architecture, as the provider says it, isn't among the
   image's) is skipped, saying so;
 - when no location has the type, it keeps trying it until the type's
@@ -53,9 +53,9 @@ from morca._internal.db.pools import LiveMachine
 from morca._internal.machines import MachineSpec, Provider
 from morca._internal.pool_boot import CREATED_BY, WORKER_IMAGE, boot_script
 from morca._internal.pool_config import NO_WAIT
-from morca.registry import Registry
-from morca.state import State
-from morca.tokens import token_hash
+from morca._internal.registry import Registry
+from morca._internal.state import State
+from morca._internal.tokens import token_hash
 from morca._internal.workers import create_worker_token
 
 

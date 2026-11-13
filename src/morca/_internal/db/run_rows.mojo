@@ -1,6 +1,6 @@
 """The rows the run stores' queries return, the same for both dialects
 (`morca._internal.db.runs` and `morca._internal.db.steps` on Postgres, `morca._internal.db.sqlite_runs`
-on SQLite). Declared here, with no import, so that `morca.store` takes them
+on SQLite). Declared here, with no import, so that `morca._internal.store` takes them
 from here (`from morca.store import RunInfo` keeps working) without
 depending on either database's library."""
 
@@ -19,7 +19,7 @@ struct RunInfo(Copyable, Movable):
 
 @fieldwise_init
 struct Usage(ImplicitlyCopyable, Movable):
-    """What an attempt's processes used (`morca.usage`): the peak resident
+    """What an attempt's processes used (`morca._internal.usage`): the peak resident
     bytes of its process tree, its CPU seconds, and the most cores it kept
     busy over a sample's interval. Each is -1 where it isn't known: a run
     on EC2 or Kubernetes, one no scheduler or worker started, or on macOS

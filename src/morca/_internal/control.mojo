@@ -14,7 +14,7 @@ image's). Small runs then start in a second, without an instance to boot.
 **Limits**, so a run can't starve Postgres, the scheduler or the UI:
 
 - **Memory.** Each tick the scheduler adds up the resident memory of each
-  control-placed run's process tree (`morca.sample.tree_rss`) and kills one
+  control-placed run's process tree (`morca._internal.sample.tree_rss`) and kills one
   over `MORCA_CONTROL_MEMORY_MB` (1024), failing its attempts with why. Its
   processes are also the first the kernel kills if memory runs out before
   that (`oom_score_adj` 1000, on Linux).
@@ -43,8 +43,8 @@ from std.os import getenv
 from json import loads
 
 from morca._internal.awsjson import aws_json
-from morca.json import quote
-from morca.proc import binary_seconds, capture
+from morca._internal.json import quote
+from morca._internal.proc import binary_seconds, capture
 from morca._internal.system import Now
 
 comptime CONTROL = "control"
@@ -214,7 +214,7 @@ def run_env(
 def secrets_env(secrets: List[Tuple[String, String]]) -> List[String]:
     """A run's secrets as environment entries, `secrets` being (NAME, value)
     pairs: each `NAME=value`, then `MORCA_SECRETS` naming them, which
-    `morca.logs.mask` masks the values by. Nothing for no secrets."""
+    `morca._internal.logs.mask` masks the values by. Nothing for no secrets."""
     var out = List[String]()
     var names = String()
     for s in secrets:

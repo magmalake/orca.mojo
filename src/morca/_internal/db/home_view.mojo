@@ -109,7 +109,7 @@ def recent_records(
 
 @fieldwise_init
 struct DayCount(Copyable, Movable):
-    """A UTC day's runs (`morca.chart.DayRuns`)."""
+    """A UTC day's runs (`morca._internal.chart.DayRuns`)."""
 
     var day: String
     var succeeded: Int

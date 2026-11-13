@@ -6,12 +6,12 @@ page each attempt's.
 import morca._internal.db.pipelines_view as pipelines_db
 import morca._internal.db.run_view as run_db
 
-from morca.sample import fixed1
-from morca.state import State
-from morca.store import Usage
+from morca._internal.sample import fixed1
+from morca._internal.state import State
+from morca._internal.store import Usage
 from morca._internal.ui.step_cards import AttemptCard, StepCard, duration_text
 from morca._internal.ui.terms import value_help
-from morca.usage import bytes_text, cpu_text
+from morca._internal.usage import bytes_text, cpu_text
 from morca._internal.views.code import CodeLinks
 from morca._internal.views.pipelines import StepDef
 

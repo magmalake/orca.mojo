@@ -1,4 +1,4 @@
-"""Hand-over's queries (`morca.handover`): whether a run is outdated, its
+"""Hand-over's queries (`morca._internal.handover`): whether a run is outdated, its
 code against its pipeline's and its scheduler instance's draining."""
 
 from postgres import Connection, Params

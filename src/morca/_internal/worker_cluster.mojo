@@ -13,7 +13,7 @@ from std.ffi import c_int, external_call
 
 from dista.socket import Listener
 
-from morca.proc import spawn
+from morca._internal.proc import spawn
 
 comptime MEMBER_CONNECT_SECONDS = "10"
 

@@ -9,7 +9,7 @@ against the ones it declared (`reads=` and `writes=` on its `Step`). `runtime` i
 pipeline with `tasks=`.
 
 `log` writes to stdout and, when `MORCA_LOGS` is set, appends to the attempt's
-log file as well (`morca.logs.attempt_log`).
+log file as well (`morca._internal.logs.attempt_log`).
 
 **Commits are fenced.** A process whose heartbeat went stale while it was
 alive (the database unreachable for a while, a paused VM) may have lost its
@@ -22,8 +22,8 @@ without committing.
 """
 
 
-from morca.logs import mask, utc_now
-from morca.store import Recorder, TableSnapshot
+from morca._internal.logs import mask, utc_now
+from morca._internal.store import Recorder, TableSnapshot
 from morca.tasks import TaskSet, task_list
 
 

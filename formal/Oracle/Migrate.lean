@@ -5,7 +5,7 @@ import Oracle.Words
 # `morca-oracle migrate`
 
 What the migration model says, in three kinds of line, which
-tests/test_formal_migrate.mojo checks against `morca.state`
+tests/test_formal_migrate.mojo checks against `morca._internal.state`
 (formal/difftest/migrate.cases is this output):
 
 - `F <version> <floor>`: `migration_floor`, for versions 0 to 50;
@@ -20,7 +20,7 @@ tests/test_formal_migrate.mojo checks against `morca.state`
   outcome is `o` (the binary goes on), `x` (it refuses) or `-` (for `n`);
   then the database's version and stated floor.
 
-`raisers` must be `_floor_raisers` of src/morca/migrations.mojo.
+`raisers` must be `_floor_raisers` of src/morca/_internal/migrations.mojo.
 -/
 namespace Morca.Oracle.Migrate
 
