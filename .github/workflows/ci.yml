@@ -216,15 +216,12 @@ jobs:
           pixi-version: v0.78.0
           environments: ${{ matrix.env }}
           manifest-path: morca/pixi.toml
-          # sai installs from the packages it keeps itself, with a pixi of
-          # the job's own (setup-pixi won't replace one in ~/.pixi/bin).
-          cache: ${{ runner.environment == 'github-hosted' }}
+          # No environment cache: installing it takes about 30 s on GitHub's
+          # runners, and its entry would be ~1.2 GB of the 10 GB GitHub keeps
+          # a repository, which the build caches below use better. A pixi of
+          # the job's own (setup-pixi won't replace one in sai's ~/.pixi/bin).
+          cache: false
           pixi-bin-path: ${{ runner.temp }}/pixi/bin/pixi
-          # Only main and the nightly write the environment cache. Every PR
-          # writing ~1 GB per environment kept the repository over GitHub's
-          # 10 GB cap, which evicted main's entries: the only ones every PR can
-          # read.
-          cache-write: ${{ github.event_name != 'pull_request' }}
 
       # Mojo's compile cache (share/max/cache in the environment) starts
       # empty on GitHub's runners. Restored, it makes builds of code built
@@ -692,9 +689,9 @@ jobs:
           pixi-version: v0.78.0
           environments: rust
           manifest-path: morca/pixi.toml
-          cache: ${{ runner.environment == 'github-hosted' }}
+          # No environment cache, as for the test legs.
+          cache: false
           pixi-bin-path: ${{ runner.temp }}/pixi/bin/pixi
-          cache-write: ${{ github.event_name != 'pull_request' }}
       # The build caches, as the test legs keep them, with cargo's target
       # directory (build/cargo, the crates the tests compile).
       - if: runner.environment == 'github-hosted'
