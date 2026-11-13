@@ -2,7 +2,7 @@
 error, and its facts, which refresh from `/facts` while it runs.
 """
 
-import morca.db.run_view as run_db
+import morca._internal.db.run_view as run_db
 
 from morca.html import Html
 from morca.json import quote

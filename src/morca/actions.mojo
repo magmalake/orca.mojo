@@ -18,9 +18,9 @@ still going) rather than an error.
 
 from std.os import getenv
 
-import morca.db.actions as actions_db
-import morca.db.starting as starting_db
-from morca.db.live import live_runs, stale_seconds, stalled_sql
+import morca._internal.db.actions as actions_db
+import morca._internal.db.starting as starting_db
+from morca._internal.db.live import live_runs, stale_seconds, stalled_sql
 from morca.name import parse_names
 from morca.pause import set_paused
 from morca.queueing import (

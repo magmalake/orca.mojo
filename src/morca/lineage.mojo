@@ -24,8 +24,8 @@ datasets take part: a table outside the warehouse has no name to follow.
 The same edges are in the snapshots' own summaries, as `orca.reads`.
 """
 
-import morca.db.lineage as lineage_db
-from morca.db.lineage import (
+import morca._internal.db.lineage as lineage_db
+from morca._internal.db.lineage import (
     DEPTH,
     Commit,
     Dataset,

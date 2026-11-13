@@ -3,8 +3,8 @@ host, with its cgroup's memory against its limit (`morca.cgroup`), which
 the scheduler records every 5 seconds, and its grant (`morca.resources`).
 """
 
-import morca.db.machines_view as machines_db
-from morca.db.machines_view import HostRun
+import morca._internal.db.machines_view as machines_db
+from morca._internal.db.machines_view import HostRun
 
 from morca.html import Html
 from morca.json import quote

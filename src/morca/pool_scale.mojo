@@ -47,8 +47,8 @@ from std.os import getenv
 from std.time import perf_counter_ns
 
 from json import loads
-import morca.db.pools as pools_db
-from morca.db.pools import LiveMachine
+import morca._internal.db.pools as pools_db
+from morca._internal.db.pools import LiveMachine
 
 from morca.machines import MachineSpec, Provider
 from morca.pool_boot import CREATED_BY, WORKER_IMAGE, boot_script

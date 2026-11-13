@@ -3,8 +3,8 @@ so one backfill doesn't fill the list, and a run with none as its own row;
 what needs attention first.
 """
 
-import morca.db.home_view as home_db
-from morca.db.home_view import FAILED_LATELY
+import morca._internal.db.home_view as home_db
+from morca._internal.db.home_view import FAILED_LATELY
 
 from morca.json import quote
 from morca.state import State

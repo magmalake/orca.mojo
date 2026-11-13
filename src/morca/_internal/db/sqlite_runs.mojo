@@ -1,6 +1,6 @@
 """The SQLite run store's queries (`morca.sqlite_store`): the dialect of
-`morca.db.runs` and `morca.db.steps` for a file, function for function,
-over the same rows (`morca.db.run_rows`).
+`morca._internal.db.runs` and `morca._internal.db.steps` for a file, function for function,
+over the same rows (`morca._internal.db.run_rows`).
 
 **Why a module of its own.** The two dialects share no statement text: the
 tables have no `orca.` schema here, parameters are `?1`, not `$1`, and the
@@ -31,7 +31,14 @@ is a single guarded `UPDATE`, as there.
 
 from sqlite import Database, Statement
 
-from morca.db.run_rows import Fence, Owned, RunInfo, StepInfo, Succeeded, Usage
+from morca._internal.db.run_rows import (
+    Fence,
+    Owned,
+    RunInfo,
+    StepInfo,
+    Succeeded,
+    Usage,
+)
 
 comptime NOW = "((julianday('now') - 2440587.5) * 86400.0)"
 """Unix seconds, to the millisecond, in SQL."""

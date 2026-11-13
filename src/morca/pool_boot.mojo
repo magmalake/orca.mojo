@@ -20,7 +20,7 @@ set on the scheduler, the script runs that command as the worker instead
 
 from std.os import getenv
 
-import morca.db.pools as pools_db
+import morca._internal.db.pools as pools_db
 
 from morca.json import quote
 from morca.registry import ImageRef, Registry

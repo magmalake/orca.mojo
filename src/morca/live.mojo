@@ -1,7 +1,7 @@
-"""Which runs are live: moved to `morca.db.live` (#362), which holds the
+"""Which runs are live: moved to `morca._internal.db.live` (#362), which holds the
 SQL; these names stay importable from here."""
 
-from morca.db.live import (
+from morca._internal.db.live import (
     WAITING_BEHIND,
     behind_sql,
     dead_sql,

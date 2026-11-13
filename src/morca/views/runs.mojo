@@ -4,14 +4,14 @@ and what it used, its steps (`StepRow`), the tables they read and wrote
 attempts (`AttemptRow`), and a runs list's page (`RunsQuery`, `RunsPage`:
 keyset by run id, so pages stay put as runs arrive).
 
-The queries are `morca.db.runs_view`'s (the lists) and
-`morca.db.run_view`'s (a run's page): a list's URL is parsed here into its
+The queries are `morca._internal.db.runs_view`'s (the lists) and
+`morca._internal.db.run_view`'s (a run's page): a list's URL is parsed here into its
 `RunsQuery`, whose filters go to the database as a `RunsFilter`.
 """
 
-import morca.db.run_view as run_db
-import morca.db.runs_view as runs_db
-from morca.db.run_view import (
+import morca._internal.db.run_view as run_db
+import morca._internal.db.runs_view as runs_db
+from morca._internal.db.run_view import (
     AttemptRecord,
     AuditRow,
     InstanceRow,
@@ -19,7 +19,7 @@ from morca.db.run_view import (
     Touch,
     VersionRow,
 )
-from morca.db.runs_view import RunRecord, RunsFilter, utc_sql
+from morca._internal.db.runs_view import RunRecord, RunsFilter, utc_sql
 
 from morca.views.cluster import ClusterRow, cluster_rows
 from morca.handover import run_outdated
@@ -138,7 +138,7 @@ struct RunRow(Copyable, Movable):
     var ended: String
     var cancel_requested: Bool
     var stalled: Bool
-    """`running` with no live process (`morca.db.live.stalled_sql`)."""
+    """`running` with no live process (`morca._internal.db.live.stalled_sql`)."""
     var error: String
     """Why the run ended without its steps saying so (`runs.error`)."""
     var waiting_until: String
@@ -242,7 +242,7 @@ def run_rows(
     before: Int = 0,
     after: Int = 0,
 ) raises -> List[RunRow]:
-    """The runs `q`'s filters let through (`morca.db.runs_view.runs_where`),
+    """The runs `q`'s filters let through (`morca._internal.db.runs_view.runs_where`),
     newest first, with ids under `before` if it's over 0; with `after` over
     0, the `limit` runs just above it, oldest first."""
     var out = List[RunRow]()
@@ -515,7 +515,7 @@ struct RunsQuery(Copyable, Movable):
 
     def filter(self) -> RunsFilter:
         """Its filters as the database binds them
-        (`morca.db.runs_view.runs_where`)."""
+        (`morca._internal.db.runs_view.runs_where`)."""
         return RunsFilter(
             self.pipeline,
             self.status,

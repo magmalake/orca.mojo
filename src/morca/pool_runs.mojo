@@ -4,12 +4,12 @@ instances, and fill runs queued for the pool.
 """
 
 from postgres import Transaction
-from morca.db.batches import mark_batch
+from morca._internal.db.batches import mark_batch
 from morca.fill import fill_status
-import morca.db.audit as audit_db
-import morca.db.pool_runs as pool_runs_db
-import morca.db.starting as starting_db
-from morca.db.live import hold_behind
+import morca._internal.db.audit as audit_db
+import morca._internal.db.pool_runs as pool_runs_db
+import morca._internal.db.starting as starting_db
+from morca._internal.db.live import hold_behind
 from morca.scheduler import (
     Scheduler,
     _WORKER_OWNER,

@@ -27,8 +27,8 @@ tokens, for the `morca` command on another machine, are `morca.tokens`.
 from std.os import getenv
 
 from flare.crypto.random import random_bytes
-import morca.db.audit as audit_db
-import morca.db.auth as auth_db
+import morca._internal.db.audit as audit_db
+import morca._internal.db.auth as auth_db
 
 from morca.state import State
 

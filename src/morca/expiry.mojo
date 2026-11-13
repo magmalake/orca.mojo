@@ -28,7 +28,7 @@ from std.os import getenv
 from std.os.path import exists
 from std.sys import argv
 
-import morca.db.expiry as expiry_db
+import morca._internal.db.expiry as expiry_db
 
 from morca.state import State
 

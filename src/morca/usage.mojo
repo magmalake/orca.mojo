@@ -38,8 +38,8 @@ from std.ffi import c_int, external_call
 from std.time import perf_counter_ns
 
 from json import Value
-import morca.db.usage as usage_db
-from morca.db.usage import AttemptSpan
+import morca._internal.db.usage as usage_db
+from morca._internal.db.usage import AttemptSpan
 
 from morca.sample import fixed1
 from morca.state import State

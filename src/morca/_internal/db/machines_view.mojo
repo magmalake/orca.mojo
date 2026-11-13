@@ -6,7 +6,7 @@ scales (`orca.pools`), and the runs on the control host.
 
 from postgres import Connection, Params
 
-from morca.db.live import dead_sql, stale_limit, start_grace
+from morca._internal.db.live import dead_sql, stale_limit, start_grace
 
 
 comptime _TS = '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\''

@@ -48,8 +48,8 @@ from std.memory.alloc import unsafe_alloc
 from postgres import Connection
 from threads import AtomicCounter, Mutex
 
-import morca.db.handover as handover_db
-from morca.db.handover import differs_sql, label_sql, outdated_sql
+import morca._internal.db.handover as handover_db
+from morca._internal.db.handover import differs_sql, label_sql, outdated_sql
 from morca.source import source_commit, source_dirty
 
 

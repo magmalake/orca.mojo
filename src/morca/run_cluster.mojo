@@ -26,8 +26,8 @@ TLS, and is never in a log or a page.
 """
 
 from json import Value
-import morca.db.run_cluster as cluster_db
-from morca.db.run_cluster import MEMBER_GRANTS_SQL, MEMBER_MB_SQL
+import morca._internal.db.run_cluster as cluster_db
+from morca._internal.db.run_cluster import MEMBER_GRANTS_SQL, MEMBER_MB_SQL
 
 from morca.http_store import Body
 from morca.registered import registered, run_request

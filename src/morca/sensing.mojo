@@ -6,10 +6,10 @@ from std.time import perf_counter_ns
 from postgres import Transaction
 from morca.civil import Civil
 from morca.cron import CronExpr
-from morca.db.batches import mark_batch
-from morca.db.live import live_runs
-import morca.db.sensing as sensing_db
-import morca.db.starting as starting_db
+from morca._internal.db.batches import mark_batch
+from morca._internal.db.live import live_runs
+import morca._internal.db.sensing as sensing_db
+import morca._internal.db.starting as starting_db
 from morca.schedule import Schedule
 from morca.sensors import (
     join_keys,

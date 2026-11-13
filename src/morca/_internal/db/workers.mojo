@@ -5,8 +5,8 @@ died, with the stale limit as `$2`."""
 
 from postgres import Connection, Params, Transaction
 
-from morca.db.live import behind_sql
-from morca.db.run_cluster import MEMBER_GRANTS_SQL, MEMBER_MB_SQL
+from morca._internal.db.live import behind_sql
+from morca._internal.db.run_cluster import MEMBER_GRANTS_SQL, MEMBER_MB_SQL
 
 
 # ── tokens ───────────────────────────────────────────────────────────────────

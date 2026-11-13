@@ -104,7 +104,7 @@ def migrations() -> List[List[String]]:
         # A random token per run, as Postgres's migration 47 keeps it
         # (#292): a file that was deleted and made again gives out the same
         # run numbers. SQLite adds no column with a default that isn't
-        # constant, so `morca.db.sqlite_runs.create` sets it (`UUID7`), and
+        # constant, so `morca._internal.db.sqlite_runs.create` sets it (`UUID7`), and
         # older runs have none.
         [
             "ALTER TABLE runs ADD COLUMN token TEXT",

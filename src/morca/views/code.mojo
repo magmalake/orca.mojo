@@ -4,7 +4,7 @@ step a page shows.
 """
 
 from json import loads
-import morca.db.code_view as code_db
+import morca._internal.db.code_view as code_db
 
 from morca.locate import function_key
 from morca.source import is_hex, web_url

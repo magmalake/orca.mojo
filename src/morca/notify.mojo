@@ -44,7 +44,7 @@ aren't sent, so they have no row. Kept 90 days.
 from std.os import getenv
 
 from objectstore.http import Header, HttpClient
-import morca.db.notify as notify_db
+import morca._internal.db.notify as notify_db
 
 from morca.control import fetch_secret
 from morca.html import Html

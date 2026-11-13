@@ -4,11 +4,11 @@ holds, and what a rerun or an append refuses.
 
 from std.os.path import exists
 from postgres import Transaction
-from morca.db.batches import mark_batch
-import morca.db.queueing as queueing_db
-import morca.db.starting as starting_db
-from morca.db.live import live_runs
-from morca.db.queueing import APPENDING_SQL, DONE_SQL
+from morca._internal.db.batches import mark_batch
+import morca._internal.db.queueing as queueing_db
+import morca._internal.db.starting as starting_db
+from morca._internal.db.live import live_runs
+from morca._internal.db.queueing import APPENDING_SQL, DONE_SQL
 from morca.timekeys import parse_time_keys
 from morca.name import (
     Name,

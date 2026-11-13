@@ -5,7 +5,7 @@ the pipelines' timeline (`/api/gantt`).
 
 from postgres import Connection, Params
 
-from morca.db.runs_view import utc_sql
+from morca._internal.db.runs_view import utc_sql
 
 
 comptime FAILED_LATELY = "1 day"

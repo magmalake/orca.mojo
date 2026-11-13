@@ -5,7 +5,7 @@ the fragment it refreshes from; and `/keys/<key>`, one key of a keyed
 pipeline in every run it was in.
 """
 
-import morca.db.pipelines_view as pipelines_db
+import morca._internal.db.pipelines_view as pipelines_db
 
 from morca.civil import now
 from morca.config_show import config_html

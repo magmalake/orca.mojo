@@ -3,8 +3,8 @@
 """
 
 from std.os.path import exists
-import morca.db.pipelines as pipelines_db
-import morca.db.registering as registering_db
+import morca._internal.db.pipelines as pipelines_db
+import morca._internal.db.registering as registering_db
 from morca.config import (
     ProjectConfig,
     RegisterFlags,

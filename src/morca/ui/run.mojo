@@ -5,7 +5,7 @@ files: `/live`, `/steps`, `/metrics`, `timeline.json`, `driver.log` and
 each machine's log.
 """
 
-import morca.db.run_view as run_db
+import morca._internal.db.run_view as run_db
 
 from morca.ui.cluster import cluster_html
 from morca.views.cluster import cluster_rows

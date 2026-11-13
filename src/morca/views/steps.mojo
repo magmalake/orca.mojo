@@ -3,8 +3,8 @@ with what its attempts in the pipeline's latest runs did, and on a run's
 page each attempt's.
 """
 
-import morca.db.pipelines_view as pipelines_db
-import morca.db.run_view as run_db
+import morca._internal.db.pipelines_view as pipelines_db
+import morca._internal.db.run_view as run_db
 
 from morca.sample import fixed1
 from morca.state import State

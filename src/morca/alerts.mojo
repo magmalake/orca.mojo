@@ -16,7 +16,7 @@ never a secret.
 
 from std.os import getenv
 
-import morca.db.notify as notify_db
+import morca._internal.db.notify as notify_db
 
 from morca.fill import FillStatus
 from morca.notify import (

@@ -23,8 +23,8 @@ from std.os import getenv
 
 from flare.crypto.random import random_bytes
 from objectstore.crypto import sha256_hex
-import morca.db.auth as auth_db
-from morca.db.auth import TokenRow
+import morca._internal.db.auth as auth_db
+from morca._internal.db.auth import TokenRow
 
 from morca.state import State
 

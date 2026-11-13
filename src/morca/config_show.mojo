@@ -8,8 +8,8 @@ from json import (
     Value,
     loads,
 )
-import morca.db.config_show as config_db
-from morca.db.config_show import Settings
+import morca._internal.db.config_show as config_db
+from morca._internal.db.config_show import Settings
 from morca.fill import fill_max_runs_text
 from morca.fill import SINCE_REGISTRATION
 from morca.html import Html

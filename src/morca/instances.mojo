@@ -20,10 +20,10 @@ their heartbeats are stale too, queued again (`Scheduler._requeue_orphans`).
 from std.os import getenv
 from std.time import sleep
 
-import morca.db.schedulers as schedulers_db
-from morca.db.schedulers import live_cond
+import morca._internal.db.schedulers as schedulers_db
+from morca._internal.db.schedulers import live_cond
 
-from morca.db.live import stale_limit
+from morca._internal.db.live import stale_limit
 from morca.migrations import known_migrations, migration_floor
 from morca.state import State
 from morca.store import process_owner

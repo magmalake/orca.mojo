@@ -3,8 +3,8 @@ and cancelled from the UI and the command line."""
 
 from postgres import Connection, Params, Transaction
 
-from morca.db.live import stalled_sql
-from morca.db.scheduler import RETRIED
+from morca._internal.db.live import stalled_sql
+from morca._internal.db.scheduler import RETRIED
 
 
 def _cancel_set(kill_seconds: StaticString) -> String:

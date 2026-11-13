@@ -5,8 +5,8 @@ died, with the stale limit as `$2`."""
 
 from postgres import Params, Transaction
 
-from morca.db.live import dead_sql, stale_sql
-from morca.db.scheduler import RETRIED
+from morca._internal.db.live import dead_sql, stale_sql
+from morca._internal.db.scheduler import RETRIED
 
 
 def hold_fills(mut tx: Transaction, pipeline: String, why: String) raises:

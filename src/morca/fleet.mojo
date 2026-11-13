@@ -33,11 +33,11 @@ such as `€8.49/month`; "Fixed" when unset), with no region.
 from std.os import getenv
 
 from json import Value, loads
-import morca.db.fleet as fleet_db
+import morca._internal.db.fleet as fleet_db
 
 from morca.html import Html, escape, url_encode
 from morca.json import quote
-from morca.db.live import stale_limit, start_grace
+from morca._internal.db.live import stale_limit, start_grace
 from morca.logs import read_location
 from morca.metrics import bytes_text
 from morca.sample import metrics_location

@@ -9,8 +9,8 @@ writes them to Postgres, so a run can be resumed by another process.
 `RunStore` is a `Store` that also keeps runs: the rest of what a pipeline
 binary (`morca.cli`) asks of persistence, from registering the pipeline to
 ending its run, so the binary depends on this trait and nothing else.
-Both backends' SQL is in `morca.db` (`morca.db.runs`, `morca.db.steps`,
-`morca.db.sqlite_runs`), as is the scheduler's and the UI's.
+Both backends' SQL is in `morca._internal.db` (`morca._internal.db.runs`, `morca._internal.db.steps`,
+`morca._internal.db.sqlite_runs`), as is the scheduler's and the UI's.
 """
 
 from std.ffi import external_call
@@ -19,7 +19,7 @@ from std.time import perf_counter_ns, sleep
 
 from dista.codec import decode
 
-from morca.db.run_rows import RunInfo, StepInfo, Usage
+from morca._internal.db.run_rows import RunInfo, StepInfo, Usage
 
 comptime RUNNING = "running"
 comptime CANCELLED = "cancelled"

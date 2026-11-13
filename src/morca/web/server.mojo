@@ -36,7 +36,7 @@ connections, `/healthz` 503, the requests in flight answered, then exit 0 within
 
 from flare.http import Handler, HttpServer, Request, Response, ServerConfig
 from flare.net import SocketAddr
-import morca.db.health as health_db
+import morca._internal.db.health as health_db
 from threads import AtomicFlag
 
 from morca.api import worker as worker_api

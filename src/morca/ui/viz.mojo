@@ -35,7 +35,7 @@ GET /api/gantt?window=24h      # 1h, 6h, 24h or 7d
 
 from std.os import getenv
 
-import morca.db.home_view as home_db
+import morca._internal.db.home_view as home_db
 
 from morca.html import Html, url_encode
 from morca.json import quote

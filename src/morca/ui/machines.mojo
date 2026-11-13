@@ -3,7 +3,7 @@ metrics' peaks and warnings (`morca.metrics`), and the steps that ran on
 it.
 """
 
-import morca.db.run_view as run_db
+import morca._internal.db.run_view as run_db
 
 from morca.control import CONTROL
 from morca.html import Html

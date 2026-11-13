@@ -33,8 +33,8 @@ from std.os.path import exists
 from std.time import perf_counter_ns
 
 from json import Value, loads
-import morca.db.system as system_db
-from morca.db.system import Container, Minute
+import morca._internal.db.system as system_db
+from morca._internal.db.system import Container, Minute
 
 from morca.civil import Civil
 from morca.fleet import Series, Summary, _chart, _fixed

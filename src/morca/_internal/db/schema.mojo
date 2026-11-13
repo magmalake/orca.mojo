@@ -1,7 +1,7 @@
 """`State.migrate`'s bookkeeping on Postgres: the advisory lock it takes,
 `orca.schema_version` and the floor each version leaves. The migrations'
 statements themselves are `morca.migrations`'; the SQLite file's are
-`morca.db.sqlite_runs`'."""
+`morca._internal.db.sqlite_runs`'."""
 
 from postgres import Params, Transaction
 

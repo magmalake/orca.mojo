@@ -4,7 +4,7 @@ queue, and a pipeline's `sense_error`."""
 
 from postgres import Connection, Params, Transaction
 
-from morca.db.live import is_live_sql
+from morca._internal.db.live import is_live_sql
 
 
 @fieldwise_init

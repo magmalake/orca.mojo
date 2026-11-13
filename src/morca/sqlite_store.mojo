@@ -11,7 +11,7 @@ commands stay on Postgres (`morca.state.State` refuses a SQLite URL).
 The tables are Postgres's, under the same names without the `orca.` schema,
 holding what a pipeline binary writes: steps' inputs and outputs are hex
 text, times are Unix seconds (`julianday` based, to the millisecond). The
-schema is `morca.db.sqlite_schema`'s, the queries `morca.db.sqlite_runs`'.
+schema is `morca._internal.db.sqlite_schema`'s, the queries `morca._internal.db.sqlite_runs`'.
 
 **Concurrency.** The file is in WAL mode, so readers (`status`, `sqlite3`)
 don't block the writer and the writer doesn't block them. There is one
@@ -36,9 +36,9 @@ from std.os import getenv
 
 from sqlite import Database
 
-import morca.db.sqlite_runs as sql
-import morca.db.sqlite_schema as schema
-from morca.db.sqlite_runs import to_hex
+import morca._internal.db.sqlite_runs as sql
+import morca._internal.db.sqlite_schema as schema
+from morca._internal.db.sqlite_runs import to_hex
 from morca.heartbeat import Beater, Heartbeat
 from morca.store import (
     DEFERRED,

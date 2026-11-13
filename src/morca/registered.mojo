@@ -3,7 +3,7 @@
 """
 
 from std.os import getenv
-import morca.db.registered as registered_db
+import morca._internal.db.registered as registered_db
 from morca.civil import Civil
 from morca.control import (
     CONTROL,

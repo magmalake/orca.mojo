@@ -1,5 +1,5 @@
 """The rows the run stores' queries return, the same for both dialects
-(`morca.db.runs` and `morca.db.steps` on Postgres, `morca.db.sqlite_runs`
+(`morca._internal.db.runs` and `morca._internal.db.steps` on Postgres, `morca._internal.db.sqlite_runs`
 on SQLite). Declared here, with no import, so that `morca.store` takes them
 from here (`from morca.store import RunInfo` keeps working) without
 depending on either database's library."""

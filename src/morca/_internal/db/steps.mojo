@@ -4,12 +4,12 @@ and committed (`orca.reads`, `orca.commits`).
 
 An attempt's start and end, a skip, and an interrupted run's clean-up are
 each one transaction, the caller's (`mut tx: Transaction`), which checks
-first that its process still owns the run (`morca.db.runs.still_owner`).
-The SQLite file's queries are `morca.db.sqlite_runs`."""
+first that its process still owns the run (`morca._internal.db.runs.still_owner`).
+The SQLite file's queries are `morca._internal.db.sqlite_runs`."""
 
 from postgres import Connection, Params, Transaction
 
-from morca.db.run_rows import StepInfo, Succeeded, Usage
+from morca._internal.db.run_rows import StepInfo, Succeeded, Usage
 
 
 def fail_running_attempts(

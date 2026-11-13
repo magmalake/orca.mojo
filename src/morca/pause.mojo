@@ -1,7 +1,7 @@
 """Pausing a pipeline: what `morca pause`, the UI's Pause button and the
 watchdog (`morca.watchdog`) all do."""
 
-import morca.db.pipelines as pipelines_db
+import morca._internal.db.pipelines as pipelines_db
 
 from morca.state import State
 

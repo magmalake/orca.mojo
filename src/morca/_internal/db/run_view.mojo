@@ -6,7 +6,7 @@ its cards show of its row of `orca.runs`.
 
 from postgres import Connection, Params
 
-from morca.db.runs_view import utc_sql
+from morca._internal.db.runs_view import utc_sql
 
 comptime _TS = '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\''
 

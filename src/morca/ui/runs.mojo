@@ -6,7 +6,7 @@ runs picked to cancel, retry or backfill again in one go
 it refreshes from, for `/runs`, a pipeline's Runs tab and the home page.
 """
 
-import morca.db.runs_view as runs_db
+import morca._internal.db.runs_view as runs_db
 from morca.admission import held_warning, row_json, scheduler_pressure
 from morca.api.runs import json_runs, json_runs_page, runs_filters_json
 from morca.html import Html, query_param, url_encode

@@ -39,14 +39,14 @@ continues. A rebuild's commits don't start sensors in pipelines the rebuild
 runs itself.
 """
 
-import morca.db.rebuilds as rebuilds_db
-import morca.db.starting as starting_db
-from morca.db.rebuilds import Planned, Rebuild
+import morca._internal.db.rebuilds as rebuilds_db
+import morca._internal.db.starting as starting_db
+from morca._internal.db.rebuilds import Planned, Rebuild
 
 from morca.day import Day
 from morca.hour import Hour
 from morca.lineage import flows
-from morca.db.live import live_runs
+from morca._internal.db.live import live_runs
 from morca.month import Month, days_in
 from morca.name import sort_texts
 from morca.state import State

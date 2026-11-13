@@ -27,9 +27,9 @@ from std.sys import stderr
 
 from postgres import Connection, Transaction
 
-import morca.db.runs as runs_db
-import morca.db.schema as schema_db
-import morca.db.steps as steps_db
+import morca._internal.db.runs as runs_db
+import morca._internal.db.schema as schema_db
+import morca._internal.db.steps as steps_db
 from morca.heartbeat import Beater, Heartbeat
 from morca.migrations import (
     _migrations,
@@ -37,9 +37,9 @@ from morca.migrations import (
     known_migrations,
     schema_ahead,
 )
-from morca.db.live import stale_limit
-from morca.db.pipelines import set_version
-from morca.db.schedulers import live_older
+from morca._internal.db.live import stale_limit
+from morca._internal.db.pipelines import set_version
+from morca._internal.db.schedulers import live_older
 from morca.handover import run_outdated, set_outdated
 from morca.store import (
     CANCELLED,
@@ -294,7 +294,7 @@ def _stop(
 ) raises -> String:
     """Ends the run as the watchdog finds it should end, and returns why,
     or empty if it shouldn't: a cancel whose time has come, or an attempt
-    past its step's timeout (`morca.db.runs.stop_reason`)."""
+    past its step's timeout (`morca._internal.db.runs.stop_reason`)."""
     var got = runs_db.stop_reason(conn, run, owner, timeouts)
     if not got:
         return ""

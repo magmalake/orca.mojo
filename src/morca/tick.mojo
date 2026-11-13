@@ -4,7 +4,7 @@ second): what each registered pipeline is due, started.
 
 from std.time import perf_counter_ns
 from std.os import remove
-import morca.db.scheduler as scheduler_db
+import morca._internal.db.scheduler as scheduler_db
 from morca.alerts import failed_runs
 from morca.notify import configured as notify_configured
 from morca.logs import publish

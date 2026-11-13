@@ -4,7 +4,7 @@ cgroups gave them."""
 
 from postgres import Connection, Params, Transaction
 
-from morca.db.live import dead_sql, stale_sql
+from morca._internal.db.live import dead_sql, stale_sql
 
 
 comptime RETRIED = "trigger IN ('schedule', 'backfill', 'sensor', 'fill')"

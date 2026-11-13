@@ -6,7 +6,7 @@ the Timeline tab (`morca.ui.viz`);
 from.
 """
 
-import morca.db.home_view as home_db
+import morca._internal.db.home_view as home_db
 
 from morca.admission import held_warning, row_json, scheduler_pressure
 from morca.api.pipelines import json_pipeline

@@ -43,7 +43,7 @@ from std.os import getenv
 
 from json import Value
 from k8s import JOBS, PODS, SERVICES, Client, Config
-import morca.db.kube as kube_db
+import morca._internal.db.kube as kube_db
 
 from morca.crash import crash_summary
 from morca.json import quote

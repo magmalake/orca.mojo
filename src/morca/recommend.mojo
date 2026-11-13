@@ -41,8 +41,8 @@ records where its request came from (`orca.runs.request_source`: `declared`,
 
 from std.math import ceil
 
-import morca.db.recommend as recommend_db
-from morca.db.recommend import RunPeaks
+import morca._internal.db.recommend as recommend_db
+from morca._internal.db.recommend import RunPeaks
 
 from morca.json import quote
 from morca.resources import Request, gb_hundredths

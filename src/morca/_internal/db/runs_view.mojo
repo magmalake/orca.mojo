@@ -10,7 +10,7 @@ reaches the SQL but as a bound parameter.
 
 from postgres import Connection, Params, Row
 
-from morca.db.live import stalled_sql
+from morca._internal.db.live import stalled_sql
 
 
 def utc_sql(col: StaticString) -> String:

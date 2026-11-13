@@ -23,9 +23,9 @@ from morca.fill import (
     fill_status,
 )
 from morca.system import system_now
-from morca.db.batches import mark_batch
-import morca.db.starting as starting_db
-from morca.db.live import hold_behind
+from morca._internal.db.batches import mark_batch
+import morca._internal.db.starting as starting_db
+from morca._internal.db.live import hold_behind
 from morca.kube import (
     RunSpec,
     cpu_millis,

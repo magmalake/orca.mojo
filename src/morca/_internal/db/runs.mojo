@@ -2,13 +2,13 @@
 binary's registration and versions, its runs' rows in `orca.runs`, their
 claims, heartbeats and ends, and the watchdog's look at a running run.
 
-The SQLite file's are `morca.db.sqlite_runs`, a module of their own: the two
+The SQLite file's are `morca._internal.db.sqlite_runs`, a module of their own: the two
 dialects share no statement text (module doc there). Steps and attempts are
-`morca.db.steps`."""
+`morca._internal.db.steps`."""
 
 from postgres import Connection, Params, Transaction
 
-from morca.db.run_rows import Fence, Owned, RunInfo
+from morca._internal.db.run_rows import Fence, Owned, RunInfo
 from morca.migrations import data_version_sql
 
 
@@ -22,7 +22,7 @@ def register(
     describe: String,
 ) raises:
     """Records a pipeline, or updates it to this binary's DAG; its version
-    is `morca.db.pipelines.set_version`'s."""
+    is `morca._internal.db.pipelines.set_version`'s."""
     _ = conn.execute(
         (
             "INSERT INTO orca.pipelines (name, registry_hash, describe)"

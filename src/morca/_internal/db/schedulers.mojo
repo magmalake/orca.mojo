@@ -4,7 +4,7 @@ on, and the lead its advisory lock is."""
 
 from postgres import Connection, Params, Transaction
 
-from morca.db.live import stale_limit
+from morca._internal.db.live import stale_limit
 
 
 def live_older(

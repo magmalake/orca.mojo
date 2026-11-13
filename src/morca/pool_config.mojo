@@ -21,7 +21,7 @@ last type has no `wait`: morca keeps trying it. A machine that's running is
 never replaced by a type higher in the list.
 """
 
-import morca.db.pools as pools_db
+import morca._internal.db.pools as pools_db
 
 from morca.control import pool_problem
 from morca.json import quote

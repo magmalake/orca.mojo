@@ -4,7 +4,7 @@ rebuild of it runs; `/datasets/<name>/snapshots/<id>`, a snapshot's
 lineage (`morca.lineage`); `/rebuilds/<id>`, a rebuild's runs by level.
 """
 
-import morca.db.datasets_view as datasets_db
+import morca._internal.db.datasets_view as datasets_db
 
 from morca.api.datasets import json_made, json_rebuild
 from morca.api.pipelines import json_strings

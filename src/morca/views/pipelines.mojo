@@ -6,8 +6,8 @@ Resources card's summary of what its runs used (`UsageSummary`).
 
 from std.os import getenv
 
-import morca.db.pipelines_view as pipelines_db
-from morca.db.pipelines_view import (
+import morca._internal.db.pipelines_view as pipelines_db
+from morca._internal.db.pipelines_view import (
     PipelineRow,
     StepDef,
     UsageSummary,
@@ -24,7 +24,7 @@ from morca.cron import CronExpr
 from morca.fill import FillStatus, fill_status
 from morca.follow import Follow, follow
 from morca.lineage import SnapshotRef
-from morca.db.live import live_runs
+from morca._internal.db.live import live_runs
 from morca.recommend import Recommendation
 from morca.schedule import Schedule
 from morca.queueing import (

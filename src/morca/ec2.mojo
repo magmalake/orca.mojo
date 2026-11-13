@@ -126,8 +126,8 @@ from dista.socket import wall_ns
 from objectstore.crypto import sha256_hex
 
 from morca.awsec2 import Ec2, Instance
-import morca.db.ec2 as ec2_db
-from morca.db.ec2 import SpecRow
+import morca._internal.db.ec2 as ec2_db
+from morca._internal.db.ec2 import SpecRow
 from morca.config import (
     env_json,
     parse_env,

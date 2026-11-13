@@ -3,7 +3,7 @@
 
 from postgres import Connection, Params
 
-from morca.db.scheduler import RETRIED
+from morca._internal.db.scheduler import RETRIED
 
 
 @fieldwise_init

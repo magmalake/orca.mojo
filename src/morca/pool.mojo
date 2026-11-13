@@ -30,7 +30,7 @@ a database that can't be reached for a while, retrying every second.
 from std.os import getenv
 from std.time import perf_counter_ns, sleep
 
-import morca.db.ec2 as ec2_db
+import morca._internal.db.ec2 as ec2_db
 
 from morca.state import State
 

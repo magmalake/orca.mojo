@@ -200,8 +200,8 @@ from morca.instances import (
     step_down,
     try_lead,
 )
-import morca.db.scheduler as scheduler_db
-from morca.db.live import stale_limit, start_grace
+import morca._internal.db.scheduler as scheduler_db
+from morca._internal.db.live import stale_limit, start_grace
 from morca.logs import read_location
 from morca.proc import (
     Capture,
@@ -272,7 +272,7 @@ comptime _WORKER_OWNER = "worker"
 """A run's owner once a worker claimed it and before its process did
 (`orca.workers.WORKER_OWNER`, which imports this module)."""
 comptime _RETRIED = scheduler_db.RETRIED
-"""The runs the scheduler retries, as SQL (`morca.db.scheduler.RETRIED`)."""
+"""The runs the scheduler retries, as SQL (`morca._internal.db.scheduler.RETRIED`)."""
 comptime RETRIED_SQL = _RETRIED
 """`_RETRIED`, for `morca.actions`."""
 

@@ -7,7 +7,7 @@ steps, and what its runs used (`UsageSummary`).
 
 from postgres import Connection, Params
 
-from morca.db.runs_view import utc_sql
+from morca._internal.db.runs_view import utc_sql
 
 
 def _int_or_zero(s: String) -> Int:

@@ -11,8 +11,8 @@ the runs list. The newest page refreshes from `/ops/alerts/live` every
 30 s. `/api/alerts` is the same as JSON.
 """
 
-import morca.db.alerts_view as alerts_db
-from morca.db.alerts_view import AlertRow
+import morca._internal.db.alerts_view as alerts_db
+from morca._internal.db.alerts_view import AlertRow
 
 from morca.html import Html, query_param, url_encode
 from morca.json import quote

@@ -5,7 +5,7 @@ to (`orca.pools.status`), and as JSON for `/api/pools`.
 """
 
 from json import loads
-import morca.db.machines_view as machines_db
+import morca._internal.db.machines_view as machines_db
 
 from morca.html import Html
 from morca.json import quote

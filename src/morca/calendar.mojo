@@ -21,8 +21,8 @@ Hourly, daily and monthly keys are zero-padded, so they compare as text.
 
 from std.collections import Dict
 
-import morca.db.calendar as calendar_db
-from morca.db.live import live_runs
+import morca._internal.db.calendar as calendar_db
+from morca._internal.db.live import live_runs
 
 from morca.civil import Civil, now
 from morca.day import Day

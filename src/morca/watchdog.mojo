@@ -39,9 +39,9 @@ Evaluation is pure (`eval_*`, over plain rows) apart from the gathering
 from std.os import getenv
 
 from json import Value, loads
-import morca.db.pipelines as pipelines_db
-import morca.db.watchdog as watchdog_db
-from morca.db.watchdog import Counts, Lease, Quiet
+import morca._internal.db.pipelines as pipelines_db
+import morca._internal.db.watchdog as watchdog_db
+from morca._internal.db.watchdog import Counts, Lease, Quiet
 
 from morca.auth import audit
 from morca.fleet import hourly_price

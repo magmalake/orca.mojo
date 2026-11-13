@@ -41,7 +41,7 @@ from std.os.path import exists
 from std.sys import argv, exit, stderr
 from std.time import sleep
 
-import morca.db.notify as notify_db
+import morca._internal.db.notify as notify_db
 
 from morca.actions import cancel_runs, pause_pipeline
 from morca.auth import add_user, remove_user, users

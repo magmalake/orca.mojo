@@ -14,8 +14,8 @@ worker that stopped isn't holding anything.
 """
 
 from json import Value
-import morca.db.pressure as pressure_db
-from morca.db.pressure import Reading
+import morca._internal.db.pressure as pressure_db
+from morca._internal.db.pressure import Reading
 
 from morca.html import Html
 from morca.http_store import Body

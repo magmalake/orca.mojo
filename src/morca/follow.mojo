@@ -19,7 +19,7 @@ failed, and not queued yet. A single query reads the keys (through the
 
 from std.collections import Dict
 
-import morca.db.sensing as sensing_db
+import morca._internal.db.sensing as sensing_db
 
 from morca.calendar import Cell, states_of
 from morca.civil import Civil, now

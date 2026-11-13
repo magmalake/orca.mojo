@@ -49,10 +49,10 @@ worker checks the spec again before it starts anything (`morca.worker`).
 from std.os import getenv
 
 from json import Value, loads
-import morca.db.audit as audit_db
-import morca.db.scheduler as scheduler_db
-import morca.db.starting as starting_db
-import morca.db.workers as workers_db
+import morca._internal.db.audit as audit_db
+import morca._internal.db.scheduler as scheduler_db
+import morca._internal.db.starting as starting_db
+import morca._internal.db.workers as workers_db
 
 from morca.run_cluster import (
     join_claim,
@@ -83,7 +83,7 @@ from morca.http_store import (
 )
 from morca.civil import now
 from morca.json import quote
-from morca.db.live import dead_sql, stale_limit, start_grace
+from morca._internal.db.live import dead_sql, stale_limit, start_grace
 from morca.cgroup import growth_pct_of, oom_text, raised_mb, raised_request
 from morca.recommend import RunRequest
 from morca.resources import Grant, Request, Room, admit

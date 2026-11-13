@@ -20,9 +20,9 @@ never a sampler's file.
 
 from std.os import getenv
 
-import morca.db.machines_view as machines_db
-from morca.db.live import stale_limit
-from morca.db.machines_view import WorkerRun
+import morca._internal.db.machines_view as machines_db
+from morca._internal.db.live import stale_limit
+from morca._internal.db.machines_view import WorkerRun
 from morca.state import State
 
 

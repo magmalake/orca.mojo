@@ -4,7 +4,7 @@ reads of them and of `orca.instances` and `orca.runs`."""
 
 from postgres import Connection, Params
 
-from morca.db.live import dead_sql
+from morca._internal.db.live import dead_sql
 
 
 comptime _INSERT = (

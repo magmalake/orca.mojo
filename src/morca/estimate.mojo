@@ -8,7 +8,7 @@ takes waves of `max_runs` runs at once, each about as long as a run of
 its size; one run over them all takes them one after another.
 """
 
-import morca.db.estimate as estimate_db
+import morca._internal.db.estimate as estimate_db
 
 from morca.fill import eta_text
 from morca.state import State
