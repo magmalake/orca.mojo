@@ -841,6 +841,13 @@ def _migrations() -> List[List[String]]:
                 " NOT NULL"
             ),
         ],
+        # A pool machine's worker image, and when the autoscaler began
+        # draining it for a newer one (#356). Additive: an older binary
+        # leaves both null, and its machines are replaced once idle.
+        [
+            "ALTER TABLE orca.pool_machines ADD COLUMN image text",
+            "ALTER TABLE orca.pool_machines ADD COLUMN draining timestamptz",
+        ],
     ]
 
 
@@ -869,6 +876,11 @@ def _floor_raisers() -> List[Int]:
     44 (learned requests, `morca._internal.recommend`) is additive: new nullable
     columns the binaries before it neither read nor write. A start they make
     leaves `request_source` and `request_runs` as an earlier start set them.
+
+    57 (`pool_machines.image`, `draining`, #356) is additive: nullable
+    columns the binaries before it neither read nor write. A machine one of
+    them makes has no image recorded, so a newer autoscaler replaces it
+    once it's idle.
     """
     return [1, 24]
 

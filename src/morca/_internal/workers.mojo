@@ -50,6 +50,7 @@ from std.os import getenv
 
 from json import Value, loads
 import morca._internal.db.audit as audit_db
+import morca._internal.db.pools as pools_db
 import morca._internal.db.scheduler as scheduler_db
 import morca._internal.db.starting as starting_db
 import morca._internal.db.workers as workers_db
@@ -424,15 +425,40 @@ def _num(v: Value, key: String) raises -> Int64:
 
 def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     """`/api/worker/claim`'s answer: `{"run": <spec>|null, "refused": ...,
-    "join": <member spec>, "stop": [member, ...]}`. With no run to start,
+    "join": <member spec>, "stop": [member, ...]}`. Nothing for a draining
+    pool machine (`morca._internal.pool_scale`). With no run to start,
     room left and an address the pool's machines reach it at
     (`advertise`), a run to join (`morca._internal.run_cluster`); and always the
     members it has whose run has ended, to stop."""
     var stop = members_to_stop(db, w.id)
-    var answer = _claim_run(db, w, v)
+    # A pool machine the autoscaler is draining (a deploy changed the
+    # worker image, #356) is given nothing new: it finishes what it has
+    # and is replaced once idle.
+    var drained = pools_db.draining(db.conn, w.id)
+    var answer: String
+    if drained:
+        _seen(db, w, v)
+        answer = String(
+            '{"run": null, "refused": ',
+            quote(
+                String(
+                    "this machine is draining: it runs ",
+                    drained,
+                    ", which is no longer the pool's image",
+                )
+            ),
+            "}",
+        )
+    else:
+        answer = _claim_run(db, w, v)
     var slots = Int(v["slots"].int_value()) if String("slots") in v else 0
     var advertise = text_field(v, "advertise")
-    if answer.startswith('{"run": null') and slots > 0 and advertise:
+    if (
+        not drained
+        and answer.startswith('{"run": null')
+        and slots > 0
+        and advertise
+    ):
         var room_cpus = -1
         var room_mb = -1
         if String("room_cpus") in v and String("room_memory_mb") in v:

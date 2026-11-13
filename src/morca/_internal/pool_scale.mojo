@@ -36,7 +36,17 @@ deleted, then its row ended with why) when:
 - its pool is no longer in morca.toml, once it's idle;
 - its worker never showed up within `MORCA_POOL_BOOT_SECONDS` (900), or went
   silent for `MORCA_POOL_LOST_SECONDS` (300): its runs are queued again as
-  any lost worker's are (`morca._internal.pool_runs`).
+  any lost worker's are (`morca._internal.pool_runs`);
+- it was made for another worker image than the scheduler's
+  (`MORCA_WORKER_IMAGE`, which a deploy changes), once it's idle (#356).
+
+**Draining.** A machine runs the image it was made for (the boot answer
+gives the one `orca.pool_machines.image` recorded), and its container keeps
+running it. One whose image isn't the scheduler's drains: its worker is
+given no more runs (`/api/worker/claim` refuses it), the runs it has
+finish, and it's removed once idle, whatever the demand and without waiting
+for `idle_seconds`. While busy it still counts toward `max_machines`, so the
+cap holds; its replacement is made once it's gone, as for any demand.
 
 **Strays.** A machine of the provider's with the pool's and this stack's
 labels that `orca.pool_machines` doesn't have live (made, but the row
@@ -111,6 +121,11 @@ def _remove(
     pools_db.end_machine(db.conn, m.id, why)
     print("removed machine", m.name, String("(", why, ")"))
     return True
+
+
+def _image_of(m: LiveMachine) -> String:
+    """The image `m` was made to run, or that it has none recorded."""
+    return m.image if m.image else String("an image morca didn't record")
 
 
 @fieldwise_init
@@ -242,6 +257,9 @@ struct PoolScaler(Movable):
         var lost_s = _seconds("MORCA_POOL_LOST_SECONDS", 300.0)
         var kept = 0
         var booting = 0
+        # The image a machine made now would run: one made for another
+        # (before a deploy) drains, and is removed once idle (#356).
+        var image = getenv(WORKER_IMAGE)
         for m in live:
             if not m.seen and m.age >= boot_s:
                 _ = _remove(
@@ -263,6 +281,23 @@ struct PoolScaler(Movable):
                 booting += 1
                 kept += 1
                 continue
+            var outdated = Bool(image) and m.image != image
+            if outdated != m.draining:
+                pools_db.drain(db.conn, m.id, outdated)
+                if outdated:
+                    print(
+                        "draining machine",
+                        m.name,
+                        "of pool",
+                        p.name,
+                        String(
+                            "(it runs ",
+                            _image_of(m),
+                            ", the pool's image is now ",
+                            image,
+                            ")",
+                        ),
+                    )
             if m.busy:
                 if m.idle_for >= 0.0:
                     pools_db.clear_idle(db.conn, m.id)
@@ -273,6 +308,15 @@ struct PoolScaler(Movable):
             if not p.configured:
                 if _remove(db, provider, m, "its pool left morca.toml"):
                     continue
+            elif outdated and _remove(
+                db,
+                provider,
+                m,
+                String(
+                    "replaced: it ran ", _image_of(m), ", the pool runs ", image
+                ),
+            ):
+                continue
             elif (
                 want == 0
                 and m.idle_for >= Float64(p.idle_seconds)
@@ -487,6 +531,7 @@ struct PoolScaler(Movable):
             got.id,
             got.address,
             worker,
+            image,
         )
         var what = String("made ", name, ": ", machine_type)
         if location:

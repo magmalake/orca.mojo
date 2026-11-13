@@ -601,9 +601,14 @@ The leading scheduler grows and shrinks each pool (`morca._internal.pool_scale`)
   a type whose architecture (as the provider says) the worker image has no
   variant for. `orca.pools.status` says what the last try came to.
 - **Boot.** The machine's startup script holds only a worker token of its
-  own. With it, the machine asks the UI's `/api/worker/boot` for the image,
-  the login to pull it and the bucket's variables, then runs
-  `morca worker` in Docker with run cgroups.
+  own. With it, the machine asks the UI's `/api/worker/boot` for the image
+  it was made for, the login to pull it and the bucket's variables, then
+  runs `morca worker` in Docker with run cgroups.
+- **Deploys.** A machine keeps the image it booted with. Once the
+  scheduler's `MORCA_WORKER_IMAGE` is another (a deploy), the machine
+  drains: it's given no new runs, finishes those it has, and is removed
+  once idle, without waiting for `idle_seconds`. A machine of the new
+  image replaces it as runs wait, within `max_machines`.
 - **Shrink.** A machine idle for `idle_seconds` with nothing waiting is
   removed: its token revoked, then the machine deleted. So is one whose
   worker never shows up (15 min) or goes silent (5 min), whose runs are
