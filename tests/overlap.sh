@@ -17,7 +17,9 @@
 #   (MORCA_DRAIN_SECONDS): B kills it and exits, and C queues it again once
 #   its heartbeat is stale (audited) and runs it to success, a second start;
 # - `morca scheduler status` lists the instances, and `morca register`
-#   while the newest instance doesn't lead yet waits, then refuses.
+#   while the newest instance doesn't lead yet waits, then refuses;
+# - SIGTERM to the leading instance C (docker stop) kills its run and ends
+#   its row before it exits, so nothing counts it leading (#426).
 #
 # Then the floors (morca.state._floor_raisers): `morca scheduler can-overlap`
 # says yes beside a live leading instance that knows this binary's floor
@@ -156,8 +158,24 @@ echo "ok   a drain that runs out kills its run, and the leader queues it again"
 ./build/morca scheduler status > build/overlap-status.txt || fail "status"
 grep -q "^3 .* leading " build/overlap-status.txt || fail "status: $(cat build/overlap-status.txt)"
 grep -q "^1 .* ended " build/overlap-status.txt || fail "status: $(cat build/overlap-status.txt)"
-kill "$pid_c"
-wait "$pid_c" 2> /dev/null || true
+echo "ok   status lists the instances"
+
+# --- SIGTERM (docker stop): C kills its run and ends its row at once ---
+./build/morca backfill toy 2024-06 >> "$log" 2>&1 || fail "backfill"
+r4=$(q "SELECT max(id) FROM orca.runs")
+until_ 20 "c didn't start run $r4: $(runs)" \
+    is "SELECT count(*) FROM orca.runs WHERE id = $r4 AND status = 'running' AND instance = 3 AND heartbeat IS NOT NULL" 1
+kill -TERM "$pid_c"
+until_ 10 "c didn't exit on SIGTERM" sh -c "! kill -0 $pid_c 2> /dev/null"
+wait "$pid_c" || fail "c exited $? on SIGTERM"
+said c "^killed pid [0-9]* of run $r4 (stopped)" || fail "c didn't say it killed its run"
+said c "^morca: scheduler instance 3 stopped" || fail "c didn't say it stopped"
+is "SELECT role || ' ' || (ended IS NOT NULL) FROM orca.schedulers WHERE id = 3" "ended true" \
+    || fail "c's row after SIGTERM: $(q "SELECT * FROM orca.schedulers")"
+is "SELECT count(*) FROM orca.schedulers WHERE role = 'leading'" 0 \
+    || fail "a stopped instance still counts leading: $(q "SELECT * FROM orca.schedulers")"
+echo "ok   SIGTERM ends a leading instance's row and its run (#426)"
+q "UPDATE orca.runs SET status = 'failed', ended = now() WHERE id = $r4" > /dev/null
 q "UPDATE orca.schedulers SET ended = now() WHERE ended IS NULL" > /dev/null
 # A newer instance that doesn't lead yet (made up): register waits, then
 # refuses.

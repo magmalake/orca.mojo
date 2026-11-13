@@ -581,6 +581,22 @@ struct Scheduler(Movable):
             "ended its drain; the leader queues its runs again",
         )
 
+    def stop(mut self) raises:
+        """An instance's SIGTERM or SIGINT (`docker stop`, #426): kills what
+        it started, as a drain that runs out does, and ends its row at
+        once, so it isn't counted leading until its heartbeat goes stale;
+        the leader queues its runs again. `morca scheduler` then exits."""
+        self.finished = True
+        if self.instance == 0:
+            return
+        for e in self._spawned.items():
+            if e.key in self._control:
+                _ = external_call["kill", c_int](c_int(-e.key), c_int(9))
+            _ = external_call["kill", c_int](c_int(e.key), c_int(9))
+            print("killed pid", e.key, "of run", e.value[0], "(stopped)")
+        end_instance(self.db, self.instance)
+        print("morca: scheduler instance", self.instance, "stopped")
+
     def _kill_held(mut self):
         """Kills each contained run held at its memory limit (`held`) for
         `MORCA_RUN_MEMORY_HELD_SECONDS` in a row: throttled at memory.high,

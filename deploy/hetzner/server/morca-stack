@@ -1001,6 +1001,10 @@ EOF
         replaced="$replaced $a_name"
         return 0
     fi
+    # The scheduler is stopped first, not killed: on SIGTERM it ends its
+    # instance, which the check after the deploy would count leading
+    # otherwise (#426).
+    [ "$a_name" != scheduler ] || docker stop -t 30 scheduler > /dev/null 2>&1 || true
     docker rm -f "$a_name" > /dev/null 2>&1 || true
     docker run -d --name "$a_name" --restart always --label "orca.stack.spec=$a_spec" \
         --label "orca.stack.args=$a_args" --label "orca.stack.files=$a_files" "$@" > /dev/null
