@@ -65,10 +65,10 @@ A step that can't do its work yet, such as a download that isn't
 published or an API that's out of requests, raises `defer(seconds, why)`
 instead of failing: the attempt ends `deferred`, spending no retry, and its
 run ends `deferred` and is started again by the scheduler that many seconds
-later, without counting against `run_retries` (`morca.scheduler`).
+later, without counting against `run_retries` (`morca._internal.scheduler`).
 
 `timeout_seconds=N` bounds an attempt: one still going N seconds after it
-started is stopped (`morca.heartbeat`), as a failed attempt, and its run
+started is stopped (`morca._internal.heartbeat`), as a failed attempt, and its run
 fails, to be retried by the scheduler as any failed run is. A step can't be
 interrupted where it is, so the run's process exits: its other partitions
 and the step's own retries wait for the run's retry.

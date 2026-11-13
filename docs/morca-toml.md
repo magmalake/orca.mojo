@@ -4,7 +4,7 @@
 pipeline runs. The pipeline's code still says what it does (steps, partitions,
 schedule, reads and writes); the file says where it runs and how much it uses.
 `morca register` and `morca aws register` read it. The code that reads it is in
-`src/morca/config.mojo`, and the TOML parser is in `src/morca/toml.mojo`.
+`src/morca/_internal/config.mojo`, and the TOML parser is in `src/morca/_internal/toml.mojo`.
 
 ```toml
 [defaults]
@@ -52,7 +52,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 
 | Key | Type | Default when absent | Replaces the flag | Notes |
 |---|---|---|---|---|
-| `placement` | string: `"control"`, `"ec2"`, `"worker:<pool>"` or `"default"` | `default`, the scheduler's runner (`MORCA_RUNNER`) | `--placement` | `control` runs on the scheduler's host (`morca.control`). `worker:<pool>` runs on a remote worker of that pool (`morca worker`), never the scheduler: [workers.md](workers.md). All four: [placement.md](placement.md). |
+| `placement` | string: `"control"`, `"ec2"`, `"worker:<pool>"` or `"default"` | `default`, the scheduler's runner (`MORCA_RUNNER`) | `--placement` | `control` runs on the scheduler's host (`morca._internal.control`). `worker:<pool>` runs on a remote worker of that pool (`morca worker`), never the scheduler: [workers.md](workers.md). All four: [placement.md](placement.md). |
 | `head_type` | string, an instance type | `MORCA_EC2_HEAD_TYPE`, else `c7g.large` | `--head-type` | Only used on EC2. |
 | `worker_type` | string, an instance type | `MORCA_EC2_WORKER_TYPE`, else `c7g.xlarge` | `--worker-type` | Only used on EC2. |
 | `workers` | integer `N` (at least 1), or string `"MIN..MAX"` | the code's `workers`, else 2; 0 for a pipeline without tasks | `--workers` | With `MIN..MAX`, the run scales between the two. |
@@ -228,7 +228,7 @@ A project's image sets `MORCA_CONFIG`, `MORCA_PIPELINES_DIR`, `MORCA_COMMIT` and
 
 `cpus` and `memory_gb` are a pipeline's **request**: the least it needs to
 start and the most it can use, `"MIN..MAX"` (a single number is both). Its
-runs are then sized to their share of the machine (#171, `src/morca/resources.mojo`):
+runs are then sized to their share of the machine (#171, `src/morca/_internal/resources.mojo`):
 
 ```toml
 [pipelines.gharchive]
@@ -269,7 +269,7 @@ env = { DISTA_WORKER_SLOTS = "auto", GHARCHIVE_PARALLEL = "auto" }
 - **The control placement's memory cap** (`MORCA_CONTROL_MEMORY_MB`, 1024)
   still kills a control-placed run over it, whatever its grant: set it at
   least as high as the largest `memory_gb` maximum you place there.
-- **Enforced where morca can make cgroups** (`morca.cgroup`;
+- **Enforced where morca can make cgroups** (`morca._internal.cgroup`;
   [docs/hetzner.md](hetzner.md#a-cgroup-per-run)): a run's grant is its
   cgroup's `memory.high`, and `MORCA_RUN_MEMORY_MARGIN` (25) percent above it
   the kernel kills the run, it alone. A run held at its grant short of that
@@ -290,7 +290,7 @@ env = { DISTA_WORKER_SLOTS = "auto", GHARCHIVE_PARALLEL = "auto" }
 
 From the peaks of a pipeline's last 20 successful measured runs ([What a
 run uses](ui.md#what-a-run-uses)), morca works out the request they suggest
-(#269, `src/morca/recommend.mojo`): memory is the 95th percentile of their
+(#269, `src/morca/_internal/recommend.mojo`): memory is the 95th percentile of their
 peak memory plus 15%, rounded up to a quarter GB and never below what an
 out-of-memory kill raised the pipeline to; CPUs are the 90th percentile of
 their peak cores, rounded up, at least 1 (none on macOS, which doesn't
@@ -591,7 +591,7 @@ file no longer has is deleted there, and its machines are removed once
 idle. A machine that's running is never replaced by a type higher in the
 list: the order only matters when morca adds one.
 
-The leading scheduler grows and shrinks each pool (`morca.pool_scale`):
+The leading scheduler grows and shrinks each pool (`morca._internal.pool_scale`):
 
 - **Grow.** While runs of the pool's pipelines have waited 20 s that a
   worker could start (at most `max_runs` less those running, per
@@ -650,7 +650,7 @@ resumes with the steps already done skipped.
 
 ## Fills
 
-With `fills = "all"` a pipeline fills its whole range by itself, within limits (#155, `src/morca/fill.mojo`). People change the limits; nobody has to drive a long backfill by hand.
+With `fills = "all"` a pipeline fills its whole range by itself, within limits (#155, `src/morca/_internal/fill.mojo`). People change the limits; nobody has to drive a long backfill by hand.
 
 The default, `fills = "since_registration"`, is what morca did before. A schedule fills from the pipeline's registration on, and `morca backfill` fills the rest by hand.
 
@@ -692,7 +692,7 @@ The pipeline page and `/api/pipelines/<name>` say which of these stopped it, in 
 
 The estimate is conservative and fails closed. The AWS project's spend limit pauses the whole project, so a fill must stop well before it.
 
-- **Price.** A run's price is an hour of its head instance plus its most workers, at on-demand prices from morca.fleet's table (`hourly_price` in `src/morca/fleet.mojo`). That's the us-east-2 on-demand price for the types morca uses. The estimate is multiplied by 1.2 for what the table leaves out: EBS, transfer and requests.
+- **Price.** A run's price is an hour of its head instance plus its most workers, at on-demand prices from morca.fleet's table (`hourly_price` in `src/morca/_internal/fleet.mojo`). That's the us-east-2 on-demand price for the types morca uses. The estimate is multiplied by 1.2 for what the table leaves out: EBS, transfer and requests.
 - **Spend today.** It sums each fill run's instances (`orca.instances`) since 00:00 UTC, at their own types' prices. An instance still up counts to now, including its idle time in the warm pool.
 - **Before starting a run**, morca adds what the fill runs going and the new one may still cost. The expected time of a run is the longest of the pipeline's last 20 ended fill runs, or an hour before any has ended. It is at least a minute (EC2's minimum), plus `MORCA_EC2_POOL_SECONDS` of idle time in the pool. A run already going is charged that time less what it has run. The run starts only if the spend plus that is within `fill_budget_per_day`.
 - **Unknown prices.** No fill run starts on a budget when the price isn't known: an instance type that isn't in the table (today's runs' or the next run's), or a run on Kubernetes. The reason says which type.

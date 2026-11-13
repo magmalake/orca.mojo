@@ -16,10 +16,10 @@ lineage and an `morca-full` with it?
 
 ## What the code says today
 
-- **There is a seam, and it is the right shape.** `Store` (`src/morca/store.mojo`)
+- **There is a seam, and it is the right shape.** `Store` (`src/morca/_internal/store.mojo`)
   is the executor's only view of persistence: six methods, two implementations
   (`MemoryStore`, `PgStore`). `Pipeline.execute` sees nothing else.
-- **The seam stops at the executor.** `State` (`src/morca/state.mojo`, 22
+- **The seam stops at the executor.** `State` (`src/morca/_internal/state.mojo`, 22
   methods, Postgres only) is imported by eleven modules; the pipeline binary's
   `cli.mojo` calls thirteen of its methods directly; `Ctx`'s `Recorder` opens
   its own Postgres connection; the scheduler and the UI write SQL of their own.

@@ -7,7 +7,7 @@ and a process commits to Iceberg only right after checking that it still
 owns the run and that its heartbeat is younger than half the limit (`fence`).
 All of it is by the database's clock.
 
-Mirrors src/morca/state.mojo#State.claim+beat_run+PgStore.fence and
+Mirrors src/morca/_internal/state.mojo#State.claim+beat_run+PgStore.fence and
 src/morca/ctx.mojo#Ctx.fence.
 -/
 namespace Morca.Fence

@@ -1,10 +1,10 @@
-"""The watchdog's rules (`morca.watchdog`) over made-up rows: what trips,
+"""The watchdog's rules (`morca._internal.watchdog`) over made-up rows: what trips,
 what each rule's scope is, and the arithmetic of the cost estimate and of
 the durations a snooze takes."""
 
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
-from morca.watchdog import (
+from morca._internal.watchdog import (
     Counts,
     Lease,
     Quiet,

@@ -13,7 +13,7 @@ from std.testing import (
     assert_true,
 )
 
-from morca.control import (
+from morca._internal.control import (
     ControlLimits,
     control_stage,
     fetch_secret,
@@ -22,7 +22,7 @@ from morca.control import (
     run_env,
     slots_reason,
 )
-from morca.system import Container, Now
+from morca._internal.system import Container, Now
 
 
 def _now(age: Float64, mem: Float64, disk: Float64) -> Now:

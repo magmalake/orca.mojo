@@ -1,4 +1,4 @@
-"""The sampler (`morca.sample`): what it makes of Linux's /proc, and a line
+"""The sampler (`morca._internal.sample`): what it makes of Linux's /proc, and a line
 read from the machine the test runs on, Linux or macOS."""
 
 from std.ffi import c_int, external_call
@@ -7,7 +7,7 @@ from std.testing import TestSuite, assert_equal, assert_true
 
 from json import loads
 
-from morca.sample import (
+from morca._internal.sample import (
     Sampler,
     container_ids,
     container_mem,

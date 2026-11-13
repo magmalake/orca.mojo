@@ -1,10 +1,10 @@
-"""Where a binary's code came from (`morca.source`): the links to it. The
+"""Where a binary's code came from (`morca._internal.source`): the links to it. The
 defines themselves are checked by tests/versions.sh, which builds with and
 without them."""
 
 from std.testing import TestSuite, assert_equal
 
-from morca.source import commit_url, web_url
+from morca._internal.source import commit_url, web_url
 
 comptime SHA = "0123456789abcdef0123456789abcdef01234567"
 

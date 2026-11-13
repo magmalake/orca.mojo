@@ -27,7 +27,7 @@ go in the PR.
 A deploy can be rolled back to an older image without restoring the
 database, because an older morca runs on a newer schema as long as every
 migration it doesn't know is additive (`schema_ahead` in
-`src/morca/migrations.mojo`). Keep new migrations additive:
+`src/morca/_internal/migrations.mojo`). Keep new migrations additive:
 
 - add columns only nullable or with a default, never `NOT NULL` without one;
 - add tables and indexes freely; a foreign key onto a table morca deletes

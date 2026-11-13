@@ -6,7 +6,7 @@ from std.testing import (
     assert_true,
 )
 
-from morca.upgrade import (
+from morca._internal.upgrade import (
     UpgradeStep,
     parse_upgrade,
     select_steps,

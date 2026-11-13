@@ -43,6 +43,17 @@ mojo build bin/scheduler.mojo -o build/morca
 ./build/morca locate build/daily --root . && ./build/morca register ./build/daily
 ```
 
+## Public API
+
+A pipeline imports from `morca` (steps, pipelines, `Ctx`, partitions,
+schedules, `morca_main`, `outdated()`), `morca.tables` (Iceberg reads and
+commits from a step) and `morca.keyed` (`Keyed` partitions); a project's
+`morca` and `morca_maintain` binaries import `morca.command` and
+`morca.maintain`. Those modules are the public API, listed in
+[`src/morca/__init__.mojo`](src/morca/__init__.mojo): a breaking change to
+them comes with a note in the changelog. Everything under `morca._internal`
+(the scheduler, stores, runners, UI) is internal and changes without one.
+
 ## Docs
 
 | Page | What it covers |
@@ -127,7 +138,7 @@ mojo build -D MORCA_SOURCE=$(git remote get-url origin) -D MORCA_COMMIT=$(git re
 
 What a pipeline does stays in its code; where and how much it runs with
 goes in `morca.toml` at the root of the project, which `morca register` and
-`morca aws register` read (`morca.config`):
+`morca aws register` read (`morca._internal.config`):
 
 ```toml
 [defaults]
@@ -185,7 +196,7 @@ SSM `sudo docker exec scheduler morca ...` is for debugging only.
 A pipeline placed `worker:<pool>` runs on another machine, such as a coding
 machine with spare CPU: `morca worker --pool <pool> --remote <url>` polls
 `morca ui` for the pool's runs and runs them there, with its run's state
-calls going over HTTPS to the UI (`morca.http_store`), which writes them to
+calls going over HTTPS to the UI (`morca._internal.http_store`), which writes them to
 Postgres. Nothing on the worker holds database credentials. Its token,
 from `morca worker-token create --pool <pool>`, is scoped to the pool and
 revocable. A worker that dies has its runs requeued once their heartbeats

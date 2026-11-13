@@ -2,8 +2,8 @@
 
 Problems otherwise show only in the UI. With an [ntfy](https://ntfy.sh)
 topic set, the scheduler pushes the important ones to the ntfy phone app,
-each with a link into the UI. The code is `src/morca/notify.mojo` (sending)
-and `src/morca/alerts.mojo` (what is sent).
+each with a link into the UI. The code is `src/morca/_internal/notify.mojo` (sending)
+and `src/morca/_internal/alerts.mojo` (what is sent).
 
 ```sh
 export MORCA_NOTIFY_URL=https://ntfy.sh/$(openssl rand -hex 16)   # subscribe to this topic in the app

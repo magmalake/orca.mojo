@@ -8,7 +8,7 @@ control character, only JSON's escapes, and unescaped it gives back the input.
 
 from harness import check, run_harness, save_last
 
-from morca.json import quote
+from morca._internal.json import quote
 
 
 def _hex(b: UInt8) raises -> Int:

@@ -9,7 +9,7 @@ snapshot means nothing known of one.
 
 from harness import bytes_of, check, only_findings, run_harness, save_last
 
-from morca.warehouse import current_of
+from morca._internal.warehouse import current_of
 
 
 def target(data: List[UInt8]) raises:

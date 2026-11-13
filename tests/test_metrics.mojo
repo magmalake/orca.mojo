@@ -1,11 +1,11 @@
-"""A run's machine metrics on its page (`morca.metrics`): samples read
+"""A run's machine metrics on its page (`morca._internal.metrics`): samples read
 back, peaks, warnings and the charts."""
 
 from std.testing import TestSuite, assert_equal, assert_true
 
 from json import loads
 
-from morca.metrics import (
+from morca._internal.metrics import (
     StepSpan,
     axis_of,
     bytes_text,

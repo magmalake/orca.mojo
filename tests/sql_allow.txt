@@ -1,3 +1,3 @@
-# Files that still build SQL outside src/morca/db/ (#362). Moving a file's
-# queries into morca.db takes it off; nothing is added.
-src/morca/aws_replace.mojo
+# Files that still build SQL outside src/morca/_internal/db/ (#362). Moving a file's
+# queries into morca._internal.db takes it off; nothing is added.
+src/morca/_internal/aws_replace.mojo

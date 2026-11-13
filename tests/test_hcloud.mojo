@@ -13,8 +13,14 @@ from std.testing import (
     assert_true,
 )
 
-from morca.hcloud import Created, HCloud, ServerSpec, error_of, is_no_stock
-from morca.machines import MachineSpec, Provider, docker_arch
+from morca._internal.hcloud import (
+    Created,
+    HCloud,
+    ServerSpec,
+    error_of,
+    is_no_stock,
+)
+from morca._internal.machines import MachineSpec, Provider, docker_arch
 
 
 def _dir() -> String:

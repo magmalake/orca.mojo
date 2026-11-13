@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes src/morca/aws_assets.mojo from deploy/aws/morca.yaml and
+"""Writes src/morca/_internal/aws_assets.mojo from deploy/aws/morca.yaml and
 deploy/project.Dockerfile, so that `morca aws` carries them in the package.
 
     python3 scripts/embed-aws.py          # rewrite it
@@ -9,7 +9,7 @@ import pathlib
 import sys
 
 root = pathlib.Path(__file__).resolve().parent.parent
-out = root / "src/morca/aws_assets.mojo"
+out = root / "src/morca/_internal/aws_assets.mojo"
 
 
 def literal(path):
@@ -31,7 +31,7 @@ comptime PROJECT_DOCKERFILE: StaticString = {literal("deploy/project.Dockerfile"
 
 if "--check" in sys.argv:
     if not out.exists() or out.read_text() != body:
-        sys.exit("src/morca/aws_assets.mojo is out of date: run python3 scripts/embed-aws.py")
+        sys.exit("src/morca/_internal/aws_assets.mojo is out of date: run python3 scripts/embed-aws.py")
     print("ok   aws assets")
 else:
     out.write_text(body)

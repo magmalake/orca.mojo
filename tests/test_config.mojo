@@ -1,11 +1,11 @@
-"""What `morca register` reads from morca.toml (`morca.config`): the keys it
+"""What `morca register` reads from morca.toml (`morca._internal.config`): the keys it
 checks, the order values win in, and what a registration records."""
 
 from std.testing import TestSuite, assert_equal, assert_false, assert_true
 
 from json import loads
 
-from morca.config import (
+from morca._internal.config import (
     FROM_FILE,
     FROM_FLAG,
     ProjectConfig,
@@ -15,8 +15,8 @@ from morca.config import (
     parse_workers,
     resolve,
 )
-from morca.apps_config import apps_text
-from morca.pool_config import NO_WAIT, read_pools
+from morca._internal.apps_config import apps_text
+from morca._internal.pool_config import NO_WAIT, read_pools
 
 comptime EXAMPLE = """[defaults]
 placement = "ec2"

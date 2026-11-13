@@ -1,11 +1,11 @@
-"""Finding a pipeline's functions in its source (`morca.locate`), over this
+"""Finding a pipeline's functions in its source (`morca._internal.locate`), over this
 repository's examples."""
 
 from std.testing import TestSuite, assert_equal, assert_true
 
 from json import loads
 
-from morca.locate import function_key, locate, mojo_files
+from morca._internal.locate import function_key, locate, mojo_files
 
 comptime DESCRIBE = """{"pipeline": "toy", "steps": [
   {"name": "days", "function": "toy::days(morca::ctx::Ctx,morca::month::Month)"},

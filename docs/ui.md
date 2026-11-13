@@ -4,8 +4,8 @@
 `127.0.0.1:8270` (`MORCA_UI_ADDR`). Every page is also JSON, to
 `Accept: application/json` or `?format=json`. Reading needs no login; the
 actions need one once a user exists (`morca user add <name>`). The full list
-of paths is the docstring of `src/morca/web/routes.mojo`, and of the actions
-`src/morca/api/actions.mojo`'s (DESIGN.md's "Web layer" maps the modules);
+of paths is the docstring of `src/morca/_internal/web/routes.mojo`, and of the actions
+`src/morca/_internal/api/actions.mojo`'s (DESIGN.md's "Web layer" maps the modules);
 the site's [UI page](https://mlake.dev/s/orca/docs/ui) has the older pages.
 This page is the parts that changed most recently.
 
@@ -215,7 +215,7 @@ Each pipeline has one coverage number, the same on the home page's
 each pipeline of `/` and on `/api/pipelines/<name>`'s `pipeline`, as
 `{"done": 1141, "total": 1407, "pct": 81.0, "unit": "day"}`, `pct`
 rounded down to a tenth; the page shows it rounded down to a whole
-percent, so 100% means all of them). `src/morca/coverage.mojo` defines it:
+percent, so 100% means all of them). `src/morca/_internal/coverage.mojo` defines it:
 
 - **Hourly, daily or monthly**: partitions done of those in the range so
   far, from the first partition through the last one that has ended on the
@@ -265,7 +265,7 @@ are links (`?cal=2026` or `?cal=2026-03`, `&cov=year` or `month`), so all
 of it works without scripts. A monthly pipeline's card is a year of
 months, a keyed pipeline has none.
 
-For a sensor (`morca.sensors`), days the datasets it follows have but no run
+For a sensor (`morca._internal.sensors`), days the datasets it follows have but no run
 of it has done, failed on or is running are **behind**, in amber, with a
 line under the legend saying what that means.
 
@@ -370,7 +370,7 @@ for its memory pressure, the home page and Runs say so at the top (and
 their JSON has `memory_pressure`).
 
 Where the scheduler (or worker) gives runs a cgroup of their own
-([docs/hetzner.md](hetzner.md#a-cgroup-per-run), `morca.cgroup`), the run's
+([docs/hetzner.md](hetzner.md#a-cgroup-per-run), `morca._internal.cgroup`), the run's
 page also has **Memory limit**: its latest start's `memory.high` (its grant,
 request maximum or `MORCA_RUN_MEMORY_MB`) and the `memory.max` past which the
 kernel kills it. The Steps table's Peak cell reads `312 MB / 1 GB`: the
@@ -402,7 +402,7 @@ it, on hover, keyboard focus or a tap. A value from a fixed set (a status
 such as `deferred`, a step's kind `mapped`, a trigger, a placement, where
 a setting came from) is dotted underlined instead, and says what it means
 the same ways, so a table doesn't get a "?" in every cell. The texts are
-in one place, `src/morca/ui/terms.mojo`: a header's by its label (or its
+in one place, `src/morca/_internal/ui/terms.mojo`: a header's by its label (or its
 table's, for a word that means different things, as From does in the
 Configuration and Actions tables), a value's by its kind and value, and a
 setting's by its key. The UI adds a header's "?" to every `<th>` it has a
@@ -424,7 +424,7 @@ Hovering a link to a line on GitHub shows that function, coloured:
 keywords, names a `def` or `struct` defines, strings (triple-quoted too),
 comments, numbers and decorators, from the theme's colours. The UI fetches
 the file (`/code?u=`, only a GitHub file at a commit, at most 1 MiB) and
-colours it (`morca.highlight`, a small tokenizer, no library), so the
+colours it (`morca._internal.highlight`, a small tokenizer, no library), so the
 browser needn't reach GitHub; a private repository's file it can't fetch
 says so, and the link still opens it.
 
@@ -465,7 +465,7 @@ goes back to the button that asked.
 
 A form asks with `data-confirm` (on the form, or on one of its submit
 buttons), `data-confirm-body`, `data-confirm-yes`, `data-confirm-no` and
-`data-confirm-danger` (`ask_attrs` in `morca.ui.layout`). It's one
+`data-confirm-danger` (`ask_attrs` in `morca._internal.ui.layout`). It's one
 `<dialog>` per page, and yes submits the form again with the same button,
 so what's posted, the login cookie and the Origin check are as before.
 Without scripts, or in a browser without `<dialog>`, the form posts
@@ -605,4 +605,4 @@ under `docker stop`'s 10 s grace) bounds the wait; when it's up the server
 stops and closes its kept-alive connections, and a request still running
 half a second later is given up, with exit code 1. A second signal stops
 it at once. The worker API on `MORCA_WORKER_ADDR`, if any, ends with the
-process. `src/morca/web/drain.mojo` has the details.
+process. `src/morca/_internal/web/drain.mojo` has the details.

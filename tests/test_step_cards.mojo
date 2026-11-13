@@ -1,10 +1,10 @@
-"""The step cards' data (`morca.ui.step_cards`): type names as code writes them,
+"""The step cards' data (`morca._internal.ui.step_cards`): type names as code writes them,
 the recorded signature, the signature and docstring found in a file, and
 the page's JSON, which nothing in it can end."""
 
 from std.testing import TestSuite, assert_equal, assert_true, assert_false
 
-from morca.ui.step_cards import (
+from morca._internal.ui.step_cards import (
     AttemptCard,
     StepCard,
     cards_script,

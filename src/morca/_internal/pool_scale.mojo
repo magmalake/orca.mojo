@@ -1,0 +1,495 @@
+"""The pool autoscaler (#267): machines for the pools morca.toml declares
+(`morca._internal.pool_config`), made and removed by the leading scheduler every
+`MORCA_POOL_SCALE_SECONDS` (15).
+
+**Demand.** A pool needs a machine while runs of its pipelines (placement
+`worker:<pool>`, not paused) have been queued `MORCA_POOL_GROW_AFTER`
+seconds (20) that a worker could start: no more of a pipeline's than
+`max_runs` less its running ones, and its fill runs. Workers already in
+the pool take what they have room for first; what's left waiting is the
+demand.
+
+**Growing.** While there's demand, no machine of the pool is still booting
+(made, its worker not yet seen) and it has fewer than `max_machines`, the
+autoscaler makes one, at most once every `MORCA_POOL_TRY_SECONDS` (60):
+
+- it tries the type it's on (the first, to start with) in each location in
+  turn; the first that the provider has is made;
+- a type the worker image has no variant for (`morca._internal.registry`: the
+  machine's architecture, as the provider says it, isn't among the
+  image's) is skipped, saying so;
+- when no location has the type, it keeps trying it until the type's
+  `wait` has passed since it started, then moves to the next; the last has
+  no wait and is tried for as long as there's demand;
+- once one is made, or the demand goes, it starts again from the first.
+
+The machine is named `orca-pool-<pool>-<n>`, labelled with the pool and this
+stack's id (`orca.stack_identity`, so a project several stacks share keeps
+them apart), and booted as a worker (`morca._internal.pool_boot`) with a token of its
+own. `orca.pools.status` says what the last attempt came to.
+
+**Shrinking.** A machine is removed (its token revoked, then the machine
+deleted, then its row ended with why) when:
+
+- it has run nothing for its pool's `idle_seconds` and the pool has no
+  demand;
+- its pool is no longer in morca.toml, once it's idle;
+- its worker never showed up within `MORCA_POOL_BOOT_SECONDS` (900), or went
+  silent for `MORCA_POOL_LOST_SECONDS` (300): its runs are queued again as
+  any lost worker's are (`morca._internal.pool_runs`).
+
+**Strays.** A machine of the provider's with the pool's and this stack's
+labels that `orca.pool_machines` doesn't have live (made, but the row
+wasn't written) is deleted.
+"""
+
+from std.os import getenv
+from std.time import perf_counter_ns
+
+from json import loads
+import morca._internal.db.pools as pools_db
+from morca._internal.db.pools import LiveMachine
+
+from morca._internal.machines import MachineSpec, Provider
+from morca._internal.pool_boot import CREATED_BY, WORKER_IMAGE, boot_script
+from morca._internal.pool_config import NO_WAIT
+from morca._internal.registry import Registry
+from morca._internal.state import State
+from morca._internal.tokens import token_hash
+from morca._internal.workers import create_worker_token
+
+
+def _seconds(name: String, default: Float64) -> Float64:
+    var v = getenv(name)
+    if not v:
+        return default
+    try:
+        return max(Float64(v), 0.0)
+    except:
+        return default
+
+
+def scale_seconds() -> Float64:
+    return _seconds("MORCA_POOL_SCALE_SECONDS", 15.0)
+
+
+def stack_id(mut db: State) raises -> String:
+    """This stack's id, made once (`orca.stack_identity`): the label that
+    marks its machines as its own."""
+    return pools_db.stack_id(db.conn)
+
+
+def demand(mut db: State, pool: String, after: Float64) raises -> Int:
+    """The runs of `pool`'s pipelines queued at least `after` seconds that
+    a worker could start: per pipeline at most `max_runs` less its running
+    ones, and its fill runs; and the members its running runs that spread
+    (#268) still want, once they've run `after` seconds."""
+    return pools_db.demand(db.conn, pool, after)
+
+
+def _live(mut db: State, pool: String) raises -> List[LiveMachine]:
+    return pools_db.live_machines(db.conn, pool)
+
+
+def _status(mut db: State, pool: String, text: String) raises:
+    pools_db.set_status(db.conn, pool, text)
+
+
+def _remove(
+    mut db: State, provider: Provider, m: LiveMachine, why: String
+) raises -> Bool:
+    """Revokes `m`'s token, deletes it at the provider, and ends its row
+    with `why`. False (left for the next pass) if the provider refused."""
+    if m.worker > 0:
+        pools_db.revoke_worker(db.conn, m.worker)
+    if m.provider_id:
+        try:
+            _ = provider.delete(m.provider_id)
+        except e:
+            print("morca: can't remove machine", m.name, ":", e)
+            return False
+    pools_db.end_machine(db.conn, m.id, why)
+    print("removed machine", m.name, String("(", why, ")"))
+    return True
+
+
+@fieldwise_init
+struct _Pool(Copyable, Movable):
+    var name: String
+    var provider: String
+    var machines: List[Tuple[String, Int]]
+    var locations: List[String]
+    var max_machines: Int
+    var idle_seconds: Int
+    var configured: Bool
+    var trying: Int
+    var trying_for: Float64
+    """Seconds since it started trying `trying`; -1 if it isn't."""
+    var since_try: Float64
+    """Seconds since the last attempt; -1 for none."""
+
+
+def _pools(mut db: State) raises -> List[_Pool]:
+    """The pools morca.toml has, then those it no longer has that still have
+    machines live."""
+    var out = List[_Pool]()
+    for r in pools_db.pool_rows(db.conn):
+        var machines = List[Tuple[String, Int]]()
+        for m in loads(r.machines).array_items():
+            var wait = NO_WAIT
+            if "wait" in m and m["wait"].is_int():
+                wait = Int(m["wait"].int_value())
+            machines.append((m["type"].string_value(), wait))
+        var locations = List[String]()
+        for l in loads(r.locations).array_items():
+            locations.append(l.string_value())
+        out.append(
+            _Pool(
+                r.name,
+                r.provider,
+                machines^,
+                locations^,
+                r.max_machines,
+                r.idle_seconds,
+                r.configured,
+                r.trying,
+                r.trying_for,
+                r.since_try,
+            )
+        )
+    return out^
+
+
+def _sweep(mut db: State, provider: Provider, pool: String) raises:
+    """Deletes the provider's machines of `pool` and this stack that no live
+    row has."""
+    var known = Dict[String, Bool]()
+    for id in pools_db.provider_ids(db.conn, pool):
+        known[id] = True
+    for m in provider.machines(pool):
+        if m.id not in known:
+            _ = provider.delete(m.id)
+            print("deleted stray machine", m.name, "of pool", pool)
+
+
+struct PoolScaler(Movable):
+    """The autoscaler's state between passes: when it last ran, this stack's
+    id, and the worker image's architectures (read once per image)."""
+
+    var last: Float64
+    var owner: String
+    var image: String
+    var arches: List[String]
+    var arches_why: String
+    var arches_at: Float64
+    """When they were read (`perf_counter_ns` seconds): a tag can be
+    pushed again, so they're read again after `MORCA_POOL_IMAGE_SECONDS`
+    (600)."""
+
+    def __init__(out self):
+        self.last = -1.0e18
+        self.owner = String()
+        self.image = String()
+        self.arches = List[String]()
+        self.arches_why = String()
+        self.arches_at = 0.0
+
+    def due(mut self, now: Float64) -> Bool:
+        if now - self.last < scale_seconds():
+            return False
+        self.last = now
+        return True
+
+    def _image_arches(mut self, image: String) -> Bool:
+        """Reads `image`'s architectures if it's new; False if they can't be
+        read (`arches_why`), when every type is tried."""
+        var now = Float64(perf_counter_ns()) / 1e9
+        if image == self.image and now - self.arches_at < _seconds(
+            "MORCA_POOL_IMAGE_SECONDS", 600.0
+        ):
+            return len(self.arches) > 0
+        self.image = image
+        self.arches_at = now
+        self.arches = List[String]()
+        self.arches_why = String()
+        try:
+            self.arches = Registry.from_env().arches(image)
+        except e:
+            self.arches_why = String(e)
+            print(
+                "morca: pools: can't tell the worker image's architectures:", e
+            )
+        return len(self.arches) > 0
+
+    def scale(mut self, mut db: State) raises:
+        """One pass over every pool."""
+        if not self.owner:
+            self.owner = stack_id(db)
+        for p in _pools(db):
+            try:
+                self._pool(db, p)
+            except e:
+                print("morca: can't scale pool", p.name, ":", e)
+                _status(db, p.name, String("error: ", e))
+
+    def _pool(mut self, mut db: State, p: _Pool) raises:
+        var provider = Provider.of(p.provider, self.owner)
+        var want = demand(
+            db, p.name, _seconds("MORCA_POOL_GROW_AFTER", 20.0)
+        ) if p.configured else 0
+        var live = _live(db, p.name)
+        var boot_s = _seconds("MORCA_POOL_BOOT_SECONDS", 900.0)
+        var lost_s = _seconds("MORCA_POOL_LOST_SECONDS", 300.0)
+        var kept = 0
+        var booting = 0
+        for m in live:
+            if not m.seen and m.age >= boot_s:
+                _ = _remove(
+                    db,
+                    provider,
+                    m,
+                    String("never joined in ", Int(boot_s), " s"),
+                )
+                continue
+            if m.seen and m.silent >= lost_s:
+                _ = _remove(
+                    db,
+                    provider,
+                    m,
+                    String("its worker went silent for ", Int(lost_s), " s"),
+                )
+                continue
+            if not m.seen:
+                booting += 1
+                kept += 1
+                continue
+            if m.busy:
+                if m.idle_for >= 0.0:
+                    pools_db.clear_idle(db.conn, m.id)
+                kept += 1
+                continue
+            if m.idle_for < 0.0:
+                pools_db.mark_idle(db.conn, m.id)
+            if not p.configured:
+                if _remove(db, provider, m, "its pool left morca.toml"):
+                    continue
+            elif (
+                want == 0
+                and m.idle_for >= Float64(p.idle_seconds)
+                and _remove(
+                    db, provider, m, String("idle ", p.idle_seconds, " s")
+                )
+            ):
+                continue
+            kept += 1
+        _sweep(db, provider, p.name)
+        if not p.configured:
+            return
+        if want == 0:
+            if p.trying > 0 or p.trying_for >= 0.0:
+                pools_db.stop_trying(db.conn, p.name)
+            return
+        if booting > 0 or kept >= p.max_machines:
+            return
+        var every = _seconds("MORCA_POOL_TRY_SECONDS", 60.0)
+        if p.since_try >= 0.0 and p.since_try < every:
+            return
+        self._grow(db, provider, p)
+
+    def _grow(mut self, mut db: State, provider: Provider, p: _Pool) raises:
+        """Tries to make one machine for `p`, by the wait rule over the
+        types the worker image runs on."""
+        pools_db.mark_try(db.conn, p.name)
+        var image = getenv(WORKER_IMAGE)
+        var remote = getenv("MORCA_POOL_REMOTE", getenv("MORCA_UI_URL"))
+        if not image or not remote:
+            _status(
+                db,
+                p.name,
+                String(
+                    "can't grow: the scheduler needs ",
+                    WORKER_IMAGE,
+                    " and MORCA_UI_URL",
+                ),
+            )
+            return
+        # The types the image runs on, in order; the others said.
+        var checked = self._image_arches(image)
+        var usable = List[Int]()
+        var skipped = String()
+        for k in range(len(p.machines)):
+            var t = p.machines[k][0]
+            if checked:
+                var arch = provider.arch(t)
+                if arch not in self.arches:
+                    skipped.write(
+                        t, " skipped: ", image, " has no linux/", arch, "; "
+                    )
+                    continue
+            usable.append(k)
+        if len(usable) == 0:
+            _status(
+                db,
+                p.name,
+                String(
+                    skipped, "can't grow: the image runs on none of its types"
+                ),
+            )
+            return
+        # The type it's on: the one it was trying, else the next usable one
+        # after it, else back to the first.
+        var at = -1
+        for u in range(len(usable)):
+            if usable[u] >= p.trying:
+                at = u
+                break
+        var trying_for = max(p.trying_for, 0.0)
+        if at < 0 or usable[at] != p.trying:
+            trying_for = 0.0
+            if at < 0:
+                at = 0
+        var locations = p.locations.copy()
+        if len(locations) == 0:
+            locations.append("")
+        # A type refused for the project's quota: the next usable type may
+        # fit, this pass (waiting doesn't free quota); every location shares
+        # the quota, so it isn't tried in the others.
+        var i = usable[at]
+        var t = p.machines[i][0]
+        var wait = p.machines[i][1]
+        while True:
+            i = usable[at]
+            t = p.machines[i][0]
+            wait = p.machines[i][1]
+            var quota_hit = False
+            for loc in locations:
+                var made = self._make(
+                    db, provider, p.name, t, loc, image, remote
+                )
+                if made[0]:
+                    pools_db.grew(db.conn, p.name, String(skipped, made[1]))
+                    return
+                if made[3]:
+                    skipped.write(t, " refused for quota: ", made[1], "; ")
+                    quota_hit = True
+                    break
+                if not made[2]:
+                    # A refusal that isn't stock: say it, try again later.
+                    pools_db.refused(
+                        db.conn, p.name, i, String(skipped, made[1])
+                    )
+                    return
+            if not quota_hit:
+                break
+            if at + 1 >= len(usable):
+                _status(
+                    db,
+                    p.name,
+                    String(
+                        skipped,
+                        "can't grow: the project's quota fits none of its",
+                        " types",
+                    ),
+                )
+                return
+            at += 1
+            trying_for = 0.0
+        var places = String(" in ", ", ".join(p.locations)) if len(
+            p.locations
+        ) else String()
+        var last = at == len(usable) - 1
+        if wait != NO_WAIT and trying_for >= Float64(wait) and not last:
+            var next = usable[at + 1]
+            pools_db.try_next(
+                db.conn,
+                p.name,
+                next,
+                String(
+                    skipped,
+                    "no ",
+                    t,
+                    places,
+                    " for ",
+                    wait,
+                    " s: trying ",
+                    p.machines[next][0],
+                    " next",
+                ),
+            )
+            return
+        var left = String(
+            " (", Int(trying_for), " of ", wait, " s)"
+        ) if wait != NO_WAIT and not last else String(
+            " (the last: keeps trying)"
+        )
+        pools_db.keep_trying(
+            db.conn,
+            p.name,
+            i,
+            usable[at] != p.trying,
+            String(skipped, "waiting: no ", t, places, " yet", left),
+        )
+
+    def _make(
+        mut self,
+        mut db: State,
+        provider: Provider,
+        pool: String,
+        machine_type: String,
+        location: String,
+        image: String,
+        remote: String,
+    ) raises -> Tuple[Bool, String, Bool, Bool]:
+        """Makes one machine: (made, what it came to, out of stock, refused
+        for quota)."""
+        var id = pools_db.next_machine_id(db.conn)
+        # orca-pool-<pool>-<n>: plainly a pool's, beside the stack's own.
+        var name = String("orca-pool-", pool.replace("_", "-"), "-", id)
+        var issued = create_worker_token(
+            db, pool, name, 30, String(CREATED_BY, pool)
+        )
+        var worker = pools_db.worker_id(db.conn, token_hash(issued.token))
+        var script = boot_script(
+            remote,
+            pool,
+            name,
+            issued.token,
+            getenv("MORCA_POOL_WORKER_COMMAND"),
+        )
+        var arch = String()
+        try:
+            arch = provider.arch(machine_type)
+        except:
+            pass
+        var got = provider.create(
+            MachineSpec(name, machine_type, location, script, pool)
+        )
+        if not got.ok:
+            # Nothing was made: the token goes with it.
+            pools_db.delete_worker(db.conn, worker)
+            return (
+                False,
+                String(
+                    "can't make ", machine_type, " in ", location, ": ", got.why
+                ),
+                got.no_stock,
+                got.quota(),
+            )
+        pools_db.add_machine(
+            db.conn,
+            id,
+            pool,
+            provider.kind,
+            name,
+            machine_type,
+            arch,
+            location,
+            got.id,
+            got.address,
+            worker,
+        )
+        var what = String("made ", name, ": ", machine_type)
+        if location:
+            what.write(" in ", location)
+        print("pool", pool, what)
+        return (True, what^, False, False)

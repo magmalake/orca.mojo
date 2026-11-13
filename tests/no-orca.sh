@@ -8,7 +8,7 @@ set -eu
 cd "$(dirname "$0")/.."
 found=$(git grep -nE '(^|[^M])ORCA_[A-Za-z]|(^|[^m])orca(\.<?[a-z<>]*)?\.toml' -- . \
     ':!CHANGELOG.md' ':!tests/no-orca.sh' ':!tests/hetzner.sh' \
-    ':!deploy/hetzner/server/morca-stack' ':!deploy/hetzner/lib.sh' ':!src/morca/config.mojo' || true)
+    ':!deploy/hetzner/server/morca-stack' ':!deploy/hetzner/lib.sh' ':!src/morca/_internal/config.mojo' || true)
 if [ -n "$found" ]; then
     echo "$found"
     echo "FAIL: ORCA_* or orca.toml outside the rename's own checks (#384)"

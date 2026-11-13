@@ -8,8 +8,8 @@ own memory. A new attempt starts from what Postgres has on record
 (`pinned_reads`). Other writers move the tables' current snapshots in
 between, and the worker can crash between any two of these.
 
-Mirrors src/morca/ctx.mojo#Ctx.pin, src/morca/store.mojo#MemoryStore.pinned_reads
-and src/morca/state.mojo#PgStore._pinned_reads.
+Mirrors src/morca/ctx.mojo#Ctx.pin, src/morca/_internal/store.mojo#MemoryStore.pinned_reads
+and src/morca/_internal/state.mojo#PgStore._pinned_reads.
 -/
 namespace Morca.Pins
 

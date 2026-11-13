@@ -92,7 +92,7 @@ holder's connection goes.
 
 Each local or control-placed run an instance starts records it
 (`runs.instance`). The rule from the earlier #242, with "held by instance
-X" in place of "held by the runner" (`morca.db.live.held_sql`, part of
+X" in place of "held by the runner" (`morca._internal.db.live.held_sql`, part of
 `dead_sql`):
 
 - **held**, so live, while its instance has been seen within the stale
@@ -152,7 +152,7 @@ setting existed, which drains without a limit.
 
 A draining instance's runs, and any run whose pipeline has since been
 registered with other code, are **outdated**, and can find out
-(`morca.handover`, #397). Morca tells them and does nothing else: it
+(`morca._internal.handover`, #397). Morca tells them and does nothing else: it
 doesn't cancel, kill or queue them again. Their code decides.
 
 - **Where the flag comes from.** Each run's heartbeat thread already beats
@@ -167,7 +167,7 @@ doesn't cancel, kill or queue them again. Their code decides.
   called between any two units of work. No new column: both conditions
   are already in the schema.
 - **The code version** is the version row `morca register` and each run
-  already record (`orca.pipeline_versions`, `morca.source`): the source
+  already record (`orca.pipeline_versions`, `morca._internal.source`): the source
   commit the binary was built from (`-D MORCA_COMMIT`), whether its tree
   was dirty, and the registry hash. Not the registry hash alone (what the
   snapshot summaries carry as `orca.code`): it covers the DAG, the steps'
@@ -362,7 +362,7 @@ Next: the stack (#246, above), the instances on Ops' System page, and making
 `MORCA_OVERLAP=on` the default once proven (#390: the stack's default, with
 the required drain limit).
 
-#397's first slice: outdated runs (above, `morca.handover`), no drain
+#397's first slice: outdated runs (above, `morca._internal.handover`), no drain
 limit by default, and deploys that don't wait for the old scheduler's runs
 (`drain-old` returns, old schedulers named by time, check's `info` line).
 Tested by `tests/outdated.sh` (three real instances: a run that hands

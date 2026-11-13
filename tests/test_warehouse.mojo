@@ -1,6 +1,6 @@
 """What sensors read and decide without a database: a table's current
-snapshot from its metadata JSON (`morca.warehouse`), `sense`'s lines, and
-partition keys moved between kinds (`morca.sensors`).
+snapshot from its metadata JSON (`morca._internal.warehouse`), `sense`'s lines, and
+partition keys moved between kinds (`morca._internal.sensors`).
 
 tests/sensors.sh checks `sense` against tables iceberg wrote.
 """
@@ -10,8 +10,14 @@ from std.time import perf_counter_ns
 from std.testing import TestSuite, assert_equal, assert_false, assert_raises
 from std.testing import assert_true
 
-from morca.sensors import join_keys, key_kind, map_keys, parse_sense, split_keys
-from morca.warehouse import current_of, current_snapshot
+from morca._internal.sensors import (
+    join_keys,
+    key_kind,
+    map_keys,
+    parse_sense,
+    split_keys,
+)
+from morca._internal.warehouse import current_of, current_snapshot
 
 comptime META = """{
   "format-version" : 2,

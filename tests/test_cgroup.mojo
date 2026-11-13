@@ -10,7 +10,7 @@ from std.testing import (
     assert_true,
 )
 
-from morca.cgroup import (
+from morca._internal.cgroup import (
     Contained,
     MemoryKnobs,
     avg10_of,
