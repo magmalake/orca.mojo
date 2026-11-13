@@ -129,6 +129,25 @@ def _wake_fd() -> c_int:
     return fds[0]
 
 
+def stop_signals() -> c_int:
+    """For a loop other than `morca ui`'s (`morca scheduler`, #426): makes
+    SIGTERM and SIGINT write to the same pipe, and returns its read end
+    for `stop_asked`; or -1, leaving both as they were."""
+    return _wake_fd()
+
+
+def stop_asked(fd: c_int, timeout_ms: Int) -> Bool:
+    """Whether SIGTERM or SIGINT has come, waiting up to `timeout_ms` for
+    one on `stop_signals`'s `fd` (just sleeping when it's -1)."""
+    if fd < 0:
+        sleep(Float64(timeout_ms) / 1000)
+        return False
+    if _readable(fd, timeout_ms):
+        _take(fd)
+        return True
+    return False
+
+
 struct _Stopping(Movable):
     var server: Int
     """The `HttpServer`'s address; its loop runs on the main thread."""

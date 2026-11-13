@@ -39,7 +39,6 @@ Exit codes: 0, 2 for a usage error, 3 for any other error.
 from std.os import getenv
 from std.os.path import exists
 from std.sys import argv, exit, stderr
-from std.time import sleep
 
 import morca._internal.db.notify as notify_db
 
@@ -104,6 +103,7 @@ from morca._internal.watchdog import acknowledge, snooze as snooze_rule
 from morca._internal.auth import audit
 from morca._internal.tokens import revoke_user_tokens, user_tokens
 from morca._internal.web.server import DEFAULT_ADDR, serve_ui
+from morca._internal.web.drain import stop_asked, stop_signals
 from morca._internal.worker import worker_command
 from morca._internal.workers import (
     create_worker_token,
@@ -534,6 +534,8 @@ def _command(args: List[String], target: String) raises -> Int:
         s.say_pressure()
         s.contain()
         s.join()
+        # SIGTERM (docker stop) or SIGINT ends the instance before exiting.
+        var stop_fd = stop_signals()
         while not s.finished:
             # A tick that fails (the database is down) is tried again; the
             # state it would have changed is all in Postgres.
@@ -550,8 +552,13 @@ def _command(args: List[String], target: String) raises -> Int:
                         s.contain()
                 except:
                     pass
-            if not s.finished:
-                sleep(1.0)
+            if not s.finished and stop_asked(stop_fd, 1000):
+                print("morca: scheduler: stopping (SIGTERM or SIGINT)")
+                try:
+                    s.stop()
+                except e:
+                    print("morca: scheduler: couldn't end its instance:", e)
+                    return 1
         return 0
     if cmd == "lineage" and (len(args) == 3 or len(args) == 4):
         var db = State(url)
