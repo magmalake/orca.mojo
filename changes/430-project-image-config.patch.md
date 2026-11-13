@@ -1,0 +1,1 @@
+- **morca.toml in project images**: project.Dockerfile copies it to /opt/morca/morca.toml and sets MORCA_CONFIG. (#430)

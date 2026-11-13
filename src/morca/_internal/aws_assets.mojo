@@ -666,6 +666,10 @@ comptime PROJECT_DOCKERFILE: StaticString = """# The image `morca aws push` buil
 #   /opt/morca/bin/morca_maintain; a project without them runs the runtime's.
 # - its pipelines, every pipelines/*.mojo, at /opt/morca/pipelines/<name>,
 #   with the source map `morca locate` writes beside each.
+# - its morca.toml, if it has one, at /opt/morca/morca.toml, which
+#   MORCA_CONFIG names: a bare `morca register` (morca-stack register) reads
+#   it. A project without one has nothing there, and registers with
+#   --no-config or a --config of its own.
 # - the pixi environment's libraries those link or dlopen, in /opt/morca/lib
 #   over the runtime's, so the project's own versions win.
 #
@@ -717,7 +721,8 @@ RUN pixi install --locked
 COPY --from=runtime /opt/morca /opt/morca-runtime
 ARG MOJO_TARGET_CPU=neoverse-n1
 COPY . .
-RUN mkdir -p /out/bin /out/pipelines \\
+RUN mkdir -p /out/bin /out/pipelines /out/config \\
+    && { [ ! -f morca.toml ] || cp morca.toml /out/config/morca.toml; } \\
     && pixi run sh -c 'inc=""; [ -d src ] && inc="-I src"; \\
         for f in bin/*.mojo; do [ -f "$f" ] || continue; n=$(basename "$f" .mojo); [ "$n" = scheduler ] && n=morca; \\
             mojo build -g1 --target-cpu "$MOJO_TARGET_CPU" $inc "$f" -o "/out/bin/$n" || exit 1; done; \\
@@ -744,6 +749,8 @@ FROM runtime
 COPY --from=build /out/lib /opt/morca/lib
 COPY --from=build /out/bin /opt/morca/bin
 COPY --from=build /out/pipelines /opt/morca/pipelines
+COPY --from=build /out/config/ /opt/morca/
+ENV MORCA_CONFIG=/opt/morca/morca.toml
 # What the pipelines were built from, read at run time (morca.source), not
 # compiled in: a new commit then changes no program, and the build above
 # stays cacheable. Declared last, so a new commit reruns only this layer.

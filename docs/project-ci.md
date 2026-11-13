@@ -64,7 +64,10 @@ dies on a CAX with SIGILL; see [Images](hetzner.md#images)), and
    [`deploy/project.Dockerfile`](../deploy/project.Dockerfile) of that morca
    release (`v<version>`, or `morca-ref`), `FROM`
    `ghcr.io/morca-dev/morca-runtime:<version>`, or from the project's own
-   `dockerfile`. The build args are `MOJO_TARGET_CPU`, `MORCA_SOURCE` (the
+   `dockerfile`. morca's Dockerfile puts the project's `morca.toml`, if
+   it has one, at `/opt/morca/morca.toml` and sets `MORCA_CONFIG` to it,
+   which `morca-stack register` needs; a project's own Dockerfile must do
+   the same. The build args are `MOJO_TARGET_CPU`, `MORCA_SOURCE` (the
    repository's URL), `MORCA_COMMIT` (the commit), the version as
    `version-arg`, `MORCA_VERSION` and `MORCA_RUNTIME`, and `build-args`;
 4. runs the image's `morca config check` on each of `configs`;
@@ -129,6 +132,8 @@ summary instead.
 `ci.yml`'s `project-image`, `project-test` and `project-release` jobs call
 the three workflows on a scratch project
 ([`tests/example-project.sh`](../tests/example-project.sh)), which adds the
-PR's commit of morca-mojo, `examples/toy.mojo` and a morca.toml. The image is
+PR's commit of morca-mojo, `examples/toy.mojo` and a morca.toml; the image's
+smoke test runs the toy and `morca config show --file`, which must find that
+morca.toml at `MORCA_CONFIG`. The image is
 built on a runtime built from the same commit (`build-runtime`); nothing is
 pushed, and the release is a dry run.
