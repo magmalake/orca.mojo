@@ -134,7 +134,7 @@ RUN t=$(cd /usr/lib && echo *-linux-gnu) && mkdir -p /out/bin /out/usr/lib/$t \
         | awk '$2 == "=>" && $3 ~ /^\// && $3 !~ /^\/opt\/morca\// {print $1, $3}' | sort -u \
         | while read -r n p; do [ -e "/base/lib/$t/$n" ] || [ -e "/base/usr/lib/$t/$n" ] \
             || cp -L "$p" "/out/usr/lib/$t/$n" || exit 1; done \
-    && ls /out/usr/lib/$t
+    && ls /out/usr/lib/$t && /bin/busybox | head -1 && /bin/busybox --list-full | tr '\n' ' '
 
 FROM base
 COPY --from=sys /out /
