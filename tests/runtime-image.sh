@@ -53,7 +53,7 @@ out=$(run --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfi
         [ $((0x$b & 0x200000)) = 0 ] && echo dropped'"'"'' 2>&1) || fail "the scheduler's cgroup start: $out"
 [ "$out" = dropped ] || fail "the scheduler's cgroup start kept CAP_SYS_ADMIN: $out"
 # morca-stack's health probe (probe()), at a listener in the image.
-code=$(run --entrypoint sh "$img" -c 'mkdir -p /tmp/www && echo ok > /tmp/www/index.html && httpd -p 127.0.0.1:8270 -h /tmp/www && sleep 1
+code=$(run --entrypoint sh "$img" -c 'mkdir -p /tmp/www && echo ok > /tmp/www/index.html && busybox httpd -p 127.0.0.1:8270 -h /tmp/www && sleep 1
 printf "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" "$1" \
     | timeout 5 nc 127.0.0.1 "$0" | { read -r _ code _ && echo "$code" | tr -d "\r"; }' 8270 /index.html) || code=
 [ "$code" = 200 ] || fail "morca-stack's health probe: '$code'"
