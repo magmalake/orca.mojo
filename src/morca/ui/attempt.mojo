@@ -2,7 +2,7 @@
 error, and its facts, which refresh from `/facts` while it runs.
 """
 
-from postgres import Params
+import morca.db.run_view as run_db
 
 from morca.html import Html
 from morca.json import quote
@@ -12,7 +12,12 @@ from morca.ui.layout import LIVE_EVERY, act_button, not_found, page_html
 from morca.ui.parts import code_link, limit_facts, usage_facts
 from morca.usage import bytes_text, usage_json
 from morca.views.code import CodeLinks, code_of
-from morca.views.runs import AttemptRow, attempt_rows, live_status
+from morca.views.runs import (
+    AttemptRow,
+    attempt_rows,
+    live_status,
+    step_attempt_rows,
+)
 from morca.web.page import Page
 
 
@@ -104,15 +109,10 @@ def _attempt_facts(
 
 def attempt_facts(mut db: State, run: Int, id: Int) raises -> Page:
     """An attempt's error and facts, as a fragment; 286 once it's ended."""
-    var found = attempt_rows(db, run, "a.id = $2", id)
+    var found = attempt_rows(db, run, id)
     if len(found) == 0:
         return not_found(String("no attempt ", id, " in run ", run))
-    var siblings = attempt_rows(
-        db,
-        run,
-        "a.step = (SELECT step FROM orca.attempts WHERE id = $2)",
-        id,
-    )
+    var siblings = step_attempt_rows(db, run, id)
     var h = Html()
     _attempt_facts(h, db, run, found[0], siblings)
     return Page(
@@ -124,16 +124,11 @@ def attempt_facts(mut db: State, run: Int, id: Int) raises -> Page:
 
 
 def attempt(mut db: State, run: Int, id: Int) raises -> Page:
-    var found = attempt_rows(db, run, "a.id = $2", id)
+    var found = attempt_rows(db, run, id)
     if len(found) == 0:
         return not_found(String("no attempt ", id, " in run ", run))
     ref a = found[0]
-    var siblings = attempt_rows(
-        db,
-        run,
-        "a.step = (SELECT step FROM orca.attempts WHERE id = $2)",
-        id,
-    )
+    var siblings = step_attempt_rows(db, run, id)
     var log = read_log(a.log)
 
     var j = String(
@@ -183,14 +178,7 @@ def attempt(mut db: State, run: Int, id: Int) raises -> Page:
     h.status(a.status)
     # A new run from this step on, once the run has ended, as the run
     # page's "Rerun from" does.
-    var ended = db.conn.query(
-        (
-            "SELECT status NOT IN ('queued', 'running') AS ended FROM orca.runs"
-            " WHERE id = $1"
-        ),
-        Params().int64(Int64(run)),
-    )
-    if len(ended) > 0 and ended.row(0).bool("ended"):
+    if run_db.run_ended(db.conn, run):
         act_button(
             h,
             String("/runs/", run, "/rerun"),
@@ -237,7 +225,7 @@ def attempt(mut db: State, run: Int, id: Int) raises -> Page:
 
 def attempt_log(mut db: State, run: Int, id: Int) raises -> Page:
     """An attempt's log, as a fragment; 286 once the attempt has ended."""
-    var found = attempt_rows(db, run, "a.id = $2", id)
+    var found = attempt_rows(db, run, id)
     if len(found) == 0:
         return not_found(String("no attempt ", id, " in run ", run))
     var h = Html()

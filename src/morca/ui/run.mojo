@@ -5,7 +5,7 @@ files: `/live`, `/steps`, `/metrics`, `timeline.json`, `driver.log` and
 each machine's log.
 """
 
-from postgres import Params
+import morca.db.run_view as run_db
 
 from morca.ui.cluster import cluster_html
 from morca.views.cluster import cluster_rows
@@ -413,25 +413,12 @@ def _trigger_card(mut h: Html, mut db: State, r: RunRow) raises:
     """The Partitions & trigger card: what the run does and what started
     it, with the rebuild or the snapshots a sensor saw, and the batch it
     was queued in (`morca.batches`) with how many runs that has."""
-    var row = db.conn.query(
-        (
-            "SELECT coalesce(rebuild, 0) AS rebuild, coalesce(batch, 0) AS"
-            " batch, (SELECT count(*) FROM orca.runs b WHERE b.batch ="
-            " r.batch) AS batch_runs FROM orca.runs r WHERE id = $1"
-        ),
-        Params().int64(Int64(r.id)),
-    ).row(0)
-    var rebuild = Int(row.int64("rebuild"))
-    var batch = Int(row.int64("batch"))
+    var row = run_db.run_batch(db.conn, r.id)
+    var rebuild = row.rebuild
+    var batch = row.batch
     var sensed = List[SnapshotRef]()
-    for x in db.conn.query(
-        (
-            "SELECT dataset, snapshot_id FROM orca.sensed WHERE run = $1"
-            " ORDER BY dataset, snapshot_id"
-        ),
-        Params().int64(Int64(r.id)),
-    ):
-        sensed.append(SnapshotRef(x.text("dataset"), x.int64("snapshot_id")))
+    for x in run_db.sensed(db.conn, r.id):
+        sensed.append(SnapshotRef(x[0], x[1]))
     card_open(
         h,
         "trigger",
@@ -477,7 +464,7 @@ def _trigger_card(mut h: Html, mut db: State, r: RunRow) raises:
         h.raw(' <span class="muted">part of</span> ')
         h.link(String("/runs?batch=", batch), String(r.trigger, " ", batch))
         h.raw(' <span class="muted">(')
-        h.text(row.int64("batch_runs"), " runs)")
+        h.text(row.batch_runs, " runs)")
         h.raw("</span>")
     h.raw("</dd></dl></section>")
 
@@ -486,22 +473,8 @@ def _run_code_card(mut h: Html, mut db: State, r: RunRow) raises:
     """The Code card: the pipeline, its steps and tasks on one line, each
     a name linked to its line; the commit and image; the driver log; then
     the code hash."""
-    var current = (
-        db.conn.query(
-            "SELECT registry_hash FROM orca.pipelines WHERE name = $1",
-            Params().text(r.pipeline),
-        )
-        .row(0)
-        .text("registry_hash")
-    )
-    var hash = (
-        db.conn.query(
-            "SELECT registry_hash FROM orca.runs WHERE id = $1",
-            Params().int64(Int64(r.id)),
-        )
-        .row(0)
-        .text("registry_hash")
-    )
+    var current = run_db.pipeline_hash(db.conn, r.pipeline)
+    var hash = run_db.run_hash(db.conn, r.id)
     var version = run_version(db, r.id)
     var links = code_links(db, r.pipeline, version)
     card_open(
@@ -611,16 +584,9 @@ def _run_code_card(mut h: Html, mut db: State, r: RunRow) raises:
 def _resources_card(mut h: Html, mut db: State, r: RunRow) raises:
     """The Resources card: what the run's own processes used, and on
     Kubernetes what its pods asked for."""
-    var row = db.conn.query(
-        (
-            "SELECT coalesce(cpu_millis, 0) AS cpu, coalesce(extract(epoch"
-            " FROM coalesce(ended, now()) - started)::bigint, 0) AS secs FROM"
-            " orca.runs WHERE id = $1"
-        ),
-        Params().int64(Int64(r.id)),
-    ).row(0)
-    var cpu = Int(row.int64("cpu"))
-    var secs = Int(row.int64("secs"))
+    var pods = run_db.run_pods(db.conn, r.id)
+    var cpu = pods[0]
+    var secs = pods[1]
     card_open(
         h,
         "resources",
@@ -677,17 +643,10 @@ def _run_state(mut h: Html, mut db: State, r: RunRow, view: String = "") raises:
     _run_live(h, db, r, step_rows(db, r.id), view)
     machines_html(h, db, r, read_metrics(r.pipeline, r.id))
     if live_status(r.status):
-        var waiting = db.conn.query(
-            (
-                "SELECT to_char(waiting_since AT TIME ZONE 'UTC',"
-                ' \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') AS since FROM orca.runs'
-                " WHERE id = $1 AND waiting_since IS NOT NULL"
-            ),
-            Params().int64(Int64(r.id)),
-        )
-        if len(waiting) > 0:
+        var waiting = run_db.waiting_since(db.conn, r.id)
+        if waiting:
             h.raw('<p class="muted">Waiting for workers since ')
-            h.text(waiting.row(0).text("since"))
+            h.text(waiting.value())
             h.raw(
                 ": its head has tasks and no worker; the attempt fails when"
                 " that has lasted <code>MORCA_NO_WORKERS_SECONDS</code>.</p>"
@@ -747,27 +706,10 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
     its environment as it was after morca.toml and the flags (what its start
     recorded, else what the pipeline is registered with), and the limits
     and machines. Secrets by name only."""
-    var rows = db.conn.query(
-        (
-            "SELECT coalesce(r.spec->'env', p.env, '{}'::jsonb)::text AS env,"
-            " coalesce(r.spec->'secrets', p.secrets, '{}'::jsonb)::text AS"
-            " secrets, (r.spec->'env' IS NOT NULL) AS recorded,"
-            " coalesce(p.max_runs::text, '') AS max_runs,"
-            " coalesce(r.placement, p.placement, '') AS placement,"
-            " coalesce(r.spec->>'head_type', p.head_type, '') AS head,"
-            " coalesce(r.spec->>'worker_type', p.worker_type, '') AS worker,"
-            " coalesce(r.spec->>'workers', p.ec2_workers::text, '') AS workers,"
-            " coalesce(r.spec->>'min_workers', p.ec2_min_workers::text, '')"
-            " AS min_workers, coalesce(r.spec->>'spot', p.spot::text, '') AS"
-            " spot, coalesce(r.spec->>'worker_procs', p.worker_procs::text,"
-            " '') AS procs FROM orca.runs r JOIN orca.pipelines p ON p.name ="
-            " r.pipeline WHERE r.id = $1"
-        ),
-        Params().int64(Int64(r.id)),
-    )
-    if len(rows) == 0:
+    var found = run_db.run_settings(db.conn, r.id)
+    if not found:
         return
-    var s = rows.row(0)
+    ref s = found.value()
     card_open(
         h,
         "settings",
@@ -781,7 +723,7 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
         "placement",
     )
     h.raw('<p class="card__sub">')
-    if s.text("recorded") == "true" or s.text("recorded") == "t":
+    if s.recorded:
         h.raw("As this run was started.")
     else:
         h.raw("As the pipeline is registered.")
@@ -817,14 +759,14 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
             h.text(on)
             h.raw("</dd>")
     var pairs = [
-        ("Max runs", s.text("max_runs")),
-        ("Placement", s.text("placement") if not r.placement else String()),
-        ("Head type", s.text("head")),
-        ("Worker type", s.text("worker")),
-        ("Workers", s.text("workers")),
-        ("Min workers", s.text("min_workers")),
-        ("Spot", s.text("spot")),
-        ("Procs per worker", s.text("procs")),
+        ("Max runs", s.max_runs),
+        ("Placement", s.placement if not r.placement else String()),
+        ("Head type", s.head),
+        ("Worker type", s.worker),
+        ("Workers", s.workers),
+        ("Min workers", s.min_workers),
+        ("Spot", s.spot),
+        ("Procs per worker", s.procs),
     ]
     for p in pairs:
         if p[1]:
@@ -839,21 +781,8 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
             h.raw("</dt><dd>")
             h.text(p[1])
             h.raw("</dd>")
-    var env = db.conn.query(
-        (
-            "SELECT e.key AS name, e.value AS value FROM jsonb_each_text("
-            "coalesce($1::text::jsonb, '{}'::jsonb)) e ORDER BY e.key"
-        ),
-        Params().text(s.text("env")),
-    )
-    var names = db.conn.query(
-        (
-            "SELECT k AS name FROM jsonb_object_keys(CASE WHEN"
-            " jsonb_typeof($1::text::jsonb) = 'object' THEN $1::text::jsonb"
-            " ELSE '{}'::jsonb END) k ORDER BY k"
-        ),
-        Params().text(s.text("secrets")),
-    )
+    var env = run_db.env_pairs(db.conn, s.env)
+    var names = run_db.object_keys(db.conn, s.secrets)
     if len(env) > 0:
         fact_item(
             h,
@@ -866,9 +795,9 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
         )
         for i in range(len(env)):
             h.raw("<br>" if i else "", '<code class="env">')
-            h.text(env.row(i).text("name"))
+            h.text(env[i][0])
             h.raw('</code>=<code class="env">')
-            h.text(env.row(i).text("value"))
+            h.text(env[i][1])
             h.raw("</code>")
         h.raw("</dd>")
     if len(names) > 0:
@@ -883,7 +812,7 @@ def _run_settings(mut h: Html, mut db: State, r: RunRow) raises:
         )
         for i in range(len(names)):
             h.raw(", " if i else "", "<code>")
-            h.text(names.row(i).text("name"))
+            h.text(names[i])
             h.raw("</code>")
         h.raw("</dd>")
     h.raw("</dl></section>")

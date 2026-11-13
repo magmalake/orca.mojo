@@ -3,7 +3,7 @@ metrics' peaks and warnings (`morca.metrics`), and the steps that ran on
 it.
 """
 
-from postgres import Params
+import morca.db.run_view as run_db
 
 from morca.control import CONTROL
 from morca.html import Html
@@ -52,20 +52,7 @@ def _machines_of(
         )
         # Runs on the same machine at the same time: the scheduler's own
         # (local and control-placed) that overlapped this one.
-        var n = Int(
-            db.conn.query(
-                (
-                    "SELECT count(*) AS n FROM orca.runs o JOIN orca.runs r ON"
-                    " r.id = $1 WHERE o.id <> r.id AND o.started IS NOT NULL"
-                    " AND r.started IS NOT NULL AND o.started < coalesce("
-                    "r.ended, now()) AND coalesce(o.ended, now()) > r.started"
-                    " AND coalesce(o.placement, '') IN ('local', 'control')"
-                ),
-                Params().int64(Int64(r.id)),
-            )
-            .row(0)
-            .int64("n")
-        )
+        var n = run_db.shared_runs(db.conn, r.id)
         var out = String(
             "The whole machine, while this run ran: ",
             host,

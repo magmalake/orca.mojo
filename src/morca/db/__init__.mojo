@@ -45,6 +45,19 @@ query run both ways has a function for each, over one SQL text.
 | `morca.db.watchdog` | `orca.watchdog_rules`, `orca.watchdog_trips` and the rules' readings |
 | `morca.db.workers` | `orca.workers`, the worker tokens, and workers' claims |
 
+The web UI's read models, a module per page (`morca.views`, `morca.ui`):
+
+| Module | Reads for |
+|---|---|
+| `morca.db.runs_view` | the runs lists: a page of runs through a `RunsFilter`, its counts |
+| `morca.db.run_view` | a run's page: steps, attempts, tables, machines, cluster, versions, audit |
+| `morca.db.pipelines_view` | the pipelines' pages: registrations, steps, step cards, keys, usage |
+| `morca.db.code_view` | the code links: which version a run or pipeline has, its `describe` |
+| `morca.db.home_view` | the home page: recent runs by batch, runs per day, the timeline |
+| `morca.db.datasets_view` | the datasets' pages: the steps that write and read one |
+| `morca.db.machines_view` | Ops' Pools and Control: instances, pods, workers, scaled pools |
+| `morca.db.alerts_view` | Ops' Alerts: a page of `orca.alerts` and its counts |
+
 **Layering.** These modules import only the standard library, `postgres`
 and each other: never a module of morca's that runs queries through them,
 so nothing above can import its way back in. The rows a query returns are

@@ -3,20 +3,12 @@ so one backfill doesn't fill the list, and a run with none as its own row;
 what needs attention first.
 """
 
-from postgres import Params
+import morca.db.home_view as home_db
+from morca.db.home_view import FAILED_LATELY
 
 from morca.json import quote
 from morca.state import State
-from morca.views.runs import RunRow, runs_one, utc_sql
-
-
-comptime FAILED_LATELY = "1 day"
-"""How recently a failure ended for its row to come first."""
-
-
-comptime _CANDIDATES = 1000
-"""The newest runs whose batches the home page looks at, beside every live
-run's and every recent failure's."""
+from morca.views.runs import RunRow, runs_one
 
 
 @fieldwise_init
@@ -62,60 +54,24 @@ def recent_rows(mut db: State, limit: Int) raises -> List[RecentRow]:
     start first. A batch counts all its runs; a run with no batch is a row
     of its own."""
     var out = List[RecentRow]()
-    for r in db.conn.query(
-        String(
-            "WITH c AS (SELECT coalesce(batch, -id) AS g FROM orca.runs WHERE",
-            " status IN ('queued', 'deferred', 'running') UNION SELECT",
-            " coalesce(batch, -id) FROM orca.runs WHERE status = 'failed'",
-            " AND ended > now() - interval '",
-            FAILED_LATELY,
-            "' UNION SELECT g FROM (SELECT coalesce(batch, -id) AS g FROM",
-            " orca.runs ORDER BY id DESC LIMIT $2) n), g AS (SELECT",
-            " coalesce(batch, -id) AS g, coalesce(max(batch), 0) AS batch,",
-            " min(id) AS first, max(id) AS last, count(*) AS n, min(pipeline)",
-            " AS pipeline, min(trigger) AS trigger, count(*) FILTER (WHERE",
-            " status = 'running') AS running, count(*) FILTER (WHERE status",
-            " IN ('queued', 'deferred')) AS queued, count(*) FILTER (WHERE",
-            " status = 'succeeded') AS succeeded, count(*) FILTER (WHERE",
-            " status = 'failed') AS failed, count(*) FILTER (WHERE status =",
-            " 'cancelled') AS cancelled, coalesce(bool_or(status = 'failed'",
-            " AND ended > now() - interval '",
-            FAILED_LATELY,
-            "'), false) AS failed_lately, ",
-            utc_sql("min(created)"),
-            " AS created, coalesce(extract(epoch FROM max(coalesce(ended,",
-            " now())) - min(started))::bigint, -1) AS seconds,",
-            " max(coalesce(ended, started, created)) AS latest,",
-            " (array_agg(partitions ORDER BY id))[1] AS first_parts,",
-            " (array_agg(partitions ORDER BY id DESC))[1] AS last_parts FROM",
-            " orca.runs WHERE batch IN (SELECT g FROM c WHERE g > 0) OR (batch",
-            " IS NULL AND id IN (SELECT -g FROM c WHERE g < 0)) GROUP BY 1),",
-            " t AS (SELECT g.*, CASE WHEN running > 0 OR failed_lately THEN 0",
-            " WHEN queued > 0 THEN 1 ELSE 2 END AS tier FROM g) SELECT batch,",
-            " first, last, n, pipeline, trigger, running, queued, succeeded,",
-            " failed, cancelled, created, seconds, first_parts, last_parts",
-            " FROM t ORDER BY tier, CASE WHEN tier = 2 THEN latest END DESC,",
-            " last DESC LIMIT $1",
-        ),
-        Params().int64(Int64(limit)).int64(Int64(_CANDIDATES)),
-    ):
+    for r in home_db.recent_records(db.conn, limit):
         out.append(
             RecentRow(
-                Int(r.int64("batch")),
-                Int(r.int64("first")),
-                Int(r.int64("last")),
-                Int(r.int64("n")),
-                r.text("pipeline"),
-                r.text("trigger"),
-                Int(r.int64("running")),
-                Int(r.int64("queued")),
-                Int(r.int64("succeeded")),
-                Int(r.int64("failed")),
-                Int(r.int64("cancelled")),
-                r.text("created"),
-                Int(r.int64("seconds")),
-                r.text("first_parts"),
-                r.text("last_parts"),
+                r.batch,
+                r.first,
+                r.last,
+                r.runs,
+                r.pipeline,
+                r.trigger,
+                r.running,
+                r.queued,
+                r.succeeded,
+                r.failed,
+                r.cancelled,
+                r.created,
+                r.seconds,
+                r.first_partitions,
+                r.last_partitions,
                 None,
             )
         )
