@@ -482,6 +482,8 @@ MORCA_UI_TRUST_PROXY=1
 EOS
         # What machines of a worker pool run: the server's own image.
         echo "MORCA_WORKER_IMAGE=$image:$tag"
+        # The image a scheduler instance records (morca scheduler status, #270).
+        echo "MORCA_IMAGE=$image:$tag"
         # On unless OVERLAP=0 (#390), which is the old way: one scheduler at
         # a time. The drain limit is required; apply checked it.
         ! overlap || echo MORCA_OVERLAP=on
