@@ -43,6 +43,17 @@ mojo build bin/scheduler.mojo -o build/morca
 ./build/morca locate build/daily --root . && ./build/morca register ./build/daily
 ```
 
+## Public API
+
+A pipeline imports from `morca` (steps, pipelines, `Ctx`, partitions,
+schedules, `morca_main`, `outdated()`), `morca.tables` (Iceberg reads and
+commits from a step) and `morca.keyed` (`Keyed` partitions); a project's
+`morca` and `morca_maintain` binaries import `morca.command` and
+`morca.maintain`. Those modules are the public API, listed in
+[`src/morca/__init__.mojo`](src/morca/__init__.mojo): a breaking change to
+them comes with a note in the changelog. Everything under `morca._internal`
+(the scheduler, stores, runners, UI) is internal and changes without one.
+
 ## Docs
 
 | Page | What it covers |

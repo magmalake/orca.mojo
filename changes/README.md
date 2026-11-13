@@ -16,3 +16,8 @@ none is a patch). `shelf release apply` writes the fragments under the new
 version in CHANGELOG.md and deletes them; this README stays, which is how it
 knows the repository keeps fragments. CI runs `shelf changes check`: a PR that
 changes code needs a fragment, unless it's labelled `no-changelog`.
+
+A change that breaks the public API (the modules `src/morca/__init__.mojo`
+lists: removing or renaming a name, changing a signature or what it does)
+needs a `.breaking.md` fragment that says what to change. A change only
+inside `morca._internal` never does, however large.
