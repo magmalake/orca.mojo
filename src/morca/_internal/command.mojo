@@ -90,6 +90,7 @@ from morca._internal.instances import (
     overlap_refusal,
     wait_for_lead,
 )
+from morca._internal.dataset_config import read_datasets, record_datasets
 from morca._internal.pool_config import read_pools, record_pools
 from morca._internal.registering import register_pipeline
 from morca._internal.scheduler import Scheduler
@@ -1013,6 +1014,14 @@ def _register(url: String, args: List[String]) raises -> Int:
             print("pool", p.name, String("(", p.provider, ")"))
         for g in gone:
             print("pool", g, "removed: its machines go once idle")
+        # Its datasets' settings (morca.dataset_config): the file's only.
+        var sets = read_datasets(file.doc)
+        var unset = record_datasets(s.db, sets)
+        for d in sets:
+            if not d.public:
+                print("dataset", d.name, "(data not public)")
+        for g in unset:
+            print("dataset", g, "settings removed: its data is public")
     return 0
 
 

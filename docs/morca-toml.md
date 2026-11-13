@@ -42,6 +42,7 @@ hostname = "orca.mlake.dev"
 | `[pipelines.<name>]` | One pipeline's own values, by the name its `describe` gives. An empty table is allowed: the pipeline is then "in the file" and gets `[defaults]`. |
 | `[pools.<name>]` | A pool of workers morca grows and shrinks itself: [Worker pools](#worker-pools). |
 | `[apps.<name>]` | An app beside the UI and what it gets: [Apps](#apps). |
+| `[datasets."<name>"]` | A dataset's settings: whether visitors see its data. [Datasets](#datasets). |
 | `[stack]` | Reserved for `morca aws up`, which doesn't read it yet. It is accepted and not checked. |
 
 Any other table, and any key at the top level, is refused.
@@ -558,6 +559,26 @@ console memory_mb 1024
 console env CONSOLE_SEMANTIC=1
 console secret POSTHOG_KEY orca/posthog-key
 ```
+
+## Datasets
+
+A `[datasets."<namespace>.<table>"]` table holds a dataset's settings
+(`src/morca/_internal/dataset_config.mojo`). The name has a dot, so quote
+it, or write it two keys deep: `[datasets.hindcast.t2m]` is the same.
+
+```toml
+[datasets."hindcast.t2m"]
+public = false
+```
+
+| Key | Type | Default | What it is |
+|---|---|---|---|
+| `public` | boolean | `true` | `false`: the dataset's Data tab (`/datasets/<name>?tab=data`, `data.json` and `data.csv`; [the UI](ui.md#a-datasets-data)) is shown only to those logged in, once login is on. Its Overview, snapshots and lineage stay public. |
+
+`morca register` records the file's datasets and only those: a dataset
+the file no longer names is public again. `morca config check` checks the
+table: an unknown key, a `public` that isn't `true` or `false`, or a name
+that isn't `namespace.table` is refused.
 
 ## Worker pools
 

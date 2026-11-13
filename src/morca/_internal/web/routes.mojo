@@ -36,6 +36,9 @@ stylesheet is served before any route is looked up.
 | `/watchdog`, `/api/watchdog` | the watchdog's rules with their last values, limits and snoozes, and the trips with a pipeline still paused (`morca._internal.watchdog`); also the red banner on `/`, `/ops/pools` and `/ops/control`; the page refreshes every 30 s from `/watchdog/live` |
 | `/datasets` | datasets, with their writers, readers and latest snapshots, and the graph of pipelines and datasets |
 | `/datasets/<name>` | a dataset's place in that graph, the steps that write and read it (linked to their code), what a rebuild of it runs, and its snapshots; `?preview=1&partitions=`: a rebuild's runs by level, queueing nothing |
+| `/datasets/<name>?tab=data` | its Data tab (`morca._internal.ui.data`): the schema (columns, types, field ids, docs) and partition spec, the partitions (rows, files, bytes and the snapshot that last wrote each, from the manifests), a page of rows and a quick chart, read by the project's `morca_maintain data` within limits (`morca._internal.views.data`). `?snapshot=` a snapshot (else the current one); `?f=COL:OP:VALUE`, one or more (`OP` `eq`, `ne`, `lt`, `le`, `gt`, `ge` or `in`, its values split on `,`); `?c=` the columns, one or more; `?sort=COL` or `-COL`; `?cursor=` the page's `next`; `?n=` rows (100, `MORCA_DATA_PAGE_ROWS`, at most); `?x=`, `?y=` (up to 3), `?agg=avg` or `sum` and `?chart=line` or `bar`. A read that stops at a limit says why (`stopped`). Hidden from visitors not logged in (401) when morca.toml has `[datasets."<name>"] public = false` |
+| `/datasets/<name>/data.json` | the Data tab's JSON, whatever is asked for: `schema`, `partition_spec`, `snapshots`, `partitions`, `rows` (`next`, and `next_url`), `chart`, `limits` and `csv_url` |
+| `/datasets/<name>/data.csv` | the filtered (and sorted) rows as CSV, up to `MORCA_DATA_DOWNLOAD_ROWS` (100,000); `X-Morca-Rows` says how many, and `X-Morca-Stopped` why it stopped, when it did |
 | `/datasets/<name>?before=<cursor>` | its snapshots 50 to a page, newest first; `?after=` for the newer page, the cursor `<attempt>.<snapshot>` (`snapshots_page` in the JSON) |
 | `/datasets/<name>/snapshots/<id>` | a snapshot's lineage (`morca._internal.lineage`): its diagram, Upstream (`back` in the JSON: the snapshot, if a run wrote it, and the snapshots it was written from, with the run and step that wrote each and what that step read) and Downstream (`forward`: the snapshots written from it) |
 | `/rebuilds/<id>` | a rebuild's pipelines by level, with their runs (`morca._internal.sensors`) |
@@ -59,6 +62,7 @@ from morca._internal.state import State
 from morca._internal.ui.alerts import alerts, alerts_api, alerts_live
 from morca._internal.ui.attempt import attempt, attempt_facts, attempt_log
 from morca._internal.ui.code import code_page
+from morca._internal.ui.data import data_csv, data_json, data_page
 from morca._internal.ui.datasets import (
     dataset_page,
     datasets_page,
@@ -160,6 +164,8 @@ def routes() -> List[Route]:
         # Datasets and their lineage.
         page("/datasets", _datasets),
         page("/datasets/{name}", _dataset),
+        page("/datasets/{name}/data.json", _data_json),
+        page("/datasets/{name}/data.csv", _data_csv),
         page("/datasets/{name}/snapshots/{id:int}", _snapshot, "snapshot"),
         page("/rebuilds/{id:int}", _rebuild, "rebuild"),
         # Ops: Alerts, Control, Pools, the watchdog; Fleet and Workers moved
@@ -342,6 +348,8 @@ def _datasets(mut db: State, call: Call) raises -> Page:
 
 
 def _dataset(mut db: State, call: Call) raises -> Page:
+    if call.query("tab") == "data":
+        return data_page(db, call.param("name"), call.url, call.user)
     return dataset_page(
         db,
         call.param("name"),
@@ -349,6 +357,14 @@ def _dataset(mut db: State, call: Call) raises -> Page:
         call.query("preview") == "1",
         call.url,
     )
+
+
+def _data_json(mut db: State, call: Call) raises -> Page:
+    return data_json(db, call.param("name"), call.url, call.user)
+
+
+def _data_csv(mut db: State, call: Call) raises -> Page:
+    return data_csv(db, call.param("name"), call.url, call.user)
 
 
 def _snapshot(mut db: State, call: Call) raises -> Page:

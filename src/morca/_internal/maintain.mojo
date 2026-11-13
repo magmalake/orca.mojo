@@ -43,12 +43,18 @@ from iceberg.maintain import (
     ExpireResult,
 )
 
+from morca._internal.dataread import data_main
 from morca.tables import load_dataset, table_defaults
 
 
 comptime USAGE = """usage:
   morca_maintain expire <dataset> [--older-than 30d|12h|90m|<ms>] [--keep N]
-      [--retain ID,...] [--if-policy] [--dry-run] [--report]"""
+      [--retain ID,...] [--if-policy] [--dry-run] [--report]
+  morca_maintain data <dataset> [--snapshot ID] [--where COL:OP:VALUE]...
+      [--columns A,B] [--sort [-]COL] [--offset N] [--limit N]
+      [--chart-x COL --chart-y A,B [--chart-agg avg|sum]] [--csv PATH]
+      [--max-rows N] [--seconds S] [--memory-mb M] [--no-partitions]
+      [--no-rows]"""
 
 
 def parse_duration_ms(text: String) raises -> Int64:
@@ -227,6 +233,13 @@ def maintain_main() raises:
     var args = List[String]()
     for a in argv():
         args.append(String(a))
+    if len(args) >= 3 and args[1] == "data":
+        # The UI's data view (morca._internal.dataread).
+        var rest = List[String]()
+        for k in range(2, len(args)):
+            rest.append(args[k])
+        data_main(rest)
+        return
     if len(args) < 3 or args[1] != "expire":
         _usage()
         raise Error("morca_maintain: expected `expire <dataset>`")

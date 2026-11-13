@@ -320,6 +320,9 @@ test-run-token = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_run_t
 test-chaos-tables = { cmd = "CHAOS_SRC=tests/chaos_tables.mojo CHAOS_CHECK=1 scripts/with-postgres.sh tests/chaos.sh" }
 test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh" }
 test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh" }
+# A dataset's Data tab (#435): schema, partitions, rows, chart and download,
+# read by morca_maintain data, and public = false.
+test-dataview = { cmd = "scripts/with-postgres.sh tests/dataview.sh" }
 test-commits = { cmd = "tests/concurrent_commits.sh" }
 # Snapshot expiry: morca expire, morca_maintain and the scheduler's sweep.
 test-expire = { cmd = "scripts/with-postgres.sh tests/expire.sh" }
@@ -341,7 +344,7 @@ test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh" }
 # `morca worker` with no database, committing to a local warehouse.
 test-worker = { cmd = "scripts/with-postgres.sh tests/worker.sh" }
 # CI runs these three groups on runners of their own; test-data is all three.
-test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-replace", "test-replace-concurrent", "test-formal-retry", "test-run-token", "test-chaos-tables", "test-lineage", "test-commits", "test-expire", "test-taxi"] }
+test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-replace", "test-replace-concurrent", "test-formal-retry", "test-run-token", "test-chaos-tables", "test-lineage", "test-dataview", "test-commits", "test-expire", "test-taxi"] }
 test-data-sensors = { depends-on = ["build-shared", "test-sensors", "test-keys-per-run", "test-sensed-behind-live", "test-lineage-s3", "test-sensors-s3", "test-sample-s3", "test-worker"] }
 test-data-keyed = { depends-on = ["build-shared", "test-keyed", "test-keyed-backfills", "test-keyed-sensor", "test-keyed-names"] }
 test-data = { depends-on = ["test-data-tables", "test-data-sensors", "test-data-keyed"] }

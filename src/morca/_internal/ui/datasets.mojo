@@ -57,6 +57,19 @@ def snapshot_href(at: SnapshotRef) -> String:
     return String(dataset_href(at.dataset), "/snapshots/", at.snapshot)
 
 
+def dataset_tabs(mut h: Html, name: String, tab: String):
+    """A dataset page's tabs: Overview (its place in the graph, rebuilds and
+    snapshots) and Data (`morca._internal.ui.data`), each a link."""
+    var base = dataset_href(name)
+    h.raw('<nav class="ptabs" aria-label="Dataset sections">')
+    for t in [("overview", "Overview"), ("data", "Data")]:
+        h.raw('<a class="ptabs__tab" href="')
+        h.text(base if t[0] == "overview" else String(base, "?tab=", t[0]))
+        h.raw('"', ' aria-current="page"' if t[0] == tab else "", ">")
+        h.raw(t[1], "</a>")
+    h.raw("</nav>")
+
+
 def _flow_graph(mut db: State, mark: String) raises -> String:
     """The graph of every pipeline and the datasets it reads and writes,
     with the dataset `mark` (if any) marked."""
@@ -411,7 +424,9 @@ def dataset_page(
     h.raw('<p class="crumb"><a href="/datasets">Datasets</a></p><h1>')
     h.text(d.name)
     var cache = Dict[String, CodeLinks]()
-    h.raw('</h1><dl class="facts"><dt>Written by</dt><dd>')
+    h.raw("</h1>")
+    dataset_tabs(h, d.name, "overview")
+    h.raw('<dl class="facts"><dt>Written by</dt><dd>')
     steps_using(h, db, cache, dataset_steps(db, name, writes=True))
     h.raw("</dd><dt>Read by</dt><dd>")
     steps_using(h, db, cache, dataset_steps(db, name, writes=False))

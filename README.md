@@ -84,6 +84,7 @@ pixi run -e data test-tables   # Iceberg; needs the sibling checkouts (see CI)
 pixi run -e data test-append-files   # files written in dista tasks, committed once by the step
 pixi run -e data test-taxi     # examples/taxi on two sliced TLC months
 pixi run -e data test-lineage  # lineage over three pipelines' tables
+pixi run -e data test-dataview # a dataset's Data tab: schema, partitions, rows, chart, CSV
 pixi run -e data test-expire   # snapshot expiry: morca expire, morca_maintain, the scheduler's sweep
 pixi run -e data test-sensors  # sensors and a rebuild, with the scheduler running
 pixi run -e data test-lineage-s3   # lineage, and sensors (test-sensors-s3), over MinIO
