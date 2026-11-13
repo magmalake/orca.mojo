@@ -17,7 +17,7 @@ gets. An app gets nothing it doesn't ask for: no morca database, no
 analytics key unless it names one in `secrets`.
 """
 
-from morca.secrets import secret_problem
+from morca._internal.secrets import secret_problem
 from morca.toml import BOOLEAN, FLOAT, INTEGER, STRING, TABLE, TomlDoc, toml_key
 
 comptime APP_KEYS = ["port", "check", "env", "lake", "secrets", "memory_gb"]

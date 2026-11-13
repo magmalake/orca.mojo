@@ -9,7 +9,7 @@ each from Postgres only (never object storage), with the thresholds below
 | Rule | Trips when | Scope |
 |---|---|---|
 | `launches` | more than `MORCA_WATCHDOG_LAUNCHES` (200) instances were launched in the last hour (pool handovers aren't launches) | all pipelines |
-| `cost` | the estimated cost of the instances up (`morca.fleet`'s price table) stayed over `MORCA_WATCHDOG_COST_HOUR` ($3) an hour for `MORCA_WATCHDOG_COST_MINUTES` (15) minutes, or the last 24 hours cost over `MORCA_WATCHDOG_COST_DAY` ($25) | all pipelines |
+| `cost` | the estimated cost of the instances up (`morca._internal.fleet`'s price table) stayed over `MORCA_WATCHDOG_COST_HOUR` ($3) an hour for `MORCA_WATCHDOG_COST_MINUTES` (15) minutes, or the last 24 hours cost over `MORCA_WATCHDOG_COST_DAY` ($25) | all pipelines |
 | `idle` | at least `MORCA_WATCHDOG_IDLE_WORKERS` (4) workers, up for `MORCA_WATCHDOG_IDLE_MINUTES` (10, at most 30) minutes, averaged under `MORCA_WATCHDOG_IDLE_CPU` (15) percent CPU over them (pooled idle and draining workers aren't counted) | the pipelines owning those workers |
 | `failing` | a pipeline had more than `MORCA_WATCHDOG_FAILED` (20) failed attempts in the last hour, or at least `MORCA_WATCHDOG_FAILED_MIN` (10) attempts ended and more than `MORCA_WATCHDOG_FAILED_PERCENT` (50) percent failed | each such pipeline |
 | `stuck` | a run with a running attempt, on instances that are sampled, has had no attempt start or end, no instance launched or ended and no sampled host over `MORCA_WATCHDOG_STUCK_CPU` (5) percent CPU for `MORCA_WATCHDOG_STUCK_MINUTES` (30, at most 30, since samples are kept that long) minutes | that run's pipeline |
@@ -44,13 +44,13 @@ import morca._internal.db.watchdog as watchdog_db
 from morca._internal.db.watchdog import Counts, Lease, Quiet
 
 from morca.auth import audit
-from morca.fleet import hourly_price
+from morca._internal.fleet import hourly_price
 from morca.html import Html, url_encode
 from morca.json import quote
 from morca.notify import alert, ui_link
 from morca.pause import set_paused
 from morca.state import State
-from morca.system import system_now
+from morca._internal.system import system_now
 
 comptime SAMPLE_MINUTES = 30
 """How long fleet samples are kept, which bounds `idle` and `stuck`."""
@@ -390,7 +390,7 @@ def eval_launches(
 
 def cost_rate(leases: List[Lease], ago: Float64, control: Float64) -> Float64:
     """Dollars an hour being spent `ago` seconds ago (unpriced types cost
-    nothing here, as in `morca.fleet`)."""
+    nothing here, as in `morca._internal.fleet`)."""
     var total = control
     for l in leases:
         if l.start_ago >= ago and (l.end_ago < 0 or l.end_ago <= ago):

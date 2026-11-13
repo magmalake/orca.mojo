@@ -8,9 +8,9 @@ morca sample --out <location> [--pid PID] [--until FILE] [--match PATH]
 ```
 
 It runs beside every process that does a run's work, started by the runner:
-on the ec2 runner by each instance's user data, next to dista (`morca.ec2`);
+on the ec2 runner by each instance's user data, next to dista (`morca._internal.ec2`);
 on the local runner beside each run's process (`morca.scheduler`); on the
-kube runner in each pod (`morca.kube`). The runners start it as
+kube runner in each pod (`morca._internal.kube`). The runners start it as
 `<binary> sample`, since the pipeline's binary is what every instance and
 image has; `morca sample` is the same command.
 
@@ -58,7 +58,7 @@ at `<MORCA_LOGS>/<pipeline>/<run>/metrics/<instance>.jsonl`
 
 `--keep N` keeps a file `--out` names to about its last N lines, for a
 sampler that never ends (the control instance's, which the scheduler reads
-back into the fleet page, `morca.fleet`): once the file has 2 N it's
+back into the fleet page, `morca._internal.fleet`): once the file has 2 N it's
 rewritten with its last N, atomically, so a reader sees either.
 
 `--cgroup DIR` (the control instance's sampler) adds `containers`: the

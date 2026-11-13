@@ -1,4 +1,4 @@
-"""Remote workers' queries (`morca.workers`): worker tokens in
+"""Remote workers' queries (`morca._internal.workers`): worker tokens in
 `orca.workers`, what a worker says of itself, its claims of a pool's runs,
 and the ends of those runs. `dead` in these is SQL for a run whose process
 died, with the stale limit as `$2`."""
@@ -236,7 +236,7 @@ def unhold_pressure(
 
 def granted(mut conn: Connection, worker: Int) raises -> Tuple[Int, Int]:
     """The CPUs and the MB of memory granted to `worker`'s running runs and
-    its live members (`morca.run_cluster`)."""
+    its live members (`morca._internal.run_cluster`)."""
     var g = conn.query(
         String(
             "SELECT coalesce(sum(grant_cpus), 0)",

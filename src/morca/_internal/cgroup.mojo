@@ -1,7 +1,7 @@
 """Containment (#201): a cgroup v2 memory limit per run, and retrying bigger
 after an out-of-memory kill.
 
-A local or control-placed run (and a remote worker's, `morca.worker`) gets a
+A local or control-placed run (and a remote worker's, `morca._internal.worker`) gets a
 cgroup of its own, `morca-run-<run>-<start>-<owner pid>`, beside the leaf
 `morca` the scheduler moved itself into. Its process is placed in it between
 `fork` and `exec` (`morca.proc.spawn`: the parent opens the cgroup's

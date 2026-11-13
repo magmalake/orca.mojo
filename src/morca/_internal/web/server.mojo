@@ -307,14 +307,14 @@ struct Ui(Copyable, Handler):
 
 def read_page(mut db: State, url: String) raises -> Page:
     """What `GET url` answers, for `morca` commands that print a page's JSON
-    over the database (`morca.remote`)."""
+    over the database (`morca._internal.remote`)."""
     var got = answer(routes(), db, Call(url, _path_of(url)), PAGE)
     return got.take()
 
 
 def act(mut db: State, path: String, form: String) raises -> Optional[Page]:
     """The action `path` with the fields of `form`, as the UI's button does
-    it, or None if `path` names none (`morca.remote`). Not audited: the
+    it, or None if `path` names none (`morca._internal.remote`). Not audited: the
     command acts as whoever can reach the database."""
     var call = Call(path, path)
     call.form = form

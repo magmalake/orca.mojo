@@ -43,7 +43,7 @@ struct RunResources(Copyable, Movable):
     var memory_gb: String
     var grant: Grant
     var limit_mb: Int
-    """Its latest start's cgroup limit, `memory.high` (`morca.cgroup`); 0
+    """Its latest start's cgroup limit, `memory.high` (`morca._internal.cgroup`); 0
     for none."""
     var max_mb: Int
     """Its `memory.max`, past which the kernel kills its processes."""
@@ -149,7 +149,7 @@ struct RunRow(Copyable, Movable):
     """Where its latest start ran: `control` (the scheduler's host), `ec2`,
     `kubernetes` or `local`; empty before its first."""
     var held: String
-    """Why the scheduler keeps it queued (`morca.control`), or empty."""
+    """Why the scheduler keeps it queued (`morca._internal.control`), or empty."""
     var usage: Usage
     """What its attempts used (`morca.usage`): the largest peak, the CPU
     seconds summed and the most cores."""
@@ -182,7 +182,7 @@ struct StepRow(Copyable, Movable):
     var usage: Usage
     """What the latest attempt used."""
     var limit_mb: Int
-    """The latest attempt's memory limit (`morca.cgroup`); 0 for none."""
+    """The latest attempt's memory limit (`morca._internal.cgroup`); 0 for none."""
     var grant_mb: Int
     """Its start's memory grant (`morca.resources`); 0 for none."""
 
@@ -815,7 +815,7 @@ struct AttemptRow(Copyable, Movable):
     var log: String
     var usage: Usage
     var limit_mb: Int
-    """Its memory limit (`morca.cgroup`); 0 for none."""
+    """Its memory limit (`morca._internal.cgroup`); 0 for none."""
     var grant_mb: Int
     """Its start's memory grant (`morca.resources`); 0 for none."""
 

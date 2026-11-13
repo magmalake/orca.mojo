@@ -27,7 +27,7 @@ page has its Machines card, as a local run's does. Each poll the
 worker samples its runs' process trees, as the scheduler samples a local
 run's, and sends the samples with `/api/worker/exited`, so their attempts
 get their peak memory and CPU (`morca.usage`). Where the worker can make
-cgroups (`morca.cgroup`), each run gets one at its grant, and an
+cgroups (`morca._internal.cgroup`), each run gets one at its grant, and an
 out-of-memory kill is reported with `/api/worker/exited`, which fails the
 attempts saying so and raises what the pipeline asks for.
 
@@ -58,16 +58,16 @@ from std.time import perf_counter_ns, sleep
 
 from json import Value
 
-from morca.run_cluster import MemberSpec, member_spec_of
+from morca._internal.run_cluster import MemberSpec, member_spec_of
 from morca.tokens import new_token
-from morca.worker_cluster import (
+from morca._internal.worker_cluster import (
     free_port,
     start_dista_worker,
     start_head,
     stop_group,
 )
 from morca.admission import Report
-from morca.cgroup import (
+from morca._internal.cgroup import (
     Cgroups,
     Contained,
     HeldWatch,
@@ -75,9 +75,9 @@ from morca.cgroup import (
     held_text,
     own_limit_pressure,
 )
-from morca.cgroup import put as put_cgroup
-from morca.cgroup import start_limit_mb
-from morca.control import fetch_secret
+from morca._internal.cgroup import put as put_cgroup
+from morca._internal.cgroup import start_limit_mb
+from morca._internal.control import fetch_secret
 from morca.http_store import Body, StateApi
 from morca.logs import run_dir
 from morca.pressure import (
@@ -101,7 +101,7 @@ from morca.sample import (
 )
 from morca.store import FINAL
 from morca.usage import Meter, marks_json
-from morca.workers import (
+from morca._internal.workers import (
     WorkerRun,
     pool_problem,
     version_refusal,
@@ -121,7 +121,7 @@ struct _Running(Copyable, Movable):
     var stage: String
     var env: List[String]
     var helpers: List[Int]
-    """Its cluster's head and dista worker (`morca.worker_cluster`), stopped
+    """Its cluster's head and dista worker (`morca._internal.worker_cluster`), stopped
     when it ends; empty for a run on this worker alone."""
 
 
@@ -177,7 +177,7 @@ struct Worker(Movable):
     var admission: Admission
     """Whether this worker claims runs for its host's memory pressure."""
     var cgroups: Cgroups
-    """Where the runs' cgroups go (`morca.cgroup`), or why they don't."""
+    """Where the runs' cgroups go (`morca._internal.cgroup`), or why they don't."""
     var contained: Dict[Int, Contained]
     """The runs' processes' cgroups, by pid."""
     var held: HeldWatch
@@ -192,7 +192,7 @@ struct Worker(Movable):
     var advertise: String
     """The address the pool's machines reach this one at (`--advertise`):
     with it, a run that spreads is started as a cluster here, and runs are
-    joined (`morca.run_cluster`); without it, neither."""
+    joined (`morca._internal.run_cluster`); without it, neither."""
     var members: Dict[Int, Int]
     """The dista workers this one runs for other workers' runs: pid to
     `orca.run_members` id."""
@@ -399,7 +399,8 @@ struct Worker(Movable):
                 print("morca worker: no sampler for run", spec.run, ":", e)
 
     def _join(mut self, m: MemberSpec) raises:
-        """A dista worker for another worker's run (`morca.run_cluster`)."""
+        """A dista worker for another worker's run (`morca._internal.run_cluster`).
+        """
         var env = grant_env(m.env, m.grant, pressure_env(self.psi))
         for s in m.secrets:
             env.append(String(s[0], "=", fetch_secret(s[1])))

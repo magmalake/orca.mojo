@@ -53,7 +53,7 @@ from std.os import getenv, remove
 from std.os.path import exists
 from std.time import sleep
 
-from morca.aws import (
+from morca._internal.aws import (
     _DIR,
     _Opts,
     _out,

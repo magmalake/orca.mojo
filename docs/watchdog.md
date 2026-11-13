@@ -37,7 +37,7 @@ scheduler that overrides it.
 
 Pooled idle and draining workers don't count for `idle`. `idle` and `stuck`
 look back at most 30 minutes, because fleet samples are kept that long. The
-cost is an estimate from `morca.fleet`'s on-demand price table, plus the
+cost is an estimate from `morca._internal.fleet`'s on-demand price table, plus the
 control instance's own price when `MORCA_CONTROL_TYPE` names its type.
 
 **On the local runner** (`MORCA_RUNNER=local`, such as the

@@ -1,5 +1,5 @@
 """`HttpStore`: a run's state over `morca ui`'s API, for a run on a remote
-worker (`morca worker`, `morca.worker`), which holds no database credentials.
+worker (`morca worker`, `morca._internal.worker`), which holds no database credentials.
 
 A pipeline binary given `MORCA_STATE_URL` (the UI, `https://...`, or `http`
 to this machine only) and `MORCA_STATE_TOKEN` (a worker token,

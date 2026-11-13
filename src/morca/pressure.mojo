@@ -413,7 +413,7 @@ struct Admission(Copyable, Movable):
         """Takes a reading (None: none could be read, which holds nothing),
         at `now`, with `idle` whether none of morca's runs is going on this
         host. `own` is the part of `some avg10` that runs held at their own
-        memory limits explain (`morca.cgroup.own_limit_pressure`), which
+        memory limits explain (`morca._internal.cgroup.own_limit_pressure`), which
         holds nothing: the host may have memory to spare, and such a run is
         killed and retried bigger in its own time."""
         self.reading = psi

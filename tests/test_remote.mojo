@@ -1,6 +1,6 @@
 """`morca login`'s pieces that need no server: API tokens' form, digest and
 lifetime (`morca.tokens`), which URLs a token may be sent to, and the
-credentials file and its mode (`morca.remote`). tests/remote.sh runs the
+credentials file and its mode (`morca._internal.remote`). tests/remote.sh runs the
 whole of it against `morca ui`."""
 
 from std.os import getenv, listdir, remove, setenv, stat
@@ -13,7 +13,7 @@ from std.testing import (
     assert_true,
 )
 
-from morca.remote import (
+from morca._internal.remote import (
     Credential,
     find_credential,
     read_credentials,

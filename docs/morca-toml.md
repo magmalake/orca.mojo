@@ -52,7 +52,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 
 | Key | Type | Default when absent | Replaces the flag | Notes |
 |---|---|---|---|---|
-| `placement` | string: `"control"`, `"ec2"`, `"worker:<pool>"` or `"default"` | `default`, the scheduler's runner (`MORCA_RUNNER`) | `--placement` | `control` runs on the scheduler's host (`morca.control`). `worker:<pool>` runs on a remote worker of that pool (`morca worker`), never the scheduler: [workers.md](workers.md). All four: [placement.md](placement.md). |
+| `placement` | string: `"control"`, `"ec2"`, `"worker:<pool>"` or `"default"` | `default`, the scheduler's runner (`MORCA_RUNNER`) | `--placement` | `control` runs on the scheduler's host (`morca._internal.control`). `worker:<pool>` runs on a remote worker of that pool (`morca worker`), never the scheduler: [workers.md](workers.md). All four: [placement.md](placement.md). |
 | `head_type` | string, an instance type | `MORCA_EC2_HEAD_TYPE`, else `c7g.large` | `--head-type` | Only used on EC2. |
 | `worker_type` | string, an instance type | `MORCA_EC2_WORKER_TYPE`, else `c7g.xlarge` | `--worker-type` | Only used on EC2. |
 | `workers` | integer `N` (at least 1), or string `"MIN..MAX"` | the code's `workers`, else 2; 0 for a pipeline without tasks | `--workers` | With `MIN..MAX`, the run scales between the two. |
@@ -269,7 +269,7 @@ env = { DISTA_WORKER_SLOTS = "auto", GHARCHIVE_PARALLEL = "auto" }
 - **The control placement's memory cap** (`MORCA_CONTROL_MEMORY_MB`, 1024)
   still kills a control-placed run over it, whatever its grant: set it at
   least as high as the largest `memory_gb` maximum you place there.
-- **Enforced where morca can make cgroups** (`morca.cgroup`;
+- **Enforced where morca can make cgroups** (`morca._internal.cgroup`;
   [docs/hetzner.md](hetzner.md#a-cgroup-per-run)): a run's grant is its
   cgroup's `memory.high`, and `MORCA_RUN_MEMORY_MARGIN` (25) percent above it
   the kernel kills the run, it alone. A run held at its grant short of that
@@ -591,7 +591,7 @@ file no longer has is deleted there, and its machines are removed once
 idle. A machine that's running is never replaced by a type higher in the
 list: the order only matters when morca adds one.
 
-The leading scheduler grows and shrinks each pool (`morca.pool_scale`):
+The leading scheduler grows and shrinks each pool (`morca._internal.pool_scale`):
 
 - **Grow.** While runs of the pool's pipelines have waited 20 s that a
   worker could start (at most `max_runs` less those running, per
@@ -692,7 +692,7 @@ The pipeline page and `/api/pipelines/<name>` say which of these stopped it, in 
 
 The estimate is conservative and fails closed. The AWS project's spend limit pauses the whole project, so a fill must stop well before it.
 
-- **Price.** A run's price is an hour of its head instance plus its most workers, at on-demand prices from morca.fleet's table (`hourly_price` in `src/morca/fleet.mojo`). That's the us-east-2 on-demand price for the types morca uses. The estimate is multiplied by 1.2 for what the table leaves out: EBS, transfer and requests.
+- **Price.** A run's price is an hour of its head instance plus its most workers, at on-demand prices from morca.fleet's table (`hourly_price` in `src/morca/_internal/fleet.mojo`). That's the us-east-2 on-demand price for the types morca uses. The estimate is multiplied by 1.2 for what the table leaves out: EBS, transfer and requests.
 - **Spend today.** It sums each fill run's instances (`orca.instances`) since 00:00 UTC, at their own types' prices. An instance still up counts to now, including its idle time in the warm pool.
 - **Before starting a run**, morca adds what the fill runs going and the new one may still cost. The expected time of a run is the longest of the pipeline's last 20 ended fill runs, or an hour before any has ended. It is at least a minute (EC2's minimum), plus `MORCA_EC2_POOL_SECONDS` of idle time in the pool. A run already going is charged that time less what it has run. The run starts only if the spend plus that is within `fill_budget_per_day`.
 - **Unknown prices.** No fill run starts on a budget when the price isn't known: an instance type that isn't in the table (today's runs' or the next run's), or a run on Kubernetes. The reason says which type.

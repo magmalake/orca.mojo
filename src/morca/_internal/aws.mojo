@@ -14,7 +14,7 @@ its user already has (`aws login`, or `AWS_PROFILE` for a named profile).
     morca aws down --yes
 
 `up` creates or updates the stack from the template morca carries
-(deploy/aws/morca.yaml, in `morca.aws_assets`); the first time it needs
+(deploy/aws/morca.yaml, in `morca._internal.aws_assets`); the first time it needs
 `--email`, for the Budgets alert, and makes the database's password. `push`
 builds the project's image from a staged copy of `pixi.toml`, `pixi.lock`,
 `bin/`, `pipelines/` and `src/`, with the project's `Dockerfile.morca` or
@@ -33,7 +33,7 @@ instance's settings beyond the template's (`ControlEnv`, all of them at
 once; never a secret). An update changes no running control instance: its
 boot script is the stack's `ControlBoot`, which a new one runs, and each
 slot's AMI is pinned to the one its instance has. `replace-control`
-(`morca.aws_replace`) boots a new control instance from the template, with
+(`morca._internal.aws_replace`) boots a new control instance from the template, with
 the old one's database, and moves the Elastic IP to it. `down` deletes the
 stack, which fails while its buckets hold objects.
 
@@ -49,7 +49,7 @@ from std.time import sleep
 
 from json import loads
 
-from morca.aws_assets import PROJECT_DOCKERFILE, STACK_TEMPLATE
+from morca._internal.aws_assets import PROJECT_DOCKERFILE, STACK_TEMPLATE
 from morca.config import ProjectConfig, refuse_orca_toml
 from morca.json import quote
 from morca.proc import capture

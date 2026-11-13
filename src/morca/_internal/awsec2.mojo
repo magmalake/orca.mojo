@@ -1,4 +1,4 @@
-"""The few EC2 calls the `ec2` runner makes (`morca.ec2`), over objectstore's
+"""The few EC2 calls the `ec2` runner makes (`morca._internal.ec2`), over objectstore's
 SigV4 signing and HTTP.
 
 EC2's API is a form `POST` of `Action=...&Version=...` to

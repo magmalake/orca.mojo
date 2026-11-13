@@ -27,7 +27,7 @@ from morca.notify import (
     ui_link,
 )
 from morca.state import State
-from morca.system import system_now
+from morca._internal.system import system_now
 from morca.watchdog import active_trips
 
 

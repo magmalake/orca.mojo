@@ -88,7 +88,7 @@ struct Pipeline[
     `keys_per_run` overrides it): one for time keys by default, tens to hundreds for keyed
     partitions (`morca.keyed`), whose runs then each go through many keys.
     On Kubernetes, a run of a pipeline with `tasks` gets a cluster of
-    `workers` dista workers (`morca.kube`); locally it forks `MORCA_WORKERS`.
+    `workers` dista workers (`morca._internal.kube`); locally it forks `MORCA_WORKERS`.
 
     The scheduler runs at most `max_runs` of its runs at once, and starts a
     failed scheduled or backfilled run again up to `run_retries` times, with

@@ -1,5 +1,5 @@
 """API tokens: what `morca login` gets from `morca ui`, so the `morca` command
-on another machine can act as a user of it (`morca.remote`).
+on another machine can act as a user of it (`morca._internal.remote`).
 
 ```
 morca user tokens alice          her tokens: label, created, last used, expires

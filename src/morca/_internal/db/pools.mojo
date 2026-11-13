@@ -1,6 +1,6 @@
-"""`orca.pools`, the worker pools morca.toml declares (`morca.pool_config`),
+"""`orca.pools`, the worker pools morca.toml declares (`morca._internal.pool_config`),
 and `orca.pool_machines`, the machines the pool autoscaler
-(`morca.pool_scale`) made for them."""
+(`morca._internal.pool_scale`) made for them."""
 
 from postgres import Connection, Params, Transaction
 
@@ -64,7 +64,7 @@ def booting_machine(mut conn: Connection, worker: Int) raises -> Bool:
     return len(rows) > 0
 
 
-# ── the autoscaler (`morca.pool_scale`) ──────────────────────────────────────
+# ── the autoscaler (`morca._internal.pool_scale`) ──────────────────────────────────────
 
 
 def stack_id(mut conn: Connection) raises -> String:

@@ -16,7 +16,7 @@ from morca.config import (
     resolve,
 )
 from morca.apps_config import apps_text
-from morca.pool_config import NO_WAIT, read_pools
+from morca._internal.pool_config import NO_WAIT, read_pools
 
 comptime EXAMPLE = """[defaults]
 placement = "ec2"

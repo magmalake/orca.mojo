@@ -31,7 +31,7 @@ from morca._internal.db.run_cluster import MEMBER_GRANTS_SQL, MEMBER_MB_SQL
 
 from morca.http_store import Body
 from morca.registered import registered, run_request
-from morca.cgroup import raised_request
+from morca._internal.cgroup import raised_request
 from morca.resources import Grant, Room, admit
 from morca.state import State
 

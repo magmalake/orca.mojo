@@ -1,4 +1,4 @@
-"""The Kubernetes runner's queries (`morca.kube`): which runs' objects to
+"""The Kubernetes runner's queries (`morca._internal.kube`): which runs' objects to
 keep."""
 
 from postgres import Connection, Params

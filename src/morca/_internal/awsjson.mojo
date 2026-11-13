@@ -1,7 +1,7 @@
 """One signed call to an AWS service's JSON API (Secrets Manager's
 `GetSecretValue`, SSM's `GetParameter`): SigV4 over objectstore's HTTP,
 with the credentials of the `AWS_*` environment or else the instance
-role. A low module: `morca.control` and `morca.machines_ec2` both use it.
+role. A low module: `morca._internal.control` and `morca._internal.machines_ec2` both use it.
 """
 
 from std.os import getenv

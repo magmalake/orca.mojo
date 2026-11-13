@@ -4,7 +4,7 @@ page's, `morca._internal.ui.pools`). `/api/fleet` and `/api/workers` are what th
 Fleet and Workers pages were, before Pools replaced them.
 """
 
-from morca.fleet import (
+from morca._internal.fleet import (
     charts_json,
     fleet_charts,
     fleet_hosts,
@@ -23,7 +23,7 @@ from morca.watchdog import (
     watchdog_json,
 )
 from morca._internal.web.page import Page
-from morca.workers import worker_rows, workers_json
+from morca._internal.workers import worker_rows, workers_json
 
 
 def _fleet_sort(sort: String) -> String:

@@ -9,7 +9,7 @@ the request they suggest:
 - **memory** is the `MEMORY_PERCENTILE` of the runs' peak memory times
   `MEMORY_MARGIN`, rounded up to `MEMORY_STEP_MB`, and never below what an
   out-of-memory kill raised the pipeline to (`orca.pipelines.memory_raised_mb`,
-  `morca.cgroup`);
+  `morca._internal.cgroup`);
 - **CPUs** are the `CPU_PERCENTILE` of the runs' peak cores, rounded up, at
   least 1; none where peak cores aren't measured (macOS);
 - each is clamped to the pipeline's declared range (`cpus`, `memory_gb`),

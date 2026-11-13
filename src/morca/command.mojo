@@ -29,7 +29,7 @@ Its commands:
     ./build/morca --remote morca.example.com backfill taxi 2024-03
 
 Needs `MORCA_DATABASE_URL`, but for the commands `--remote` (or
-`MORCA_REMOTE`) sends to a deployed `morca ui` instead (`morca.remote`). See
+`MORCA_REMOTE`) sends to a deployed `morca ui` instead (`morca._internal.remote`). See
 `morca.scheduler` for what a tick does, and `morca._internal.web` for the pages,
 `morca.lineage` for what `lineage` prints, and `morca.sensors` for what
 `rebuild` plans.
@@ -45,8 +45,8 @@ import morca._internal.db.notify as notify_db
 
 from morca.actions import cancel_runs, pause_pipeline
 from morca.auth import add_user, remove_user, users
-from morca.aws import aws_command
-from morca.aws_replace import replace_control
+from morca._internal.aws import aws_command
+from morca._internal.aws_replace import replace_control
 from morca.civil import now
 from morca.expiry import expirable, expire_argv, maintain_binary
 from morca.lineage import Made, SnapshotRef, back, forward, latest
@@ -59,7 +59,7 @@ from morca.notify import (
     send_now,
 )
 from morca.proc import absolute, binary_seconds, capture
-from morca.remote import (
+from morca._internal.remote import (
     Api,
     api_command,
     is_remote_command,
@@ -82,29 +82,29 @@ from morca.config_show import (
     show_json,
     shown,
 )
-from morca.instances import (
+from morca._internal.instances import (
     ask_drain,
     instances,
     overlap_on,
     overlap_refusal,
     wait_for_lead,
 )
-from morca.pool_config import read_pools, record_pools
+from morca._internal.pool_config import read_pools, record_pools
 from morca.registering import register_pipeline
 from morca.scheduler import Scheduler
 from morca.tick import tick
-from morca.control import fetch_secret
-from morca.ec2 import vcpus
-from morca.fleet import hourly_price
-from morca.secrets import secret_problem
+from morca._internal.control import fetch_secret
+from morca._internal.ec2 import vcpus
+from morca._internal.fleet import hourly_price
+from morca._internal.secrets import secret_problem
 from morca.sensors import rebuild, rebuilds
 from morca.state import State
 from morca.watchdog import acknowledge, snooze as snooze_rule
 from morca.auth import audit
 from morca.tokens import revoke_user_tokens, user_tokens
 from morca._internal.web.server import DEFAULT_ADDR, serve_ui
-from morca.worker import worker_command
-from morca.workers import (
+from morca._internal.worker import worker_command
+from morca._internal.workers import (
     create_worker_token,
     revoke_worker_token,
     worker_rows,

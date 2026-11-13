@@ -9,7 +9,7 @@ morca worker-token revoke <id>
 
 A pipeline placed `worker:<pool>` (`placement` in morca.toml, or `morca
 register --placement worker:<pool>`) has its runs started by a worker of
-that pool (`morca worker`, `morca.worker`), never by the scheduler, which
+that pool (`morca worker`, `morca._internal.worker`), never by the scheduler, which
 keeps them queued, `held` "waiting for a worker of pool <pool>", requeues
 one whose heartbeat went stale (a worker that died, or a laptop that went
 to sleep) as it would start any dead run again, and fails one that has no
@@ -43,7 +43,7 @@ claim is a row of `orca.audit` (user `worker:<label>`, source `worker`).
 **Versions.** A run needs its pipeline's image (`--image`, `image` in
 morca.toml) to be the worker's (`MORCA_IMAGE`), both empty included: a worker
 of another image isn't given it, and it stays queued, held saying why. The
-worker checks the spec again before it starts anything (`morca.worker`).
+worker checks the spec again before it starts anything (`morca._internal.worker`).
 """
 
 from std.os import getenv
@@ -54,7 +54,7 @@ import morca._internal.db.scheduler as scheduler_db
 import morca._internal.db.starting as starting_db
 import morca._internal.db.workers as workers_db
 
-from morca.run_cluster import (
+from morca._internal.run_cluster import (
     join_claim,
     member_spec_json,
     members_of,
@@ -71,7 +71,7 @@ from morca.admission import (
     row_json,
     worker_host,
 )
-from morca.control import WORKER_PREFIX, pool_of, pool_problem
+from morca._internal.control import WORKER_PREFIX, pool_of, pool_problem
 from morca.http_store import (
     STORE_PATH,
     Body,
@@ -84,7 +84,12 @@ from morca.http_store import (
 from morca.civil import now
 from morca.json import quote
 from morca._internal.db.live import dead_sql, stale_limit, start_grace
-from morca.cgroup import growth_pct_of, oom_text, raised_mb, raised_request
+from morca._internal.cgroup import (
+    growth_pct_of,
+    oom_text,
+    raised_mb,
+    raised_request,
+)
 from morca.recommend import RunRequest
 from morca.resources import Grant, Request, Room, admit
 from morca.registered import (
@@ -291,7 +296,7 @@ struct WorkerRun(Copyable, Movable):
     what it can grant."""
     var members: Int
     """How many more workers its dista cluster may spread over
-    (`morca.run_cluster`); 0 runs it on this worker alone."""
+    (`morca._internal.run_cluster`); 0 runs it on this worker alone."""
 
 
 def _pairs_json(
@@ -421,7 +426,7 @@ def claim(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     """`/api/worker/claim`'s answer: `{"run": <spec>|null, "refused": ...,
     "join": <member spec>, "stop": [member, ...]}`. With no run to start,
     room left and an address the pool's machines reach it at
-    (`advertise`), a run to join (`morca.run_cluster`); and always the
+    (`advertise`), a run to join (`morca._internal.run_cluster`); and always the
     members it has whose run has ended, to stop."""
     var stop = members_to_stop(db, w.id)
     var answer = _claim_run(db, w, v)
@@ -616,7 +621,7 @@ def release(mut db: State, w: WorkerAuth, v: Value) raises -> String:
 
 
 def _contained_exit(mut db: State, w: WorkerAuth, v: Value) raises:
-    """A worker's run's cgroup (`morca.cgroup`), at its process's end: its
+    """A worker's run's cgroup (`morca._internal.cgroup`), at its process's end: its
     limit on the attempts it made, and after an out-of-memory kill, while
     the start is still this worker's, those left running failed saying so
     and the pipeline's memory raised, up to its request's maximum; killed

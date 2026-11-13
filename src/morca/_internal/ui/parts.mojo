@@ -384,7 +384,7 @@ def mb_text(mb: Int) -> String:
 
 def usage_cell(mut h: Html, u: Usage, limit_mb: Int = 0, grant_mb: Int = 0):
     """A `<td>` of a peak in memory, with the CPU in its title, and after
-    it the attempt's memory limit (`morca.cgroup`) when it had one."""
+    it the attempt's memory limit (`morca._internal.cgroup`) when it had one."""
     if u.peak_rss_bytes < 0 and limit_mb <= 0:
         h.raw('<td class="num"></td>')
         return
@@ -458,7 +458,7 @@ comptime LIMIT_HELP = (
 
 
 def limit_facts(mut h: Html, limit_mb: Int, max_mb: Int, grant_mb: Int = 0):
-    """A Memory limit fact (`morca.cgroup`), when there was one."""
+    """A Memory limit fact (`morca._internal.cgroup`), when there was one."""
     if limit_mb <= 0:
         return
     fact_item(h, "Memory limit", "memory-limit", LIMIT_HELP, "runners")
@@ -472,7 +472,7 @@ def limit_facts(mut h: Html, limit_mb: Int, max_mb: Int, grant_mb: Int = 0):
 
 def grant_facts(mut h: Html, r: RunResources):
     """A run's Requested and Granted facts (`morca.resources`), when its
-    pipeline asked for any, and its memory limit (`morca.cgroup`) when it
+    pipeline asked for any, and its memory limit (`morca._internal.cgroup`) when it
     had one."""
     if not r.any():
         if r.source:

@@ -1,6 +1,6 @@
 """Worker pools morca grows and shrinks itself (#267): a `[pools.<name>]`
 table in morca.toml, read and checked here, recorded by `morca register` in
-`orca.pools`, and acted on by the scheduler (`morca.pool_scale`).
+`orca.pools`, and acted on by the scheduler (`morca._internal.pool_scale`).
 
     [pools.lab]
     provider = "hetzner"
@@ -23,7 +23,7 @@ never replaced by a type higher in the list.
 
 import morca._internal.db.pools as pools_db
 
-from morca.control import pool_problem
+from morca._internal.control import pool_problem
 from morca.json import quote
 from morca.state import State
 from morca.toml import ARRAY, INTEGER, STRING, TABLE, TomlDoc, toml_key

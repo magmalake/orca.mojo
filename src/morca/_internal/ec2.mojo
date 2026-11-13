@@ -88,7 +88,7 @@ than launching new ones:
   given and its worker processes. A run takes only instances of its own
   keys, so a new registration, image or setting never reuses old ones.
 - **Back to the pool.** A head's driver exits; a worker's `<binary>
-  pool-wait` (`morca.pool`) sees its run end and the script kills its dista
+  pool-wait` (`morca._internal.pool`) sees its run end and the script kills its dista
   processes, which don't end with their head. Each uploads that run's logs
   and samples and runs `<binary> pool-next`, which marks the run's row
   `idle` and beats `polled` every second until it's handed a run. Its run's
@@ -125,7 +125,7 @@ from dista.scale import Demand, Policy, decide
 from dista.socket import wall_ns
 from objectstore.crypto import sha256_hex
 
-from morca.awsec2 import Ec2, Instance
+from morca._internal.awsec2 import Ec2, Instance
 import morca._internal.db.ec2 as ec2_db
 from morca._internal.db.ec2 import SpecRow
 from morca.config import (
@@ -135,7 +135,7 @@ from morca.config import (
 from morca.json import quote
 from morca.proc import capture
 from morca.sample import sample_seconds
-from morca.secrets import parse_secrets
+from morca._internal.secrets import parse_secrets
 from morca.state import State
 
 comptime HEAD_PORT = 6390
@@ -676,7 +676,7 @@ struct Ec2Runner(Movable):
     ) raises -> String:
         """The instance's script. With the pool on, its work is a loop: run
         `run` at `start`, then, back in the pool, wait for the next with
-        `<binary> pool-next` (`morca.pool`), which sets the run, start, head
+        `<binary> pool-next` (`morca._internal.pool`), which sets the run, start, head
         and new-code flag the next pass uses, or shuts down. Everything a
         pass writes and uploads is named by its run, so each run's logs and
         samples hold its own part only, and its secrets are read again."""

@@ -1,5 +1,5 @@
 """A run's dista cluster over several workers of a pool
-(`morca.run_cluster`): its head on `orca.runs`, its members in
+(`morca._internal.run_cluster`): its head on `orca.runs`, its members in
 `orca.run_members`."""
 
 from postgres import Connection, Params

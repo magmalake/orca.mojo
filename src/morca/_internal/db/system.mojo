@@ -1,4 +1,4 @@
-"""The control instance's samples (`morca.system`): `orca.system_minutes`,
+"""The control instance's samples (`morca._internal.system`): `orca.system_minutes`,
 a row per minute, and `orca.system_containers`, each container's peak in
 it."""
 

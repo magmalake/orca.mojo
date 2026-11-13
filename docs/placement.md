@@ -17,8 +17,8 @@ placement = "worker:bgent"   # on a remote worker of pool bgent
 | Placement | Runs start | Use it for |
 |---|---|---|
 | `default` (or absent) | on the scheduler's runner, `MORCA_RUNNER`: `local`, `kubernetes` or `ec2` | what morca did before placement |
-| `ec2` | on instances of their own, a head and workers per run (`morca.ec2`) | runs that need more than the control host has. On a scheduler whose runner isn't `ec2` they wait, saying why. |
-| `control` | as child processes of the scheduler, on its host, with no instance to boot (`morca.control`) | small runs on an EC2 stack: they start in a second instead of minutes |
+| `ec2` | on instances of their own, a head and workers per run (`morca._internal.ec2`) | runs that need more than the control host has. On a scheduler whose runner isn't `ec2` they wait, saying why. |
+| `control` | as child processes of the scheduler, on its host, with no instance to boot (`morca._internal.control`) | small runs on an EC2 stack: they start in a second instead of minutes |
 | `worker:<pool>` | on a remote worker of that pool, never by the scheduler | another machine with spare CPU: [workers.md](workers.md) |
 
 The pipeline page's Config card and `morca config show <pipeline>` say a
@@ -34,7 +34,7 @@ UI, so the scheduler bounds it:
 | Variable | Default | |
 |---|---|---|
 | `MORCA_CONTROL_MAX_RUNS` | 2 | control-placed runs at once, of all pipelines |
-| `MORCA_CONTROL_MEMORY_MB` | 1024 | a run whose processes' resident memory goes over is killed, its attempts failed saying why; where runs get cgroups (`morca.cgroup`), it's the most a run's limit (`memory.high`) can be, and the cgroup does the killing |
+| `MORCA_CONTROL_MEMORY_MB` | 1024 | a run whose processes' resident memory goes over is killed, its attempts failed saying why; where runs get cgroups (`morca._internal.cgroup`), it's the most a run's limit (`memory.high`) can be, and the cgroup does the killing |
 | `MORCA_CONTROL_NICE` | 10 | the `nice` its processes run at, so the host's own processes win |
 | `MORCA_CONTROL_WORKERS` | 1 | local dista workers a run forks |
 

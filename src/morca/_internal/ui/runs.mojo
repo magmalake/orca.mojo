@@ -16,7 +16,7 @@ from morca._internal.api.runs import (
 from morca.html import Html, query_param, url_encode
 from morca.json import quote
 from morca.state import State
-from morca.system import alert_html
+from morca._internal.system import alert_html
 from morca._internal.ui.layout import (
     HERE_SLOT,
     IDLE_EVERY,

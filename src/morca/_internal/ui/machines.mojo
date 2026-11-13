@@ -5,7 +5,7 @@ it.
 
 import morca._internal.db.run_view as run_db
 
-from morca.control import CONTROL
+from morca._internal.control import CONTROL
 from morca.html import Html
 from morca.metrics import InstanceMetrics, metrics_html
 from morca.state import State

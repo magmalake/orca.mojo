@@ -1,5 +1,5 @@
 """Ops > Control's Runs card: each local and control-placed run going on this
-host, with its cgroup's memory against its limit (`morca.cgroup`), which
+host, with its cgroup's memory against its limit (`morca._internal.cgroup`), which
 the scheduler records every 5 seconds, and its grant (`morca.resources`).
 """
 

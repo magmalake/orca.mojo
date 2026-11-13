@@ -14,7 +14,7 @@ reads:
 | Variable | Meaning |
 |---|---|
 | `MORCA_NOTIFY_URL` | a topic URL (`https://ntfy.sh/<long-random-topic>`), or just a server (`https://ntfy.example.com`) when the topic comes from the secret. Unset, and no `MORCA_NOTIFY_SECRET`: no alerts. |
-| `MORCA_NOTIFY_SECRET` | the id of a secret, read with `MORCA_SECRET_FETCH` (`morca.control.fetch_secret`), holding the topic: a name (appended to `MORCA_NOTIFY_URL`, else `https://ntfy.sh`), or a whole URL. The topic is a secret in practice (anyone who knows it can read it). |
+| `MORCA_NOTIFY_SECRET` | the id of a secret, read with `MORCA_SECRET_FETCH` (`morca._internal.control.fetch_secret`), holding the topic: a name (appended to `MORCA_NOTIFY_URL`, else `https://ntfy.sh`), or a whole URL. The topic is a secret in practice (anyone who knows it can read it). |
 | `MORCA_NOTIFY_TOKEN`, `MORCA_NOTIFY_TOKEN_SECRET` | an ntfy access token for a protected topic, plain or as a secret's id. |
 | `MORCA_NOTIFY_MIN_SECONDS` | 1800: the same alert (kind and subject) is sent at most once per period. |
 | `MORCA_NOTIFY_TIMEOUT_MS` | 5000: how long a send may take. |
@@ -46,7 +46,7 @@ from std.os import getenv
 from objectstore.http import Header, HttpClient
 import morca._internal.db.notify as notify_db
 
-from morca.control import fetch_secret
+from morca._internal.control import fetch_secret
 from morca.html import Html
 from morca.json import quote
 from morca.state import State

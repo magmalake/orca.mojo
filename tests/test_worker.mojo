@@ -13,7 +13,7 @@ from std.testing import (
 
 from json import loads
 
-from morca.control import pool_of, pool_problem
+from morca._internal.control import pool_of, pool_problem
 from morca.resources import Grant
 from morca.http_store import (
     Body,
@@ -39,7 +39,7 @@ from morca.store import (
     Usage,
 )
 from morca.sample import machine_name
-from morca.workers import (
+from morca._internal.workers import (
     WorkerRun,
     version_refusal,
     worker_run_json,

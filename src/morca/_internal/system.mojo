@@ -7,7 +7,7 @@ scheduler, with the host's process and network namespaces and the host's
 cgroup files and Docker's config files mounted read-only (`morca.sample`
 `--cgroup` and `--names`). It keeps its last hour of lines in the file
 `MORCA_CONTROL_SAMPLES` names. Every `MORCA_FLEET_SECONDS` the scheduler reads
-the file (`morca.fleet.ingest`) and, here:
+the file (`morca._internal.fleet.ingest`) and, here:
 
 - rolls the lines it hasn't seen into one row a minute in
   `orca.system_minutes` (CPU, memory, the fullest disk, network: sums to
@@ -37,7 +37,7 @@ import morca._internal.db.system as system_db
 from morca._internal.db.system import Container, Minute
 
 from morca.civil import Civil
-from morca.fleet import Series, Summary, _chart, _fixed
+from morca._internal.fleet import Series, Summary, _chart, _fixed
 from morca.html import Html, escape
 from morca.json import quote
 from morca.logs import (
@@ -862,7 +862,7 @@ def _label_value(s: String) -> String:
 
 def prometheus(now: Optional[Now], f: Summary) -> String:
     """The gauges, in Prometheus' text format: the fleet's (`f`, from
-    `morca.fleet`) and the control instance's, which are left out while its
+    `morca._internal.fleet`) and the control instance's, which are left out while its
     samples are stale or missing."""
     var out = String()
     if now and not now.value().stale():

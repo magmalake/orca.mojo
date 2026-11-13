@@ -106,7 +106,7 @@ struct Machine(Copyable, Movable):
 
 def type_size(instance_type: String) -> Tuple[Int, Int]:
     """The vCPUs and memory (MiB) of the instance types morca runs on, as
-    `morca.fleet.hourly_price` prices them; (0, 0) for any other."""
+    `morca._internal.fleet.hourly_price` prices them; (0, 0) for any other."""
     if instance_type == "c7g.large":
         return (2, 4096)
     if instance_type == "c7g.xlarge":

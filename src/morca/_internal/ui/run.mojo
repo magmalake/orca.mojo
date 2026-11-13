@@ -61,7 +61,7 @@ from morca._internal.views.runs import (
 )
 from morca._internal.views.steps import attempt_cards, step_cards_of
 from morca._internal.web.page import Page
-from morca.workers import ran_on
+from morca._internal.workers import ran_on
 
 
 def run_html(mut db: State, v: RunView, view: String = "") raises -> String:

@@ -1,5 +1,5 @@
 """The pool autoscaler (#267): machines for the pools morca.toml declares
-(`morca.pool_config`), made and removed by the leading scheduler every
+(`morca._internal.pool_config`), made and removed by the leading scheduler every
 `MORCA_POOL_SCALE_SECONDS` (15).
 
 **Demand.** A pool needs a machine while runs of its pipelines (placement
@@ -25,7 +25,7 @@ autoscaler makes one, at most once every `MORCA_POOL_TRY_SECONDS` (60):
 
 The machine is named `orca-pool-<pool>-<n>`, labelled with the pool and this
 stack's id (`orca.stack_identity`, so a project several stacks share keeps
-them apart), and booted as a worker (`morca.pool_boot`) with a token of its
+them apart), and booted as a worker (`morca._internal.pool_boot`) with a token of its
 own. `orca.pools.status` says what the last attempt came to.
 
 **Shrinking.** A machine is removed (its token revoked, then the machine
@@ -36,7 +36,7 @@ deleted, then its row ended with why) when:
 - its pool is no longer in morca.toml, once it's idle;
 - its worker never showed up within `MORCA_POOL_BOOT_SECONDS` (900), or went
   silent for `MORCA_POOL_LOST_SECONDS` (300): its runs are queued again as
-  any lost worker's are (`morca.pool_runs`).
+  any lost worker's are (`morca._internal.pool_runs`).
 
 **Strays.** A machine of the provider's with the pool's and this stack's
 labels that `orca.pool_machines` doesn't have live (made, but the row
@@ -50,13 +50,13 @@ from json import loads
 import morca._internal.db.pools as pools_db
 from morca._internal.db.pools import LiveMachine
 
-from morca.machines import MachineSpec, Provider
-from morca.pool_boot import CREATED_BY, WORKER_IMAGE, boot_script
-from morca.pool_config import NO_WAIT
+from morca._internal.machines import MachineSpec, Provider
+from morca._internal.pool_boot import CREATED_BY, WORKER_IMAGE, boot_script
+from morca._internal.pool_config import NO_WAIT
 from morca.registry import Registry
 from morca.state import State
 from morca.tokens import token_hash
-from morca.workers import create_worker_token
+from morca._internal.workers import create_worker_token
 
 
 def _seconds(name: String, default: Float64) -> Float64:

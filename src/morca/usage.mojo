@@ -2,7 +2,7 @@
 
 Whoever starts a run's process measures it: the scheduler for a local or
 control-placed run (`morca.scheduler`), `morca worker` for a remote worker's
-(`morca.worker`). Each tick, at most every quarter of a second, it reads
+(`morca._internal.worker`). Each tick, at most every quarter of a second, it reads
 the process's tree in /proc (`morca.sample.tree_usage`: the driver and what
 it started, dista's local workers among them) and keeps a `Meter` of it:
 the resident bytes, the CPU seconds so far (utime + stime, with what the

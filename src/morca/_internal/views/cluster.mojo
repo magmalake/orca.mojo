@@ -1,5 +1,5 @@
 """A run's dista cluster over several workers of its pool (#268,
-`morca.run_cluster`), as its page and JSON show it: the worker that started
+`morca._internal.run_cluster`), as its page and JSON show it: the worker that started
 it, holding its head, then each worker that joined it, with their grants
 and when and why each ended (`morca._internal.db.run_view.cluster_rows`).
 """

@@ -26,7 +26,7 @@ from morca.proc import (
     binary_seconds,
     capture,
 )
-from morca.secrets import secrets_json
+from morca._internal.secrets import secrets_json
 from morca.sensors import parse_sense
 from morca.scheduler import Scheduler
 from morca.registered import (

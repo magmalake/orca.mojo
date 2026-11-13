@@ -12,8 +12,8 @@ build -g1`, as the image builds it). Without the symbolizer the dump starts
 
 The runners call `crash_summary` on the output of a start that ended: the
 local runner when it reaps the process (`morca.scheduler`), the ec2 runner's
-`keep-log` on the head (`morca.ec2`), and the Kubernetes runner as it keeps
-the driver pod's log (`morca.kube`); each marks the attempts the process
+`keep-log` on the head (`morca._internal.ec2`), and the Kubernetes runner as it keeps
+the driver pod's log (`morca._internal.kube`); each marks the attempts the process
 left `running` as failed with it.
 """
 

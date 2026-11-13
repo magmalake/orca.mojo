@@ -1,5 +1,5 @@
 """The processes of one run's dista cluster on a remote worker (#268,
-`morca.run_cluster`): the head and a dista worker beside the run's driver
+`morca._internal.run_cluster`): the head and a dista worker beside the run's driver
 on the worker that starts it, and a dista worker on each one that joins.
 
 Every one of them gets the run's cluster token as `DISTA_TOKEN` (dista

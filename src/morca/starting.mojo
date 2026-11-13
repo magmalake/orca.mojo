@@ -4,11 +4,11 @@ control-placed run's process.
 """
 
 from std.os import makedirs
-from morca.cgroup import (
+from morca._internal.cgroup import (
     Cgroups,
     raised_request,
 )
-from morca.control import (
+from morca._internal.control import (
     CONTROL,
     control_stage,
     fetch_secret,
@@ -22,11 +22,11 @@ from morca.fill import (
     FillStatus,
     fill_status,
 )
-from morca.system import system_now
+from morca._internal.system import system_now
 from morca._internal.db.batches import mark_batch
 import morca._internal.db.starting as starting_db
 from morca._internal.db.live import hold_behind
-from morca.kube import (
+from morca._internal.kube import (
     RunSpec,
     cpu_millis,
 )
@@ -69,7 +69,7 @@ from morca.registered import (
     recorded_memory_gb,
     run_request,
 )
-from morca.pool_runs import (
+from morca._internal.pool_runs import (
     _fill_for_workers,
     _requeue_for_workers,
     _requeue_orphans,
@@ -82,7 +82,7 @@ def _start(
     """Starts queued runs, retries that are due and runs whose process
     died, up to `max_runs` live at once; none while `p` is paused, when
     they wait (runs already going go on). A control-placed pipeline's
-    runs start here (`morca.control`), within the control instance's
+    runs start here (`morca._internal.control`), within the control instance's
     limits; a queued run those hold, or that's placed on a runner this
     scheduler hasn't, is `held` with the reason.
 
@@ -455,7 +455,7 @@ def _start_control(
     grant: Grant = Grant.none(),
 ):
     """Starts start `start` of `p`'s run `id` on this host
-    (`morca.control`): its binary's `resume`, in a process group of its
+    (`morca._internal.control`): its binary's `resume`, in a process group of its
     own, at a lower CPU priority, first to go if memory runs out, with
     its secrets read now and given to it alone, and its output staged
     for `keep-log`. A run that can't start fails, and is retried as a

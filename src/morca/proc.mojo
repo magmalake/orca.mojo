@@ -43,7 +43,7 @@ def spawn(
     makes it lead a process group of its own, which `kill(-pid)` ends whole;
     `first_to_go`, on Linux, makes it (and what it forks) the first the
     kernel kills when memory runs out (`oom_score_adj` 1000). `cgroup`, a
-    cgroup v2 directory (`morca.cgroup`), is where it goes before it execs:
+    cgroup v2 directory (`morca._internal.cgroup`), is where it goes before it execs:
     the parent opens its `cgroup.procs` (close-on-exec) and the child
     writes `0` to it, its first act and an async-signal-safe one, so all
     it runs and starts is in the cgroup."""

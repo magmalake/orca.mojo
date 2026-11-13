@@ -19,7 +19,7 @@ from morca.recommend import (
     learned,
 )
 from morca.resources import Request
-from morca.secrets import parse_secrets
+from morca._internal.secrets import parse_secrets
 from morca.source import (
     is_hex,
     web_url,

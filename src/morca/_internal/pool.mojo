@@ -1,4 +1,4 @@
-"""An EC2 instance's side of the warm pool (`morca.ec2`,
+"""An EC2 instance's side of the warm pool (`morca._internal.ec2`,
 `MORCA_EC2_POOL_SECONDS`): the two commands its script runs between runs,
 through the pipeline's binary, over `MORCA_DATABASE_URL`.
 

@@ -1,4 +1,4 @@
-"""A worker pool's machines on EC2 (#267): `morca.machines.Provider` for a
+"""A worker pool's machines on EC2 (#267): `morca._internal.machines.Provider` for a
 pool with `provider = "ec2"`.
 
 - **Where:** a pool's `locations` are subnet IDs, tried in order (each is
@@ -26,9 +26,9 @@ from std.os import getenv
 
 from json import loads
 
-from morca.awsec2 import Ec2
-from morca.awsjson import aws_json
-from morca.hcloud import Created
+from morca._internal.awsec2 import Ec2
+from morca._internal.awsjson import aws_json
+from morca._internal.hcloud import Created
 from morca.json import quote
 
 comptime NO_CAPACITY = [

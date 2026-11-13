@@ -5,7 +5,7 @@
 from std.os import getenv
 import morca._internal.db.registered as registered_db
 from morca.civil import Civil
-from morca.control import (
+from morca._internal.control import (
     CONTROL,
     pool_of,
 )
@@ -20,10 +20,10 @@ from morca.fill import (
 from morca.cron import CronExpr
 from morca.day import Day
 from morca.hour import Hour
-from morca.ec2 import Ec2Spec
+from morca._internal.ec2 import Ec2Spec
 from morca.month import Month
 from morca.schedule import Schedule
-from morca.secrets import parse_secrets
+from morca._internal.secrets import parse_secrets
 from morca.resources import (
     Request,
     resolve_auto,
@@ -83,7 +83,7 @@ struct Registered(Copyable, Movable):
     (`morca register --worker-procs`); 0 is one per vCPU."""
     var placement: String
     """Where its runs run (`morca register --placement`): `control` (the
-    scheduler's host, `morca.control`), `ec2`, or empty for the scheduler's
+    scheduler's host, `morca._internal.control`), `ec2`, or empty for the scheduler's
     runner."""
     var env: List[Tuple[String, String]]
     """Its runs' own variables (`env` in morca.toml, `morca.config`), given
@@ -96,7 +96,7 @@ struct Registered(Copyable, Movable):
     var memory_gb: String
     """The memory it asks for, in GB; empty for none."""
     var memory_raised_mb: Int
-    """What an out-of-memory kill raised its memory to (`morca.cgroup`),
+    """What an out-of-memory kill raised its memory to (`morca._internal.cgroup`),
     which its runs ask for at least; 0 for none."""
     var learn: Bool
     """Whether `auto` uses what its runs suggest (`learn` in morca.toml)."""

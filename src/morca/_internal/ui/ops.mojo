@@ -1,5 +1,5 @@
 """The Ops pages: Control (`/ops/control`, the machine running the
-scheduler, the UI and Postgres; `morca.system`), the watchdog (`/watchdog`;
+scheduler, the UI and Postgres; `morca._internal.system`), the watchdog (`/watchdog`;
 `morca.watchdog`) and Prometheus' `/metrics`, with the fragments each
 refreshes from; Alerts (`/ops/alerts`, where `/ops` goes) is
 `morca._internal.ui.alerts` and Pools (`/ops/pools`) is `morca._internal.ui.pools`. Fleet and
@@ -15,7 +15,7 @@ from morca.admission import (
     row_json,
     scheduler_pressure,
 )
-from morca.fleet import fleet_summary
+from morca._internal.fleet import fleet_summary
 from morca.html import Html
 from morca.notify import (
     configured as notify_configured,
@@ -24,7 +24,7 @@ from morca.notify import (
     recent as recent_alerts,
 )
 from morca.state import State
-from morca.system import (
+from morca._internal.system import (
     prometheus,
     range_hours,
     system_charts,

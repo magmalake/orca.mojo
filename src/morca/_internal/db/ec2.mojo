@@ -1,4 +1,4 @@
-"""The EC2 runner's queries (`morca.ec2`): a run's start as it was given
+"""The EC2 runner's queries (`morca._internal.ec2`): a run's start as it was given
 (`orca.runs.spec`), its instances in `orca.instances`, and the warm pool's
 hand-overs, sweeps and rescues."""
 
@@ -584,7 +584,7 @@ def ended(mut conn: Connection, id: String, why: String) raises:
 
 
 # ---------------------------------------------------------------------------
-# The instance's side of the warm pool (`morca.pool`)
+# The instance's side of the warm pool (`morca._internal.pool`)
 # ---------------------------------------------------------------------------
 
 

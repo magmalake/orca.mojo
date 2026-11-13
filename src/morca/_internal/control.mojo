@@ -2,7 +2,7 @@
 the control runner, which runs them on the scheduler's own host.
 
 A pipeline's placement is `default` (stored as null: the scheduler's runner,
-`MORCA_RUNNER`, as before), `ec2` (instances of their own, `morca.ec2`; on a
+`MORCA_RUNNER`, as before), `ec2` (instances of their own, `morca._internal.ec2`; on a
 scheduler whose runner isn't `ec2` such runs wait, saying why),
 `worker:<pool>` (a remote worker of that pool starts them, `orca.workers`,
 never the scheduler) or `control`:
@@ -23,7 +23,7 @@ image's). Small runs then start in a second, without an instance to boot.
 - **How many.** At most `MORCA_CONTROL_MAX_RUNS` (2) control-placed runs, of
   all pipelines, run at once.
 - **Pressure.** None starts while the control instance's newest minute
-  (`morca.system`, from its sampler) has memory or its fullest disk over 85%.
+  (`morca._internal.system`, from its sampler) has memory or its fullest disk over 85%.
 
 A run held by either of the last two stays queued with the reason in
 `runs.held`, which its page and JSON show. dista inside such a run is in
@@ -42,10 +42,10 @@ from std.os import getenv
 
 from json import loads
 
-from morca.awsjson import aws_json
+from morca._internal.awsjson import aws_json
 from morca.json import quote
 from morca.proc import binary_seconds, capture
-from morca.system import Now
+from morca._internal.system import Now
 
 comptime CONTROL = "control"
 """The placement, and the instance name of a control-placed run's samples."""
@@ -248,7 +248,7 @@ def fetch_secret(id: String) raises -> String:
 
 
 def get_secret_value(id: String) raises -> String:
-    """Secrets Manager's `GetSecretValue` of `id` (`morca.awsjson`), with
+    """Secrets Manager's `GetSecretValue` of `id` (`morca._internal.awsjson`), with
     the credentials of the `AWS_*` environment or else the instance role;
     `MORCA_SECRETS_ENDPOINT` points it elsewhere, as the tests do at their
     stand-in (`tests/fake_ec2.py`)."""

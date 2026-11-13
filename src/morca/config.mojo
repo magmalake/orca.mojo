@@ -60,7 +60,7 @@ from std.os.path import exists
 
 from objectstore.crypto import sha256_hex
 
-from morca.control import parse_placement
+from morca._internal.control import parse_placement
 from morca.fill import (
     lag_text,
     parse_fill_budget,
@@ -81,12 +81,12 @@ from morca.resources import (
     canonical_cpus,
     canonical_memory_gb,
 )
-from morca.secrets import (
+from morca._internal.secrets import (
     parse_secrets,
     secret_problem,
 )
 from morca.apps_config import AppConfig, apps_problem, read_apps
-from morca.pool_config import read_pools
+from morca._internal.pool_config import read_pools
 from morca.toml import (
     BOOLEAN,
     FLOAT,

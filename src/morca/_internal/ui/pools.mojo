@@ -2,7 +2,7 @@
 placed on (`morca._internal.views.pools`), filtered by pool and kind with plain links,
 refreshed every 10 s from `/ops/pools/live`; a machine's own page
 (`/ops/pools/<kind>/<id>`); and `/api/pools`. With EC2 in view the page
-keeps Fleet's summary cards and charts (`morca.fleet`).
+keeps Fleet's summary cards and charts (`morca._internal.fleet`).
 
 Pools replaced Fleet and Workers: `/ops/fleet` and `/ops/workers` redirect
 here (`?kind=ec2`, `?kind=self-hosted`), and answer their old JSON to a
@@ -16,7 +16,7 @@ from morca._internal.ui.pool_status import (
     scaled_pools_html,
     scaled_pools_json,
 )
-from morca.fleet import (
+from morca._internal.fleet import (
     charts_html,
     fleet_charts,
     fleet_summary,

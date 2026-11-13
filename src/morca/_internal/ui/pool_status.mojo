@@ -1,4 +1,4 @@
-"""The pools morca grows and shrinks itself (`morca.pool_scale`), on Ops ›
+"""The pools morca grows and shrinks itself (`morca._internal.pool_scale`), on Ops ›
 Pools: each `[pools.<name>]` with its provider and machine types, how many
 of its machines are live, the type it's trying and what its last try came
 to (`orca.pools.status`), and as JSON for `/api/pools`.

@@ -370,7 +370,7 @@ for its memory pressure, the home page and Runs say so at the top (and
 their JSON has `memory_pressure`).
 
 Where the scheduler (or worker) gives runs a cgroup of their own
-([docs/hetzner.md](hetzner.md#a-cgroup-per-run), `morca.cgroup`), the run's
+([docs/hetzner.md](hetzner.md#a-cgroup-per-run), `morca._internal.cgroup`), the run's
 page also has **Memory limit**: its latest start's `memory.high` (its grant,
 request maximum or `MORCA_RUN_MEMORY_MB`) and the `memory.max` past which the
 kernel kills it. The Steps table's Peak cell reads `312 MB / 1 GB`: the

@@ -1,4 +1,4 @@
-"""Scheduler instances (docs/overlap.md, `morca.instances`):
+"""Scheduler instances (docs/overlap.md, `morca._internal.instances`):
 `orca.schedulers`, a row per `morca scheduler` process with MORCA_OVERLAP
 on, and the lead its advisory lock is."""
 

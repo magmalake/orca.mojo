@@ -1,4 +1,4 @@
-"""The worker API: what `morca worker` (`morca.worker`) and the runs it starts
+"""The worker API: what `morca worker` (`morca._internal.worker`) and the runs it starts
 (`morca.http_store.HttpStore`) call, each a `POST` of JSON with
 `Authorization: Bearer <worker token>`. What each call does is
 `orca.workers`; this is how a request reaches it.
@@ -8,9 +8,9 @@
 | `/api/worker/claim` | the worker's heartbeat, and with `slots` > 0 a queued run of its pool to start: its spec, or `null` |
 | `/api/worker/release` | a run it was given and won't start: queued again, held saying why |
 | `/api/worker/exited` | a run's process ended, with its samples |
-| `/api/worker/cluster` | a run this worker started as a cluster: its head's address and token (`morca.run_cluster`) |
+| `/api/worker/cluster` | a run this worker started as a cluster: its head's address and token (`morca._internal.run_cluster`) |
 | `/api/worker/left` | a member's process ended |
-| `/api/worker/boot` | a machine the pool autoscaler made, booting: the image, its login and the bucket's variables (`morca.pool_boot`) |
+| `/api/worker/boot` | a machine the pool autoscaler made, booting: the image, its login and the bucket's variables (`morca._internal.pool_boot`) |
 | `/api/worker/store/<call>` | a `RunStore` call of a run this worker claimed (`morca.state.PgStore`) |
 
 Every call is checked the same way first: the token is a live worker
@@ -33,15 +33,15 @@ from json import Value, loads
 from threads import AtomicFlag, WorkerPool
 from threads.ffi import OpaquePtr, opaque_ptr
 
-from morca.run_cluster import member_left, report_head
-from morca.pool_boot import BOOT_PATH, boot_answer
+from morca._internal.run_cluster import member_left, report_head
+from morca._internal.pool_boot import BOOT_PATH, boot_answer
 from morca.http_store import STORE_PATH
 from morca.json import quote
 from morca.state import State
 from morca.store import FINAL
 from morca._internal.web.auth import bearer
 from morca._internal.web.page import Page, respond
-from morca.workers import (
+from morca._internal.workers import (
     WorkerAuth,
     claim,
     exited,
@@ -110,18 +110,18 @@ def _exited(mut db: State, w: WorkerCall) raises -> Page:
 
 
 def _cluster(mut db: State, w: WorkerCall) raises -> Page:
-    """A run's head, started by this worker (`morca.run_cluster`)."""
+    """A run's head, started by this worker (`morca._internal.run_cluster`)."""
     return _answer(200, report_head(db, w.worker.id, w.body))
 
 
 def _left(mut db: State, w: WorkerCall) raises -> Page:
-    """A member's process ended (`morca.run_cluster`)."""
+    """A member's process ended (`morca._internal.run_cluster`)."""
     return _answer(200, member_left(db, w.worker.id, w.body))
 
 
 def _boot(mut db: State, w: WorkerCall) raises -> Page:
     """A machine the pool autoscaler made, booting: what it needs to run its
-    worker (`morca.pool_boot`); 403 for any other token."""
+    worker (`morca._internal.pool_boot`); 403 for any other token."""
     try:
         return _answer(200, boot_answer(db, w.worker.id))
     except e:

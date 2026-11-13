@@ -52,7 +52,7 @@ than that many going whatever the number of workers; each worker's
 runs cost nothing more than its machines, which run anyway.
 
 **The cost estimate** is conservative, and fails closed. A fill run's
-cost is its instances' time (`orca.instances`) at `morca.fleet`'s on-demand
+cost is its instances' time (`orca.instances`) at `morca._internal.fleet`'s on-demand
 price table, times `COST_MARGIN` for what the table leaves out (EBS,
 transfer, requests). The day's spend is that over the fill runs' instances
 since 00:00 UTC, up to now. Before starting a run, morca also counts what
@@ -78,7 +78,7 @@ from postgres import Transaction
 import morca._internal.db.fill as fill_db
 
 from morca.civil import Civil
-from morca.fleet import hourly_price
+from morca._internal.fleet import hourly_price
 from morca.json import quote
 from morca._internal.db.live import (
     dead_sql,
@@ -395,7 +395,8 @@ def run_hourly(
     machines (which run anyway), the head and its most
     workers at on-demand prices on EC2 (a type left empty is the runner's,
     `MORCA_EC2_HEAD_TYPE` / `MORCA_EC2_WORKER_TYPE`), and -1 for a price that
-    isn't known (a type not in `morca.fleet`'s table, or Kubernetes)."""
+    isn't known (a type not in `morca._internal.fleet`'s table, or Kubernetes).
+    """
     if placed == "control" or placed == "local" or placed.startswith("worker:"):
         return 0.0
     if placed != "ec2":

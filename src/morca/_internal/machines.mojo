@@ -1,5 +1,5 @@
 """Machines for a worker pool, from whichever provider the pool names (#267):
-what the autoscaler (`morca.pool_scale`) calls, so it never knows which.
+what the autoscaler (`morca._internal.pool_scale`) calls, so it never knows which.
 
     var p = Provider.of("hetzner", owner)   # raises without its settings
     p.arch("cax31")                  # "arm64": Docker's name, for the image
@@ -7,7 +7,7 @@ what the autoscaler (`morca.pool_scale`) calls, so it never knows which.
     for m in p.machines("lab"): ...
     _ = p.delete(m.id)
 
-**Hetzner** (`morca.hcloud`): the token as there; a machine is a server of
+**Hetzner** (`morca._internal.hcloud`): the token as there; a machine is a server of
 `MORCA_HCLOUD_IMAGE` (`ubuntu-24.04`), with the project's SSH keys
 `MORCA_HCLOUD_SSH_KEYS` (comma-separated names, none by default) and the
 firewall `MORCA_HCLOUD_FIREWALL` (none by default), labelled `morca=pool`,
@@ -19,7 +19,7 @@ finds a pool's. Every machine joins the private network
 there; `none` for none): one run's dista cluster over several machines
 talks over it (#268), its public side only ssh.
 
-**EC2** (`morca.machines_ec2`): subnets for locations, the security group
+**EC2** (`morca._internal.machines_ec2`): subnets for locations, the security group
 and instance profile from the scheduler's settings, Ubuntu for the type's
 architecture, the same labels as tags.
 
@@ -30,8 +30,8 @@ a type before it makes one.
 
 from std.os import getenv
 
-from morca.hcloud import Created, HCloud, ServerSpec
-from morca.machines_ec2 import Ec2Machines
+from morca._internal.hcloud import Created, HCloud, ServerSpec
+from morca._internal.machines_ec2 import Ec2Machines
 
 comptime POOL_LABEL = "orca-pool"
 comptime OWNER_LABEL = "orca-owner"

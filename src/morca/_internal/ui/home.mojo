@@ -13,11 +13,16 @@ from morca._internal.api.pipelines import json_pipeline
 from morca._internal.api.runs import json_runs
 from morca.chart import DayRuns, runs_chart
 from morca.coverage import Coverage
-from morca.fleet import fleet_summary, summary_html, summary_json
+from morca._internal.fleet import fleet_summary, summary_html, summary_json
 from morca.html import Html, url_encode
 from morca.json import quote
 from morca.state import State
-from morca.system import alert_html, system_now, warnings, warnings_json
+from morca._internal.system import (
+    alert_html,
+    system_now,
+    warnings,
+    warnings_json,
+)
 from morca._internal.ui.coverage import coverage_href
 from morca._internal.ui.layout import IDLE_EVERY, LIVE_EVERY, page_html
 from morca._internal.ui.parts import pause_button

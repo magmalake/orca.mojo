@@ -1,4 +1,4 @@
-"""The fleet's queries (`morca.fleet`): `orca.fleet_samples` and
+"""The fleet's queries (`morca._internal.fleet`): `orca.fleet_samples` and
 `orca.fleet_hourly`, which the scheduler fills, and what the fleet page
 reads of them and of `orca.instances` and `orca.runs`."""
 

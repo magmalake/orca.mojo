@@ -1,4 +1,4 @@
-"""The scheduler's queries for runs on a worker pool (`morca.pool_runs`):
+"""The scheduler's queries for runs on a worker pool (`morca._internal.pool_runs`):
 runs queued again for a worker, lost workers' and gone instances' runs,
 and fill runs queued for the pool. `dead` is SQL for a run whose process
 died, with the stale limit as `$2`."""

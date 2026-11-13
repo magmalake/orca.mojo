@@ -115,7 +115,7 @@ def content_type(req: Request) -> String:
 
 
 def scripted(req: Request, path: String) -> Bool:
-    """Whether `req` is a script's (`morca.remote`): it has an
+    """Whether `req` is a script's (`morca._internal.remote`): it has an
     `Authorization` header, or is a JSON login for a token. `/login` and
     `/logout` are a browser's whatever they're sent with."""
     if path == LOGIN or path == LOGOUT:
@@ -216,7 +216,7 @@ def login_needed(req: Request, json: Bool) raises -> Response:
 
 
 def json_form(body: String) raises -> String:
-    """A JSON object of strings, numbers and booleans (`morca.remote`'s
+    """A JSON object of strings, numbers and booleans (`morca._internal.remote`'s
     actions) as the form the UI's own pages post, so both are handled and
     audited alike: true is `1`, false and null are left out."""
     var v = loads(body if body.strip() else "{}")

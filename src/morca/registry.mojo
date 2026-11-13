@@ -9,7 +9,7 @@ An image's tag names a manifest; a multi-architecture image's is an index
 a single-architecture image's has its architecture in its config blob.
 This reads the registry's v2 API with a pull token: anonymous, or from
 `MORCA_REGISTRY_USER` and the secret `MORCA_REGISTRY_TOKEN_SECRET` names
-(`morca.control.fetch_secret`) for a private image, never in an error.
+(`morca._internal.control.fetch_secret`) for a private image, never in an error.
 `MORCA_REGISTRY_ENDPOINT` points every image's registry at one URL, for
 tests' fake.
 """
@@ -20,7 +20,7 @@ from std.os import getenv
 from json import Value, loads
 from objectstore.http import Header, HttpClient, RetryPolicy
 
-from morca.control import fetch_secret
+from morca._internal.control import fetch_secret
 
 comptime _ACCEPT = (
     "application/vnd.oci.image.index.v1+json,"
@@ -122,7 +122,7 @@ struct Registry(Movable):
 
     def credentials(self) -> Tuple[String, String]:
         """The user and token to log in to pull the image (the pool
-        machines' boot, `morca.pool_boot`); empty for none."""
+        machines' boot, `morca._internal.pool_boot`); empty for none."""
         return (self.user, self._token)
 
     def _base(self, img: ImageRef) -> String:

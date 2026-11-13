@@ -73,7 +73,7 @@ from morca.tasks import workers
 from morca.civil import Civil, now, parse_time
 from morca.crash import crash_summary
 from morca.pipeline import Pipeline
-from morca.pool import pool_next_main, pool_wait_main
+from morca._internal.pool import pool_next_main, pool_wait_main
 from morca.sample import sample_main
 from morca.sqlite_store import SqliteStore, sqlite_path
 from morca.state import PgStore

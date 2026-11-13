@@ -50,10 +50,10 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   and queues a run per `keys_per_run` of them; `morca backfill` says on
   stderr which keys it dropped and why.
 - **Where runs run.** `MORCA_RUNNER` is `local` (a process here, the
-  default), `kubernetes` (a dista cluster of pods per run, `morca.kube`) or
-  `ec2` (a head instance and worker instances per run, `morca.ec2`).
+  default), `kubernetes` (a dista cluster of pods per run, `morca._internal.kube`) or
+  `ec2` (a head instance and worker instances per run, `morca._internal.ec2`).
   A pipeline registered with `--placement control` runs here whatever the
-  runner, within the control instance's limits (`morca.control`); one with
+  runner, within the control instance's limits (`morca._internal.control`); one with
   `--placement ec2` waits on a scheduler whose runner isn't `ec2`. One with
   `--placement worker:<pool>` is never started here: a remote worker of the
   pool claims its queued runs over the UI's API (`orca.workers`), and the
@@ -121,14 +121,14 @@ times and retry times are on it. Heartbeats are on the database's clock.
 A run's output goes to `<MORCA_LOGS>/<pipeline>/<run>/driver.log` when
 `MORCA_LOGS` is set: written there by a local run, published there when the
 process is reaped if `MORCA_LOGS` is in object storage, or kept from the
-driver pod's log on Kubernetes (`morca.kube`). Beside a local run's process
+driver pod's log on Kubernetes (`morca._internal.kube`). Beside a local run's process
 the scheduler starts `<binary> sample` (`morca.sample`), which writes the
 machine's metrics to `.../<run>/metrics/local.jsonl` until the process ends;
 `MORCA_SAMPLE_SECONDS=0` turns it off, on every runner. Apart from that, each
 tick reads each local and control-placed run's process tree in /proc, and
 once the process is reaped its attempts get their peak memory and CPU
 (`morca.usage`). `morca scheduler` gives each local and control-placed run a
-cgroup of its own where it can (`morca.cgroup`): a memory limit at its
+cgroup of its own where it can (`morca._internal.cgroup`): a memory limit at its
 grant, an out-of-memory kill that fails its attempts saying so, and a retry
 that asks for more.
 """
@@ -144,13 +144,13 @@ from std.time import (
     sleep,
 )
 from postgres import Transaction
-from morca.pool_scale import PoolScaler
+from morca._internal.pool_scale import PoolScaler
 from morca.expiry import (
     expirable,
     expire_argv,
     maintain_binary,
 )
-from morca.cgroup import (
+from morca._internal.cgroup import (
     Cgroups,
     Contained,
     MemoryKnobs,
@@ -164,7 +164,7 @@ from morca.cgroup import (
     raised_mb,
     start_limit_mb,
 )
-from morca.control import ControlLimits
+from morca._internal.control import ControlLimits
 from morca.crash import (
     crash_summary,
     crashed_by_signal,
@@ -180,18 +180,18 @@ from morca.notify import (
     flush as flush_notify,
 )
 from morca.fill import fill_status
-from morca.ec2 import Ec2Runner
-from morca.fleet import ingest
-from morca.system import (
+from morca._internal.ec2 import Ec2Runner
+from morca._internal.fleet import ingest
+from morca._internal.system import (
     Archive,
     keep as keep_system,
     trim as trim_system,
 )
-from morca.kube import (
+from morca._internal.kube import (
     KubeRunner,
     cpu_millis,
 )
-from morca.instances import (
+from morca._internal.instances import (
     beat,
     end as end_instance,
     join as join_instance,
@@ -309,7 +309,7 @@ struct Scheduler(Movable):
     var ec2: Optional[Ec2Runner]
     """Set with `MORCA_RUNNER=ec2`; with neither, runs are local processes."""
     var pools: PoolScaler
-    """The pool autoscaler's state between passes (`morca.pool_scale`)."""
+    """The pool autoscaler's state between passes (`morca._internal.pool_scale`)."""
     var logs: String
     var _polled: Dict[String, Int]
     """When each sensor's binary was last asked to `sense`, on the monotonic
@@ -346,7 +346,7 @@ struct Scheduler(Movable):
     var _fleet_next: Int
     """When the next pass starts, on the monotonic clock."""
     var _archive: Archive
-    """The control instance's day files between passes (`morca.system`)."""
+    """The control instance's day files between passes (`morca._internal.system`)."""
     var watchdog_seconds: Float64
     """How often the watchdog's rules are checked
     (`MORCA_WATCHDOG_SECONDS`, 60; 0 turns it off): `morca.watchdog`."""
@@ -356,7 +356,7 @@ struct Scheduler(Movable):
     """When the alerts' checks (`orca.alerts`) run next, on the monotonic
     clock; they are every `MORCA_NOTIFY_CHECK_SECONDS` (10)."""
     var limits: ControlLimits
-    """What a control-placed run may use (`morca.control`)."""
+    """What a control-placed run may use (`morca._internal.control`)."""
     var room: Room
     """What this host can grant the runs of pipelines with a request
     (`morca.resources`): its capacity less its reserve."""
@@ -383,7 +383,7 @@ struct Scheduler(Movable):
     var _pressure_unread: Bool
     """The file was found but last couldn't be read (said once)."""
     var cgroups: Cgroups
-    """Where its runs' cgroups go (`morca.cgroup`); off until `contain`."""
+    """Where its runs' cgroups go (`morca._internal.cgroup`); off until `contain`."""
     var _contained: Dict[Int, Contained]
     """A local or control-placed run's process to its cgroup."""
     var _unswept: List[String]
@@ -677,7 +677,7 @@ struct Scheduler(Movable):
             )
 
     def contain(mut self) raises:
-        """Turns on a cgroup per run (`morca.cgroup`) where this host lets
+        """Turns on a cgroup per run (`morca._internal.cgroup`) where this host lets
         morca make them, saying once which, and picks up the empty cgroups
         an earlier scheduler left. `morca scheduler` does this; `morca tick`
         and the other commands don't, as they don't reap what they
@@ -709,7 +709,7 @@ struct Scheduler(Movable):
         grant: Grant,
         control: Bool,
     ) -> Contained:
-        """Makes a start's cgroup at its limit (`morca.cgroup`) and records
+        """Makes a start's cgroup at its limit (`morca._internal.cgroup`) and records
         the limit on the run; with cgroups off, or if it can't, one with no
         path, and the run starts as before."""
         var c = Contained(run, start, p.name, "", 0, 0, 0, grant.memory_mb)
@@ -874,7 +874,7 @@ struct Scheduler(Movable):
         printed, such as `resume`'s refusal. A process that claimed it and
         crashed has the attempts it left running failed with the crash's
         summary (`morca.crash`), or with `over` if the scheduler killed it
-        for its memory (`morca.control`)."""
+        for its memory (`morca._internal.control`)."""
         var why = String(
             "its process (pid ", pid, ") exited ", code, " before claiming it"
         )
@@ -997,7 +997,7 @@ struct Scheduler(Movable):
     def _fleet(mut self) raises:
         """Every `fleet_seconds`, keeps the new samples of the live
         instances and the control instance for the fleet page
-        (`morca.fleet`)."""
+        (`morca._internal.fleet`)."""
         if self.fleet_seconds <= 0 or not (
             self.ec2 or getenv("MORCA_CONTROL_SAMPLES")
         ):

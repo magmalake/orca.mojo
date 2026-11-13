@@ -1,5 +1,5 @@
 """Hetzner Cloud's API, as the pool autoscaler needs it (#267,
-`morca.pool_scale`): make a server, list a pool's, delete one, and the
+`morca._internal.pool_scale`): make a server, list a pool's, delete one, and the
 architecture of a server type.
 
     var h = HCloud.from_env()        # raises without a token
@@ -9,7 +9,7 @@ architecture of a server type.
     h.arch("cax31")                  # "arm"
 
 The token is `MORCA_HCLOUD_TOKEN`, or the secret `MORCA_HCLOUD_TOKEN_SECRET`
-names (`morca.control.fetch_secret`: `MORCA_SECRET_FETCH` on a Hetzner
+names (`morca._internal.control.fetch_secret`: `MORCA_SECRET_FETCH` on a Hetzner
 stack); it's sent as a bearer token and never put in an error. A call
 isn't retried and times out after 10 s: the scheduler calls these from its
 tick and tries again on the next.
@@ -25,7 +25,7 @@ from std.os import getenv
 from json import Value, loads
 from objectstore.http import Header, HttpClient, RetryPolicy
 
-from morca.control import fetch_secret
+from morca._internal.control import fetch_secret
 from morca.json import quote
 
 comptime DEFAULT_ENDPOINT = "https://api.hetzner.cloud/v1"
