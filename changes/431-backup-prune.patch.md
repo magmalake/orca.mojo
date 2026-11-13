@@ -1,0 +1,1 @@
+- **Backup prune is best effort**: a failed delete of an old dump warns instead of failing the backup; uploads are retried. (#431)

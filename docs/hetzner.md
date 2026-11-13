@@ -963,7 +963,10 @@ The server runs `morca-stack backup` every night at 02:30 UTC
 (`orca-backup.timer`; `systemctl list-timers` and `journalctl -u
 morca-backup` on the server). It writes `pg_dump -n orca -Fc` (the format
 [replace-control.md](replace-control.md) uses), checks that it reads back,
-uploads it to `s3://<bucket>/backups/pg/<time>.dump`, and keeps the newest 14.
+uploads it to `s3://<bucket>/backups/pg/<time>.dump` (each upload tried
+three times), and keeps the newest 14 (`BACKUP_KEEP`). Deleting the older
+ones is best effort: a failed delete only warns, the backup still succeeds,
+and the next backup deletes it.
 Beside each dump is `<time>.paused`: the pipelines paused when it was taken,
 as `paused_by_hand` and `paused_by_deploy` (the ones a deploy's quiesce
 paused), which a restore uses to unpause the latter

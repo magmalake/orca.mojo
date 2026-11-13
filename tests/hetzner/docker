@@ -6,7 +6,9 @@
 # $FAKE/backup-fails makes pg_dump fail, $FAKE/register-fails morca register.
 # The pipelines are toy and manual1; $FAKE/paused lists the paused ones,
 # which morca pause/unpause and an UPDATE of paused change. The aws-cli
-# container's bucket is $FAKE/bucket, and its /b the -v directory.
+# container's bucket is $FAKE/bucket, and its /b the -v directory;
+# $FAKE/s3-rm-fails makes every rm fail, and $FAKE/s3-cp-fails holds how
+# many of the next cps fail.
 #
 # Containers are directories in $FAKE/containers/<name>: image (the
 # reference it was started with), id (that image's id), status, labels
@@ -137,10 +139,21 @@ case "$all" in
                 done
                 ;;
             cp)
+                if [ -s "$FAKE/s3-cp-fails" ] && [ "$(cat "$FAKE/s3-cp-fails")" -gt 0 ]; then
+                    echo $(($(cat "$FAKE/s3-cp-fails") - 1)) > "$FAKE/s3-cp-fails"
+                    echo "upload failed: $3 to $4 AWS_ERROR_HTTP_CHANNEL_THROUGHPUT_FAILURE" >&2
+                    exit 1
+                fi
                 [ -f "$(path "$3")" ] || exit 1
                 cp "$(path "$3")" "$(path "$4")"
                 ;;
-            rm) rm -f "$(path "$3")" ;;
+            rm)
+                if [ -f "$FAKE/s3-rm-fails" ]; then
+                    echo "delete failed: $3 AWS_ERROR_HTTP_CHANNEL_THROUGHPUT_FAILURE: Http connection channel shut down" >&2
+                    exit 1
+                fi
+                rm -f "$(path "$3")"
+                ;;
         esac
         ;;
     *"FROM orca.schedulers WHERE ended IS NULL"*) cat "$FAKE/instances" 2> /dev/null || true ;;
