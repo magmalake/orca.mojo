@@ -32,15 +32,22 @@ image that started it and ends under it.
 
 ## Decisions
 
-### `MORCA_OVERLAP`, off by default
+### `MORCA_OVERLAP`, on in the stack by default
 
 `MORCA_OVERLAP=on` makes each `morca scheduler` a scheduler instance. With it
-`off`, the default, nothing changes: no instance rows, runs start with no
-instance, and every rule below has nothing to apply to. Deploys keep
-pausing and waiting, as now, until overlap is proven in the stack; then
-the stack turns it on, and later it becomes the default. A flag, rather
-than a version check, because the first deploy that turns it on still
-replaces a scheduler that doesn't know how to drain.
+`off`, the binary's default, nothing changes: no instance rows, runs start
+with no instance, and every rule below has nothing to apply to. The
+Hetzner stack turns it on unless `hetzner.env` has `OVERLAP=0` (#390,
+after it was proven there with `OVERLAP=1`). The binary's default stays
+`off`: a scheduler run by hand, or in a test, is one at a time and needs
+no drain limit. A flag, rather than a version check, because the first
+deploy that turns it on still replaces a scheduler that doesn't know how
+to drain.
+
+An instance needs `MORCA_DRAIN_SECONDS` (#390, [the drain](#the-drain)):
+`morca scheduler` with `MORCA_OVERLAP=on` refuses to start without it, or
+with it 0, negative or not a number, before it touches the database,
+saying what to set.
 
 `morca tick` is never an instance: it's one pass, for tests and by hand.
 
@@ -85,7 +92,7 @@ holder's connection goes.
 
 Each local or control-placed run an instance starts records it
 (`runs.instance`). The rule from the earlier #242, with "held by instance
-X" in place of "held by the runner" (`morca.live.held_sql`, part of
+X" in place of "held by the runner" (`morca.db.live.held_sql`, part of
 `dead_sql`):
 
 - **held**, so live, while its instance has been seen within the stale
@@ -123,13 +130,23 @@ claims runs any more.
 
 An instance that drains starts nothing, keeps supervising its children and
 the `keep-log`s their ends started, and once none is left ends its row
-(`role = 'ended'`, `ended` set) and exits 0, however long that takes: a
-run may last months, and morca never stops one for a deploy (#397). With
-`MORCA_DRAIN_SECONDS` set, it kills what is left after that many seconds
-(each control run's process group too), ends its row and exits; the
-leader queues those runs again once their heartbeats are stale. Unset, the
-default since #397, there is no limit. An ended instance is gone at once,
-so nothing waits for its row to go stale.
+(`role = 'ended'`, `ended` set) and exits 0. Morca doesn't stop a run for
+a deploy before the limit the user set (#397): `MORCA_DRAIN_SECONDS`,
+required of an instance (#390; `DRAIN_SECONDS` in the stack's
+`hetzner.env`, no default). Once that many seconds have passed since the
+drain began, it kills what is left (each control run's process group
+too), ends its row and exits; the leader queues those runs again once
+their heartbeats are stale. An ended instance is gone at once, so nothing
+waits for its row to go stale.
+
+The limit is enforced by the draining instance itself, which knows when
+its drain began and can end its row before it exits, so the leader's
+requeue doesn't wait for the row to go stale. The stack's reaper
+(`morca-stack reap-old`) is the backstop: it stops an old scheduler's
+container still running a grace (`MORCA_STACK_DRAIN_GRACE`, 60 s) past
+the limit, counted from when the deploy asked it to drain, which is after
+the instance began to. That covers an old scheduler started before the
+setting existed, which drains without a limit.
 
 ### Outdated runs
 
@@ -280,8 +297,10 @@ holds nothing.
 ## The stack (#246)
 
 The Hetzner change is #246, stacked on #244 (stack #245), so this PR
-doesn't touch `deploy/hetzner/`. With `OVERLAP=1` in stack.conf (off by
-default) the containers get `MORCA_OVERLAP=on`, and:
+doesn't touch `deploy/hetzner/`. Unless `OVERLAP=0` (in `hetzner.env`,
+synced to stack.conf; on by default since #390) the containers get
+`MORCA_OVERLAP=on`, and `MORCA_DRAIN_SECONDS` from `DRAIN_SECONDS`, which
+`deploy.sh`, `up.sh` and `morca-stack apply` require, and:
 
 - `deploy.sh` asks `morca-stack can-overlap --tag <tag>`, which runs the new
   image's `morca scheduler can-overlap`; on `no` it quiesces and replaces as
@@ -293,8 +312,10 @@ default) the containers get `MORCA_OVERLAP=on`, and:
   `scheduler`, and waits for `morca scheduler wait-lead`;
 - the deploy registers the pipelines, then `morca-stack drain-old` asks
   every old instance to drain and returns (#397): it leaves each a reaper
-  (`morca-stack reap-old`) that removes its container once it has exited.
-  `drain-old --wait` waits instead, and `--timeout` stops one after that;
+  (`morca-stack reap-old`) that removes its container once it has exited,
+  and stops it if it still runs past the drain limit (`DRAIN_SECONDS`).
+  `drain-old --wait` waits instead, stopping one after the limit or
+  `--timeout`;
 - an old scheduler still draining doesn't stop the next deploy from
   overlapping: each gets its own name, so none shadows another. `morca-stack
   check` and `status` report each as `scheduler-old-<time>: draining N
@@ -313,14 +334,11 @@ scheduler is replaced by stopping its container, whose child processes
 are every local and control run, so not waiting kills them. And when the
 reason is a migration that raises the floor, the old binary's runs can't
 go on over the new schema at all (`State.migrate` refuses while an older
-instance is live). So it is left as it was; overlapping, the default once
-#390 lands, is the path that doesn't wait.
+instance is live). So it is left as it was; overlapping, the default since
+#390, is the path that doesn't wait.
 
 ### Not in this slice
 
-- The required global drain limit (#390: `DRAIN_SECONDS` in hetzner.env,
-  a hard error when missing): until then `MORCA_DRAIN_SECONDS` is
-  optional and unset means no limit.
 - Concurrency keys (#397: one `mojo_live` across versions), and the limit
   on how long a run waits for an older version's run.
 
@@ -341,7 +359,8 @@ across both, no double start or requeue of the draining one's runs, a
 drain that runs out and its requeue, register's wait, and the floor cases).
 
 Next: the stack (#246, above), the instances on Ops' System page, and making
-`MORCA_OVERLAP=on` the default once proven.
+`MORCA_OVERLAP=on` the default once proven (#390: the stack's default, with
+the required drain limit).
 
 #397's first slice: outdated runs (above, `morca.handover`), no drain
 limit by default, and deploys that don't wait for the old scheduler's runs
@@ -350,3 +369,11 @@ Tested by `tests/outdated.sh` (three real instances: a run that hands
 over, one that ignores it and succeeds once it returns, nothing killed,
 the drain-only case) and `tests/hetzner.sh` (a deploy that returns while
 the old scheduler drains, a second deploy while it does, the reaper).
+
+#390: overlap on by default in the stack (`OVERLAP` in `hetzner.env`,
+`OVERLAP=0` opts out) and the required drain limit (`DRAIN_SECONDS`,
+`MORCA_DRAIN_SECONDS`), which replaces #397's "no limit by default".
+Tested by `tests/overlap.sh` (an instance refusing to start without it)
+and `tests/hetzner.sh` (the default, `OVERLAP=0`, deploy.sh refusing a
+missing, 0 or negative limit before any change, apply refusing without
+it, drain-old and the reaper stopping an old scheduler at the limit).

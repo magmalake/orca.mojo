@@ -9,9 +9,15 @@
 # <app>=<tag> argument gives one app another. Postgres is not restarted.
 # --all starts every container again, changed or not.
 #
-# First it brings the server's settings in line with hetzner.env, as up.sh
+# Before anything changes on the server it checks hetzner.env: DRAIN_SECONDS
+# is required (#390), a whole number of seconds above 0, how long an old
+# scheduler may keep draining its runs after an overlapping deploy before it
+# is stopped (docs/hetzner.md#the-drain-limit). Without it, or with 0 or a
+# negative value, the deploy stops there, saying to set it.
+#
+# Then it brings the server's settings in line with hetzner.env, as up.sh
 # writes them (sync_settings in lib.sh): settings.env, the secret files,
-# the stack settings and the apps; not the tags, which are this script's.
+# the stack settings (OVERLAP, DRAIN_SECONDS, BACKUP_KEEP...) and the apps; not the tags, which are this script's.
 # It prints what changed, settings.env's keys by name (added, removed,
 # changed), never a value; a stack setting old -> new. A container whose
 # env file this changes is then replaced ("replace settings: ..." in the
@@ -31,19 +37,21 @@
 #   paused. On a timeout, a failed deploy or a failed registration the
 #   pipelines stay paused, and the message says how to undo it. --force
 #   skips the pause and kills the running runs. Only this path waits for
-#   runs: it's taken when the schedulers can't overlap (OVERLAP off, a
-#   migration that raises the floor past the old binary, a rollback), and
-#   then the old scheduler's restart would kill them (docs/overlap.md).
-# - The scheduler is replaced and the stack overlaps schedulers (OVERLAP=1
-#   in stack.conf, docs/overlap.md), and morca-stack can-overlap says the new
-#   image's scheduler may start beside the old one (no migration of it
-#   raises the floor past the old binary): nothing is paused and runs go
-#   on. The apply starts the new scheduler beside the old one and waits
+#   runs: it's taken when the schedulers can't overlap (OVERLAP=0 in
+#   hetzner.env, a migration that raises the floor past the old binary, an
+#   old scheduler without overlap, a rollback), and then the old
+#   scheduler's restart would kill them (docs/overlap.md).
+# - The scheduler is replaced and the stack overlaps schedulers (the
+#   default; OVERLAP=0 in hetzner.env turns it off, docs/overlap.md), and
+#   morca-stack can-overlap says the new image's scheduler may start beside
+#   the old one (no migration of it raises the floor past the old binary):
+#   nothing is paused and runs go on. The apply starts the new scheduler beside the old one and waits
 #   until it leads; it registers the pipelines from the new image, asks the
 #   old scheduler to drain (morca-stack drain-old) and returns: it doesn't
-#   wait for the old scheduler's runs, which may go on for months. They
-#   see that they're outdated (morca.outdated()) and end when their code
-#   decides; the old scheduler then exits and is removed. Another deploy
+#   wait for the old scheduler's runs. They see that they're outdated
+#   (morca.outdated()) and end when their code decides, or are killed once
+#   DRAIN_SECONDS have passed (and queued again by the new scheduler); the
+#   old scheduler then exits and is removed. Another deploy
 #   meanwhile overlaps again, each old scheduler draining under its own
 #   name (docs/overlap.md). A rollback, --force and a dry run don't overlap.
 # - The scheduler keeps running (an app's tag only, say the census

@@ -3,14 +3,13 @@ snapshots, keyed or by partition.
 """
 
 from std.time import perf_counter_ns
-from postgres import (
-    Params,
-    Transaction,
-)
+from postgres import Transaction
 from morca.civil import Civil
 from morca.cron import CronExpr
-from morca.batches import mark_batch
-from morca.live import is_live_sql, live_runs
+from morca.db.batches import mark_batch
+from morca.db.live import live_runs
+import morca.db.sensing as sensing_db
+import morca.db.starting as starting_db
 from morca.schedule import Schedule
 from morca.sensors import (
     join_keys,
@@ -40,36 +39,10 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
     var datasets = List[String]()
     var snapshots = List[Int64]()
     var keys = List[String]()
-    for r in self.db.conn.query(
-        (
-            "WITH io AS (SELECT k.kind, x.ds FROM orca.pipelines p,"
-            " jsonb_array_elements(p.describe->'steps') AS s(st), (VALUES"
-            " ('reads'), ('writes')) AS k(kind),"
-            " jsonb_array_elements_text(coalesce(s.st->k.kind, '[]')) AS"
-            " x(ds) WHERE p.name = $1 UNION SELECT 'reads',"
-            " describe->'partitions'->>'dataset' FROM orca.pipelines WHERE"
-            " name = $1 AND describe->'partitions'->>'dataset' IS NOT"
-            " NULL) SELECT DISTINCT ON (c.dataset,"
-            " c.snapshot_id) c.dataset, c.snapshot_id,"
-            " coalesce(nullif(s.partition, ''), r.partitions) AS keys FROM"
-            " orca.commits c JOIN orca.attempts a ON a.id = c.attempt JOIN"
-            " orca.steps s ON s.id = a.step JOIN orca.runs r ON r.id ="
-            " s.run JOIN orca.pipelines me ON me.name = $1 WHERE"
-            " r.pipeline <> $1 AND r.status = 'succeeded' AND a.status ="
-            " 'succeeded' AND a.ended >= me.sensing_since AND c.dataset IN"
-            " (SELECT ds FROM io WHERE kind = 'reads' EXCEPT SELECT ds FROM"
-            " io WHERE kind = 'writes') AND NOT EXISTS (SELECT 1 FROM"
-            " orca.sensed x WHERE x.pipeline = $1 AND x.dataset ="
-            " c.dataset AND x.snapshot_id = c.snapshot_id) AND NOT EXISTS"
-            " (SELECT 1 FROM orca.rebuild_pipelines rp WHERE rp.rebuild ="
-            " r.rebuild AND rp.pipeline = $1) ORDER BY c.dataset,"
-            " c.snapshot_id, c.attempt"
-        ),
-        Params().text(p.name),
-    ):
-        datasets.append(r.text("dataset"))
-        snapshots.append(r.int64("snapshot_id"))
-        keys.append(r.text("keys"))
+    for c in sensing_db.unsensed(self.db.conn, p.name):
+        datasets.append(c.dataset)
+        snapshots.append(c.snapshot)
+        keys.append(c.keys)
     var polled = Optional[String](None)
     if p.name in self._unsensed:
         polled = self._unsensed.pop(p.name)
@@ -112,10 +85,7 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
     else:
         fallback = fill_key(p.kind, "current", Civil.of(now))
     var tx = self.db.conn.begin()
-    _ = tx.query(
-        "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
-        Params().text(p.name),
-    )
+    starting_db.lock_pipeline(tx, p.name)
     var taken = List[Int]()
     var unusable = List[Tuple[Int, String]]()
     var all = List[String]()
@@ -124,15 +94,7 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
     var offered = Offered()
     for i in range(len(datasets)):
         # Seen by another tick already, or twice in this one.
-        var new = tx.query(
-            (
-                "INSERT INTO orca.sensed (pipeline, dataset, snapshot_id)"
-                " VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING"
-                " snapshot_id"
-            ),
-            Params().text(p.name).text(datasets[i]).int64(snapshots[i]),
-        )
-        if len(new) == 0:
+        if not sensing_db.see(tx, p.name, datasets[i], snapshots[i]):
             continue
         var ks = split_keys(keys[i])
         if len(ks) == 0:
@@ -144,16 +106,8 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
         try:
             mk = map_keys(ks, p.kind, p.start)
         except e:
-            _ = tx.execute(
-                (
-                    "UPDATE orca.sensed SET error = $4 WHERE pipeline = $1"
-                    " AND dataset = $2 AND snapshot_id = $3"
-                ),
-                Params()
-                .text(p.name)
-                .text(datasets[i])
-                .int64(snapshots[i])
-                .text(String(e)),
+            sensing_db.sensed_error(
+                tx, p.name, datasets[i], snapshots[i], String(e)
             )
             unusable.append((i, String(e)))
             continue
@@ -191,17 +145,7 @@ def _sense(mut self: Scheduler, p: Registered, now: Int64) raises:
             did.write(", behind live run ", behind)
     if run >= 0:
         for i in taken:
-            _ = tx.execute(
-                (
-                    "UPDATE orca.sensed SET run = $4 WHERE pipeline = $1"
-                    " AND dataset = $2 AND snapshot_id = $3"
-                ),
-                Params()
-                .text(p.name)
-                .text(datasets[i])
-                .int64(snapshots[i])
-                .int64(run),
-            )
+            sensing_db.sensed_run(tx, p.name, datasets[i], snapshots[i], run)
     tx.commit()
     for i in taken:
         print(
@@ -259,41 +203,18 @@ def _live_for(
     var stale = Dict[String, Int]()
     if len(offered.keys) == 0:
         return (left^, stale^)
-    for r in tx.query(
-        String(
-            (
-                "WITH x AS (SELECT x.key, x.ds, x.snap FROM"
-                " unnest(string_to_array($2, ','),"
-            ),
-            " string_to_array($3, ','), string_to_array($4,",
-            " ',')::bigint[]) AS x(key, ds, snap)), l AS (SELECT DISTINCT",
-            " k.key, r.id FROM orca.runs r, unnest(string_to_array(",
-            "r.partitions, ',')) AS k(key) WHERE r.pipeline = $1 AND ",
-            is_live_sql("r"),
-            " AND k.key IN (SELECT key FROM x)) SELECT l.key, l.id, EXISTS",
-            " (SELECT 1 FROM x JOIN orca.steps s ON s.run = l.id AND",
-            " s.partition IN (l.key, '') JOIN orca.attempts a ON a.step =",
-            " coalesce(s.copied_from, s.id) JOIN orca.reads rd ON",
-            " rd.attempt = a.id AND rd.dataset = x.ds WHERE x.key = l.key",
-            " AND rd.snapshot_id <> x.snap AND NOT EXISTS (SELECT 1 FROM",
-            " orca.commits cr, orca.commits cx WHERE cr.dataset = x.ds AND",
-            " cr.snapshot_id = rd.snapshot_id AND cx.dataset = x.ds AND",
-            " cx.snapshot_id = x.snap AND cr.attempt > cx.attempt)) AS",
-            " behind FROM l ORDER BY l.key, l.id",
-        ),
-        Params()
-        .text(p.name)
-        .text(join_keys(offered.keys))
-        .text(join_keys(offered.datasets))
-        .text(join_keys(offered.snapshots)),
+    for r in sensing_db.live_keys(
+        tx,
+        p.name,
+        join_keys(offered.keys),
+        join_keys(offered.datasets),
+        join_keys(offered.snapshots),
     ):
-        var k = r.text("key")
-        var id = Int(r.int64("id"))
-        if r.bool("behind"):
-            if k not in stale:
-                stale[k] = id
-        elif k not in left:
-            left[k] = id
+        if r.behind:
+            if r.key not in stale:
+                stale[r.key] = r.run
+        elif r.key not in left:
+            left[r.key] = r.run
     return (left^, stale^)
 
 
@@ -311,37 +232,18 @@ def _queue_sensed(
     hasn't started meanwhile."""
     var k = p.keys_per_run
     if k <= 1:
-        var id = (
-            tx.query(
-                (
-                    "INSERT INTO orca.runs (pipeline, registry_hash,"
-                    " partitions, trigger, status) VALUES ($1, $2, $3,"
-                    " 'sensor', 'queued') RETURNING id"
-                ),
-                Params()
-                .text(p.name)
-                .text(p.registry_hash)
-                .text(join_keys(keys)),
-            )
-            .row(0)
-            .int64("id")
+        var id = sensing_db.add_sensor_run(
+            tx, p.name, p.registry_hash, join_keys(keys)
         )
         return (id, String("run ", id, " for ", join_keys(keys)))
     var first = Int64(-1)
     var log = String()
     var made = List[Int64]()
     var i = 0
-    for r in tx.query(
-        (
-            "SELECT id, partitions FROM orca.runs WHERE pipeline = $1 AND"
-            " trigger = 'sensor' AND status = 'queued' AND starts = 0 AND"
-            " registry_hash = $2 ORDER BY id"
-        ),
-        Params().text(p.name).text(p.registry_hash),
-    ):
+    for r in sensing_db.unstarted_sensor_runs(tx, p.name, p.registry_hash):
         if i >= len(keys):
             break
-        var have = split_keys(r.text("partitions"))
+        var have = split_keys(r.partitions)
         if len(have) >= k:
             continue
         var added = List[String]()
@@ -350,11 +252,8 @@ def _queue_sensed(
             i += 1
         var both = have.copy()
         both.extend(added.copy())
-        var id = r.int64("id")
-        _ = tx.execute(
-            "UPDATE orca.runs SET partitions = $2 WHERE id = $1",
-            Params().int64(id).text(join_keys(map_keys(both, p.kind))),
-        )
+        var id = r.id
+        sensing_db.set_partitions(tx, id, join_keys(map_keys(both, p.kind)))
         if first < 0:
             first = id
         log.write(
@@ -369,20 +268,8 @@ def _queue_sensed(
         while i < len(keys) and len(batch) < k:
             batch.append(keys[i])
             i += 1
-        var id = (
-            tx.query(
-                (
-                    "INSERT INTO orca.runs (pipeline, registry_hash,"
-                    " partitions, trigger, status) VALUES ($1, $2, $3,"
-                    " 'sensor', 'queued') RETURNING id"
-                ),
-                Params()
-                .text(p.name)
-                .text(p.registry_hash)
-                .text(join_keys(batch)),
-            )
-            .row(0)
-            .int64("id")
+        var id = sensing_db.add_sensor_run(
+            tx, p.name, p.registry_hash, join_keys(batch)
         )
         if first < 0:
             first = id
@@ -403,24 +290,9 @@ def _sensed(mut self: Scheduler, p: Registered, error: String) raises:
     ):
         return
     if not error:
-        _ = self.db.conn.execute(
-            (
-                "UPDATE orca.pipelines SET sense_error = NULL,"
-                " sense_error_at = NULL WHERE name = $1 AND sense_error IS"
-                " NOT NULL"
-            ),
-            Params().text(p.name),
-        )
+        sensing_db.clear_sense_error(self.db.conn, p.name)
         return
-    var changed = self.db.conn.query(
-        (
-            "UPDATE orca.pipelines SET sense_error = $2, sense_error_at ="
-            " now() WHERE name = $1 AND sense_error IS DISTINCT FROM $2"
-            " RETURNING name"
-        ),
-        Params().text(p.name).text(error),
-    )
-    if len(changed) > 0:
+    if sensing_db.set_sense_error(self.db.conn, p.name, error):
         print("morca: pipeline", p.name, "can't sense:", error)
 
 
@@ -474,15 +346,7 @@ def _sense_keyed(
     var everything = False
     var offer = List[String]()
     for i in range(len(datasets)):
-        var new = tx.query(
-            (
-                "INSERT INTO orca.sensed (pipeline, dataset, snapshot_id)"
-                " VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING"
-                " snapshot_id"
-            ),
-            Params().text(p.name).text(datasets[i]).int64(snapshots[i]),
-        )
-        if len(new) == 0:
+        if not sensing_db.see(tx, p.name, datasets[i], snapshots[i]):
             continue
         taken.append(i)
         if datasets[i] == p.keys_dataset:
@@ -498,16 +362,8 @@ def _sense_keyed(
     ).runs.copy()
     if len(runs) > 0:
         for i in taken:
-            _ = tx.execute(
-                (
-                    "UPDATE orca.sensed SET run = $4 WHERE pipeline = $1"
-                    " AND dataset = $2 AND snapshot_id = $3"
-                ),
-                Params()
-                .text(p.name)
-                .text(datasets[i])
-                .int64(snapshots[i])
-                .int64(Int64(runs[0])),
+            sensing_db.sensed_run(
+                tx, p.name, datasets[i], snapshots[i], Int64(runs[0])
             )
     tx.commit()
     for i in taken:
@@ -523,17 +379,7 @@ def _sense_keyed(
 
 def _fire(mut self: Scheduler, p: Registered, now: Int64) raises:
     var s = Schedule(CronExpr.parse(p.cron), Zone.load(p.tz))
-    var last = (
-        self.db.conn.query(
-            (
-                "SELECT coalesce(max(fire_at), $2) AS last FROM orca.fires"
-                " WHERE pipeline = $1"
-            ),
-            Params().text(p.name).int64(p.since),
-        )
-        .row(0)
-        .int64("last")
-    )
+    var last = sensing_db.last_fire(self.db.conn, p.name, p.since)
     var times = List[Int64]()
     var t = last
     # Many missed fires are made a thousand at a time, one per tick.
@@ -547,36 +393,20 @@ def _fire(mut self: Scheduler, p: Registered, now: Int64) raises:
     for t in times:
         var key = fill_key(p.kind, p.fills, Civil.of(s.zone.to_local(t)))
         var tx = self.db.conn.begin()
-        _ = tx.query(
-            "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
-            Params().text(p.name),
-        )
-        var made = tx.query(
-            (
-                "INSERT INTO orca.fires (pipeline, fire_at, partition)"
-                " VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING"
-                " fire_at"
-            ),
-            Params().text(p.name).int64(t).text(key),
-        )
+        starting_db.lock_pipeline(tx, p.name)
+        var made = sensing_db.add_fire(tx, p.name, t, key)
         var run = Int64(-1)
         var held = False
         # Keys of one kind order as text: `YYYY-MM`, `YYYY-MM-DD`.
-        if len(made) == 1 and (not p.start or key >= p.start):
+        if made and (not p.start or key >= p.start):
             # A live run of the key is the fire's run: a second one
             # would run beside it, and both would append.
             var live = live_runs(tx, p.name).get(key)
             held = Bool(live)
             run = Int64(live.value()) if live else _queue_fire(self, tx, p, key)
-            _ = tx.execute(
-                (
-                    "UPDATE orca.fires SET run = $3 WHERE pipeline = $1"
-                    " AND fire_at = $2"
-                ),
-                Params().text(p.name).int64(t).int64(run),
-            )
+            sensing_db.fire_run(tx, p.name, t, run)
         tx.commit()
-        if len(made) == 1:
+        if made:
             print(
                 "fired",
                 p.name,
@@ -594,15 +424,4 @@ def _queue_fire(
     mut self: Scheduler, mut tx: Transaction, p: Registered, key: String
 ) raises -> Int64:
     """A queued run of `p` over `key`, trigger `schedule`."""
-    return (
-        tx.query(
-            (
-                "INSERT INTO orca.runs (pipeline, registry_hash,"
-                " partitions, trigger, status) VALUES ($1, $2, $3,"
-                " 'schedule', 'queued') RETURNING id"
-            ),
-            Params().text(p.name).text(p.registry_hash).text(key),
-        )
-        .row(0)
-        .int64("id")
-    )
+    return sensing_db.add_schedule_run(tx, p.name, p.registry_hash, key)

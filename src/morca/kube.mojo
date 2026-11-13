@@ -43,7 +43,7 @@ from std.os import getenv
 
 from json import Value
 from k8s import JOBS, PODS, SERVICES, Client, Config
-from postgres import Params
+import morca.db.kube as kube_db
 
 from morca.crash import crash_summary
 from morca.json import quote
@@ -403,18 +403,7 @@ struct KubeRunner(Movable):
             var all = String(before, "--- start ", start, "\n", text)
             write_location(at, all.as_bytes())
             var why = crash_summary(text)
-            if why and (
-                len(
-                    db.conn.query(
-                        (
-                            "SELECT id FROM orca.runs WHERE id = $1 AND status"
-                            " = 'running' AND starts::text = $2"
-                        ),
-                        Params().int64(Int64(run)).text(start),
-                    )
-                )
-                > 0
-            ):
+            if why and kube_db.running_at(db.conn, run, start):
                 var n = db.interrupt(run, why)
                 print("run", run, "crashed,", n, "attempts failed:", why)
         except e:
@@ -431,29 +420,17 @@ struct KubeRunner(Movable):
         """Deletes the objects of runs that aren't running at their start,
         and of Jobs that have finished; returns how many it deleted."""
         var live = Dict[String, Bool]()
-        for r in db.conn.query(
-            (
-                "SELECT id || '-' || starts AS k FROM orca.runs WHERE status ="
-                " 'running'"
-            ),
-            Params(),
-        ):
-            live[r.text("k")] = True
+        for k in kube_db.running_keys(db.conn):
+            live[k] = True
         # A run ends when its driver says so, before its pods have: their
         # last lines and samples aren't in their logs yet, and a short run
         # can end before its sampler's first line. Its Job is kept until it
         # finishes, for `MORCA_KUBE_SETTLE_SECONDS` (30) at most.
         var settling = Dict[String, Bool]()
-        for r in db.conn.query(
-            (
-                "SELECT id || '-' || starts AS k FROM orca.runs WHERE status <>"
-                " 'running' AND ended > now() - make_interval(secs => $1)"
-            ),
-            Params().float64(
-                Float64(getenv("MORCA_KUBE_SETTLE_SECONDS", "30"))
-            ),
+        for k in kube_db.ended_keys(
+            db.conn, Float64(getenv("MORCA_KUBE_SETTLE_SECONDS", "30"))
         ):
-            settling[r.text("k")] = True
+            settling[k] = True
         var n = 0
         for o in self.k.list(JOBS, "orca.run").items:
             var finished = (

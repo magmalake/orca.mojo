@@ -11,7 +11,8 @@ the runs list. The newest page refreshes from `/ops/alerts/live` every
 30 s. `/api/alerts` is the same as JSON.
 """
 
-from postgres import Params
+import morca.db.alerts_view as alerts_db
+from morca.db.alerts_view import AlertRow
 
 from morca.html import Html, query_param, url_encode
 from morca.json import quote
@@ -36,21 +37,6 @@ comptime ALERT_KINDS: List[String] = [
 ]
 """The kinds morca raises (`orca.alerts`, `morca.admission`) and the one the
 Hetzner server's backup sends; the filter adds any others the table has."""
-
-comptime _RESOLVABLE = (
-    "(a.event = 'raised' AND (a.kind IN ('watchdog', 'fill-stalled', 'disk',"
-    " 'memory-pressure') OR a.resolved_at IS NOT NULL OR EXISTS (SELECT 1"
-    " FROM orca.alerts r WHERE r.kind = a.kind AND r.event = 'resolved')))"
-)
-"""Whether an alert resolves: those of the kinds morca resolves (a watchdog
-trip, a stalled fill, the disk, memory pressure), and of a kind that
-`morca notify --resolved` has ended once."""
-
-comptime _OPEN = (
-    "(a.event = 'raised' AND (a.kind IN ('watchdog', 'fill-stalled', 'disk',"
-    " 'memory-pressure') OR EXISTS (SELECT 1 FROM orca.alerts r WHERE r.kind"
-    " = a.kind AND r.event = 'resolved')) AND a.resolved_at IS NULL)"
-)
 
 
 @fieldwise_init
@@ -112,40 +98,6 @@ def alerts_ask(url: String) -> AlertsAsk:
     )
 
 
-@fieldwise_init
-struct AlertRow(Copyable, Movable):
-    var id: Int
-    var kind: String
-    var subject: String
-    var event: String
-    var title: String
-    var body: String
-    var priority: String
-    var url: String
-    var pipelines: String
-    var run: Int
-    var created: String
-    var delivery: String
-    var attempts: Int
-    var sent: String
-    var error: String
-    var resolvable: Bool
-    var resolved: String
-    var resolved_by: Int
-    var resolved_by_event: String
-
-    def state(self) -> String:
-        """open, resolved, repeated (raised again before it resolved), or
-        empty for an alert that doesn't resolve and for a 'resolved'."""
-        if not self.resolvable:
-            return String()
-        if not self.resolved:
-            return "open"
-        if self.resolved_by_event == "raised":
-            return "repeated"
-        return "resolved"
-
-
 struct AlertsPage(Movable):
     var q: AlertsAsk
     var rows: List[AlertRow]
@@ -184,82 +136,12 @@ struct AlertsPage(Movable):
         return 0
 
 
-def _state_sql(state: String) -> String:
-    if state == "open":
-        return String(" AND ", _OPEN)
-    if state == "resolved":
-        return " AND (a.resolved_at IS NOT NULL OR a.event = 'resolved')"
-    return String()
-
-
 def alerts_page(mut db: State, var q: AlertsAsk) raises -> AlertsPage:
     """A page of alerts, newest first, with its counts."""
-    comptime ts = '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\''
     var p = AlertsPage(q^)
-    var cond = String("WHERE true", _state_sql(p.q.state))
-    if p.q.kind:
-        cond.write(" AND a.kind = $1")
-    else:
-        cond.write(" AND $1 = ''")
-    var cursor: String
-    var order = "DESC"
-    if p.q.after > 0:
-        cursor = " AND a.id > $2"
-        order = "ASC"
-    elif p.q.before > 0:
-        cursor = " AND a.id < $2"
-    else:
-        cursor = " AND $2 = 0"
-    var sql = String(
-        "SELECT a.id, a.kind, a.subject, a.event, a.title, a.body,",
-        " a.priority, a.url, coalesce(a.pipelines, '') AS pipelines,",
-        " coalesce(a.run, 0) AS run, to_char(a.created AT TIME ZONE 'UTC', ",
-        ts,
-        ") AS created, a.delivery, a.attempts, coalesce(to_char(a.sent_at AT",
-        " TIME ZONE 'UTC', ",
-        ts,
-        "), '') AS sent, coalesce(a.error, '') AS error, ",
-        _RESOLVABLE,
-        " AS resolvable, coalesce(to_char(a.resolved_at AT TIME ZONE 'UTC', ",
-        ts,
-        "), '') AS resolved, coalesce(a.resolved_by, 0) AS resolved_by,",
-        " coalesce(b.event, '') AS resolved_by_event FROM orca.alerts a LEFT",
-        " JOIN orca.alerts b ON b.id = a.resolved_by ",
-        cond,
-        cursor,
-        " ORDER BY a.id ",
-        order,
-        " LIMIT $3",
+    var got = alerts_db.alert_rows(
+        db.conn, p.q.kind, p.q.state, p.q.before, p.q.after, p.q.size + 1
     )
-    var cur = p.q.after if p.q.after > 0 else p.q.before
-    var got = List[AlertRow]()
-    for r in db.conn.query(
-        sql,
-        Params().text(p.q.kind).int64(Int64(cur)).int64(Int64(p.q.size + 1)),
-    ):
-        got.append(
-            AlertRow(
-                Int(r.int64("id")),
-                r.text("kind"),
-                r.text("subject"),
-                r.text("event"),
-                r.text("title"),
-                r.text("body"),
-                r.text("priority"),
-                r.text("url"),
-                r.text("pipelines"),
-                Int(r.int64("run")),
-                r.text("created"),
-                r.text("delivery"),
-                Int(r.int64("attempts")),
-                r.text("sent"),
-                r.text("error"),
-                r.bool("resolvable"),
-                r.text("resolved"),
-                Int(r.int64("resolved_by")),
-                r.text("resolved_by_event"),
-            )
-        )
     var more = len(got) > p.q.size
     if more:
         _ = got.pop()
@@ -269,37 +151,18 @@ def alerts_page(mut db: State, var q: AlertsAsk) raises -> AlertsPage:
     else:
         p.older = more
     p.rows = got^
-    var counts = db.conn.query(
-        String(
-            "SELECT count(*) AS total, count(*) FILTER (WHERE a.id > $2) AS",
-            " newer FROM orca.alerts a ",
-            cond,
-        ),
-        Params()
-        .text(p.q.kind)
-        .int64(Int64(p.rows[0].id if len(p.rows) > 0 else 1 << 62)),
+    var counts = alerts_db.alerts_counted(
+        db.conn,
+        p.q.kind,
+        p.q.state,
+        p.rows[0].id if len(p.rows) > 0 else 1 << 62,
     )
-    p.total = Int(counts.row(0).int64("total"))
-    p.newer = Int(counts.row(0).int64("newer"))
+    p.total = counts[0]
+    p.newer = counts[1]
     if p.q.after > 0 and p.newer == 0:
         p.older = p.total > len(p.rows)
-    p.open = Int(
-        db.conn.query(
-            String("SELECT count(*) AS n FROM orca.alerts a WHERE ", _OPEN),
-            Params(),
-        )
-        .row(0)
-        .int64("n")
-    )
-    for r in db.conn.query(
-        String(
-            "SELECT a.kind, count(*) AS n FROM orca.alerts a WHERE true",
-            _state_sql(p.q.state),
-            " GROUP BY a.kind ORDER BY a.kind",
-        ),
-        Params(),
-    ):
-        p.kinds.append((r.text("kind"), Int(r.int64("n"))))
+    p.open = alerts_db.open_alerts(db.conn)
+    p.kinds = alerts_db.alert_kinds(db.conn, p.q.state)
     return p^
 
 

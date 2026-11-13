@@ -8,10 +8,8 @@ from json import (
     Value,
     loads,
 )
-from postgres import (
-    Params,
-    Row,
-)
+import morca.db.config_show as config_db
+from morca.db.config_show import Settings
 from morca.fill import fill_max_runs_text
 from morca.fill import SINCE_REGISTRATION
 from morca.html import Html
@@ -309,27 +307,6 @@ def config_html(
     h.raw("</tbody></table></div>")
 
 
-comptime _SHOWN_SQL = (
-    "SELECT name, head_type, worker_type, ec2_workers, ec2_min_workers,"
-    " worker_procs, placement, max_runs, coalesce(max_runs_auto, false) AS"
-    " max_runs_auto, coalesce(describe->>'max_runs', '1') AS code_max_runs,"
-    " keys_per_run, coalesce(describe->>'keys_per_run', '1') AS"
-    " code_keys_per_run,"
-    " describe->>'workers' AS code_workers,"
-    " jsonb_array_length(coalesce(describe->'tasks', '[]')) > 0 AS tasks,"
-    " coalesce(secrets::text, '') AS secrets, coalesce(env::text, '') AS env,"
-    " coalesce(config::text, '') AS config, coalesce(image, '') AS image,"
-    " coalesce(spot, false) AS spot, coalesce(fills, '') AS fills,"
-    " coalesce(fill_order, '') AS fill_order, coalesce(fill_max_runs, 0) AS"
-    " fill_max_runs, coalesce(fill_max_runs_auto, false) AS fill_max_runs_auto,"
-    " coalesce(fill_budget_per_day, -1) AS fill_budget,"
-    " coalesce(fill_window, '') AS fill_window, coalesce(fill_lag, '') AS"
-    " fill_lag, coalesce(cpus, '') AS cpus, coalesce(memory_gb, '') AS"
-    " memory_gb, learn FROM orca.pipelines WHERE binary_path IS NOT NULL AND"
-    " ($1 = '' OR name = $1) ORDER BY name"
-)
-
-
 def _source(
     sources: Optional[Value], key: String
 ) raises -> Tuple[String, String]:
@@ -371,11 +348,11 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
     `MORCA_EC2_WORKER_TYPE`, `MORCA_RUN_ENV`'s variables) are read from this
     process's, which is the scheduler's when run beside it."""
     var out = List[Shown]()
-    for r in db.conn.query(_SHOWN_SQL, Params().text(only)):
-        var s = Shown(r.text("name"))
+    for r in config_db.settings(db.conn, only):
+        var s = Shown(r.name)
         var sources = Optional[Value](None)
-        if r.text("config"):
-            var c = loads(r.text("config"))
+        if r.config:
+            var c = loads(r.config)
             var f = c.get("file")
             if f and f.value().is_string():
                 s.file = f.value().string_value()
@@ -397,7 +374,7 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
             if src:
                 sources = src.value().copy()
         # placement
-        if r.is_null("placement"):
+        if not r.placement:
             s.add(
                 "placement",
                 "default",
@@ -408,15 +385,16 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
             )
         else:
             var w = _source(sources, "placement")
-            s.add("placement", r.text("placement"), w[0], w[1])
+            s.add("placement", r.placement.value(), w[0], w[1])
         for t in range(2):
             var key = String("head_type") if t == 0 else String("worker_type")
             var var_name = String("MORCA_EC2_HEAD_TYPE") if t == 0 else String(
                 "MORCA_EC2_WORKER_TYPE"
             )
-            if not r.is_null(key):
+            var have = r.head_type.copy() if t == 0 else r.worker_type.copy()
+            if have:
                 var w = _source(sources, key)
-                s.add(key, r.text(key), w[0], w[1])
+                s.add(key, have.value(), w[0], w[1])
             elif getenv(var_name):
                 s.add(key, getenv(var_name), FROM_ENV, var_name)
             else:
@@ -426,43 +404,43 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
                     CODE_DEFAULT,
                     "the ec2 runner's",
                 )
-        if not r.is_null("ec2_workers"):
+        if r.ec2_workers:
             var w = _source(sources, "workers")
-            var v = String(r.int64("ec2_workers"))
-            if not r.is_null("ec2_min_workers"):
-                v = String(r.int64("ec2_min_workers"), "..", v)
+            var v = String(r.ec2_workers.value())
+            if r.ec2_min_workers:
+                v = String(r.ec2_min_workers.value(), "..", v)
             var detail = w[1]
-            if not r.bool("tasks"):
+            if not r.tasks:
                 detail.write(
                     "; " if detail else "", "unused: the pipeline has no tasks"
                 )
             s.add("workers", v, w[0], detail)
-        elif not r.bool("tasks"):
+        elif not r.tasks:
             s.add("workers", "0", CODE_DEFAULT, "the pipeline has no tasks")
-        elif not r.is_null("code_workers"):
+        elif r.code_workers:
             s.add(
                 "workers",
-                r.text("code_workers"),
+                r.code_workers.value(),
                 CODE_DEFAULT,
                 "the pipeline's code",
             )
         else:
             s.add("workers", "2", CODE_DEFAULT, "")
-        if r.is_null("worker_procs"):
+        if not r.worker_procs:
             s.add("worker_procs", "1", CODE_DEFAULT, "")
         else:
             var w = _source(sources, "worker_procs")
-            var n = r.int64("worker_procs")
+            var n = r.worker_procs.value()
             s.add(
                 "worker_procs",
                 String("auto") if n == 0 else String(n),
                 w[0],
                 w[1],
             )
-        if r.is_null("max_runs"):
+        if not r.max_runs:
             s.add(
                 "max_runs",
-                r.text("code_max_runs"),
+                r.code_max_runs,
                 CODE_DEFAULT,
                 "the pipeline's max_runs",
             )
@@ -470,41 +448,41 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
             var w = _source(sources, "max_runs")
             s.add(
                 "max_runs",
-                max_runs_text(
-                    Int(r.int64("max_runs")), r.bool("max_runs_auto")
-                ),
+                max_runs_text(Int(r.max_runs.value()), r.max_runs_auto),
                 w[0],
                 w[1],
             )
-        if r.is_null("keys_per_run"):
+        if not r.keys_per_run:
             s.add(
                 "keys_per_run",
-                r.text("code_keys_per_run"),
+                r.code_keys_per_run,
                 CODE_DEFAULT,
                 "the pipeline's keys_per_run",
             )
         else:
             var w = _source(sources, "keys_per_run")
-            s.add("keys_per_run", String(r.int64("keys_per_run")), w[0], w[1])
+            s.add("keys_per_run", String(r.keys_per_run.value()), w[0], w[1])
         # A request (morca.resources), only when it has one.
         for key in ["cpus", "memory_gb"]:
-            if r.text(key):
+            if r.cpus if key == "cpus" else r.memory_gb:
                 var w = _source(sources, key)
-                s.add(key, r.text(key), w[0], w[1])
-        var learn = r.is_null("learn") or r.bool("learn")
+                s.add(
+                    key, (r.cpus if key == "cpus" else r.memory_gb), w[0], w[1]
+                )
+        var learn = not r.learn or r.learn.value()
         if not learn:
             var w = _source(sources, "learn")
             s.add("learn", "false", w[0], w[1])
         _show_fills(s, r, sources)
-        if r.text("image"):
-            s.add("image", r.text("image"), FROM_FLAG, "--image")
-        if r.bool("spot"):
+        if r.image:
+            s.add("image", r.image, FROM_FLAG, "--image")
+        if r.spot:
             s.add("spot", "true", FROM_FLAG, "--spot")
-        for kv in parse_secrets(r.text("secrets")):
+        for kv in parse_secrets(r.secrets):
             var key = String("secrets.", kv[0])
             var w = _source(sources, key)
             s.add(key, kv[1], w[0], w[1])
-        var env = parse_env(r.text("env"))
+        var env = parse_env(r.env)
         for kv in env:
             var key = String("env.", kv[0])
             var w = _source(sources, key)
@@ -519,8 +497,8 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
         for ref row in s.rows:
             if row.setting.source == FROM_FILE:
                 row.setting.line = _line_of(sources, row.key)
-        var l = learned(db, s.name, r.text("cpus"), r.text("memory_gb"))
-        s.auto = Request.of(r.text("cpus"), r.text("memory_gb")).auto()
+        var l = learned(db, s.name, r.cpus, r.memory_gb)
+        s.auto = Request.of(r.cpus, r.memory_gb).auto()
         s.learn = learn
         l.applied = s.auto and learn and l.any()
         s.learned = l^
@@ -528,10 +506,10 @@ def shown(mut db: State, only: String = "") raises -> List[Shown]:
     return out^
 
 
-def _show_fills(mut s: Shown, r: Row, sources: Optional[Value]) raises:
+def _show_fills(mut s: Shown, r: Settings, sources: Optional[Value]) raises:
     """The `fill*` keys (`morca.fill`): `fills` always, the others when the
     pipeline fills or sets them."""
-    var fills = r.text("fills")
+    var fills = r.fills
     if fills:
         var w = _source(sources, "fills")
         s.add("fills", fills, w[0], w[1])
@@ -539,36 +517,32 @@ def _show_fills(mut s: Shown, r: Row, sources: Optional[Value]) raises:
         s.add("fills", SINCE_REGISTRATION, CODE_DEFAULT, "")
     var any = (
         fills == "all"
-        or r.text("fill_order") != ""
-        or r.int64("fill_max_runs") > 0
-        or r.float64("fill_budget") >= 0
-        or r.text("fill_window") != ""
-        or r.text("fill_lag") != ""
+        or r.fill_order != ""
+        or r.fill_max_runs > 0
+        or r.fill_budget >= 0
+        or r.fill_window != ""
+        or r.fill_lag != ""
     )
     if not any:
         return
-    if r.text("fill_order"):
+    if r.fill_order:
         var w = _source(sources, "fill_order")
-        s.add("fill_order", r.text("fill_order"), w[0], w[1])
+        s.add("fill_order", r.fill_order, w[0], w[1])
     else:
         s.add("fill_order", "oldest", CODE_DEFAULT, "")
-    if r.int64("fill_max_runs") > 0:
+    if r.fill_max_runs > 0:
         var w = _source(sources, "fill_max_runs")
         s.add(
             "fill_max_runs",
-            fill_max_runs_text(
-                Int(r.int64("fill_max_runs")), r.bool("fill_max_runs_auto")
-            ),
+            fill_max_runs_text(Int(r.fill_max_runs), r.fill_max_runs_auto),
             w[0],
             w[1],
         )
     else:
         s.add("fill_max_runs", "1", CODE_DEFAULT, "")
-    if r.float64("fill_budget") >= 0:
+    if r.fill_budget >= 0:
         var w = _source(sources, "fill_budget_per_day")
-        s.add(
-            "fill_budget_per_day", String(r.float64("fill_budget")), w[0], w[1]
-        )
+        s.add("fill_budget_per_day", String(r.fill_budget), w[0], w[1])
     else:
         s.add(
             "fill_budget_per_day",
@@ -576,14 +550,14 @@ def _show_fills(mut s: Shown, r: Row, sources: Optional[Value]) raises:
             CODE_DEFAULT,
             "fill runs on ec2 or kubernetes don't start without one",
         )
-    if r.text("fill_window"):
+    if r.fill_window:
         var w = _source(sources, "fill_window")
-        s.add("fill_window", r.text("fill_window"), w[0], w[1])
+        s.add("fill_window", r.fill_window, w[0], w[1])
     else:
         s.add("fill_window", "0..24", CODE_DEFAULT, "all day")
-    if r.text("fill_lag"):
+    if r.fill_lag:
         var w = _source(sources, "fill_lag")
-        s.add("fill_lag", r.text("fill_lag"), w[0], w[1])
+        s.add("fill_lag", r.fill_lag, w[0], w[1])
     else:
         s.add("fill_lag", "0", CODE_DEFAULT, "a partition fills once it ends")
 
@@ -624,70 +598,71 @@ def export_toml(mut db: State) raises -> String:
         ),
         "# in morca's database. `morca register` reads it (morca.config).\n",
     )
-    for r in db.conn.query(_SHOWN_SQL, Params().text("")):
-        out.write("\n[pipelines.", toml_key(r.text("name")), "]\n")
-        if not r.is_null("placement"):
-            out.write("placement = ", toml_string(r.text("placement")), "\n")
-        if not r.is_null("head_type"):
-            out.write("head_type = ", toml_string(r.text("head_type")), "\n")
-        if not r.is_null("worker_type"):
+    for r in config_db.settings(db.conn, ""):
+        out.write("\n[pipelines.", toml_key(r.name), "]\n")
+        if r.placement:
+            out.write("placement = ", toml_string(r.placement.value()), "\n")
+        if r.head_type:
+            out.write("head_type = ", toml_string(r.head_type.value()), "\n")
+        if r.worker_type:
             out.write(
-                "worker_type = ", toml_string(r.text("worker_type")), "\n"
+                "worker_type = ", toml_string(r.worker_type.value()), "\n"
             )
-        if not r.is_null("ec2_workers"):
-            if r.is_null("ec2_min_workers"):
-                out.write("workers = ", r.int64("ec2_workers"), "\n")
+        if r.ec2_workers:
+            if not r.ec2_min_workers:
+                out.write("workers = ", r.ec2_workers.value(), "\n")
             else:
                 out.write(
                     'workers = "',
-                    r.int64("ec2_min_workers"),
+                    r.ec2_min_workers.value(),
                     "..",
-                    r.int64("ec2_workers"),
+                    r.ec2_workers.value(),
                     '"\n',
                 )
-        if not r.is_null("worker_procs"):
-            var n = r.int64("worker_procs")
+        if r.worker_procs:
+            var n = r.worker_procs.value()
             if n == 0:
                 out.write('worker_procs = "auto"\n')
             else:
                 out.write("worker_procs = ", n, "\n")
-        if not r.is_null("max_runs"):
-            if r.bool("max_runs_auto"):
-                var t = max_runs_text(Int(r.int64("max_runs")), True)
+        if r.max_runs:
+            if r.max_runs_auto:
+                var t = max_runs_text(Int(r.max_runs.value()), True)
                 out.write("max_runs = ", toml_string(t), "\n")
             else:
-                out.write("max_runs = ", r.int64("max_runs"), "\n")
-        if not r.is_null("keys_per_run"):
-            out.write("keys_per_run = ", r.int64("keys_per_run"), "\n")
+                out.write("max_runs = ", r.max_runs.value(), "\n")
+        if r.keys_per_run:
+            out.write("keys_per_run = ", r.keys_per_run.value(), "\n")
         for key in ["cpus", "memory_gb"]:
-            if r.text(key):
-                out.write(key, " = ", toml_string(r.text(key)), "\n")
-        if not r.is_null("learn") and not r.bool("learn"):
+            if r.cpus if key == "cpus" else r.memory_gb:
+                out.write(
+                    key,
+                    " = ",
+                    toml_string((r.cpus if key == "cpus" else r.memory_gb)),
+                    "\n",
+                )
+        if r.learn and not r.learn.value():
             out.write("learn = false\n")
-        if r.text("fills"):
-            out.write("fills = ", toml_string(r.text("fills")), "\n")
-        if r.text("fill_order"):
-            out.write("fill_order = ", toml_string(r.text("fill_order")), "\n")
-        if r.int64("fill_max_runs") > 0:
-            if r.bool("fill_max_runs_auto"):
-                var t = fill_max_runs_text(Int(r.int64("fill_max_runs")), True)
+        if r.fills:
+            out.write("fills = ", toml_string(r.fills), "\n")
+        if r.fill_order:
+            out.write("fill_order = ", toml_string(r.fill_order), "\n")
+        if r.fill_max_runs > 0:
+            if r.fill_max_runs_auto:
+                var t = fill_max_runs_text(Int(r.fill_max_runs), True)
                 out.write("fill_max_runs = ", toml_string(t), "\n")
             else:
-                out.write("fill_max_runs = ", r.int64("fill_max_runs"), "\n")
-        if r.float64("fill_budget") >= 0:
-            out.write(
-                "fill_budget_per_day = ", String(r.float64("fill_budget")), "\n"
-            )
-        if r.text("fill_window"):
-            out.write(
-                "fill_window = ", toml_string(r.text("fill_window")), "\n"
-            )
-        if r.text("fill_lag"):
-            out.write("fill_lag = ", toml_string(r.text("fill_lag")), "\n")
-        var env = parse_env(r.text("env"))
+                out.write("fill_max_runs = ", r.fill_max_runs, "\n")
+        if r.fill_budget >= 0:
+            out.write("fill_budget_per_day = ", String(r.fill_budget), "\n")
+        if r.fill_window:
+            out.write("fill_window = ", toml_string(r.fill_window), "\n")
+        if r.fill_lag:
+            out.write("fill_lag = ", toml_string(r.fill_lag), "\n")
+        var env = parse_env(r.env)
         if len(env) > 0:
             out.write("env = ", _inline(env), "\n")
-        var secrets = parse_secrets(r.text("secrets"))
+        var secrets = parse_secrets(r.secrets)
         if len(secrets) > 0:
             out.write("secrets = ", _inline(secrets), "\n")
     return out^

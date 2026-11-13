@@ -23,7 +23,8 @@ from std.os import getenv
 
 from flare.crypto.random import random_bytes
 from objectstore.crypto import sha256_hex
-from postgres import Params
+import morca.db.auth as auth_db
+from morca.db.auth import TokenRow
 
 from morca.state import State
 
@@ -121,26 +122,8 @@ def issue_token(
 ) raises -> Issued:
     """A new token for `user`, which only this answer ever holds."""
     var token = new_token()
-    var expires = (
-        db.conn.query(
-            (
-                "INSERT INTO orca.api_tokens (token_hash, username, label,"
-                " expires) VALUES ($1, $2, $3, now() + make_interval(days =>"
-                " $4)) RETURNING to_char(expires AT TIME ZONE 'UTC',"
-                ' \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') AS expires'
-            ),
-            Params()
-            .text(token_hash(token))
-            .text(user)
-            .text(clean_label(label))
-            .int32(Int32(days)),
-        )
-        .row(0)
-        .text("expires")
-    )
-    # Expired tokens go as new ones come, as sessions do.
-    _ = db.conn.execute(
-        "DELETE FROM orca.api_tokens WHERE expires < now()", Params()
+    var expires = auth_db.add_token(
+        db.conn, token_hash(token), user, clean_label(label), days
     )
     return Issued(token^, expires^)
 
@@ -149,77 +132,22 @@ def token_user(mut db: State, token: String) raises -> String:
     """The user whose live token `token` is, or empty; marks it used."""
     if not is_token(token):
         return ""
-    var rows = db.conn.query(
-        (
-            "UPDATE orca.api_tokens SET last_used = now() WHERE token_hash = $1"
-            " AND expires > now() RETURNING username"
-        ),
-        Params().text(token_hash(token)),
-    )
-    return rows.row(0).text("username") if len(rows) == 1 else String()
+    return auth_db.use_token(db.conn, token_hash(token))
 
 
 def revoke_token(mut db: State, token: String) raises -> Bool:
     """Revokes `token`; False if it wasn't a live one."""
     if not is_token(token):
         return False
-    return (
-        db.conn.execute(
-            "DELETE FROM orca.api_tokens WHERE token_hash = $1",
-            Params().text(token_hash(token)),
-        )
-        == 1
-    )
-
-
-@fieldwise_init
-struct TokenRow(Copyable, Movable):
-    var id: Int
-    var label: String
-    var created: String
-    var last_used: String
-    """Empty if it hasn't been."""
-    var expires: String
-    var expired: Bool
+    return auth_db.remove_token(db.conn, token_hash(token))
 
 
 def user_tokens(mut db: State, user: String) raises -> List[TokenRow]:
     """`user`'s tokens, newest first, expired ones too until they're
     removed."""
-    comptime ts = '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\''
-    var out = List[TokenRow]()
-    for r in db.conn.query(
-        String(
-            "SELECT id, label, to_char(created AT TIME ZONE 'UTC', ",
-            ts,
-            ") AS created, coalesce(to_char(last_used AT TIME ZONE 'UTC', ",
-            ts,
-            "), '') AS last_used, to_char(expires AT TIME ZONE 'UTC', ",
-            ts,
-            ") AS expires, expires < now() AS expired FROM orca.api_tokens",
-            " WHERE username = $1 ORDER BY id DESC",
-        ),
-        Params().text(user),
-    ):
-        out.append(
-            TokenRow(
-                Int(r.int64("id")),
-                r.text("label"),
-                r.text("created"),
-                r.text("last_used"),
-                r.text("expires"),
-                r.bool("expired"),
-            )
-        )
-    return out^
+    return auth_db.user_tokens(db.conn, user)
 
 
 def revoke_user_tokens(mut db: State, user: String, id: Int) raises -> Int:
     """Revokes `user`'s token `id`, or all of them for 0; how many."""
-    return db.conn.execute(
-        (
-            "DELETE FROM orca.api_tokens WHERE username = $1 AND ($2 = 0 OR"
-            " id = $2)"
-        ),
-        Params().text(user).int64(Int64(id)),
-    )
+    return auth_db.remove_user_tokens(db.conn, user, id)

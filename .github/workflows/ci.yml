@@ -444,6 +444,10 @@ jobs:
         run: pixi run -e fmt format-check
       - name: nothing reads the old orca names (#384)
         run: sh tests/no-orca.sh
+      - name: SQL only in morca.db (#362)
+        run: sh tests/sql_in_db.sh
+      - name: no file in src/ is over 1,500 lines (#363)
+        run: sh tests/file_size.sh
 
   # The Lean 4 models under formal/: the project builds, no proof is left
   # open or rests on an axiom of its own, and formal/difftest/retry.cases,

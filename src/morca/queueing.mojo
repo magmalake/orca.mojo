@@ -3,12 +3,12 @@ holds, and what a rerun or an append refuses.
 """
 
 from std.os.path import exists
-from postgres import (
-    Params,
-    Transaction,
-)
-from morca.batches import mark_batch
-from morca.live import live_runs
+from postgres import Transaction
+from morca.db.batches import mark_batch
+import morca.db.queueing as queueing_db
+import morca.db.starting as starting_db
+from morca.db.live import live_runs
+from morca.db.queueing import APPENDING_SQL, DONE_SQL
 from morca.timekeys import parse_time_keys
 from morca.name import (
     Name,
@@ -27,31 +27,17 @@ def dataset_cycle(mut db: State, describe: String) raises -> String:
     """How the pipeline `describe` gives would close a cycle across
     pipelines, through the datasets they write and read, or empty if it
     wouldn't. A pipeline reading a dataset it writes itself isn't one."""
-    var rows = db.conn.query(
-        (
-            "WITH d AS (SELECT name, describe FROM orca.pipelines WHERE name"
-            " <> $1::jsonb->>'pipeline' UNION ALL SELECT $1::jsonb->>"
-            "'pipeline', $1::jsonb), io AS (SELECT DISTINCT d.name, k.kind,"
-            " x.ds FROM d, jsonb_array_elements(d.describe->'steps') AS s(st),"
-            " (VALUES ('reads'), ('writes')) AS k(kind),"
-            " jsonb_array_elements_text(coalesce(s.st->k.kind, '[]')) AS"
-            " x(ds)) SELECT w.name AS src, r.name AS dst, w.ds, $1::jsonb->>"
-            "'pipeline' AS me FROM io w JOIN io r ON r.ds = w.ds AND r.kind ="
-            " 'reads' WHERE w.kind = 'writes' AND w.name <> r.name ORDER BY"
-            " 1, 2, 3"
-        ),
-        Params().text(describe),
-    )
-    if len(rows) == 0:
+    var got = queueing_db.dataset_edges(db.conn, describe)
+    if len(got[1]) == 0:
         return ""
-    var me = rows.row(0).text("me")
+    var me = got[0]
     var src = List[String]()
     var dst = List[String]()
     var via = List[String]()
-    for r in rows:
-        src.append(r.text("src"))
-        dst.append(r.text("dst"))
-        via.append(r.text("ds"))
+    for r in got[1]:
+        src.append(r.src)
+        dst.append(r.dst)
+        via.append(r.ds)
     # A path from `me` back to `me`, breadth first, by the edge taken.
     var came = List[Int](length=len(src), fill=-2)
     var frontier = List[Int]()
@@ -124,14 +110,7 @@ def keep_keys(
     var text = String()
     for i in range(len(keys[1])):
         text.write("\n" if i else "", keys[1][i])
-    _ = db.conn.execute(
-        (
-            "INSERT INTO orca.keys (pipeline, snapshot_id, keys) VALUES ($1,"
-            " $2, $3) ON CONFLICT (pipeline) DO UPDATE SET snapshot_id ="
-            " EXCLUDED.snapshot_id, keys = EXCLUDED.keys, read_at = now()"
-        ),
-        Params().text(pipeline).int64(keys[0]).text(text),
-    )
+    queueing_db.keep_keys(db.conn, pipeline, keys[0], text)
 
 
 @fieldwise_init
@@ -146,25 +125,15 @@ struct KeptKeys(Copyable, Movable):
 
 
 def kept_keys(mut db: State, pipeline: String) raises -> Optional[KeptKeys]:
-    var rows = db.conn.query(
-        (
-            "SELECT snapshot_id, keys, to_char(read_at AT TIME ZONE 'UTC',"
-            ' \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') AS at, extract(epoch FROM'
-            " now() - read_at)::float8 AS age FROM orca.keys WHERE pipeline ="
-            " $1"
-        ),
-        Params().text(pipeline),
-    )
-    if len(rows) == 0:
+    var row = queueing_db.kept_keys(db.conn, pipeline)
+    if not row:
         return None
-    var r = rows.row(0)
+    ref r = row.value()
     var keys = List[String]()
-    for k in r.text("keys").split("\n"):
+    for k in r.keys.split("\n"):
         if k:
             keys.append(String(k))
-    return KeptKeys(
-        r.int64("snapshot_id"), keys^, r.text("at"), r.float64("age")
-    )
+    return KeptKeys(r.snapshot, keys^, r.read_at, r.age)
 
 
 def file_names(path: String) raises -> String:
@@ -199,44 +168,21 @@ def kind_mismatch(mut db: State, describe: String) raises -> String:
     A keyed sensor's own keys dataset needs no mapping, whoever writes it:
     a new snapshot of it offers the keys it holds, which are names already.
     So a dated pipeline may write the keys a keyed sensor runs."""
-    var rows = db.conn.query(
-        (
-            "WITH d AS (SELECT name, describe FROM orca.pipelines WHERE name"
-            " <> $1::jsonb->>'pipeline' UNION ALL SELECT $1::jsonb->>"
-            "'pipeline', $1::jsonb), io AS (SELECT DISTINCT d.name,"
-            " coalesce(d.describe->'partitions'->>'kind', 'monthly') AS"
-            " pkind, coalesce((d.describe->>'sensor')::boolean, false) AS"
-            " sensor, k.kind, x.ds, coalesce(d.describe->'partitions'->>"
-            "'dataset', '') AS keys FROM d, jsonb_array_elements(d.describe->"
-            "'steps') AS s(st), (VALUES ('reads'), ('writes')) AS k(kind),"
-            " jsonb_array_elements_text(coalesce(s.st->k.kind, '[]')) AS"
-            " x(ds) UNION SELECT d.name, 'keyed', coalesce((d.describe->>"
-            "'sensor')::boolean, false), 'reads', d.describe->'partitions'->>"
-            "'dataset', d.describe->'partitions'->>'dataset' FROM d WHERE"
-            " d.describe->'partitions'->>'dataset' IS NOT NULL) SELECT w.name"
-            " AS writer, w.pkind AS wkind, r.name AS reader, r.pkind AS rkind,"
-            " w.ds FROM io w JOIN io r ON r.ds = w.ds AND r.kind = 'reads'"
-            " WHERE w.kind = 'writes' AND w.name <> r.name AND r.sensor AND"
-            " (w.pkind = 'keyed') <> (r.pkind = 'keyed') AND NOT (r.pkind ="
-            " 'keyed' AND r.ds = r.keys) AND $1::jsonb->>'pipeline' IN"
-            " (w.name, r.name) ORDER BY 1, 3, 5 LIMIT 1"
-        ),
-        Params().text(describe),
-    )
-    if len(rows) == 0:
+    var m = queueing_db.kind_mismatch(db.conn, describe)
+    if not m:
         return ""
-    var r = rows.row(0)
+    ref r = m.value()
     return String(
         "the sensor ",
-        r.text("reader"),
+        r.reader,
         " (",
-        r.text("rkind"),
+        r.rkind,
         ") reads ",
-        r.text("ds"),
+        r.ds,
         ", which ",
-        r.text("writer"),
+        r.writer,
         " (",
-        r.text("wkind"),
+        r.wkind,
         ") writes, and no rule turns a name into a date or a date into a",
         " name",
     )
@@ -263,32 +209,6 @@ def partition_keys(p: Registered, keys: String) raises -> List[String]:
             texts.append(n.text)
         return texts^
     return parse_time_keys(p.kind, keys, p.start)
-
-
-comptime DONE_SQL = (
-    "WITH k AS (SELECT DISTINCT unnest(string_to_array($2, ',')) AS key), p"
-    " AS (SELECT registry_hash, describe FROM orca.pipelines WHERE name ="
-    " $1), m AS (SELECT x->>'name' AS step FROM p,"
-    " jsonb_array_elements(p.describe->'steps') AS x WHERE x->>'kind' ="
-    " 'mapped') SELECT k.key FROM k WHERE CASE WHEN EXISTS (SELECT 1 FROM m)"
-    " THEN NOT EXISTS (SELECT 1 FROM m WHERE NOT EXISTS (SELECT 1 FROM"
-    " orca.steps st JOIN orca.runs r ON r.id = st.run JOIN p ON"
-    " r.registry_hash = p.registry_hash WHERE r.pipeline = $1 AND st.step ="
-    " m.step AND st.partition = k.key AND st.status = 'succeeded')) ELSE"
-    " false END UNION ALL SELECT k.key FROM k WHERE k.key IN (SELECT"
-    " unnest(string_to_array(r.partitions, ',')) FROM orca.runs r JOIN p ON"
-    " r.registry_hash = p.registry_hash WHERE NOT EXISTS (SELECT 1 FROM m)"
-    " AND r.pipeline = $1 AND r.status = 'succeeded')"
-)
-"""Of the comma-separated keys `$2`, those done for pipeline `$1`: every
-mapped step has succeeded for the key in a run of the pipeline's current
-code. A pipeline with no mapped step has a key done when a run of its
-current code over it succeeded. The two are separate halves, each empty
-when the other applies. The first looks each key's steps up by index (the
-`CASE` keeps Postgres from hashing every step of every pipeline instead);
-the second joins the keys to its runs' keys, read once, rather than
-scanning the runs again for each key (1.2 s for 1,500 keys over 30,000
-runs when it was a `CASE` branch too, 10 ms now)."""
 
 
 @fieldwise_init
@@ -350,8 +270,8 @@ def done_keys(
     for i in range(len(keys)):
         joined.write("," if i else "", keys[i])
     var out = Dict[String, Bool]()
-    for r in db.conn.query(DONE_SQL, Params().text(pipeline).text(joined)):
-        out[r.text("key")] = True
+    for k in queueing_db.done_keys(db.conn, pipeline, joined):
+        out[k] = True
     return out^
 
 
@@ -384,10 +304,7 @@ def _queue(
 ) raises -> Queued:
     """`queue_keys` in `tx`; with `dry`, what it would queue, queueing
     nothing."""
-    _ = tx.query(
-        "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
-        Params().text(p.name),
-    )
+    starting_db.lock_pipeline(tx, p.name)
     var got = Queued()
     var live = live_runs(tx, p.name)
     var joined = String()
@@ -395,8 +312,8 @@ def _queue(
         joined.write("," if i else "", keys[i])
     var done = Dict[String, Bool]()
     if not rerun:
-        for r in tx.query(DONE_SQL, Params().text(p.name).text(joined)):
-            done[r.text("key")] = True
+        for k in queueing_db.done_keys(tx, p.name, joined):
+            done[k] = True
     var seen = Dict[String, Bool]()
     var todo = List[String]()
     for k in keys:
@@ -426,22 +343,7 @@ def _queue(
             i = j
             continue
         runs.append(
-            Int(
-                tx.query(
-                    (
-                        "INSERT INTO orca.runs (pipeline, registry_hash,"
-                        " partitions, trigger, status) VALUES ($1, $2, $3, $4,"
-                        " 'queued') RETURNING id"
-                    ),
-                    Params()
-                    .text(p.name)
-                    .text(p.registry_hash)
-                    .text(batch)
-                    .text(trigger),
-                )
-                .row(0)
-                .int64("id")
-            )
+            queueing_db.queue_run(tx, p.name, p.registry_hash, batch, trigger)
         )
         i = j
     var ids = List[Int64]()
@@ -449,17 +351,6 @@ def _queue(
         ids.append(Int64(r))
     mark_batch(tx, ids)
     return got^
-
-
-comptime APPENDING_SQL = (
-    "SELECT x.st->>'name' AS step, w.ds FROM orca.pipelines p,"
-    " jsonb_array_elements(p.describe->'steps') WITH ORDINALITY AS x(st, n),"
-    " jsonb_array_elements_text(coalesce(x.st->'writes', '[]'::jsonb)) AS"
-    " w(ds) WHERE p.name = $1 AND x.n > $2 AND NOT coalesce(x.st->'replaces',"
-    " '[]'::jsonb) ? w.ds ORDER BY x.n, w.ds"
-)
-"""`step` and `ds` for each dataset a step of pipeline `$1` after its
-first `$2` declares in `writes=` and not in `replaces=`."""
 
 
 def appending_writes(
@@ -471,10 +362,8 @@ def appending_writes(
     already has rows appends to again. A pipeline registered before
     `replaces=` existed appends to all it writes."""
     var out = List[String]()
-    for r in db.conn.query(
-        APPENDING_SQL, Params().text(pipeline).int64(Int64(from_step))
-    ):
-        out.append(String("step ", r.text("step"), " writes ", r.text("ds")))
+    for r in queueing_db.appending_writes(db.conn, pipeline, from_step):
+        out.append(String("step ", r[0], " writes ", r[1]))
     return out^
 
 

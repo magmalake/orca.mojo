@@ -38,7 +38,8 @@ from std.ffi import c_int, external_call
 from std.time import perf_counter_ns
 
 from json import Value
-from postgres import Params
+import morca.db.usage as usage_db
+from morca.db.usage import AttemptSpan
 
 from morca.sample import fixed1
 from morca.state import State
@@ -137,16 +138,6 @@ struct Meter(Copyable, Movable):
         return out^
 
 
-@fieldwise_init
-struct AttemptSpan(ImplicitlyCopyable, Movable):
-    """An attempt the process made, in seconds before now."""
-
-    var id: Int
-    var started: Float64
-    var ended: Float64
-    """-1 if it hadn't ended when the process did."""
-
-
 def _cpu_at(marks: List[Mark], age: Float64) -> Float64:
     """The CPU seconds so far at `age`, between the marks around it."""
     if age >= marks[0].at:
@@ -242,52 +233,17 @@ def record(
     that worker's."""
     if len(marks) < 2:
         return 0
-    var guard = String()
-    if worker > 0:
-        guard = (
-            " AND EXISTS (SELECT 1 FROM orca.runs r WHERE r.id = $1 AND"
-            " r.worker = $4 AND r.starts = $5)"
-        )
-    var params = (
-        Params().int64(Int64(run)).text(String(pid)).float64(marks[0].at + 60.0)
+    var spans = usage_db.unmeasured(
+        db.conn, run, pid, marks[0].at + 60.0, worker, start
     )
-    if worker > 0:
-        params = params^.int64(Int64(worker)).int64(Int64(start))
-    var rows = db.conn.query(
-        String(
-            "SELECT a.id, extract(epoch FROM now() - a.started)::float8 AS s,",
-            " coalesce(extract(epoch FROM now() - a.ended)::float8, -1) AS e",
-            " FROM orca.attempts a JOIN orca.steps st ON st.id = a.step WHERE",
-            " st.run = $1 AND a.host LIKE '%:' || $2 AND a.cpu_seconds IS",
-            " NULL AND a.peak_rss_bytes IS NULL AND a.started > now() -",
-            " make_interval(secs => $3)",
-            guard,
-            " ORDER BY a.started, a.id",
-        ),
-        params,
-    )
-    var spans = List[AttemptSpan]()
-    for r in rows:
-        spans.append(
-            AttemptSpan(Int(r.int64("id")), r.float64("s"), r.float64("e"))
-        )
     var got = attribute(marks, max_rss, spans)
     var n = 0
     for i in range(len(spans)):
         ref u = got[i]
         if not u.known():
             continue
-        n += db.conn.execute(
-            (
-                "UPDATE orca.attempts SET peak_rss_bytes = NULLIF($2, -1),"
-                " cpu_seconds = NULLIF($3, -1), peak_cpus = NULLIF($4, -1)"
-                " WHERE id = $1"
-            ),
-            Params()
-            .int64(Int64(spans[i].id))
-            .int64(Int64(u.peak_rss_bytes))
-            .float64(u.cpu_seconds)
-            .float64(u.peak_cpus),
+        n += usage_db.set_usage(
+            db.conn, spans[i].id, u.peak_rss_bytes, u.cpu_seconds, u.peak_cpus
         )
     return n
 

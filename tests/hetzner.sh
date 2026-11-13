@@ -23,6 +23,11 @@
 #   flags, CGROUPS) changed, and says why; it refuses over running runs
 #   only when the scheduler would be replaced; --only and --all; plan
 #   changes nothing; Postgres is started once and never again;
+# - run cgroups are on by default (#239): CGROUPS=0 drops the scheduler's
+#   cgroup flags, a host without cgroup v2 or its memory controller runs it
+#   without them, saying so, a failed remount doesn't stop the scheduler,
+#   and with them on, apply warns for each pipeline whose peak is over its
+#   memory_gb's maximum or what the host can grant;
 # - deploy.sh (and --rollback) first brings the server's settings in line
 #   with hetzner.env: a key added there reaches settings.env, one emptied is
 #   removed, a secret file is rewritten (mode 600), a stack setting set,
@@ -97,6 +102,11 @@ trap 'rm -rf "$FAKE"' EXIT INT TERM
 export PATH="$PWD/tests/hetzner:$PATH"
 export MORCA_STACK_TEST=1 MORCA_STACK_REGISTER_TRIES=1 MORCA_CONF="$FAKE/conf" MORCA_DATA="$FAKE/data" MORCA_STATE="$FAKE/state"
 mkdir -p "$MORCA_CONF"
+# The host: cgroup v2 with the memory controller, and 8 GB.
+export MORCA_HOST_CGROUP="$FAKE/cgroup" MORCA_MEMINFO="$FAKE/meminfo"
+mkdir -p "$MORCA_HOST_CGROUP"
+echo "cpuset cpu io memory hugetlb pids rdma misc" > "$MORCA_HOST_CGROUP/cgroup.controllers"
+echo "MemTotal:        8192000 kB" > "$MORCA_MEMINFO"
 # The server's settings as up.sh writes them from hetzner.env (deploy.sh
 # brings them in line with it; no tunnel: an empty tunnel.env).
 cat > "$MORCA_CONF/settings.env" << 'EOS'
@@ -120,6 +130,7 @@ TUNNEL_TOKEN_FILE=$FAKE/tunnel.env
 MORCA_IMAGE=img
 EXTRA_ENV_FILE=$FAKE/extra.env
 SSH_PRIVATE_KEY_FILE=
+DRAIN_SECONDS=86400
 EOS
 : > "$FAKE/extra.env"
 export HETZNER_ENV="$FAKE/hetzner.env"
@@ -146,12 +157,45 @@ add_setting() {
 # A stack that ran before tags were kept: its conf says what runs.
 stack configure MORCA_IMAGE=img MORCA_TAG=aaa1111 BUCKET=bkt
 stack app console 8080
+# The drain limit is required (#390): apply starts nothing without it, and
+# configure takes only a whole number of seconds above 0 for it (and 0 or
+# 1 for OVERLAP).
+stack apply > "$FAKE/out" 2>&1 && fail "apply without DRAIN_SECONDS"
+has "DRAIN_SECONDS isn't set in $MORCA_CONF/stack.conf: set it in hetzner.env"
+[ -z "$(ls "$FAKE/containers" 2> /dev/null)" ] || fail "apply without DRAIN_SECONDS started $(ls "$FAKE/containers")"
+for bad in DRAIN_SECONDS=0 DRAIN_SECONDS=-5 DRAIN_SECONDS=1.5 OVERLAP=2 OVERLAP=yes; do
+    stack configure "$bad" > "$FAKE/out" 2>&1 && fail "configure $bad"
+    grep -q "^${bad%%=*}=" "$MORCA_CONF/stack.conf" && fail "configure $bad wrote it"
+done
+stack configure DRAIN_SECONDS=86400 > /dev/null
 stack apply > /dev/null
 rm "$MORCA_CONF/deployed"
 [ "$(stack tags)" = aaa1111 ] || fail "tags from the conf: $(stack tags)"
 [ -z "$(stack tags --previous)" ] || fail "a previous deploy before any"
 stack rollback > "$FAKE/out" 2>&1 && fail "a rollback with nothing before"
 has "nothing to roll back to"
+
+# deploy.sh refuses a missing, zero or negative DRAIN_SECONDS (#390) before
+# it changes anything on the server: no morca-stack sent, stack.conf as it
+# was, a message naming the setting.
+cp "$MORCA_CONF/stack.conf" "$FAKE/stack.conf.before"
+for d in missing empty 0 -5 1h; do
+    case $d in
+        missing) sed '/^DRAIN_SECONDS=/d' "$FAKE/hetzner.env" > "$FAKE/drain.env" ;;
+        empty) sed 's/^DRAIN_SECONDS=.*/DRAIN_SECONDS=/' "$FAKE/hetzner.env" > "$FAKE/drain.env" ;;
+        *) sed "s/^DRAIN_SECONDS=.*/DRAIN_SECONDS=$d/" "$FAKE/hetzner.env" > "$FAKE/drain.env" ;;
+    esac
+    HETZNER_ENV="$FAKE/drain.env" sh deploy/hetzner/deploy.sh bbb2222 > "$FAKE/out" 2>&1 && fail "deployed with DRAIN_SECONDS $d"
+    case $d in
+        missing | empty) has "deploy.sh: DRAIN_SECONDS isn't set: set DRAIN_SECONDS in $FAKE/drain.env to how long" ;;
+        *) has "deploy.sh: DRAIN_SECONDS=$d isn't a whole number of seconds above 0: set DRAIN_SECONDS in" ;;
+    esac
+    has "nothing was changed on the server"
+    [ ! -e "$FAKE/morca-stack" ] || fail "DRAIN_SECONDS $d: deploy.sh sent morca-stack first"
+    cmp -s "$MORCA_CONF/stack.conf" "$FAKE/stack.conf.before" || fail "DRAIN_SECONDS $d: stack.conf changed"
+    [ "$(stack tags)" = aaa1111 ] || fail "DRAIN_SECONDS $d: deployed $(stack tags)"
+done
+rm "$FAKE/drain.env" "$FAKE/stack.conf.before"
 
 # A deploy: backup first, then apply; the tags before are kept.
 : > "$FAKE/docker.log"
@@ -407,7 +451,7 @@ before=$(cat "$MORCA_CONF/settings.env" "$MORCA_CONF/s3.env" "$MORCA_CONF/stack.
 sh deploy/hetzner/deploy.sh --dry-run eee5555 > "$FAKE/out" 2>&1 || fail "a dry run with settings changed"
 has "+ ssh root@<server-ip> morca-stack sync --keys settings.env < "
 has "+ ssh root@<server-ip> morca-stack sync s3.env < $FAKE/s3.env"
-has "+ ssh root@<server-ip> morca-stack configure MORCA_IMAGE=img .*BACKUP_KEEP=7 GHCR_USER=$"
+has "+ ssh root@<server-ip> morca-stack configure MORCA_IMAGE=img .*BACKUP_KEEP=7 GHCR_USER= OVERLAP=1 DRAIN_SECONDS=86400$"
 has "# settings.env from $FAKE/hetzner.env: AWS_REGION .*MORCA_FIXED_COST"
 grep -q 'MORCA_POSTHOG_KEY\|notasecret99\|nbg1 ' "$FAKE/out" && fail "the dry run: $(grep 'POSTHOG\|notasecret99' "$FAKE/out")"
 [ "$(cat "$MORCA_CONF/settings.env" "$MORCA_CONF/s3.env" "$MORCA_CONF/stack.conf" | cksum)" = "$before" ] \
@@ -618,10 +662,52 @@ has "scheduler: replaced (settings: its env file changed)"
 has "ui: replaced (settings: its env file changed)"
 has "console: unchanged"
 has "sampler: unchanged"
+# Run cgroups are on by default (#239): the scheduler already has them.
+grep 'run -d --name scheduler ' "$FAKE/docker.all" | tail -n 1 | grep -q -- '--cgroupns=private --cap-add SYS_ADMIN' \
+    || fail "the scheduler has no cgroup flags by default"
+stack configure CGROUPS=0
+stack apply > "$FAKE/out" 2>&1 || fail "apply with CGROUPS=0"
+has "scheduler: replaced (options: its flags, mounts or CGROUPS changed)"
+has "ui: unchanged"
+grep 'run -d --name scheduler ' "$FAKE/docker.all" | tail -n 1 | grep -q -- '--cgroupns' && fail "CGROUPS=0 kept the cgroup flags"
+grep -q 'run cgroups' "$FAKE/out" && fail "CGROUPS=0 said why there are no cgroups"
 stack configure CGROUPS=1
 stack apply > "$FAKE/out" 2>&1 || fail "apply with CGROUPS=1"
 has "scheduler: replaced (options: its flags, mounts or CGROUPS changed)"
-has "ui: unchanged"
+grep 'run -d --name scheduler ' "$FAKE/docker.all" | tail -n 1 | grep -q -- 'remount,rw /sys/fs/cgroup || echo' \
+    || fail "a failed remount stops the scheduler"
+stack configure CGROUPS=2 > "$FAKE/out" 2>&1 && fail "configured CGROUPS=2"
+has "CGROUPS is 1 (the default) or 0, not 2"
+# A host without cgroup v2 (or its memory controller): the scheduler runs
+# without, saying why, in the plan and the apply.
+mv "$MORCA_HOST_CGROUP/cgroup.controllers" "$FAKE/controllers"
+stack plan > "$FAKE/out" 2>&1 || fail "plan on a cgroup v1 host"
+has "morca-stack: run cgroups off: this host has no cgroup v2 at $MORCA_HOST_CGROUP"
+has "scheduler replace options: its flags, mounts or CGROUPS changed"
+stack apply > "$FAKE/out" 2>&1 || fail "apply on a cgroup v1 host"
+has "morca-stack: run cgroups off: this host has no cgroup v2"
+grep 'run -d --name scheduler ' "$FAKE/docker.all" | tail -n 1 | grep -q -- '--cgroupns' && fail "cgroup flags on a cgroup v1 host"
+echo "cpu io pids" > "$MORCA_HOST_CGROUP/cgroup.controllers"
+stack plan > "$FAKE/out" 2>&1 || fail "plan without a memory controller"
+has "run cgroups off: this host's cgroup v2 has no memory controller"
+has "scheduler keep unchanged"
+mv "$FAKE/controllers" "$MORCA_HOST_CGROUP/cgroup.controllers"
+# The pre-flight: a warning for each pipeline whose peak is over its
+# memory_gb's maximum, or what the host can grant (8000 - 1536 MB).
+printf 'big|9000|20|2..8\nfits|3000|20|2..4\nwild|7000|5|\nlearned|7000|20|auto\ncapped|5000|20|auto..4\n' > "$FAKE/peaks"
+stack apply > "$FAKE/out" 2>&1 || fail "apply with peaks over their limits"
+has "scheduler: replaced (options: its flags, mounts or CGROUPS changed)"
+has "warning: big peaks at 9000 MB (95th percentile of its last 20 runs), over memory_gb's maximum, 8 GB"
+has "warning: wild peaks at 7000 MB (95th percentile of its last 5 runs), over what the host can grant, 6464 MB"
+has "warning: learned peaks at 7000 MB"
+has "warning: capped peaks at 5000 MB (95th percentile of its last 20 runs), over memory_gb's maximum, 4 GB"
+grep -q 'warning: fits' "$FAKE/out" && fail "warned for a pipeline that fits"
+stack configure CGROUPS=0
+stack apply > "$FAKE/out" 2>&1 || fail "apply with CGROUPS=0 and peaks"
+grep -q 'warning:' "$FAKE/out" && fail "warned about peaks with CGROUPS=0"
+stack configure CGROUPS=1
+stack apply > /dev/null 2>&1 || fail "apply with CGROUPS=1 again"
+rm "$FAKE/peaks"
 echo sha256:0123456789abcdef0123 > "$FAKE/images/img_eee5555"
 stack apply > "$FAKE/out" 2>&1 || fail "apply after a push"
 has "scheduler: replaced (image eee5555 pushed again ("
@@ -811,16 +897,39 @@ rm "$FAKE/health/ui"
 stack configure HEALTH_TIMEOUT=300
 [ "$(cat "$FAKE/containers/ui/image")" = img:ppp6666 ] || fail "the older UI wasn't swapped in: $(cat "$FAKE/containers/ui/image")"
 
-# Overlapping schedulers (OVERLAP=1, docs/overlap.md). Off: morca.env has
-# no MORCA_OVERLAP and can-overlap says no without asking the image.
-grep -q MORCA_OVERLAP "$MORCA_CONF/morca.env" && fail "MORCA_OVERLAP with OVERLAP unset"
-stack can-overlap > "$FAKE/out" 2>&1 && fail "can-overlap with OVERLAP off"
-has "no: OVERLAP isn't 1 in stack.conf"
-# Turning it on changes the scheduler's env file: that deploy can't overlap
-# (the running one has it off), so it pauses and waits as before.
-stack configure OVERLAP=1
+# Overlapping schedulers (docs/overlap.md), on by default (#390): hetzner.env
+# has no OVERLAP, so the deploys set OVERLAP=1, and morca.env has
+# MORCA_OVERLAP=on and the drain limit, hetzner.env's DRAIN_SECONDS.
+grep -qx OVERLAP=1 "$MORCA_CONF/stack.conf" || fail "no OVERLAP=1 in stack.conf: $(cat "$MORCA_CONF/stack.conf")"
+grep -qx DRAIN_SECONDS=86400 "$MORCA_CONF/stack.conf" || fail "no DRAIN_SECONDS in stack.conf: $(cat "$MORCA_CONF/stack.conf")"
+grep -qx MORCA_OVERLAP=on "$MORCA_CONF/morca.env" || fail "no MORCA_OVERLAP=on in morca.env by default"
+grep -qx MORCA_DRAIN_SECONDS=86400 "$MORCA_CONF/morca.env" || fail "no MORCA_DRAIN_SECONDS in morca.env"
+# A stack.conf without OVERLAP (a server set up before #390) overlaps too:
+# can-overlap asks the new image.
+grep -v '^OVERLAP=' "$MORCA_CONF/stack.conf" > "$FAKE/conf.new" && mv "$FAKE/conf.new" "$MORCA_CONF/stack.conf"
+stack can-overlap > "$FAKE/out" 2>&1 && fail "can-overlap without a leading instance"
+has "no: no live scheduler instance leads"
+# OVERLAP=0 in hetzner.env opts out: the deploy sets it, morca.env loses
+# MORCA_OVERLAP, can-overlap says no without asking the image (which would
+# say yes), and the deploy pauses and waits.
+echo OVERLAP=0 >> "$FAKE/hetzner.env"
+echo yes > "$FAKE/can-overlap"
+: > "$FAKE/docker.log"
+deploy ppp6666 || fail "the deploy that turns OVERLAP off"
+has "OVERLAP (unset) -> 0"
+has "not overlapping the schedulers: OVERLAP=0 in stack.conf"
+has "pausing the pipelines"
+grep -q 'run -d --name scheduler-next' "$FAKE/docker.log" && fail "overlapped with OVERLAP=0"
+grep -q MORCA_OVERLAP "$MORCA_CONF/morca.env" && fail "MORCA_OVERLAP with OVERLAP=0"
+grep -qx MORCA_DRAIN_SECONDS=86400 "$MORCA_CONF/morca.env" || fail "no MORCA_DRAIN_SECONDS with OVERLAP=0"
+rm "$FAKE/can-overlap"
+# Taking it out turns it on again, which changes the scheduler's env file:
+# that deploy can't overlap (the running one has it off), so it pauses and
+# waits as before.
+sed -i.bak '/^OVERLAP=/d' "$FAKE/hetzner.env"
 : > "$FAKE/docker.log"
 deploy ppp6666 || fail "the deploy that turns OVERLAP on"
+has "OVERLAP 0 -> 1"
 grep -q '^MORCA_OVERLAP=on$' "$MORCA_CONF/morca.env" || fail "no MORCA_OVERLAP=on in morca.env"
 has "not overlapping the schedulers: no live scheduler instance leads"
 has "pausing the pipelines"
@@ -899,6 +1008,26 @@ stack drain-old --timeout 0 > "$FAKE/out" 2>&1 || fail "drain-old --timeout 0"
 grep -q "$old_re still runs after 0s: stopping it" "$FAKE/out" || fail "drain-old --timeout didn't stop it"
 grep -q "stop -t 30 $old_re" "$FAKE/docker.log" || fail "the old scheduler wasn't stopped"
 ls "$FAKE/containers" | grep -q '^scheduler-old' && fail "an old scheduler is left: $(ls "$FAKE/containers")"
+# The drain limit drives drain-old and the reaper (#390): one still running
+# DRAIN_SECONDS (and MORCA_STACK_DRAIN_GRACE) after it was asked to drain is
+# stopped, its runs queued again by the new scheduler. (The limit is set to
+# 1 only around them, so the schedulers' env file stays as it was.)
+stack apply --tag ttt0001 --overlap > /dev/null 2>&1 || fail "an overlapping apply"
+stack configure DRAIN_SECONDS=1 > /dev/null
+: > "$FAKE/docker.log"
+MORCA_STACK_DRAIN_GRACE=0 stack drain-old --wait > "$FAKE/out" 2>&1 || fail "drain-old --wait"
+grep -q "$old_re still runs after 1s: stopping it" "$FAKE/out" || fail "drain-old --wait didn't stop it at the drain limit"
+ls "$FAKE/containers" | grep -q '^scheduler-old' && fail "an old scheduler is left: $(ls "$FAKE/containers")"
+stack configure DRAIN_SECONDS=86400 > /dev/null
+stack apply --tag ttt0002 --overlap > /dev/null 2>&1 || fail "an overlapping apply"
+reaped=$(ls "$FAKE/containers" | grep '^scheduler-old-')
+stack configure DRAIN_SECONDS=1 > /dev/null
+MORCA_STACK_DRAIN_GRACE=0 MORCA_STACK_REAP_SECONDS=1 stack reap-old "$reaped" > "$FAKE/out" 2>&1 || fail "reap-old"
+has "waiting for $reaped to drain (the drain limit: 1s)"
+has "$reaped still runs past the drain limit (1s): stopping it; the new scheduler queues its runs again"
+has "$reaped drained and removed"
+[ ! -d "$FAKE/containers/$reaped" ] || fail "the reaper left $reaped"
+stack configure DRAIN_SECONDS=86400 > /dev/null
 rm "$FAKE/old-stays" "$FAKE/old-running"
 # One from before #397 (scheduler-old), still draining: the next deploy
 # overlaps beside it, apply leaves it, and drain-old counts it.
@@ -924,7 +1053,7 @@ deploy uuu1212 || fail "an overlapping deploy over an exited scheduler-old"
 grep -q 'removed scheduler-old, left by a deploy before (img:f3516e2, exited, exited [0-9]*d [0-9]*h ago)$' "$FAKE/out" \
     || fail "no line naming the exited scheduler-old"
 has "removed scheduler-next, left by a deploy before (img:f3516e2, created, never ran)"
-grep -q "^scheduler: replaced (image ttt0000 -> uuu1212), overlapping: $old_re drains its runs$" "$FAKE/out" \
+grep -q "^scheduler: replaced (image ttt0002 -> uuu1212), overlapping: $old_re drains its runs$" "$FAKE/out" \
     || fail "no overlap over the exited scheduler-old"
 grep -q "$old_re drained and removed" "$FAKE/out" || fail "the old scheduler wasn't removed"
 has "check: all ok"
@@ -959,6 +1088,7 @@ NAME=morca
 BUCKET=bkt
 S3_ENDPOINT=https://example.invalid
 S3_REGION=fsn1
+DRAIN_SECONDS=86400
 S3_CREDENTIALS_FILE=creds/s3.env
 TUNNEL_TOKEN_FILE=./tunnel.env
 MORCA_IMAGE=img

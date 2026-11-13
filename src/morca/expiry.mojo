@@ -28,7 +28,7 @@ from std.os import getenv
 from std.os.path import exists
 from std.sys import argv
 
-from postgres import Params
+import morca.db.expiry as expiry_db
 
 from morca.state import State
 
@@ -38,39 +38,12 @@ comptime MAINTAIN_BINARY = String("morca_maintain")
 
 def retained(mut db: State, dataset: String) raises -> List[Int64]:
     """The snapshots of `dataset` morca still needs (see the module doc)."""
-    var out = List[Int64]()
-    for r in db.conn.query(
-        (
-            "WITH live AS (SELECT a.id AS attempt FROM orca.attempts a JOIN"
-            " orca.steps s ON s.id = a.step JOIN orca.runs r ON r.id = s.run"
-            " WHERE r.status NOT IN ('succeeded', 'cancelled')), last_run AS"
-            " (SELECT s.run FROM orca.commits c JOIN orca.attempts a ON a.id ="
-            " c.attempt JOIN orca.steps s ON s.id = a.step WHERE c.dataset ="
-            " $1 ORDER BY c.attempt DESC LIMIT 1) SELECT DISTINCT snapshot_id"
-            " FROM (SELECT rd.snapshot_id FROM orca.reads rd JOIN live ON"
-            " live.attempt = rd.attempt WHERE rd.dataset = $1 UNION SELECT"
-            " c.snapshot_id FROM orca.commits c JOIN live ON live.attempt ="
-            " c.attempt WHERE c.dataset = $1 UNION SELECT c.snapshot_id FROM"
-            " orca.commits c JOIN orca.attempts a ON a.id = c.attempt JOIN"
-            " orca.steps s ON s.id = a.step WHERE c.dataset = $1 AND s.run IN"
-            " (SELECT run FROM last_run)) x WHERE snapshot_id >= 0 ORDER BY"
-            " snapshot_id"
-        ),
-        Params().text(dataset),
-    ):
-        out.append(r.int64("snapshot_id"))
-    return out^
+    return expiry_db.retained(db.conn, dataset)
 
 
 def expirable(mut db: State) raises -> List[String]:
     """Every dataset morca has committed to, by name."""
-    var out = List[String]()
-    for r in db.conn.query(
-        "SELECT DISTINCT dataset FROM orca.commits WHERE dataset IS NOT"
-        " NULL AND dataset <> '' ORDER BY dataset"
-    ):
-        out.append(r.text("dataset"))
-    return out^
+    return expiry_db.committed(db.conn)
 
 
 def maintain_binary() -> String:

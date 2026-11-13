@@ -343,11 +343,17 @@ in `lib.sh`, which both run):
   `ghcr-token`, `secrets/orca/*`): each only if it differs, mode 600, sent
   on ssh's standard input (`morca-stack sync`);
 - the stack settings `MORCA_IMAGE`, `CLOUDFLARED_IMAGE`, `BUCKET`,
-  `BACKUP_KEEP` and `GHCR_USER` (`morca-stack configure`), and the apps
+  `BACKUP_KEEP`, `GHCR_USER`, `OVERLAP` (1 unless `hetzner.env` says 0)
+  and `DRAIN_SECONDS` (`morca-stack configure`), and the apps
   (`morca-stack app`). Not the tags: those are `deploy.sh`'s, and
-  `MORCA_TAG` in `hetzner.env` is only the first `up.sh`'s. `CGROUPS`,
-  `OVERLAP` and `HEALTH_TIMEOUT`, set on the server by hand, aren't in
-  `hetzner.env` and are left alone.
+  `MORCA_TAG` in `hetzner.env` is only the first `up.sh`'s. `CGROUPS` (on
+  unless set to 0) and `HEALTH_TIMEOUT`, set on the server by hand, aren't
+  in `hetzner.env` and are left alone.
+
+Before any of that, `deploy.sh` and `up.sh` check that `hetzner.env` has
+the [drain limit](#the-drain-limit), `DRAIN_SECONDS`, as a whole number of
+seconds above 0, and stop without changing anything on the server when it
+is missing, 0 or negative.
 
 It prints what changed, never a value: for `settings.env` the keys added,
 removed or changed, for a secret file only that it changed, for a stack
@@ -509,9 +515,13 @@ root@<ip> morca-stack resume` undoes the pause. `--force` skips the pause and th
 the scheduler is replaced. `morca-stack status` shows the running runs (the
 scheduler's and those on remote workers) and what quiesce paused.
 
-**Overlapping schedulers** (off by default; [docs/overlap.md](overlap.md)).
-With `morca-stack configure OVERLAP=1` the containers get `MORCA_OVERLAP=on`,
-and a deploy that replaces the scheduler doesn't have to pause. Step 2
+**Overlapping schedulers** (on by default since #390;
+[docs/overlap.md](overlap.md)). The containers get `MORCA_OVERLAP=on` and
+`MORCA_DRAIN_SECONDS` (the [drain limit](#the-drain-limit)), and a deploy
+that replaces the scheduler doesn't have to pause. `OVERLAP=0` in
+`hetzner.env` turns it off: every such deploy then pauses and waits as
+above. A `stack.conf` without `OVERLAP` (a server set up before #390)
+overlaps too. Step 2
 first asks `morca-stack can-overlap --tag <tag>`, which runs the new
 image's `morca scheduler can-overlap`. It says yes when the running
 scheduler leads with overlap on and the new binary's migrations don't
@@ -527,13 +537,12 @@ raise the schema's floor past it. On yes, nothing is paused or killed:
 - the pipelines are registered from the new scheduler, which now alone
   starts runs;
 - `morca-stack drain-old` asks the old one to drain and returns: the deploy
-  doesn't wait for its runs. A run may go on for months (a training run,
-  say), and morca never stops it for a deploy: it sees that it's outdated
+  doesn't wait for its runs. A run sees that it's outdated
   (`morca.outdated()`, [docs/overlap.md](overlap.md#outdated-runs)) and
-  ends when its code decides. Once its last run has ended the old
-  scheduler exits, and a reaper `drain-old` left in the background
-  (`morca-stack reap-old`, its log in `/var/lib/orca/reap-<name>.log`)
-  removes its container.
+  ends when its code decides, up to the drain limit. Once its last run has
+  ended, or the limit has run out, the old scheduler exits, and a reaper
+  `drain-old` left in the background (`morca-stack reap-old`, its log in
+  `/var/lib/orca/reap-<name>.log`) removes its container.
 
 While an old scheduler drains, `morca-stack status` and the check say so,
 as `scheduler-old-<time>: draining 2 run(s) (outdated)`, which isn't a
@@ -547,10 +556,9 @@ migration that raises the floor past an old one pauses and waits for its
 runs too.
 
 To wait for the old schedulers anyway, `ssh root@<ip> morca-stack drain-old
---wait`; with `--timeout <seconds>` one still running after that is
-stopped, its runs killed and queued again by the new scheduler. The
-required drain limit of #390 isn't built yet: until then nothing stops a
-draining scheduler but this.
+--wait`: one still running after the drain limit (or `--timeout
+<seconds>`) is stopped, its runs killed and queued again by the new
+scheduler.
 
 An old scheduler or a `scheduler-next` that a deploy before left behind
 and that isn't running any more (its reaper gone, say after a reboot)
@@ -558,16 +566,46 @@ holds no runs: every `morca-stack apply` first removes it, with a line
 naming its image and how long ago it exited. A `scheduler-old` from before
 this release (no time in its name) is treated as one of them.
 
-On no (overlap off, a migration that raises the floor, no scheduler
+On no (`OVERLAP=0`, a migration that raises the floor, no scheduler
 going), the deploy pauses and waits as above, and says why. So does the
-deploy that turns `OVERLAP` on: the scheduler it replaces has overlap off.
+deploy that turns overlap on (the first after upgrading to #390, on a
+stack that had it off): the scheduler it replaces has overlap off.
 A rollback, `--force` and a dry run don't overlap. That path still waits
 for the running runs, the old schedulers' included: it replaces the
 scheduler by stopping it, and every local run is a child process of its
 container, so not waiting would kill them; and a migration that raises the
 floor can't run while an older binary's runs go on over the schema. Only
 overlapping avoids the wait. `morca-stack status` lists the scheduler
-instances (`morca scheduler status`) when `OVERLAP=1`.
+instances (`morca scheduler status`) unless `OVERLAP=0`.
+
+#### The drain limit
+
+`DRAIN_SECONDS` in `hetzner.env` is required: how long, in seconds, an old
+scheduler may keep draining its runs after an overlapping deploy before it
+is stopped. There is no default, because only you know how long your runs
+may go on under old code: a day (`86400`) or a week (`604800`), say.
+`deploy.sh` and `up.sh` refuse a missing, 0 or negative value before they
+change anything on the server, naming the setting; `morca-stack apply`
+refuses too, and `morca scheduler` with overlap on doesn't start without
+it (`MORCA_DRAIN_SECONDS`, which the containers get from it).
+
+Nothing is killed before the limit. Once it has run out, the old
+scheduler kills the runs it still has (each control run's process group
+too), ends its instance and exits; the new scheduler queues those runs
+again once their heartbeats are stale, and the reaper removes the
+container. The reaper also stops an old scheduler that still runs a minute
+past the limit (`MORCA_STACK_DRAIN_GRACE`, 60 seconds): one started before
+the limit was set, which doesn't know it. A pipeline that hands over
+between units of work (`morca.outdated()`) ends long before.
+
+**Upgrading to #390.** Add `DRAIN_SECONDS=<seconds>` to `hetzner.env`
+before the first deploy with these scripts: until you do, `deploy.sh`
+stops with "DRAIN_SECONDS isn't set: set DRAIN_SECONDS in hetzner.env
+...", having changed nothing. Overlap is then on unless you add
+`OVERLAP=0`. A stack that had it off pauses and waits once more, on the
+deploy that turns it on; one that had `OVERLAP=1` already overlaps, and
+the old scheduler it replaces, started without the limit, is stopped by
+its reaper once the limit has run out.
 
 ### The check after each deploy
 
@@ -580,7 +618,7 @@ way back. It checks:
   cloudflared) is running the image `stack.conf` says, the UI and the apps
   healthy as apply probes them;
 - one scheduler: no `scheduler-next` is left (an exited one the apply has
-  removed), and with `OVERLAP=1` exactly one instance leads. An old
+  removed), and unless `OVERLAP=0` exactly one instance leads. An old
   scheduler still draining is an `info` line, not a failure:
   `scheduler-old-<time>: draining N run(s) (outdated)`;
 - the pipelines: at least one registered, and each one's binary is in the
@@ -816,26 +854,28 @@ the retry and the pipeline's later runs ask for 1.5 times as much
 that runs away can push the machine into the kernel's OOM killer, which picks
 the run's processes first (`oom_score_adj`) but may take others too.
 
-The scheduler runs in a container, whose `/sys/fs/cgroup` docker mounts
-read-only. To turn it on:
+**On by default** (since #239). The scheduler runs in a container, whose
+`/sys/fs/cgroup` docker mounts read-only, so `morca-stack apply` starts it
+with the flags below unless `CGROUPS=0` (in `/etc/orca/stack.conf`, set with
+`morca-stack configure`). To see that it took:
 
 ```sh
-ssh root@<ip> morca-stack configure CGROUPS=1
-ssh root@<ip> morca-stack apply           # replaces the scheduler only; pause first, or --force
 ssh root@<ip> docker logs scheduler 2>&1 | grep 'run cgroups'
 # morca: run cgroups on: runs' cgroups go in /sys/fs/cgroup
 ```
 
-What `CGROUPS=1` changes in the scheduler's `docker run` (nothing else's):
+What it changes in the scheduler's `docker run` (nothing else's):
 
 - `--cgroupns=private`: the container sees its own cgroup as
   `/sys/fs/cgroup` (docker's default on cgroup v2, said explicitly).
 - `--cap-add SYS_ADMIN --security-opt apparmor=unconfined` and an entrypoint
-  of `mount -o remount,rw /sys/fs/cgroup && exec /usr/bin/setpriv --bounding-set
+  of `mount -o remount,rw /sys/fs/cgroup; exec /usr/bin/setpriv --bounding-set
   -sys_admin --inh-caps -sys_admin morca scheduler`: the remount needs the
   capability and AppArmor's leave, and the capability is dropped from the
   bounding set before morca starts, so neither morca nor any run it starts has
-  it. (`--privileged` would work too, and gives far more.)
+  it. (`--privileged` would work too, and gives far more.) A remount that
+  fails doesn't stop the scheduler: it says so on its log and starts with
+  `/sys/fs/cgroup` read-only, where morca turns run cgroups off (below).
 
 morca then moves itself into `/sys/fs/cgroup/morca` (a cgroup that gives its
 children controllers can hold no processes), turns on the memory controller
@@ -846,22 +886,53 @@ container's root cgroup's `memory.max` isn't writable from inside, and nothing
 above it is visible. `docker exec scheduler ...` (morca-stack's quiesce,
 `morca pause`) still works: runc puts it in `morca`.
 
-**Safe to turn on, but not on by default.** For the machine, it only adds a
-boundary; the capability is gone before morca runs, so the one thing given up
-for good is docker's AppArmor profile on the scheduler's container. What
-changes is what runs may use: a run is throttled past its grant and killed 25%
-above it, where today it may take what's free. Before turning it on, check on
-each pipeline's page (Resources: the max of its peaks, #203) that its peak
-fits under `memory_gb`'s maximum, and raise the maximum where it doesn't; a
-pipeline without a request is limited only to what the host can grant (its
-memory less `MORCA_RESERVE_MEMORY_MB`). Off again: `morca-stack configure
-CGROUPS=0` and `apply`.
+**A host that can't.** On a host without cgroup v2 (`/sys/fs/cgroup/cgroup.controllers`),
+or whose cgroup v2 has no memory controller, `apply` and `plan` start the
+scheduler without the flags, as with `CGROUPS=0`, and say why:
 
-Where morca can't make cgroups (this option off, macOS, cgroup v1), the
-scheduler says why once (`morca: run cgroups off: ...`) and runs as before:
-`first_to_go`, and control-placed runs killed over `MORCA_CONTROL_MEMORY_MB`.
-`MORCA_CGROUPS=0` in `settings.env` (a line of `EXTRA_ENV_FILE`) turns it off from morca's side. Ops >
-Control lists each run going with its memory against its limit.
+```
+morca-stack: run cgroups off: this host has no cgroup v2 at /sys/fs/cgroup (cgroup v1?), so the scheduler runs as with CGROUPS=0
+```
+
+The servers `up.sh` makes (Ubuntu 24.04) have both.
+
+**What changes for runs.** For the machine, it only adds a boundary; the
+capability is gone before morca runs, so the one thing given up for good is
+docker's AppArmor profile on the scheduler's container. What changes is what
+runs may use: a run is throttled past its grant and killed 25% above it,
+where without it, it may take what's free. With run cgroups on, `apply`
+(and `plan`, on standard error) warns for each pipeline whose runs here
+peak above the most a cgroup lets them have: the 95th percentile of the
+peaks of its last 20 successful runs (at least 3) against its `memory_gb`'s
+maximum, else what the host can grant (its memory less
+`MORCA_RESERVE_MEMORY_MB`). It doesn't stop the apply:
+
+```
+morca-stack: warning: gharchive peaks at 9000 MB (95th percentile of its last 20 runs), over memory_gb's maximum, 8 GB: its runs will be throttled there and killed 25% above (raise memory_gb's maximum, or CGROUPS=0)
+```
+
+The pipeline's page shows the same peaks (Resources: the max of its peaks,
+#203). Raise the maximum where they don't fit; a pipeline without a request
+is limited only to what the host can grant.
+
+**Turning it off.** For the stack:
+
+```sh
+ssh root@<ip> morca-stack configure CGROUPS=0
+ssh root@<ip> morca-stack apply           # replaces the scheduler only; pause first, or --force
+```
+
+`CGROUPS=1` (or the line removed from `stack.conf`) turns it on again.
+`MORCA_CGROUPS=0` in `settings.env` (a line of `EXTRA_ENV_FILE`) turns it
+off from morca's side, leaving the flags. There is no switch for one
+pipeline: give it room instead, a `memory_gb` whose maximum is over its
+peaks, or none, so its runs may grow to what the host can grant.
+
+Where morca can't make cgroups (`CGROUPS=0`, a host as above, macOS, cgroup
+v1), the scheduler says why once (`morca: run cgroups off: ...`) and runs as
+before: `first_to_go`, and control-placed runs killed over
+`MORCA_CONTROL_MEMORY_MB`. Ops > Control lists each run going with its
+memory against its limit.
 
 ## Worker pools that grow themselves
 
@@ -1227,6 +1298,7 @@ GHCR_USER=...                           # as production's, for the private packa
 GHCR_TOKEN_FILE=...
 GITHUB_TOKEN_FILE=$HOME/.config/morca-hetzner/github-token     # or mojo_repos's and mojo_stats's runs fail
 CONFIG_OVERLAY_FILE=$HOME/.config/morca-hetzner/dev.overlay.toml
+DRAIN_SECONDS=3600                      # required: an old scheduler drains for an hour at most
 # No NTFY_TOPIC_FILE: no alerts. Or a topic of its own, never production's.
 # No POSTHOG_KEY: the dev pages stay out of the analytics.
 ```
@@ -1295,9 +1367,10 @@ gharchive=2026-11-08"`) and steps 2, 3 and 5, and step 4 inside the server (not 
 5. One manual run per pipeline (`morca start <pipeline> <partition>`, or the
    UI's run button), each succeeding.
 6. A deploy with a run in flight: start a long run, `./deploy.sh <tag>
-   --all`, and see it pause, wait and resume. Then with overlapping
-   schedulers: `ssh root@<ip> morca-stack configure OVERLAP=1`, deploy once
-   to turn it on, start a run, deploy again: nothing paused, the deploy
+   --all`, and see it pause, wait and resume (with `OVERLAP=0` in the dev
+   stack's `hetzner.env`). Then with overlapping schedulers, the default:
+   take `OVERLAP=0` out, deploy once to turn it on, start a run, deploy
+   again: nothing paused, the deploy
    returns while the run goes on under `scheduler-old-<time>` (the check
    says it's draining, its page says it's outdated), and once it ends the
    old scheduler is removed.

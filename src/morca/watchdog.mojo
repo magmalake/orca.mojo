@@ -39,7 +39,9 @@ Evaluation is pure (`eval_*`, over plain rows) apart from the gathering
 from std.os import getenv
 
 from json import Value, loads
-from postgres import Params
+import morca.db.pipelines as pipelines_db
+import morca.db.watchdog as watchdog_db
+from morca.db.watchdog import Counts, Lease, Quiet
 
 from morca.auth import audit
 from morca.fleet import hourly_price
@@ -386,16 +388,6 @@ def eval_launches(
     )
 
 
-@fieldwise_init
-struct Lease(Copyable, Movable):
-    """An instance's row: its type, how long ago it started and ended
-    (-1: it hasn't)."""
-
-    var instance_type: String
-    var start_ago: Float64
-    var end_ago: Float64
-
-
 def cost_rate(leases: List[Lease], ago: Float64, control: Float64) -> Float64:
     """Dollars an hour being spent `ago` seconds ago (unpriced types cost
     nothing here, as in `morca.fleet`)."""
@@ -504,15 +496,6 @@ def eval_idle(
     )
 
 
-@fieldwise_init
-struct Counts(Copyable, Movable):
-    """A pipeline's attempts that ended in the last hour."""
-
-    var pipeline: String
-    var failed: Int
-    var total: Int
-
-
 def eval_failing(c: Config, counts: List[Counts]) -> Reading:
     """Pipelines over either failure limit; the value is the most failed
     attempts any had; the share check's, the highest share of a pipeline
@@ -558,15 +541,6 @@ def eval_failing(c: Config, counts: List[Counts]) -> Reading:
         out^,
         checks^,
     )
-
-
-@fieldwise_init
-struct Quiet(Copyable, Movable):
-    """A run with a running attempt, and the minutes nothing has moved."""
-
-    var pipeline: String
-    var run: Int
-    var minutes: Float64
 
 
 def eval_stuck(c: Config, runs: List[Quiet]) -> Reading:
@@ -643,52 +617,15 @@ def eval_control(
 
 
 def all_pipelines(mut db: State) raises -> List[String]:
-    var out = List[String]()
-    for r in db.conn.query(
-        "SELECT name FROM orca.pipelines ORDER BY name", Params()
-    ):
-        out.append(r.text("name"))
-    return out^
+    return pipelines_db.names(db.conn)
 
 
 def gather_launches(mut db: State) raises -> Int:
-    return Int(
-        db.conn.query(
-            (
-                "SELECT count(*) AS n FROM orca.instances WHERE launched >"
-                " now() - interval '1 hour' AND NOT pooled"
-            ),
-            Params(),
-        )
-        .row(0)
-        .int64("n")
-    )
+    return watchdog_db.launches_last_hour(db.conn)
 
 
 def gather_leases(mut db: State) raises -> List[Lease]:
-    var out = List[Lease]()
-    for r in db.conn.query(
-        (
-            "SELECT instance_type, extract(epoch FROM now() -"
-            " launched)::float8 AS s, CASE WHEN ended IS NULL THEN -1.0::float8"
-            " ELSE extract(epoch FROM now() - ended)::float8 END AS e FROM"
-            " orca.instances WHERE ended IS NULL OR ended > now() - interval"
-            " '24 hours'"
-        ),
-        Params(),
-    ):
-        out.append(
-            Lease(r.text("instance_type"), r.float64("s"), r.float64("e"))
-        )
-    return out^
-
-
-comptime _IDLE_WORKERS = (
-    "SELECT i.id, r.pipeline FROM orca.instances i JOIN orca.runs r ON r.id ="
-    " i.run WHERE i.ended IS NULL AND i.role = 'worker' AND i.drained IS NULL"
-    " AND i.idle IS NULL AND i.launched < now() - make_interval(mins =>"
-    " $1::int)"
-)
+    return watchdog_db.leases(db.conn)
 
 
 def gather_idle(
@@ -696,84 +633,15 @@ def gather_idle(
 ) raises -> Tuple[Int, Float64, List[String]]:
     """The workers up the whole window that were sampled, their average
     CPU (-1 if none), and the pipelines that own them."""
-    var row = db.conn.query(
-        String(
-            "WITH w AS (",
-            _IDLE_WORKERS,
-            (
-                ") SELECT count(DISTINCT s.host) AS n, avg(s.cpu)::float8 AS"
-                " cpu FROM orca.fleet_samples s JOIN w ON w.id = s.host WHERE"
-                " s.t > now() - make_interval(mins => $1::int)"
-            ),
-        ),
-        Params().int32(Int32(c.idle_minutes)),
-    ).row(0)
-    var pipelines = List[String]()
-    for r in db.conn.query(
-        String(
-            "WITH w AS (",
-            _IDLE_WORKERS,
-            (
-                ") SELECT DISTINCT w.pipeline FROM w WHERE EXISTS (SELECT 1"
-                " FROM orca.fleet_samples s WHERE s.host = w.id AND s.t > now()"
-                " - make_interval(mins => $1::int)) ORDER BY 1"
-            ),
-        ),
-        Params().int32(Int32(c.idle_minutes)),
-    ):
-        pipelines.append(r.text("pipeline"))
-    var cpu = -1.0 if row.is_null("cpu") else row.float64("cpu")
-    return (Int(row.int64("n")), cpu, pipelines^)
+    return watchdog_db.idle_workers(db.conn, c.idle_minutes)
 
 
 def gather_failing(mut db: State) raises -> List[Counts]:
-    var out = List[Counts]()
-    for r in db.conn.query(
-        (
-            "SELECT r.pipeline, count(*) FILTER (WHERE a.status = 'failed') AS"
-            " failed, count(*) AS total FROM orca.attempts a JOIN orca.steps s"
-            " ON s.id = a.step JOIN orca.runs r ON r.id = s.run WHERE a.ended"
-            " > now() - interval '1 hour' AND a.status IN ('succeeded',"
-            " 'failed') GROUP BY r.pipeline ORDER BY r.pipeline"
-        ),
-        Params(),
-    ):
-        out.append(
-            Counts(
-                r.text("pipeline"),
-                Int(r.int64("failed")),
-                Int(r.int64("total")),
-            )
-        )
-    return out^
+    return watchdog_db.failing_counts(db.conn)
 
 
 def gather_stuck(mut db: State, c: Config) raises -> List[Quiet]:
-    var out = List[Quiet]()
-    for r in db.conn.query(
-        (
-            "SELECT r.pipeline, r.id AS run, extract(epoch FROM now() -"
-            " greatest(ev.last, b.last))::float8 / 60 AS quiet FROM orca.runs r"
-            " JOIN LATERAL (SELECT greatest((SELECT max(greatest(a.started,"
-            " a.ended)) FROM orca.attempts a JOIN orca.steps s ON s.id ="
-            " a.step WHERE s.run = r.id), (SELECT max(greatest(i.launched,"
-            " i.joined, i.ended)) FROM orca.instances i WHERE i.run = r.id),"
-            " r.started, r.created) AS last) ev ON true LEFT JOIN LATERAL"
-            " (SELECT max(f.t) AS last FROM orca.fleet_samples f JOIN"
-            " orca.instances i ON i.id = f.host WHERE i.run = r.id AND f.cpu"
-            " >= $1) b ON true WHERE r.status = 'running' AND EXISTS (SELECT 1"
-            " FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE"
-            " s.run = r.id AND a.status = 'running') AND EXISTS (SELECT 1 FROM"
-            " orca.fleet_samples f JOIN orca.instances i ON i.id = f.host"
-            " WHERE i.run = r.id AND i.ended IS NULL AND f.t > now() -"
-            " interval '5 minutes') ORDER BY r.id"
-        ),
-        Params().float64(c.stuck_cpu),
-    ):
-        out.append(
-            Quiet(r.text("pipeline"), Int(r.int64("run")), r.float64("quiet"))
-        )
-    return out^
+    return watchdog_db.quiet_runs(db.conn, c.stuck_cpu)
 
 
 def evaluate(mut db: State, c: Config) raises -> List[Reading]:
@@ -801,47 +669,19 @@ def evaluate(mut db: State, c: Config) raises -> List[Reading]:
 
 
 def snoozed(mut db: State, rule: String) raises -> Bool:
-    return (
-        len(
-            db.conn.query(
-                (
-                    "SELECT 1 FROM orca.watchdog_rules WHERE rule = $1 AND"
-                    " snoozed_until > now()"
-                ),
-                Params().text(rule),
-            )
-        )
-        > 0
-    )
+    return watchdog_db.is_snoozed(db.conn, rule)
 
 
 def _record(mut db: State, r: Reading) raises:
-    _ = db.conn.execute(
-        (
-            "INSERT INTO orca.watchdog_rules (rule, value, threshold, detail,"
-            " checked, checks) VALUES ($1, $2, $3, $4, now(),"
-            " $5::text::jsonb) ON CONFLICT (rule) DO UPDATE SET value ="
-            " EXCLUDED.value, threshold = EXCLUDED.threshold, detail ="
-            " EXCLUDED.detail, checked = EXCLUDED.checked, checks ="
-            " EXCLUDED.checks"
-        ),
-        Params()
-        .text(r.rule)
-        .float64(r.value)
-        .float64(r.threshold)
-        .text(r.detail)
-        .text(checks_json(r.checks)),
+    watchdog_db.record_reading(
+        db.conn, r.rule, r.value, r.threshold, r.detail, checks_json(r.checks)
     )
 
 
 def trip(mut db: State, r: Reading) raises -> List[String]:
     """Pauses the unpaused pipelines in `r`'s scope and records why. Returns
     the ones it paused; none, and no record, if all were paused already."""
-    var unpaused = List[String]()
-    for row in db.conn.query(
-        "SELECT name FROM orca.pipelines WHERE NOT paused", Params()
-    ):
-        unpaused.append(row.text("name"))
+    var unpaused = pipelines_db.unpaused(db.conn)
     var paused = List[String]()
     var joined = String()
     for p in r.pipelines:
@@ -864,19 +704,14 @@ def trip(mut db: State, r: Reading) raises -> List[String]:
             "watchdog",
         )
     if len(paused) > 0:
-        _ = db.conn.execute(
-            (
-                "INSERT INTO orca.watchdog_trips (rule, value, threshold,"
-                " detail, pipelines, checks) VALUES ($1, $2, $3, $4, $5,"
-                " $6::text::jsonb)"
-            ),
-            Params()
-            .text(r.rule)
-            .float64(r.value)
-            .float64(r.threshold)
-            .text(r.detail)
-            .text(joined)
-            .text(checks_json(r.checks)),
+        watchdog_db.insert_trip(
+            db.conn,
+            r.rule,
+            r.value,
+            r.threshold,
+            r.detail,
+            joined,
+            checks_json(r.checks),
         )
         print(
             "morca: watchdog rule",
@@ -922,10 +757,7 @@ def check(mut db: State, c: Config) raises -> Int:
         _record(db, r)
         if r.tripped and not snoozed(db, r.rule):
             paused += len(trip(db, r))
-    _ = db.conn.execute(
-        "DELETE FROM orca.watchdog_trips WHERE at < now() - interval '30 days'",
-        Params(),
-    )
+    watchdog_db.prune_trips(db.conn)
     return paused
 
 
@@ -976,23 +808,9 @@ def snooze(
         raise Error("morca: no rule ", rule, " (", names, ")")
     var secs = parse_duration(duration)
     if secs == 0:
-        _ = db.conn.execute(
-            (
-                "UPDATE orca.watchdog_rules SET snoozed_until = NULL,"
-                " snoozed_by = NULL WHERE rule = $1"
-            ),
-            Params().text(rule),
-        )
+        watchdog_db.end_snooze(db.conn, rule)
         return 0
-    _ = db.conn.execute(
-        (
-            "INSERT INTO orca.watchdog_rules (rule, snoozed_until, snoozed_by)"
-            " VALUES ($1, now() + make_interval(secs => $2::float8), $3) ON"
-            " CONFLICT (rule) DO UPDATE SET snoozed_until ="
-            " EXCLUDED.snoozed_until, snoozed_by = EXCLUDED.snoozed_by"
-        ),
-        Params().text(rule).float64(Float64(secs)).text(by),
-    )
+    watchdog_db.set_snooze(db.conn, rule, secs, by)
     return secs
 
 
@@ -1037,51 +855,31 @@ def acknowledge(mut db: State, trip: Int, by: String) raises -> Int:
     for t in active_trips(db):
         if trip != 0 and t.id != trip:
             continue
-        _ = db.conn.execute(
-            (
-                "UPDATE orca.watchdog_trips SET acknowledged_at = now(),"
-                " acknowledged_by = $2 WHERE id = $1"
-            ),
-            Params().int64(Int64(t.id)).text(by if by else String("ui")),
-        )
+        watchdog_db.acknowledge_trip(db.conn, t.id, by if by else String("ui"))
         n += 1
     return n
 
 
 def _trips(mut db: State, acknowledged: Bool) raises -> List[Trip]:
     var out = List[Trip]()
-    for r in db.conn.query(
-        (
-            "SELECT * FROM (SELECT t.rule, extract(epoch FROM now() -"
-            " t.at)::float8 AS ago, to_char(t.at AT TIME ZONE 'UTC',"
-            " 'YYYY-MM-DD HH24:MI:SS') || ' UTC' AS at, t.value, t.threshold,"
-            " t.detail, t.id, coalesce(t.acknowledged_by, '') AS acked,"
-            " coalesce(t.checks::text, '') AS checks,"
-            " t.acknowledged_at IS NOT NULL AS is_acked, (SELECT"
-            " string_agg(p.name, ',' ORDER BY p.name) FROM orca.pipelines p"
-            " WHERE p.paused AND p.name = ANY(string_to_array(t.pipelines,"
-            " ','))) AS paused FROM orca.watchdog_trips t) x WHERE paused IS"
-            " NOT NULL ORDER BY id DESC"
-        ),
-        Params(),
-    ):
-        if r.bool("is_acked") and not acknowledged:
+    for r in watchdog_db.trip_rows(db.conn):
+        if r.is_acked and not acknowledged:
             continue
         var ps = List[String]()
-        for p in r.text("paused").split(","):
+        for p in r.paused.split(","):
             ps.append(String(p))
         out.append(
             Trip(
-                r.text("rule"),
-                r.float64("ago"),
-                r.text("at"),
-                r.float64("value"),
-                r.float64("threshold"),
-                r.text("detail"),
+                r.rule,
+                r.ago,
+                r.at,
+                r.value,
+                r.threshold,
+                r.detail,
                 ps^,
-                Int(r.int64("id")),
-                r.text("acked"),
-                parse_checks(r.text("checks")),
+                r.id,
+                r.acked_by,
+                parse_checks(r.checks),
             )
         )
     return out^
@@ -1127,18 +925,8 @@ def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
         var note = String()
         if name == "cost" and c.fixed_price:
             note = "fixed price"
-        var rows = db.conn.query(
-            (
-                "SELECT value, threshold, checked IS NOT NULL AS seen,"
-                " coalesce(to_char(snoozed_until AT TIME ZONE 'UTC',"
-                " 'YYYY-MM-DD HH24:MI:SS') || ' UTC', '') AS until,"
-                " snoozed_until > now() AS live, coalesce(snoozed_by, '') AS"
-                " by, coalesce(checks::text, '') AS checks FROM"
-                " orca.watchdog_rules WHERE rule = $1"
-            ),
-            Params().text(name),
-        )
-        if len(rows) == 0 or not rows.row(0).bool("seen"):
+        var r = watchdog_db.rule_reading(db.conn, name)
+        if not r.seen:
             out.append(
                 RuleRow(
                     name,
@@ -1154,19 +942,17 @@ def rule_rows(mut db: State, c: Config) raises -> List[RuleRow]:
                 )
             )
             continue
-        var r = rows.row(0)
-        var live = (not r.is_null("live")) and r.bool("live")
-        var checks = parse_checks(r.text("checks"))
+        var checks = parse_checks(r.checks)
         if len(checks) == 0:
             checks = limits(c, name)
         out.append(
             RuleRow(
                 name,
-                r.float64("value") if not r.is_null("value") else -1.0,
-                r.float64("threshold"),
+                r.value,
+                r.threshold,
                 True,
-                r.text("until") if live else String(),
-                r.text("by") if live else String(),
+                r.until if r.live else String(),
+                r.by if r.live else String(),
                 tripped,
                 note,
                 checks^,

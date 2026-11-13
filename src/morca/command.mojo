@@ -41,7 +41,7 @@ from std.os.path import exists
 from std.sys import argv, exit, stderr
 from std.time import sleep
 
-from postgres import Params
+import morca.db.notify as notify_db
 
 from morca.actions import cancel_runs, pause_pipeline
 from morca.auth import add_user, remove_user, users
@@ -84,6 +84,7 @@ from morca.config_show import (
 )
 from morca.instances import (
     ask_drain,
+    drain_limit,
     instances,
     overlap_on,
     overlap_refusal,
@@ -180,8 +181,9 @@ comptime USAGE = """usage:
                                     in MORCA_NOTIFY_MIN_SECONDS)
   morca tick
   morca scheduler                    (with MORCA_OVERLAP=on an instance that
-                                    leads, or drains once a newer one runs:
-                                    docs/overlap.md)
+                                    leads, or drains once a newer one runs,
+                                    for at most MORCA_DRAIN_SECONDS, which
+                                    it needs: docs/overlap.md)
   morca scheduler status             (the instances: role, runs, last seen)
   morca scheduler drain <id>         (asks instance <id> to drain and exit)
   morca scheduler can-overlap        (exit 0 if this binary can start beside
@@ -356,14 +358,7 @@ def _notify(args: List[String]) raises -> Int:
             if not queued:
                 print("held back: the same alert was sent lately")
                 return 0
-            var waiting = db.conn.query(
-                (
-                    "SELECT 1 FROM orca.notifications WHERE kind = $1 AND"
-                    " subject = $2 AND pending"
-                ),
-                Params().text(kind).text(subject),
-            )
-            if len(waiting) > 0:
+            if notify_db.is_pending(db.conn, kind, subject):
                 print(
                     (
                         "not sent yet: ntfy didn't answer; the scheduler tries"
@@ -531,6 +526,10 @@ def _command(args: List[String], target: String) raises -> Int:
     if cmd == "scheduler" and len(args) >= 3:
         return _scheduler(url, args)
     if cmd == "scheduler" and len(args) == 2:
+        # An instance needs its drain limit (#390): refused before anything,
+        # the schema's migration included.
+        if overlap_on():
+            _ = drain_limit()
         var s = Scheduler(url)
         s.say_pressure()
         s.contain()

@@ -16,7 +16,7 @@ never a secret.
 
 from std.os import getenv
 
-from postgres import Params
+import morca.db.notify as notify_db
 
 from morca.fill import FillStatus
 from morca.notify import (
@@ -106,29 +106,18 @@ def failed_runs(
     if not configured():
         return 0
     var n = 0
-    for r in db.conn.query(
-        String(
-            "SELECT r.id, r.starts, r.partitions, coalesce(r.error, (SELECT",
-            " a.error FROM orca.attempts a JOIN orca.steps s ON s.id = a.step",
-            " WHERE s.run = r.id AND a.error IS NOT NULL ORDER BY a.id DESC",
-            " LIMIT 1), '') AS error FROM orca.runs r WHERE r.pipeline = $1",
-            " AND r.status = 'failed' AND r.retry_at IS NULL AND r.ended >",
-            " now() - interval '1 hour' AND (NOT (",
-            retried_sql,
-            ") OR r.starts - r.deferrals > $2 OR r.error LIKE 'not started:",
-            " its code%') ORDER BY r.id LIMIT 20",
-        ),
-        Params().text(pipeline).int64(Int64(run_retries)),
+    for r in notify_db.failed_unretried(
+        db.conn, pipeline, run_retries, retried_sql
     ):
-        var id = r.int64("id")
-        var subject = String(id, "/", r.int64("starts"))
+        var id = r.id
+        var subject = String(id, "/", r.starts)
         if _known(db, "run-failed", subject):
             continue
-        var keys = r.text("partitions")
+        var keys = r.partitions
         if keys.byte_length() > 80:
             var cut = String(keys[byte=:80], "...")
             keys = cut^
-        var why = _first_line(r.text("error"))
+        var why = _first_line(r.error)
         if alert(
             db,
             "run-failed",
@@ -152,18 +141,7 @@ def failed_runs(
 
 
 def _known(mut db: State, kind: String, subject: String) raises -> Bool:
-    return (
-        len(
-            db.conn.query(
-                (
-                    "SELECT 1 FROM orca.notifications WHERE kind = $1 AND"
-                    " subject = $2"
-                ),
-                Params().text(kind).text(subject),
-            )
-        )
-        > 0
-    )
+    return notify_db.is_known(db.conn, kind, subject)
 
 
 # ---------------------------------------------------------------------------
@@ -186,22 +164,11 @@ def fill(
     var limit = Int(_hours("MORCA_NOTIFY_FILL_STALL_HOURS", 2.0) * 3600.0)
     # Since the last fill run that succeeded; else the first fill run, else
     # when the pipeline was first registered.
-    var rows = db.conn.query(
-        (
-            "SELECT extract(epoch FROM now() - coalesce((SELECT max(ended)"
-            " FROM orca.runs WHERE pipeline = $1 AND trigger = 'fill' AND"
-            " status = 'succeeded'), (SELECT min(created) FROM orca.runs"
-            " WHERE pipeline = $1 AND trigger = 'fill'), (SELECT first_seen"
-            " FROM orca.pipelines WHERE name = $1)))::bigint AS ago, EXISTS"
-            " (SELECT 1 FROM orca.runs WHERE pipeline = $1 AND trigger ="
-            " 'fill' AND status = 'succeeded') AS ever"
-        ),
-        Params().text(pipeline),
-    )
-    if len(rows) != 1:
+    var got = notify_db.fill_success_age(db.conn, pipeline)
+    if not got:
         return
-    var ago = Int(rows.row(0).int64("ago"))
-    var ever = rows.row(0).bool("ever")
+    var ago = got.value()[0]
+    var ever = got.value()[1]
     var unfinished = s.done < s.total and (
         s.left + s.retrying + s.live + s.running > 0
     )
@@ -304,39 +271,28 @@ def lost_workers(mut db: State) raises -> Int:
         return 0
     var quiet = _hours("MORCA_NOTIFY_WORKER_SECONDS", 300.0)
     var n = 0
-    for r in db.conn.query(
-        (
-            "SELECT id, pool, label, coalesce(name, '') AS name, running,"
-            " extract(epoch FROM last_seen)::bigint AS seen,"
-            " extract(epoch FROM now() - last_seen)::bigint AS ago FROM"
-            " orca.workers WHERE revoked IS NULL AND expires > now() AND"
-            " last_seen IS NOT NULL AND last_seen < now() -"
-            " make_interval(secs => $1) AND last_seen > now() - interval '1"
-            " day' AND running IS NOT NULL ORDER BY id"
-        ),
-        Params().float64(quiet),
-    ):
-        var subject = String(r.int64("id"), "/", r.int64("seen"))
+    for r in notify_db.quiet_workers(db.conn, quiet):
+        var subject = String(r.id, "/", r.seen)
         if _known(db, "worker-lost", subject):
             continue
-        var runs = r.text("running")
+        var runs = r.running
         var count = len(runs.split(","))
-        var host = r.text("name")
+        var host = r.name
         if alert(
             db,
             "worker-lost",
             subject,
             "default",
             "warning",
-            String("morca: worker ", r.text("label"), " lost"),
+            String("morca: worker ", r.label, " lost"),
             String(
                 "Pool ",
-                r.text("pool"),
+                r.pool,
                 ", worker ",
-                r.text("label"),
+                r.label,
                 String(" (", host, ")") if host else String(),
                 " has been quiet for ",
-                _duration(Int(r.int64("ago"))),
+                _duration(r.ago),
                 " while holding ",
                 count,
                 " run" if count == 1 else " runs",
@@ -344,7 +300,7 @@ def lost_workers(mut db: State) raises -> Int:
                 runs,
                 "); they are requeued when their heartbeats go stale.",
             ),
-            ui_link(String("/ops/pools/self-hosted/", r.int64("id"))),
+            ui_link(String("/ops/pools/self-hosted/", r.id)),
         ):
             n += 1
     return n

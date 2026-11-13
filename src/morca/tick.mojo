@@ -4,7 +4,7 @@ second): what each registered pipeline is due, started.
 
 from std.time import perf_counter_ns
 from std.os import remove
-from postgres import Params
+import morca.db.scheduler as scheduler_db
 from morca.alerts import failed_runs
 from morca.notify import configured as notify_configured
 from morca.logs import publish
@@ -111,18 +111,8 @@ def tick(mut self: Scheduler, now: Int64) raises:
                 print("morca: can't check control-placed runs' memory:", e)
             return
         try:
-            self._going = Int(
-                self.db.conn.query(
-                    String(
-                        "SELECT count(*) AS n FROM orca.runs WHERE status",
-                        " = 'running' AND placement IN ('local',",
-                        " 'control') AND NOT ",
-                        self._dead("$1"),
-                    ),
-                    Params().float64(self.stale),
-                )
-                .row(0)
-                .int64("n")
+            self._going = scheduler_db.local_running(
+                self.db.conn, self.stale, self._dead("$1")
             )
         except e:
             print("morca: can't count this host's runs:", e)

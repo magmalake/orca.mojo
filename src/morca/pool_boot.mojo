@@ -20,7 +20,7 @@ set on the scheduler, the script runs that command as the worker instead
 
 from std.os import getenv
 
-from postgres import Params
+import morca.db.pools as pools_db
 
 from morca.json import quote
 from morca.registry import ImageRef, Registry
@@ -184,15 +184,7 @@ def boot_answer(mut db: State, worker: Int) raises -> String:
     """The UI's answer to a machine's `/api/worker/boot`, for worker token
     `worker`: what its script needs, as JSON. Raises (the UI answers 403)
     for a token the autoscaler didn't make, or whose machine isn't live."""
-    var rows = db.conn.query(
-        (
-            "SELECT w.created_by FROM orca.workers w JOIN orca.pool_machines m"
-            " ON m.worker = w.id WHERE w.id = $1 AND m.ended IS NULL AND"
-            " w.created_by LIKE 'pool:%'"
-        ),
-        Params().int64(Int64(worker)),
-    )
-    if len(rows) == 0:
+    if not pools_db.booting_machine(db.conn, worker):
         raise Error(
             "morca: this token isn't one the pool autoscaler made for a live",
             " machine",

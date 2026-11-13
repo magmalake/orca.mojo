@@ -1,0 +1,1 @@
+- **The run stores' SQL moves into `morca.db`**: Postgres's and SQLite's queries for runs, steps and attempts, a module per dialect, with nothing changed for a user. (#417)
