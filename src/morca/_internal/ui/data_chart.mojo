@@ -262,6 +262,12 @@ comptime CHART_STYLE = """
 .dc__bar.dc--2, .dc__key--2 { fill: #7a5af8; background: #7a5af8; }
 .dc__key { display: inline-block; width: 0.9em; height: 0.55em; margin: 0 0.3em 0 0.7em; border-radius: 2px; }
 .data__stop { color: var(--warn); }
+a.data-link { font-size: 0.75rem; padding: 0 0.4em; border: 1px solid var(--border-strong);
+  border-radius: 999px; text-decoration: none; white-space: nowrap; }
+a.data-link:hover { border-color: var(--lake); }
+.data-line { font-size: 0.8125rem; color: var(--muted); margin-top: 0.15rem; }
+.data-line a.data-link { font-size: inherit; border: 0; padding: 0; text-decoration: underline; }
+body.anon .data-link--private, body.anon .data-link--private + .data-line__sep { display: none; }
 .data__chart form.filters, .data__rows form.filters { padding: 0.75rem 1.1rem 0; margin: 0; }
 .data__rows .pager, .data__rows > p { padding: 0 1.1rem 0.8rem; }
 .data__rows td.null { color: var(--faint); font-style: italic; }

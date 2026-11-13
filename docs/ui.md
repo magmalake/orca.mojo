@@ -338,6 +338,13 @@ need no UI of their own:
   summed for each x, drawn as a line or as bars.
 - **Download CSV**: the filtered (and sorted) rows, up to 100,000.
 
+The way there is on the pages people land on first: under each
+pipeline's name on the home page, `Data:` and the datasets it writes; on a
+pipeline's page, a line of what it writes and reads, and the Steps
+table's Reads and Writes; a Data column on `/datasets`; and on a run's
+Snapshots card, each snapshot it wrote or read, at that snapshot. A
+dataset with `public = false` has its links hidden from visitors.
+
 The same is JSON at `/datasets/<name>/data.json`, and the download is
 `/datasets/<name>/data.csv`; routes.mojo lists the parameters.
 

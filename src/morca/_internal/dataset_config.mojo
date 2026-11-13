@@ -149,6 +149,13 @@ def record_datasets(
     return gone^
 
 
+def private_datasets(mut db: State) raises -> List[String]:
+    """The datasets whose data visitors not logged in don't see; their
+    Data links carry `data-link--private`, which the stylesheet hides for
+    them (`body.anon`)."""
+    return settings_db.private_datasets(db.conn)
+
+
 def dataset_public(mut db: State, name: String) raises -> Bool:
     """Whether morca.toml leaves `name`'s data public (the default)."""
     return settings_db.is_public(db.conn, name)

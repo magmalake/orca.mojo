@@ -148,6 +148,20 @@ curl -fsS "$base/datasets/lake.obs" | grep -qF 'href="/datasets/lake.obs" aria-c
 [ "$(curl -fsS "$base/datasets/lake.obs?tab=data&fc=city&fo=eq&fv=Lima&format=json" | jq '.rows.rows | length')" -eq 100 ] || fail "the form's filter"
 echo "ok   the tab's cards, partition links, download link and filter form"
 
+# The way to the data from the pages people land on.
+curl -fsS "$base/" | grep -qF '<div class="data-line">Data: <a class="data-link" href="/datasets/lake.obs?tab=data"' \
+    || fail "the home page doesn't link obs to lake.obs's data"
+curl -fsS "$base/home/pipelines" | grep -qF 'href="/datasets/lake.obs?tab=data"' || fail "the home page's refreshed table"
+page=$(curl -fsS "$base/pipelines/obs")
+echo "$page" | grep -qF '<p class="data-line pipeline__datasets">Writes <a href="/datasets/lake.obs">lake.obs</a> <a class="data-link" href="/datasets/lake.obs?tab=data"' \
+    || fail "the pipeline page's Datasets line"
+curl -fsS "$base/pipelines/obs?steps=table" | grep -qF '<td class="names"><a href="/datasets/lake.obs">lake.obs</a> <a class="data-link" href="/datasets/lake.obs?tab=data"' \
+    || fail "the steps table's data link"
+curl -fsS "$base/datasets" | grep -qF '<td><a class="data-link" href="/datasets/lake.obs?tab=data"' || fail "the datasets list's Data column"
+run=$(psql "$MORCA_DATABASE_URL" -Atc "SELECT max(id) FROM orca.runs WHERE pipeline = 'obs'")
+curl -fsS "$base/runs/$run" | grep -qF "href=\"/datasets/lake.obs?tab=data&amp;snapshot=$S2\"" || fail "the run page's link to the data it wrote"
+echo "ok   home, the pipeline page, the steps, the datasets list and the run page link to the data"
+
 # The download: capped, with why.
 hdr=build/dataview/csv.hdr
 curl -fsS -D "$hdr" -o build/dataview/obs.csv "$base/datasets/lake.obs/data.csv?f=month:eq:2024-01" || fail "the download"
@@ -192,6 +206,11 @@ for path in "/datasets/lake.obs/data.json" "/datasets/lake.obs/data.csv" "/datas
     [ "$(code "$base$path")" = 401 ] || fail "$path isn't hidden from a visitor"
 done
 grep -q 'Log in</a> to see it' build/dataview/body || fail "the hidden tab's login link"
+for path in / /datasets /pipelines/obs; do
+    page=$(curl -fsS "$base$path")
+    echo "$page" | grep -qF '<body class="anon">' && echo "$page" | grep -qF 'data-link--private' \
+        || fail "$path doesn't mark lake.obs's data link private for a visitor"
+done
 [ "$(code "$base/datasets/lake.obs")" = 200 ] || fail "the overview is hidden too"
 jar=build/dataview/cookies.txt
 rm -f "$jar"

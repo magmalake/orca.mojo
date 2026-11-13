@@ -35,10 +35,12 @@ from morca._internal.ui.layout import (
     not_found,
     page_html,
 )
+from morca._internal.dataset_config import private_datasets
 from morca._internal.ui.parts import (
     CPU_HELP,
     PEAK_HELP,
     dataset_links,
+    datasets_with_data,
     named_code_link,
     pause_button,
     request_text,
@@ -636,6 +638,7 @@ def _steps_html(
     links: CodeLinks,
     view: String,
     cards: String,
+    private: List[String],
 ):
     """The Steps card: Graph and Table tabs, links that work without
     scripts (`?steps=`); with them, the choice is kept in `localStorage`.
@@ -687,9 +690,9 @@ def _steps_html(
         h.raw("</td>")
         h.cell(s.after)
         h.raw('<td class="names">')
-        dataset_links(h, s.reads)
+        datasets_with_data(h, s.reads, private)
         h.raw('</td><td class="names">')
-        dataset_links(h, s.writes)
+        datasets_with_data(h, s.writes, private)
         h.raw("</td></tr>")
     h.raw("</tbody></table></div>", cards, "</section>")
 
@@ -718,6 +721,8 @@ def pipeline_html(
     )
     var base = String("/pipelines/", url_encode(p.name))
     _tabs_html(h, base, tab)
+    var private = private_datasets(db)
+    _datasets_line(h, v.steps, private)
     _cards_html(
         h,
         p,
@@ -742,6 +747,7 @@ def pipeline_html(
                 step_cards_of(db, p.name, v.steps, links, True),
                 List[AttemptCard](),
             ),
+            private,
         )
         if v.keys:
             _keys_html(h, p.name, v.keys.value())
@@ -841,6 +847,31 @@ def pipeline_html(
             h.raw("</tbody></table></div>")
     h.raw("<script>", _TAB_JS, "</script>")
     return page_html(p.name, "/", h)
+
+
+def _datasets_line(mut h: Html, steps: List[StepDef], private: List[String]):
+    """Under the tabs: the datasets the pipeline writes and reads, each
+    linked to its page and to its data."""
+    var writes = List[String]()
+    var reads = List[String]()
+    for s in steps:
+        for d in s.writes:
+            if d not in writes:
+                writes.append(d)
+    for s in steps:
+        for d in s.reads:
+            if d not in reads and d not in writes:
+                reads.append(d)
+    if len(writes) == 0 and len(reads) == 0:
+        return
+    h.raw('<p class="data-line pipeline__datasets">')
+    if len(writes):
+        h.raw("Writes ")
+        datasets_with_data(h, writes, private)
+    if len(reads):
+        h.raw("; reads " if len(writes) else "Reads ")
+        datasets_with_data(h, reads, private)
+    h.raw("</p>")
 
 
 def _tabs_html(mut h: Html, base: String, tab: String):

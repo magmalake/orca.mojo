@@ -33,6 +33,16 @@ def delete_datasets_but(
     return gone^
 
 
+def private_datasets(mut conn: Connection) raises -> List[String]:
+    """The datasets morca.toml marks `public = false`."""
+    var out = List[String]()
+    for r in conn.query(
+        "SELECT name FROM orca.dataset_settings WHERE NOT public ORDER BY name"
+    ):
+        out.append(r.text("name"))
+    return out^
+
+
 def is_public(mut conn: Connection, name: String) raises -> Bool:
     """Whether dataset `name`'s data is public: true unless morca.toml says
     `public = false`."""

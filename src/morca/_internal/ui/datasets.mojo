@@ -35,7 +35,8 @@ from morca._internal.ui.layout import (
     not_found,
     page_html,
 )
-from morca._internal.ui.parts import code_link
+from morca._internal.dataset_config import private_datasets
+from morca._internal.ui.parts import code_link, data_link
 from morca._internal.ui.runs import pager_link
 from morca._internal.views.code import CodeLinks, code_of
 from morca._internal.views.commands import rebuild_cmd, remote_cmd
@@ -143,12 +144,16 @@ def datasets_page(mut db: State) raises -> Page:
     h.raw('<div class="scroll">', _flow_graph(db, ""), "</div>")
     h.raw(
         '<div class="scroll"><table><thead><tr><th>Dataset</th>',
+        "<th>Data</th>",
         '<th>Written by</th><th>Read by</th><th class="num">Snapshots</th>',
         "<th>Latest</th><th>By run</th></tr></thead><tbody>",
     )
+    var private = private_datasets(db)
     for d in ds:
         h.raw("<tr><td>")
         h.link(dataset_href(d.name), d.name)
+        h.raw("</td><td>")
+        data_link(h, d.name, private)
         h.raw('</td><td class="names">')
         _pipeline_links(h, d.writers)
         h.raw('</td><td class="names">')
