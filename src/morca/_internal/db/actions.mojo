@@ -3,7 +3,7 @@ and cancelled from the UI and the command line."""
 
 from postgres import Connection, Params, Transaction
 
-from morca._internal.db.live import stalled_sql
+from morca._internal.db.live import ordered_runs, stalled_sql
 from morca._internal.db.scheduler import RETRIED
 
 
@@ -244,13 +244,18 @@ def cancel_over(
     var done = conn.query(
         String(
             _cancel_set("$5"),
-            " WHERE",
-            " pipeline = $1 AND ($2 OR string_to_array(partitions, ',') &&",
-            " string_to_array($3, ',')) AND (status IN ('queued', 'deferred')",
-            " OR (status = 'running' AND NOT cancel_requested) OR (status =",
-            " 'failed' AND ",
-            RETRIED,
-            " AND starts - deferrals <= $4)) RETURNING id",
+            " WHERE ",
+            ordered_runs(
+                String(
+                    "pipeline = $1 AND ($2 OR string_to_array(partitions,",
+                    " ',') && string_to_array($3, ',')) AND (status IN",
+                    " ('queued', 'deferred') OR (status = 'running' AND NOT",
+                    " cancel_requested) OR (status = 'failed' AND ",
+                    RETRIED,
+                    " AND starts - deferrals <= $4))",
+                )
+            ),
+            " RETURNING id",
         ),
         Params()
         .text(pipeline)
@@ -271,9 +276,13 @@ def cancel_picked(
     for r in conn.query(
         String(
             _cancel_set("$2"),
-            " WHERE id = ANY(string_to_array($1, ',')::bigint[]) AND (status",
-            " IN ('queued', 'deferred') OR (status = 'running' AND NOT",
-            " cancel_requested)) RETURNING id::bigint AS id",
+            " WHERE ",
+            ordered_runs(
+                "id = ANY(string_to_array($1, ',')::bigint[]) AND (status IN"
+                " ('queued', 'deferred') OR (status = 'running' AND NOT"
+                " cancel_requested))"
+            ),
+            " RETURNING id::bigint AS id",
         ),
         Params().text(ids).float64(kill_seconds),
     ):
