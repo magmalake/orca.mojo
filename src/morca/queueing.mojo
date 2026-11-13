@@ -8,7 +8,7 @@ from postgres import (
     Transaction,
 )
 from morca.batches import mark_batch
-from morca.live import live_runs
+from morca.db.live import live_runs
 from morca.timekeys import parse_time_keys
 from morca.name import (
     Name,

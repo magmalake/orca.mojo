@@ -37,7 +37,7 @@ from postgres import Params
 
 from morca.html import Html, escape, url_encode
 from morca.json import quote
-from morca.live import dead_sql, stale_limit, start_grace
+from morca.db.live import dead_sql, stale_limit, start_grace
 from morca.logs import read_location
 from morca.metrics import bytes_text
 from morca.sample import metrics_location

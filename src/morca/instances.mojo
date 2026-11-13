@@ -22,7 +22,7 @@ from std.time import sleep
 
 from postgres import Params
 
-from morca.live import stale_limit
+from morca.db.live import stale_limit
 from morca.migrations import known_migrations, migration_floor
 from morca.state import State, live_older
 from morca.store import process_owner

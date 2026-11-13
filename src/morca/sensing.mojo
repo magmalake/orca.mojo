@@ -10,7 +10,7 @@ from postgres import (
 from morca.civil import Civil
 from morca.cron import CronExpr
 from morca.batches import mark_batch
-from morca.live import is_live_sql, live_runs
+from morca.db.live import is_live_sql, live_runs
 from morca.schedule import Schedule
 from morca.sensors import (
     join_keys,

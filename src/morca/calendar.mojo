@@ -27,7 +27,7 @@ from morca.civil import Civil, now
 from morca.day import Day
 from morca.hour import Hour
 from morca.json import quote
-from morca.live import live_sql
+from morca.db.live import live_sql
 from morca.month import Month, days_in
 from morca.queueing import done_keys
 from morca.state import State

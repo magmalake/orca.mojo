@@ -9,7 +9,7 @@ from postgres import (
 )
 from morca.batches import mark_batch
 from morca.fill import fill_status
-from morca.live import (
+from morca.db.live import (
     dead_sql,
     hold_behind,
     stale_sql,

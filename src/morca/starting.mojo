@@ -25,7 +25,7 @@ from morca.fill import (
 )
 from morca.system import system_now
 from morca.batches import mark_batch
-from morca.live import behind_sql, hold_behind
+from morca.db.live import behind_sql, hold_behind
 from morca.kube import (
     RunSpec,
     cpu_millis,

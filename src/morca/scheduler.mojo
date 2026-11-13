@@ -203,7 +203,7 @@ from morca.instances import (
     step_down,
     try_lead,
 )
-from morca.live import (
+from morca.db.live import (
     dead_sql,
     stale_limit,
     stale_sql,

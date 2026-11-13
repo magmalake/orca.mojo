@@ -18,7 +18,7 @@ from morca.cron import CronExpr
 from morca.fill import FillStatus, fill_status
 from morca.follow import Follow, follow
 from morca.lineage import SnapshotRef
-from morca.live import live_sql
+from morca.db.live import live_sql
 from morca.recommend import Recommendation
 from morca.schedule import Schedule
 from morca.queueing import (

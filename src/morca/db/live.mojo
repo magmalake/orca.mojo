@@ -1,5 +1,5 @@
 """Which runs are live: queued, deferred, or running with their process
-alive.
+alive, as SQL the other queries build on (`live_sql`, `dead_sql`, ...).
 
 A running run's process is taken to have died when its heartbeat is older
 than the stale limit (`MORCA_STALE_SECONDS`), or, before its first beat, when

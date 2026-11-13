@@ -35,7 +35,7 @@ from morca.migrations import (
     known_migrations,
     schema_ahead,
 )
-from morca.live import stale_limit
+from morca.db.live import stale_limit
 from morca.handover import run_outdated, set_outdated
 from morca.store import (
     CANCELLED,
