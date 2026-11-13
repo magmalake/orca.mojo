@@ -63,8 +63,8 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
 - **Overlapping instances** (`orca.instances`, docs/overlap.md). With
   `MORCA_OVERLAP=on` a deploy starts the new image's scheduler beside the
   old one: the newest live instance leads and alone decides, and an older
-  one starts nothing more, supervises its runs until they end, however
-  long that takes (or kills them after `MORCA_DRAIN_SECONDS`, if set), and
+  one starts nothing more, supervises its runs until they end or
+  `MORCA_DRAIN_SECONDS` (required) runs out, when it kills them, and
   exits. Its runs see that they're outdated (`morca.outdated()`). A local or control-placed
   run records the instance that started it; while that instance lists it
   the run is live (`morca._internal.live.held_sql`), counted against `max_runs`, the
@@ -193,6 +193,7 @@ from morca._internal.kube import (
 )
 from morca._internal.instances import (
     beat,
+    drain_limit,
     end as end_instance,
     join as join_instance,
     newer,
@@ -410,8 +411,9 @@ struct Scheduler(Movable):
     processes it started have ended."""
     var drain_seconds: Float64
     """`MORCA_DRAIN_SECONDS`: how long a drain waits for its runs before it
-    kills what's left; unset (-1), it waits for as long as they take, which
-    may be months (#397: morca never stops a run for a deploy)."""
+    kills what's left. Required of an instance (#390: `join` refuses to
+    start without it); -1 for a scheduler that isn't one, which never
+    drains."""
     var _drain_start: Int
     """When the drain began, on the monotonic clock."""
     var finished: Bool
@@ -486,17 +488,18 @@ struct Scheduler(Movable):
         self.instance = 0
         self.leading = True
         self.draining = False
-        var drain = getenv("MORCA_DRAIN_SECONDS")
-        self.drain_seconds = Float64(drain) if drain else -1.0
+        self.drain_seconds = -1.0
         self._drain_start = 0
         self.finished = False
         self._going = 0
 
     def join(mut self) raises:
         """With `MORCA_OVERLAP=on`, makes this scheduler an instance
-        (`orca.instances`): it leads only once it holds the lead."""
+        (`orca.instances`): it leads only once it holds the lead. Refuses
+        to without `MORCA_DRAIN_SECONDS` (#390)."""
         if not overlap_on():
             return
+        self.drain_seconds = drain_limit()
         self.instance = join_instance(self.db)
         self.leading = False
         print("morca: scheduler instance", self.instance, "joined")
@@ -520,7 +523,7 @@ struct Scheduler(Movable):
         """An instance's turn at the lead: marks it seen with its runs,
         drains once a newer instance is live or it's asked to, takes the
         lead when free otherwise, and while draining ends once nothing it
-        started is left (killing what is after `drain_seconds`, if set)."""
+        started is left (killing what is after `drain_seconds`)."""
         var running = String()
         for e in self._spawned.items():
             if running:
@@ -555,7 +558,7 @@ struct Scheduler(Movable):
             print("morca: scheduler instance", self.instance, "drained")
             return
         var waited = Float64(Int(perf_counter_ns()) - self._drain_start) / 1e9
-        if self.drain_seconds < 0 or waited < self.drain_seconds:
+        if waited < self.drain_seconds:
             return
         for e in self._spawned.items():
             if e.key in self._control:
