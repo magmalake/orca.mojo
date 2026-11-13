@@ -1115,7 +1115,9 @@ project's image builds `FROM` it and adds only its own programs:
 [`deploy/project.Dockerfile`](../deploy/project.Dockerfile), the image
 `morca aws push` builds, compiles the project's `bin/*.mojo` and
 `pipelines/*.mojo` into `/opt/morca/bin` and `/opt/morca/pipelines`, with the
-libraries they link. `MORCA_VERSION` picks the runtime: the morca-mojo
+libraries they link, and copies the project's `morca.toml` to
+`/opt/morca/morca.toml` with `MORCA_CONFIG` naming it, so `morca-stack
+register` (a bare `morca register`) reads it. `MORCA_VERSION` picks the runtime: the morca-mojo
 version the project pins (`morca aws push` reads it from `pixi.lock`), so
 the runtime and the pipelines are the same morca. Moving the project to a
 new morca moves its image to that release's runtime. A

@@ -345,7 +345,15 @@ jobs:
       morca-repository: ${{ github.repository }}
       morca-ref: ${{ github.sha }}
       build-runtime: true
-      smoke: docker run --rm --entrypoint toy "$IMAGE" run --partitions 2024-01
+      # The toy runs, and the image has the project's morca.toml where
+      # MORCA_CONFIG says, which a bare `morca register` reads (#424).
+      smoke: |
+        docker run --rm --entrypoint toy "$IMAGE" run --partitions 2024-01
+        shown=$(docker run --rm "$IMAGE" config show --file)
+        echo "$shown"
+        case "$shown" in "# /opt/morca/morca.toml"*) ;; *) echo "::error::no /opt/morca/morca.toml"; exit 1 ;; esac
+        case "$shown" in *pipelines.toy*) ;; *) echo "::error::the image's morca.toml has no toy"; exit 1 ;; esac
+        docker run --rm "$IMAGE" config check
 
   project-test:
     needs: [changes, release]
