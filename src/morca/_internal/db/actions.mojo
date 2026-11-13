@@ -271,10 +271,11 @@ def cancel_picked(
     mut conn: Connection, ids: String, kill_seconds: Float64
 ) raises -> List[Int]:
     """Cancels, as `cancel` does, those of the runs `ids` (`1,2,3`) queued,
-    deferred, or running and not stopping; returns them."""
+    deferred, or running and not stopping; returns them, in `id` order."""
     var out = List[Int]()
     for r in conn.query(
         String(
+            "WITH c AS (",
             _cancel_set("$2"),
             " WHERE ",
             ordered_runs(
@@ -282,7 +283,7 @@ def cancel_picked(
                 " ('queued', 'deferred') OR (status = 'running' AND NOT"
                 " cancel_requested))"
             ),
-            " RETURNING id::bigint AS id",
+            " RETURNING id) SELECT id::bigint AS id FROM c ORDER BY id",
         ),
         Params().text(ids).float64(kill_seconds),
     ):
