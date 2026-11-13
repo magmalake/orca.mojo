@@ -22,6 +22,7 @@ Hourly, daily and monthly keys are zero-padded, so they compare as text.
 from std.collections import Dict
 
 import morca.db.calendar as calendar_db
+from morca.db.live import live_runs
 
 from morca.civil import Civil, now
 from morca.day import Day
@@ -232,8 +233,8 @@ def _cells(
     for i in range(len(keys)):
         joined.write("," if i else "", keys[i])
     var live = Dict[String, Bool]()
-    for k in calendar_db.live_keys(db.conn, pipeline):
-        live[k] = True
+    for e in live_runs(db.conn, pipeline).items():
+        live[e.key] = True
     var failed = Dict[String, Bool]()
     for k in calendar_db.failed_keys(db.conn, pipeline, joined):
         failed[k] = True

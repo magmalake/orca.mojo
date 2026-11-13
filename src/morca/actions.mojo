@@ -18,10 +18,9 @@ still going) rather than an error.
 
 from std.os import getenv
 
-
 import morca.db.actions as actions_db
 import morca.db.starting as starting_db
-from morca.db.live import live_runs
+from morca.db.live import live_runs, stale_seconds, stalled_sql
 from morca.name import parse_names
 from morca.pause import set_paused
 from morca.queueing import (
@@ -63,15 +62,6 @@ struct Outcome(Movable):
         return Self(0, 0, why^, confirm, List[String]())
 
 
-def stale_seconds() -> Float64:
-    """`MORCA_STALE_SECONDS` (default 30): how old a running run's heartbeat
-    is when its process is taken to have died."""
-    try:
-        return Float64(getenv("MORCA_STALE_SECONDS", "30"))
-    except:
-        return 30.0
-
-
 def cancel_kill_seconds() -> Float64:
     """`MORCA_CANCEL_KILL_SECONDS` (default 60): how long a running run
     asked to cancel has to finish its step before it's stopped."""
@@ -79,12 +69,6 @@ def cancel_kill_seconds() -> Float64:
         return Float64(getenv("MORCA_CANCEL_KILL_SECONDS", "60"))
     except:
         return 60.0
-
-
-def stalled_sql() -> String:
-    """True for a run that's `running` with no live process: its heartbeat,
-    or its start when it has none yet, is older than the stale limit."""
-    return actions_db.stalled_sql(stale_seconds())
 
 
 def _pipeline(mut db: State, name: String) raises -> Optional[Registered]:
@@ -169,7 +153,7 @@ def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
     than when it asked). A run whose pipeline's code has changed
     since is refused until `allow_new_code`, which the scheduler passes on
     as `--allow-new-code`."""
-    var got = actions_db.resumable(db.conn, run, stale_seconds())
+    var got = actions_db.resumable(db.conn, run)
     if not got:
         return Outcome.no(String("no run ", run))
     ref r = got.value()
@@ -208,7 +192,7 @@ def resume_run(mut db: State, run: Int, allow_new_code: Bool) raises -> Outcome:
             ),
             confirm=True,
         )
-    var n = actions_db.requeue(db.conn, run, allow_new_code, stale_seconds())
+    var n = actions_db.requeue(db.conn, run, allow_new_code)
     if n != 1:
         return Outcome.no(String("run ", run, " changed; look again"))
     return Outcome.done(run)
@@ -417,9 +401,7 @@ def resume_failed(mut db: State, runs: List[Int]) raises -> Bulk:
     var b = Bulk.none()
     if len(runs) == 0:
         return b^
-    var failed = actions_db.failed_or_stalled(
-        db.conn, _id_list(runs), stale_seconds()
-    )
+    var failed = actions_db.failed_or_stalled(db.conn, _id_list(runs))
     for id in runs:
         if id not in failed:
             if id not in b.skipped:

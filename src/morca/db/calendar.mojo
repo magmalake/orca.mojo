@@ -1,9 +1,7 @@
-"""The calendar's queries (`morca.calendar`): which keys of a pipeline a
-live run has, and how each key's last run ended."""
+"""The calendar's query (`morca.calendar`): how each key's last run
+ended."""
 
 from postgres import Connection, Params
-
-from morca.db.live import live_sql
 
 comptime _LAST_SQL = (
     "SELECT DISTINCT ON (k.key) k.key, r.status FROM orca.runs r,"
@@ -12,14 +10,6 @@ comptime _LAST_SQL = (
 )
 """Of the comma-separated keys `$2`, the status of the last run of pipeline
 `$1` that had each (`key`, `status`)."""
-
-
-def live_keys(mut conn: Connection, pipeline: String) raises -> List[String]:
-    """The keys of `pipeline`'s live runs (`live_sql`)."""
-    var out = List[String]()
-    for r in conn.query(live_sql(), Params().text(pipeline)):
-        out.append(r.text("key"))
-    return out^
 
 
 def failed_keys(

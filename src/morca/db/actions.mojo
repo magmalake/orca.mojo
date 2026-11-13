@@ -3,18 +3,8 @@ and cancelled from the UI and the command line."""
 
 from postgres import Connection, Params, Transaction
 
+from morca.db.live import stalled_sql
 from morca.db.scheduler import RETRIED
-
-
-def stalled_sql(stale: Float64) -> String:
-    """True for a run that's `running` with no live process: its heartbeat,
-    or its start when it has none yet, is older than `stale` seconds."""
-    return String(
-        "(status = 'running' AND coalesce(heartbeat, started, created) <",
-        " now() - make_interval(secs => ",
-        stale,
-        "))",
-    )
 
 
 def _cancel_set(kill_seconds: StaticString) -> String:
@@ -64,17 +54,15 @@ struct Resumable(Copyable, Movable):
     var stalled: Bool
 
 
-def resumable(
-    mut conn: Connection, run: Int, stale: Float64
-) raises -> Optional[Resumable]:
-    """`run`, with the stale limit `stale` for whether it stalled; None if
-    there's no such run."""
+def resumable(mut conn: Connection, run: Int) raises -> Optional[Resumable]:
+    """`run`, with whether it stalled (`stalled_sql`); None if there's no
+    such run."""
     var rows = conn.query(
         String(
             "SELECT r.pipeline, r.status, r.registry_hash, p.registry_hash AS",
             " current,",
             " p.binary_path IS NOT NULL AS has_binary, ",
-            stalled_sql(stale),
+            stalled_sql(),
             " AS stalled FROM orca.runs r JOIN orca.pipelines p ON p.name =",
             " r.pipeline WHERE r.id = $1",
         ),
@@ -93,11 +81,9 @@ def resumable(
     )
 
 
-def requeue(
-    mut conn: Connection, run: Int, allow_new_code: Bool, stale: Float64
-) raises -> Int:
+def requeue(mut conn: Connection, run: Int, allow_new_code: Bool) raises -> Int:
     """Queues `run` again if it's failed, cancelled, deferred or stalled
-    (by `stale`); returns how many runs (0 or 1)."""
+    (`stalled_sql`); returns how many runs (0 or 1)."""
     return conn.execute(
         String(
             "UPDATE orca.runs SET status = 'queued', owner = NULL, heartbeat =",
@@ -107,7 +93,7 @@ def requeue(
                 " IN ('failed',"
             ),
             " 'cancelled', 'deferred') OR ",
-            stalled_sql(stale),
+            stalled_sql(),
             ")",
         ),
         Params().int64(Int64(run)).bool(allow_new_code),
@@ -295,18 +281,16 @@ def cancel_picked(
     return out^
 
 
-def failed_or_stalled(
-    mut conn: Connection, ids: String, stale: Float64
-) raises -> List[Int]:
-    """Those of the runs `ids` (`1,2,3`) that failed, or stalled (by
-    `stale`)."""
+def failed_or_stalled(mut conn: Connection, ids: String) raises -> List[Int]:
+    """Those of the runs `ids` (`1,2,3`) that failed, or stalled
+    (`stalled_sql`)."""
     var out = List[Int]()
     for r in conn.query(
         String(
             "SELECT id::bigint AS id FROM orca.runs WHERE id =",
             " ANY(string_to_array($1, ',')::bigint[]) AND (status = 'failed'",
             " OR ",
-            stalled_sql(stale),
+            stalled_sql(),
             ")",
         ),
         Params().text(ids),
