@@ -12,9 +12,15 @@
 #   the attempt, naming the panic or the column, and commit nothing;
 # - the stop flag ends the worker's stream early, and what came is
 #   committed;
-# - a run whose process dies after the commit is resumed: the retry finds
-#   the commit, the worker doesn't run again, and the table has one
-#   snapshot of the run.
+# - an error in the stream reaches the log in the worker's words;
+# - Parquet files the worker writes itself are checked, uploaded and
+#   committed in one snapshot; a file whose column doesn't fit, one holding
+#   two partitions, and one reported but not there fail the attempt and
+#   commit nothing; a worker may stream and write files in one run;
+# - a run whose process dies after the commit is resumed, streamed or in
+#   files: the retry finds the commit, the worker doesn't run again, and
+#   the table has one snapshot of the run;
+# - each call's output directory is gone after it.
 #
 # Run in the rust environment (pixi run -e rust test-rust-worker), which has
 # cargo and the data environment's tins.
@@ -63,8 +69,13 @@ bin=./build/numbers
 export MORCA_WAREHOUSE=$PWD/build/rust-worker/wh NUMBERS_LIB=$lib
 unset MORCA_DATABASE_URL MORCA_LOGS
 rm -rf "$MORCA_WAREHOUSE"
+# Where the calls' output directories go, to check they're removed.
+export TMPDIR=$PWD/build/rust-worker/tmp
+rm -rf "$TMPDIR"
+mkdir -p "$TMPDIR"
 out=build/rust-worker/run.out
 rows() { "$bin" check | sed -n 's/^rows \([0-9]*\) .*/\1/p'; }
+snaps() { "$bin" check | sed -n 's/^all snapshots \([0-9]*\)$/\1/p'; }
 run() {
     month=$1; shift
     env "$@" "$bin" run --partitions "$month" > "$out" 2>&1
@@ -75,7 +86,7 @@ run 2024-01 NUMBERS_PARAMS='{"rows": 1000, "batch_rows": 100}' || { cat "$out" >
 cat "$out" >> "$log"
 grep -q "numbers worker 0.1.0: 1000 rows for 2024-01, attempt 1" "$out" || fail "no log line from the worker"
 grep -q "progress 1000/1000" "$out" || fail "no progress line"
-grep -q "numbers: 1000 rows, snapshot [0-9]*, stopped=False, resumed=False" "$out" || fail "the step's result"
+grep -q "numbers: 1000 rows, 0 files of its own, snapshot [0-9]*, stopped=False, resumed=False" "$out" || fail "the step's result"
 [ "$(rows)" = 1000 ] || fail "rows: $(rows)"
 "$bin" check | grep -qx "ids 499500" || fail "the ids: $("$bin" check)"
 echo "ok   a run commits the worker's 1000 rows, with its logs and progress"
@@ -87,8 +98,12 @@ grep -q "the Rust worker .* failed: .*the worker panicked: asked to panic in bat
 run 2024-02 NUMBERS_PARAMS='{"panic": "run"}' && fail "a panic in run didn't fail the run"
 cat "$out" >> "$log"
 grep -q "the Rust worker .* failed: the worker panicked: asked to panic in run" "$out" || fail "the panic in run's message"
+run 2024-02 NUMBERS_PARAMS='{"fail": true}' && fail "an error in the stream didn't fail the run"
+cat "$out" >> "$log"
+grep -q "the Rust worker .* failed: asked to fail in the stream" "$out" || fail "the stream error's message"
+grep -q "External error\|get_next failed" "$out" && fail "the stream error isn't in the worker's words: $(grep 'asked to fail' "$out")"
 [ "$(rows)" = 1000 ] || fail "a failed run committed: $(rows) rows"
-echo "ok   a panic fails the attempt with its message, and commits nothing"
+echo "ok   a panic or an error fails the attempt with the worker's message, and commits nothing"
 
 for m in type:"column square is string in the worker's schema, which doesn't fit the table's double" \
     extra:"column cube is in the worker's schema but not in the table" \
@@ -114,10 +129,44 @@ touch "$stop"
 wait "$pid" || { cat "$out" >> "$log"; fail "the stopped run failed"; }
 cat "$out" >> "$log"
 grep -q "stopping after [0-9]* rows, as morca asks" "$out" || fail "the worker didn't stop"
-got=$(sed -n 's/.*numbers: \([0-9]*\) rows, snapshot [0-9]*, stopped=True.*/\1/p' "$out")
+got=$(sed -n 's/.*numbers: \([0-9]*\) rows, 0 files of its own, snapshot [0-9]*, stopped=True.*/\1/p' "$out")
 [ -n "$got" ] && [ "$got" -gt 0 ] && [ "$got" -lt 100000 ] || fail "the stopped run's rows: [$got]"
 [ "$(rows)" = $((1000 + got)) ] || fail "rows after the stop: $(rows), not $((1000 + got))"
 echo "ok   the stop flag ends the stream early: $got rows committed"
+
+# --- Parquet files written by the worker ---
+base=$(rows)
+before=$(snaps)
+run 2024-06 NUMBERS_PARAMS='{"mode": "files", "rows": 1000, "file_rows": 300}' || { cat "$out" >> "$log"; fail "the files run failed"; }
+cat "$out" >> "$log"
+grep -q "wrote file 3" "$out" || fail "the worker didn't write its files"
+grep -q "numbers: 1000 rows, 4 files of its own, snapshot [0-9]*, stopped=False, resumed=False" "$out" || fail "the files run's result"
+grep -q "the Rust worker wrote 1000 rows in 4 data files (4 of its own) to demo.numbers" "$out" || fail "the files run's log"
+[ "$(rows)" = $((base + 1000)) ] || fail "rows after the files run: $(rows)"
+[ "$(snaps)" = $((before + 1)) ] || fail "the files run made $(($(snaps) - before)) snapshots"
+"$bin" check | grep -qx "ids $((499500 + got * (got - 1) / 2 + 499500))" || fail "the ids after the files run: $("$bin" check)"
+n=$(find "$MORCA_WAREHOUSE" -path "*partition=2024-06*" -name "*-w0000[0-3].parquet" | wc -l | tr -d ' ')
+[ "$n" = 4 ] || fail "the worker's files in the partition's data/: $n"
+echo "ok   the worker's own Parquet files are uploaded to their partition and committed in one snapshot"
+
+for m in type:"doesn't fit demo.numbers: column square is string in the file, which doesn't fit the table's double" \
+    partition:"doesn't fit demo.numbers: it holds rows of more than one partition: column partition goes from" \
+    missing:"the Rust worker reported the file .*/not-written.parquet, which doesn't exist"; do
+    run 2024-07 NUMBERS_PARAMS="{\"mode\": \"files\", \"file_mismatch\": \"${m%%:*}\"}" && fail "file_mismatch ${m%%:*} didn't fail"
+    cat "$out" >> "$log"
+    grep -q "${m#*:}" "$out" || fail "file_mismatch ${m%%:*}: $(grep -i "fit\|reported" "$out" | head -3)"
+done
+[ "$(rows)" = $((base + 1000)) ] || fail "a file that doesn't fit committed: $(rows) rows"
+echo "ok   a file that doesn't fit, holds two partitions or isn't there fails the attempt, naming it"
+
+before=$(snaps)
+run 2024-08 NUMBERS_PARAMS='{"mode": "mix", "rows": 1000}' || { cat "$out" >> "$log"; fail "the mixed run failed"; }
+cat "$out" >> "$log"
+grep -q "numbers: 1000 rows, 1 files of its own" "$out" || fail "the mixed run's result"
+grep -q "the Rust worker wrote 1000 rows in 2 data files (1 of its own)" "$out" || fail "the mixed run's log"
+[ "$(rows)" = $((base + 2000)) ] || fail "rows after the mixed run: $(rows)"
+[ "$(snaps)" = $((before + 1)) ] || fail "the mixed run made $(($(snaps) - before)) snapshots"
+echo "ok   a worker that streams and writes files commits both in one snapshot"
 
 # --- a crash after the commit, resumed ---
 export MORCA_DATABASE_URL=sqlite:$PWD/build/rust-worker/runs.db MORCA_STALE_SECONDS=1
@@ -128,12 +177,32 @@ cat "$out" >> "$log"
 [ -f build/rust-worker/crashed ] || fail "the step didn't get to its crash"
 r=$(sed -n 's/^run \([0-9][0-9]*\)$/\1/p' "$out" | head -1)
 [ -n "$r" ] || fail "no run number"
-[ "$(rows)" = $((1500 + got)) ] || fail "rows after the crash: $(rows)"
+[ "$(rows)" = $((base + 2500)) ] || fail "rows after the crash: $(rows)"
 sleep 1.5
 "$bin" resume "$r" > "$out" 2>&1 || { cat "$out" >> "$log"; fail "the resume failed"; }
 cat "$out" >> "$log"
 grep -q "the worker's output is committed already; it doesn't run again" "$out" || fail "the retry didn't find its commit"
-grep -q "numbers: 0 rows, snapshot [0-9]*, stopped=False, resumed=True" "$out" || fail "the resumed step's result"
+grep -q "numbers: 0 rows, 0 files of its own, snapshot [0-9]*, stopped=False, resumed=True" "$out" || fail "the resumed step's result"
 grep -q "numbers worker 0.1.0" "$out" && fail "the worker ran again"
-[ "$("$bin" check "$r" | head -1)" = "rows $((1500 + got)) snapshots 1" ] || fail "after the resume: $("$bin" check "$r")"
+[ "$("$bin" check "$r" | head -1)" = "rows $((base + 2500)) snapshots 1" ] || fail "after the resume: $("$bin" check "$r")"
 echo "ok   a crash after the commit is resumed: the commit is found, and the worker doesn't run again"
+
+rm -f build/rust-worker/crashed
+run 2024-09 NUMBERS_CRASH_ONCE="$PWD/build/rust-worker/crashed" NUMBERS_PARAMS='{"mode": "files", "rows": 500}' \
+    && fail "the files run didn't crash"
+cat "$out" >> "$log"
+[ -f build/rust-worker/crashed ] || fail "the files step didn't get to its crash"
+r=$(sed -n 's/^run \([0-9][0-9]*\)$/\1/p' "$out" | head -1)
+[ -n "$r" ] || fail "no run number for the files run"
+[ "$(rows)" = $((base + 3000)) ] || fail "rows after the files crash: $(rows)"
+sleep 1.5
+"$bin" resume "$r" > "$out" 2>&1 || { cat "$out" >> "$log"; fail "the files resume failed"; }
+cat "$out" >> "$log"
+grep -q "the worker's output is committed already; it doesn't run again" "$out" || fail "the files retry didn't find its commit"
+grep -q "numbers worker 0.1.0" "$out" && fail "the files worker ran again"
+[ "$("$bin" check "$r" | head -1)" = "rows $((base + 3000)) snapshots 1" ] || fail "after the files resume: $("$bin" check "$r")"
+echo "ok   a crash after committing the worker's files is resumed without a second commit"
+
+left=$(find "$TMPDIR" -maxdepth 1 -name 'morca-rust-*' | head -3)
+[ -z "$left" ] || fail "output directories left behind: $left"
+echo "ok   every call's output directory is removed"

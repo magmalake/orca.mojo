@@ -11,3 +11,5 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 morca-worker = { path = "../../rust/morca-worker" }
+# Writes its own Parquet files in the files mode: pure Rust, Snappy only.
+parquet = { version = "60", default-features = false, features = ["arrow", "snap"] }

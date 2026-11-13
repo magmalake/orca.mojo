@@ -44,7 +44,7 @@ comes with a minor-version note in the changelog (changes/README.md).
 | `morca.civil` | `Civil`, `now`, `parse_time`, `utc` |
 | `morca.tasks` | `Tasks`, `TaskSet`, `NoTasks`, `workers`: a step's dista tasks |
 | `morca.tables` | Iceberg from steps: `table`, `scan`, `append`, `commit`, `ensure_table`, `find_commit`, `append_files`, `write_files`, `replace_partitions`, `load_dataset` |
-| `morca.rust_step` | steps written in Rust: `rust_step`, which runs a worker library and commits what it streams, and `RustRun` (docs/rust-workers.md) |
+| `morca.rust_step` | steps written in Rust: `rust_step`, which runs a worker library and commits what it streams and the Parquet files it writes, and `RustRun` (docs/rust-workers.md) |
 | `morca.cli` | `morca_main`, the command line of a pipeline binary, and `report` |
 | `morca.command` | `morca_command`, the `morca` binary (scheduler, UI, registration) |
 | `morca.maintain` | `maintain_main`, the `morca_maintain` binary (snapshot expiry) |
