@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.27.0 - 2026-11-13
+
+- **Steps in Rust:** `morca.rust_step` and the `morca-worker` crate (docs/rust-workers.md). (#422)
+- **Hindcast example:** GFS forecast skill, with a Rust worker and Mojo steps. (#423)
+- **Per-run cgroups on by default** on Hetzner; `CGROUPS=0` opts out. (#410)
+- **Overlapping schedulers on by default.** Upgrading needs `DRAIN_SECONDS` in hetzner.env. (#411)
+- **Distroless runtime image:** no bash or apt-get; install extras in a build stage. (#412)
+- **A public API:** internal modules move to `morca._internal`. (#419)
+- **All SQL in `morca.db`**, and no source file over 1,500 lines. (#363, #413, #415–#417)
+
 ## 0.26.0 - 2026-11-12
 
 - **A stack's overlay on morca.toml**: a stack's own changes to the project's `morca.toml` (a dev stack's `fills`, a lab stack's pipelines) go in an overlay kept with the stack (`CONFIG_OVERLAY_FILE` in hetzner.env, `MORCA_CONFIG_OVERLAY`, `--overlay`), which deploy.sh sends and the image's morca checks before a deploy changes anything; `enabled = false` keeps a pipeline out of `morca register`, and `morca config show --file` prints the merged file. (#399)
