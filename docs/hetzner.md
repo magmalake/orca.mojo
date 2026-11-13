@@ -433,7 +433,8 @@ on the `morca` network (`http://ui:8270`, `http://console:8080`), so
 cloudflared resolves the name for each new connection, so traffic moves
 over without it restarting, and the worker API's listener, in the same
 container, moves with the UI. The check is made inside the container with
-bash's `/dev/tcp` (the images are Debian without curl). A new container
+busybox's `nc` (the runtime image has no curl), or bash's `/dev/tcp` in
+an image from before the distroless runtime (#337). A new container
 that isn't healthy within `HEALTH_TIMEOUT` seconds (`morca-stack configure
 HEALTH_TIMEOUT=600`; default 300; `apply --health-timeout` for one apply),
 or that exits, is removed and the old one keeps serving; `apply` goes on
@@ -868,7 +869,7 @@ What it changes in the scheduler's `docker run` (nothing else's):
 - `--cgroupns=private`: the container sees its own cgroup as
   `/sys/fs/cgroup` (docker's default on cgroup v2, said explicitly).
 - `--cap-add SYS_ADMIN --security-opt apparmor=unconfined` and an entrypoint
-  of `mount -o remount,rw /sys/fs/cgroup; exec setpriv --bounding-set
+  of `mount -o remount,rw /sys/fs/cgroup; exec /usr/bin/setpriv --bounding-set
   -sys_admin --inh-caps -sys_admin morca scheduler`: the remount needs the
   capability and AppArmor's leave, and the capability is dropped from the
   bounding set before morca starts, so neither morca nor any run it starts has
@@ -1103,7 +1104,11 @@ linux/amd64; [`deploy/runtime.Dockerfile`](../deploy/runtime.Dockerfile)):
 morca's own `morca` and `morca_maintain`, git, libcurl, the CA bundles where
 libcurl, OpenSSL and flare look for them, llvm-symbolizer, and the
 `/opt/morca` layout and environment, installed from a committed lock
-(`deploy/runtime/pixi.lock`). morca's CI builds and tests it on every pull
+(`deploy/runtime/pixi.lock`). It's built on distroless
+(`gcr.io/distroless/cc-debian12`: glibc, libstdc++, CA certificates and
+tzdata) with a static busybox for `sh` and the usual tools (`cat`, `test`,
+`mount`, `nc`, ...), util-linux's `setpriv`, and an `ldd`: no bash and no
+apt. morca's CI builds and tests it on every pull
 request, and on main pushes it as `morca-runtime:<sha>`; a release tags its
 commit's image `<version>` once main has pushed it, rebuilding nothing. A
 project's image builds `FROM` it and adds only its own programs:
@@ -1127,6 +1132,8 @@ COPY --from=build /out/bin /opt/morca/bin
 ```
 
 and build it with `--build-arg MORCA_VERSION=<the morca it pins>`. A
+`RUN` in a stage `FROM` the runtime runs busybox `sh`: there is no bash or
+apt-get there, so install packages in a build stage and copy them in. A
 `Dockerfile.morca` that builds everything itself, like the census's today,
 keeps working as before.
 

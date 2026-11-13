@@ -764,7 +764,7 @@ grep -q '^console 8080 [^ ]* /ready$' "$MORCA_CONF/apps" || fail "app without a 
 stack apply --app console=lll2222 > "$FAKE/out" 2>&1 || fail "the console's apply"
 has "console: replaced (image hhh8888 -> lll2222), without downtime"
 grep -q '^probe console-next 8080 /ready$' "$FAKE/docker.log" || fail "the console's probe isn't /ready on 8080"
-[ "$(grep -n 'exec console-next bash\|stop -t 10 console$' "$FAKE/docker.log" | head -1 | grep -c exec)" = 1 ] \
+[ "$(grep -n 'exec console-next sh\|stop -t 10 console$' "$FAKE/docker.log" | head -1 | grep -c exec)" = 1 ] \
     || fail "the old console was stopped before the new one was healthy"
 
 # A new console that answers 503 (warming up, for good): removed, the old
