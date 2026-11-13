@@ -1,0 +1,16 @@
+[package]
+name = "morca-worker"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Write a morca pipeline step in Rust: the Worker trait and the C ABI morca loads (docs/rust-workers.md)."
+repository = "https://github.com/morca-dev/morca"
+
+[dependencies]
+# A worker builds its batches with these; it uses them through
+# `morca_worker::arrow_array` and `morca_worker::arrow_schema`, so the
+# versions on both sides of the stream are the same.
+arrow-array = { version = "60", features = ["ffi"] }
+arrow-schema = { version = "60", features = ["ffi"] }
+serde_json = "1"

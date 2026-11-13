@@ -1,0 +1,1 @@
+- **Steps in Rust**: `morca.rust_step` runs a worker library built with the new `morca-worker` crate and commits the Arrow batches it streams to the step's table in one snapshot; see docs/rust-workers.md and examples/rust-worker. (#PR)
