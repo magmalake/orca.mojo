@@ -1,0 +1,1 @@
+- **The runtime image is distroless** (`cc-debian12` with busybox `sh`): deploy it with this release's `morca-stack`, and install what a project Dockerfile `RUN`s on top of it in a build stage, since there's no bash or apt-get. (#412)

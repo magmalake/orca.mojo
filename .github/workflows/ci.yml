@@ -573,8 +573,13 @@ jobs:
   # `ci` user; no Docker, no sudo), for the repo's own code only: a fork's
   # code is arbitrary, and this runner is ours. It runs for information
   # first and isn't in `ci`'s needs; the gate decision comes after a week of
-  # runs (#342). The workspace persists between jobs on a self-hosted runner,
-  # so checkout cleans it and build/ goes before the tests.
+  # runs (#342). The workspace persists between jobs on a self-hosted runner:
+  # each job starts from a clean checkout but for .pixi, the built pixi
+  # environment, which `pixi install --locked` brings up to the job's
+  # pixi.lock. Rebuilding it every job (pixi builds the git dependencies from
+  # source) was most of the job's time, and with the Mac busy it once ran out
+  # the timeout before a test (#360). Mojo's compile cache lives in the
+  # environment and stays with it; build/ goes every job.
   #
   # Left out: what needs Linux (test-cgroups and test-usage read
   # /sys/fs/cgroup, test-pressure and test-sample read /proc, test-kind needs
@@ -583,49 +588,64 @@ jobs:
   # workers on macOS, morca #135). The nightly leg's macos-latest runs the two
   # halves of `test` in full.
   #
-  # Also left out, to keep the job near 20 minutes (the cold build of the
-  # shared binaries is 7 of them): test-compile-fail, test-config, test-fill,
-  # test-chaos-sqlite, test-crash, test-versions, test-ec2, test-hetzner,
-  # test-pool-scale, test-pool-scale-ec2 and test-placement, which pass on a
-  # Mac, and test-ui, whose run can end before the test asks for its live
-  # attempt's facts (the 286 "stop polling" answer) on the slower runner.
+  # Also left out, for time: test-versions (5 minutes here), test-hetzner (6,
+  # and its hetzner-stacks.sh once failed here, an old scheduler not yet
+  # removed once it exited), test-pool-scale, test-pool-scale-ec2 and
+  # test-placement. With them the job would pass 45 minutes.
   macos:
     name: macOS (m4)
     needs: [changes, release]
     if: ${{ !cancelled() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
     runs-on: [self-hosted, m4]
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     defaults:
       run:
         working-directory: morca
     steps:
+      # clean: false keeps .pixi; the next step removes everything else.
       - uses: actions/checkout@v4
         with:
           path: morca
-          clean: true
+          clean: false
           persist-credentials: false
       - uses: actions/checkout@v4
         with: {repository: magmalake/dista.mojo, ref: df018565d71a8f7061350deeeb02f31555526429, path: dista.mojo, clean: true, persist-credentials: false}
       - uses: actions/checkout@v4
         with: {repository: magmalake/k8s.mojo, ref: 6cb83ce08e02234873f2d09c7501208eedb5589f, path: k8s.mojo, clean: true, persist-credentials: false}
 
-      - name: Start from an empty build/
-        run: rm -rf build
+      - name: A clean workspace but for the pixi environment
+        run: |
+          git reset --hard -q HEAD
+          git clean -ffdxq -e /.pixi
+          rm -rf build
+          if [ -n "$(git status --porcelain --ignored | grep -v '^!! \.pixi/$')" ]; then
+            git status --porcelain --ignored
+            echo "::error::the workspace isn't clean"
+            exit 1
+          fi
+          du -sh .pixi 2> /dev/null || echo "no .pixi yet: this job builds the environment"
 
       # pixi 0.78.0 is installed for the runner's `ci` user, as the lock
-      # needs, but the runner service's PATH doesn't have it: add its usual
-      # homes, and say what is found.
-      - name: Find pixi
+      # needs. The runner service's PATH should have it, from the
+      # LaunchDaemon's EnvironmentVariables; until it does, it's added here.
+      - name: pixi on PATH
         run: |
-          for d in "$HOME/.pixi/bin" /opt/homebrew/bin /usr/local/bin; do
-            [ -x "$d/pixi" ] && echo "$d" >> "$GITHUB_PATH" && PATH="$d:$PATH" && break
-          done
-          echo "user: $(id -un), HOME: $HOME, PATH: $PATH"
-          pixi --version
+          if ! command -v pixi > /dev/null; then
+            echo "::warning::pixi isn't on the runner's PATH: add $HOME/.pixi/bin to PATH in the LaunchDaemon's EnvironmentVariables (#360)"
+            echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
+            PATH="$HOME/.pixi/bin:$PATH"
+          fi
+          echo "user: $(id -un), pixi: $(command -v pixi), $(pixi --version)"
+
+      # An environment a cancelled job left half-installed is built again
+      # from nothing.
       - name: Install the environment
-        run: pixi install --locked -e default
+        run: |
+          start=$(date +%s)
+          pixi install --locked -e default || { rm -rf .pixi; pixi install --locked -e default; }
+          echo "installed in $(($(date +%s) - start))s"
 
       - name: Tests
         run: |
@@ -637,7 +657,9 @@ jobs:
             test-metrics test-tasks test-store test-formal-pins test-resources \
             test-recommend test-worker-api test-state test-formal-migrate \
             test-formal-fence test-cli test-logs test-remote test-kill \
-            test-scheduler test-chaos test-hcloud test-aws test-worker-procs; do
+            test-scheduler test-chaos test-hcloud test-aws test-worker-procs \
+            test-compile-fail test-config test-fill test-chaos-sqlite test-crash \
+            test-ec2 test-ui; do
             echo "::group::$t"
             pixi run -e default "$t"
             echo "::endgroup::"

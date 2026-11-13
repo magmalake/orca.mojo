@@ -3,7 +3,9 @@
 # `morca` (bin/scheduler.mojo) and `morca_maintain` (bin/morca_maintain.mojo),
 # git, libcurl, the CA bundles where libcurl, OpenSSL and flare look for
 # them, llvm-symbolizer, and the /opt/morca layout and environment that
-# deploy/hetzner and `morca aws` run. morca's CI builds and tests it on every
+# deploy/hetzner and `morca aws` run. On distroless (glibc, libstdc++, CA
+# certificates and tzdata, no shell), with a static busybox for `sh` and
+# the tools the stacks run in it (`sys`, below). morca's CI builds and tests it on every
 # pull request, and pushes main's as morca-runtime:<sha>, which a release
 # tags <version> (.github/workflows/runtime-image.yml). Build it from the
 # repository root:
@@ -96,11 +98,48 @@ RUN curl -fsSL https://mirrors.edge.kernel.org/pub/software/scm/git/git-$GIT_VER
     && install -s git-remote-http /opt/morca/libexec/git/git-remote-https \
     && ln -s ../libexec/git/git /opt/morca/bin/git
 
-FROM debian:bookworm-slim
-# tzdata: schedules read the system's TZif files. libpsl5 for libcurl (see
-# above).
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata ca-certificates libpsl5 \
+# What the distroless base lacks, from the Debian it's built from:
+# - a static busybox, for `sh`: MORCA_SECRET_FETCH runs as `sh
+#   /etc/orca/secret-fetch` through `sh -c` (morca.control), and so do
+#   morca's git calls (morca.config) and `morca aws`; morca-stack runs the
+#   scheduler with cgroups through `/bin/sh -c 'mount -o remount,rw ... &&
+#   exec setpriv ...'`, checks images with `test`, and probes the UI and
+#   apps with `nc`; operators `docker exec scheduler sh`. Every applet is
+#   linked where busybox puts it (/bin/sh, /usr/bin/env, ...), except
+#   where a file below already is (setpriv, ldd).
+# - util-linux's setpriv, at /usr/bin/setpriv: busybox's has no
+#   --bounding-set, which the scheduler's cgroup start drops CAP_SYS_ADMIN
+#   with. Call it by that path: busybox's sh runs its own applet for a
+#   bare `setpriv` (Debian builds it standalone), whatever PATH says.
+# - ldd (deploy/runtime/ldd; glibc's is bash), for the image tests.
+# - the Debian libraries the binaries, git, setpriv and /opt/morca/lib link
+#   that the base hasn't: libpsl5 for libcurl (see above) with what it
+#   links, zlib for git, libcap-ng for setpriv. Whatever ldd resolves
+#   outside /opt/morca and the base, so nothing is listed by hand.
+FROM gcr.io/distroless/cc-debian12 AS base
+
+FROM debian:bookworm-slim AS sys
+RUN apt-get update && apt-get install -y --no-install-recommends busybox-static libpsl5 \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=base / /base
+COPY --from=build /out/lib /opt/morca/lib
+COPY --from=build /out/bin /opt/morca/bin
+COPY --from=build /out/libexec /opt/morca/libexec
+COPY --from=git /opt/morca /opt/morca
+COPY deploy/runtime/ldd /out/usr/bin/ldd
+RUN t=$(cd /usr/lib && echo *-linux-gnu) && mkdir -p /out/bin /out/usr/lib/$t \
+    && cp /bin/busybox /out/bin/busybox && cp "$(command -v setpriv)" /out/usr/bin/setpriv && chmod 755 /out/usr/bin/ldd \
+    && for a in $(/bin/busybox --list-full); do case $a in */busybox | */setpriv | */ldd | linuxrc) continue ;; esac; \
+            mkdir -p "/out/${a%/*}" && ln -s /bin/busybox "/out/$a" || exit 1; done \
+    && for f in /opt/morca/bin/* /opt/morca/libexec/llvm-symbolizer /opt/morca/libexec/git/git* \
+            /opt/morca/lib/*.so* /out/usr/bin/setpriv; do LD_LIBRARY_PATH=/opt/morca/lib ldd "$f" 2> /dev/null; done \
+        | awk '$2 == "=>" && $3 ~ /^\// && $3 !~ /^\/opt\/morca\// {print $1, $3}' | sort -u \
+        | while read -r n p; do [ -e "/base/lib/$t/$n" ] || [ -e "/base/usr/lib/$t/$n" ] \
+            || cp -L "$p" "/out/usr/lib/$t/$n" || exit 1; done \
+    && ls /out/usr/lib/$t && /bin/busybox | head -1 && /bin/busybox --list-full | tr '\n' ' '
+
+FROM base
+COPY --from=sys /out /
 COPY --from=build /out/lib /opt/morca/lib
 COPY --from=build /out/bin /opt/morca/bin
 COPY --from=build /out/libexec /opt/morca/libexec
@@ -111,7 +150,8 @@ COPY --from=git /opt/morca /opt/morca
 # them: /src/project/.pixi/envs/default/ssl, here and in a project's image
 # alike. A fetch that hands flare $CONDA_PREFIX/ssl/cacert.pem finds the
 # same bundle at /opt/morca/ssl. /opt/morca/pipelines is where a project's
-# image puts its pipelines.
+# image puts its pipelines. Schedules read the base's TZif files
+# (/usr/share/zoneinfo).
 COPY --from=build /src/project/.pixi/envs/default/ssl /opt/morca/ssl
 RUN mkdir -p /opt/morca/pipelines /src/project/.pixi/envs/default \
     && ln -s /opt/morca/ssl /src/project/.pixi/envs/default/ssl

@@ -818,10 +818,12 @@ containers() {
     # its own, and its /sys/fs/cgroup, which docker mounts read-only, is
     # made writable before morca starts: remounting needs CAP_SYS_ADMIN,
     # outside docker's AppArmor profile, and the capability is dropped
-    # (setpriv) before morca, and every run it starts, gets it. Its own
-    # cgroup is the container's: it can't touch any other container's or
-    # the host's. A remount that fails leaves it read-only: morca then says
-    # "run cgroups off" and runs as with CGROUPS=0, rather than not start.
+    # (setpriv) before morca, and every run it starts, gets it. util-linux's
+    # setpriv by its path: busybox's sh runs its own applet for a bare
+    # `setpriv`, which has no --bounding-set. Its own cgroup is the
+    # container's: it can't touch any other container's or the host's. A
+    # remount that fails leaves it read-only: morca then says "run cgroups
+    # off" and runs as with CGROUPS=0, rather than not start.
     cgroups_mode
     if [ "$cg" = 1 ]; then
         # shellcheck disable=SC2086
@@ -830,7 +832,7 @@ containers() {
             -v "$CONF/secrets:/etc/orca/secrets:ro" -v "$CONF/secret-fetch:/etc/orca/secret-fetch:ro" \
             --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
             --entrypoint /bin/sh "$image:$tag" -c \
-            'mount -o remount,rw /sys/fs/cgroup || echo "morca-stack: /sys/fs/cgroup stays read-only, so no run cgroups (docs/hetzner.md#a-cgroup-per-run)" >&2; exec setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/morca/bin/morca scheduler'
+            'mount -o remount,rw /sys/fs/cgroup || echo "morca-stack: /sys/fs/cgroup stays read-only, so no run cgroups (docs/hetzner.md#a-cgroup-per-run)" >&2; exec /usr/bin/setpriv --bounding-set -sys_admin --inh-caps -sys_admin /opt/morca/bin/morca scheduler'
     else
         # shellcheck disable=SC2086
         $cb scheduler "$sfiles" - "$image:$tag" --network orca --env-file "$CONF/morca.env" \
@@ -1041,13 +1043,21 @@ overlap_scheduler() {
 }
 
 # probe CONTAINER PORT PATH: the HTTP status the container answers on its own
-# PORT for GET PATH, or nothing. bash's /dev/tcp, since the images have no
-# curl.
+# PORT for GET PATH, or nothing. The images have no curl: busybox's nc in
+# a runtime on distroless (#337), else bash's /dev/tcp, in an image from
+# before it (Debian, without nc), as a rollback deploys.
 probe() {
     # shellcheck disable=SC2016
-    docker exec "$1" bash -c 'exec 3<> "/dev/tcp/127.0.0.1/$0" || exit 1
+    p_code=$(docker exec "$1" sh -c 'command -v nc > /dev/null || exit 1
+printf "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" "$1" \
+    | timeout 5 nc 127.0.0.1 "$0" | { read -r _ code _ && echo "$code" | tr -d "\r"; }' "$2" "$3" 2> /dev/null) || p_code=
+    if [ -z "$p_code" ]; then
+        # shellcheck disable=SC2016
+        p_code=$(docker exec "$1" bash -c 'exec 3<> "/dev/tcp/127.0.0.1/$0" || exit 1
 printf "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" "$1" >&3
-read -r -t 5 _ code _ <&3 && echo "$code" | tr -d "\r"' "$2" "$3" 2> /dev/null || true
+read -r -t 5 _ code _ <&3 && echo "$code" | tr -d "\r"' "$2" "$3" 2> /dev/null) || p_code=
+    fi
+    [ -z "$p_code" ] || echo "$p_code"
 }
 
 # healthy CONTAINER CHECKS TIMEOUT: whether each of CHECKS ("PORT:PATH:STATUS",
