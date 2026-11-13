@@ -9,11 +9,9 @@ src/morca/batches.mojo
 src/morca/calendar.mojo
 src/morca/command.mojo
 src/morca/config_show.mojo
-src/morca/ec2.mojo
 src/morca/estimate.mojo
 src/morca/expiry.mojo
 src/morca/fill.mojo
-src/morca/fleet.mojo
 src/morca/follow.mojo
 src/morca/handover.mojo
 src/morca/instances.mojo
