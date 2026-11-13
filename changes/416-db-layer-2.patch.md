@@ -1,0 +1,1 @@
+- **More SQL moves into `morca.db`**: the worker pools, machines', sensors', lineage, fills' and actions' queries, with nothing changed for a user. (#416)
