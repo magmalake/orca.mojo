@@ -41,7 +41,7 @@ from std.os.path import exists
 from std.sys import argv, exit, stderr
 from std.time import sleep
 
-from postgres import Params
+import morca.db.notify as notify_db
 
 from morca.actions import cancel_runs, pause_pipeline
 from morca.auth import add_user, remove_user, users
@@ -356,14 +356,7 @@ def _notify(args: List[String]) raises -> Int:
             if not queued:
                 print("held back: the same alert was sent lately")
                 return 0
-            var waiting = db.conn.query(
-                (
-                    "SELECT 1 FROM orca.notifications WHERE kind = $1 AND"
-                    " subject = $2 AND pending"
-                ),
-                Params().text(kind).text(subject),
-            )
-            if len(waiting) > 0:
+            if notify_db.is_pending(db.conn, kind, subject):
                 print(
                     (
                         "not sent yet: ntfy didn't answer; the scheduler tries"

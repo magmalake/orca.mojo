@@ -4,7 +4,7 @@ holds, and what a rerun or an append refuses.
 
 from std.os.path import exists
 from postgres import Transaction
-from morca.batches import mark_batch
+from morca.db.batches import mark_batch
 import morca.db.queueing as queueing_db
 import morca.db.starting as starting_db
 from morca.db.live import live_runs

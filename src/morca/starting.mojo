@@ -23,7 +23,7 @@ from morca.fill import (
     fill_status,
 )
 from morca.system import system_now
-from morca.batches import mark_batch
+from morca.db.batches import mark_batch
 import morca.db.starting as starting_db
 from morca.db.live import hold_behind
 from morca.kube import (

@@ -2,22 +2,16 @@
 # queries into morca.db takes it off; nothing is added.
 src/morca/actions.mojo
 src/morca/admission.mojo
-src/morca/alerts.mojo
-src/morca/auth.mojo
 src/morca/aws_replace.mojo
-src/morca/batches.mojo
 src/morca/calendar.mojo
-src/morca/command.mojo
 src/morca/config_show.mojo
 src/morca/estimate.mojo
 src/morca/expiry.mojo
 src/morca/fill.mojo
 src/morca/follow.mojo
 src/morca/handover.mojo
-src/morca/instances.mojo
 src/morca/kube.mojo
 src/morca/lineage.mojo
-src/morca/notify.mojo
 src/morca/pool.mojo
 src/morca/pool_boot.mojo
 src/morca/pool_config.mojo
@@ -29,8 +23,6 @@ src/morca/sensing.mojo
 src/morca/sensors.mojo
 src/morca/sqlite_store.mojo
 src/morca/state.mojo
-src/morca/system.mojo
-src/morca/tokens.mojo
 src/morca/ui/alerts.mojo
 src/morca/ui/attempt.mojo
 src/morca/ui/contained.mojo
@@ -51,5 +43,4 @@ src/morca/views/pools.mojo
 src/morca/views/recent.mojo
 src/morca/views/runs.mojo
 src/morca/views/steps.mojo
-src/morca/web/server.mojo
 src/morca/workers.mojo

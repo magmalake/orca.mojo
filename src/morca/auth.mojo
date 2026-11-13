@@ -27,7 +27,8 @@ tokens, for the `morca` command on another machine, are `morca.tokens`.
 from std.os import getenv
 
 from flare.crypto.random import random_bytes
-from postgres import Params
+import morca.db.audit as audit_db
+import morca.db.auth as auth_db
 
 from morca.state import State
 
@@ -55,13 +56,7 @@ def _name_ok(name: String) -> Bool:
 def login_required(mut db: State) raises -> Bool:
     if getenv("MORCA_UI_LOGIN") == "required":
         return True
-    return (
-        db.conn.query(
-            "SELECT EXISTS (SELECT 1 FROM orca.users) AS any", Params()
-        )
-        .row(0)
-        .bool("any")
-    )
+    return auth_db.any_user(db.conn)
 
 
 def add_user(mut db: State, name: String, password: String) raises -> Bool:
@@ -77,50 +72,17 @@ def add_user(mut db: State, name: String, password: String) raises -> Bool:
     # bcrypt reads at most 72 bytes; a longer password would be cut.
     if n < 8 or n > 72:
         raise Error("morca: a password is 8 to 72 bytes")
-    var tx = db.conn.begin()
-    var new = (
-        tx.query(
-            (
-                "INSERT INTO orca.users (name, password_hash) VALUES ($1,"
-                " crypt($2, gen_salt('bf', 12))) ON CONFLICT (name) DO UPDATE"
-                " SET password_hash = EXCLUDED.password_hash RETURNING (xmax ="
-                " 0) AS new"
-            ),
-            Params().text(name).text(password),
-        )
-        .row(0)
-        .bool("new")
-    )
-    if not new:
-        _ = tx.execute(
-            "DELETE FROM orca.sessions WHERE username = $1", Params().text(name)
-        )
-        _ = tx.execute(
-            "DELETE FROM orca.api_tokens WHERE username = $1",
-            Params().text(name),
-        )
-    tx.commit()
-    return new
+    return auth_db.set_user(db.conn, name, password)
 
 
 def remove_user(mut db: State, name: String) raises -> Bool:
     """Removes the user, their sessions and their API tokens; False if
     there was none."""
-    return (
-        db.conn.execute(
-            "DELETE FROM orca.users WHERE name = $1", Params().text(name)
-        )
-        == 1
-    )
+    return auth_db.remove_user(db.conn, name)
 
 
 def users(mut db: State) raises -> List[String]:
-    var out = List[String]()
-    for r in db.conn.query(
-        "SELECT name FROM orca.users ORDER BY name", Params()
-    ):
-        out.append(r.text("name"))
-    return out^
+    return auth_db.users(db.conn)
 
 
 def _hex(b: List[UInt8]) -> String:
@@ -144,19 +106,10 @@ def too_many_failures(
     `FAILURES_PER_ADDRESS` from an address in `FAILURE_WINDOW_MINUTES`.
     Failures are `login-failed` rows of `orca.audit`, with the address as
     their detail."""
-    var n = db.conn.query(
-        (
-            "SELECT count(*) FILTER (WHERE username = $1) AS by_name,"
-            " count(*) FILTER (WHERE detail = $2) AS by_address FROM"
-            " orca.audit WHERE action = 'login-failed' AND at > now() -"
-            " make_interval(mins => $3)"
-        ),
-        Params().text(name).text(address).int32(Int32(FAILURE_WINDOW_MINUTES)),
-    ).row(0)
-    return (
-        n.int64("by_name") >= FAILURES_PER_NAME
-        or n.int64("by_address") >= FAILURES_PER_ADDRESS
+    var n = auth_db.login_failures(
+        db.conn, name, address, FAILURE_WINDOW_MINUTES
     )
+    return n[0] >= FAILURES_PER_NAME or n[1] >= FAILURES_PER_ADDRESS
 
 
 def login_failed(
@@ -167,14 +120,7 @@ def login_failed(
 
 def password_ok(mut db: State, name: String, password: String) raises -> Bool:
     """Whether `password` is the user `name`'s."""
-    var ok = db.conn.query(
-        (
-            "SELECT password_hash = crypt($2, password_hash) AS ok FROM"
-            " orca.users WHERE name = $1"
-        ),
-        Params().text(name).text(password),
-    )
-    return len(ok) == 1 and ok.row(0).bool("ok")
+    return auth_db.password_ok(db.conn, name, password)
 
 
 def open_session(
@@ -185,17 +131,7 @@ def open_session(
         return ""
     var token = _hex(random_bytes(32))
     var hours = Float64(getenv("MORCA_UI_SESSION_HOURS", "12"))
-    _ = db.conn.execute(
-        (
-            "INSERT INTO orca.sessions (token_hash, username, expires) VALUES"
-            " (digest($1, 'sha256'), $2, now() + make_interval(secs => $3))"
-        ),
-        Params().text(token).text(name).float64(hours * 3600.0),
-    )
-    # Expired sessions go as new ones come.
-    _ = db.conn.execute(
-        "DELETE FROM orca.sessions WHERE expires < now()", Params()
-    )
+    auth_db.add_session(db.conn, token, name, hours * 3600.0)
     return token^
 
 
@@ -203,21 +139,11 @@ def session_user(mut db: State, token: String) raises -> String:
     """The user whose session `token` is, or empty."""
     if not token:
         return ""
-    var rows = db.conn.query(
-        (
-            "SELECT username FROM orca.sessions WHERE token_hash = digest($1,"
-            " 'sha256') AND expires > now()"
-        ),
-        Params().text(token),
-    )
-    return rows.row(0).text("username") if len(rows) == 1 else String()
+    return auth_db.session_user(db.conn, token)
 
 
 def close_session(mut db: State, token: String) raises:
-    _ = db.conn.execute(
-        "DELETE FROM orca.sessions WHERE token_hash = digest($1, 'sha256')",
-        Params().text(token),
-    )
+    auth_db.close_session(db.conn, token)
 
 
 def audit(
@@ -231,12 +157,4 @@ def audit(
     """Records that `user` did `action` (the action's path), to `run` (0 for
     none), with `detail` (what the form gave), from `source`: `ui` for a
     browser's session, `cli` for an API token (`morca.tokens`)."""
-    var p = Params().text(user).text(action)
-    p = p^.null() if run == 0 else p^.int64(Int64(run))
-    _ = db.conn.execute(
-        (
-            "INSERT INTO orca.audit (username, action, run, detail, source)"
-            " VALUES ($1, $2, $3, $4, $5)"
-        ),
-        p^.text(detail).text(source),
-    )
+    audit_db.add(db.conn, user, action, run, detail, source)

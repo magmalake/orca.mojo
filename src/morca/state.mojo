@@ -36,6 +36,7 @@ from morca.migrations import (
     schema_ahead,
 )
 from morca.db.live import stale_limit
+from morca.db.schedulers import live_older
 from morca.handover import run_outdated, set_outdated
 from morca.store import (
     CANCELLED,
@@ -60,31 +61,6 @@ from morca.store import (
 
 
 comptime _MIGRATION_LOCK = 0x6F726361  # "orca"
-
-
-def live_older(
-    mut tx: Transaction, floor: Int
-) raises -> List[Tuple[Int, String, Int]]:
-    """The scheduler instances (docs/overlap.md) still going, seen within
-    the stale limit and not ended, that know fewer than `floor` migrations:
-    each one's id, host and how many it knows. None where `orca.schedulers`
-    doesn't exist yet."""
-    var out = List[Tuple[Int, String, Int]]()
-    var t = tx.query(
-        "SELECT to_regclass('orca.schedulers') IS NOT NULL AS ok"
-    ).row(0)
-    if not t.bool("ok"):
-        return out^
-    for r in tx.query(
-        (
-            "SELECT id, host, known FROM orca.schedulers WHERE ended IS NULL"
-            " AND last_seen > now() - make_interval(secs => $1) AND known < $2"
-            " ORDER BY id"
-        ),
-        Params().float64(stale_limit()).int64(Int64(floor)),
-    ):
-        out.append((Int(r.int64("id")), r.text("host"), Int(r.int64("known"))))
-    return out^
 
 
 def _refuse_overlap(mut tx: Transaction, floor: Int) raises:
