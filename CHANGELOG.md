@@ -2,28 +2,13 @@
 
 ## 0.27.0 - 2026-11-13
 
-- **CI: no source file over 1,500 lines.** (#363)
-
-- **Per-run cgroups on by default on Hetzner:** `morca-stack apply` gives each run a memory-limited cgroup unless `CGROUPS=0`, warning for pipelines whose peaks exceed their limit; the next deploy replaces the scheduler, so check those warnings first. (#410)
-
-- **Overlapping schedulers on by default, with a required drain limit.**
-  Upgrading needs `DRAIN_SECONDS=<seconds>` in hetzner.env (how long an old scheduler may drain before it is stopped): deploys refuse without it, and `OVERLAP=0` opts out of overlap (#411)
-
-- **The runtime image is distroless** (`cc-debian12` with busybox `sh`): deploy it with this release's `morca-stack`, and install what a project Dockerfile `RUN`s on top of it in a build stage, since there's no bash or apt-get. (#412)
-
-- **SQL moves into `morca.db`**: the scheduler's, watchdog's, fleet's, EC2 runner's, auth and alert queries are typed functions in one package, with nothing changed for a user. (#413)
-
-- **The web UI's queries move into `morca.db`**: the pages' and their JSON's reads are typed functions there, a module per page, with nothing changed for a user. (#415)
-
-- **More SQL moves into `morca.db`**: the worker pools', sensors', lineage's, fills' and actions' queries, with nothing changed for a user. (#416)
-
-- **The run stores' SQL moves into `morca.db`**: Postgres's and SQLite's queries for runs, steps and attempts, a module per dialect, with nothing changed for a user. (#417)
-
-- **A public API, and internals under `morca._internal`**: the modules `src/morca/__init__.mojo` lists are the public API and keep their import paths; the rest moved, so a pipeline that imported an internal module (say `morca.sample`) imports `morca._internal.sample` now. (#419)
-
-- **Steps in Rust**: `morca.rust_step` runs a worker library built with the new `morca-worker` crate and commits the Arrow batches it streams to the step's table in one snapshot; see docs/rust-workers.md and examples/rust-worker. (#PR)
-
-- **Hindcast example**: examples/hindcast scores NOAA GFS 2 m temperature forecasts, fetched and decoded by a Rust worker and scored by Mojo steps; see its README. (#423)
+- **Steps in Rust:** `morca.rust_step` and the `morca-worker` crate (docs/rust-workers.md). (#422)
+- **Hindcast example:** GFS forecast skill, with a Rust worker and Mojo steps. (#423)
+- **Per-run cgroups on by default** on Hetzner; `CGROUPS=0` opts out. (#410)
+- **Overlapping schedulers on by default.** Upgrading needs `DRAIN_SECONDS` in hetzner.env. (#411)
+- **Distroless runtime image:** no bash or apt-get; install extras in a build stage. (#412)
+- **A public API:** internal modules move to `morca._internal`. (#419)
+- **All SQL in `morca.db`**, and no source file over 1,500 lines. (#363, #413, #415–#417)
 
 ## 0.26.0 - 2026-11-12
 
