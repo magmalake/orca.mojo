@@ -569,6 +569,81 @@ jobs:
             morca/build/.mojo-build
           key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('morca/pixi.lock') }}-${{ github.run_id }}
 
+  # Rust workers (docs/rust-workers.md): the morca-worker crate's tests and
+  # examples/rust-worker, a worker and its proxy pipeline over a local
+  # warehouse (tests/rust_worker.sh), in the rust environment: the data
+  # environment's tins plus conda-forge's rust. On sai for this
+  # repository's own branches, as the test legs are, and on GitHub's
+  # runners for a fork's. No secrets, and the token can only read.
+  rust-worker:
+    needs: [changes, release]
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "sai"]') || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: morca
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: morca
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with: {repository: morca-dev/dista, ref: 3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30, path: dista.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/k8s.mojo, ref: 6cb83ce08e02234873f2d09c7501208eedb5589f, path: k8s.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/memory-region.mojo, ref: 40068c4f95ea659e9b78aa91ced45420b07e3e6e, path: memory-region.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/arrow-mlake.mojo, ref: 178aae6e0da0dbe105f9cb02632a51cfd35b9dda, path: arrow-mlake.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/parquet.mojo, ref: 5d265f9004fdad1522b80c8770c8a7a7f5f9f089, path: parquet.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/iceberg.mojo, ref: bb361f975f9f56d33218850a5f3d048202a85f02, path: iceberg.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/threads.mojo, ref: f45e780a8de77278c140cee36904e46e93e0ca1c, path: threads.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/thrift.mojo, ref: 21cdbce67d22d72e88e88a60e2f168b05b4ef9fa, path: thrift.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/hashes.mojo, ref: 395aca597f9410bd0511df44d972f14b10a8b01d, path: hashes.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/snappy.mojo, ref: b8172ed0a4ef13911cc225d46e26676a5b8f1ccd, path: snappy.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/deflate.mojo, ref: c3dfb87f5b09fb2559449dcb8b748629da4908af, path: deflate.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/avro.mojo, ref: d5b26ccefa8c49cc3af517731f5df104762119e0, path: avro.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/roaring.mojo, ref: a90a7bd30cf1c21403a29059282072e93fbeeee2, path: roaring.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/objectstore.mojo, ref: ff66975c095f392695facc1b6dd56823dec914bc, path: objectstore.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/zstd.mojo, ref: 76190bb31012cd2d2f6712c4e1724a66474215db, path: zstd.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/lz4.mojo, ref: 23cd6e54967d7e41573371507228ca5c958ca685, path: lz4.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/brotli.mojo, ref: dcbf840d22e3deaf24c587d12d28570a9a882b7f, path: brotli.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/sqlite.mojo, ref: 0d76aa7b672c85580f4d8c5de855772bc972d535, path: sqlite.mojo, persist-credentials: false}
+      - uses: actions/checkout@v4
+        with: {repository: magmalake/postgres.mojo, ref: 324b2bb61e2e80327654abecf70fd4b2defbc50d, path: postgres.mojo, persist-credentials: false}
+      # Off before setup-pixi restores rattler's git cache: git's
+      # background maintenance in a cached repo races its
+      # `git clone --local` (mojo-census#135).
+      - run: git config --global maintenance.auto false && git config --global gc.auto 0
+
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          pixi-version: v0.78.0
+          environments: rust
+          manifest-path: morca/pixi.toml
+          cache: ${{ runner.environment == 'github-hosted' }}
+          pixi-bin-path: ${{ runner.temp }}/pixi/bin/pixi
+          cache-write: ${{ github.event_name != 'pull_request' }}
+      - name: Rust workers
+        run: pixi run -e rust test-rust-worker
+
   # The tests that apply on macOS, on the Mac mini runner (m4-mini, an isolated
   # `ci` user; no Docker, no sudo), for the repo's own code only: a fork's
   # code is arbitrary, and this runner is ours. It runs for information
@@ -670,7 +745,7 @@ jobs:
   # gate doesn't cover.)
   ci:
     if: ${{ always() && github.event_name != 'schedule' }}
-    needs: [release, release-check, changes, test, kind, runtime-image, runtime-image-main, runtime-lock, project-image, project-test, project-release, fuzz, format, formal, data]
+    needs: [release, release-check, changes, test, kind, runtime-image, runtime-image-main, runtime-lock, project-image, project-test, project-release, fuzz, format, formal, data, rust-worker]
     runs-on: ubuntu-latest
     steps:
       - env:

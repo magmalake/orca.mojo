@@ -347,6 +347,16 @@ test-data-keyed = { depends-on = ["build-shared", "test-keyed", "test-keyed-back
 test-data = { depends-on = ["test-data-tables", "test-data-sensors", "test-data-keyed"] }
 taxi = { cmd = "scripts/mojo-build.sh -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi" }
 
+# Rust workers (docs/rust-workers.md): the morca-worker crate's tests, and
+# examples/rust-worker, a worker and its proxy pipeline, over a local
+# warehouse. Cargo is only needed to build a worker; a run loads the built
+# library, so the runtime image doesn't carry it.
+[feature.rust.dependencies]
+rust = ">=1.85"
+
+[feature.rust.tasks]
+test-rust-worker = { cmd = "tests/rust_worker.sh" }
+
 # MinIO for the tests over object storage (scripts/with-minio.sh). conda-forge
 # builds it for these two platforms only.
 [feature.data.target.osx-arm64.dependencies]
@@ -380,3 +390,4 @@ nightly = ["nightly"]
 fuzz = ["stable", "fuzz"]
 fmt = { features = ["fmt"], no-default-feature = true }
 data = { features = ["data"], no-default-feature = true }
+rust = { features = ["data", "rust"], no-default-feature = true }

@@ -1,0 +1,13 @@
+[package]
+name = "numbers-worker"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "examples/rust-worker: a morca step in Rust (docs/rust-workers.md)."
+
+[lib]
+# libnumbers_worker.so (.dylib on macOS), which the proxy pipeline loads.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+morca-worker = { path = "../../rust/morca-worker" }

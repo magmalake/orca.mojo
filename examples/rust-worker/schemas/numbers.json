@@ -1,0 +1,9 @@
+{
+  "type": "struct",
+  "schema-id": 0,
+  "fields": [
+    {"id": 1, "name": "id", "required": true, "type": "long"},
+    {"id": 2, "name": "partition", "required": true, "type": "string"},
+    {"id": 3, "name": "square", "required": false, "type": "double"}
+  ]
+}
