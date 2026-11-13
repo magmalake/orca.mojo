@@ -1,1 +1,1 @@
-- **Dataset Data tab**: a dataset page shows its schema, partitions, rows and a quick chart. (#PR)
+- **Dataset Data tab**: a dataset page shows its schema, partitions, rows and a quick chart. (#438)
