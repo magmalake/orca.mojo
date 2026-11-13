@@ -20,7 +20,7 @@ from std.os import getenv
 
 from postgres import Params
 
-from morca.db.live import live_runs
+from morca.db.live import live_runs, stale_seconds, stalled_sql
 from morca.name import parse_names
 from morca.pause import set_paused
 from morca.queueing import (
@@ -63,15 +63,6 @@ struct Outcome(Movable):
         return Self(0, 0, why^, confirm, List[String]())
 
 
-def stale_seconds() -> Float64:
-    """`MORCA_STALE_SECONDS` (default 30): how old a running run's heartbeat
-    is when its process is taken to have died."""
-    try:
-        return Float64(getenv("MORCA_STALE_SECONDS", "30"))
-    except:
-        return 30.0
-
-
 def cancel_kill_seconds() -> Float64:
     """`MORCA_CANCEL_KILL_SECONDS` (default 60): how long a running run
     asked to cancel has to finish its step before it's stopped."""
@@ -79,17 +70,6 @@ def cancel_kill_seconds() -> Float64:
         return Float64(getenv("MORCA_CANCEL_KILL_SECONDS", "60"))
     except:
         return 60.0
-
-
-def stalled_sql() -> String:
-    """True for a run that's `running` with no live process: its heartbeat,
-    or its start when it has none yet, is older than the stale limit."""
-    return String(
-        "(status = 'running' AND coalesce(heartbeat, started, created) <",
-        " now() - make_interval(secs => ",
-        stale_seconds(),
-        "))",
-    )
 
 
 def _pipeline(mut db: State, name: String) raises -> Optional[Registered]:

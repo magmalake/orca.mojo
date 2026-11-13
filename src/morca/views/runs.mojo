@@ -3,12 +3,25 @@ and what it used, its steps (`StepRow`), the tables they read and wrote
 (`Touch`), its machines (`InstanceRow`) and code (`VersionRow`), a step's
 attempts (`AttemptRow`), and a runs list's page (`RunsQuery`, `RunsPage`:
 keyset by run id, so pages stay put as runs arrive).
+
+The queries are `morca.db.runs_view`'s (the lists) and
+`morca.db.run_view`'s (a run's page): a list's URL is parsed here into its
+`RunsQuery`, whose filters go to the database as a `RunsFilter`.
 """
 
-from postgres import Params, Row
+import morca.db.run_view as run_db
+import morca.db.runs_view as runs_db
+from morca.db.run_view import (
+    AttemptRecord,
+    AuditRow,
+    InstanceRow,
+    StepRecord,
+    Touch,
+    VersionRow,
+)
+from morca.db.runs_view import RunRecord, RunsFilter, utc_sql
 
 from morca.views.cluster import ClusterRow, cluster_rows
-from morca.actions import stalled_sql
 from morca.handover import run_outdated
 from morca.html import query_param, query_values, url_decode, url_encode
 from morca.json import quote
@@ -19,15 +32,6 @@ from morca.resources import Grant
 from morca.state import State
 from morca.store import Usage
 from morca.views.pipelines import utc_text
-
-
-def utc_sql(col: StaticString) -> String:
-    """SQL for a timestamptz as `YYYY-MM-DDTHH:MM:SSZ`, or `''`."""
-    return String(
-        "coalesce(to_char(",
-        col,
-        " AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '')",
-    )
 
 
 @fieldwise_init
@@ -134,7 +138,7 @@ struct RunRow(Copyable, Movable):
     var ended: String
     var cancel_requested: Bool
     var stalled: Bool
-    """`running` with no live process (`morca.actions.stalled_sql`)."""
+    """`running` with no live process (`morca.db.live.stalled_sql`)."""
     var error: String
     """Why the run ended without its steps saying so (`runs.error`)."""
     var waiting_until: String
@@ -162,43 +166,6 @@ struct RunRow(Copyable, Movable):
 
 
 @fieldwise_init
-struct VersionRow(Copyable, Movable):
-    """A version of a pipeline's code (`morca.source`)."""
-
-    var id: Int
-    var registry_hash: String
-    var source: String
-    var commit: String
-    var dirty: Bool
-    var image: String
-    var first_seen: String
-    var last_seen: String
-    var runs: Int
-    var locations: String
-    """Where its functions are (`morca.locate`), as JSON, or empty."""
-
-
-@fieldwise_init
-struct InstanceRow(Copyable, Movable):
-    """An instance a run ran on (`orca.instances`)."""
-
-    var id: String
-    var start: Int
-    var role: String
-    var instance_type: String
-    var market: String
-    var launched: String
-    var ended: String
-    var why: String
-    var from_start: Float64
-    """Seconds from the run's start to its launch."""
-    var to_end: Float64
-    """Seconds from the run's start to its end, or to now."""
-    var procs: Int
-    """The dista worker processes it ran (`--worker-procs`)."""
-
-
-@fieldwise_init
 struct StepRow(Copyable, Movable):
     var step: String
     var partition: String
@@ -220,20 +187,6 @@ struct StepRow(Copyable, Movable):
     """Its start's memory grant (`morca.resources`); 0 for none."""
 
 
-@fieldwise_init
-struct Touch(Copyable, Movable):
-    """A table a step read or committed to."""
-
-    var step: String
-    var partition: String
-    var kind: String
-    """`read` or `commit`."""
-    var table: String
-    var snapshot: String
-    var dataset: String
-    """Empty for a table outside the warehouse."""
-
-
 def int_or_zero(s: String) -> Int:
     try:
         return Int(s)
@@ -241,69 +194,45 @@ def int_or_zero(s: String) -> Int:
         return 0
 
 
-comptime _WAITING = (
-    "CASE WHEN status = 'deferred' THEN coalesce(retry_at, 0) ELSE 0 END"
-)
-"""SQL for when a deferred run starts again (`retry_at`), 0 for others."""
-
-
 def _waiting(t: Int64) -> String:
     return utc_text(t) if t > 0 else String()
 
 
-comptime _RUN_USAGE = (
-    " LEFT JOIN LATERAL (SELECT max(a.peak_rss_bytes) AS peak,"
-    " sum(a.cpu_seconds) AS cpu, max(a.peak_cpus) AS cpus FROM orca.attempts"
-    " a JOIN orca.steps s ON s.id = a.step WHERE s.run = orca.runs.id) u ON"
-    " true"
-)
-"""SQL joining a run (`orca.runs`) to what its attempts used, as `u`."""
-
-
-comptime _USAGE_COLUMNS = (
-    " coalesce(u.peak, -1) AS peak, coalesce(u.cpu, -1) AS cpu,"
-    " coalesce(u.cpus, -1) AS cpus"
-)
-
-
-comptime _GRANT_COLUMNS = (
-    " coalesce(request_cpus, '') AS request_cpus, coalesce(request_memory_gb,"
-    " '') AS request_memory_gb, coalesce(grant_cpus, 0)::bigint AS"
-    " grant_cpus, coalesce(grant_memory_mb, 0)::bigint AS grant_memory_mb,"
-    " coalesce(memory_limit_mb, 0)::bigint AS memory_limit_mb,"
-    " coalesce(memory_max_mb, 0)::bigint AS memory_max_mb, CASE WHEN status"
-    " = 'running' THEN coalesce(memory_bytes, -1) ELSE -1 END::bigint AS"
-    " memory_bytes, coalesce(request_source, '') AS request_source,"
-    " coalesce(request_runs, 0)::bigint AS request_runs,"
-)
-"""SQL for a run's request and grant (`morca.resources`), and where the
-request came from (`morca.recommend`)."""
-
-
-def _resources_of(r: Row) raises -> RunResources:
-    """The `_GRANT_COLUMNS`' request and grant."""
-    return RunResources(
-        r.text("request_cpus"),
-        r.text("request_memory_gb"),
-        Grant(Int(r.int64("grant_cpus")), Int(r.int64("grant_memory_mb"))),
-        Int(r.int64("memory_limit_mb")),
-        Int(r.int64("memory_max_mb")),
-        Int(r.int64("memory_bytes")),
-        r.text("request_source"),
-        Int(r.int64("request_runs")),
+def _run_row(r: RunRecord) -> RunRow:
+    """The row the pages show of `r`; its versions come after
+    (`with_versions`)."""
+    return RunRow(
+        r.id,
+        r.pipeline,
+        r.partitions,
+        r.trigger,
+        r.status,
+        r.starts,
+        r.created,
+        r.started,
+        r.ended,
+        r.cancel_requested,
+        r.stalled,
+        r.error,
+        _waiting(r.waiting),
+        r.seconds,
+        r.placement,
+        r.held,
+        Usage(r.peak, r.cpu, r.cpus),
+        RunResources(
+            r.request_cpus,
+            r.request_memory_gb,
+            Grant(r.grant_cpus, r.grant_memory_mb),
+            r.memory_limit_mb,
+            r.memory_max_mb,
+            r.memory_bytes,
+            r.request_source,
+            r.request_runs,
+        ),
+        String(),
+        String(),
+        String(),
     )
-
-
-def usage_columns(r: Row) raises -> Usage:
-    """The `peak`, `cpu` and `cpus` columns' usage."""
-    return Usage(Int(r.int64("peak")), r.float64("cpu"), r.float64("cpus"))
-
-
-comptime _SECONDS = (
-    "coalesce(extract(epoch FROM coalesce(ended, now()) - started)::bigint, -1)"
-)
-"""SQL for how long a run ran, up to now if it hasn't ended; -1 before it
-started."""
 
 
 def run_rows(
@@ -313,70 +242,12 @@ def run_rows(
     before: Int = 0,
     after: Int = 0,
 ) raises -> List[RunRow]:
-    """The runs `q`'s filters let through (`runs_where`), newest first, with
-    ids under `before` if it's over 0; with `after` over 0, the `limit` runs
-    just above it, oldest first."""
-    var w = runs_where(q)
-    if before > 0:
-        w.int("orca.runs.id < ?", before)
-    if after > 0:
-        w.int("orca.runs.id > ?", after)
-    var rows = db.conn.query(
-        String(
-            "SELECT id::text AS id, pipeline, partitions, trigger, status,",
-            " starts::text AS starts, ",
-            utc_sql("created"),
-            " AS created, ",
-            utc_sql("started"),
-            " AS started, ",
-            utc_sql("ended"),
-            " AS ended, cancel_requested, coalesce(error, '') AS error, ",
-            stalled_sql(),
-            " AS stalled, ",
-            _WAITING,
-            " AS waiting, ",
-            _SECONDS,
-            " AS seconds, coalesce(placement, '') AS placement,",
-            " coalesce(held, '') AS held,",
-            _GRANT_COLUMNS,
-            _USAGE_COLUMNS,
-            " FROM orca.runs",
-            _RUN_USAGE,
-            w.sql,
-            " ORDER BY orca.runs.id ",
-            "ASC" if after > 0 else "DESC",
-            " LIMIT ",
-            w.next(),
-        ),
-        w.params.copy().int64(Int64(limit)),
-    )
+    """The runs `q`'s filters let through (`morca.db.runs_view.runs_where`),
+    newest first, with ids under `before` if it's over 0; with `after` over
+    0, the `limit` runs just above it, oldest first."""
     var out = List[RunRow]()
-    for r in rows:
-        out.append(
-            RunRow(
-                int_or_zero(r.text("id")),
-                r.text("pipeline"),
-                r.text("partitions"),
-                r.text("trigger"),
-                r.text("status"),
-                int_or_zero(r.text("starts")),
-                r.text("created"),
-                r.text("started"),
-                r.text("ended"),
-                r.bool("cancel_requested"),
-                r.bool("stalled"),
-                r.text("error"),
-                _waiting(r.int64("waiting")),
-                Int(r.int64("seconds")),
-                r.text("placement"),
-                r.text("held"),
-                usage_columns(r),
-                _resources_of(r),
-                String(),
-                String(),
-                String(),
-            )
-        )
+    for r in runs_db.run_records(db.conn, q.filter(), limit, before, after):
+        out.append(_run_row(r))
     for i in range(len(out)):
         with_versions(db, out[i])
     return out^
@@ -397,89 +268,22 @@ def version_rows(
     mut db: State, pipeline: String = "", id: Int = 0
 ) raises -> List[VersionRow]:
     """A pipeline's versions newest first, or the one with `id`."""
-    var rows = db.conn.query(
-        String(
-            "SELECT v.id, v.registry_hash, v.source, v.commit_sha, v.dirty,",
-            " v.image, ",
-            utc_sql("v.first_seen"),
-            " AS first_seen, ",
-            utc_sql("v.last_seen"),
-            " AS last_seen, (SELECT count(*) FROM orca.runs r WHERE r.version",
-            " = v.id) AS runs, coalesce(v.locations::text, '') AS locations",
-            " FROM orca.pipeline_versions v WHERE ($1 = '' OR",
-            " v.pipeline = $1) AND ($2 = 0 OR v.id = $2) ORDER BY v.id DESC",
-        ),
-        Params().text(pipeline).int64(Int64(id)),
-    )
-    var out = List[VersionRow]()
-    for r in rows:
-        out.append(
-            VersionRow(
-                Int(r.int64("id")),
-                r.text("registry_hash"),
-                r.text("source"),
-                r.text("commit_sha"),
-                r.bool("dirty"),
-                r.text("image"),
-                r.text("first_seen"),
-                r.text("last_seen"),
-                Int(r.int64("runs")),
-                r.text("locations"),
-            )
-        )
-    return out^
+    return run_db.version_rows(db.conn, pipeline, id)
 
 
 def run_version(mut db: State, run: Int) raises -> Optional[VersionRow]:
     """The version a run ran, if it recorded one."""
-    var rows = db.conn.query(
-        "SELECT coalesce(version, 0) AS v FROM orca.runs WHERE id = $1",
-        Params().int64(Int64(run)),
-    )
-    if len(rows) == 0 or not rows.row(0).int64("v"):
+    var v = run_db.run_version_id(db.conn, run)
+    if not v:
         return None
-    var vs = version_rows(db, id=Int(rows.row(0).int64("v")))
+    var vs = version_rows(db, id=v)
     if len(vs) == 0:
         return None
     return vs[0].copy()
 
 
 def instance_rows(mut db: State, run: Int) raises -> List[InstanceRow]:
-    var rows = db.conn.query(
-        String(
-            "SELECT i.id, i.start, i.role, i.instance_type, i.market, ",
-            utc_sql("i.launched"),
-            " AS launched, ",
-            utc_sql("i.ended"),
-            " AS ended, coalesce(i.why, '') AS why,",
-            " coalesce(i.procs, 1) AS procs,",
-            " extract(epoch FROM i.launched - coalesce(r.started,",
-            " i.launched))::float8 AS from_start, extract(epoch FROM",
-            " coalesce(i.ended, now()) - coalesce(r.started,",
-            " i.launched))::float8 AS to_end FROM orca.instances i JOIN",
-            " orca.runs r ON r.id = i.run WHERE i.run = $1 ORDER BY",
-            " i.launched, i.role, i.id",
-        ),
-        Params().int64(Int64(run)),
-    )
-    var out = List[InstanceRow]()
-    for r in rows:
-        out.append(
-            InstanceRow(
-                r.text("id"),
-                Int(r.int64("start")),
-                r.text("role"),
-                r.text("instance_type"),
-                r.text("market"),
-                r.text("launched"),
-                r.text("ended"),
-                r.text("why"),
-                r.float64("from_start"),
-                r.float64("to_end"),
-                Int(r.int64("procs")),
-            )
-        )
-    return out^
+    return run_db.instance_rows(db.conn, run)
 
 
 def cluster_log_name(i: InstanceRow) -> String:
@@ -490,109 +294,39 @@ def cluster_log_name(i: InstanceRow) -> String:
 def step_spans(mut db: State, run: Int) raises -> List[StepSpan]:
     """The run's attempts on the wall clock, for the machines' steps lane."""
     var out = List[StepSpan]()
-    for r in db.conn.query(
-        (
-            "SELECT s.step, s.partition, a.status, a.id::text AS id,"
-            " extract(epoch FROM a.started)::float8 AS t0, extract(epoch FROM"
-            " coalesce(a.ended, now()))::float8 AS t1 FROM orca.attempts a JOIN"
-            " orca.steps s ON s.id = a.step WHERE s.run = $1 ORDER BY s.ord,"
-            " a.started"
-        ),
-        Params().int64(Int64(run)),
-    ):
+    for s in run_db.step_spans(db.conn, run):
         out.append(
-            StepSpan(
-                r.text("step"),
-                r.text("partition"),
-                r.text("status"),
-                r.float64("t0"),
-                r.float64("t1"),
-                int_or_zero(r.text("id")),
-            )
+            StepSpan(s.step, s.partition, s.status, s.start, s.end, s.attempt)
         )
     return out^
 
 
 def step_rows(mut db: State, run: Int) raises -> List[StepRow]:
     """A run's steps in run order: what `status <run>` shows, with times."""
-    var rows = db.conn.query(
-        String(
-            "SELECT s.step, s.partition, s.status, coalesce(s.error, '') AS",
-            " error, (SELECT count(*) FROM orca.attempts a WHERE a.step =",
-            " s.id)::text AS attempts, coalesce((SELECT a.log FROM",
-            " orca.attempts a WHERE a.step = s.id ORDER BY a.attempt DESC",
-            " LIMIT 1), '') AS log, ",
-            utc_sql(
-                "(SELECT min(a.started) FROM orca.attempts a WHERE a.step ="
-                " s.id)"
-            ),
-            " AS started, ",
-            utc_sql(
-                "(SELECT max(a.ended) FROM orca.attempts a WHERE a.step = s.id)"
-            ),
-            " AS ended, coalesce((SELECT a.id FROM orca.attempts a WHERE",
-            " a.step = s.id ORDER BY a.attempt DESC LIMIT 1), 0)::text AS",
-            " attempt_id, coalesce((SELECT c.run FROM orca.steps c WHERE c.id",
-            " = s.copied_from), 0)::text AS from_run, coalesce(u.peak, -1) AS",
-            " peak, coalesce(u.cpu, -1) AS cpu, coalesce(u.cpus, -1) AS cpus,",
-            " coalesce(u.limit_mb, 0) AS limit_mb, coalesce(u.grant_mb, 0) AS",
-            " grant_mb FROM orca.steps s LEFT JOIN LATERAL (SELECT",
-            " a.peak_rss_bytes AS peak, a.cpu_seconds AS cpu, a.peak_cpus AS",
-            " cpus, a.memory_limit_mb AS limit_mb, a.grant_memory_mb AS",
-            " grant_mb FROM orca.attempts a WHERE a.step = s.id ORDER BY",
-            " a.attempt DESC",
-            " LIMIT 1) u ON true WHERE s.run = $1 ORDER BY s.ord, s.id",
-        ),
-        Params().int64(Int64(run)),
-    )
     var out = List[StepRow]()
-    for r in rows:
+    for s in run_db.step_records(db.conn, run):
         out.append(
             StepRow(
-                r.text("step"),
-                r.text("partition"),
-                r.text("status"),
-                int_or_zero(r.text("attempts")),
-                r.text("error"),
-                r.text("log"),
-                r.text("started"),
-                r.text("ended"),
-                int_or_zero(r.text("attempt_id")),
-                int_or_zero(r.text("from_run")),
-                usage_columns(r),
-                Int(r.int64("limit_mb")),
-                Int(r.int64("grant_mb")),
+                s.step,
+                s.partition,
+                s.status,
+                s.attempts,
+                s.error,
+                s.log,
+                s.started,
+                s.ended,
+                s.attempt_id,
+                s.from_run,
+                Usage(s.peak, s.cpu, s.cpus),
+                s.limit_mb,
+                s.grant_mb,
             )
         )
     return out^
 
 
 def touch_rows(mut db: State, run: Int) raises -> List[Touch]:
-    var rows = db.conn.query(
-        (
-            "SELECT st.step, st.partition, x.kind, x.table_name,"
-            " x.snapshot_id::text AS snapshot, coalesce(x.dataset, '') AS"
-            " dataset FROM (SELECT attempt, 'read' AS kind, table_name,"
-            " snapshot_id, dataset FROM orca.reads UNION ALL SELECT attempt,"
-            " 'commit', table_name, snapshot_id, dataset FROM orca.commits) x"
-            " JOIN orca.attempts a ON a.id = x.attempt JOIN orca.steps st ON"
-            " st.id = a.step WHERE st.run = $1 ORDER BY st.ord, st.id, a.id"
-        ),
-        Params().int64(Int64(run)),
-    )
-    var out = List[Touch]()
-    for r in rows:
-        out.append(
-            Touch(
-                r.text("step"),
-                r.text("partition"),
-                r.text("kind"),
-                r.text("table_name"),
-                r.text("snapshot"),
-                r.text("dataset"),
-            )
-        )
-    return out^
+    return run_db.touch_rows(db.conn, run)
 
 
 comptime RUNS_PAGE = 50
@@ -779,6 +513,24 @@ struct RunsQuery(Copyable, Movable):
             out.append((String("limit"), String(self.size)))
         return out^
 
+    def filter(self) -> RunsFilter:
+        """Its filters as the database binds them
+        (`morca.db.runs_view.runs_where`)."""
+        return RunsFilter(
+            self.pipeline,
+            self.status,
+            self.statuses(),
+            self.trigger,
+            self.run,
+            self.batch,
+            self.since,
+            since_interval(self.since) if self.since != "today" else String(),
+            self.start,
+            self.end,
+            self.key,
+            key_like(self.key) if self.key else String(),
+        )
+
 
 def _digits(s: StringSlice, start: Int, n: Int) -> Bool:
     var b = s.as_bytes()
@@ -913,87 +665,6 @@ def runs_query(url: String, view: String, pipeline: String = "") -> RunsQuery:
     return q^
 
 
-struct RunsWhere(Movable):
-    """A runs list's filters as SQL over `orca.runs`: `sql` (` WHERE ...`)
-    and its `params`, numbered in order, so a filter that isn't set adds
-    nothing to the plan."""
-
-    var sql: String
-    var params: Params
-
-    def __init__(out self):
-        self.sql = String(" WHERE true")
-        self.params = Params()
-
-    def text(mut self, clause: StaticString, v: String):
-        """`AND clause`, its `?` the next parameter, `v`."""
-        self.sql.write(
-            " AND ",
-            String(clause).replace("?", String("$", len(self.params) + 1)),
-        )
-        self.params = self.params.copy().text(v)
-
-    def int(mut self, clause: StaticString, v: Int):
-        self.sql.write(
-            " AND ",
-            String(clause).replace("?", String("$", len(self.params) + 1)),
-        )
-        self.params = self.params.copy().int64(Int64(v))
-
-    def next(self) -> String:
-        """The next parameter's placeholder."""
-        return String("$", len(self.params) + 1)
-
-
-def runs_where(q: RunsQuery, with_status: Bool = True) -> RunsWhere:
-    """The runs `q`'s filters let through, with its statuses unless not
-    `with_status` (for the counts of each)."""
-    var w = RunsWhere()
-    if q.pipeline:
-        w.text("pipeline = ?", q.pipeline)
-    if with_status and q.status:
-        var ss = q.statuses()
-        if len(ss) == 1:
-            w.text("status = ?", ss[0])
-        else:
-            w.text("status = ANY(string_to_array(?, ','))", q.status)
-    if q.trigger:
-        w.text("trigger = ?", q.trigger)
-    if q.run > 0:
-        w.int("id = ?", q.run)
-    if q.batch > 0:
-        w.int("batch = ?", q.batch)
-    if q.since == "today":
-        w.sql.write(
-            " AND created >= date_trunc('day', now() AT TIME ZONE 'UTC') AT"
-            " TIME ZONE 'UTC'"
-        )
-    elif q.since:
-        w.text("created >= now() - ?::interval", since_interval(q.since))
-    if q.start:
-        w.text("created >= (?::timestamp AT TIME ZONE 'UTC')", q.start)
-    if q.end:
-        if q.end.byte_length() == 10:
-            w.text(
-                "created < ((?::date + 1)::timestamp AT TIME ZONE 'UTC')", q.end
-            )
-        else:
-            w.text("created <= (?::timestamp AT TIME ZONE 'UTC')", q.end)
-    if q.key:
-        var like = key_like(q.key)
-        if like:
-            w.text(
-                (
-                    "EXISTS (SELECT 1 FROM unnest(string_to_array(partitions,"
-                    " ',')) k WHERE k LIKE ?)"
-                ),
-                like,
-            )
-        else:
-            w.text("strpos(lower(partitions), lower(?)) > 0", q.key)
-    return w^
-
-
 struct RunsPage(Movable):
     """A page of a runs list, newest first, with how many runs that match
     are newer and older than it, and how many of each status match its
@@ -1076,65 +747,25 @@ def runs_page(mut db: State, var q: RunsQuery) raises -> RunsPage:
         return RunsPage(q^, rs^, len(rs), 0, 0, [])
     # How many match, and how many of them are above this page.
     var top = rs[0].id + 1 if len(rs) > 0 else q.before
-    var w = runs_where(q)
-    var counted = db.conn.query(
-        String(
-            "SELECT count(*) AS total, count(*) FILTER (WHERE ",
-            w.next(),
-            " > 0 AND id >= ",
-            w.next(),
-            ") AS newer FROM orca.runs",
-            w.sql,
-        ),
-        w.params.copy().int64(Int64(top)),
-    )
-    var total = Int(counted.row(0).int64("total"))
-    var newer = Int(counted.row(0).int64("newer"))
+    var f = q.filter()
+    var counted = runs_db.runs_counted(db.conn, f, top)
+    var total = counted[0]
+    var newer = counted[1]
     var older = max(0, total - newer - len(rs))
     # Each status's, under the other filters.
-    var ws = runs_where(q, with_status=False)
-    var counts = List[Tuple[String, Int]]()
-    for r in db.conn.query(
-        String(
-            "SELECT status, count(*) AS n FROM orca.runs",
-            ws.sql,
-            " GROUP BY status ORDER BY n DESC, status",
-        ),
-        ws.params.copy(),
-    ):
-        counts.append((r.text("status"), Int(r.int64("n"))))
+    var counts = runs_db.status_counts(db.conn, f)
     return RunsPage(q^, rs^, total, newer, older, counts^)
 
 
 def run_ids(mut db: State, q: RunsQuery, limit: Int) raises -> List[Int]:
     """The ids of the runs `q`'s filters let through, newest first, at most
     `limit` (its page and size aside)."""
-    var w = runs_where(q)
-    var out = List[Int]()
-    for r in db.conn.query(
-        String(
-            "SELECT id::bigint AS id FROM orca.runs",
-            w.sql,
-            " ORDER BY id DESC LIMIT ",
-            w.next(),
-        ),
-        w.params.copy().int64(Int64(limit)),
-    ):
-        out.append(Int(r.int64("id")))
-    return out^
+    return runs_db.run_ids(db.conn, q.filter(), limit)
 
 
 def count_runs(mut db: State, q: RunsQuery) raises -> Int:
     """How many runs `q`'s filters let through."""
-    var w = runs_where(q)
-    return Int(
-        db.conn.query(
-            String("SELECT count(*) AS n FROM orca.runs", w.sql),
-            w.params.copy(),
-        )
-        .row(0)
-        .int64("n")
-    )
+    return runs_db.count_runs(db.conn, q.filter())
 
 
 def live_status(status: String) -> Bool:
@@ -1146,17 +777,10 @@ def timeline_path(mut db: State, r: RunRow) raises -> String:
     """The run's Dista timeline, if it left one: beside its attempts' logs,
     or in its directory under this process's MORCA_LOGS."""
     var dirs = List[String]()
-    var rows = db.conn.query(
-        (
-            "SELECT a.log FROM orca.attempts a JOIN orca.steps s ON s.id ="
-            " a.step WHERE s.run = $1 AND a.log IS NOT NULL AND a.log <> ''"
-            " LIMIT 1"
-        ),
-        Params().int64(Int64(r.id)),
-    )
-    if len(rows) > 0:
+    var found = run_db.first_log(db.conn, r.id)
+    if found:
         # <dir>/<step>/<partition>/<attempt>.log
-        var log = rows.row(0).text("log")
+        var log = found.value()
         var d = log
         for _ in range(3):
             var at = d.rfind("/")
@@ -1196,117 +820,51 @@ struct AttemptRow(Copyable, Movable):
     """Its start's memory grant (`morca.resources`); 0 for none."""
 
 
-def attempt_rows(
-    mut db: State, run: Int, cond: String, arg: Int
-) raises -> List[AttemptRow]:
-    var rows = db.conn.query(
-        String(
-            "SELECT a.id::text AS id, r.pipeline, s.step, s.partition,",
-            " a.attempt::text AS attempt, a.status, a.host, ",
-            utc_sql("a.started"),
-            " AS started, ",
-            utc_sql("a.ended"),
-            " AS ended, coalesce(a.error, '') AS error, coalesce(a.log, '')",
-            " AS log, coalesce(a.peak_rss_bytes, -1) AS peak,",
-            " coalesce(a.cpu_seconds, -1) AS cpu, coalesce(a.peak_cpus, -1)",
-            " AS cpus, coalesce(a.memory_limit_mb, 0) AS limit_mb,",
-            " coalesce(a.grant_memory_mb, 0) AS grant_mb FROM orca.attempts a",
-            " JOIN orca.steps s ON s.id = a.step",
-            " JOIN orca.runs r ON r.id = s.run WHERE s.run = $1 AND ",
-            cond,
-            " ORDER BY a.attempt",
-        ),
-        Params().int64(Int64(run)).int64(Int64(arg)),
-    )
+def _attempt_rows(run: Int, rs: List[AttemptRecord]) -> List[AttemptRow]:
     var out = List[AttemptRow]()
-    for r in rows:
+    for r in rs:
         out.append(
             AttemptRow(
-                int_or_zero(r.text("id")),
+                r.id,
                 run,
-                r.text("pipeline"),
-                r.text("step"),
-                r.text("partition"),
-                int_or_zero(r.text("attempt")),
-                r.text("status"),
-                r.text("host"),
-                r.text("started"),
-                r.text("ended"),
-                r.text("error"),
-                r.text("log"),
-                usage_columns(r),
-                Int(r.int64("limit_mb")),
-                Int(r.int64("grant_mb")),
+                r.pipeline,
+                r.step,
+                r.partition,
+                r.attempt,
+                r.status,
+                r.host,
+                r.started,
+                r.ended,
+                r.error,
+                r.log,
+                Usage(r.peak, r.cpu, r.cpus),
+                r.limit_mb,
+                r.grant_mb,
             )
         )
     return out^
 
 
+def attempt_rows(mut db: State, run: Int, id: Int) raises -> List[AttemptRow]:
+    """Attempt `id` of run `run`, or none if the run has no such attempt."""
+    return _attempt_rows(run, run_db.attempt_record(db.conn, run, id))
+
+
+def step_attempt_rows(
+    mut db: State, run: Int, id: Int
+) raises -> List[AttemptRow]:
+    """Every attempt of the step attempt `id` is of, in run `run`, in
+    order."""
+    return _attempt_rows(run, run_db.step_attempt_records(db.conn, run, id))
+
+
 def runs_one(mut db: State, id: Int) raises -> Optional[RunRow]:
-    var rows = db.conn.query(
-        String(
-            "SELECT id::text AS id, pipeline, partitions, trigger, status,",
-            " starts::text AS starts, ",
-            utc_sql("created"),
-            " AS created, ",
-            utc_sql("started"),
-            " AS started, ",
-            utc_sql("ended"),
-            " AS ended, cancel_requested, coalesce(error, '') AS error, ",
-            stalled_sql(),
-            " AS stalled, ",
-            _WAITING,
-            " AS waiting, ",
-            _SECONDS,
-            " AS seconds, coalesce(placement, '') AS placement,",
-            " coalesce(held, '') AS held,",
-            _GRANT_COLUMNS,
-            _USAGE_COLUMNS,
-            " FROM orca.runs",
-            _RUN_USAGE,
-            " WHERE id = $1",
-        ),
-        Params().int64(Int64(id)),
-    )
-    if len(rows) == 0:
+    var found = runs_db.run_record(db.conn, id)
+    if not found:
         return None
-    var r = rows.row(0)
-    var row = RunRow(
-        id,
-        r.text("pipeline"),
-        r.text("partitions"),
-        r.text("trigger"),
-        r.text("status"),
-        int_or_zero(r.text("starts")),
-        r.text("created"),
-        r.text("started"),
-        r.text("ended"),
-        r.bool("cancel_requested"),
-        r.bool("stalled"),
-        r.text("error"),
-        _waiting(r.int64("waiting")),
-        Int(r.int64("seconds")),
-        r.text("placement"),
-        r.text("held"),
-        usage_columns(r),
-        _resources_of(r),
-        String(),
-        String(),
-        String(),
-    )
+    var row = _run_row(found.value())
     with_versions(db, row)
     return row^
-
-
-@fieldwise_init
-struct AuditRow(Copyable, Movable):
-    """Who did something to a run, from the UI or the `morca` command
-    (`morca.auth`)."""
-
-    var at: String
-    var user: String
-    var action: String
-    var source: String
 
 
 struct RunView(Movable):
@@ -1373,74 +931,27 @@ def run_view(mut db: State, id: Int) raises -> Optional[RunView]:
     ref r = v.run
     v.steps = step_rows(db, id)
     v.touches = touch_rows(db, id)
-    var current = (
-        db.conn.query(
-            "SELECT registry_hash FROM orca.pipelines WHERE name = $1",
-            Params().text(r.pipeline),
-        )
-        .row(0)
-        .text("registry_hash")
-    )
-    var row = db.conn.query(
-        (
-            "SELECT registry_hash, coalesce(rebuild, 0) AS rebuild,"
-            " coalesce(batch, 0) AS batch, (SELECT count(*) FROM orca.runs b"
-            " WHERE b.batch = r.batch) AS batch_runs,"
-            " coalesce(version, 0) AS version,"
-            " coalesce(cpu_millis, 0) AS cpu, coalesce(extract(epoch FROM"
-            " coalesce(ended, now()) - started)::bigint, 0) AS secs FROM"
-            " orca.runs r WHERE id = $1"
-        ),
-        Params().int64(Int64(id)),
-    ).row(0)
-    v.registry_hash = row.text("registry_hash")
+    var current = run_db.pipeline_hash(db.conn, r.pipeline)
+    var row = run_db.run_facts(db.conn, id)
+    v.registry_hash = row.registry_hash
     v.current_code = v.registry_hash == current
-    v.rebuild = Int(row.int64("rebuild"))
-    v.batch = Int(row.int64("batch"))
-    v.batch_runs = Int(row.int64("batch_runs"))
-    if row.int64("version"):
-        var vs = version_rows(db, id=Int(row.int64("version")))
+    v.rebuild = row.rebuild
+    v.batch = row.batch
+    v.batch_runs = row.batch_runs
+    if row.version:
+        var vs = version_rows(db, id=row.version)
         if len(vs) > 0:
             v.version = vs[0].copy()
-    v.cpu_millis = Int(row.int64("cpu"))
-    v.seconds = Int(row.int64("secs"))
-    for x in db.conn.query(
-        (
-            "SELECT dataset, snapshot_id FROM orca.sensed WHERE run = $1"
-            " ORDER BY dataset, snapshot_id"
-        ),
-        Params().int64(Int64(id)),
-    ):
-        v.sensed.append(SnapshotRef(x.text("dataset"), x.int64("snapshot_id")))
+    v.cpu_millis = row.cpu_millis
+    v.seconds = row.seconds
+    for x in run_db.sensed(db.conn, id):
+        v.sensed.append(SnapshotRef(x[0], x[1]))
     v.instances = instance_rows(db, id)
     v.cluster = cluster_rows(db, id)
     v.metrics = read_metrics(r.pipeline, id)
     # The pipeline's runs in order (all triggers, fills too).
-    var nb = db.conn.query(
-        (
-            "SELECT coalesce((SELECT max(id) FROM orca.runs WHERE pipeline = $1"
-            " AND id < $2), 0) AS prev, coalesce((SELECT min(id) FROM"
-            " orca.runs WHERE pipeline = $1 AND id > $2), 0) AS next"
-        ),
-        Params().text(r.pipeline).int64(Int64(r.id)),
-    ).row(0)
-    v.prev = nb.int64("prev")
-    v.next = nb.int64("next")
-    for a in db.conn.query(
-        (
-            "SELECT to_char(at AT TIME ZONE 'UTC',"
-            ' \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') AS at, username, action,'
-            " coalesce(source, '') AS source FROM orca.audit WHERE run = $1"
-            " ORDER BY id"
-        ),
-        Params().int64(Int64(id)),
-    ):
-        v.actions.append(
-            AuditRow(
-                a.text("at"),
-                a.text("username"),
-                a.text("action"),
-                a.text("source"),
-            )
-        )
+    var nb = run_db.neighbours(db.conn, r.pipeline, r.id)
+    v.prev = nb[0]
+    v.next = nb[1]
+    v.actions = run_db.audit_rows(db.conn, id)
     return v^

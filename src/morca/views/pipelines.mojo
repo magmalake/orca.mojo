@@ -6,7 +6,13 @@ Resources card's summary of what its runs used (`UsageSummary`).
 
 from std.os import getenv
 
-from postgres import Params
+import morca.db.pipelines_view as pipelines_db
+from morca.db.pipelines_view import (
+    PipelineRow,
+    StepDef,
+    UsageSummary,
+    comma_list,
+)
 
 from morca.civil import Civil, now
 from morca.config_show import (
@@ -18,7 +24,7 @@ from morca.cron import CronExpr
 from morca.fill import FillStatus, fill_status
 from morca.follow import Follow, follow
 from morca.lineage import SnapshotRef
-from morca.db.live import live_sql
+from morca.db.live import live_runs
 from morca.recommend import Recommendation
 from morca.schedule import Schedule
 from morca.queueing import (
@@ -37,10 +43,8 @@ from morca.tz import Zone
 from morca.views.runs import (
     RunsPage,
     VersionRow,
-    int_or_zero,
     runs_page,
     runs_query,
-    utc_sql,
     version_rows,
 )
 from morca.views.start import StartPreview, start_preview
@@ -52,71 +56,10 @@ def utc_text(t: Int64) -> String:
 
 
 @fieldwise_init
-struct PipelineRow(Copyable, Movable):
-    var name: String
-    var registry_hash: String
-    var binary: String
-    var kind: String
-    var start: String
-    var cron: String
-    var tz: String
-    var fills: String
-    var max_runs: Int
-    var run_retries: Int
-    var running: Int
-    var queued: Int
-    var last_run: Int
-    """0 when it has none."""
-    var last_status: String
-    var last_partitions: String
-    var next_fire: String
-    var next_partition: String
-    var paused: Bool
-    """`morca pause`: the scheduler starts none of its runs."""
-    var sense_error: String
-    """Why the sensor's last pass failed, or empty."""
-    var sense_error_at: String
-    var placement: String
-    """`morca register --placement`: `control`, `ec2`, or empty for the
-    scheduler's runner."""
-    var cpus: String
-    """The CPUs it asks for (`morca.resources`), or empty."""
-    var memory_gb: String
-    """The memory it asks for, in GB, or empty."""
-    var waiting: String
-    """Why its oldest queued run that waits for room on its host waits
-    (`morca.resources`), or empty."""
-    var fill_lag: String
-    """`fill_lag` as registered (`morca.fill`), or empty."""
-
-
-@fieldwise_init
-struct StepDef(Copyable, Movable):
-    var name: String
-    var kind: String
-    var after: String
-    var reads: List[String]
-    var writes: List[String]
-    var function: String
-    """Its function's linkage name, as `describe` records it."""
-    var input: String
-    var output: String
-
-
-@fieldwise_init
 struct Fire(Copyable, Movable):
     var at: String
     var local: String
     var partition: String
-
-
-def comma_list(s: String) -> List[String]:
-    """A comma-separated list, empty for an empty string."""
-    var out = List[String]()
-    if s:
-        for p in s.split(","):
-            out.append(String(p))
-    return out^
 
 
 def next_fires(p: PipelineRow, after: Int64, count: Int) raises -> List[Fire]:
@@ -135,71 +78,9 @@ def next_fires(p: PipelineRow, after: Int64, count: Int) raises -> List[Fire]:
 
 def pipeline_rows(mut db: State, name: String = "") raises -> List[PipelineRow]:
     """Every registered pipeline, or the one named."""
-    var rows = db.conn.query(
-        String(
-            (
-                "SELECT p.name, p.registry_hash, coalesce(p.binary_path, '') AS"
-                " binary, coalesce(p.describe->'partitions'->>'kind', '') AS"
-                " kind, coalesce(p.describe->'partitions'->>'start', '') AS"
-                " start, coalesce(p.describe->'schedule'->>'cron', '') AS cron,"
-                " coalesce(p.describe->'schedule'->>'tz', '') AS tz,"
-                " coalesce(p.describe->'schedule'->>'fills', '') AS fills,"
-                " coalesce(p.max_runs::text, p.describe->>'max_runs', '1') AS"
-                " max_runs, coalesce(p.describe->>'run_retries', '0') AS"
-                " run_retries, (SELECT count(*) FROM orca.runs r WHERE"
-                " r.pipeline = p.name AND r.status = 'running')::text AS"
-                " running, (SELECT count(*) FROM orca.runs r WHERE r.pipeline ="
-                " p.name AND r.status = 'queued')::text AS queued,"
-                " coalesce(l.id, 0)::text AS last_run, coalesce(l.status, '')"
-                " AS last_status, coalesce(l.partitions, '') AS"
-                " last_partitions, p.paused, coalesce(p.sense_error, '') AS"
-                " sense_error, coalesce(p.placement, '') AS placement,"
-                " coalesce(p.cpus, '') AS cpus, coalesce(p.memory_gb, '') AS"
-                " memory_gb, coalesce((SELECT r.held FROM orca.runs r WHERE"
-                " r.pipeline = p.name AND r.status = 'queued' AND r.held LIKE"
-                " 'waiting: %' ORDER BY r.id LIMIT 1), '') AS waiting,"
-                " coalesce(p.fill_lag, '') AS fill_lag, "
-            ),
-            utc_sql("p.sense_error_at"),
-            (
-                " AS sense_error_at FROM orca.pipelines p LEFT JOIN LATERAL"
-                " (SELECT id, status, partitions FROM orca.runs r WHERE"
-                " r.pipeline = p.name ORDER BY id DESC LIMIT 1) l ON true WHERE"
-                " ($1 = '' OR p.name = $1) ORDER BY p.name"
-            ),
-        ),
-        Params().text(name),
-    )
-    var out = List[PipelineRow]()
+    var out = pipelines_db.pipeline_rows(db.conn, name)
     var t = now()
-    for r in rows:
-        var p = PipelineRow(
-            r.text("name"),
-            r.text("registry_hash"),
-            r.text("binary"),
-            r.text("kind"),
-            r.text("start"),
-            r.text("cron"),
-            r.text("tz"),
-            r.text("fills"),
-            int_or_zero(r.text("max_runs")),
-            int_or_zero(r.text("run_retries")),
-            int_or_zero(r.text("running")),
-            int_or_zero(r.text("queued")),
-            int_or_zero(r.text("last_run")),
-            r.text("last_status"),
-            r.text("last_partitions"),
-            "",
-            "",
-            r.bool("paused"),
-            r.text("sense_error"),
-            r.text("sense_error_at"),
-            r.text("placement"),
-            r.text("cpus"),
-            r.text("memory_gb"),
-            r.text("waiting"),
-            r.text("fill_lag"),
-        )
+    for ref p in out:
         try:
             var f = next_fires(p, t, 1)
             if len(f) > 0:
@@ -207,41 +88,11 @@ def pipeline_rows(mut db: State, name: String = "") raises -> List[PipelineRow]:
                 p.next_partition = f[0].partition
         except:
             pass
-        out.append(p^)
     return out^
 
 
 def step_defs(mut db: State, name: String) raises -> List[StepDef]:
-    var rows = db.conn.query(
-        (
-            "SELECT s->>'name' AS name, s->>'kind' AS kind,"
-            " coalesce(s->>'after', '') AS after, coalesce((SELECT"
-            " string_agg(v, ',') FROM jsonb_array_elements_text(coalesce(s->"
-            "'reads', '[]')) AS v), '') AS reads, coalesce((SELECT"
-            " string_agg(v, ',') FROM jsonb_array_elements_text(coalesce(s->"
-            "'writes', '[]')) AS v), '') AS writes, coalesce(s->>'function',"
-            " '') AS function, coalesce(s->>'input', '') AS input,"
-            " coalesce(s->>'output', '') AS output FROM orca.pipelines p,"
-            " jsonb_array_elements(p.describe->'steps') WITH ORDINALITY AS x(s,"
-            " n) WHERE p.name = $1 ORDER BY n"
-        ),
-        Params().text(name),
-    )
-    var out = List[StepDef]()
-    for r in rows:
-        out.append(
-            StepDef(
-                r.text("name"),
-                r.text("kind"),
-                r.text("after"),
-                comma_list(r.text("reads")),
-                comma_list(r.text("writes")),
-                r.text("function"),
-                r.text("input"),
-                r.text("output"),
-            )
-        )
-    return out^
+    return pipelines_db.step_defs(db.conn, name)
 
 
 @fieldwise_init
@@ -275,13 +126,6 @@ def _keys_seconds() -> Float64:
         return Float64(getenv("MORCA_SENSE_SECONDS", "60"))
     except:
         return 60.0
-
-
-comptime _FAILED_SQL = (
-    "SELECT DISTINCT st.partition AS key FROM orca.steps st JOIN orca.runs r"
-    " ON r.id = st.run WHERE r.pipeline = $1 AND st.status IN ('failed',"
-    " 'skipped') AND st.partition = ANY (string_to_array($2, ',')) ORDER BY 1"
-)
 
 
 def key_counts(mut db: State, name: String) raises -> KeyCounts:
@@ -320,9 +164,7 @@ def key_counts(mut db: State, name: String) raises -> KeyCounts:
             note = String("reading them again failed: ", e)
     var read_at = kept.value().read_at if kept else String()
     var done = done_keys(db, name, got[1])
-    var live = Dict[String, Bool]()
-    for r in db.conn.query(live_sql(), Params().text(name)):
-        live[r.text("key")] = True
+    var live = live_runs(db.conn, name)
     var n_live = 0
     var open = String()
     for k in got[1]:
@@ -332,8 +174,7 @@ def key_counts(mut db: State, name: String) raises -> KeyCounts:
             open.write("," if open else "", k)
     var failed = List[String]()
     if open:
-        for r in db.conn.query(_FAILED_SQL, Params().text(name).text(open)):
-            failed.append(r.text("key"))
+        failed = pipelines_db.failed_keys(db.conn, name, open)
     return KeyCounts(
         p.keys_dataset,
         got[0],
@@ -363,14 +204,7 @@ def fill_of(mut db: State, name: String) raises -> Optional[FillStatus]:
     if len(regs) == 0:
         return None
     if not regs[0].fill.all:
-        var any = db.conn.query(
-            (
-                "SELECT 1 FROM orca.runs WHERE pipeline = $1 AND trigger ="
-                " 'fill' LIMIT 1"
-            ),
-            Params().text(name),
-        )
-        if len(any) == 0:
+        if not pipelines_db.has_fill_runs(db.conn, name):
             return None
     var tx = db.conn.begin()
     var s = fill_status(tx, fill_pipeline(regs[0]), now(), regs[0].run_retries)
@@ -383,70 +217,10 @@ comptime USAGE_RUNS = 20
 summarizes."""
 
 
-@fieldwise_init
-struct UsageSummary(Copyable, Movable):
-    """What a pipeline's latest measured runs used: the median and the most
-    of each run's peak memory, CPU seconds and peak cores; -1 for none."""
-
-    var runs: Int
-    var peak_p50: Float64
-    var peak_max: Float64
-    var cpu_p50: Float64
-    var cpu_max: Float64
-    var cpus_p50: Float64
-    var cpus_max: Float64
-
-    def json(self) -> String:
-        """`{"runs": n, "peak_rss_bytes": {"p50": .., "max": ..}, ...}`."""
-        var out = String('{"runs": ', self.runs)
-        var parts = [
-            ("peak_rss_bytes", self.peak_p50, self.peak_max),
-            ("cpu_seconds", self.cpu_p50, self.cpu_max),
-            ("peak_cpus", self.cpus_p50, self.cpus_max),
-        ]
-        for p in parts:
-            out.write(', "', p[0], '": {"p50": ')
-            out.write(_json_num(p[1]), ', "max": ', _json_num(p[2]), "}")
-        out.write("}")
-        return out^
-
-
-def _json_num(x: Float64) -> String:
-    """`x` to the thousandth as JSON, or null if it's negative."""
-    if x < 0:
-        return "null"
-    return String(Float64(Int(x * 1000.0 + 0.5)) / 1000.0)
-
-
 def usage_summary(mut db: State, name: String) raises -> UsageSummary:
     """The pipeline's latest `USAGE_RUNS` runs that recorded what they used,
     summarized."""
-    var r = db.conn.query(
-        (
-            "SELECT count(*) AS n, coalesce(percentile_cont(0.5) WITHIN GROUP"
-            " (ORDER BY peak), -1) AS peak_p50, coalesce(max(peak), -1)::float8"
-            " AS peak_max, coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY"
-            " cpu), -1) AS cpu_p50, coalesce(max(cpu), -1) AS cpu_max,"
-            " coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY cpus), -1)"
-            " AS cpus_p50, coalesce(max(cpus), -1) AS cpus_max FROM (SELECT"
-            " max(a.peak_rss_bytes) AS peak, sum(a.cpu_seconds) AS cpu,"
-            " max(a.peak_cpus) AS cpus FROM orca.runs r JOIN orca.steps s ON"
-            " s.run = r.id JOIN orca.attempts a ON a.step = s.id WHERE"
-            " r.pipeline = $1 GROUP BY r.id HAVING max(a.peak_rss_bytes) IS"
-            " NOT NULL OR sum(a.cpu_seconds) IS NOT NULL ORDER BY r.id DESC"
-            " LIMIT $2) x"
-        ),
-        Params().text(name).int64(Int64(USAGE_RUNS)),
-    ).row(0)
-    return UsageSummary(
-        Int(r.int64("n")),
-        r.float64("peak_p50"),
-        r.float64("peak_max"),
-        r.float64("cpu_p50"),
-        r.float64("cpu_max"),
-        r.float64("cpus_p50"),
-        r.float64("cpus_max"),
-    )
+    return pipelines_db.usage_summary(db.conn, name, USAGE_RUNS)
 
 
 @fieldwise_init
@@ -577,20 +351,8 @@ def pipeline_view(
         v.keys = key_counts(db, name)
     # After the keys: their read keeps them in orca.keys, which this counts.
     v.coverage = pipeline_coverage(db, p)
-    for x in db.conn.query(
-        String(
-            "SELECT dataset, snapshot_id, error, ",
-            utc_sql("created"),
-            " AS at FROM orca.sensed WHERE pipeline = $1 AND error IS NOT",
-            " NULL ORDER BY created DESC, dataset LIMIT 10",
-        ),
-        Params().text(name),
-    ):
+    for x in pipelines_db.sense_errors(db.conn, name):
         v.not_run.append(
-            NotRun(
-                SnapshotRef(x.text("dataset"), x.int64("snapshot_id")),
-                x.text("at"),
-                x.text("error"),
-            )
+            NotRun(SnapshotRef(x.dataset, x.snapshot), x.at, x.error)
         )
     return v^

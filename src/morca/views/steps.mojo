@@ -3,16 +3,17 @@ with what its attempts in the pipeline's latest runs did, and on a run's
 page each attempt's.
 """
 
-from postgres import Params
+import morca.db.pipelines_view as pipelines_db
+import morca.db.run_view as run_db
 
 from morca.sample import fixed1
 from morca.state import State
+from morca.store import Usage
 from morca.ui.step_cards import AttemptCard, StepCard, duration_text
 from morca.ui.terms import value_help
 from morca.usage import bytes_text, cpu_text
 from morca.views.code import CodeLinks
 from morca.views.pipelines import StepDef
-from morca.views.runs import int_or_zero, usage_columns, utc_sql
 
 
 comptime STEP_RUNS = 20
@@ -56,40 +57,22 @@ def step_cards_of(
         )
     if not recent:
         return out^
-    var rows = db.conn.query(
-        (
-            "SELECT s.step, count(DISTINCT s.run) AS runs, count(*) AS"
-            " attempts, count(*) FILTER (WHERE a.status = 'failed') AS failed,"
-            " coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER BY"
-            " extract(epoch FROM a.ended - a.started)::float8) FILTER (WHERE"
-            " a.status = 'succeeded' AND a.ended IS NOT NULL), -1) AS"
-            " took_p50, coalesce(max(extract(epoch FROM a.ended -"
-            " a.started)::float8) FILTER (WHERE a.status = 'succeeded'), -1)"
-            " AS took_max, coalesce(percentile_cont(0.5) WITHIN GROUP (ORDER"
-            " BY a.peak_rss_bytes), -1) AS peak_p50,"
-            " coalesce(max(a.peak_rss_bytes), -1)::float8 AS peak_max FROM"
-            " orca.steps s JOIN orca.attempts a ON a.step = s.id WHERE s.run"
-            " IN (SELECT id FROM orca.runs WHERE pipeline = $1 ORDER BY id"
-            " DESC LIMIT $2) GROUP BY s.step"
-        ),
-        Params().text(pipeline).int64(Int64(STEP_RUNS)),
-    )
-    for r in rows:
-        var name = r.text("step")
+    for r in pipelines_db.step_stats(db.conn, pipeline, STEP_RUNS):
+        var name = r.step
         for ref c in out:
             if c.name != name:
                 continue
-            c.recent_runs = Int(r.int64("runs"))
-            c.recent_attempts = Int(r.int64("attempts"))
-            c.recent_failed = Int(r.int64("failed"))
-            var t50 = r.float64("took_p50")
-            var tmax = r.float64("took_max")
+            c.recent_runs = r.runs
+            c.recent_attempts = r.attempts
+            c.recent_failed = r.failed
+            var t50 = r.took_p50
+            var tmax = r.took_max
             if tmax >= 0:
                 c.took = String(
                     "p50 ", duration_text(t50), " · max ", duration_text(tmax)
                 )
-            var p50 = r.float64("peak_p50")
-            var pmax = r.float64("peak_max")
+            var p50 = r.peak_p50
+            var pmax = r.peak_max
             if pmax >= 0:
                 c.peak = String(
                     "p50 ",
@@ -102,42 +85,26 @@ def step_cards_of(
 
 def attempt_cards(mut db: State, run: Int) raises -> List[AttemptCard]:
     """What each of a run's attempts adds to its step's card."""
-    var rows = db.conn.query(
-        String(
-            "SELECT a.id::text AS id, s.step, s.partition, a.attempt::text AS",
-            " attempt, a.status, ",
-            utc_sql("a.started"),
-            " AS started, ",
-            utc_sql("a.ended"),
-            " AS ended, coalesce(extract(epoch FROM coalesce(a.ended, now())",
-            " - a.started)::float8, -1) AS took, coalesce(a.error, '') AS",
-            " error, coalesce(a.peak_rss_bytes, -1) AS peak,",
-            " coalesce(a.cpu_seconds, -1) AS cpu, coalesce(a.peak_cpus, -1)",
-            " AS cpus FROM orca.attempts a JOIN orca.steps s ON s.id = a.step",
-            " WHERE s.run = $1 ORDER BY s.ord, a.started",
-        ),
-        Params().int64(Int64(run)),
-    )
     var out = List[AttemptCard]()
-    for r in rows:
-        var u = usage_columns(r)
-        var id = int_or_zero(r.text("id"))
-        var status = r.text("status")
+    for r in run_db.attempt_card_records(db.conn, run):
+        var u = Usage(r.peak, r.cpu, r.cpus)
+        var id = r.id
+        var status = r.status
         out.append(
             AttemptCard(
                 id,
-                r.text("step"),
-                r.text("partition"),
-                int_or_zero(r.text("attempt")),
+                r.step,
+                r.partition,
+                r.attempt,
                 status,
                 String(value_help("status", status)),
-                r.text("started"),
-                r.text("ended"),
-                duration_text(r.float64("took")),
+                r.started,
+                r.ended,
+                duration_text(r.took),
                 bytes_text(u.peak_rss_bytes) if u.peak_rss_bytes >= 0 else "",
                 cpu_text(u.cpu_seconds) if u.cpu_seconds >= 0 else "",
                 fixed1(u.peak_cpus) if u.peak_cpus >= 0 else "",
-                r.text("error"),
+                r.error,
                 String("/runs/", run, "/attempts/", id),
             )
         )

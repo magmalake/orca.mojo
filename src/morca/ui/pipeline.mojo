@@ -5,7 +5,7 @@ the fragment it refreshes from; and `/keys/<key>`, one key of a keyed
 pipeline in every run it was in.
 """
 
-from postgres import Params
+import morca.db.pipelines_view as pipelines_db
 
 from morca.civil import now
 from morca.config_show import config_html
@@ -179,18 +179,7 @@ def key_page(mut db: State, name: String, key: String) raises -> Page:
     var ps = pipeline_rows(db, name)
     if len(ps) == 0:
         return not_found(String("no pipeline ", name))
-    var rows = db.conn.query(
-        (
-            "SELECT r.id AS run, r.status AS run_status, r.registry_hash ="
-            " p.registry_hash AS current, st.step, st.status,"
-            " coalesce(st.error, '') AS error, (SELECT count(*) FROM"
-            " orca.attempts a WHERE a.step = st.id) AS attempts FROM orca.steps"
-            " st JOIN orca.runs r ON r.id = st.run JOIN orca.pipelines p ON"
-            " p.name = r.pipeline WHERE r.pipeline = $1 AND st.partition = $2"
-            " ORDER BY r.id, st.ord"
-        ),
-        Params().text(name).text(key),
-    )
+    var rows = pipelines_db.key_steps(db.conn, name, key)
     var done = done_keys(db, name, [key])
     var j = String(
         '{"pipeline": ',
@@ -222,30 +211,30 @@ def key_page(mut db: State, name: String, key: String) raises -> Page:
         j.write(
             ", " if i else "",
             '{"run": ',
-            r.int64("run"),
+            r.run,
             ', "step": ',
-            quote(r.text("step")),
+            quote(r.step),
             ', "status": ',
-            quote(r.text("status")),
+            quote(r.status),
             ', "attempts": ',
-            r.int64("attempts"),
+            r.attempts,
             ', "current_code": ',
-            "true" if r.bool("current") else "false",
+            "true" if r.current else "false",
             ', "error": ',
-            quote(r.text("error")),
+            quote(r.error),
             "}",
         )
         i += 1
         h.raw("<tr><td>")
-        h.chip(String("/runs/", r.int64("run")), String(r.int64("run")))
+        h.chip(String("/runs/", r.run), String(r.run))
         h.raw("</td>")
-        h.cell(r.text("step"))
+        h.cell(r.step)
         h.raw("<td>")
-        h.status(r.text("status"))
+        h.status(r.status)
         h.raw("</td>")
-        h.num(r.int64("attempts"))
-        h.cell("current" if r.bool("current") else "older")
-        h.cell(r.text("error"))
+        h.num(r.attempts)
+        h.cell("current" if r.current else "older")
+        h.cell(r.error)
         h.raw("</tr>")
     if len(rows) > 0:
         h.raw("</tbody></table></div>")

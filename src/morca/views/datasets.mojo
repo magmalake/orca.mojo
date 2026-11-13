@@ -2,7 +2,8 @@
 and what a rebuild of it would queue (`RebuildPreview`).
 """
 
-from postgres import Params
+import morca.db.datasets_view as datasets_db
+from morca.db.datasets_view import StepUse
 
 from morca.html import Html, url_encode
 from morca.sensors import plan_rebuild
@@ -11,48 +12,10 @@ from morca.ui.parts import code_link
 from morca.views.code import CodeLinks, code_of
 
 
-@fieldwise_init
-struct StepUse(Copyable, Movable):
-    """A step that writes (or reads) a dataset: declared in its `writes=`
-    (`reads=`), or seen committing to (reading) it; and the newest run that
-    did, or 0."""
-
-    var pipeline: String
-    var step: String
-    var run: Int
-
-
 def dataset_steps(
     mut db: State, dataset: String, writes: Bool
 ) raises -> List[StepUse]:
-    var kind = "writes" if writes else "reads"
-    var table = "orca.commits" if writes else "orca.reads"
-    var rows = db.conn.query(
-        String(
-            "WITH d AS (SELECT p.name AS pipeline, st->>'name' AS step FROM",
-            " orca.pipelines p, jsonb_array_elements(p.describe->'steps') AS",
-            " x(st) WHERE EXISTS (SELECT 1 FROM",
-            " jsonb_array_elements_text(coalesce(st->'",
-            kind,
-            "', '[]')) AS v WHERE v = $1)), seen AS (SELECT DISTINCT ON",
-            " (r.pipeline, s.step) r.pipeline, s.step, r.id AS run FROM ",
-            table,
-            " c JOIN orca.attempts a ON a.id = c.attempt JOIN orca.steps s ON",
-            " s.id = a.step JOIN orca.runs r ON r.id = s.run WHERE c.dataset",
-            " = $1 ORDER BY r.pipeline, s.step, c.attempt DESC) SELECT",
-            " coalesce(d.pipeline, seen.pipeline) AS pipeline,",
-            " coalesce(d.step, seen.step) AS step, coalesce(seen.run, 0) AS",
-            " run FROM d FULL JOIN seen ON seen.pipeline = d.pipeline AND",
-            " seen.step = d.step ORDER BY 1, 2",
-        ),
-        Params().text(dataset),
-    )
-    var out = List[StepUse]()
-    for r in rows:
-        out.append(
-            StepUse(r.text("pipeline"), r.text("step"), Int(r.int64("run")))
-        )
-    return out^
+    return datasets_db.dataset_steps(db.conn, dataset, writes)
 
 
 def steps_using(

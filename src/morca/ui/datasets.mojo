@@ -4,7 +4,7 @@ rebuild of it runs; `/datasets/<name>/snapshots/<id>`, a snapshot's
 lineage (`morca.lineage`); `/rebuilds/<id>`, a rebuild's runs by level.
 """
 
-from postgres import Params
+import morca.db.datasets_view as datasets_db
 
 from morca.api.datasets import json_made, json_rebuild
 from morca.api.pipelines import json_strings
@@ -699,15 +699,7 @@ comptime _DOWNSTREAM_HELP = (
 
 def snapshot_page(mut db: State, name: String, id: Int64) raises -> Page:
     var start = SnapshotRef(name, id)
-    var known = db.conn.query(
-        (
-            "SELECT 1 FROM orca.commits WHERE dataset = $1 AND snapshot_id = $2"
-            " UNION ALL SELECT 1 FROM orca.reads WHERE dataset = $1 AND"
-            " snapshot_id = $2 LIMIT 1"
-        ),
-        Params().text(name).int64(id),
-    )
-    if len(known) == 0:
+    if not datasets_db.snapshot_known(db.conn, name, id):
         return not_found(String("no snapshot ", start, " that morca knows of"))
     var b = back(db, start)
     var f = forward(db, start)
