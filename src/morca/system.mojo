@@ -33,7 +33,8 @@ from std.os.path import exists
 from std.time import perf_counter_ns
 
 from json import Value, loads
-from postgres import Params
+import morca.db.system as system_db
+from morca.db.system import Container, Minute
 
 from morca.civil import Civil
 from morca.fleet import Series, Summary, _chart, _fixed
@@ -66,13 +67,6 @@ comptime _TAIL = 800
 # ---------------------------------------------------------------------------
 # Reading samples (pure)
 # ---------------------------------------------------------------------------
-
-
-@fieldwise_init
-struct Container(Copyable, Movable):
-    var name: String
-    var mem: Int
-    """Bytes, as `docker stats` counts them."""
 
 
 @fieldwise_init
@@ -180,31 +174,6 @@ def samples_after(
     return sorted^
 
 
-@fieldwise_init
-struct Minute(Copyable, Movable):
-    """What the samples of one minute add up to."""
-
-    var minute: Int
-    """Unix time of its start."""
-    var n: Int
-    var last_t: Float64
-    var cpu_sum: Float64
-    var cpu_max: Float64
-    var mem_sum: Float64
-    var mem_max: Float64
-    var mem_used: Int
-    var mem_total: Int
-    var disk_max: Float64
-    var disk_used: Int
-    var disk_total: Int
-    var disk_path: String
-    var net_in_sum: Float64
-    var net_out_sum: Float64
-    var names: List[String]
-    var peaks: List[Int]
-    """Each container's highest memory in the minute."""
-
-
 def roll(samples: List[ControlSample]) -> List[Minute]:
     """The samples, in time order, as one `Minute` each."""
     var out = List[Minute]()
@@ -262,29 +231,6 @@ def roll(samples: List[ControlSample]) -> List[Minute]:
 # ---------------------------------------------------------------------------
 # Keeping them (the scheduler)
 # ---------------------------------------------------------------------------
-
-comptime _UPSERT = (
-    "INSERT INTO orca.system_minutes AS m (minute, n, last_t, cpu_sum,"
-    " cpu_max, mem_sum, mem_max, mem_used, mem_total, disk_max, disk_used,"
-    " disk_total, disk_path, net_in_sum, net_out_sum) VALUES"
-    " (to_timestamp($1), $2::int, to_timestamp($3), $4, $5, $6, $7, $8::int8,"
-    " $9::int8, $10, $11::int8, $12::int8, $13, $14, $15) ON CONFLICT"
-    " (minute) DO UPDATE SET n = m.n + EXCLUDED.n, last_t = GREATEST(m.last_t,"
-    " EXCLUDED.last_t), cpu_sum = m.cpu_sum + EXCLUDED.cpu_sum, cpu_max ="
-    " GREATEST(m.cpu_max, EXCLUDED.cpu_max), mem_sum = m.mem_sum +"
-    " EXCLUDED.mem_sum, mem_max = GREATEST(m.mem_max, EXCLUDED.mem_max),"
-    " mem_used = GREATEST(m.mem_used, EXCLUDED.mem_used), mem_total ="
-    " EXCLUDED.mem_total, disk_max = GREATEST(m.disk_max, EXCLUDED.disk_max),"
-    " disk_used = EXCLUDED.disk_used, disk_total = EXCLUDED.disk_total,"
-    " disk_path = EXCLUDED.disk_path, net_in_sum = m.net_in_sum +"
-    " EXCLUDED.net_in_sum, net_out_sum = m.net_out_sum + EXCLUDED.net_out_sum"
-)
-
-comptime _UPSERT_CONTAINER = (
-    "INSERT INTO orca.system_containers AS c (minute, name, mem) VALUES"
-    " (to_timestamp($1), $2, $3::int8) ON CONFLICT (minute, name) DO UPDATE"
-    " SET mem = GREATEST(c.mem, EXCLUDED.mem)"
-)
 
 
 struct Archive(Movable):
@@ -395,42 +341,9 @@ def _expire_local() raises:
 def keep(mut db: State, text: String, mut archive: Archive) raises -> Int:
     """Rolls the new samples in `text` (the control instance's file) into
     the database and the day files; returns how many were new."""
-    var mark = db.conn.query(
-        (
-            "SELECT coalesce(extract(epoch FROM max(last_t)), 0)::float8 AS t"
-            " FROM orca.system_minutes"
-        ),
-        Params(),
-    ).row(0)
-    var fresh = samples_after(text, mark.float64("t"))
+    var fresh = samples_after(text, system_db.last_kept(db.conn))
     for m in roll(fresh):
-        _ = db.conn.execute(
-            _UPSERT,
-            Params()
-            .float64(Float64(m.minute))
-            .int32(Int32(m.n))
-            .float64(m.last_t)
-            .float64(m.cpu_sum)
-            .float64(m.cpu_max)
-            .float64(m.mem_sum)
-            .float64(m.mem_max)
-            .int64(Int64(m.mem_used))
-            .int64(Int64(m.mem_total))
-            .float64(m.disk_max)
-            .int64(Int64(m.disk_used))
-            .int64(Int64(m.disk_total))
-            .text(m.disk_path)
-            .float64(m.net_in_sum)
-            .float64(m.net_out_sum),
-        )
-        for k in range(len(m.names)):
-            _ = db.conn.execute(
-                _UPSERT_CONTAINER,
-                Params()
-                .float64(Float64(m.minute))
-                .text(m.names[k])
-                .int64(Int64(m.peaks[k])),
-            )
+        system_db.keep_minute(db.conn, m)
     try:
         _archive(fresh, archive)
     except e:
@@ -441,15 +354,7 @@ def keep(mut db: State, text: String, mut archive: Archive) raises -> Int:
 def trim(mut db: State) raises:
     """Drops what is older than `KEEP_DAYS`, in the database and in a local
     `MORCA_LOGS`."""
-    for t in ["system_minutes", "system_containers"]:
-        _ = db.conn.execute(
-            String(
-                "DELETE FROM orca.",
-                t,
-                " WHERE minute < now() - make_interval(days => $1::int)",
-            ),
-            Params().int32(Int32(KEEP_DAYS)),
-        )
+    system_db.trim(db.conn, KEEP_DAYS)
     try:
         _expire_local()
     except:
@@ -487,43 +392,24 @@ struct Now(Copyable, Movable):
 def system_now(mut db: State) raises -> Optional[Now]:
     """The newest minute the control instance sampled, or None if it never
     has. Check `stale()`: it may be long ago."""
-    var rows = db.conn.query(
-        (
-            "SELECT minute, extract(epoch FROM now() - last_t)::float8 AS age,"
-            " cpu_sum / n AS cpu, cpu_max, mem_sum / n AS mem, mem_used,"
-            " mem_total, disk_max, disk_used, disk_total, disk_path, net_in_sum"
-            " / n AS nin, net_out_sum / n AS nout, extract(epoch FROM"
-            " minute)::float8 AS e FROM orca.system_minutes ORDER BY minute"
-            " DESC LIMIT 1"
-        ),
-        Params(),
-    )
-    if len(rows) == 0:
+    var got = system_db.newest_minute(db.conn)
+    if not got:
         return None
-    var r = rows.row(0)
-    var containers = List[Container]()
-    for c in db.conn.query(
-        (
-            "SELECT name, mem FROM orca.system_containers WHERE minute ="
-            " to_timestamp($1) ORDER BY mem DESC, name"
-        ),
-        Params().float64(r.float64("e")),
-    ):
-        containers.append(Container(c.text("name"), Int(c.int64("mem"))))
+    ref r = got.value()
     return Now(
-        r.float64("age"),
-        r.float64("cpu"),
-        r.float64("cpu_max"),
-        r.float64("mem"),
-        Int(r.int64("mem_used")),
-        Int(r.int64("mem_total")),
-        r.float64("disk_max"),
-        Int(r.int64("disk_used")),
-        Int(r.int64("disk_total")),
-        r.text("disk_path"),
-        r.float64("nin"),
-        r.float64("nout"),
-        containers^,
+        r.age,
+        r.cpu,
+        r.cpu_max,
+        r.mem,
+        r.mem_used,
+        r.mem_total,
+        r.disk_max,
+        r.disk_used,
+        r.disk_total,
+        r.disk_path,
+        r.nin,
+        r.nout,
+        r.containers.copy(),
     )
 
 
@@ -638,10 +524,7 @@ def system_charts(mut db: State, hours: Int) raises -> Charts:
     samples is 0."""
     var bucket = 300 if hours <= 24 else (1800 if hours <= 168 else 3600)
     var n = hours * 3600 // bucket
-    var now = db.conn.query(
-        "SELECT extract(epoch FROM now())::float8 AS e", Params()
-    ).row(0)
-    var current = Int(now.float64("e")) // bucket
+    var current = Int(system_db.now_epoch(db.conn)) // bucket
     var first = current - n + 1
     var labels = List[String]()
     for i in range(n):
@@ -653,51 +536,21 @@ def system_charts(mut db: State, hours: Int) raises -> Charts:
     var disk = List[Float64](length=n, fill=0.0)
     var net_in = List[Float64](length=n, fill=0.0)
     var net_out = List[Float64](length=n, fill=0.0)
-    var bucket_sql = String(
-        "floor(extract(epoch FROM minute) / ", bucket, ")::int8 - ", first
-    )
-    for r in db.conn.query(
-        String(
-            "SELECT ",
-            bucket_sql,
-            (
-                " AS i, sum(cpu_sum) / sum(n) AS cpu, max(cpu_max) AS cpu_max,"
-                " sum(mem_sum) / sum(n) AS mem, max(mem_max) AS mem_max,"
-                " max(disk_max) AS disk, sum(net_in_sum) / sum(n) AS nin,"
-                " sum(net_out_sum) / sum(n) AS nout FROM orca.system_minutes"
-                " WHERE minute >= to_timestamp("
-            ),
-            first * bucket,
-            ") GROUP BY 1",
-        ),
-        Params(),
-    ):
-        var i = Int(r.int64("i"))
+    for r in system_db.points(db.conn, bucket, first):
+        var i = r.i
         if i < 0 or i >= n:
             continue
-        cpu[i] = r.float64("cpu")
-        cpu_peak[i] = r.float64("cpu_max")
-        mem[i] = r.float64("mem")
-        mem_peak[i] = r.float64("mem_max")
-        disk[i] = r.float64("disk")
-        net_in[i] = r.float64("nin") / 1e6
-        net_out[i] = r.float64("nout") / 1e6
+        cpu[i] = r.cpu
+        cpu_peak[i] = r.cpu_max
+        mem[i] = r.mem
+        mem_peak[i] = r.mem_max
+        disk[i] = r.disk
+        net_in[i] = r.nin / 1e6
+        net_out[i] = r.nout / 1e6
     var names = List[String]()
     var series = List[List[Float64]]()
-    for r in db.conn.query(
-        String(
-            "SELECT name, ",
-            bucket_sql,
-            (
-                " AS i, max(mem) AS mem FROM orca.system_containers WHERE"
-                " minute >= to_timestamp("
-            ),
-            first * bucket,
-            ") GROUP BY name, 2 ORDER BY name, 2",
-        ),
-        Params(),
-    ):
-        var name = r.text("name")
+    for r in system_db.container_points(db.conn, bucket, first):
+        var name = r[0]
         var at = -1
         for k in range(len(names)):
             if names[k] == name:
@@ -706,9 +559,9 @@ def system_charts(mut db: State, hours: Int) raises -> Charts:
             names.append(name)
             series.append(List[Float64](length=n, fill=0.0))
             at = len(names) - 1
-        var i = Int(r.int64("i"))
+        var i = r[1]
         if i >= 0 and i < n:
-            series[at][i] = Float64(r.int64("mem")) / 1e6
+            series[at][i] = Float64(r[2]) / 1e6
     var by = List[Series]()
     var classes: List[String] = [
         "fl--0",

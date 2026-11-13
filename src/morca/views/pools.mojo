@@ -22,7 +22,7 @@ from std.os import getenv
 
 from postgres import Params
 
-from morca.live import dead_sql, stale_limit, start_grace
+from morca.db.live import dead_sql, stale_limit, start_grace
 from morca.state import State
 
 

@@ -33,11 +33,11 @@ such as `€8.49/month`; "Fixed" when unset), with no region.
 from std.os import getenv
 
 from json import Value, loads
-from postgres import Params
+import morca.db.fleet as fleet_db
 
 from morca.html import Html, escape, url_encode
 from morca.json import quote
-from morca.live import dead_sql, stale_limit, start_grace
+from morca.db.live import stale_limit, start_grace
 from morca.logs import read_location
 from morca.metrics import bytes_text
 from morca.sample import metrics_location
@@ -185,63 +185,30 @@ def tail_samples(text: String, n: Int = _TAIL) -> List[FleetSample]:
 # Ingesting (the scheduler)
 # ---------------------------------------------------------------------------
 
-comptime _INSERT = (
-    "WITH ins AS (INSERT INTO orca.fleet_samples (host, t, cores, cpu,"
-    " busiest, mem, disk, net_in, net_out) SELECT $1, to_timestamp($2),"
-    " $3::int, $4, $5, $6, $7, $8, $9 WHERE to_timestamp($2) > now() -"
-    " make_interval(mins => $12::int) ON CONFLICT DO NOTHING RETURNING t)"
-    " INSERT INTO orca.fleet_hourly (hour, role, seconds, core_seconds,"
-    " busy_seconds, net_in_bytes, net_out_bytes) SELECT date_trunc('hour', t),"
-    " $10, $11::float8, $3::float8 * $11::float8, $3::float8 * $11::float8 *"
-    " $4 / 100, $8 * $11::float8, $9 * $11::float8 FROM ins ON CONFLICT"
-    " (hour, role) DO UPDATE SET seconds = orca.fleet_hourly.seconds +"
-    " EXCLUDED.seconds, core_seconds = orca.fleet_hourly.core_seconds +"
-    " EXCLUDED.core_seconds, busy_seconds = orca.fleet_hourly.busy_seconds +"
-    " EXCLUDED.busy_seconds, net_in_bytes = orca.fleet_hourly.net_in_bytes +"
-    " EXCLUDED.net_in_bytes, net_out_bytes = orca.fleet_hourly.net_out_bytes"
-    " + EXCLUDED.net_out_bytes"
-)
-
 
 def _keep(
     mut db: State, host: String, role: String, text: String
 ) raises -> Int:
     """Stores the samples in `text` that `host` hasn't got and aren't
     older than the keep window, and adds them to the hour's totals."""
-    var before = Int(
-        db.conn.query(
-            "SELECT count(*) AS n FROM orca.fleet_samples WHERE host = $1",
-            Params().text(host),
-        )
-        .row(0)
-        .int64("n")
-    )
+    var before = fleet_db.sample_count(db.conn, host)
     for s in tail_samples(text):
-        _ = db.conn.execute(
-            _INSERT,
-            Params()
-            .text(host)
-            .float64(s.t)
-            .float64(s.cores)
-            .float64(s.cpu)
-            .float64(s.busiest)
-            .float64(s.mem)
-            .float64(s.disk)
-            .float64(s.net_in)
-            .float64(s.net_out)
-            .text(role)
-            .float64(s.dt)
-            .int32(Int32(SAMPLE_KEEP_MINUTES)),
+        fleet_db.keep_sample(
+            db.conn,
+            host,
+            role,
+            s.t,
+            s.dt,
+            s.cores,
+            s.cpu,
+            s.busiest,
+            s.mem,
+            s.disk,
+            s.net_in,
+            s.net_out,
+            SAMPLE_KEEP_MINUTES,
         )
-    var after = Int(
-        db.conn.query(
-            "SELECT count(*) AS n FROM orca.fleet_samples WHERE host = $1",
-            Params().text(host),
-        )
-        .row(0)
-        .int64("n")
-    )
-    return after - before
+    return fleet_db.sample_count(db.conn, host) - before
 
 
 def ingest(mut db: State) raises -> Int:
@@ -251,19 +218,9 @@ def ingest(mut db: State) raises -> Int:
     uploaded yet."""
     var added = 0
     # An instance that just ended uploaded its last lines as it did.
-    for row in db.conn.query(
-        (
-            "SELECT i.id, i.run, i.start, i.role, r.pipeline FROM"
-            " orca.instances i JOIN orca.runs r ON r.id = i.run WHERE"
-            " i.ended IS NULL OR i.ended > now() - interval '2 minutes'"
-        ),
-        Params(),
-    ):
-        var role = row.text("role")
+    for row in fleet_db.sampled_instances(db.conn):
         var loc = metrics_location(
-            row.text("pipeline"),
-            Int(row.int64("run")),
-            String(role, "-", row.text("id")),
+            row.pipeline, row.run, String(row.role, "-", row.id)
         )
         if not loc:
             continue
@@ -272,7 +229,7 @@ def ingest(mut db: State) raises -> Int:
             text = String(from_utf8_lossy=Span(read_location(loc)))
         except:
             continue
-        added += _keep(db, row.text("id"), role, text)
+        added += _keep(db, row.id, row.role, text)
     var control = getenv("MORCA_CONTROL_SAMPLES")
     if control:
         try:
@@ -280,20 +237,7 @@ def ingest(mut db: State) raises -> Int:
             added += _keep(db, _CONTROL, _CONTROL, text)
         except:
             pass
-    _ = db.conn.execute(
-        (
-            "DELETE FROM orca.fleet_samples WHERE t < now() -"
-            " make_interval(mins => $1::int)"
-        ),
-        Params().int32(Int32(SAMPLE_KEEP_MINUTES)),
-    )
-    _ = db.conn.execute(
-        (
-            "DELETE FROM orca.fleet_hourly WHERE hour < now() -"
-            " make_interval(days => $1::int)"
-        ),
-        Params().int32(Int32(HOURLY_KEEP_DAYS)),
-    )
+    fleet_db.prune(db.conn, SAMPLE_KEEP_MINUTES, HOURLY_KEEP_DAYS)
     return added
 
 
@@ -345,84 +289,52 @@ def fleet_hosts(mut db: State) raises -> List[Host]:
     var out = List[Host]()
     var sparks_x = Dict[String, List[Float64]]()
     var sparks_y = Dict[String, List[Float64]]()
-    for r in db.conn.query(
-        (
-            "SELECT host, extract(epoch FROM now() - t)::float8 AS ago, cpu"
-            " FROM orca.fleet_samples WHERE t > now() - make_interval(secs =>"
-            " $1::int) ORDER BY host, t"
-        ),
-        Params().int32(Int32(_SPARK_SECONDS)),
-    ):
-        var h = r.text("host")
+    for r in fleet_db.spark_points(db.conn, _SPARK_SECONDS):
+        var h = r.host
         if h not in sparks_x:
             sparks_x[h] = List[Float64]()
             sparks_y[h] = List[Float64]()
-        sparks_x[h].append(1.0 - r.float64("ago") / Float64(_SPARK_SECONDS))
-        sparks_y[h].append(r.float64("cpu"))
-    var sql = (
-        "SELECT i.id, i.role, i.instance_type, i.run, extract(epoch FROM now()"
-        " - i.launched)::float8 AS up, i.drained IS NOT NULL AS draining,"
-        " i.idle IS NOT NULL AS idle, coalesce(extract(epoch FROM now() -"
-        " i.idle), 0)::float8 AS idle_for,"
-        " s.cpu, s.busiest, s.mem, s.disk, s.net_in, s.net_out, s.ago FROM"
-        " orca.instances i LEFT JOIN LATERAL (SELECT cpu, busiest, mem, disk,"
-        " net_in, net_out, extract(epoch FROM now() - t)::float8 AS ago FROM"
-        " orca.fleet_samples WHERE host = i.id ORDER BY t DESC LIMIT 1) s ON"
-        " true WHERE i.ended IS NULL ORDER BY i.launched, i.id"
-    )
-    for r in db.conn.query(sql, Params()):
-        var id = r.text("id")
-        var sampled = not r.is_null("cpu")
+        sparks_x[h].append(1.0 - r.ago / Float64(_SPARK_SECONDS))
+        sparks_y[h].append(r.cpu)
+    for r in fleet_db.live_instances(db.conn):
+        var id = r.id
+        var sampled = Bool(r.sample)
+        var s = r.sample.value().copy() if sampled else fleet_db.LastSample(
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        )
         out.append(
             Host(
                 id,
-                r.text("role"),
-                r.text("instance_type"),
-                Int(r.int64("run")),
-                r.float64("up"),
-                "idle (pooled)" if r.bool("idle") else (
-                    "draining" if r.bool("draining") else (
+                r.role,
+                r.instance_type,
+                r.run,
+                r.up,
+                "idle (pooled)" if r.idle else (
+                    "draining" if r.draining else (
                         "running" if sampled else "starting"
                     )
                 ),
                 sampled,
-                r.float64("ago") if sampled else 0.0,
-                r.float64("cpu") if sampled else 0.0,
-                r.float64("busiest") if sampled else 0.0,
-                r.float64("mem") if sampled else 0.0,
-                r.float64("disk") if sampled else 0.0,
-                r.float64("net_in") if sampled else 0.0,
-                r.float64("net_out") if sampled else 0.0,
+                s.ago,
+                s.cpu,
+                s.busiest,
+                s.mem,
+                s.disk,
+                s.net_in,
+                s.net_out,
                 sparks_x.pop(id, List[Float64]()),
                 sparks_y.pop(id, List[Float64]()),
-                r.float64("idle_for") if r.bool("idle") else 0.0,
-                [Int(r.int64("run"))],
+                r.idle_for if r.idle else 0.0,
+                [r.run],
             )
         )
     # Runs placed on the control instance, live: running with a process
     # that hasn't gone stale.
     var stale = stale_limit()
-    var runs = List[Int]()
-    for r in db.conn.query(
-        String(
-            "SELECT id FROM orca.runs WHERE status = 'running' AND placement",
-            " = 'control' AND NOT ",
-            dead_sql(String(stale), start_grace(stale)),
-            " ORDER BY id",
-        ),
-        Params(),
-    ):
-        runs.append(Int(r.int64("id")))
-    var c = db.conn.query(
-        (
-            "SELECT cpu, busiest, mem, disk, net_in, net_out,"
-            " extract(epoch FROM now() - t)::float8 AS ago FROM"
-            " orca.fleet_samples WHERE host = $1 ORDER BY t DESC LIMIT 1"
-        ),
-        Params().text(_CONTROL),
-    )
-    if len(c) > 0 or len(runs) > 0:
-        var sampled = len(c) > 0
+    var runs = fleet_db.control_runs(db.conn, stale, start_grace(stale))
+    var c = fleet_db.last_sample(db.conn, _CONTROL)
+    if c or len(runs) > 0:
+        var sampled = Bool(c)
         var ago = 0.0
         var cpu = 0.0
         var busiest = 0.0
@@ -431,14 +343,14 @@ def fleet_hosts(mut db: State) raises -> List[Host]:
         var net_in = 0.0
         var net_out = 0.0
         if sampled:
-            var r = c.row(0)
-            ago = r.float64("ago")
-            cpu = r.float64("cpu")
-            busiest = r.float64("busiest")
-            mem = r.float64("mem")
-            disk = r.float64("disk")
-            net_in = r.float64("net_in")
-            net_out = r.float64("net_out")
+            ref r = c.value()
+            ago = r.ago
+            cpu = r.cpu
+            busiest = r.busiest
+            mem = r.mem
+            disk = r.disk
+            net_in = r.net_in
+            net_out = r.net_out
         out.append(
             Host(
                 _CONTROL,
@@ -503,14 +415,6 @@ def _bump(mut types: List[TypeCount], t: String, n: Int = 1):
     types.append(TypeCount(t, n))
 
 
-def _hours_sql(hours: Int) -> String:
-    return String(
-        "generate_series(date_trunc('hour', now()) - interval '1 hour' * ",
-        hours - 1,
-        ", date_trunc('hour', now()), interval '1 hour')",
-    )
-
-
 def fleet_summary(mut db: State) raises -> Summary:
     var s = Summary(
         0,
@@ -527,28 +431,13 @@ def fleet_summary(mut db: State) raises -> Summary:
         0,
         List[Float64](),
     )
-    for r in db.conn.query(
-        (
-            "SELECT role, instance_type, count(*) AS n FROM orca.instances"
-            " WHERE ended IS NULL GROUP BY role, instance_type ORDER BY"
-            " instance_type"
-        ),
-        Params(),
-    ):
-        var n = Int(r.int64("n"))
-        if r.text("role") == "head":
-            s.heads += n
+    for r in fleet_db.live_type_counts(db.conn):
+        if r.role == "head":
+            s.heads += r.n
         else:
-            s.workers += n
-        _bump(s.types, r.text("instance_type"), n)
-    var control = db.conn.query(
-        (
-            "SELECT 1 AS one FROM orca.fleet_samples WHERE host = $1 AND t >"
-            " now() - interval '5 minutes' LIMIT 1"
-        ),
-        Params().text(_CONTROL),
-    )
-    if len(control) > 0:
+            s.workers += r.n
+        _bump(s.types, r.instance_type, r.n)
+    if fleet_db.sampled_lately(db.conn, _CONTROL):
         s.control = True
         if _control_type():
             _bump(s.types, _control_type())
@@ -558,47 +447,16 @@ def fleet_summary(mut db: State) raises -> Summary:
             s.unpriced += t.n
         else:
             s.cost += p * Float64(t.n)
-    var counts = db.conn.query(
-        (
-            "SELECT count(*) FILTER (WHERE status = 'running') AS running,"
-            " count(*) FILTER (WHERE status = 'queued') AS queued FROM"
-            " orca.runs WHERE status IN ('running', 'queued')"
-        ),
-        Params(),
-    ).row(0)
-    s.running = Int(counts.int64("running"))
-    s.queued = Int(counts.int64("queued"))
-    var hour = db.conn.query(
-        (
-            "SELECT (SELECT count(*) FROM orca.runs WHERE started > now() -"
-            " interval '1 hour') AS runs, (SELECT count(*) FROM"
-            " orca.attempts WHERE status = 'failed' AND ended > now() -"
-            " interval '1 hour') AS attempts, (SELECT count(*) FROM orca.runs"
-            " WHERE status = 'failed' AND ended > now() - interval '1 hour')"
-            " AS failed"
-        ),
-        Params(),
-    ).row(0)
-    s.runs_hour = Int(hour.int64("runs"))
-    s.failed_attempts_hour = Int(hour.int64("attempts"))
-    s.failed_runs_hour = Int(hour.int64("failed"))
-    for r in db.conn.query(
-        String(
-            (
-                "SELECT (SELECT count(*) FROM orca.runs WHERE started >= h AND"
-                " started < h + interval '1 hour') AS runs, (SELECT count(*)"
-                " FROM orca.attempts WHERE status = 'failed' AND ended >= h AND"
-                " ended < h + interval '1 hour') + (SELECT count(*) FROM"
-                " orca.runs WHERE status = 'failed' AND ended >= h AND ended <"
-                " h + interval '1 hour') AS errors FROM "
-            ),
-            _hours_sql(24),
-            " AS h ORDER BY h",
-        ),
-        Params(),
-    ):
-        s.runs_spark.append(Float64(r.int64("runs")))
-        s.errors_spark.append(Float64(r.int64("errors")))
+    var counts = fleet_db.running_and_queued(db.conn)
+    s.running = counts[0]
+    s.queued = counts[1]
+    var hour = fleet_db.last_hour(db.conn)
+    s.runs_hour = hour.runs
+    s.failed_attempts_hour = hour.attempts
+    s.failed_runs_hour = hour.failed
+    for r in fleet_db.hourly_sparks(db.conn, 24):
+        s.runs_spark.append(r[0])
+        s.errors_spark.append(r[1])
     return s^
 
 
@@ -650,81 +508,20 @@ def fleet_charts(mut db: State, hours: Int) raises -> Charts:
     var capacity = List[Float64]()
     var net_in = List[Float64]()
     var net_out = List[Float64]()
-    # An hour's totals over the time it has had: less than 3600 s for this one.
-    var span = String(
-        "least(3600, greatest(extract(epoch FROM now() - hrs.h), 1))"
-    )
-    var sql = String(
-        "WITH hrs AS (SELECT ",
-        "h FROM ",
-        _hours_sql(hours),
-        (
-            " AS h), st AS (SELECT date_trunc('hour', started) AS h, count(*)"
-            " AS n FROM orca.runs WHERE started >= now() - interval '1 hour' * "
-        ),
-        hours,
-        (
-            " GROUP BY 1), en AS (SELECT date_trunc('hour', ended) AS h,"
-            " count(*) AS n, count(*) FILTER (WHERE status = 'failed') AS bad"
-            " FROM orca.runs WHERE ended >= now() - interval '1 hour' * "
-        ),
-        hours,
-        (
-            " GROUP BY 1), fa AS (SELECT date_trunc('hour', ended) AS h,"
-            " count(*) AS n FROM orca.attempts WHERE status = 'failed' AND"
-            " ended >= now() - interval '1 hour' * "
-        ),
-        hours,
-        (
-            " GROUP BY 1), fl AS (SELECT hour AS h, sum(busy_seconds) AS busy,"
-            " sum(core_seconds) AS cap, sum(net_in_bytes) AS nin,"
-            " sum(net_out_bytes) AS nout, bool_or(role = 'control') AS ctl FROM"
-            " orca.fleet_hourly GROUP BY hour) SELECT to_char(hrs.h AT TIME"
-            " ZONE 'UTC', 'MM-DD HH24\":00\"') AS label, (SELECT count(*) FROM"
-            " orca.instances i WHERE i.role = 'head' AND i.launched < hrs.h +"
-            " interval '1 hour' AND coalesce(i.ended, now()) > hrs.h)::float8"
-            " AS heads, (SELECT count(*) FROM orca.instances i WHERE i.role ="
-            " 'worker' AND i.launched < hrs.h + interval '1 hour' AND"
-            " coalesce(i.ended, now()) > hrs.h)::float8 AS workers, CASE WHEN"
-            " coalesce(fl.ctl, false) THEN 1.0 ELSE 0.0 END AS control,"
-            # A self-hosted worker (`morca worker`, a token per machine) that
-            # ran a run that hour, or was seen in it.
-            " (SELECT count(*) FROM orca.workers w WHERE (w.last_seen >="
-            " hrs.h AND w.last_seen < hrs.h + interval '1 hour') OR EXISTS"
-            " (SELECT 1 FROM orca.runs r WHERE r.worker = w.id AND r.started"
-            " < hrs.h + interval '1 hour' AND coalesce(r.ended, now()) >"
-            " hrs.h))::float8 AS self_hosted,"
-            " coalesce(st.n, 0)::float8 AS started, coalesce(en.n, 0)::float8"
-            " AS finished, coalesce(en.bad, 0)::float8 AS failed,"
-            " coalesce(fa.n, 0)::float8 AS attempts, coalesce(fl.busy,"
-            " 0)::float8 /"
-        ),
-        span,
-        " AS busy, coalesce(fl.cap, 0)::float8 / ",
-        span,
-        " AS capacity, coalesce(fl.nin, 0)::float8 / ",
-        span,
-        " AS nin, coalesce(fl.nout, 0)::float8 / ",
-        span,
-        (
-            " AS nout FROM hrs LEFT JOIN st USING (h) LEFT JOIN en USING (h)"
-            " LEFT JOIN fa USING (h) LEFT JOIN fl USING (h) ORDER BY hrs.h"
-        ),
-    )
-    for r in db.conn.query(sql, Params()):
-        labels.append(r.text("label"))
-        heads.append(r.float64("heads"))
-        workers.append(r.float64("workers"))
-        control.append(r.float64("control"))
-        self_hosted.append(r.float64("self_hosted"))
-        started.append(r.float64("started"))
-        finished.append(r.float64("finished"))
-        failed.append(r.float64("failed") + r.float64("attempts"))
-        attempts.append(r.float64("attempts"))
-        busy.append(r.float64("busy"))
-        capacity.append(r.float64("capacity"))
-        net_in.append(r.float64("nin") / 1e6)
-        net_out.append(r.float64("nout") / 1e6)
+    for r in fleet_db.chart_hours(db.conn, hours):
+        labels.append(r.label)
+        heads.append(r.heads)
+        workers.append(r.workers)
+        control.append(r.control)
+        self_hosted.append(r.self_hosted)
+        started.append(r.started)
+        finished.append(r.finished)
+        failed.append(r.failed + r.attempts)
+        attempts.append(r.attempts)
+        busy.append(r.busy)
+        capacity.append(r.capacity)
+        net_in.append(r.nin / 1e6)
+        net_out.append(r.nout / 1e6)
     return Charts(
         hours,
         labels^,

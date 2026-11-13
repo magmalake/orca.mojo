@@ -143,10 +143,7 @@ from std.time import (
     perf_counter_ns,
     sleep,
 )
-from postgres import (
-    Params,
-    Transaction,
-)
+from postgres import Transaction
 from morca.pool_scale import PoolScaler
 from morca.expiry import (
     expirable,
@@ -203,12 +200,8 @@ from morca.instances import (
     step_down,
     try_lead,
 )
-from morca.live import (
-    dead_sql,
-    stale_limit,
-    stale_sql,
-    start_grace,
-)
+import morca.db.scheduler as scheduler_db
+from morca.db.live import stale_limit, start_grace
 from morca.logs import read_location
 from morca.proc import (
     Capture,
@@ -278,8 +271,8 @@ while another runs."""
 comptime _WORKER_OWNER = "worker"
 """A run's owner once a worker claimed it and before its process did
 (`orca.workers.WORKER_OWNER`, which imports this module)."""
-comptime _RETRIED = "trigger IN ('schedule', 'backfill', 'sensor', 'fill')"
-"""The runs the scheduler retries."""
+comptime _RETRIED = scheduler_db.RETRIED
+"""The runs the scheduler retries, as SQL (`morca.db.scheduler.RETRIED`)."""
 comptime RETRIED_SQL = _RETRIED
 """`_RETRIED`, for `morca.actions`."""
 
@@ -624,15 +617,10 @@ struct Scheduler(Movable):
             if ids:
                 ids.write(",")
             ids.write(e.value[0])
-        for r in self.db.conn.query(
-            String(
-                "SELECT id, pipeline FROM orca.runs WHERE status = 'running'",
-                " AND id::text = ANY (string_to_array($2, ',')) AND ",
-                stale_sql("$1", self.start_grace),
-            ),
-            Params().float64(self.stale).text(ids),
+        for r in scheduler_db.stale_of(
+            self.db.conn, self.stale, self.start_grace, ids
         ):
-            var id = Int(r.int64("id"))
+            var id = r[0]
             var pid = 0
             for e in self._spawned.items():
                 if e.value[0] == id:
@@ -659,7 +647,7 @@ struct Scheduler(Movable):
                 "killed pid",
                 pid,
                 "of",
-                r.text("pipeline"),
+                r[1],
                 "run",
                 id,
                 "(its heartbeat went stale)",
@@ -748,16 +736,8 @@ struct Scheduler(Movable):
             var made = self.cgroups.make(run, start, c.limit_mb)
             c.path = made[0]
             c.kill_mb = made[1]
-            _ = self.db.conn.execute(
-                (
-                    "UPDATE orca.runs SET memory_limit_mb = $3, memory_max_mb"
-                    " = $4, memory_bytes = NULL WHERE id = $1 AND starts = $2"
-                ),
-                Params()
-                .int64(Int64(run))
-                .int64(Int64(start))
-                .int64(Int64(c.limit_mb))
-                .int64(Int64(c.kill_mb)),
+            scheduler_db.set_memory_limit(
+                self.db.conn, run, start, c.limit_mb, c.kill_mb
             )
         except e:
             print("morca: run", run, "starts without a cgroup:", e)
@@ -798,44 +778,21 @@ struct Scheduler(Movable):
             print("run", c.run, "pid", pid, over)
             spent = next <= c.limit_mb
             try:
-                _ = self.db.conn.execute(
-                    (
-                        "UPDATE orca.pipelines SET memory_raised_mb ="
-                        " greatest(coalesce(memory_raised_mb, 0), $2),"
-                        " memory_raised_run = $3 WHERE name = $1"
-                    ),
-                    Params()
-                    .text(c.pipeline)
-                    .int64(Int64(next))
-                    .int64(Int64(c.run)),
-                )
+                scheduler_db.raise_memory(self.db.conn, c.pipeline, next, c.run)
             except e:
                 print("morca: can't raise", c.pipeline, "memory:", e)
         var stall = Cgroups.stall_ms(c.path)
         try:
-            _ = self.db.conn.execute(
-                (
-                    "UPDATE orca.attempts a SET memory_limit_mb = $3,"
-                    " grant_memory_mb = nullif($4, 0), memory_stall_ms ="
-                    " nullif($5, -1), memory_stall_full_ms = nullif($6, -1)"
-                    " FROM orca.steps st WHERE st.id = a.step AND st.run = $1"
-                    " AND a.host LIKE '%:' || $2 AND a.memory_limit_mb IS NULL"
-                ),
-                Params()
-                .int64(Int64(c.run))
-                .text(String(pid))
-                .int64(Int64(c.limit_mb))
-                .int64(Int64(c.grant_mb))
-                .int64(Int64(stall[0]))
-                .int64(Int64(stall[1])),
+            scheduler_db.attempts_memory(
+                self.db.conn,
+                c.run,
+                pid,
+                c.limit_mb,
+                c.grant_mb,
+                stall[0],
+                stall[1],
             )
-            _ = self.db.conn.execute(
-                (
-                    "UPDATE orca.runs SET memory_bytes = NULL WHERE id = $1"
-                    " AND starts = $2"
-                ),
-                Params().int64(Int64(c.run)).int64(Int64(c.start)),
-            )
+            scheduler_db.clear_memory_bytes(self.db.conn, c.run, c.start)
         except e:
             print("morca: can't record run", c.run, "memory limit:", e)
         # The run is over: what it left running goes with it.
@@ -860,15 +817,8 @@ struct Scheduler(Movable):
             if b < 0:
                 continue
             try:
-                _ = self.db.conn.execute(
-                    (
-                        "UPDATE orca.runs SET memory_bytes = $3 WHERE id = $1"
-                        " AND starts = $2"
-                    ),
-                    Params()
-                    .int64(Int64(e.value.run))
-                    .int64(Int64(e.value.start))
-                    .int64(Int64(b)),
+                scheduler_db.set_memory_bytes(
+                    self.db.conn, e.value.run, e.value.start, b
                 )
             except:
                 pass
@@ -931,16 +881,8 @@ struct Scheduler(Movable):
         var last = over if over else _last_line(spawned[2])
         if last:
             why.write(": ", last)
-        var n = self.db.conn.execute(
-            (
-                "UPDATE orca.runs SET status = 'failed', ended = now(),"
-                " heartbeat = NULL, error = $3 WHERE id = $1 AND status ="
-                " 'running' AND owner = 'scheduler' AND starts = $2"
-            ),
-            Params()
-            .int64(Int64(spawned[0]))
-            .int64(Int64(spawned[1]))
-            .text(why),
+        var n = scheduler_db.fail_unclaimed(
+            self.db.conn, spawned[0], spawned[1], why
         )
         if n == 1:
             print("run", spawned[0], "failed:", why)
@@ -953,17 +895,8 @@ struct Scheduler(Movable):
         """Fails the run a process killed for its memory at the most it may
         ask for was started for, with `over` as its error: a retry would
         ask for the same and be killed again."""
-        var n = self.db.conn.execute(
-            (
-                "UPDATE orca.runs SET status = 'failed', ended = now(),"
-                " heartbeat = NULL, retry_at = NULL, error = $3,"
-                " unretried_start = starts WHERE id = $1 AND status ="
-                " 'running' AND starts = $2"
-            ),
-            Params()
-            .int64(Int64(spawned[0]))
-            .int64(Int64(spawned[1]))
-            .text(over),
+        var n = scheduler_db.fail_unretried(
+            self.db.conn, spawned[0], spawned[1], over
         )
         if n == 1:
             print("run", spawned[0], "failed, not retried:", over)
@@ -978,17 +911,9 @@ struct Scheduler(Movable):
         """Fails the attempts a crashed process left running, if the run is
         still its at that start, with what its driver log says of the crash
         or, with no log or no dump in it, the signal."""
-        var held = self.db.conn.query(
-            (
-                "SELECT id FROM orca.runs WHERE id = $1 AND status ="
-                " 'running' AND starts = $2 AND owner LIKE '%:' || $3"
-            ),
-            Params()
-            .int64(Int64(spawned[0]))
-            .int64(Int64(spawned[1]))
-            .text(String(pid)),
-        )
-        if len(held) == 0:
+        if not scheduler_db.held_by_pid(
+            self.db.conn, spawned[0], spawned[1], pid
+        ):
             return
         var why = over
         if not why and spawned[2] and exists(spawned[2]):
@@ -1216,29 +1141,14 @@ struct Scheduler(Movable):
         var base = Int64(p.retry_seconds) if p.retry_seconds > 0 else (
             self.retry_seconds
         )
-        _ = self.db.conn.execute(
-            String(
-                (
-                    "UPDATE orca.runs SET retry_at = $2 + (SELECT CASE WHEN $5"
-                    " > 0 THEN least(w, $5) ELSE w END FROM (SELECT least($3 *"
-                    " power(2, least(starts - deferrals - 1, 60)),"
-                    " 1e15)::bigint AS w) AS x) + (id * 7919 % 1000) * least($3"
-                    " * power(2, least(starts - deferrals - 1, 60)), CASE WHEN"
-                    " $5 > 0 THEN $5 ELSE 1e15 END)::bigint / 10000 WHERE"
-                    " pipeline = $1 AND status = 'failed' AND "
-                ),
-                _RETRIED,
-                " AND retry_at IS NULL AND starts - deferrals BETWEEN 1 AND $4",
-                " AND (registry_hash = $6 OR allow_new_code) AND",
-                " unretried_start IS DISTINCT FROM starts",
-            ),
-            Params()
-            .text(p.name)
-            .int64(now)
-            .int64(base)
-            .int64(Int64(p.run_retries))
-            .int64(Int64(p.max_retry_seconds))
-            .text(p.registry_hash),
+        scheduler_db.schedule_retries(
+            self.db.conn,
+            p.name,
+            now,
+            base,
+            p.run_retries,
+            p.max_retry_seconds,
+            p.registry_hash,
         )
 
     def _dead(self, stale_param: StaticString) -> String:
@@ -1249,15 +1159,14 @@ struct Scheduler(Movable):
         process may be wedged rather than gone: `_kill_wedged` kills it,
         and only once it's reaped is the run dead, so it's never failed,
         cancelled or started again with its process still there (#398)."""
-        var dead = dead_sql(String(stale_param), self.start_grace)
-        if len(self._spawned) == 0:
-            return dead
         var ids = String()
         for e in self._spawned.items():
             if ids:
                 ids.write(",")
             ids.write(e.value[0])
-        return String("(", dead, " AND orca.runs.id NOT IN (", ids, "))")
+        return scheduler_db.dead_except(
+            String(stale_param), self.start_grace, ids
+        )
 
     def _end_dead(
         mut self, mut tx: Transaction, p: Registered, dead: String
@@ -1270,77 +1179,21 @@ struct Scheduler(Movable):
         paused, one with retries left is queued again, as nothing restarts
         it until then and it would look running (a deploy's drain waits
         for it)."""
-        _ = tx.execute(
-            String(
-                "UPDATE orca.runs SET status = 'cancelled', ended = now(),",
-                " heartbeat = NULL WHERE pipeline = $1 AND status = 'running'",
-                " AND cancel_requested AND ",
-                dead,
-            ),
-            Params().text(p.name).float64(self.stale),
-        )
+        scheduler_db.cancel_dead(tx, p.name, self.stale, dead)
         # A run of code that isn't the pipeline's any more would be refused
         # by the binary's `resume`, and started again until its retries were
         # spent, so it fails here, saying how to resume it.
-        _ = tx.execute(
-            String(
-                "UPDATE orca.runs SET status = 'failed', ended =",
-                " coalesce(ended, now()), heartbeat = NULL, retry_at = NULL,",
-                " error = 'not started: its code is ' || registry_hash || ',",
-                " and the pipeline''s binary is now ' || $4 || '; resume it",
-                " with the new code from morca ui, or with <binary> resume",
-                " ' || id || ' --allow-new-code' WHERE pipeline = $1 AND",
-                " registry_hash <> $4 AND NOT allow_new_code AND error IS NULL",
-                " AND (status IN ('queued', 'deferred') OR (status = 'failed'",
-                " AND ",
-                _RETRIED,
-                " AND starts - deferrals BETWEEN 1 AND $3) OR (status =",
-                " 'running' AND ",
-                _RETRIED,
-                " AND NOT cancel_requested AND ",
-                dead,
-                "))",
-            ),
-            Params()
-            .text(p.name)
-            .float64(self.stale)
-            .int64(Int64(p.run_retries))
-            .text(p.registry_hash),
+        scheduler_db.fail_old_code(
+            tx, p.name, self.stale, p.run_retries, p.registry_hash, dead
         )
         # A run whose process died and has no retries left has failed, and
         # so has one the scheduler doesn't retry (a manual, UI or rerun
         # run), so it holds its keys no longer and can be resumed.
-        _ = tx.execute(
-            String(
-                "UPDATE orca.runs SET status = 'failed', ended = now(),",
-                " heartbeat = NULL, error = CASE WHEN ",
-                _RETRIED,
-                " THEN 'interrupted: its process stopped, and its retries are",
-                " spent' ELSE 'interrupted: its process stopped' END WHERE",
-                " pipeline = $1 AND status = 'running' AND NOT",
-                " cancel_requested AND ",
-                dead,
-                " AND (starts - deferrals > $3 OR NOT ",
-                _RETRIED,
-                " OR (trigger = 'fill' AND NOT $4))",
-            ),
-            Params()
-            .text(p.name)
-            .float64(self.stale)
-            .int64(Int64(p.run_retries))
-            .bool(p.fill.all),
+        scheduler_db.fail_dead(
+            tx, p.name, self.stale, p.run_retries, p.fill.all, dead
         )
         if p.paused:
-            var n = tx.execute(
-                String(
-                    "UPDATE orca.runs SET status = 'queued', owner = NULL,",
-                    " heartbeat = NULL, retry_at = NULL, held = NULL, instance",
-                    " = NULL WHERE pipeline = $1 AND status = 'running' AND",
-                    " NOT cancel_requested AND ",
-                    dead,
-                ),
-                Params().text(p.name).float64(self.stale),
-            )
+            var n = scheduler_db.requeue_dead(tx, p.name, self.stale, dead)
             if n > 0:
                 print(
                     "morca: paused",
