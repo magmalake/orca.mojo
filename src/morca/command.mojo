@@ -84,6 +84,7 @@ from morca.config_show import (
 )
 from morca.instances import (
     ask_drain,
+    drain_limit,
     instances,
     overlap_on,
     overlap_refusal,
@@ -180,8 +181,9 @@ comptime USAGE = """usage:
                                     in MORCA_NOTIFY_MIN_SECONDS)
   morca tick
   morca scheduler                    (with MORCA_OVERLAP=on an instance that
-                                    leads, or drains once a newer one runs:
-                                    docs/overlap.md)
+                                    leads, or drains once a newer one runs,
+                                    for at most MORCA_DRAIN_SECONDS, which
+                                    it needs: docs/overlap.md)
   morca scheduler status             (the instances: role, runs, last seen)
   morca scheduler drain <id>         (asks instance <id> to drain and exit)
   morca scheduler can-overlap        (exit 0 if this binary can start beside
@@ -531,6 +533,10 @@ def _command(args: List[String], target: String) raises -> Int:
     if cmd == "scheduler" and len(args) >= 3:
         return _scheduler(url, args)
     if cmd == "scheduler" and len(args) == 2:
+        # An instance needs its drain limit (#390): refused before anything,
+        # the schema's migration included.
+        if overlap_on():
+            _ = drain_limit()
         var s = Scheduler(url)
         s.say_pressure()
         s.contain()

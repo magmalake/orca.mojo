@@ -41,6 +41,34 @@ def overlap_on() raises -> Bool:
     return v == "on"
 
 
+def drain_limit() raises -> Float64:
+    """`MORCA_DRAIN_SECONDS`, required of an instance (#390): how long it may
+    keep draining its runs once a newer one leads before it kills what is
+    left. Raises when it's unset, not a number, or not above 0."""
+    var v = getenv("MORCA_DRAIN_SECONDS")
+    var how = String(
+        ": with MORCA_OVERLAP=on it is how long, in seconds, a scheduler may",
+        " keep draining its runs once a newer one leads before it kills them",
+        " (docs/overlap.md#the-drain). Set it (in the Hetzner stack,",
+        " DRAIN_SECONDS in hetzner.env), or MORCA_OVERLAP=off",
+    )
+    if not v:
+        raise Error("morca: MORCA_DRAIN_SECONDS isn't set", how)
+    var n: Float64
+    try:
+        n = Float64(v)
+    except:
+        raise Error(
+            "morca: MORCA_DRAIN_SECONDS isn't a number of seconds (",
+            v,
+            ")",
+            how,
+        )
+    if not n > 0:
+        raise Error("morca: MORCA_DRAIN_SECONDS isn't above 0 (", v, ")", how)
+    return n
+
+
 def live_cond(stale: Float64) -> String:
     """SQL true for a row of `orca.schedulers` that is live: not ended, and
     seen within `stale` seconds."""

@@ -94,6 +94,8 @@ load_env() {
     CLOUDFLARED_IMAGE=${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.7}
     APPS=${APPS:-console:8080}
     BACKUP_KEEP=${BACKUP_KEEP:-14}
+    # Overlapping schedulers (docs/overlap.md): on unless OVERLAP=0.
+    OVERLAP=${OVERLAP:-1}
     SERVER=$NAME
     # The settings file may name the hcloud context (the Hetzner project) the
     # stack is in; otherwise hcloud's active one.
@@ -238,6 +240,8 @@ check_args() {
 # are made from is set. With SECRETS_FILE, decrypts it (load_secrets), so a
 # decrypt failure stops before anything is changed on the server.
 need_settings() {
+    need_drain_limit
+    case $OVERLAP in 0 | 1) ;; *) die "OVERLAP is 1 (overlapping schedulers, the default) or 0, not '$OVERLAP' ($HETZNER_ENV); nothing was changed on the server" ;; esac
     need BUCKET S3_ENDPOINT S3_REGION
     [ -z "${EXTRA_ENV_FILE:-}" ] || need_file EXTRA_ENV_FILE
     [ -z "${CONFIG_OVERLAY_FILE:-}" ] || need_file CONFIG_OVERLAY_FILE
@@ -264,6 +268,19 @@ need_settings() {
             break
         fi
     done
+}
+
+# need_drain_limit: DRAIN_SECONDS, required (#390), is a whole number of
+# seconds above 0: how long an old scheduler may keep draining its runs
+# after a deploy before it is stopped (docs/hetzner.md#the-drain-limit).
+# Checked before anything is changed on the server.
+need_drain_limit() {
+    d_how="set DRAIN_SECONDS in $HETZNER_ENV to how long, in seconds, an old scheduler may keep draining its runs after a deploy before it is stopped and its runs queued again (e.g. DRAIN_SECONDS=604800, a week; docs/hetzner.md#the-drain-limit); nothing was changed on the server"
+    case ${DRAIN_SECONDS:-} in
+        "") die "DRAIN_SECONDS isn't set: $d_how" ;;
+        *[!0-9]*) die "DRAIN_SECONDS=$DRAIN_SECONDS isn't a whole number of seconds above 0: $d_how" ;;
+    esac
+    [ "$DRAIN_SECONDS" -gt 0 ] || die "DRAIN_SECONDS=$DRAIN_SECONDS isn't a whole number of seconds above 0: $d_how"
 }
 
 # --- SECRETS_FILE: every secret in one SOPS file, one `sops -d` ----------------
@@ -491,7 +508,8 @@ sync_settings_() {
     fi
     # GHCR_USER= (none in hetzner.env) removes it from stack.conf.
     remote morca-stack configure MORCA_IMAGE="$MORCA_IMAGE" CLOUDFLARED_IMAGE="$CLOUDFLARED_IMAGE" \
-        BUCKET="$BUCKET" BACKUP_KEEP="$BACKUP_KEEP" GHCR_USER="${GHCR_USER:-}" || return 1
+        BUCKET="$BUCKET" BACKUP_KEEP="$BACKUP_KEEP" GHCR_USER="${GHCR_USER:-}" \
+        OVERLAP="$OVERLAP" DRAIN_SECONDS="$DRAIN_SECONDS" || return 1
     # APPS=console names an app; console:8080 also gives its port, for an
     # app whose morca.toml has no [apps.console] port.
     for app in $APPS; do

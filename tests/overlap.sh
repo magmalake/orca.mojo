@@ -3,6 +3,9 @@
 # MORCA_OVERLAP=on, over examples/toy.mojo (max_runs 2, every step taking
 # MORCA_TOY_SLEEP seconds):
 #
+# - an instance refuses to start without its drain limit
+#   (MORCA_DRAIN_SECONDS unset, 0, negative or not a number, #390), before
+#   it touches the database;
 # - instance A leads and starts two runs, its children;
 # - instance B joins: A drains (starts nothing more), B leads; a third run
 #   waits while A's two are going, counted against max_runs across both,
@@ -38,6 +41,7 @@ log=build/overlap.log
 rm -f build/overlap-*.out
 export MORCA_STALE_SECONDS=4 MORCA_SAMPLE_SECONDS=0 MORCA_WATCHDOG_SECONDS=0
 export MORCA_NOW=2024-01-15T00:00Z MORCA_OVERLAP=on MORCA_TOY_SLEEP=2
+export MORCA_DRAIN_SECONDS=3600
 unset MORCA_LOGS
 pids=
 cleanup() {
@@ -73,6 +77,24 @@ done_once() {
     is "SELECT status || ' ' || starts FROM orca.runs WHERE id = $1" "succeeded $2" \
         && is "SELECT count(*) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $1" 3
 }
+
+# --- No drain limit: refused, before anything (#390) ---
+for d in unset "" 0 -5 soon; do
+    if [ "$d" = unset ]; then
+        env -u MORCA_DRAIN_SECONDS ./build/morca scheduler > build/overlap-nolimit.out 2>&1 && fail "a scheduler started without MORCA_DRAIN_SECONDS"
+    else
+        env MORCA_DRAIN_SECONDS="$d" ./build/morca scheduler > build/overlap-nolimit.out 2>&1 && fail "a scheduler started with MORCA_DRAIN_SECONDS='$d'"
+    fi
+    case $d in
+        unset | "") said nolimit "MORCA_DRAIN_SECONDS isn't set: with MORCA_OVERLAP=on" || fail "no message for $d: $(cat build/overlap-nolimit.out)" ;;
+        soon) said nolimit "MORCA_DRAIN_SECONDS isn't a number of seconds (soon)" || fail "no message for $d: $(cat build/overlap-nolimit.out)" ;;
+        *) said nolimit "MORCA_DRAIN_SECONDS isn't above 0 ($d)" || fail "no message for $d: $(cat build/overlap-nolimit.out)" ;;
+    esac
+    said nolimit "DRAIN_SECONDS in hetzner.env" || fail "the message doesn't name hetzner.env's setting: $(cat build/overlap-nolimit.out)"
+done
+[ "$(q "SELECT count(*) FROM pg_tables WHERE schemaname = 'orca'")" = 0 ] \
+    || fail "a scheduler refused for its drain limit migrated the database"
+echo "ok   an instance refuses to start without its drain limit"
 
 ./build/morca register ./build/toy >> "$log" 2>&1 || fail "register"
 

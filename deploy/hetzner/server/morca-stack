@@ -31,13 +31,15 @@
 #                                              for a deploy from F, before or after
 #   upgrade-run morca ARG...                    docker exec scheduler morca ARG... (a step)
 #   can-overlap [--tag T]                      exit 0 if the new image's scheduler may start
-#                                              beside the old one (OVERLAP=1, docs/overlap.md)
+#                                              beside the old one (OVERLAP, docs/overlap.md)
 #   drain-old [--wait] [--timeout SECONDS]     ask the old schedulers to drain, and leave each
 #                                              a reaper that removes it once its last run
 #                                              ends; with --wait (or --timeout) wait for that
-#                                              instead (stopped after the timeout)
+#                                              instead (stopped after the timeout, by default
+#                                              the drain limit, DRAIN_SECONDS)
 #   reap-old NAME                              wait for old scheduler NAME to exit, then
-#                                              remove it (drain-old starts one in the background)
+#                                              remove it (drain-old starts one in the background);
+#                                              stopped if it still runs past the drain limit
 #   quiesce [--timeout SECONDS] [--workers]    pause every pipeline, wait for the scheduler's
 #                                              runs to end (those on remote workers too
 #                                              with --workers: rescale.sh's)
@@ -85,18 +87,22 @@
 # curl). The sampler and cloudflared are replaced by stopping the old one
 # first, and so is the scheduler, unless apply is given --overlap.
 #
-# Overlapping schedulers (OVERLAP=1 in stack.conf, MORCA_OVERLAP=on in
-# morca.env; docs/overlap.md). With --overlap (deploy.sh passes it when
+# Overlapping schedulers (on unless OVERLAP=0 in stack.conf: MORCA_OVERLAP=on
+# in morca.env; docs/overlap.md). With --overlap (deploy.sh passes it when
 # can-overlap says yes) the new scheduler starts as scheduler-next beside
 # the old one; the old one is set not to restart and renamed
 # scheduler-old-<UTC time>, the new one renamed scheduler, and apply waits
 # until it leads (morca scheduler wait-lead, HEALTH_TIMEOUT). The old one
 # has seen it and drains: it starts nothing, and exits once its runs have
-# ended, however long they take (#397: its runs see morca.outdated(), and
-# nothing stops them). drain-old asks it to drain and leaves a reaper
+# ended (#397: its runs see morca.outdated()), or once the drain limit
+# runs out: DRAIN_SECONDS in stack.conf (required, #390; MORCA_DRAIN_SECONDS
+# in morca.env), after which it kills what is left and the new scheduler
+# queues those runs again. drain-old asks it to drain and leaves a reaper
 # behind (reap-old, $STATE/reap-NAME.log) that removes its container once
-# it has exited; deploy.sh doesn't wait for it. Runs aren't paused or
-# killed. A deploy while one still drains overlaps again: its scheduler
+# it has exited, and stops it if it still runs MORCA_STACK_DRAIN_GRACE (60)
+# seconds past the limit (an old scheduler started without the limit);
+# deploy.sh doesn't wait for it. Runs aren't paused, and killed only at the
+# limit. apply refuses to start anything without DRAIN_SECONDS. A deploy while one still drains overlaps again: its scheduler
 # becomes another scheduler-old-<time>, so several can drain at once, each
 # under its own name, and none is renamed over another. check reports each
 # one draining as information, not a failure. One that isn't running any
@@ -164,6 +170,26 @@ conf_get() { # KEY: its value in stack.conf, or empty
         case "$1" in MORCA_*) _cv=$(sed -n "s/^ORCA_${1#MORCA_}=//p" "$CONF/stack.conf" | tail -n 1) ;; esac
     fi
     [ -z "$_cv" ] || printf '%s\n' "$_cv"
+}
+
+# overlap: the stack overlaps schedulers (docs/overlap.md): on unless
+# stack.conf has OVERLAP=0 (#390; it was off unless OVERLAP=1 before).
+overlap() {
+    [ "$(conf_get OVERLAP)" != 0 ]
+}
+
+# drain_ok VALUE: VALUE is a whole number of seconds above 0.
+drain_ok() {
+    case "$1" in "" | *[!0-9]*) return 1 ;; esac
+    [ "$1" -gt 0 ]
+}
+
+# drain_limit: DRAIN_SECONDS, how long an old scheduler may keep draining
+# its runs before it is stopped (#390): required, so fatal without it.
+drain_limit() {
+    dl_=$(conf_get DRAIN_SECONDS)
+    drain_ok "$dl_" || die "DRAIN_SECONDS isn't set in $CONF/stack.conf${dl_:+ to a whole number of seconds above 0 (it is '$dl_')}: set it in hetzner.env, how long an old scheduler may keep draining its runs after a deploy before it is stopped, and deploy again (docs/hetzner.md#the-drain-limit)"
+    echo "$dl_"
 }
 
 # scli ARGS...: the scheduler container's command, morca, or orca in an
@@ -276,8 +302,13 @@ cmd_configure() {
         k=${kv%%=*}
         v=${kv#*=}
         case "$k" in
-            MORCA_IMAGE | MORCA_TAG | CLOUDFLARED_IMAGE | BUCKET | BACKUP_KEEP | GHCR_USER | CGROUPS | HEALTH_TIMEOUT | OVERLAP) ;;
+            MORCA_IMAGE | MORCA_TAG | CLOUDFLARED_IMAGE | BUCKET | BACKUP_KEEP | GHCR_USER | CGROUPS | HEALTH_TIMEOUT | OVERLAP | DRAIN_SECONDS) ;;
             *) die "unknown setting $k" ;;
+        esac
+        case "$k=$v" in
+            OVERLAP= | OVERLAP=[01]) ;;
+            OVERLAP=*) die "OVERLAP is 1 (the default) or 0, not '$v'" ;;
+            DRAIN_SECONDS=*) drain_ok "$v" || die "DRAIN_SECONDS is a whole number of seconds above 0, not '$v'" ;;
         esac
         [ "$k=" = "$kv" ] && [ "$k" = GHCR_USER ] || safe "$v"
         old=$(conf_get "$k")
@@ -446,8 +477,11 @@ MORCA_UI_TRUST_PROXY=1
 EOS
         # What machines of a worker pool run: the server's own image.
         echo "MORCA_WORKER_IMAGE=$image:$tag"
-        # Off unless OVERLAP=1: the old way, one scheduler at a time.
-        [ "$(conf_get OVERLAP)" != 1 ] || echo MORCA_OVERLAP=on
+        # On unless OVERLAP=0 (#390), which is the old way: one scheduler at
+        # a time. The drain limit is required; apply checked it.
+        ! overlap || echo MORCA_OVERLAP=on
+        dl_=$(conf_get DRAIN_SECONDS)
+        [ -z "$dl_" ] || echo "MORCA_DRAIN_SECONDS=$dl_"
     } > "$1/morca.env"
 }
 
@@ -1062,8 +1096,10 @@ EOF
 cmd_apply() {
     apply_args "$@"
     # Nothing changes before the image is known to be morca's; only then is
-    # a server from before the rename migrated (once).
+    # a server from before the rename migrated (once). Nor without the
+    # drain limit, which the new scheduler refuses to start without (#390).
     if [ "$dbonly" = 0 ]; then
+        drain_limit > /dev/null
         need_morca_image "$(conf_get MORCA_IMAGE):${newtag:-$(conf_get MORCA_TAG)}"
         check_overlay "$(conf_get MORCA_IMAGE):${newtag:-$(conf_get MORCA_TAG)}"
         migrate_orca
@@ -1250,7 +1286,7 @@ cmd_rollback() {
 }
 
 # can-overlap [--tag T]: whether the image at T (the conf's tag without
-# it) may start its scheduler beside the running one: OVERLAP=1, the
+# it) may start its scheduler beside the running one: OVERLAP not 0, the
 # scheduler running, and the new binary's `morca scheduler can-overlap` (a
 # migration that raises the floor past any live instance, the old
 # schedulers still draining included, says no). An old scheduler still
@@ -1263,7 +1299,7 @@ cmd_can_overlap() {
         t=$2
     fi
     safe "$t"
-    [ "$(conf_get OVERLAP)" = 1 ] || { echo "no: OVERLAP isn't 1 in stack.conf"; return 1; }
+    overlap || { echo "no: OVERLAP=0 in stack.conf"; return 1; }
     ! orca_conf && [ ! -f "$CONF/renamed" ] || { echo "no: the first deploy after the orca -> morca rename (#384) replaces the scheduler"; return 1; }
     [ "$(docker inspect -f '{{.State.Running}}' scheduler 2> /dev/null)" = true ] \
         || { echo "no: no scheduler is running"; return 1; }
@@ -1284,11 +1320,12 @@ cmd_can_overlap() {
 # drain-old [--wait] [--timeout SECONDS]: asks each old scheduler's
 # instances to drain (they do once they see the new one; this says so in
 # their rows too) and returns: each one exits once its last run ends,
-# however long that takes, and a reaper (reap-old, in the background,
-# $STATE/reap-NAME.log) then removes its container. One that has exited
-# already is removed now. With --wait it waits for them instead, and with
-# --timeout too stops one still running after that many seconds (its runs
-# are killed, and the new scheduler queues them again) and removes it.
+# or once the drain limit (DRAIN_SECONDS) runs out, and a reaper (reap-old,
+# in the background, $STATE/reap-NAME.log) then removes its container. One
+# that has exited already is removed now. With --wait it waits for them
+# instead, and stops one still running after --timeout seconds (by default
+# the drain limit and MORCA_STACK_DRAIN_GRACE: its runs are killed, and the
+# new scheduler queues them again) and removes it.
 cmd_drain_old() {
     wait=0
     timeout=
@@ -1306,6 +1343,10 @@ cmd_drain_old() {
         shift
     done
     case "$timeout" in *[!0-9]*) die "the timeout is a number of seconds, not '$timeout'" ;; esac
+    if [ "$wait" = 1 ] && [ -z "$timeout" ]; then
+        timeout=$(drain_limit)
+        timeout=$((timeout + ${MORCA_STACK_DRAIN_GRACE:-60}))
+    fi
     olds=$(old_schedulers)
     [ -n "$olds" ] || { echo "morca-stack: no old scheduler: nothing drains"; return 0; }
     for name in $olds; do
@@ -1369,13 +1410,25 @@ reaper() {
 }
 
 # reap-old NAME: waits for old scheduler NAME to exit (once its last run
-# has ended), then removes it. Polls every MORCA_STACK_REAP_SECONDS (30).
+# has ended, or its drain limit ran out), then removes it. Polls every
+# MORCA_STACK_REAP_SECONDS (30). The scheduler ends its drain itself at
+# the limit (MORCA_DRAIN_SECONDS); one still running
+# MORCA_STACK_DRAIN_GRACE (60) seconds after it (started without the
+# limit, before #390, or stuck) is stopped: its runs are killed, and the
+# new scheduler queues them again.
 cmd_reap_old() {
     [ $# -eq 1 ] || die "usage: morca-stack reap-old NAME"
     case "$1" in scheduler-old | scheduler-old-*) ;; *) die "not an old scheduler: $1" ;; esac
     safe "$1"
-    echo "morca-stack: $(date -u +%FT%TZ) waiting for $1 to drain"
+    r_limit=$(drain_limit)
+    r_end=$(($(date +%s) + r_limit + ${MORCA_STACK_DRAIN_GRACE:-60}))
+    echo "morca-stack: $(date -u +%FT%TZ) waiting for $1 to drain (the drain limit: ${r_limit}s)"
     while [ "$(docker inspect -f '{{.State.Running}}' "$1" 2> /dev/null)" = true ]; do
+        if [ "$(date +%s)" -ge "$r_end" ]; then
+            echo "morca-stack: $(date -u +%FT%TZ) $1 still runs past the drain limit (${r_limit}s): stopping it; the new scheduler queues its runs again"
+            docker stop -t 30 "$1" > /dev/null
+            break
+        fi
         sleep "${MORCA_STACK_REAP_SECONDS:-30}"
     done
     if docker inspect "$1" > /dev/null 2>&1; then
@@ -1388,7 +1441,7 @@ cmd_reap_old() {
 cmd_status() {
     docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
     echo "running runs: $(running_runs) here, $(worker_runs) on remote workers"
-    if [ "$(conf_get OVERLAP)" = 1 ]; then
+    if overlap; then
         echo "scheduler instances:"
         scli scheduler status 2> /dev/null | sed 's/^/  /' || true
     fi
@@ -1704,7 +1757,7 @@ cmd_check() {
             check_info "$c: exited; the next apply removes it"
         fi
     done
-    if [ "$(conf_get OVERLAP)" = 1 ]; then
+    if overlap; then
         leaders=$(scli scheduler status 2> /dev/null | grep -c ' leading ' || true)
         if [ "$leaders" = 1 ]; then
             check_ok "scheduler instances: one leads"
