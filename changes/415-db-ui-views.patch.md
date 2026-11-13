@@ -1,1 +1,0 @@
-- **The web UI's queries move into `morca.db`**: the pages' and their JSON's reads are typed functions there, a module per page, with nothing changed for a user. (#415)

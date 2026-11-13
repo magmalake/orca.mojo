@@ -1,1 +1,0 @@
-- **A public API, and internals under `morca._internal`**: the modules `src/morca/__init__.mojo` lists are the public API and keep their import paths; the rest moved, so a pipeline that imported an internal module (say `morca.sample`) imports `morca._internal.sample` now. (#419)
