@@ -1,5 +1,5 @@
 #!/bin/sh
-# The adoption rule (docs/overlap.md, morca.live.held_sql): a local run that
+# The adoption rule (docs/overlap.md, morca.db.live.held_sql): a local run that
 # another scheduler instance started (`runs.instance`) is left alone while
 # that instance is seen and lists it, whatever its heartbeat, and counts as
 # live; once the instance is gone (not seen for the stale limit, or ended)

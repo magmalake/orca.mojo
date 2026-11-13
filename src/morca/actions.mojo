@@ -20,7 +20,7 @@ from std.os import getenv
 
 from postgres import Params
 
-from morca.live import live_runs
+from morca.db.live import live_runs
 from morca.name import parse_names
 from morca.pause import set_paused
 from morca.queueing import (

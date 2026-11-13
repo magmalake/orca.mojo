@@ -92,7 +92,7 @@ holder's connection goes.
 
 Each local or control-placed run an instance starts records it
 (`runs.instance`). The rule from the earlier #242, with "held by instance
-X" in place of "held by the runner" (`morca.live.held_sql`, part of
+X" in place of "held by the runner" (`morca.db.live.held_sql`, part of
 `dead_sql`):
 
 - **held**, so live, while its instance has been seen within the stale

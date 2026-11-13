@@ -124,9 +124,10 @@ from std.os import getenv
 from dista.scale import Demand, Policy, decide
 from dista.socket import wall_ns
 from objectstore.crypto import sha256_hex
-from postgres import Params
 
 from morca.awsec2 import Ec2, Instance
+import morca.db.ec2 as ec2_db
+from morca.db.ec2 import SpecRow
 from morca.config import (
     env_json,
     parse_env,
@@ -207,27 +208,6 @@ def vcpus(instance_type: String) raises -> Int:
     )
 
 
-comptime _SPEC_COLUMNS = (
-    "coalesce(r.spec->>'image', p.image, '') AS image,"
-    " coalesce(r.spec->>'binary', p.binary_path) AS binary_path,"
-    " coalesce((r.spec->>'tasks')::boolean,"
-    " jsonb_array_length(coalesce(p.describe->'tasks', '[]')) > 0) AS tasks,"
-    " coalesce(r.spec->>'head_type', p.head_type, '') AS head_type,"
-    " coalesce(r.spec->>'worker_type', p.worker_type, '') AS worker_type,"
-    " coalesce((r.spec->>'workers')::bigint, p.ec2_workers,"
-    " (p.describe->>'workers')::bigint, 2) AS hi,"
-    " coalesce((r.spec->>'spot')::boolean, p.spot, false) AS spot,"
-    " coalesce((r.spec->>'min_workers')::bigint, p.ec2_min_workers, -1) AS lo,"
-    " coalesce((r.spec->'secrets')::text, p.secrets::text, '') AS secrets,"
-    " coalesce((r.spec->>'worker_procs')::bigint, p.worker_procs, 1) AS procs,"
-    " coalesce(r.spec->>'registry_hash', p.registry_hash) AS registry_hash,"
-    " coalesce((r.spec->'env')::text, p.env::text, '') AS env"
-)
-"""A run's `Ec2Spec` as SQL over `orca.runs r` and `orca.pipelines p`: the
-registration its start was given (`orca.runs.spec`, kept by `Ec2Runner.start`),
-else, for a run from before that was kept, the pipeline's now."""
-
-
 def _snapshot(mut db: State, r: Ec2Spec) raises:
     """Keeps with run `r.run` what its start `r.start` was given."""
     var secrets = String("{")
@@ -266,13 +246,7 @@ def _snapshot(mut db: State, r: Ec2Spec) raises:
         env_json(r.env) if len(r.env) > 0 else String("{}"),
         "}",
     )
-    _ = db.conn.execute(
-        (
-            "UPDATE orca.runs SET spec = $3::text::jsonb WHERE id = $1 AND"
-            " starts = $2"
-        ),
-        Params().int64(Int64(r.run)).int64(Int64(r.start)).text(spec),
-    )
+    ec2_db.save_spec(db.conn, r.run, r.start, spec)
 
 
 @fieldwise_init
@@ -313,6 +287,28 @@ def _sets(r: Ec2Spec, name: String) -> Bool:
         if kv[0] == name:
             return True
     return False
+
+
+def _spec(row: SpecRow, tasks: Bool, min_workers: Int) raises -> Ec2Spec:
+    """The start `row` reads, with `tasks` and `min_workers` as given."""
+    return Ec2Spec(
+        row.run,
+        row.start,
+        row.pipeline,
+        row.image,
+        row.binary_path,
+        tasks,
+        row.head_type,
+        row.worker_type,
+        row.hi,
+        row.spot,
+        row.allow_new_code,
+        min_workers,
+        parse_secrets(row.secrets),
+        row.procs,
+        row.registry_hash,
+        parse_env(row.env),
+    )
 
 
 def _quote(s: String) -> String:
@@ -1103,29 +1099,15 @@ struct Ec2Runner(Movable):
         if not key or n <= 0:
             return out^
         var tx = db.conn.begin()
-        var rows = tx.query(
-            (
-                "SELECT i.id, i.run, i.start, i.instance_type, i.market,"
-                " coalesce(i.address, '') AS address, coalesce(i.procs, 1) AS"
-                " procs, coalesce(i.cpu_millis, 0) AS cpu FROM orca.instances i"
-                " JOIN orca.runs r ON r.id = i.run WHERE i.ended IS NULL AND"
-                " i.pool_key = $1 AND i.role = $2 AND i.idle IS NOT NULL AND"
-                " i.drained IS NULL AND i.polled > now() - make_interval(secs"
-                " => $3) AND r.status <> 'running' ORDER BY i.idle DESC, i.id"
-                " LIMIT $4 FOR UPDATE OF i SKIP LOCKED"
-            ),
-            Params()
-            .text(key)
-            .text(String(role))
-            .float64(self.pool_live)
-            .int64(Int64(n)),
+        var rows = ec2_db.pool_candidates(
+            tx, key, String(role), self.pool_live, n
         )
         if len(rows) == 0:
             tx.rollback()
             return out^
         var ids = List[String]()
         for row in rows:
-            ids.append(row.text("id"))
+            ids.append(row.id)
         # The database's word that it's alive, then EC2's.
         var running = Dict[String, Bool]()
         var filters = List[Tuple[String, List[String]]]()
@@ -1134,40 +1116,10 @@ struct Ec2Runner(Movable):
             if i.state == "running":
                 running[i.id] = True
         for row in rows:
-            var id = row.text("id")
-            if id not in running:
+            if row.id not in running:
                 continue
-            _ = tx.execute(
-                (
-                    "UPDATE orca.instances SET ended = now(), why = 'pooled: on"
-                    " to run ' || $4 WHERE id = $1 AND run = $2 AND start = $3"
-                ),
-                Params()
-                .text(id)
-                .int64(row.int64("run"))
-                .int64(row.int64("start"))
-                .text(String(r.run)),
-            )
-            _ = tx.execute(
-                (
-                    "INSERT INTO orca.instances (id, run, start, role,"
-                    " instance_type, market, address, procs, pool_key,"
-                    " cpu_millis, pooled) VALUES ($1, $2, $3, $4, $5, $6,"
-                    " nullif($7, ''), $8, $9, $10, true)"
-                ),
-                Params()
-                .text(id)
-                .int64(Int64(r.run))
-                .int64(Int64(r.start))
-                .text(String(role))
-                .text(row.text("instance_type"))
-                .text(row.text("market"))
-                .text(row.text("address"))
-                .int64(row.int64("procs"))
-                .text(key)
-                .int64(row.int64("cpu")),
-            )
-            out.append(row.text("address"))
+            ec2_db.hand_on(tx, row, r.run, r.start, String(role), key)
+            out.append(row.address)
         tx.commit()
         if len(out) > 0:
             print(
@@ -1189,74 +1141,29 @@ struct Ec2Runner(Movable):
         if self.pool_seconds <= 0 or len(keys) == 0:
             return False
         var b = keys[1] if len(keys) > 1 else keys[0]
-        return (
-            db.conn.query(
-                (
-                    "SELECT count(*) > 0 AS any FROM orca.instances i JOIN"
-                    " orca.runs r ON r.id = i.run WHERE i.ended IS NULL AND"
-                    " i.pool_key IN ($1, $2) AND i.idle IS NULL AND i.drained"
-                    " IS NULL AND r.status <> 'running' AND r.ended > now() -"
-                    " make_interval(secs => $3)"
-                ),
-                Params().text(keys[0]).text(b).float64(self.grace),
-            )
-            .row(0)
-            .bool("any")
-        )
+        return ec2_db.settling(db.conn, keys[0], b, self.grace)
 
     def scale(mut self, mut db: State) raises -> Tuple[Int, Int]:
         """Grows and shrinks the workers of every running run that scales,
         from its head's demand; returns the workers started and drained."""
         var started = 0
         var drained = 0
-        var rows = db.conn.query(
-            String(
-                "SELECT r.id, r.starts, r.pipeline, r.allow_new_code,",
-                (
-                    " coalesce(extract(epoch FROM now() -"
-                    " r.waiting_since)::float8, -1)"
-                ),
-                " AS waited, h.address, ",
-                _SPEC_COLUMNS,
-                " FROM orca.runs r JOIN orca.pipelines p ON p.name =",
-                " r.pipeline JOIN orca.instances h ON h.run = r.id AND h.start",
-                " = r.starts AND h.role = 'head' AND h.ended IS NULL AND",
-                " h.address IS NOT NULL WHERE r.status = 'running'",
-            ),
-            Params(),
-        )
+        var rows = ec2_db.scaling_runs(db.conn)
         var live = Dict[String, Bool]()
         for row in rows:
-            var lo = Int(row.int64("lo"))
-            var hi = Int(row.int64("hi"))
+            var lo = row.spec.lo
+            var hi = row.spec.hi
             # From the run's own registration; a run that scales has fewer
             # workers at the start than at most, one that needs workers
             # at all is watched for their coming.
             var scales = lo >= 0 and lo < hi
-            var watched = self.no_workers > 0 and row.bool("tasks") and hi > 0
+            var watched = self.no_workers > 0 and row.spec.tasks and hi > 0
             if not scales and not watched:
                 continue
-            var r = Ec2Spec(
-                Int(row.int64("id")),
-                Int(row.int64("starts")),
-                row.text("pipeline"),
-                row.text("image"),
-                row.text("binary_path"),
-                True,
-                row.text("head_type"),
-                row.text("worker_type"),
-                hi,
-                row.bool("spot"),
-                row.bool("allow_new_code"),
-                lo if lo >= 0 else hi,
-                parse_secrets(row.text("secrets")),
-                Int(row.int64("procs")),
-                row.text("registry_hash"),
-                parse_env(row.text("env")),
-            )
+            var r = _spec(row.spec, True, lo if lo >= 0 else hi)
             var key = String(r.run, "-", r.start)
             live[key] = True
-            var head_ip = row.text("address")
+            var head_ip = row.head_address
             var head = String(head_ip, ":", head_port())
             # A head whose port black-holes mustn't hold up the tick.
             var got_status: Tuple[Int, String]
@@ -1281,25 +1188,12 @@ struct Ec2Runner(Movable):
                     + demand.actors_waiting
                 )
                 var stuck = waiting > 0 and len(demand.workers) == 0
-                var waited = row.float64("waited")
+                var waited = row.waited
                 if stuck and waited < 0:
-                    _ = db.conn.execute(
-                        (
-                            "UPDATE orca.runs SET waiting_since = now() WHERE"
-                            " id = $1 AND starts = $2 AND waiting_since IS"
-                            " NULL"
-                        ),
-                        Params().int64(Int64(r.run)).int64(Int64(r.start)),
-                    )
+                    ec2_db.start_waiting(db.conn, r.run, r.start)
                     waited = 0
                 elif not stuck and waited >= 0:
-                    _ = db.conn.execute(
-                        (
-                            "UPDATE orca.runs SET waiting_since = NULL WHERE"
-                            " id = $1 AND starts = $2"
-                        ),
-                        Params().int64(Int64(r.run)).int64(Int64(r.start)),
-                    )
+                    ec2_db.stop_waiting(db.conn, r.run, r.start)
                 if stuck and waited > Float64(self.no_workers):
                     self._give_up(db, r, waiting)
                     continue
@@ -1309,19 +1203,7 @@ struct Ec2Runner(Movable):
             # starts and costs, `per` processes each. `up` is the processes
             # the live instances still have to offer.
             var per = self.procs_of(r)
-            var up = Int(
-                db.conn.query(
-                    (
-                        "SELECT coalesce(sum(coalesce(procs, 1) -"
-                        " procs_drained), 0) AS n FROM orca.instances WHERE"
-                        " run = $1 AND start = $2 AND role = 'worker' AND"
-                        " ended IS NULL AND drained IS NULL"
-                    ),
-                    Params().int64(Int64(r.run)).int64(Int64(r.start)),
-                )
-                .row(0)
-                .int64("n")
-            )
+            var up = ec2_db.worker_procs_up(db.conn, r.run, r.start)
             var pending = max(up - demand.live(), 0)
             var got = decide(
                 demand,
@@ -1351,18 +1233,7 @@ struct Ec2Runner(Movable):
                     continue
                 drained += 1
                 var ip = String(addr[byte = : addr.rfind(":")])
-                _ = db.conn.execute(
-                    (
-                        "UPDATE orca.instances SET procs_drained ="
-                        " procs_drained + 1, drained = CASE WHEN procs_drained"
-                        " + 1 >= coalesce(procs, 1) THEN now() END WHERE id ="
-                        " (SELECT id FROM orca.instances WHERE run = $1 AND"
-                        " start = $2 AND role = 'worker' AND ended IS NULL AND"
-                        " drained IS NULL AND address = $3 ORDER BY launched"
-                        " LIMIT 1)"
-                    ),
-                    Params().int64(Int64(r.run)).int64(Int64(r.start)).text(ip),
-                )
+                ec2_db.drained_one(db.conn, r.run, r.start, ip)
         # Forget runs that ended.
         var gone = List[String]()
         for k in self.short_since.keys():
@@ -1388,25 +1259,10 @@ struct Ec2Runner(Movable):
             ")",
         )
         var n = db.interrupt(r.run, why)
-        var ids = List[String]()
-        for o in db.conn.query(
-            (
-                "UPDATE orca.instances SET ended = now(), why = $3 WHERE run ="
-                " $1 AND start = $2 AND ended IS NULL RETURNING id"
-            ),
-            Params()
-            .int64(Int64(r.run))
-            .int64(Int64(r.start))
-            .text(String("terminated by morca: ", why)),
-        ):
-            ids.append(o.text("id"))
-        _ = db.conn.execute(
-            (
-                "UPDATE orca.runs SET waiting_since = NULL WHERE id = $1 AND"
-                " starts = $2"
-            ),
-            Params().int64(Int64(r.run)).int64(Int64(r.start)),
+        var ids = ec2_db.end_start(
+            db.conn, r.run, r.start, String("terminated by morca: ", why)
         )
+        ec2_db.stop_waiting(db.conn, r.run, r.start)
         self.ec2.terminate(ids)
         print(
             "morca: run",
@@ -1440,77 +1296,42 @@ struct Ec2Runner(Movable):
         it has been idle `MORCA_EC2_POOL_SECONDS`, or has stopped asking for
         a run. Returns how many it terminated."""
         var live = Dict[String, Bool]()
-        for row in db.conn.query(
-            (
-                "SELECT id || '-' || starts AS k FROM orca.runs WHERE status ="
-                " 'running'"
-            ),
-            Params(),
-        ):
-            live[row.text("k")] = True
+        for k in ec2_db.running_starts(db.conn):
+            live[k] = True
         # A head shuts itself down once it has kept the driver's log and
         # uploaded its own and its samples, so it gets a grace after its run
         # ends; a run restarted elsewhere is running, and its old head isn't
         # spared.
         var ending = Dict[String, Bool]()
-        for row in db.conn.query(
-            (
-                "SELECT id || '-' || starts AS k FROM orca.runs WHERE status"
-                " <> 'running' AND ended > now() - make_interval(secs => $1)"
-            ),
-            Params().float64(self.grace),
-        ):
-            ending[row.text("k")] = True
+        for k in ec2_db.ended_starts(db.conn, self.grace):
+            ending[k] = True
         # The run each instance serves is its live row's: one the pool
         # handed on still has its first run's tags. The pool's are kept
         # while they wait (on their way there, for the head's grace).
         var serves = Dict[String, String]()
         var pooled = Dict[String, String]()  # each of the pool's to go: why
         var kept = Dict[String, Bool]()
-        for row in db.conn.query(
-            (
-                "SELECT i.id, i.run || '-' || i.start AS k, i.pool_key IS NOT"
-                " NULL AND i.drained IS NULL AND r.status <> 'running' AS"
-                " pooling, i.idle IS NOT NULL AS idle, coalesce(extract(epoch"
-                " FROM now() - i.idle), 0)::float8 AS idle_for,"
-                " coalesce(extract(epoch FROM now() - i.polled),"
-                " 1e9)::float8 AS since_poll, coalesce(extract(epoch FROM"
-                " now() - r.ended), 1e9)::float8 AS since_end FROM"
-                " orca.instances i JOIN orca.runs r ON r.id = i.run WHERE"
-                " i.ended IS NULL"
-            ),
-            Params(),
-        ):
-            var id = row.text("id")
-            serves[id] = row.text("k")
-            if self.pool_seconds <= 0 or not row.bool("pooling"):
+        for row in ec2_db.sweep_rows(db.conn):
+            var id = row.id
+            serves[id] = row.serves
+            if self.pool_seconds <= 0 or not row.pooling:
                 continue
-            if not row.bool("idle"):
-                if row.float64("since_end") < self.grace:
+            if not row.idle:
+                if row.since_end < self.grace:
                     kept[id] = True
                 else:
                     pooled[id] = String(
                         "terminated by morca: it didn't go back to the pool"
                     )
-            elif row.float64("idle_for") >= self.pool_seconds:
+            elif row.idle_for >= self.pool_seconds:
                 pooled[id] = String(
                     "pooled: idle ", Int(self.pool_seconds), " s, shut down"
                 )
-            elif row.float64("since_poll") >= max(self.pool_live * 3, 15.0):
+            elif row.since_poll >= max(self.pool_live * 3, 15.0):
                 pooled[id] = String("pooled: stopped asking for a run")
             else:
                 kept[id] = True
-        var old = (
-            db.conn.query(
-                (
-                    "SELECT to_char((now() - make_interval(secs => $1)) AT TIME"
-                    " ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS') AS t"
-                ),
-                Params().float64(Float64(self.deadline)),
-            )
-            .row(0)
-            .text("t")
-        )
+        var old = ec2_db.utc_ago(db.conn, Float64(self.deadline))
         var filters = List[Tuple[String, List[String]]]()
         var tag: List[String] = [String("orca.run")]
         var states: List[String] = [String("pending"), String("running")]
@@ -1545,16 +1366,12 @@ struct Ec2Runner(Movable):
         for id in leaving:
             var k = serves[id]
             var dash = k.find("-")
-            var n = db.conn.execute(
-                (
-                    "UPDATE orca.instances SET ended = now(), why = $4 WHERE id"
-                    " = $1 AND run = $2 AND start = $3 AND ended IS NULL"
-                ),
-                Params()
-                .text(id)
-                .int64(Int64(Int(k[byte=:dash])))
-                .int64(Int64(Int(k[byte = dash + 1 :])))
-                .text(pooled[id]),
+            var n = ec2_db.end_row(
+                db.conn,
+                id,
+                Int(k[byte=:dash]),
+                Int(k[byte = dash + 1 :]),
+                pooled[id],
             )
             if n > 0:
                 doomed.append(id)
@@ -1572,29 +1389,12 @@ struct Ec2Runner(Movable):
         start, well within the start grace."""
         if self.pool_seconds <= 0:
             return
-        var rows = db.conn.query(
-            (
-                "SELECT i.id, i.run, i.start, i.role FROM orca.instances i JOIN"
-                " orca.runs r ON r.id = i.run AND r.starts = i.start AND"
-                " r.status = 'running' WHERE i.ended IS NULL AND i.pooled AND"
-                " i.joined IS NULL AND i.launched < now() - make_interval(secs"
-                " => $1) ORDER BY i.role, i.id"
-            ),
-            Params().float64(self.pool_join),
-        )
-        for row in rows:
-            var id = row.text("id")
-            var run = Int(row.int64("run"))
-            var start = Int(row.int64("start"))
-            var role = row.text("role")
-            var n = db.conn.execute(
-                (
-                    "UPDATE orca.instances SET ended = now(), why = 'pooled:"
-                    " never took the run up' WHERE id = $1 AND run = $2 AND"
-                    " start = $3 AND ended IS NULL"
-                ),
-                Params().text(id).int64(Int64(run)).int64(Int64(start)),
-            )
+        for row in ec2_db.unjoined(db.conn, self.pool_join):
+            var id = row.id
+            var run = row.run
+            var start = row.start
+            var role = row.role
+            var n = ec2_db.end_never_joined(db.conn, id, run, start)
             if n == 0:
                 continue
             self.ec2.terminate([id])
@@ -1603,30 +1403,12 @@ struct Ec2Runner(Movable):
             if not spec:
                 continue
             if role == "worker":
-                var head = db.conn.query(
-                    (
-                        "SELECT coalesce(address, '') AS a FROM orca.instances"
-                        " WHERE run = $1 AND start = $2 AND role = 'head' AND"
-                        " ended IS NULL"
-                    ),
-                    Params().int64(Int64(run)).int64(Int64(start)),
-                )
-                if len(head) > 0 and head.row(0).text("a"):
-                    self._workers(
-                        db, spec.value(), 1, head.row(0).text("a"), True
-                    )
+                var head = ec2_db.head_address(db.conn, run, start)
+                if head and head.value():
+                    self._workers(db, spec.value(), 1, head.value(), True)
                 continue
             # Its workers were told the lost head's address: they go too.
-            var others = List[String]()
-            for o in db.conn.query(
-                (
-                    "UPDATE orca.instances SET ended = now(), why = 'its pooled"
-                    " head never took the run up' WHERE run = $1 AND start = $2"
-                    " AND ended IS NULL RETURNING id"
-                ),
-                Params().int64(Int64(run)).int64(Int64(start)),
-            ):
-                others.append(o.text("id"))
+            var others = ec2_db.end_lost_head(db.conn, run, start)
             self.ec2.terminate(others)
             self.start(db, spec.value(), fresh=True)
 
@@ -1634,49 +1416,17 @@ struct Ec2Runner(Movable):
         self, mut db: State, run: Int, start: Int
     ) raises -> Optional[Ec2Spec]:
         """Run `run`'s start `start`, as `start` was given it."""
-        var rows = db.conn.query(
-            String(
-                "SELECT r.pipeline, r.allow_new_code, ",
-                _SPEC_COLUMNS,
-                (
-                    " FROM orca.runs r JOIN orca.pipelines p ON p.name ="
-                    " r.pipeline WHERE r.id = $1 AND r.starts = $2"
-                ),
-            ),
-            Params().int64(Int64(run)).int64(Int64(start)),
-        )
-        if len(rows) == 0:
+        var row = ec2_db.spec_of(db.conn, run, start)
+        if not row:
             return None
-        var row = rows.row(0)
-        var hi = Int(row.int64("hi"))
-        var lo = Int(row.int64("lo"))
-        return Ec2Spec(
-            run,
-            start,
-            row.text("pipeline"),
-            row.text("image"),
-            row.text("binary_path"),
-            row.bool("tasks"),
-            row.text("head_type"),
-            row.text("worker_type"),
-            hi,
-            row.bool("spot"),
-            row.bool("allow_new_code"),
-            hi if lo < 0 else min(lo, hi),
-            parse_secrets(row.text("secrets")),
-            Int(row.int64("procs")),
-            row.text("registry_hash"),
-            parse_env(row.text("env")),
-        )
+        ref s = row.value()
+        return _spec(s, s.tasks, s.hi if s.lo < 0 else min(s.lo, s.hi))
 
     def _ended_since(self, mut db: State, up: List[String]) raises:
         """Records the end of every instance `orca.instances` has as live
         that isn't among those `up`, with EC2's reason for it."""
         var gone = List[String]()
-        for row in db.conn.query(
-            "SELECT id FROM orca.instances WHERE ended IS NULL", Params()
-        ):
-            var id = row.text("id")
+        for id in ec2_db.live_ids(db.conn):
             if id not in up:
                 gone.append(id)
         if len(gone) == 0:
@@ -1718,34 +1468,21 @@ def _record(
             cpu = vcpus(i.instance_type) * 1000
         except:
             pass
-        _ = db.conn.execute(
-            (
-                "INSERT INTO orca.instances (id, run, start, role,"
-                " instance_type, market, address, procs, pool_key, cpu_millis)"
-                " VALUES ($1, $2, $3, $4, $5, $6, nullif($7, ''), $8,"
-                " nullif($9, ''), $10) ON CONFLICT DO NOTHING"
-            ),
-            Params()
-            .text(i.id)
-            .int64(Int64(r.run))
-            .int64(Int64(r.start))
-            .text(String(role))
-            .text(i.instance_type)
-            .text(market)
-            .text(i.private_ip)
-            .int64(Int64(procs))
-            .text(key)
-            .int64(Int64(cpu)),
+        ec2_db.add_instance(
+            db.conn,
+            i.id,
+            r.run,
+            r.start,
+            String(role),
+            i.instance_type,
+            market,
+            i.private_ip,
+            procs,
+            key,
+            cpu,
         )
 
 
 def _ended(mut db: State, id: String, why: String) raises:
     """Records that instance `id` ended, unless it's recorded already."""
-    _ = db.conn.execute(
-        (
-            "UPDATE orca.instances SET ended = now(), why = CASE WHEN drained"
-            " IS NOT NULL AND $2 = 'shut itself down' THEN 'drained: idle'"
-            " ELSE $2 END WHERE id = $1 AND ended IS NULL"
-        ),
-        Params().text(id).text(why),
-    )
+    ec2_db.ended(db.conn, id, why)

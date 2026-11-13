@@ -44,7 +44,7 @@ aren't sent, so they have no row. Kept 90 days.
 from std.os import getenv
 
 from objectstore.http import Header, HttpClient
-from postgres import Params
+import morca.db.notify as notify_db
 
 from morca.control import fetch_secret
 from morca.html import Html
@@ -217,71 +217,17 @@ def alert(
     Never raises for a send that fails; Postgres errors do."""
     if not configured():
         return False
-    var rows = db.conn.query(
-        (
-            "SELECT state, pending, (last_sent IS NOT NULL AND last_sent >"
-            " now() - make_interval(secs => $3)) AS recent FROM"
-            " orca.notifications WHERE kind = $1 AND subject = $2"
-        ),
-        Params().text(kind).text(subject).float64(Float64(min_seconds())),
-    )
-    if len(rows) == 1:
-        var r = rows.row(0)
-        if r.text("state") == "firing" and r.bool("pending"):
+    var m = notify_db.Message(title, body, priority, tags, click)
+    var st = notify_db.state_of(db.conn, kind, subject, Float64(min_seconds()))
+    if st:
+        ref r = st.value()
+        if r.state == "firing" and r.pending:
             # Not delivered yet: the newest words, on the same schedule.
-            _ = db.conn.execute(
-                (
-                    "UPDATE orca.notifications SET title = $3, body = $4,"
-                    " priority = $5, tags = $6, click = $7 WHERE kind = $1"
-                    " AND subject = $2"
-                ),
-                Params()
-                .text(kind)
-                .text(subject)
-                .text(title)
-                .text(body)
-                .text(priority)
-                .text(tags)
-                .text(click),
-            )
-            _ = db.conn.execute(
-                (
-                    "UPDATE orca.alerts SET title = $3, body = $4, priority ="
-                    " $5, tags = $6, url = $7 WHERE id = (SELECT max(id) FROM"
-                    " orca.alerts WHERE kind = $1 AND subject = $2 AND event ="
-                    " 'raised' AND delivery = 'pending')"
-                ),
-                Params()
-                .text(kind)
-                .text(subject)
-                .text(title)
-                .text(body)
-                .text(priority)
-                .text(tags)
-                .text(click),
-            )
+            notify_db.reword_pending(db.conn, kind, subject, m)
             return True
-        if r.bool("recent"):
+        if r.recent:
             return False
-    _ = db.conn.execute(
-        (
-            "INSERT INTO orca.notifications (kind, subject, state, pending,"
-            " title, body, priority, tags, click, attempts, next_try) VALUES"
-            " ($1, $2, 'firing', true, $3, $4, $5, $6, $7, 0, now()) ON"
-            " CONFLICT (kind, subject) DO UPDATE SET state = 'firing',"
-            " pending = true, title = EXCLUDED.title, body = EXCLUDED.body,"
-            " priority = EXCLUDED.priority, tags = EXCLUDED.tags, click ="
-            " EXCLUDED.click, attempts = 0, next_try = now()"
-        ),
-        Params()
-        .text(kind)
-        .text(subject)
-        .text(title)
-        .text(body)
-        .text(priority)
-        .text(tags)
-        .text(click),
-    )
+    notify_db.fire(db.conn, kind, subject, m)
     var id = _record(
         db,
         kind,
@@ -296,14 +242,7 @@ def alert(
         run,
     )
     # An earlier raise of it still open is repeated by this one.
-    _ = db.conn.execute(
-        (
-            "UPDATE orca.alerts SET resolved_at = now(), resolved_by = $3"
-            " WHERE kind = $1 AND subject = $2 AND event = 'raised' AND"
-            " resolved_at IS NULL AND id < $3"
-        ),
-        Params().text(kind).text(subject).int64(id),
-    )
+    notify_db.resolve_older_raises(db.conn, kind, subject, id)
     _ = flush(db)
     return True
 
@@ -325,56 +264,29 @@ def _record(
     sent; the earlier ones of its kind and subject that hadn't gone are
     dropped, since `orca.notifications` now holds this one instead. Returns
     its id."""
-    _ = db.conn.execute(
-        (
-            "UPDATE orca.alerts SET delivery = 'dropped', error = 'replaced"
-            " before it was sent' WHERE kind = $1 AND subject = $2 AND"
-            " delivery = 'pending'"
-        ),
-        Params().text(kind).text(subject),
+    notify_db.drop_pending(
+        db.conn, kind, subject, "replaced before it was sent"
     )
-    var p = Params().text(kind).text(subject).text(String(event))
-    p = p^.text(title).text(body).text(priority).text(tags).text(click)
-    var rows = db.conn.query(
-        (
-            "INSERT INTO orca.alerts (kind, subject, event, title, body,"
-            " priority, tags, url, pipelines, run) VALUES ($1, $2, $3, $4, $5,"
-            " $6, $7, $8, nullif($9, ''), nullif($10, 0)) RETURNING id"
-        ),
-        p^.text(pipelines).int64(Int64(run)),
+    return notify_db.add_alert(
+        db.conn,
+        kind,
+        subject,
+        String(event),
+        notify_db.Message(title, body, priority, tags, click),
+        pipelines,
+        run,
     )
-    return rows.row(0).int64("id")
 
 
 def is_firing(mut db: State, kind: String, subject: String) raises -> Bool:
     """Whether an alert of this kind and subject was raised and not yet
     resolved."""
-    return (
-        len(
-            db.conn.query(
-                (
-                    "SELECT 1 FROM orca.notifications WHERE kind = $1 AND"
-                    " subject = $2 AND state = 'firing'"
-                ),
-                Params().text(kind).text(subject),
-            )
-        )
-        > 0
-    )
+    return notify_db.is_firing(db.conn, kind, subject)
 
 
 def firing_subjects(mut db: State, kind: String) raises -> List[String]:
     """The subjects of `kind` raised and not yet resolved."""
-    var out = List[String]()
-    for r in db.conn.query(
-        (
-            "SELECT subject FROM orca.notifications WHERE kind = $1 AND state"
-            " = 'firing' ORDER BY subject"
-        ),
-        Params().text(kind),
-    ):
-        out.append(r.text("subject"))
-    return out^
+    return notify_db.firing_subjects(db.conn, kind)
 
 
 def resolve(
@@ -389,19 +301,12 @@ def resolve(
     alert itself was ever sent. Nothing for an alert that isn't firing."""
     if not configured():
         return
-    var rows = db.conn.query(
-        (
-            "UPDATE orca.notifications SET state = 'resolved', pending ="
-            " (last_sent IS NOT NULL), title = $3, body = $4, priority ="
-            " 'low', tags = 'white_check_mark', click = $5, attempts = 0,"
-            " next_try = now() WHERE kind = $1 AND subject = $2 AND state ="
-            " 'firing' RETURNING pending"
-        ),
-        Params().text(kind).text(subject).text(title).text(body).text(click),
+    var was = notify_db.mark_resolved(
+        db.conn, kind, subject, title, body, click
     )
-    if len(rows) != 1:
+    if not was:
         return
-    var pending = rows.row(0).bool("pending")
+    var pending = was.value()
     var by = Int64(0)
     if pending:
         by = _record(
@@ -416,22 +321,10 @@ def resolve(
             click,
         )
     else:
-        _ = db.conn.execute(
-            (
-                "UPDATE orca.alerts SET delivery = 'dropped', error ="
-                " 'resolved before it was sent' WHERE kind = $1 AND subject ="
-                " $2 AND delivery = 'pending'"
-            ),
-            Params().text(kind).text(subject),
+        notify_db.drop_pending(
+            db.conn, kind, subject, "resolved before it was sent"
         )
-    _ = db.conn.execute(
-        (
-            "UPDATE orca.alerts SET resolved_at = now(), resolved_by ="
-            " nullif($3, 0) WHERE kind = $1 AND subject = $2 AND event ="
-            " 'raised' AND resolved_at IS NULL"
-        ),
-        Params().text(kind).text(subject).int64(by),
-    )
+    notify_db.resolve_raises(db.conn, kind, subject, by)
     if pending:
         _ = flush(db)
 
@@ -440,16 +333,7 @@ def flush(mut db: State) raises -> Int:
     """Sends the alerts that are pending and due (a few a call), and returns
     how many were sent. A send that fails is logged and tried again later; it
     never raises. Postgres errors do."""
-    var due = db.conn.query(
-        (
-            "UPDATE orca.notifications n SET next_try = now() + interval '60"
-            " seconds' WHERE (kind, subject) IN (SELECT kind, subject FROM"
-            " orca.notifications WHERE pending AND next_try <= now() ORDER BY"
-            " next_try LIMIT 5 FOR UPDATE SKIP LOCKED) RETURNING kind, subject,"
-            " title, body, priority, tags, click, attempts"
-        ),
-        Params(),
-    )
+    var due = notify_db.take_due(db.conn)
     if len(due) == 0:
         return 0
     var sent = 0
@@ -459,68 +343,30 @@ def flush(mut db: State) raises -> Int:
         t = target()
     except e:
         why = String(e)
-    for i in range(len(due)):
-        var r = due.row(i)
-        var kind = r.text("kind")
-        var subject = r.text("subject")
+    for r in due:
+        var kind = r.kind
+        var subject = r.subject
         var failure = why
         if t:
             try:
                 post(
                     t.value(),
-                    r.text("title"),
-                    r.text("body"),
-                    r.text("priority"),
-                    r.text("tags"),
-                    r.text("click"),
+                    r.message.title,
+                    r.message.body,
+                    r.message.priority,
+                    r.message.tags,
+                    r.message.click,
                 )
                 failure = String()
             except e:
                 failure = String(e)
         if not failure:
-            _ = db.conn.execute(
-                (
-                    "UPDATE orca.notifications SET pending = false, attempts ="
-                    " 0, last_error = NULL, sent_at = now(), last_sent = CASE"
-                    " WHEN state = 'firing' THEN now() ELSE last_sent END"
-                    " WHERE kind = $1 AND subject = $2"
-                ),
-                Params().text(kind).text(subject),
-            )
-            _ = db.conn.execute(
-                (
-                    "UPDATE orca.alerts SET delivery = 'sent', sent_at ="
-                    " now(), attempts = attempts + 1, error = NULL WHERE id ="
-                    " (SELECT max(id) FROM orca.alerts WHERE kind = $1 AND"
-                    " subject = $2 AND delivery = 'pending')"
-                ),
-                Params().text(kind).text(subject),
-            )
+            notify_db.sent(db.conn, kind, subject)
             sent += 1
             continue
-        var attempts = Int(r.int64("attempts")) + 1
+        var attempts = r.attempts + 1
         var wait = min(30 * (1 << min(attempts - 1, 10)), 900)
-        _ = db.conn.execute(
-            (
-                "UPDATE orca.notifications SET attempts = $3, last_error = $4,"
-                " next_try = now() + make_interval(secs => $5) WHERE kind = $1"
-                " AND subject = $2"
-            ),
-            Params()
-            .text(kind)
-            .text(subject)
-            .int64(Int64(attempts))
-            .text(failure)
-            .float64(Float64(wait)),
-        )
-        _ = db.conn.execute(
-            (
-                "UPDATE orca.alerts SET attempts = attempts + 1, error = $3"
-                " WHERE id = (SELECT max(id) FROM orca.alerts WHERE kind = $1"
-                " AND subject = $2 AND delivery = 'pending')"
-            ),
-            Params().text(kind).text(subject).text(failure),
-        )
+        notify_db.not_sent(db.conn, kind, subject, attempts, failure, wait)
         print(
             "morca: notify:",
             kind,
@@ -530,17 +376,7 @@ def flush(mut db: State) raises -> Int:
             wait,
             "s",
         )
-    _ = db.conn.execute(
-        (
-            "DELETE FROM orca.notifications WHERE NOT pending AND coalesce("
-            "sent_at, last_sent) < now() - interval '30 days'"
-        ),
-        Params(),
-    )
-    _ = db.conn.execute(
-        "DELETE FROM orca.alerts WHERE created < now() - interval '90 days'",
-        Params(),
-    )
+    notify_db.prune(db.conn)
     return sent
 
 
@@ -564,32 +400,19 @@ struct Sent(Copyable, Movable):
 
 def recent(mut db: State, limit: Int = 8) raises -> List[Sent]:
     """The alerts last sent or waiting to be, newest first."""
-    comptime ts = '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\''
     var out = List[Sent]()
-    for r in db.conn.query(
-        String(
-            "SELECT kind, subject, state, title, priority, pending,",
-            " coalesce(last_error, '') AS error, coalesce(to_char(sent_at AT",
-            " TIME ZONE 'UTC', ",
-            ts,
-            "), '') AS sent, coalesce(extract(epoch FROM now() -",
-            " sent_at)::bigint, -1) AS ago FROM orca.notifications WHERE",
-            " sent_at IS NOT NULL OR pending ORDER BY coalesce(sent_at,",
-            " next_try) DESC LIMIT $1",
-        ),
-        Params().int64(Int64(limit)),
-    ):
+    for r in notify_db.recent(db.conn, limit):
         out.append(
             Sent(
-                r.text("kind"),
-                r.text("subject"),
-                r.text("state"),
-                r.text("title"),
-                r.text("priority"),
-                r.text("sent"),
-                Int(r.int64("ago")),
-                r.bool("pending"),
-                r.text("error"),
+                r.kind,
+                r.subject,
+                r.state,
+                r.title,
+                r.priority,
+                r.sent,
+                r.ago,
+                r.pending,
+                r.error,
             )
         )
     return out^

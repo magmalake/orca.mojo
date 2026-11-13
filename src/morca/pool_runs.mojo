@@ -3,20 +3,15 @@ dead runs queued again for a worker, lost workers' runs, orphans of gone
 instances, and fill runs queued for the pool.
 """
 
-from postgres import (
-    Params,
-    Transaction,
-)
-from morca.batches import mark_batch
+from postgres import Transaction
+from morca.db.batches import mark_batch
 from morca.fill import fill_status
-from morca.live import (
-    dead_sql,
-    hold_behind,
-    stale_sql,
-)
+import morca.db.audit as audit_db
+import morca.db.pool_runs as pool_runs_db
+import morca.db.starting as starting_db
+from morca.db.live import hold_behind
 from morca.scheduler import (
     Scheduler,
-    _RETRIED,
     _WORKER_OWNER,
 )
 from morca.registered import (
@@ -39,56 +34,25 @@ def _requeue_for_workers(
     var dead = self._dead("$2")
     var waiting = String("held: waiting for a worker of pool ", pool)
     var tx = self.db.conn.begin()
-    _ = tx.query(
-        "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
-        Params().text(p.name),
-    )
+    starting_db.lock_pipeline(tx, p.name)
     var lost = _requeue_lost(self, tx, p, dead, waiting)
     self._end_dead(tx, p, dead)
     # One behind an older live run of its keys says which; a worker
     # doesn't claim it until that run ends.
     hold_behind(tx, p.name, waiting)
     if not p.fill.all:
-        _ = tx.execute(
+        pool_runs_db.hold_fills(
+            tx,
+            p.name,
             (
-                "UPDATE orca.runs SET held = $2 WHERE pipeline = $1 AND"
-                " status = 'queued' AND trigger = 'fill' AND held IS"
-                " DISTINCT FROM $2"
-            ),
-            Params()
-            .text(p.name)
-            .text(
                 'held: fills are off (fills isn\'t "all"), so no worker'
                 " is given it"
             ),
         )
-    var n = tx.execute(
-        String(
-            "UPDATE orca.runs SET status = 'queued', owner = NULL,",
-            " heartbeat = NULL, retry_at = NULL, held = $5 WHERE pipeline",
-            " = $1 AND trigger <> 'fill' AND ((status = 'deferred' AND",
-            " retry_at <= $4) OR (status = 'failed' AND ",
-            _RETRIED,
-            " AND retry_at <= $4) OR (status = 'running' AND ",
-            _RETRIED,
-            " AND ",
-            dead,
-            " AND starts - deferrals <= $3))",
-        ),
-        Params()
-        .text(p.name)
-        .float64(self.stale)
-        .int64(Int64(p.run_retries))
-        .int64(now)
-        .text(waiting),
+    var n = pool_runs_db.requeue_due(
+        tx, p.name, self.stale, p.run_retries, now, waiting, dead
     )
-    _ = tx.execute(
-        (
-            "UPDATE orca.runs SET held = $2 WHERE pipeline = $1 AND status"
-            " = 'queued' AND held IS NULL"
-        ),
-        Params().text(p.name).text(waiting),
-    )
+    pool_runs_db.hold_unheld(tx, p.name, waiting)
     tx.commit()
     _say_lost(p, pool, lost)
     if n > 0:
@@ -128,57 +92,26 @@ def _requeue_lost(
     a row of `orca.audit` (user `scheduler`, action
     `/api/worker/requeue`); returns each run with why."""
     var out = List[Tuple[Int, String]]()
-    # In this query orca.runs is `r` (`dead` names it by the table).
-    var gone = dead_sql("$2", self.start_grace, "r")
-    var rows = tx.query(
-        String(
-            "WITH lost AS (SELECT r.id, r.owner = '",
-            _WORKER_OWNER,
-            "' AS unstarted, CASE WHEN w.last_seen IS NULL OR w.last_seen",
-            " <= now() - make_interval(secs => $2 / 2) THEN 'worker ' ||",
-            " w.label || ' (token ' || w.id || ') stopped: not seen for '",
-            " || coalesce(extract(epoch FROM now() -",
-            " w.last_seen)::bigint::text || ' s', 'ever') ELSE 'worker '",
-            " || w.label || ' (token ' || w.id || ') no longer runs it'",
-            " END AS why FROM orca.runs r JOIN orca.workers w ON w.id =",
-            " r.worker WHERE r.pipeline = $1 AND r.status = 'running' AND",
-            " r.placement LIKE 'worker:%' AND NOT r.cancel_requested AND",
-            " (r.owner = '",
-            _WORKER_OWNER,
-            "' OR r.starts - r.deferrals <= $3) AND (((w.last_seen IS NULL",
-            " OR w.last_seen <= now() - make_interval(secs => $2 / 2)) AND",
-            " ((r.owner = '",
-            _WORKER_OWNER,
-            "' AND r.started <= now() - make_interval(secs => $2)) OR ",
-            gone,
-            ")) OR (",
-            gone,
-            " AND NOT (r.id::text = ANY (string_to_array(coalesce(",
-            "w.running, ''), ','))))) FOR UPDATE OF r) UPDATE orca.runs u",
-            " SET status = 'queued', owner = NULL, heartbeat = NULL,",
-            " retry_at = NULL, held = $4, starts = CASE WHEN",
-            " lost.unstarted THEN u.starts - 1 ELSE u.starts END FROM lost",
-            " WHERE u.id = lost.id RETURNING u.id, lost.why,",
-            " lost.unstarted",
-        ),
-        Params()
-        .text(p.name)
-        .float64(self.stale)
-        .int64(Int64(p.run_retries))
-        .text(waiting),
-    )
-    for r in rows:
-        var why = r.text("why")
-        if r.bool("unstarted"):
+    for r in pool_runs_db.requeue_lost(
+        tx,
+        p.name,
+        self.stale,
+        self.start_grace,
+        p.run_retries,
+        waiting,
+        _WORKER_OWNER,
+    ):
+        var why = r.why
+        if r.unstarted:
             why.write(", before starting it")
-        out.append((Int(r.int64("id")), why))
-        _ = tx.execute(
-            (
-                "INSERT INTO orca.audit (username, action, run, detail,"
-                " source) VALUES ('scheduler', '/api/worker/requeue', $1,"
-                " $2, 'scheduler')"
-            ),
-            Params().int64(r.int64("id")).text(String("queued again: ", why)),
+        out.append((r.run, why))
+        audit_db.add(
+            tx,
+            "scheduler",
+            "/api/worker/requeue",
+            r.run,
+            String("queued again: ", why),
+            "scheduler",
         )
     return out^
 
@@ -197,35 +130,17 @@ def _requeue_orphans(
     `scheduler`, action `/api/scheduler/requeue`); returns each with
     why."""
     var out = List[Tuple[Int, String]]()
-    var rows = tx.query(
-        String(
-            "WITH lost AS (SELECT r.id, 'scheduler instance ' || s.id ||",
-            " ' on ' || s.host || CASE WHEN s.ended IS NOT NULL THEN",
-            " ' ended' ELSE ' stopped: not seen for ' || extract(epoch",
-            " FROM now() - s.last_seen)::bigint || ' s' END AS why FROM",
-            " orca.runs r JOIN orca.schedulers s ON s.id = r.instance WHERE",
-            " r.pipeline = $1 AND r.status = 'running' AND r.placement IN",
-            " ('local', 'control') AND NOT r.cancel_requested AND",
-            " r.starts - r.deferrals <= $3 AND (s.ended IS NOT NULL OR",
-            " s.last_seen <= now() - make_interval(secs => $2)) AND ",
-            stale_sql("$2", self.start_grace, "r"),
-            " FOR UPDATE OF r) UPDATE orca.runs u SET status = 'queued',",
-            " owner = NULL, heartbeat = NULL, retry_at = NULL, held = NULL,",
-            " instance = NULL FROM lost WHERE u.id = lost.id RETURNING",
-            " u.id, lost.why",
-        ),
-        Params().text(p.name).float64(self.stale).int64(Int64(p.run_retries)),
-    )
-    for r in rows:
-        var why = r.text("why")
-        out.append((Int(r.int64("id")), why))
-        _ = tx.execute(
-            (
-                "INSERT INTO orca.audit (username, action, run, detail,"
-                " source) VALUES ('scheduler', '/api/scheduler/requeue',"
-                " $1, $2, 'scheduler')"
-            ),
-            Params().int64(r.int64("id")).text(String("queued again: ", why)),
+    for r in pool_runs_db.requeue_orphans(
+        tx, p.name, self.stale, self.start_grace, p.run_retries
+    ):
+        out.append((r.run, r.why))
+        audit_db.add(
+            tx,
+            "scheduler",
+            "/api/scheduler/requeue",
+            r.run,
+            String("queued again: ", r.why),
+            "scheduler",
         )
     return out^
 
@@ -244,10 +159,7 @@ def _fill_for_workers(
     var dead = self._dead("$2")
     var waiting = String("held: waiting for a worker of pool ", pool)
     var tx = self.db.conn.begin()
-    _ = tx.query(
-        "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
-        Params().text(p.name),
-    )
+    starting_db.lock_pipeline(tx, p.name)
     # A gone worker's fill runs first, as the other pass does, so they
     # are queued again with why (and an audit row), not as merely dead:
     # the tick's passes run a moment apart, and either may see them first.
@@ -256,44 +168,16 @@ def _fill_for_workers(
     var free = status.slots
     var again = 0
     if free > 0:
-        again = tx.execute(
-            String(
-                "UPDATE orca.runs SET status = 'queued', owner = NULL,",
-                " heartbeat = NULL, retry_at = NULL, held = $5 WHERE id IN",
-                " (SELECT id FROM orca.runs WHERE pipeline = $1 AND",
-                " trigger = 'fill' AND ((status = 'deferred' AND retry_at",
-                " <= $4) OR (status = 'failed' AND retry_at <= $4 AND",
-                " starts - deferrals BETWEEN 1 AND $3) OR (status =",
-                " 'running' AND ",
-                dead,
-                " AND starts - deferrals <= $3)) ORDER BY id LIMIT $6)",
-            ),
-            Params()
-            .text(p.name)
-            .float64(self.stale)
-            .int64(Int64(p.run_retries))
-            .int64(now)
-            .text(waiting)
-            .int64(Int64(free)),
+        again = pool_runs_db.requeue_fills(
+            tx, p.name, self.stale, p.run_retries, now, waiting, free, dead
         )
     var ids = List[Int64]()
     ref next = status.next_keys
     for i in range(min(free - again, len(next))):
         ids.append(
-            tx.query(
-                (
-                    "INSERT INTO orca.runs (pipeline, registry_hash,"
-                    " partitions, trigger, status, held) VALUES ($1, $2,"
-                    " $3, 'fill', 'queued', $4) RETURNING id"
-                ),
-                Params()
-                .text(p.name)
-                .text(p.registry_hash)
-                .text(next[i])
-                .text(waiting),
+            pool_runs_db.queue_fill(
+                tx, p.name, p.registry_hash, next[i], waiting
             )
-            .row(0)
-            .int64("id")
         )
     mark_batch(tx, ids)
     tx.commit()

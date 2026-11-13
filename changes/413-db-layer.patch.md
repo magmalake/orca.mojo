@@ -1,0 +1,1 @@
+- **SQL moves into `morca.db`**: the scheduler's, watchdog's, fleet's, EC2 runner's, auth and alert queries are typed functions in one package, with nothing changed for a user. (#413)

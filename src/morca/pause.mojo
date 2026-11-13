@@ -1,7 +1,7 @@
 """Pausing a pipeline: what `morca pause`, the UI's Pause button and the
 watchdog (`morca.watchdog`) all do."""
 
-from postgres import Params
+import morca.db.pipelines as pipelines_db
 
 from morca.state import State
 
@@ -9,19 +9,9 @@ from morca.state import State
 def set_paused(mut db: State, pipeline: String, paused: Bool) raises -> String:
     """Sets `pipelines.paused`: while it's true the scheduler starts none of
     the pipeline's runs. Returns why it wasn't changed, or empty."""
-    var rows = db.conn.query(
-        (
-            "UPDATE orca.pipelines SET paused = $2 WHERE name = $1 AND paused"
-            " <> $2 RETURNING name"
-        ),
-        Params().text(pipeline).bool(paused),
-    )
-    if len(rows) == 1:
+    if pipelines_db.change_paused(db.conn, pipeline, paused):
         return String()
-    var have = db.conn.query(
-        "SELECT 1 FROM orca.pipelines WHERE name = $1", Params().text(pipeline)
-    )
-    if len(have) == 0:
+    if not pipelines_db.exists(db.conn, pipeline):
         return String("no pipeline ", pipeline)
     return String(
         "pipeline ",
