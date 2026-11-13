@@ -1,14 +1,6 @@
 # Files that still build SQL outside src/morca/db/ (#362). Moving a file's
 # queries into morca.db takes it off; nothing is added.
-src/morca/actions.mojo
-src/morca/admission.mojo
 src/morca/aws_replace.mojo
-src/morca/config_show.mojo
-src/morca/estimate.mojo
-src/morca/fill.mojo
-src/morca/handover.mojo
-src/morca/recommend.mojo
-src/morca/registered.mojo
 src/morca/sqlite_store.mojo
 src/morca/state.mojo
 src/morca/ui/alerts.mojo
@@ -22,7 +14,6 @@ src/morca/ui/pool_status.mojo
 src/morca/ui/run.mojo
 src/morca/ui/runs.mojo
 src/morca/ui/viz.mojo
-src/morca/usage.mojo
 src/morca/views/cluster.mojo
 src/morca/views/code.mojo
 src/morca/views/datasets.mojo

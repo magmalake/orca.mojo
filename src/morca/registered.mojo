@@ -3,7 +3,7 @@
 """
 
 from std.os import getenv
-from postgres import Params
+import morca.db.registered as registered_db
 from morca.civil import Civil
 from morca.control import (
     CONTROL,
@@ -145,18 +145,8 @@ def run_request(
     if p.learned_key == p.learn_key:
         return resolve_request(declared, p.learned, True, most_cpus)
     var rec = learned(db, p.name, p.cpus, p.memory_gb)
-    _ = db.conn.execute(
-        (
-            "UPDATE orca.pipelines SET learned = jsonb_build_object('key',"
-            " $2::text, 'runs', $3::bigint, 'memory_mb', $4::bigint, 'cpus',"
-            " $5::bigint) WHERE name = $1"
-        ),
-        Params()
-        .text(p.name)
-        .text(p.learn_key)
-        .int64(Int64(rec.runs))
-        .int64(Int64(rec.memory_mb))
-        .int64(Int64(rec.cpus)),
+    registered_db.keep_learned(
+        db.conn, p.name, p.learn_key, rec.runs, rec.memory_mb, rec.cpus
     )
     return resolve_request(declared, rec, True, most_cpus)
 
@@ -231,114 +221,63 @@ def repeated_fill(p: Registered, after: Int64) raises -> String:
 def registered(mut db: State, only: String = "") raises -> List[Registered]:
     """Every pipeline registered with a binary, or the one named."""
     var out = List[Registered]()
-    var rows = db.conn.query(
-        (
-            "SELECT name, binary_path, registry_hash, coalesce(since, 0) AS"
-            " since, coalesce(describe->'schedule'->>'cron', '') AS cron,"
-            " coalesce(describe->'schedule'->>'tz', 'UTC') AS tz,"
-            " coalesce(describe->'schedule'->>'fills', 'previous') AS fills,"
-            " coalesce((describe->'schedule'->>'catchup')::boolean, true) AS"
-            " catchup, coalesce(describe->'partitions'->>'kind', 'monthly') AS"
-            " kind, coalesce(describe->'partitions'->>'start', '') AS start,"
-            " coalesce(max_runs, (describe->>'max_runs')::bigint, 1) AS"
-            " max_runs, coalesce(max_runs_auto, false) AS max_runs_auto,"
-            " coalesce((describe->>'run_retries')::bigint, 3) AS run_retries,"
-            " coalesce((describe->>'retry_seconds')::bigint, 0) AS"
-            " retry_seconds, coalesce((describe->>'max_retry_seconds')::bigint,"
-            " 0) AS max_retry_seconds, coalesce((describe->>'sensor')::boolean,"
-            " false) AS sensor, coalesce(keys_per_run,"
-            " (describe->>'keys_per_run')::bigint, 1) AS keys_per_run,"
-            " coalesce(describe->'partitions'->>'dataset', '') AS keys_dataset,"
-            " coalesce(image, '') AS image, CASE WHEN"
-            " jsonb_array_length(coalesce(describe->'tasks', '[]')) > 0 THEN"
-            " coalesce(ec2_workers, (describe->>'workers')::bigint, 2) ELSE 0"
-            " END AS workers, coalesce(head_type, '') AS head_type,"
-            " coalesce(worker_type, '') AS worker_type, coalesce(spot, false)"
-            " AS spot, coalesce(ec2_min_workers, -1) AS min_workers,"
-            " coalesce(secrets::text, '') AS secrets, paused,"
-            " coalesce(worker_procs, 1) AS worker_procs, coalesce(placement,"
-            " '') AS placement, coalesce(env::text, '') AS env, coalesce(fills,"
-            " '') AS fill_mode, coalesce(fill_order, '') AS fill_order,"
-            " coalesce(fill_max_runs, 0) AS fill_max_runs,"
-            " coalesce(fill_max_runs_auto, false) AS fill_max_runs_auto,"
-            " coalesce(fill_budget_per_day, -1) AS fill_budget,"
-            " coalesce(fill_window, '') AS fill_window, coalesce(fill_lag, '')"
-            " AS fill_lag, coalesce(cpus, '') AS cpus, coalesce(memory_gb, '')"
-            " AS memory_gb, coalesce(memory_raised_mb, 0) AS memory_raised_mb,"
-            " coalesce(learn, true) AS learn, CASE WHEN cpus LIKE 'auto%' OR"
-            " memory_gb LIKE 'auto%' THEN concat_ws('/', coalesce((SELECT"
-            " r.id::text || CASE WHEN EXISTS (SELECT 1 FROM orca.steps s JOIN"
-            " orca.attempts a ON a.step = s.id WHERE s.run = r.id AND"
-            " a.peak_rss_bytes IS NOT NULL) THEN 'm' ELSE '' END FROM orca.runs"
-            " r WHERE r.pipeline = orca.pipelines.name AND r.status ="
-            " 'succeeded' ORDER BY r.id DESC LIMIT 1), ''),"
-            " coalesce(memory_raised_mb, 0), coalesce(cpus, ''),"
-            " coalesce(memory_gb, '')) ELSE '' END AS learn_key,"
-            " coalesce(learned->>'key', '') AS learned_key,"
-            " coalesce((learned->>'runs')::bigint, 0) AS learned_runs,"
-            " coalesce((learned->>'memory_mb')::bigint, 0) AS"
-            " learned_memory_mb, coalesce((learned->>'cpus')::bigint, 0) AS"
-            " learned_cpus FROM orca.pipelines WHERE binary_path IS NOT NULL"
-            " AND ($1 = '' OR name = $1) ORDER BY name"
-        ),
-        Params().text(only),
-    )
+    var rows = registered_db.registrations(db.conn, only)
     for r in rows:
         out.append(
             Registered(
-                r.text("name"),
-                r.text("binary_path"),
-                r.text("registry_hash"),
-                r.int64("since"),
-                r.text("cron"),
-                r.text("tz"),
-                r.text("fills"),
-                r.bool("catchup"),
-                r.text("kind"),
-                r.text("start"),
-                Int(r.int64("max_runs")),
-                Int(r.int64("run_retries")),
-                Int(r.int64("retry_seconds")),
-                Int(r.int64("max_retry_seconds")),
-                r.bool("sensor"),
-                Int(r.int64("keys_per_run")),
-                r.text("keys_dataset"),
-                r.text("image"),
-                Int(r.int64("workers")),
-                r.text("head_type"),
-                r.text("worker_type"),
-                r.bool("spot"),
-                Int(r.int64("min_workers")),
-                parse_secrets(r.text("secrets")),
-                r.bool("paused"),
-                Int(r.int64("worker_procs")),
-                r.text("placement"),
-                parse_env(r.text("env")),
+                r.name,
+                r.binary_path,
+                r.registry_hash,
+                r.since,
+                r.cron,
+                r.tz,
+                r.fills,
+                r.catchup,
+                r.kind,
+                r.start,
+                r.max_runs,
+                r.run_retries,
+                r.retry_seconds,
+                r.max_retry_seconds,
+                r.sensor,
+                r.keys_per_run,
+                r.keys_dataset,
+                r.image,
+                r.workers,
+                r.head_type,
+                r.worker_type,
+                r.spot,
+                r.min_workers,
+                parse_secrets(r.secrets),
+                r.paused,
+                r.worker_procs,
+                r.placement,
+                parse_env(r.env),
                 Fill.of(
-                    r.text("fill_mode"),
-                    r.text("fill_order"),
-                    Int(r.int64("fill_max_runs")),
-                    r.float64("fill_budget"),
-                    r.text("fill_window"),
-                    r.text("fill_lag"),
-                    r.bool("fill_max_runs_auto"),
+                    r.fill_mode,
+                    r.fill_order,
+                    r.fill_max_runs,
+                    r.fill_budget,
+                    r.fill_window,
+                    r.fill_lag,
+                    r.fill_max_runs_auto,
                 ),
-                r.text("cpus"),
-                r.text("memory_gb"),
-                Int(r.int64("memory_raised_mb")),
-                r.bool("learn"),
-                r.text("learn_key"),
+                r.cpus,
+                r.memory_gb,
+                r.memory_raised_mb,
+                r.learn,
+                r.learn_key,
                 Recommendation(
-                    Int(r.int64("learned_runs")),
+                    r.learned_runs,
                     0,
-                    Int(r.int64("learned_memory_mb")),
-                    Int(r.int64("learned_cpus")),
+                    r.learned_memory_mb,
+                    r.learned_cpus,
                     "",
                     "",
                     False,
                 ),
-                r.text("learned_key"),
-                r.bool("max_runs_auto"),
+                r.learned_key,
+                r.max_runs_auto,
             )
         )
     # A fixed count, or no tasks: no scaling.

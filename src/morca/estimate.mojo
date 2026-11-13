@@ -8,7 +8,7 @@ takes waves of `max_runs` runs at once, each about as long as a run of
 its size; one run over them all takes them one after another.
 """
 
-from postgres import Params
+import morca.db.estimate as estimate_db
 
 from morca.fill import eta_text
 from morca.state import State
@@ -16,17 +16,6 @@ from morca.state import State
 
 comptime SAMPLE = 20
 """The most recent succeeded runs the estimate is taken from."""
-
-
-comptime _PACE_SQL = (
-    "SELECT count(*)::bigint AS n, coalesce(sum(extract(epoch FROM ended -"
-    " started)), 0)::float8 AS secs, coalesce(sum(cardinality("
-    "string_to_array(partitions, ','))), 0)::bigint AS keys FROM (SELECT"
-    " started, ended, partitions FROM orca.runs WHERE pipeline = $1 AND"
-    " status = 'succeeded' AND started IS NOT NULL AND ended IS NOT NULL AND"
-    " ended >= started ORDER BY ended DESC LIMIT 20) r"
-)
-"""Over the last `SAMPLE` (20) of them."""
 
 
 @fieldwise_init
@@ -59,11 +48,10 @@ struct Pace(Copyable, Movable):
 
 def pace(mut db: State, pipeline: String) raises -> Pace:
     """`pipeline`'s pace over its last `SAMPLE` succeeded runs."""
-    var r = db.conn.query(_PACE_SQL, Params().text(pipeline)).row(0)
-    var keys = Int(r.int64("keys"))
-    if r.int64("n") == 0 or keys == 0:
+    var r = estimate_db.recent(db.conn, pipeline)
+    if r.runs == 0 or r.keys == 0:
         return Pace(-1.0, 0)
-    return Pace(r.float64("secs") / Float64(keys), Int(r.int64("n")))
+    return Pace(r.seconds / Float64(r.keys), r.runs)
 
 
 def per_key_text(p: Pace, unit: String) -> String:

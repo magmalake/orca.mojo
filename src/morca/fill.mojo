@@ -73,7 +73,9 @@ Keyed pipelines and sensors don't fill: `morca register` refuses
 
 from std.os import getenv
 
-from postgres import Params, Transaction
+from postgres import Transaction
+
+import morca.db.fill as fill_db
 
 from morca.civil import Civil
 from morca.fleet import hourly_price
@@ -524,40 +526,6 @@ struct FillStatus(Copyable, Movable):
         self.lag = 0
 
 
-comptime _SAME_DATA = (
-    "SELECT r.id FROM orca.runs r LEFT JOIN (SELECT registry_hash,"
-    " max(data_version) AS dv FROM orca.pipeline_versions WHERE pipeline = $1"
-    " GROUP BY registry_hash) AS h ON h.registry_hash = r.registry_hash WHERE"
-    " r.pipeline = $1 AND coalesce(h.dv, '') = coalesce((SELECT"
-    " v.data_version FROM orca.pipelines p JOIN orca.pipeline_versions v ON"
-    " v.id = p.version WHERE p.name = $1), '')"
-)
-"""The runs of pipeline `$1` whose code has its current data version
-(`morca.state.data_version_sql`): the same steps' `version=`. A run's is its
-registry hash's, since a step's version is in the hash; a hash recorded
-before data versions, or none, has none."""
-
-comptime _DONE_ANY_CODE = (
-    "WITH m AS (SELECT x->>'name' AS step FROM orca.pipelines p,"
-    " jsonb_array_elements(p.describe->'steps') AS x WHERE p.name = $1 AND"
-    " x->>'kind' = 'mapped'), same AS ("
-    + _SAME_DATA
-    + ") SELECT st.partition AS key FROM orca.steps st"
-    " JOIN orca.runs r ON r.id = st.run WHERE r.pipeline = $1 AND st.status ="
-    " 'succeeded' AND st.step IN (SELECT step FROM m) AND r.id IN (SELECT id"
-    " FROM same) GROUP BY st.partition HAVING count(DISTINCT st.step) ="
-    " (SELECT count(*) FROM m) UNION SELECT k.key FROM orca.runs r,"
-    " unnest(string_to_array(r.partitions, ',')) AS k(key) WHERE r.pipeline ="
-    " $1 AND r.status = 'succeeded' AND r.id IN (SELECT id FROM same) AND NOT"
-    " EXISTS (SELECT 1 FROM m)"
-)
-"""The keys done for pipeline `$1` in a run of any of its code with its
-current data version: every mapped step succeeded for the key; with no
-mapped step, a run over it succeeded. (`morca.scheduler.DONE_SQL` asks the
-same of the current code.) A raised `version=` is a new data version, so
-the fill runs the partitions again (#297)."""
-
-
 def fill_status(
     mut tx: Transaction, p: FillPipeline, now: Int64, run_retries: Int
 ) raises -> FillStatus:
@@ -576,33 +544,20 @@ def fill_status(
             s.lag_key = w[0]
             s.lag_until = w[1]
     var done = Dict[String, Bool]()
-    for r in tx.query(_DONE_ANY_CODE, Params().text(p.name)):
-        done[r.text("key")] = True
+    for k in fill_db.done_any_code(tx, p.name):
+        done[k] = True
     var live = live_runs(tx, p.name)
     # Each key's latest fill run: whether it gave up, or fails and waits
     # for a retry.
     var filled = Dict[String, Bool]()
     var given_up = Dict[String, Bool]()
     var retrying = Dict[String, Bool]()
-    for r in tx.query(
-        (
-            "SELECT DISTINCT ON (k.key) k.key, r.status = 'cancelled' OR"
-            " (r.status = 'failed' AND (r.starts - r.deferrals > $2 OR"
-            " coalesce(r.error, '') LIKE 'not started: its code is %')) AS"
-            " gone, r.status = 'failed' AND r.starts - r.deferrals <= $2 AS"
-            " again"
-            " FROM orca.runs r, unnest(string_to_array(r.partitions, ',')) AS"
-            " k(key) WHERE r.pipeline = $1 AND r.trigger = 'fill' AND r.id IN ("
-            + _SAME_DATA
-            + ") ORDER BY k.key, r.id DESC"
-        ),
-        Params().text(p.name).int64(Int64(run_retries)),
-    ):
-        filled[r.text("key")] = True
-        if r.bool("gone"):
-            given_up[r.text("key")] = True
-        elif r.bool("again"):
-            retrying[r.text("key")] = True
+    for r in fill_db.latest_fills(tx, p.name, run_retries):
+        filled[r.key] = True
+        if r.gone:
+            given_up[r.key] = True
+        elif r.again:
+            retrying[r.key] = True
     var todo = List[String]()
     for k in keys:
         if k in done:
@@ -621,92 +576,36 @@ def fill_status(
 
     var stale = stale_limit()
     var dead = dead_sql(String("$2"), start_grace(stale))
-    var running = tx.query(
-        String(
-            "SELECT count(*) AS n, coalesce(sum(extract(epoch FROM now() -",
-            " started)), 0)::float8 AS elapsed, coalesce(array_agg(extract(",
-            "epoch FROM now() - started)::bigint), '{}')::text AS each FROM",
-            " orca.runs WHERE pipeline = $1 AND trigger = 'fill' AND status =",
-            " 'running' AND NOT ",
-            dead,
-        ),
-        Params().text(p.name).float64(stale),
-    ).row(0)
-    s.running = Int(running.int64("n"))
-    s.queued = Int(
-        tx.query(
-            (
-                "SELECT count(*) AS n FROM orca.runs WHERE pipeline = $1 AND"
-                " trigger = 'fill' AND status = 'queued'"
-            ),
-            Params().text(p.name),
-        )
-        .row(0)
-        .int64("n")
-    )
-    var elapsed = List[Int]()
-    var each = running.text("each")
-    if each.byte_length() > 2:
-        for e in each[byte = 1 : each.byte_length() - 1].split(","):
-            elapsed.append(Int(e))
+    var elapsed = fill_db.running_fills(tx, p.name, stale, dead)
+    s.running = len(elapsed)
+    s.queued = fill_db.queued_fills(tx, p.name)
 
     # The rate: partitions of fill runs that succeeded lately, over the
     # time since the first of them started.
-    var rate = tx.query(
-        String(
-            "SELECT coalesce(sum(cardinality(string_to_array(partitions,",
-            " ','))), 0) AS n, coalesce(extract(epoch FROM now() -",
-            " min(started)), 0)::float8 AS span FROM orca.runs WHERE pipeline",
-            " = $1 AND trigger = 'fill' AND status = 'succeeded' AND ended >",
-            " now() - make_interval(hours => ",
-            _RATE_HOURS,
-            ")",
-        ),
-        Params().text(p.name),
-    ).row(0)
-    var n = rate.int64("n")
+    var rate = fill_db.recent_fills(tx, p.name, _RATE_HOURS)
+    var n = rate[0]
     if n > 0:
-        var hours = max(rate.float64("span"), 600.0) / 3600.0
+        var hours = max(rate[1], 600.0) / 3600.0
         s.rate = Float64(n) / hours
         s.eta_seconds = Int(Float64(s.left + s.live) / s.rate * 3600.0)
 
     # Spend: the fill runs' instances since 00:00 UTC.
     var day = now - now % 86400
     var unpriced = String()
-    for r in tx.query(
-        (
-            "SELECT i.instance_type, extract(epoch FROM"
-            " least(coalesce(i.ended, to_timestamp($2)), to_timestamp($2)) -"
-            " greatest(i.launched, to_timestamp($3)))::float8 AS secs FROM"
-            " orca.instances i JOIN orca.runs r ON r.id = i.run WHERE"
-            " r.pipeline = $1 AND r.trigger = 'fill' AND coalesce(i.ended,"
-            " to_timestamp($2)) > to_timestamp($3) AND i.launched <"
-            " to_timestamp($2)"
-        ),
-        Params().text(p.name).int64(now).int64(day),
-    ):
-        var price = hourly_price(r.text("instance_type"))
+    for r in fill_db.fill_instances(tx, p.name, now, day):
+        var price = hourly_price(r.instance_type)
         if price < 0:
-            unpriced = r.text("instance_type")
+            unpriced = r.instance_type
             continue
-        s.spent += COST_MARGIN * price * max(r.float64("secs"), 0.0) / 3600.0
+        s.spent += COST_MARGIN * price * max(r.seconds, 0.0) / 3600.0
     if unpriced:
         s.spent = -1.0
 
     # What the runs going and one more may cost.
     s.hourly = run_hourly(p.placed, p.head_type, p.worker_type, p.workers)
     var longest = 0
-    for r in tx.query(
-        String(
-            "SELECT extract(epoch FROM ended - started)::bigint AS secs FROM",
-            " orca.runs WHERE pipeline = $1 AND trigger = 'fill' AND ended IS",
-            " NOT NULL AND started IS NOT NULL AND status <> 'cancelled' ORDER",
-            " BY id DESC LIMIT ",
-            _HISTORY,
-        ),
-        Params().text(p.name),
-    ):
-        longest = max(longest, Int(r.int64("secs")))
+    for secs in fill_db.fill_durations(tx, p.name, _HISTORY):
+        longest = max(longest, secs)
     var expected = longest if longest > 0 else NO_HISTORY_SECONDS
     expected = max(expected, MIN_SECONDS)
     if p.placed == "ec2":
@@ -719,17 +618,7 @@ def fill_status(
         s.next_cost = COST_MARGIN * s.hourly * Float64(secs) / 3600.0
 
     # Why no more may start, first reason first.
-    var others = Int(
-        tx.query(
-            (
-                "SELECT count(*) AS n FROM orca.runs WHERE pipeline = $1 AND"
-                " status = 'queued' AND trigger <> 'fill'"
-            ),
-            Params().text(p.name),
-        )
-        .row(0)
-        .int64("n")
-    )
+    var others = fill_db.queued_others(tx, p.name)
     var hour = Int((now % 86400) // 3600)
     var paid = p.placed == "ec2" or p.placed == "kubernetes"
     if not s.on:
@@ -745,18 +634,9 @@ def fill_status(
                 " failed for good, left for morca backfill or a resume",
             )
     elif p.paused:
-        var by = tx.query(
-            (
-                "SELECT username, detail FROM orca.audit WHERE action IN"
-                " ('/pipelines/' || $1 || '/pause', '/pipelines/' || $1 ||"
-                " '/unpause') ORDER BY id DESC LIMIT 1"
-            ),
-            Params().text(p.name),
-        )
-        if len(by) == 1 and by.row(0).text("username") == "watchdog":
-            s.idle = String(
-                "paused by the watchdog (", by.row(0).text("detail"), ")"
-            )
+        var by = fill_db.last_pause(tx, p.name)
+        if by and by.value()[0] == "watchdog":
+            s.idle = String("paused by the watchdog (", by.value()[1], ")")
         else:
             s.idle = "paused"
     elif not p.fill.in_window(hour):
