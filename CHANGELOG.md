@@ -2,9 +2,8 @@
 
 ## 0.29.0 - 2026-11-14
 
-- **liblake**: `morca.tables` runs in a shared library the package ships (`lib/liblake`), so a pipeline no longer compiles iceberg and parquet; batches are built with `morca.tables.BatchBuilder` instead of `iceberg.batch`, and `-D MORCA_LAKE_SOURCE=1` builds the old way. (#457)
-
-- **arrow-mlake-mojo 0.3.0**: morca moves to it with parquet-mojo 0.14.0, iceberg-mojo 0.12.0 and dista-mojo 0.5.1, so field ids cross to liblake in the batches and scans import without copying (liblake ABI 2). (#PR)
+- **liblake, the first lib-tin:** `morca.tables` runs in a prebuilt shared library shipped with the package, so pipelines no longer compile iceberg and parquet. Build batches with `morca.tables.BatchBuilder` instead of `iceberg.batch`; `-D MORCA_LAKE_SOURCE=1` builds the old way. (#457)
+- **arrow-mlake 0.3.0**, with parquet 0.14.0, iceberg 0.12.0 and dista 0.5.1: field ids cross to liblake, and batches cross without copying. (#459)
 
 ## 0.28.0 - 2026-11-14
 
