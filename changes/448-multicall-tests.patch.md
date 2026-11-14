@@ -1,1 +1,1 @@
-- **Faster CI**: the test and example pipelines build as one multi-call binary, `build/test-pipelines`, with a link per pipeline. (#448)
+- **Faster CI**: the test pipelines build as one multi-call binary. (#448)
