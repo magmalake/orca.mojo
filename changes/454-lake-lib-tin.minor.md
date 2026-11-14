@@ -1,1 +1,1 @@
-- **liblake**: `morca.tables` runs in a shared library the package ships (`lib/liblake`), so a pipeline no longer compiles iceberg and parquet; batches are built with `morca.tables.BatchBuilder` instead of `iceberg.batch`, and `-D MORCA_LAKE_SOURCE=1` builds the old way. (#PR)
+- **liblake**: `morca.tables` runs in a shared library the package ships (`lib/liblake`), so a pipeline no longer compiles iceberg and parquet; batches are built with `morca.tables.BatchBuilder` instead of `iceberg.batch`, and `-D MORCA_LAKE_SOURCE=1` builds the old way. (#457)
