@@ -1,0 +1,92 @@
+# Temporary (census #153): on one machine and with the same flags, does
+# building the census's pipelines as separate programs, several at a time,
+# take less wall time than the one multicall-pipelines binary? Each mojo
+# build keeps about two cores busy, so the hypothesis is the same CPU in less
+# wall time.
+#
+# The census's `env` stage (its pixi environment, from Dockerfile.morca at
+# CENSUS_SHA) is built on a builder of its own, with GNU time added, and
+# .github/measure/split-build.sh runs in a container of it: multicall-pipelines
+# as scripts/multicall.sh builds it, then each of its programs alone, one at a
+# time and then 4 and 8 at a time, each with an empty Mojo compile cache, and
+# the sizes. The results are the job's step summary.
+#
+# On pushes to this branch only (not pull_request): a push is always this
+# repository's own branch, never a fork's, and the PR's own CI doesn't run
+# it again. No secrets, and the token can only read. Nothing is pushed.
+name: Measure split build
+
+on:
+  push:
+    branches: [image-cache-sai]
+    paths: [.github/workflows/measure-split-build.yml, .github/measure/split-build.sh]
+
+permissions:
+  contents: read
+
+env:
+  # census main, on morca-mojo 0.25.0.
+  CENSUS_SHA: b3eba2d50596672322e06b84010d3dbb7e0ac9ea
+
+jobs:
+  split:
+    if: github.repository == 'morca-dev/morca'
+    runs-on: [self-hosted, sai]
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: morca
+      - uses: actions/checkout@v4
+        with:
+          repository: morca-dev/census
+          ref: ${{ env.CENSUS_SHA }}
+          path: census
+      - name: Build the census's env stage, with GNU time
+        shell: bash
+        env:
+          RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -eu
+          B="measure-split-$RUN_KEY"
+          IMG="census-measure-split:$RUN_KEY"
+          echo "B=$B" >> "$GITHUB_ENV"
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+          lscpu | grep -E 'Model name|^CPU\(s\)'
+          df -h "$HOME" | tail -1
+          cp census/Dockerfile.morca Dockerfile.measure
+          printf '\nFROM env AS measure\nRUN apt-get update && apt-get install -y --no-install-recommends time binutils && rm -rf /var/lib/apt/lists/*\n' >> Dockerfile.measure
+          docker buildx create --name "$B" --driver docker-container > /dev/null
+          docker buildx build --builder "$B" --load --progress=plain --target measure \
+            -f Dockerfile.measure -t "$IMG" census > env.log 2>&1 || { tail -80 env.log; exit 1; }
+          tail -5 env.log
+          docker image ls "$IMG" --format '{{.Repository}}:{{.Tag}} {{.Size}}'
+      - name: Measure
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p results
+          echo "load before: $(cat /proc/loadavg)"
+          docker run --rm --name "$B" \
+            -v "$PWD/census:/census:ro" -v "$PWD/results:/results" \
+            -v "$PWD/morca/.github/measure/split-build.sh:/measure.sh:ro" \
+            -e CENSUS_SHA -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            "$IMG" bash -c 'cp -a /census/. /src/project/ && cd /src/project && pixi run --frozen bash /measure.sh'
+          cat results/summary.md >> "$GITHUB_STEP_SUMMARY"
+          echo "Run on $RUNNER_NAME." >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove the builder and the image
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f "${B:-none}" > /dev/null 2>&1 || true
+          [ -n "${B:-}" ] && docker buildx rm "$B" || true
+          [ -n "${IMG:-}" ] && docker image rm "$IMG" > /dev/null || true
+          df -h "$HOME" | tail -1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: split-build-results
+          path: |
+            results/
+            env.log
+          retention-days: 7
