@@ -15,8 +15,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC tests/stop_pipeline.mojo -o build/stop
+scripts/pipelines.sh stop
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/stop.log

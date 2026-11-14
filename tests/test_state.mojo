@@ -53,9 +53,9 @@ def test_migrate_is_idempotent() raises:
     var db = _db()
     db.migrate()
     assert_equal(
-        _count("SELECT max(version) AS n FROM orca.schema_version"), 58
+        _count("SELECT max(version) AS n FROM orca.schema_version"), 59
     )
-    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 58)
+    assert_equal(_count("SELECT count(*) AS n FROM orca.schema_version"), 59)
 
 
 def test_each_version_records_its_floor() raises:
@@ -79,7 +79,8 @@ def test_each_version_records_its_floor() raises:
     # 48 (unretried_start), 49 (max_runs_auto), 50 (data_version), 51
     # (orca.pools), 52 (the pool autoscaler's state), 53 (keys_per_run), 54
     # (run_members), 55 (fill_max_runs_auto), 56 (runs.batch), 57
-    # (orca.dataset_settings) and 58 (pipelines.retired) are additive.
+    # (orca.dataset_settings), 58 (pool_machines.image, draining) and 59
+    # (pipelines.retired) are additive.
     assert_equal(migration_floor(41), 24)
     assert_equal(migration_floor(42), 24)
     assert_equal(migration_floor(43), 24)
@@ -98,6 +99,7 @@ def test_each_version_records_its_floor() raises:
     assert_equal(migration_floor(56), 24)
     assert_equal(migration_floor(57), 24)
     assert_equal(migration_floor(58), 24)
+    assert_equal(migration_floor(59), 24)
 
 
 def test_the_schema_check() raises:
@@ -113,7 +115,7 @@ def test_the_schema_check() raises:
 
 def test_an_older_binary_runs_on_additive_migrations() raises:
     _ = _db()
-    # A binary that knows 30 migrations: 31..58 are additive.
+    # A binary that knows 30 migrations: 31..59 are additive.
     _ = setenv("MORCA_TEST_MIGRATIONS", "30", True)
     try:
         var old = State(getenv("MORCA_DATABASE_URL"))
@@ -121,7 +123,7 @@ def test_an_older_binary_runs_on_additive_migrations() raises:
         # It runs on the schema, and doesn't touch the versions.
         _ = _new_run(old, "a:1")
         assert_equal(
-            _count("SELECT max(version) AS n FROM orca.schema_version"), 58
+            _count("SELECT max(version) AS n FROM orca.schema_version"), 59
         )
         # One that knows 23 doesn't: 24 raised the floor.
         _ = setenv("MORCA_TEST_MIGRATIONS", "23", True)
@@ -152,7 +154,7 @@ def test_floors_are_filled_in_for_an_older_database() raises:
             "SELECT count(*) AS n FROM orca.schema_version WHERE min_binary ="
             " 24"
         ),
-        35,
+        36,
     )
     assert_equal(
         _count(

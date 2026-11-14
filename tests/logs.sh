@@ -6,10 +6,8 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
+scripts/pipelines.sh toy
+scripts/pipelines.sh fanout
 
 MORCA_LOGS=$(pwd)/build/logs-$$
 export MORCA_LOGS

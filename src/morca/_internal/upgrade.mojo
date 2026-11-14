@@ -26,6 +26,11 @@ What makes a step run once is that range: a deploy from 1.1.0 to 1.2.0 takes
 1.2.0's steps, and the next deploy, from 1.2.0, doesn't. Nothing is recorded
 in the database. A `--from` that isn't a version (a commit, empty) takes
 only `--to`'s steps.
+
+A command that several of those versions run (the same `run`, `when` too,
+after trimming spaces) is printed once, at its last version's place, with
+the ids of all of them, comma-separated (`merge_runs`, #343): a deploy from
+1.1.0 to 1.3.0 whose 1.2.0 and 1.3.0 both re-read every repo re-reads once.
 """
 
 from std.os import getenv
@@ -234,6 +239,45 @@ def select_steps(
     return picked^
 
 
+def merge_runs(steps: List[UpgradeStep]) -> List[UpgradeStep]:
+    """`steps` with each command (`run`, the same `when` and text after
+    trimming spaces) once, where it last comes, so after whatever the
+    earlier versions' steps change; its id is the ids of every step that
+    asked for it, in order, comma-separated. Manual steps stay as they are.
+    """
+    var keys = List[String]()
+    for ref s in steps:
+        keys.append(String(s.when, "\t", s.text.strip()))
+    var out = List[UpgradeStep]()
+    for i in range(len(steps)):
+        if steps[i].kind != "run":
+            out.append(steps[i].copy())
+            continue
+        var later = False
+        for j in range(i + 1, len(steps)):
+            if steps[j].kind == "run" and keys[j] == keys[i]:
+                later = True
+                break
+        if later:
+            continue
+        var ids = String()
+        for j in range(i + 1):
+            if steps[j].kind == "run" and keys[j] == keys[i]:
+                if ids.byte_length() > 0:
+                    ids += ","
+                ids += steps[j].id
+        out.append(
+            UpgradeStep(
+                steps[i].version,
+                ids,
+                steps[i].when,
+                "run",
+                String(steps[i].text.strip()),
+            )
+        )
+    return out^
+
+
 def step_line(s: UpgradeStep) -> String:
     return String(
         "step\t",
@@ -282,6 +326,8 @@ def upgrade_command(args: List[String]) raises -> Int:
     var text: String
     with open(file, "r") as f:
         text = f.read()
-    for ref s in select_steps(parse_upgrade(text), from_v, to_v, when):
+    for ref s in merge_runs(
+        select_steps(parse_upgrade(text), from_v, to_v, when)
+    ):
         print(step_line(s))
     return 0

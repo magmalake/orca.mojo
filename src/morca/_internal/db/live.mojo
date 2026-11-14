@@ -224,3 +224,19 @@ def live_runs(
     for r in conn.query(live_sql(), Params().text(pipeline)):
         out[r.text("key")] = Int(r.int64("id"))
     return out^
+
+
+def ordered_runs(cond: String, tables: String = "orca.runs r") -> String:
+    """SQL true for the runs `cond` names, locked first in `id` order
+    (`FOR NO KEY UPDATE`), for a statement that updates several runs.
+    Two statements that each update several runs, locking them in the
+    order their scans meet the rows, deadlock when the orders cross
+    (#440); in `id` order they wait for each other instead. `cond`
+    reads `tables`, in which `r` is `orca.runs`."""
+    return String(
+        "id IN (SELECT r.id FROM ",
+        tables,
+        " WHERE ",
+        cond,
+        " ORDER BY r.id FOR NO KEY UPDATE OF r)",
+    )

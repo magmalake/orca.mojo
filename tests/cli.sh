@@ -3,8 +3,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
+scripts/pipelines.sh toy
 
 fail() { echo "FAIL: $*"; exit 1; }
 
@@ -28,8 +27,7 @@ echo "$out" | grep -q '^measure 2024-03 succeeded$' \
 echo "$out" | grep -q '^total skipped' || fail "total wasn't skipped"
 
 # A daily pipeline: days are keys, and days before its start are refused.
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/daily.mojo -o build/daily
+scripts/pipelines.sh daily
 ./build/daily describe | grep -q '"partitions": {"kind": "daily", "start": "2024-01-01"}' \
     || fail "daily describe"
 out=$(./build/daily run --partitions 2024-02-27..2024-03-02) || fail "daily run exited $?"

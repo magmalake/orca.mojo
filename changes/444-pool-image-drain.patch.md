@@ -1,0 +1,1 @@
+- **Pool machines follow deploys**: a machine of an old worker image takes no new runs and is replaced once idle. (#444)

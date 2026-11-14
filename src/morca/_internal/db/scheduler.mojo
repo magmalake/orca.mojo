@@ -4,7 +4,7 @@ cgroups gave them."""
 
 from postgres import Connection, Params, Transaction
 
-from morca._internal.db.live import dead_sql, stale_sql
+from morca._internal.db.live import dead_sql, ordered_runs, stale_sql
 
 
 comptime RETRIED = "trigger IN ('schedule', 'backfill', 'sensor', 'fill')"
@@ -195,13 +195,17 @@ def schedule_retries(
                 " power(2, least(starts - deferrals - 1, 60)),"
                 " 1e15)::bigint AS w) AS x) + (id * 7919 % 1000) * least($3"
                 " * power(2, least(starts - deferrals - 1, 60)), CASE WHEN"
-                " $5 > 0 THEN $5 ELSE 1e15 END)::bigint / 10000 WHERE"
-                " pipeline = $1 AND status = 'failed' AND "
+                " $5 > 0 THEN $5 ELSE 1e15 END)::bigint / 10000 WHERE "
             ),
-            RETRIED,
-            " AND retry_at IS NULL AND starts - deferrals BETWEEN 1 AND $4",
-            " AND (registry_hash = $6 OR allow_new_code) AND",
-            " unretried_start IS DISTINCT FROM starts",
+            ordered_runs(
+                String(
+                    "pipeline = $1 AND status = 'failed' AND ",
+                    RETRIED,
+                    " AND retry_at IS NULL AND starts - deferrals BETWEEN 1",
+                    " AND $4 AND (registry_hash = $6 OR allow_new_code) AND",
+                    " unretried_start IS DISTINCT FROM starts",
+                )
+            ),
         ),
         Params()
         .text(pipeline)
