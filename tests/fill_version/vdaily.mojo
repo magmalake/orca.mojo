@@ -1,8 +1,10 @@
-"""A daily pipeline for tests/fill_version.sh, built three ways from this
-file: `-D VDAILY_VERSION=N` sets its step's `version=`, and
-`-D VDAILY_READS=1` declares a read, a change of code (and of hash) that
-keeps the data version. The day VDAILY_FAIL names fails, and with no run
-retries its fill run gives up on it."""
+"""A daily pipeline for tests/fill_version.sh, three ways: `run[version,
+reads]()` sets its step's `version=` and, with `reads`, declares a read, a
+change of code (and of hash) that keeps the data version.
+scripts/pipelines.sh's binary runs each as vdaily-v0, vdaily-other and
+vdaily-v1; built on its own, `-D VDAILY_VERSION=N` and `-D VDAILY_READS=1`
+choose `main`'s. The day VDAILY_FAIL names fails, and with no run retries
+its fill run gives up on it."""
 
 from std.os import getenv
 from std.sys import get_defined_int
@@ -16,21 +18,37 @@ def make(mut ctx: Ctx, d: Day) raises -> Int:
     return d.month * 100 + d.day
 
 
-comptime V = get_defined_int["VDAILY_VERSION", 0]()
-comptime Plain = Step["make", Day, Int, make, Mapped, version=V]
-comptime Reading = Step[
-    "make", Day, Int, make, Mapped, reads=["lake.x"], version=V
-]
-comptime VDaily = Pipeline[
-    "vdaily", Plain, partitions=Daily["2024-01-01"], run_retries=0
-]
-comptime VDailyReads = Pipeline[
-    "vdaily", Reading, partitions=Daily["2024-01-01"], run_retries=0
-]
+def run[version: Int, reads: Bool]() raises:
+    comptime if reads:
+        morca_main[
+            Pipeline[
+                "vdaily",
+                Step[
+                    "make",
+                    Day,
+                    Int,
+                    make,
+                    Mapped,
+                    reads=["lake.x"],
+                    version=version,
+                ],
+                partitions=Daily["2024-01-01"],
+                run_retries=0,
+            ]
+        ]()
+    else:
+        morca_main[
+            Pipeline[
+                "vdaily",
+                Step["make", Day, Int, make, Mapped, version=version],
+                partitions=Daily["2024-01-01"],
+                run_retries=0,
+            ]
+        ]()
 
 
 def main() raises:
-    comptime if get_defined_int["VDAILY_READS", 0]() == 1:
-        morca_main[VDailyReads]()
-    else:
-        morca_main[VDaily]()
+    run[
+        get_defined_int["VDAILY_VERSION", 0](),
+        get_defined_int["VDAILY_READS", 0]() == 1,
+    ]()

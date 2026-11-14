@@ -12,7 +12,17 @@
 # - idle for idle_seconds, it's removed: token revoked, server deleted;
 # - a server with the pool's and the stack's labels that morca doesn't know
 #   is deleted;
-# - /api/worker/boot answers only a token the autoscaler made.
+# - /api/worker/boot answers only a token the autoscaler made;
+# - one run over two machines (#268, milestone B): fanout, with workers = 1
+#   on another pool, s, from empty: the first machine is made for the queued
+#   run and starts it as a cluster; the run's want of a member grows a
+#   second, which joins the private network the first did, and the run;
+#   both run its tasks, the total is one machine's; idle once the run ends,
+#   both are removed. (This was tests/pool_spread.sh, #447.)
+#
+# Each fake server runs its boot script, which runs `morca worker` with the
+# address MORCA_BOOT_ADVERTISE gives it (127.0.0.1 here; the private one
+# from the provider's metadata on a real machine).
 #
 # Needs MORCA_DATABASE_URL (pixi run test-pool-scale starts a throwaway
 # server), curl, jq and python3.
@@ -21,8 +31,7 @@ cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 one_cluster_test
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC -D GRANTEE=plain tests/grants/grantee.mojo -o build/plain
+scripts/pipelines.sh plain fanout
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/pool-scale.log
@@ -33,7 +42,9 @@ mkdir -p "$dir"
 export MORCA_WAREHOUSE="$dir/wh" MORCA_LOGS="$dir/logs" GRANTEE_OUT="$dir/out" GRANTEE_SLEEP=2
 mkdir -p "$GRANTEE_OUT"
 export MORCA_STALE_SECONDS=5 MORCA_START_SECONDS=20 MORCA_SAMPLE_SECONDS=0 MORCA_WATCHDOG_SECONDS=0
-unset MORCA_RUNNER MORCA_CONFIG
+export MORCA_FANOUT_SLEEP=4 MORCA_FANOUT_SHOW_HOST=1 DISTA_SHM=0
+export MORCA_BOOT_ADVERTISE=127.0.0.1
+unset MORCA_RUNNER MORCA_CONFIG MORCA_WORKER_ADVERTISE
 free_port hport
 free_port uport
 base="http://127.0.0.1:$uport"
@@ -175,4 +186,54 @@ code=$(curl -s -o "$dir/boot.out" -w '%{http_code}' -X POST -H "Authorization: B
     -H 'Content-Type: application/json' -d '{"pool": "t"}' "$base/api/worker/boot")
 [ "$code" = 403 ] || fail "a hand-made token booted: $code $(cat "$dir/boot.out")"
 echo "ok   /api/worker/boot refuses a token the autoscaler didn't make"
+# One run over two machines of pool s, from empty.
+calls=$(wc -l < "$dir/calls.jsonl" | tr -d ' ')
+cat build/pool-scale.toml - > build/pool-scale-spread.toml << 'EOF'
+
+[pools.s]
+provider = "hetzner"
+machines = [{ type = "cax31" }]
+locations = ["hel1"]
+max_machines = 2
+idle_seconds = 10
+
+[pipelines.fanout]
+placement = "worker:s"
+workers = 1
+EOF
+echo "cax31 hel1" > "$dir/stock"
+./build/morca register --config build/pool-scale-spread.toml ./build/fanout >> "$log" 2>&1 || fail "register fanout"
+./build/morca backfill fanout 2024-01 >> "$log" 2>&1 || fail "backfill fanout"
+run=$(q "SELECT max(id) FROM orca.runs WHERE pipeline = 'fanout'")
+head_known() { [ -n "$(q "SELECT coalesce(cluster_head, '') FROM orca.runs WHERE id = $run")" ]; }
+until_ 60 "no head: $(q "SELECT status, held FROM orca.runs WHERE id = $run") / $(q "SELECT status FROM orca.pools WHERE name = 's'")" head_known
+echo "ok   the first machine is made for the run and starts it as a cluster"
+
+two() { is "SELECT count(*) FROM orca.pool_machines WHERE pool = 's'" 2; }
+until_ 60 "no second machine: $(q "SELECT status FROM orca.pools WHERE name = 's'")" two
+member() { is "SELECT count(*) FROM orca.run_members WHERE run = $run" 1; }
+until_ 60 "the second machine didn't join the run" member
+since() { tail -n +$((calls + 1)) "$dir/calls.jsonl"; }
+# One private network for the stack, made for pool t's first machine.
+nets=$(jq -r 'select(.method == "POST" and .path == "/v1/networks") | .path' "$dir/calls.jsonl" | wc -l | tr -d ' ')
+[ "$nets" = 1 ] || fail "networks made: $nets"
+attached=$(since | jq -r 'select(.method == "POST" and .path == "/v1/servers") | .body | fromjson | .networks | length' | sort -u | tr '\n' ' ')
+[ "$attached" = "1 " ] || fail "servers not all on the network: $attached"
+echo "ok   the run's want of a member grows a second machine, on the same private network, which joins"
+
+until_ 120 "the run didn't succeed: $(q "SELECT status, error FROM orca.runs WHERE id = $run")" \
+    is "SELECT status FROM orca.runs WHERE id = $run" succeeded
+ran_on=$(cat "$dir"/boot-*/stage/fanout-"$run"-*.log 2> /dev/null | grep -o "trips on orca-pool-s-[0-9]*" | sort -u | wc -l | tr -d ' ')
+[ "$ran_on" = 2 ] || fail "tasks ran on $ran_on machines"
+# The driver's log is kept once its process has ended, a moment after.
+logged() { grep -q "trips in 1 months" "$MORCA_LOGS/fanout/$run/driver.log" 2> /dev/null; }
+until_ 30 "no total in run $run's driver log" logged
+spread=$(grep -ho "[0-9]* trips in 1 months" "$MORCA_LOGS/fanout/$run/driver.log" | head -1)
+want=$(awk 'BEGIN { t = 0; for (d = 1; d <= 31; d++) t += (2024 * 13 + 31 + d * 7) % 1000; print t " trips in 1 months" }')
+[ "$spread" = "$want" ] || fail "spread: '$spread', one machine: '$want'"
+echo "ok   both machines run its tasks, and the total is one machine's ($spread)"
+
+gone() { is "SELECT count(*) FROM orca.pool_machines WHERE pool = 's' AND ended IS NULL" 0; }
+until_ 60 "the machines weren't removed: $(q "SELECT name, ended, why FROM orca.pool_machines WHERE pool = 's'")" gone
+echo "ok   idle once the run ends, both machines are removed ($(q "SELECT string_agg(DISTINCT why, ', ') FROM orca.pool_machines WHERE pool = 's'"))"
 echo "pool scale: ok"

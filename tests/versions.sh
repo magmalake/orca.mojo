@@ -11,11 +11,11 @@ mkdir -p build
 repo=https://github.com/morca-dev/morca
 c1=1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
 c2=2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC -D MORCA_SOURCE=$repo.git -D MORCA_COMMIT=$c1 examples/toy.mojo -o build/toy-c1
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC -D MORCA_SOURCE=git@github.com:morca-dev/morca.git -D MORCA_COMMIT=$c2 \
-    -D MORCA_DIRTY=1 examples/toy.mojo -o build/toy-c2
+# The toy at two commits: links to scripts/pipelines.sh's binary that run
+# it with each one's source, as -D would give it (tests/test_source.mojo
+# checks the defines themselves).
+scripts/pipelines.sh --as toy-c1 toy MORCA_SOURCE=$repo.git MORCA_COMMIT=$c1
+scripts/pipelines.sh --as toy-c2 toy MORCA_SOURCE=git@github.com:morca-dev/morca.git MORCA_COMMIT=$c2 MORCA_DIRTY=1
 scripts/pipelines.sh toy
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
@@ -36,7 +36,8 @@ fail() {
 ./build/toy describe | jq -e '.source == {"repo": "", "commit": "", "dirty": false}' > /dev/null \
     || fail "describe without a source"
 # Built without the defines, a binary reads them from its environment (an
-# image's ENV); a define still wins, and a commit that isn't hex is dropped.
+# image's ENV); a define (here the link's) still wins, and a commit that
+# isn't hex is dropped.
 MORCA_SOURCE=$repo MORCA_COMMIT=$c2 ./build/toy describe \
     | jq -e ".source == {\"repo\": \"$repo\", \"commit\": \"$c2\", \"dirty\": false}" > /dev/null \
     || fail "describe's source from the environment: $(MORCA_SOURCE=$repo MORCA_COMMIT=$c2 ./build/toy describe | jq -c .source)"
@@ -130,8 +131,7 @@ for c in 1 2; do
     eval "sha=\$c$c"
     src=$repo.git
     [ "$c" = 2 ] && src=git@github.com:morca-dev/morca.git
-    # shellcheck disable=SC2086
-    scripts/mojo-build.sh -I src $DEP_INC -D MORCA_SOURCE=$src -D MORCA_COMMIT="$sha" tests/datasets/first.mojo -o "build/ds-first-c$c"
+    scripts/pipelines.sh --as "ds-first-c$c" ds-first "MORCA_SOURCE=$src" "MORCA_COMMIT=$sha"
     ./build/morca locate "./build/ds-first-c$c" --root . >> "$log" 2>&1 || fail "locate first c$c"
 done
 ./build/morca register ./build/ds-first-c1 >> "$log" 2>&1 || fail "register first c1"

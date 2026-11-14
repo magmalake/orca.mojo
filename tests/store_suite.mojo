@@ -337,7 +337,7 @@ struct Dying[S: RunStore](Movable, Store):
 
 
 def check_killed_anywhere_then_resumed[S: RunStore](mut s: S) raises:
-    """`tests/kill.sh` in one process: a run of `retrying` over two months
+    """A kill test in one process: a run of `retrying` over two months
     dies before each of its writes in turn (12 in all), and is resumed by
     another owner. Every time, it ends succeeded with the total of an
     uninterrupted run, every step succeeded, and at most one attempt more

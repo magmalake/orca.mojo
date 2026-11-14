@@ -15,12 +15,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC tests/fill_version/vdaily.mojo -o build/vdaily-v0
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC -D VDAILY_READS=1 tests/fill_version/vdaily.mojo -o build/vdaily-other
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC -D VDAILY_VERSION=1 tests/fill_version/vdaily.mojo -o build/vdaily-v1
+scripts/pipelines.sh vdaily-v0 vdaily-other vdaily-v1
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 

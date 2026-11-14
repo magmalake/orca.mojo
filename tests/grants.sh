@@ -25,10 +25,7 @@ set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 mkdir -p build
-for b in wide narrow plain; do
-    # shellcheck disable=SC2086
-    scripts/mojo-build.sh -I src $DEP_INC -D GRANTEE=$b tests/grants/grantee.mojo -o "build/$b"
-done
+scripts/pipelines.sh wide narrow plain
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/grants.log
