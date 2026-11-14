@@ -11,6 +11,7 @@ from morca._internal.config import (
     max_runs_auto,
     parse_keys_per_run,
     parse_max_runs,
+    parse_priority,
     parse_worker_procs,
     parse_workers,
     resolve,
@@ -108,6 +109,9 @@ def register_pipeline(
     if r.text("fill_max_runs"):
         fill_max_runs = parse_fill_max_runs(r.text("fill_max_runs"))
         fill_auto = fill_max_runs_auto(r.text("fill_max_runs"))
+    var priority = 0
+    if r.text("priority"):
+        priority = parse_priority(r.text("priority"))
     var fill_budget = -1.0
     if r.text("fill_budget_per_day"):
         fill_budget = parse_fill_budget(r.text("fill_budget_per_day"))
@@ -160,6 +164,7 @@ def register_pipeline(
             auto_runs,
             keys_per_run,
             fill_auto,
+            priority,
         ),
     )
     var name = res[0]

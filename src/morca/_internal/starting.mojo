@@ -4,6 +4,7 @@ control-placed run's process.
 """
 
 from std.os import makedirs
+from postgres import Transaction
 from morca._internal.cgroup import (
     Cgroups,
     raised_request,
@@ -75,6 +76,28 @@ from morca._internal.pool_runs import (
 )
 
 
+def _taken(
+    mut tx: Transaction,
+    p: Registered,
+    control: Bool,
+    hold: String,
+    stale: Float64,
+    dead: String,
+) raises -> String:
+    """`hold`, why `p`'s runs wait for room on this host, naming the
+    pipeline of a higher priority whose runs hold it, if one does (#421):
+    "waiting: for capacity (gharchive, priority 10): needs 2 GB, ...". Of
+    the control slots with `control`, else of the grants."""
+    var ahead = starting_db.ahead_on_host(tx, p.priority, control, stale, dead)
+    if not ahead:
+        return hold
+    ref a = ahead.value()
+    var why = String(hold.removeprefix("waiting: ").removeprefix("held: "))
+    return String(
+        "waiting: for capacity (", a[0], ", priority ", a[1], "): ", why
+    )
+
+
 def _start(
     mut self: Scheduler, p: Registered, now: Int64, fill: Bool = False
 ) raises:
@@ -83,7 +106,8 @@ def _start(
     they wait (runs already going go on). A control-placed pipeline's
     runs start here (`morca._internal.control`), within the control instance's
     limits; a queued run those hold, or that's placed on a runner this
-    scheduler hasn't, is `held` with the reason.
+    scheduler hasn't, is `held` with the reason. The startable runs go
+    oldest first, by id, so a due retry goes before newer runs.
 
     With `fill`, the same for its fill runs (trigger `fill`), up to
     `fill_max_runs` beside the others: due retries first, then new
@@ -188,7 +212,14 @@ def _start(
                 tx, self.stale, self._dead("$1")
             )
             if used >= self.limits.max_runs:
-                hold = slots_reason(used, self.limits.max_runs)
+                hold = _taken(
+                    tx,
+                    p,
+                    True,
+                    slots_reason(used, self.limits.max_runs),
+                    self.stale,
+                    self._dead("$1"),
+                )
                 free = 0
             else:
                 free = min(free, self.limits.max_runs - used)
@@ -238,7 +269,7 @@ def _start(
         grants = got[0].copy()
         if len(grants) < free:
             # The ones that don't start say why; those that do, not.
-            hold = got[1]
+            hold = _taken(tx, p, False, got[1], self.stale, self._dead("$1"))
         free = len(grants)
     # Its queued runs say why they wait, or no longer do; one behind an
     # older live run of its keys, which run.

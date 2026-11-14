@@ -24,6 +24,9 @@ fill_budget_per_day = 5.0    # estimated US dollars a UTC day
 fill_window = "22..6"        # UTC hours fill runs start in
 fill_lag = "2h"              # a day fills 2 hours after it ends
 
+[pipelines.mojo_live]
+priority = 10                # starts before gharchive when room is short
+
 [pipelines.mojo_repos]
 placement = "control"
 secrets = { GITHUB_TOKEN = "orca/github-token" }
@@ -70,11 +73,12 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 | `keys_per_run` | integer from 1 to 10000 | the code's `Pipeline[..., keys_per_run=]`, else 1 | none | Keys a run takes: a backfill's runs, a sensor's runs above 1, and fill runs. See [Keys per run](#keys-per-run). |
 | `fill_budget_per_day` | number from 0 to 100000, US dollars | none | none | Estimated spend of fill runs a UTC day. Fill runs on EC2 or Kubernetes don't start without it. |
 | `fill_window` | string `"A..B"`, UTC hours: A from 0 to 23, B from 1 to 24 | `"0..24"`, all day | none | Fill runs start from hour A up to hour B. `"22..6"` wraps past midnight. |
+| `priority` | integer from -1000 to 1000 | 0 | none | Higher starts first when room is short. See [Priority](#priority). |
 | `enabled` | boolean | `true` | none | `false`: `morca register` without binaries skips the pipeline (it prints `skipping <name>`); one already registered stays as it is. For a pipeline only some stacks run, turned on by [a stack's overlay](#a-stacks-overlay). |
 | `fill_lag` | string, a duration: a whole number of `s`, `m`, `h` or `d`, up to `31d`; or `0` | `0`, none | none | How long after its end a partition is filled. See [The lag](#the-lag). |
 
 `image` (`--image`) and `--spot` stay flags only. The `fill*` keys,
-`learn` and `enabled` are the file's only: no flag sets them.
+`learn`, `priority` and `enabled` are the file's only: no flag sets them.
 
 ### What is refused
 
@@ -84,6 +88,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 - A `cpus` or `memory_gb` range like `"4..2"`, `cpus = 0`, `cpus = 1.5` or `memory_gb = 0`; `auto` anywhere but alone or as a range's lower end (`"2..auto"`), or `"auto.."` without its maximum.
 - A secret ID outside `orca/`.
 - A `fill_window` like `"6..6"` or `"1..30"`, a negative `fill_budget_per_day`, or `fill_max_runs = 0`.
+- A `priority` that isn't an integer (`"high"`, `1.5`), or is outside -1000..1000.
 - A `fill_lag` without a unit (`"2"`, `2`), with one morca doesn't know (`"2w"`), or over `31d`.
 - `fills = "all"` for a keyed pipeline, a sensor, or one with no first partition. `morca register` refuses it with the file and line, because it has to see the pipeline first; see [Fills](#fills).
 - An `env` name that isn't a valid variable name.
@@ -93,7 +98,7 @@ Each key can go in `[defaults]` or in `[pipelines.<name>]`.
 Each refusal names the file and line, and nothing is registered:
 
 ```text
-morca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, keys_per_run, cpus, memory_gb, learn, fills, fill_order, fill_max_runs, fill_budget_per_day, fill_window, fill_lag, secrets and env)
+morca.toml:7: [pipelines.gharchive] has no key workrs (it has placement, head_type, worker_type, workers, worker_procs, max_runs, keys_per_run, cpus, memory_gb, learn, fills, fill_order, fill_max_runs, fill_budget_per_day, fill_window, fill_lag, priority, enabled, secrets and env)
 morca.toml:3: [pipelines.toy] workers: not a count or a range MIN..MAX: 4..2
 ```
 
@@ -467,6 +472,7 @@ gharchive  registered from morca.toml @ 3f2a9c1d0b7e, sha256 b0e8af31ea3e
   worker_procs            1           morca.toml [pipelines.gharchive]
   max_runs                2           morca.toml [pipelines.gharchive]
   keys_per_run            1           code default (the pipeline's keys_per_run)
+  priority                0           code default
   image                   …/morca:3f2a9c1  flag --image
   env.GHARCHIVE_PARALLEL  16          morca.toml [pipelines.gharchive]
   env.DISTA_WORKER_SLOTS  4           morca.toml [pipelines.gharchive]
@@ -669,6 +675,43 @@ What the scheduler and the UI need, in their environment:
 | `MORCA_POOL_SCALE_SECONDS` (15), `MORCA_POOL_GROW_AFTER` (20), `MORCA_POOL_TRY_SECONDS` (60), `MORCA_POOL_BOOT_SECONDS` (900), `MORCA_POOL_LOST_SECONDS` (300), `MORCA_POOL_IMAGE_SECONDS` (600) | How often it looks, how long runs wait before it grows, between tries, for a machine to join, for a worker gone silent, and between reads of the image's architectures. |
 
 
+## Priority
+
+When the host has room for fewer runs than could start, `priority` says
+which pipeline's go first (#421). Each scheduler pass takes the pipelines
+highest priority first, then by name, and each takes what host capacity the
+ones before it left: memory and CPUs granted to requests, the control
+slots, `MORCA_VCPU_BUDGET`.
+
+```toml
+[pipelines.mojo_live]       # hourly, meant to run on time
+priority = 10
+
+[pipelines.gharchive]       # a long backfill, priority 0
+fills = "all"
+```
+
+- **New runs before fills.** Within one priority, every pipeline's other
+  runs (scheduled, sensed, backfilled, manual, and due retries) start
+  before any pipeline's fill runs, so a fill uses only the room they left.
+  A higher priority's fill runs still go before a lower priority's other
+  runs.
+- **A retry keeps its place.** Within a pipeline, the runs that may start
+  go oldest first by run id, so a due retry of an old partition starts
+  before newer runs.
+- **Why a run waits.** A run held for room on this host while a pipeline
+  of higher priority has runs holding it names that pipeline:
+  `waiting: for capacity (mojo_live, priority 10): needs 2 GB, 0 GB free of grants`.
+- **Nothing is stopped.** A run that has started keeps its room; priority
+  only orders the starts. Steps of one run run in order, and which dista
+  worker a task goes to is dista's.
+- **Worker pools.** A remote worker claims the queued runs of its pool in
+  the same order: the highest priority first, then the other runs before
+  the fill runs, each oldest first.
+
+An older morca ignores `priority`: it starts the pipelines by name, as it
+did.
+
 ## Keys per run
 
 `keys_per_run` is how many keys one run takes (#240). The code sets it
@@ -699,7 +742,7 @@ The default, `fills = "since_registration"`, is what morca did before. A schedul
 
 ### What the scheduler does
 
-On every tick, after a pipeline's other runs have started, the scheduler queues and starts fill runs for it:
+On every tick, after the other runs of every pipeline of its [priority](#priority) have started, the scheduler queues and starts fill runs for it:
 
 - **The range** is the pipeline's first partition through the last one that has ended on its schedule's wall clock (UTC without a schedule), at least `fill_lag` ago: yesterday for a daily pipeline, last month for a monthly one. The partition still going is the schedule's. See [The lag](#the-lag).
 - **`keys_per_run` partitions per fill run** (one by default), in `fill_order`; a run's own partitions are in ascending order. The run's trigger is `fill` (`orca.runs.trigger`), so the runs page can filter for them.

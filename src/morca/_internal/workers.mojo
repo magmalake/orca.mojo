@@ -514,8 +514,9 @@ def _claim_run(mut db: State, w: WorkerAuth, v: Value) raises -> String:
     # The oldest queued run of each of the pool's pipelines, and of its fill
     # runs: the others of a pipeline would be refused for the same reasons
     # (its cap, image or request), and a long queue of one pipeline at its
-    # max_runs mustn't hide the runs of the others behind it. The other
-    # runs first, then the fill runs, each oldest first. One behind an
+    # max_runs mustn't hide the runs of the others behind it. The highest
+    # priority first (#421), and within one, the other runs first, then the
+    # fill runs, each oldest first. One behind an
     # older run of its keys waits for it (morca.live.behind_sql).
     var candidates = workers_db.candidates(db.conn, w.placement())
     var hour = Int((now() % 86400) // 3600)

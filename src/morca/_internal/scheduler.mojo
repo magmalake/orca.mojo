@@ -38,6 +38,14 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
 - **`max_runs`.** Under a lock on the pipeline's row, the runs that are live
   (a fresh heartbeat, or started by the scheduler less than the stale limit
   ago) are counted, and only that many fewer than `max_runs` are started.
+- **Priority** (#421, `morca._internal.tick`). Each pass takes the
+  pipelines by `priority` in morca.toml (0 by default), highest first, then
+  by name. Within one priority every pipeline's other runs (scheduled,
+  sensed, backfilled, manual, retries) are started before any of their
+  fill runs, so a fill takes only the room they left. Nothing running is
+  stopped to make room. A run that waits for room on this host while a
+  higher-priority pipeline's runs hold it says whose: `waiting: for
+  capacity (gharchive, priority 10): needs 2 GB, ...`.
 - **Memory pressure** (`orca.pressure`, `morca._internal.admission`). On the local
   runner and for control-placed runs, none starts while this host's PSI
   `some avg10` is over `MORCA_ADMIT_MEMORY_PRESSURE` (10%), each queued run
@@ -89,7 +97,8 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
   exits non-zero, is kept as the pipeline's `sense_error`, which `morca ui`
   shows, and printed once rather than on every tick.
 - **Fills** (`morca._internal.fill`). A pipeline registered with `fills = "all"` in
-  morca.toml has a second pass after its other runs': runs with trigger
+  morca.toml has a second pass after the other runs of every pipeline of
+  its priority: runs with trigger
   `fill`, `keys_per_run` partitions each, over the partitions of its range no run has
   taken (`fill_status`), up to `fill_max_runs` beside `max_runs`, none
   while its other runs are queued, it's paused, outside `fill_window` or
@@ -97,7 +106,9 @@ Postgres, so it can be stopped and restarted, or run twice, at any time:
 - **Retries.** A scheduled, backfilled, sensed or fill run that failed is started again
   after the pipeline's `retry_seconds` (else `MORCA_RETRY_SECONDS`, default
   60) doubling with each start, at most its `max_retry_seconds` if set,
-  plus up to a tenth more as jitter, up to `run_retries` times. One whose process
+  plus up to a tenth more as jitter, up to `run_retries` times. A due retry
+  is started in the order of its run's id among the pipeline's startable
+  runs, so an old partition's retry goes before newer runs. One whose process
   died (its heartbeat went stale) is started again at once, within the same
   budget. A manual, UI or rerun run is never retried by the scheduler: one
   whose process died ends `failed`, with the error `interrupted: its

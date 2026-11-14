@@ -862,6 +862,13 @@ def _migrations() -> List[List[String]]:
         # starts none of its runs, and lists skip it; `morca register`
         # clears it. Additive: an older binary neither reads nor writes it.
         ["ALTER TABLE orca.pipelines ADD COLUMN retired timestamptz"],
+        # A pipeline's priority from morca.toml (#421): the scheduler's
+        # pass goes highest first. Additive: an older binary's INSERTs
+        # leave it 0, and it starts pipelines by name, as it did.
+        [
+            "ALTER TABLE orca.pipelines ADD COLUMN priority integer NOT"
+            " NULL DEFAULT 0"
+        ],
     ]
 
 
@@ -899,6 +906,10 @@ def _floor_raisers() -> List[Int]:
     binaries before it neither read nor write. While one overlaps a newer
     one it would still start a retired pipeline's runs, but only the
     instance that leads starts runs, and the newer one leads.
+    60 (`pipelines.priority`, #421) is additive: a column with a default,
+    which the binaries before it neither read nor write; they start the
+    pipelines by name, as they did, and a registration they make leaves it
+    as it was.
     """
     return [1, 24]
 

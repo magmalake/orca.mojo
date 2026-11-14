@@ -11,6 +11,7 @@ runs (#145), read by `morca register` and `morca aws register`.
     worker_procs = 1             # or "auto", one per vCPU
     max_runs = 2                 # over the code's Pipeline max_runs
     keys_per_run = 30            # over the code's: keys a run takes (#240)
+    priority = 10                # higher starts first when room is short (#421)
     cpus = "1..16"               # a request: MIN..MAX (morca.resources)
     memory_gb = "2..24"          # or "auto", "auto..24" (morca.recommend)
     learn = false                # don't: "auto" is then no request
@@ -137,9 +138,11 @@ comptime SCALAR_KEYS = [
     "fill_budget_per_day",
     "fill_window",
     "fill_lag",
+    "priority",
 ]
 """The keys of `[defaults]` and `[pipelines.<name>]` with one value. The
-`fill*` keys (`morca._internal.fill`) are the file's only: no flag sets them."""
+`fill*` keys (`morca._internal.fill`) and `priority` are the file's only: no
+flag sets them."""
 comptime MAP_KEYS = ["secrets", "env"]
 """The keys whose value is a table of names."""
 
@@ -237,6 +240,29 @@ def parse_keys_per_run(v: String) raises -> Int:
     )
 
 
+comptime MAX_PRIORITY = 1000
+"""`priority`'s largest value; its smallest is the negative."""
+
+
+def parse_priority(v: String) raises -> Int:
+    """`priority` (#421): an integer from -1000 to 1000, 0 by default; the
+    scheduler's pass starts the pipelines highest first."""
+    try:
+        var n = Int(v)
+        if n >= -MAX_PRIORITY and n <= MAX_PRIORITY:
+            return n
+    except:
+        pass
+    raise Error(
+        "priority is an integer from ",
+        -MAX_PRIORITY,
+        " to ",
+        MAX_PRIORITY,
+        ", not ",
+        v,
+    )
+
+
 def max_runs_auto(v: String) -> Bool:
     """Whether `max_runs`' value is `auto` or `auto..N` (#266): as many
     runs at once as this host has room for, up to the ceiling."""
@@ -310,6 +336,8 @@ def _canonical(key: String, text: String) raises -> String:
         return String(w[0], "..", w[1])
     if key == "fill_lag":
         return lag_text(parse_fill_lag(text))
+    if key == "priority":
+        return String(parse_priority(text))
     raise Error("unknown key ", key)
 
 
@@ -339,6 +367,10 @@ def _canonical_toml(key: String, v: TomlValue) raises -> String:
     if key == "fill_max_runs" or key == "keys_per_run":
         if v.kind != INTEGER:
             raise Error("is a count, not ", v.kind)
+        return _canonical(key, v.text)
+    if key == "priority":
+        if v.kind != INTEGER:
+            raise Error("is an integer, not ", v.kind)
         return _canonical(key, v.text)
     if key == "fill_budget_per_day":
         if v.kind != INTEGER and v.kind != FLOAT:
