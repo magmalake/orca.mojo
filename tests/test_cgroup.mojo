@@ -11,6 +11,7 @@ from std.testing import (
 )
 
 from morca._internal.cgroup import (
+    Cgroups,
     Contained,
     MemoryKnobs,
     avg10_of,
@@ -31,6 +32,7 @@ from morca._internal.cgroup import (
     run_name,
     start_limit_mb,
 )
+from morca._internal.run_cpu import CpuKnobs, cpu_max, status_text
 
 
 def test_max_mb() raises:
@@ -231,6 +233,61 @@ def test_knobs() raises:
     _ = unsetenv("MORCA_RUN_MEMORY_MB")
     _ = unsetenv("MORCA_RUN_MEMORY_MARGIN")
     _ = unsetenv("MORCA_RUN_MEMORY_GROWTH")
+
+
+def test_cpu_knobs() raises:
+    _ = unsetenv("MORCA_RUN_NICE")
+    _ = unsetenv("MORCA_RUN_CPU_WEIGHT")
+    var k = CpuKnobs.from_env()
+    assert_equal(k.nice, 10)
+    assert_equal(k.weight, 20)
+    _ = setenv("MORCA_RUN_NICE", "0", True)
+    _ = setenv("MORCA_RUN_CPU_WEIGHT", "50", True)
+    k = CpuKnobs.from_env()
+    assert_equal(k.nice, 0)
+    assert_equal(k.weight, 50)
+    _ = setenv("MORCA_RUN_NICE", "20", True)
+    with assert_raises(contains="MORCA_RUN_NICE"):
+        _ = CpuKnobs.from_env()
+    assert_equal(CpuKnobs.settings().nice, 10)
+    _ = setenv("MORCA_RUN_NICE", "5", True)
+    _ = setenv("MORCA_RUN_CPU_WEIGHT", "0", True)
+    with assert_raises(contains="MORCA_RUN_CPU_WEIGHT"):
+        _ = CpuKnobs.from_env()
+    _ = unsetenv("MORCA_RUN_NICE")
+    _ = unsetenv("MORCA_RUN_CPU_WEIGHT")
+    assert_equal(CpuKnobs(10, 20).json(), '{"cpu_weight": 20, "nice": 10}')
+    assert_equal(
+        status_text(20, 10),
+        "run CPU priority: cpu.weight 20 in a cgroup, else nice 10",
+    )
+    assert_equal(
+        status_text(20, 0),
+        (
+            "run CPU priority: cpu.weight 20 in a cgroup, else not lowered"
+            " (MORCA_RUN_NICE=0)"
+        ),
+    )
+
+
+def test_cpu_max() raises:
+    assert_equal(cpu_max(0), "max")
+    assert_equal(cpu_max(2), "200000 100000")
+
+
+def test_nice_for() raises:
+    var off = Cgroups.off("off")
+    assert_equal(off.nice_for(""), 10)
+    var on = Cgroups(
+        "/sys/fs/cgroup/x", "on", MemoryKnobs(0, 25, 150, 120), True
+    )
+    assert_equal(on.nice_for("/sys/fs/cgroup/x/orca-run-1-1-1"), 0)
+    # Started without a cgroup after all: the nice instead.
+    assert_equal(on.nice_for(""), 10)
+    var no_cpu = Cgroups("/sys/fs/cgroup/x", "on", MemoryKnobs(0, 25, 150, 120))
+    assert_equal(no_cpu.nice_for("/sys/fs/cgroup/x/orca-run-1-1-1"), 10)
+    on.cpu_knobs = CpuKnobs(0, 20)
+    assert_equal(on.nice_for(""), 0)
 
 
 def main() raises:

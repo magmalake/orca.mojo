@@ -164,6 +164,7 @@ from morca._internal.cgroup import (
     raised_mb,
     start_limit_mb,
 )
+from morca._internal.run_cpu import CpuKnobs
 from morca._internal.control import ControlLimits
 from morca._internal.crash import (
     crash_summary,
@@ -478,7 +479,9 @@ struct Scheduler(Movable):
         self.admission = Admission.from_env()
         self._pressure_kept = 0
         self._pressure_unread = False
-        self.cgroups = Cgroups.off("off: not the scheduler's loop")
+        var cgroups = Cgroups.off("off: not the scheduler's loop")
+        cgroups.cpu_knobs = CpuKnobs.from_env()
+        self.cgroups = cgroups^
         self._contained = Dict[Int, Contained]()
         self._unswept = List[String]()
         self._stalled = Dict[Int, Bool]()
@@ -701,8 +704,11 @@ struct Scheduler(Movable):
         an earlier scheduler left. `morca scheduler` does this; `morca tick`
         and the other commands don't, as they don't reap what they
         start."""
-        self.cgroups = Cgroups.setup(MemoryKnobs.from_env())
+        self.cgroups = Cgroups.setup(
+            MemoryKnobs.from_env(), CpuKnobs.from_env()
+        )
         print("morca: run cgroups", self.cgroups.why)
+        print("morca: runs' CPU priority:", self.cgroups.cpu_text())
         if not self.cgroups.on():
             print(
                 "morca: runs are contained as before: first to go if memory",
@@ -752,7 +758,7 @@ struct Scheduler(Movable):
             )
             if c.limit_mb <= 0:
                 return c^
-            var made = self.cgroups.make(run, start, c.limit_mb)
+            var made = self.cgroups.make(run, start, c.limit_mb, grant.cpus)
             c.path = made[0]
             c.kill_mb = made[1]
             scheduler_db.set_memory_limit(

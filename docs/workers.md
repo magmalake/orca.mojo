@@ -193,6 +193,11 @@ queued, held saying which worker had no room, for another worker of the
 pool. A worker from before requests says nothing of its room, and its runs
 are started as before.
 
+Its runs yield the CPU to the worker and the rest of its host as the
+scheduler's do ([hetzner.md](hetzner.md#a-cgroup-per-run)): a run's cgroup
+has `cpu.weight` `MORCA_RUN_CPU_WEIGHT` (20) and, with a CPU grant,
+`cpu.max`; without one the run starts at `nice` `MORCA_RUN_NICE` (10).
+
 A worker also reads its own host's [memory pressure](morca-toml.md#memory-pressure)
 each poll (the same files, in the same order, and the same
 `MORCA_ADMIT_MEMORY_PRESSURE` of its own environment) and claims nothing while

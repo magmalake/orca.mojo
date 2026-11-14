@@ -16,6 +16,7 @@ from morca._internal.coverage import Coverage
 from morca._internal.fleet import fleet_summary, summary_html, summary_json
 from morca._internal.html import Html, url_encode
 from morca._internal.json import quote
+from morca._internal.run_cpu import CpuKnobs
 from morca._internal.state import State
 from morca._internal.system import (
     alert_html,
@@ -220,6 +221,8 @@ def home(mut db: State) raises -> Page:
         warnings_json(alerts),
         ', "memory_pressure": ',
         row_json(pressure),
+        ', "run_cpu": ',
+        CpuKnobs.settings().json(),
         ', "watchdog": ',
         trips_json(trips),
         ', "pipelines": [',

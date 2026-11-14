@@ -51,6 +51,7 @@ from morca._internal.html import url_encode
 from morca._internal.json import quote
 from morca._internal.lineage import SnapshotRef
 from morca._internal.pressure import pct_text
+from morca._internal.run_cpu import status_text
 from morca._internal.queueing import file_names
 from morca._internal.state import State
 from morca._internal.ui.parts import took_text
@@ -697,6 +698,17 @@ def pressure_status(v: Value) raises -> String:
     return line^
 
 
+def cpu_status(v: Value) raises -> String:
+    """`morca status`'s line for the runs' CPU priority (`run_cpu` in `/`'s
+    JSON, `morca._internal.run_cpu`), or empty for a server without it."""
+    if String("run_cpu") not in v or v["run_cpu"].is_null():
+        return ""
+    var c = v["run_cpu"]
+    return status_text(
+        Int(c["cpu_weight"].int_value()), Int(c["nice"].int_value())
+    )
+
+
 def _pct(x: Float64) -> String:
     return pct_text(x)
 
@@ -716,6 +728,9 @@ def print_status(json: String, one: Bool) raises:
         var pressure = pressure_status(v)
         if pressure:
             print(pressure)
+        var cpu = cpu_status(v)
+        if cpu:
+            print(cpu)
     for p in ps:
         print(_status_line(p))
         var se = p["sense_error"]

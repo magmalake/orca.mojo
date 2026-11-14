@@ -895,6 +895,27 @@ container's root cgroup's `memory.max` isn't writable from inside, and nothing
 above it is visible. `docker exec scheduler ...` (morca-stack's quiesce,
 `morca pause`) still works: runc puts it in `morca`.
 
+**CPU** (#229). Runs may use every idle core, but the scheduler wins when
+the cores are busy: where the container's cgroup has the cpu controller,
+morca turns it on for its children too, and each run's cgroup gets
+`cpu.weight` `MORCA_RUN_CPU_WEIGHT` (20, against the 100 of the scheduler's
+`morca` leaf) and, for a run granted `cpus`, `cpu.max` at that many cores, so
+it can't exceed its grant either. Without run cgroups, or without the cpu
+controller, a run starts at `nice` `MORCA_RUN_NICE` (10; 0: off) instead,
+which everything it starts inherits, dista's local workers included.
+Control-placed runs also keep `MORCA_CONTROL_NICE`. The UI and Postgres
+are containers of their own, which the kernel already weighs against the
+scheduler's container as a whole. The scheduler says which on its log:
+
+```
+morca: runs' CPU priority: cpu.weight 20 (MORCA_RUN_CPU_WEIGHT) in each run's cgroup, cpu.max at a CPU grant
+```
+
+`morca worker` does the same on its own host. Ops › Control's Runs card
+shows each run's (CPU), and `morca status` the settings, as the UI's and the
+command's own environment have them: set them in `settings.env`, which the
+scheduler and the UI both read.
+
 **A host that can't.** On a host without cgroup v2 (`/sys/fs/cgroup/cgroup.controllers`),
 or whose cgroup v2 has no memory controller, `apply` and `plan` start the
 scheduler without the flags, as with `CGROUPS=0`, and say why:

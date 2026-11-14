@@ -41,14 +41,18 @@ run starts is in it from its first instruction.
   (`some`) and all of them at once (`full`). They go on its attempts
   (`memory_stall_ms`, `memory_stall_full_ms`; for #281): how tight a grant
   was, where a kill only says it was too tight.
+- **CPU** (#229): with the `cpu` controller, the cgroup's `cpu.weight` is
+  `MORCA_RUN_CPU_WEIGHT` (20) and, with a CPU grant, `cpu.max` that many
+  cores; without it the run starts at `nice` `MORCA_RUN_NICE`
+  (`morca._internal.run_cpu`).
 - The cgroup is removed (`rmdir`) once the tree has left it, then or on a
   later tick; a scheduler that starts removes the empty ones a previous
   scheduler left (`stale`).
 
 Where morca can't make cgroups (macOS, cgroup v1, a container whose
 `/sys/fs/cgroup` is read-only or not delegated, `MORCA_CGROUPS=0`), it says
-why once and runs as before: `oom_score_adj` 1000 and, for control-placed
-runs, the sampled `MORCA_CONTROL_MEMORY_MB` cap. docs/hetzner.md says what
+why once and runs as before: `oom_score_adj` 1000, `nice` and, for
+control-placed runs, the sampled `MORCA_CONTROL_MEMORY_MB` cap. docs/hetzner.md says what
 the Hetzner deploy needs.
 """
 
@@ -59,6 +63,7 @@ from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
 from morca._internal.resources import gb_text
+from morca._internal.run_cpu import CpuKnobs, cpu_max
 from morca._internal.sample import _read
 
 comptime ROOT = "/sys/fs/cgroup"
@@ -454,11 +459,23 @@ struct Cgroups(Copyable, Movable):
     var why: String
     """Why it's off, or how it's on, for the log."""
     var knobs: MemoryKnobs
+    var cpu: Bool
+    """Whether the runs' cgroups have the `cpu` controller, for
+    `cpu.weight` and `cpu.max` (`morca._internal.run_cpu`)."""
+    var cpu_knobs: CpuKnobs
 
-    def __init__(out self, base: String, why: String, knobs: MemoryKnobs):
+    def __init__(
+        out self,
+        base: String,
+        why: String,
+        knobs: MemoryKnobs,
+        cpu: Bool = False,
+    ):
         self.base = base
         self.why = why
         self.knobs = knobs
+        self.cpu = cpu
+        self.cpu_knobs = CpuKnobs.defaults()
 
     @staticmethod
     def off(why: String) -> Cgroups:
@@ -468,14 +485,43 @@ struct Cgroups(Copyable, Movable):
         return self.base != ""
 
     @staticmethod
-    def setup(knobs: MemoryKnobs) -> Cgroups:
+    def setup(
+        knobs: MemoryKnobs, cpu_knobs: CpuKnobs = CpuKnobs.defaults()
+    ) -> Cgroups:
         """Finds or makes the cgroup runs' cgroups go in: this process's
         own, after moving what's in it into a leaf `morca` (or, if it's in
         such a leaf already, the one above), with the memory controller on
-        for its children. Never raises: off says why."""
+        for its children, and the cpu controller where the host delegates
+        it. Never raises: off says why."""
         var c = Cgroups._setup()
         c.knobs = knobs
+        c.cpu_knobs = cpu_knobs
         return c^
+
+    def nice_for(self, path: String) -> Int:
+        """The `nice` a run whose cgroup is `path` (empty: none) starts at:
+        0 when its cgroup has a `cpu.weight`, else `MORCA_RUN_NICE`."""
+        if path and self.cpu:
+            return 0
+        return self.cpu_knobs.nice
+
+    def cpu_text(self) -> String:
+        """How this process's runs are held back on CPU, for the log."""
+        if self.on() and self.cpu:
+            return String(
+                "cpu.weight ",
+                self.cpu_knobs.weight,
+                " (MORCA_RUN_CPU_WEIGHT) in each run's cgroup, cpu.max at a",
+                " CPU grant",
+            )
+        var why = String(
+            " (no cpu controller in its cgroups)" if self.on() else " (no run cgroups)"
+        )
+        if self.cpu_knobs.nice > 0:
+            return String(
+                "nice ", self.cpu_knobs.nice, " (MORCA_RUN_NICE)", why
+            )
+        return String("not lowered: MORCA_RUN_NICE=0", why)
 
     @staticmethod
     def _setup() -> Cgroups:
@@ -544,6 +590,14 @@ struct Cgroups(Copyable, Movable):
                         " or not delegated)",
                     )
                 )
+        # The cpu controller (#229) where the parent delegates it: without
+        # it, runs start at a lower nice instead. Turned on by itself, so
+        # a host that refuses it still has memory limits.
+        var cpu = False
+        if has_word(_read(String(base, "/cgroup.controllers")), "cpu"):
+            cpu = has_word(
+                _read(String(base, "/cgroup.subtree_control")), "cpu"
+            ) or put(String(base, "/cgroup.subtree_control"), "+cpu")
         # A run's cgroup, made and removed, to be sure.
         var probe = String(
             base,
@@ -558,6 +612,8 @@ struct Cgroups(Copyable, Movable):
                 String("off: can't make a cgroup in ", base, " (", e, ")")
             )
         var writable = put(String(probe, "/memory.high"), "max")
+        if cpu:
+            cpu = put(String(probe, "/cpu.weight"), "100")
         try:
             rmdir(probe)
         except:
@@ -570,14 +626,16 @@ struct Cgroups(Copyable, Movable):
             base,
             String("on: runs' cgroups go in ", base),
             MemoryKnobs(0, 25, 150, 120),
+            cpu,
         )
 
     def make(
-        self, run: Int, start: Int, limit_mb: Int
+        self, run: Int, start: Int, limit_mb: Int, cpus: Int = 0
     ) raises -> Tuple[String, Int]:
         """Makes a start's cgroup with `memory.high` at `limit_mb` and
-        `memory.max` the margin above, and returns its path and
-        `memory.max` in MB."""
+        `memory.max` the margin above, and with the cpu controller its
+        `cpu.weight` and, for a grant of `cpus` cores, `cpu.max`; returns
+        its path and `memory.max` in MB."""
         var path = String(
             self.base,
             "/",
@@ -595,6 +653,13 @@ struct Cgroups(Copyable, Movable):
         _ = put(String(path, "/memory.oom.group"), "1")
         if exists(String(path, "/memory.swap.max")):
             _ = put(String(path, "/memory.swap.max"), "0")
+        if self.cpu:
+            if not put(
+                String(path, "/cpu.weight"), String(self.cpu_knobs.weight)
+            ):
+                raise Error("can't set cpu.weight in ", path)
+            if cpus > 0 and not put(String(path, "/cpu.max"), cpu_max(cpus)):
+                raise Error("can't set cpu.max in ", path)
         return (path^, kill)
 
     @staticmethod

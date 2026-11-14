@@ -6,7 +6,8 @@
 # Ops > Control's show the limits; no run cgroup or process is left; and a
 # scheduler that starts removes an empty cgroup a dead one left; and a run
 # held at memory.high short of memory.max is killed as out of memory; and
-# one killed at its memory_gb's maximum fails, unretried.
+# one killed at its memory_gb's maximum fails, unretried; and, with the cpu
+# controller, a run's cgroup has its cpu.weight.
 #
 # The scheduler makes the cgroups under its own cgroup, which it has to be
 # able to write (delegated). Where it isn't, and `sudo -n` works (GitHub's
@@ -173,8 +174,21 @@ jq -e '.attempt.memory_limit_mb == 200 and (.attempt.error | startswith("out of 
 ./build/morca backfill grower 2024-03 >> "$log" 2>&1 || fail "backfill 2024-03"
 r3=$(q "SELECT max(id) FROM orca.runs")
 until_ 30 "run $r3 didn't start" is "SELECT status FROM orca.runs WHERE id = $r3" running
+# Its CPU priority (#229): with the cpu controller, its cgroup's cpu.weight is
+# MORCA_RUN_CPU_WEIGHT (20), and Ops > Control says so.
+cpu=
+if said "morca: runs' CPU priority: cpu.weight 20"; then
+    weight() {
+        w=$(cat "$cgbase"/orca-run-"$r3"-*/cpu.weight 2> /dev/null | head -1)
+        [ "$w" = 20 ]
+    }
+    until_ 10 "run $r3's cgroup has no cpu.weight 20: $(cat "$cgbase"/orca-run-"$r3"-*/cpu.weight 2> /dev/null)" weight
+    cpu=' and .cpu_weight == 20 and .nice == 0'
+else
+    echo "cgroups: no cpu controller: $(grep "CPU priority" build/cgroups-sched.out | head -1)"
+fi
 until_ 20 "Ops > Control has no run $r3: $(curl -fs -H 'Accept: application/json' "$base/ops/control" | jq -c .runs)" \
-    sh -c "curl -fs -H 'Accept: application/json' '$base/ops/control' | jq -e '.runs[] | select(.run == $r3 and .memory_limit_mb == 400 and .memory_max_mb == 400)' > /dev/null"
+    sh -c "curl -fs -H 'Accept: application/json' '$base/ops/control' | jq -e '.runs[] | select(.run == $r3 and .memory_limit_mb == 400 and .memory_max_mb == 400$cpu)' > /dev/null"
 until_ 60 "run $r3 didn't succeed" is "SELECT status FROM orca.runs WHERE id = $r3" succeeded
 
 # Nothing is left: no run's cgroup, no grower process.
