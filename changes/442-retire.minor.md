@@ -1,0 +1,1 @@
+- **`morca retire <pipeline>`**: the scheduler starts none of its runs and status and `morca-stack check` leave it out; `morca register` brings it back. (#442)

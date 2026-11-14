@@ -181,6 +181,9 @@ def register_pipeline(
     for c in parse_sense(seen):
         if c.snapshot >= 0:
             registering_db.seen(self.db.conn, name, c.dataset, c.snapshot)
+    # Registered again, a retired pipeline is back (#427).
+    if pipelines_db.change_retired(self.db.conn, name, False):
+        print("morca:", name, "was retired: registered again")
     for q in registered(self.db, name):
         if data_changed:
             var what = String(

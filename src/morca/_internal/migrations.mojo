@@ -858,6 +858,10 @@ def _migrations() -> List[List[String]]:
             "ALTER TABLE orca.pool_machines ADD COLUMN image text",
             "ALTER TABLE orca.pool_machines ADD COLUMN draining timestamptz",
         ],
+        # When a pipeline was retired (#427, `morca retire`): the scheduler
+        # starts none of its runs, and lists skip it; `morca register`
+        # clears it. Additive: an older binary neither reads nor writes it.
+        ["ALTER TABLE orca.pipelines ADD COLUMN retired timestamptz"],
     ]
 
 
@@ -891,6 +895,10 @@ def _floor_raisers() -> List[Int]:
     columns the binaries before it neither read nor write. A machine one of
     them makes has no image recorded, so a newer autoscaler replaces it
     once it's idle.
+    59 (`pipelines.retired`, #427) is additive: a nullable column the
+    binaries before it neither read nor write. While one overlaps a newer
+    one it would still start a retired pipeline's runs, but only the
+    instance that leads starts runs, and the newer one leads.
     """
     return [1, 24]
 

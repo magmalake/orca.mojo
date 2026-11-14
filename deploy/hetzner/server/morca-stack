@@ -1862,8 +1862,10 @@ cmd_check() {
             check_fail "scheduler instances: ${leaders:-0} lead (morca scheduler status)"
         fi
     fi
-    # The pipelines: registered, each one's binary in the scheduler's image.
-    regs=$(psql_q "SELECT name || ' ' || coalesce(binary_path, '-') || ' ' || paused FROM orca.pipelines ORDER BY name" 2> /dev/null) || regs=
+    # The pipelines: registered, each one's binary in the scheduler's image;
+    # the retired ones (morca retire, #427) left out. Through to_jsonb, so
+    # a schema from before the retired column reads too.
+    regs=$(psql_q "SELECT name || ' ' || coalesce(binary_path, '-') || ' ' || paused FROM orca.pipelines p WHERE to_jsonb(p)->>'retired' IS NULL ORDER BY name" 2> /dev/null) || regs=
     n=0
     missing=
     paused=
