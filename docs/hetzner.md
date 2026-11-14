@@ -262,7 +262,8 @@ Instead of numbers that are wrong after a rescale, a pipeline can ask for a
 range with `cpus` and `memory_gb` and set `DISTA_WORKER_SLOTS = "auto"`: the
 scheduler then starts its run once the minimum fits beside the others' and
 grants it up to the maximum of what's left, so the next run after
-`rescale.sh up` is simply given more ([morca.toml](morca-toml.md#requests-and-grants)).
+`rescale.sh up` is simply given more, and dista sizes its workers to that
+grant, memory included ([morca.toml](morca-toml.md#auto-from-the-grant)).
 A pipeline's own `"auto"`, like `GHARCHIVE_PARALLEL`, needs its code to read
 the grant (`morca.auto_count`).
 
@@ -963,7 +964,10 @@ The server runs `morca-stack backup` every night at 02:30 UTC
 (`orca-backup.timer`; `systemctl list-timers` and `journalctl -u
 morca-backup` on the server). It writes `pg_dump -n orca -Fc` (the format
 [replace-control.md](replace-control.md) uses), checks that it reads back,
-uploads it to `s3://<bucket>/backups/pg/<time>.dump`, and keeps the newest 14.
+uploads it to `s3://<bucket>/backups/pg/<time>.dump` (each upload tried
+three times), and keeps the newest 14 (`BACKUP_KEEP`). Deleting the older
+ones is best effort: a failed delete only warns, the backup still succeeds,
+and the next backup deletes it.
 Beside each dump is `<time>.paused`: the pipelines paused when it was taken,
 as `paused_by_hand` and `paused_by_deploy` (the ones a deploy's quiesce
 paused), which a restore uses to unpause the latter
@@ -1115,7 +1119,9 @@ project's image builds `FROM` it and adds only its own programs:
 [`deploy/project.Dockerfile`](../deploy/project.Dockerfile), the image
 `morca aws push` builds, compiles the project's `bin/*.mojo` and
 `pipelines/*.mojo` into `/opt/morca/bin` and `/opt/morca/pipelines`, with the
-libraries they link. `MORCA_VERSION` picks the runtime: the morca-mojo
+libraries they link, and copies the project's `morca.toml` to
+`/opt/morca/morca.toml` with `MORCA_CONFIG` naming it, so `morca-stack
+register` (a bare `morca register`) reads it. `MORCA_VERSION` picks the runtime: the morca-mojo
 version the project pins (`morca aws push` reads it from `pixi.lock`), so
 the runtime and the pipelines are the same morca. Moving the project to a
 new morca moves its image to that release's runtime. A

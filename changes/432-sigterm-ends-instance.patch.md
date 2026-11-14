@@ -1,0 +1,1 @@
+- **Stopped scheduler ends its instance**: on SIGTERM an instance ends its row, so a check right after a deploy sees one leader. (#432)

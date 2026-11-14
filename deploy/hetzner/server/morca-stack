@@ -482,6 +482,8 @@ MORCA_UI_TRUST_PROXY=1
 EOS
         # What machines of a worker pool run: the server's own image.
         echo "MORCA_WORKER_IMAGE=$image:$tag"
+        # The image a scheduler instance records (morca scheduler status, #270).
+        echo "MORCA_IMAGE=$image:$tag"
         # On unless OVERLAP=0 (#390), which is the old way: one scheduler at
         # a time. The drain limit is required; apply checked it.
         ! overlap || echo MORCA_OVERLAP=on
@@ -1001,6 +1003,10 @@ EOF
         replaced="$replaced $a_name"
         return 0
     fi
+    # The scheduler is stopped first, not killed: on SIGTERM it ends its
+    # instance, which the check after the deploy would count leading
+    # otherwise (#426).
+    [ "$a_name" != scheduler ] || docker stop -t 30 scheduler > /dev/null 2>&1 || true
     docker rm -f "$a_name" > /dev/null 2>&1 || true
     docker run -d --name "$a_name" --restart always --label "orca.stack.spec=$a_spec" \
         --label "orca.stack.args=$a_args" --label "orca.stack.files=$a_files" "$@" > /dev/null
@@ -1624,6 +1630,18 @@ dumps() { # the dumps' names in the bucket, oldest first
     s3 s3 ls "s3://$(conf_get BUCKET)/backups/pg/" | awk '{print $4}' | grep '\.dump$' | sort || true
 }
 
+# s3 cp FROM TO, tried three times: Object Storage drops the odd request
+# ("failure to meet throughput minimum", #425).
+s3_put() {
+    n=1
+    until s3 s3 cp "$1" "$2" > /dev/null; do
+        [ "$n" -lt 3 ] || return 1
+        echo "morca-stack: copying $1 to $2 failed (try $n of 3); trying again" >&2
+        sleep "$((n * 3))"
+        n=$((n + 1))
+    done
+}
+
 cmd_backup_now() {
     bucket=$(conf_get BUCKET)
     keep=$(conf_get BACKUP_KEEP)
@@ -1638,16 +1656,20 @@ cmd_backup_now() {
     # The same dump the AWS control instance's backup makes (docs/replace-control.md).
     docker exec postgres pg_dump -U orca -d orca -n orca -Fc > "$STATE/backup/$name"
     docker exec -i postgres pg_restore --list < "$STATE/backup/$name" > /dev/null || die "the dump doesn't read back"
-    s3 s3 cp "/b/$name" "s3://$bucket/backups/pg/$name" > /dev/null
-    s3 s3 cp "/b/$stamp.paused" "s3://$bucket/backups/pg/$stamp.paused" > /dev/null
+    s3_put "/b/$name" "s3://$bucket/backups/pg/$name" || die "couldn't upload $name"
+    s3_put "/b/$stamp.paused" "s3://$bucket/backups/pg/$stamp.paused" || die "couldn't upload $stamp.paused"
     echo "morca-stack: paused then (in $stamp.paused): by hand:$(sed -n 's/^paused_by_hand//p' "$STATE/backup/$stamp.paused"); by a deploy:$(sed -n 's/^paused_by_deploy//p' "$STATE/backup/$stamp.paused")"
     rm -f "$STATE/backup/$name" "$STATE/backup/$stamp.paused"
     # Keep the newest $keep (the names sort by time), each with its .paused.
+    # Best effort: the backup is made, so a failed delete (#425) only warns,
+    # and the next backup's prune deletes it.
     dumps | awk -v k="$keep" '{ a[NR] = $0 } END { for (i = 1; i <= NR - k; i++) print a[i] }' | while read -r old; do
-        [ -z "$old" ] || {
-            s3 s3 rm "s3://$bucket/backups/pg/$old" > /dev/null
-            s3 s3 rm "s3://$bucket/backups/pg/${old%.dump}.paused" > /dev/null 2>&1 || true
-        }
+        [ -n "$old" ] || continue
+        if ! err=$(s3 s3 rm "s3://$bucket/backups/pg/$old" 2>&1 > /dev/null); then
+            echo "morca-stack: warning: couldn't remove old dump $old: $(echo "$err" | tail -n 1); the next backup tries again" >&2
+            continue
+        fi
+        s3 s3 rm "s3://$bucket/backups/pg/${old%.dump}.paused" > /dev/null 2>&1 || true
     done
     echo "morca-stack: backed up to s3://$bucket/backups/pg/$name"
 }

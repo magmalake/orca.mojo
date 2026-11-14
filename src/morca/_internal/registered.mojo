@@ -24,10 +24,7 @@ from morca._internal.ec2 import Ec2Spec
 from morca.month import Month
 from morca.schedule import Schedule
 from morca._internal.secrets import parse_secrets
-from morca._internal.resources import (
-    Request,
-    resolve_auto,
-)
+from morca._internal.resources import Request
 from morca._internal.recommend import (
     Recommendation,
     RunRequest,
@@ -172,7 +169,7 @@ def _ec2_spec(p: Registered, run: Int, start: Int, new_code: Bool) -> Ec2Spec:
         p.secrets.copy(),
         p.worker_procs,
         p.registry_hash,
-        resolve_auto(p.env),
+        p.env.copy(),
     )
 
 

@@ -841,6 +841,16 @@ def _migrations() -> List[List[String]]:
                 " NOT NULL"
             ),
         ],
+        # Datasets' settings from morca.toml (#435,
+        # morca._internal.dataset_config): whether visitors see a dataset's
+        # data. A new table: additive.
+        [
+            (
+                "CREATE TABLE orca.dataset_settings (name text PRIMARY KEY,"
+                " public boolean NOT NULL DEFAULT true, updated timestamptz"
+                " NOT NULL DEFAULT now())"
+            ),
+        ],
         # A pipeline's priority from morca.toml (#421): the scheduler's
         # pass goes highest first. Additive: an older binary's INSERTs
         # leave it 0, and it starts pipelines by name, as it did.
@@ -877,7 +887,7 @@ def _floor_raisers() -> List[Int]:
     columns the binaries before it neither read nor write. A start they make
     leaves `request_source` and `request_runs` as an earlier start set them.
 
-    57 (`pipelines.priority`, #421) is additive: a column with a default,
+    58 (`pipelines.priority`, #421) is additive: a column with a default,
     which the binaries before it neither read nor write; they start the
     pipelines by name, as they did, and a registration they make leaves it
     as it was.

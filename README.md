@@ -61,7 +61,7 @@ them comes with a note in the changelog. Everything under `morca._internal`
 | [docs/morca-toml.md](docs/morca-toml.md) | `morca.toml`: every key, precedence, `morca config show` and `export`, and [fills](docs/morca-toml.md#fills) |
 | [docs/placement.md](docs/placement.md) | where a pipeline's runs run: `default`, `ec2`, `control` and `worker:<pool>`, and the control host's limits |
 | [docs/workers.md](docs/workers.md) | remote workers: `morca worker`, worker tokens, a worker on another machine, the run's state over the API |
-| [docs/rust-workers.md](docs/rust-workers.md) | steps written in Rust: the `morca-worker` crate, `morca.rust_step`, the C ABI, the schema file both sides read |
+| [docs/rust-workers.md](docs/rust-workers.md) | steps written in Rust: the `morca-worker` crate, `morca.rust_step`, the C ABI, the schema file both sides read, and Parquet files a worker writes itself |
 | [docs/watchdog.md](docs/watchdog.md) | the watchdog's rules and thresholds, what a trip pauses, `morca watchdog status`, `ack` and `snooze` |
 | [docs/alerts.md](docs/alerts.md) | alerts to your phone through ntfy: what is sent, `MORCA_NOTIFY_*`, `morca notify` |
 | [docs/ui.md](docs/ui.md) | the UI's newer parts: the pipeline page's tabs and cards, a run's timeline, Ops › Control, Pools and Watchdog |
@@ -84,6 +84,7 @@ pixi run -e data test-tables   # Iceberg; needs the sibling checkouts (see CI)
 pixi run -e data test-append-files   # files written in dista tasks, committed once by the step
 pixi run -e data test-taxi     # examples/taxi on two sliced TLC months
 pixi run -e data test-lineage  # lineage over three pipelines' tables
+pixi run -e data test-dataview # a dataset's Data tab: schema, partitions, rows, chart, CSV
 pixi run -e data test-expire   # snapshot expiry: morca expire, morca_maintain, the scheduler's sweep
 pixi run -e data test-sensors  # sensors and a rebuild, with the scheduler running
 pixi run -e data test-lineage-s3   # lineage, and sensors (test-sensors-s3), over MinIO

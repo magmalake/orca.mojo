@@ -15,6 +15,8 @@
 #   rollback goes forward again;
 # - a deploy registers the pipelines after the apply and before it unpauses,
 #   and leaves them paused when that fails;
+# - a backup's failed delete of an old dump only warns, and a failed upload
+#   is tried three times;
 # - each backup writes <time>.paused beside the dump: the pipelines paused
 #   by hand (manual1) and the ones the deploy paused (toy); list-backups
 #   says which dumps have one, and a restore unpauses only the ones the
@@ -56,7 +58,8 @@
 #   the old one is set not to restart and renamed scheduler-old-<time>, the
 #   new one leads and registers, then the old one is asked to drain and the
 #   deploy returns without waiting for its runs (#397): check and status
-#   say it's draining N run(s), as information, and a reaper removes it
+#   say it's draining N run(s), as information (status giving each
+#   instance's image, morca.env's MORCA_IMAGE, #270), and a reaper removes it
 #   once it exits. A second deploy while one drains overlaps again, its old
 #   scheduler under a name of its own beside the first; drain-old
 #   --timeout waits and stops one after it; can-overlap says no with
@@ -268,6 +271,32 @@ deploy --no-backup ccc3333 console=ddd4444 || fail "deploy.sh --no-backup"
 has "no-backup: not backing up; previous tag bbb2222, new tag morca ccc3333, console ddd4444"
 rm "$FAKE/backup-fails"
 [ "$(stack tags)" = "morca ccc3333, console ddd4444" ] || fail "tags: $(stack tags)"
+
+# A backup whose delete of an old dump fails still succeeds, and says so
+# (#425); an upload that fails once is tried again.
+cp "$MORCA_CONF/stack.conf" "$FAKE/stack.conf.before"
+echo BACKUP_KEEP=1 >> "$MORCA_CONF/stack.conf"
+sleep 1 # a stamp of its own
+touch "$FAKE/bucket/20200101T000000Z.dump" "$FAKE/s3-rm-fails"
+echo 1 > "$FAKE/s3-cp-fails"
+stack backup-now > "$FAKE/out" 2>&1 || fail "a failed prune failed the backup: $(cat "$FAKE/out")"
+has "warning: couldn't remove old dump 20200101T000000Z.dump: delete failed: .*THROUGHPUT_FAILURE"
+has "the next backup tries again"
+has "(try 1 of 3); trying again"
+has "morca-stack: backed up to s3://bkt/backups/pg/"
+[ -f "$FAKE/bucket/20200101T000000Z.dump" ] || fail "the old dump went"
+# The next prune deletes it; an upload that keeps failing fails the backup.
+rm "$FAKE/s3-rm-fails"
+sleep 1
+stack backup-now > "$FAKE/out" 2>&1 || fail "backup-now"
+[ -f "$FAKE/bucket/20200101T000000Z.dump" ] && fail "the next prune kept the old dump"
+[ "$(ls "$FAKE/bucket" | grep -c '\.dump$')" = 1 ] || fail "BACKUP_KEEP=1 kept $(ls "$FAKE/bucket")"
+echo 3 > "$FAKE/s3-cp-fails"
+sleep 1
+stack backup-now > "$FAKE/out" 2>&1 && fail "a backup whose upload failed three times"
+has "couldn't upload 2.*\.dump"
+rm "$FAKE/s3-cp-fails"
+mv "$FAKE/stack.conf.before" "$MORCA_CONF/stack.conf"
 
 # Rolling back: refused with runs running, then the tags before, registered.
 echo 2 > "$FAKE/running"
@@ -974,6 +1003,9 @@ grep -q "stop .*$first" "$FAKE/docker.all" && fail "the old scheduler was stoppe
 [ -f "$MORCA_STATE/reap-$first.pid" ] || fail "no reaper for $first"
 stack status > "$FAKE/out" 2>&1 || fail "status beside a draining old scheduler"
 has "^$first: draining 2 run(s) (outdated)$"
+# Each scheduler instance says its image: morca.env's MORCA_IMAGE (#270).
+grep -qx MORCA_IMAGE=img:rrr8888 "$MORCA_CONF/morca.env" || fail "no MORCA_IMAGE in morca.env"
+has "leading image=img:rrr8888 "
 # A second deploy while it drains overlaps again: the scheduler it replaces
 # drains under a name of its own, beside the first, which keeps its own.
 sleep 1

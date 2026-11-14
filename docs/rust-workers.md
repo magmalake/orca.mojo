@@ -6,7 +6,9 @@ with a small **proxy pipeline in Mojo**, which declares the pipeline, its
 partitions, and the dataset the step writes as for any step. The step calls
 `morca.rust_step`, which runs the worker and writes the record batches it
 streams back the way morca writes any step's output: Parquet, then one
-Iceberg commit that a retry recognises.
+Iceberg commit that a retry recognises. A worker that writes Parquet
+itself hands over files instead, or as well, and they go into the same
+commit.
 
 ```text
 proxy pipeline (Mojo)                     worker (Rust cdylib)
@@ -94,7 +96,84 @@ export_worker!(Numbers);
   thread before the stream ends.
 
 `morca_worker::testing::Run` runs a worker through the same C ABI in a
-`cargo test`, and returns its batches and log lines.
+`cargo test`, and returns its batches, the files it reported, and its log
+lines.
+
+## Parquet files from the worker
+
+A worker that already produces Parquet, or whose output is too large to
+hand over batch by batch, writes the files itself and reports them:
+
+```rust
+// The worker's own dependency: parquet = { version = "60", default-features
+// = false, features = ["arrow", "snap"] }, arrow-rs's, pure Rust.
+use parquet::arrow::ArrowWriter;
+
+fn run(ctx: &RunContext, _input: Option<Input>) -> Result<Output> {
+    let schema = Arc::new(schema::to_arrow(SCHEMA)?);   // field ids included
+    let c = ctx.clone();
+    let files = (0..4).map(move |i| {
+        let path = c.output_dir()?.join(format!("part-{i}.parquet"));
+        let mut w = ArrowWriter::try_new(File::create(&path)?, schema.clone(), None)?;
+        w.write(&make_batch(i)?)?;
+        w.close()?;
+        Ok(path)
+    });
+    Ok(Output::from_files(ctx, files))
+}
+```
+
+- **`ctx.output_dir()`** is a local directory, empty and this attempt's
+  own (under `$TMPDIR`). morca removes it, with whatever's left in it,
+  when the call ends.
+- **`ctx.add_file(path)`** reports a finished file (a relative path is in
+  the output directory). Call it in `run` and return `Output::files()`,
+  which is a stream of no columns, or return **`Output::from_files(ctx,
+  iter)`**, whose iterator writes one file per item: morca takes each file
+  before it asks for the next, so the worker's disk holds one at a time.
+  From another thread, `add_file` is queued and delivered on the run
+  thread, as logs are.
+- **Streams and files mix.** A worker may stream some rows and write
+  others to files in the same run (examples/rust-worker's `mix` mode);
+  all of them land in the step's one commit. A stream of no columns says
+  the worker only writes files.
+
+morca takes each reported file the next time it has control: when `run`
+returns, and after each batch it pulls. For each file it:
+
+1. **Fails the attempt if it isn't there**: `the Rust worker reported the
+   file …, which doesn't exist`. `add_file` returns that error to the
+   worker too, when it's called on the run thread.
+2. **Checks its schema** against the table's, from the footer, by the rule in
+   "The schema" below, with two differences, since the file is committed as it is and
+   read later by field id: every column must carry the table's field id,
+   and a type must be one iceberg's reader reads as the table's: the same
+   (a timestamp or time in the same unit), or `int` for `long`, `float`
+   for `double`, a decimal of the same scale and no more precision. The
+   error names the file and the column.
+3. **Finds its partition** from the footer's statistics: for each field of
+   the table's partition spec, the source column's minimum and maximum in
+   every row group must give one value under the transform (under
+   `bucket`, one value outright), and a column that's all null is the null
+   partition. A file holding rows of two partitions fails the attempt,
+   naming the column: write a file per partition. arrow-rs writes the
+   statistics by default. A string column the writer truncated statistics
+   for has a minimum and maximum that differ, so partition by a short key.
+4. **Uploads it** where the table's data files go, with the table's
+   `FileIO` (a local warehouse or object storage, S3 included), as
+   `data/<partition>/<uuid>-w<n>.parquet`, and deletes the local file if
+   it's in the output directory. The file is read whole once to upload it,
+   so keep files to a few hundred MB.
+5. **Keeps its entry** for the commit: row count, file size, split offsets
+   and per-column sizes, value and null counts and bounds, all from the
+   footer (iceberg's `data_file_from_footer`, as for files morca writes).
+
+At the end of the stream the files are committed with those morca wrote
+from the stream: one `append_files`, the same commit path, and the same
+recognition of an earlier attempt's commit after a crash. A file of no
+rows is dropped. The worker writes local files, not to the warehouse
+itself, so it needs no storage credentials and no object store crate,
+and a file that doesn't fit never reaches the table's location.
 
 ## The schema: one file, checked twice
 
@@ -168,15 +247,22 @@ def rust_step(
 5. **It pulls batches and writes Parquet as they arrive**, each aligned to
    the table's schema, gathering small batches into files of about
    `flush_bytes`, so a large output never sits in memory whole.
-6. At the end of the stream it **commits once**: `append_files`, which is
+6. **It takes the worker's own Parquet files**, if it reported any, when
+   `run` returns and after each batch (above).
+7. At the end of the stream it **commits once**: `append_files`, which is
    `replace_partition_files` for a dataset the step declared in
-   `replaces=`. One commit, not one per batch: morca recognises a step's
-   commits by their number after a crash.
+   `replaces=`, with the files from the stream and the worker's own. One
+   commit, not one per batch: morca recognises a step's commits by their
+   number after a crash.
 
-Any failure before the commit (the worker's error or panic, a schema that
-doesn't fit, a batch that can't be aligned) fails the attempt, and the
-run's retries apply. Files already written are left unreferenced in
-`data/`, as with an interrupted `append`.
+Any failure before the commit (the worker's error or panic, a schema or a
+file that doesn't fit, a batch that can't be aligned) fails the attempt,
+and the run's retries apply. Files already written or uploaded are left
+unreferenced in `data/`, as with an interrupted `append`.
+
+`RustRun` has `snapshot_id`, `rows` (streamed and in the worker's files),
+`files` (all data files committed), `worker_files` (of those, the
+worker's own), `stopped` and `resumed`.
 
 `library` is a path, a file name (`libx.so`), or a bare name `x`, which
 is `libx.so` (`libx.dylib` on macOS), looked up as morca's other native
@@ -210,7 +296,10 @@ typedef struct MorcaRunContext {
     void (*log)(void *host, const char *msg, size_t len);
     void (*progress)(void *host, int64_t done, int64_t total);
     void (*metric)(void *host, const char *name, size_t name_len, double value);
-} MorcaRunContext;              /* 120 bytes on a 64-bit platform */
+    /* From size 136: */
+    const char *output_dir;     /* a local directory for the worker's files */
+    int32_t (*add_file)(void *host, const char *path, size_t len);
+} MorcaRunContext;              /* 136 bytes on a 64-bit platform */
 
 uint32_t morca_worker_abi_version(void);
 const char *morca_worker_describe(void);
@@ -223,8 +312,18 @@ void morca_worker_free(char *p);
 
 - **`morca_worker_abi_version`** is 1. morca refuses another, naming both.
 - **`size` comes first.** A later morca can add fields at the end without
-  a new version: a worker reads the fields it knows and refuses a context
-  smaller than its own.
+  a new version: a worker reads the fields it knows. The first morca with
+  Rust workers passed 120 bytes; `output_dir` and `add_file` came after,
+  still version 1, since a worker built before them reads only the first
+  120. The crate reads a context of 120 bytes or more, and the two file
+  fields only when `size` is 136 or more; under an older morca,
+  `output_dir()` and `add_file` fail saying so, and streams work as
+  before.
+- **`add_file`** is called on the run thread with a UTF-8 path, absolute
+  or relative to `output_dir`, of a complete Parquet file. It returns 0
+  when morca has taken note of it, non-zero when it refuses it (it isn't
+  there); morca then fails the attempt with its reason, whatever the
+  worker does.
 - **`morca_worker_describe`** returns static JSON the library owns and
   never frees: `{"name", "version", "abi", "morca_worker"}`. morca logs it.
   It doesn't carry the schema; the proxy pipeline does.
@@ -236,7 +335,9 @@ void morca_worker_free(char *p);
   library allocated, which morca frees with **`morca_worker_free`**. There
   is no global "last error", which wouldn't be safe with two calls in one
   process. An error *during* the stream is the stream's own: `get_next`
-  returns non-zero and `get_last_error` says why.
+  returns non-zero and `get_last_error` says why, in the worker's words:
+  the crate drops arrow-rs's `External error: ` from the front, and morca
+  logs it as `morca: the Rust worker <library> failed: <message>`.
 - **`input`** is NULL in version 1 (below).
 - **Lifetimes.** `ctx` and everything it points to, the stop flag
   included, stay valid until morca has released `out`, which is when the
@@ -258,7 +359,8 @@ void morca_worker_free(char *p);
 ## Symbols and linking
 
 A `cdylib` exports only its `#[no_mangle]` functions, so with
-`export_worker!` that's the four above; tests/rust_worker.sh checks it with
+`export_worker!` that's the four above (`add_file` is a callback in the
+context, not an export); tests/rust_worker.sh checks it with
 `nm`. Rust's standard library is linked in statically, as it always is for
 a `cdylib`, so the library depends on libc and nothing of Rust's. That
 keeps the library's libc use apart from Mojo's `external_call`
@@ -309,9 +411,6 @@ built library, not the Rust toolchain:
 
 ## Not yet
 
-- **Parquet files from the worker** (the issue's option 2): the worker
-  writes Parquet itself and returns where the files are; morca checks their
-  schema and commits them through the same commit path. Next.
 - **Rust steps as dista tasks** (`rust_step` in a `Mapped` step over
   tasks), with each task process loading the library itself.
 - **Several outputs**: one stream per declared output, drained in

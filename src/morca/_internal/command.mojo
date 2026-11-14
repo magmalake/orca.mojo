@@ -36,10 +36,10 @@ Needs `MORCA_DATABASE_URL`, but for the commands `--remote` (or
 Exit codes: 0, 2 for a usage error, 3 for any other error.
 """
 
+from std.ffi import c_int
 from std.os import getenv
 from std.os.path import exists
 from std.sys import argv, exit, stderr
-from std.time import sleep
 
 import morca._internal.db.notify as notify_db
 
@@ -90,6 +90,7 @@ from morca._internal.instances import (
     overlap_refusal,
     wait_for_lead,
 )
+from morca._internal.dataset_config import read_datasets, record_datasets
 from morca._internal.pool_config import read_pools, record_pools
 from morca._internal.registering import register_pipeline
 from morca._internal.scheduler import Scheduler
@@ -104,6 +105,7 @@ from morca._internal.watchdog import acknowledge, snooze as snooze_rule
 from morca._internal.auth import audit
 from morca._internal.tokens import revoke_user_tokens, user_tokens
 from morca._internal.web.server import DEFAULT_ADDR, serve_ui
+from morca._internal.web.drain import stop_asked, stop_signals
 from morca._internal.worker import worker_command
 from morca._internal.workers import (
     create_worker_token,
@@ -534,6 +536,12 @@ def _command(args: List[String], target: String) raises -> Int:
         s.say_pressure()
         s.contain()
         s.join()
+        # An instance ends its row on SIGTERM (docker stop) or SIGINT
+        # before it exits (#426). A scheduler that isn't one dies on them
+        # at once, as before, mid-tick included.
+        var stop_fd = c_int(-1)
+        if s.instance > 0:
+            stop_fd = stop_signals()
         while not s.finished:
             # A tick that fails (the database is down) is tried again; the
             # state it would have changed is all in Postgres.
@@ -550,8 +558,13 @@ def _command(args: List[String], target: String) raises -> Int:
                         s.contain()
                 except:
                     pass
-            if not s.finished:
-                sleep(1.0)
+            if not s.finished and stop_asked(stop_fd, 1000):
+                print("morca: scheduler: stopping (SIGTERM or SIGINT)")
+                try:
+                    s.stop()
+                except e:
+                    print("morca: scheduler: couldn't end its instance:", e)
+                    return 1
         return 0
     if cmd == "lineage" and (len(args) == 3 or len(args) == 4):
         var db = State(url)
@@ -1013,6 +1026,14 @@ def _register(url: String, args: List[String]) raises -> Int:
             print("pool", p.name, String("(", p.provider, ")"))
         for g in gone:
             print("pool", g, "removed: its machines go once idle")
+        # Its datasets' settings (morca.dataset_config): the file's only.
+        var sets = read_datasets(file.doc)
+        var unset = record_datasets(s.db, sets)
+        for d in sets:
+            if not d.public:
+                print("dataset", d.name, "(data not public)")
+        for g in unset:
+            print("dataset", g, "settings removed: its data is public")
     return 0
 
 

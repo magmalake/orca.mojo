@@ -139,6 +139,11 @@ too), ends its row and exits; the leader queues those runs again once
 their heartbeats are stale. An ended instance is gone at once, so nothing
 waits for its row to go stale.
 
+An instance stopped instead (SIGTERM or SIGINT: `docker stop`, as a
+deploy that doesn't overlap replaces the scheduler) does the same at
+once: it kills its children, ends its row and exits 0, so `morca-stack
+check` right after doesn't count it leading beside the new one (#426).
+
 The limit is enforced by the draining instance itself, which knows when
 its drain began and can end its row before it exits, so the leader's
 requeue doesn't wait for the row to go stale. The stack's reaper

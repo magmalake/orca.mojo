@@ -403,7 +403,13 @@ comptime STEP_CARDS_JS = """
     if (el) return el;
     return t.matches && t.matches("a") ? t.querySelector(":scope > [data-step]") : null;
   };
-  const datasets = (names) => names.length ? names.map((n) => '<a href="/datasets/' + encodeURIComponent(n) + '">' + esc(n) + "</a>").join(", ") : '<span class="muted">none</span>';
+  // A dataset's data link is private if the page's own link to it is
+  // (the Datasets line has them all), so the stylesheet hides it alike.
+  const priv = (href) => !!document.querySelector('a.data-link--private[href="' + href + '"]');
+  const datasets = (names) => names.length ? names.map((n) => {
+    const data = "/datasets/" + encodeURIComponent(n) + "?tab=data";
+    return '<a href="/datasets/' + encodeURIComponent(n) + '">' + esc(n) + '</a> <a class="data-link' + (priv(data) ? " data-link--private" : "") + '" href="' + esc(data) + '">data</a>';
+  }).join(", ") : '<span class="muted">none</span>';
   const fact = (k, v) => v ? "<dt>" + k + "</dt><dd>" + v + "</dd>" : "";
   function render(el, d) {
     const s = d.steps[el.dataset.step];

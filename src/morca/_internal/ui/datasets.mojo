@@ -35,7 +35,8 @@ from morca._internal.ui.layout import (
     not_found,
     page_html,
 )
-from morca._internal.ui.parts import code_link
+from morca._internal.dataset_config import private_datasets
+from morca._internal.ui.parts import code_link, data_link
 from morca._internal.ui.runs import pager_link
 from morca._internal.views.code import CodeLinks, code_of
 from morca._internal.views.commands import rebuild_cmd, remote_cmd
@@ -55,6 +56,19 @@ def dataset_href(name: String) -> String:
 
 def snapshot_href(at: SnapshotRef) -> String:
     return String(dataset_href(at.dataset), "/snapshots/", at.snapshot)
+
+
+def dataset_tabs(mut h: Html, name: String, tab: String):
+    """A dataset page's tabs: Overview (its place in the graph, rebuilds and
+    snapshots) and Data (`morca._internal.ui.data`), each a link."""
+    var base = dataset_href(name)
+    h.raw('<nav class="ptabs" aria-label="Dataset sections">')
+    for t in [("overview", "Overview"), ("data", "Data")]:
+        h.raw('<a class="ptabs__tab" href="')
+        h.text(base if t[0] == "overview" else String(base, "?tab=", t[0]))
+        h.raw('"', ' aria-current="page"' if t[0] == tab else "", ">")
+        h.raw(t[1], "</a>")
+    h.raw("</nav>")
 
 
 def _flow_graph(mut db: State, mark: String) raises -> String:
@@ -130,12 +144,16 @@ def datasets_page(mut db: State) raises -> Page:
     h.raw('<div class="scroll">', _flow_graph(db, ""), "</div>")
     h.raw(
         '<div class="scroll"><table><thead><tr><th>Dataset</th>',
+        "<th>Data</th>",
         '<th>Written by</th><th>Read by</th><th class="num">Snapshots</th>',
         "<th>Latest</th><th>By run</th></tr></thead><tbody>",
     )
+    var private = private_datasets(db)
     for d in ds:
         h.raw("<tr><td>")
         h.link(dataset_href(d.name), d.name)
+        h.raw("</td><td>")
+        data_link(h, d.name, private)
         h.raw('</td><td class="names">')
         _pipeline_links(h, d.writers)
         h.raw('</td><td class="names">')
@@ -411,7 +429,9 @@ def dataset_page(
     h.raw('<p class="crumb"><a href="/datasets">Datasets</a></p><h1>')
     h.text(d.name)
     var cache = Dict[String, CodeLinks]()
-    h.raw('</h1><dl class="facts"><dt>Written by</dt><dd>')
+    h.raw("</h1>")
+    dataset_tabs(h, d.name, "overview")
+    h.raw('<dl class="facts"><dt>Written by</dt><dd>')
     steps_using(h, db, cache, dataset_steps(db, name, writes=True))
     h.raw("</dd><dt>Read by</dt><dd>")
     steps_using(h, db, cache, dataset_steps(db, name, writes=False))
