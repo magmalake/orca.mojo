@@ -34,7 +34,7 @@ extra-args = ["-I", "$PREFIX/lib/mojo"]
 
 [package.host-dependencies]
 mojo-compiler = "==1.2.0"
-dista-mojo = { git = "https://github.com/morca-dev/dista", rev = "3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30" }
+dista-mojo = { git = "https://github.com/morca-dev/dista", rev = "a53916ca52f7a1af8f8f60c55099ea7f4c54e709" }
 k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "6cb83ce08e02234873f2d09c7501208eedb5589f" }
 iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "bb361f975f9f56d33218850a5f3d048202a85f02" }
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
@@ -53,7 +53,7 @@ mojo-compiler = "==1.2.0"
 mojo-compiler = ">=1.2.0,<2"
 libpq = ">=16,<19"
 libsqlite = ">=3.45,<4"
-dista-mojo = { git = "https://github.com/morca-dev/dista", rev = "3f86c92a2616d477ec5a8f856fa5dd2e3fe48d30" }
+dista-mojo = { git = "https://github.com/morca-dev/dista", rev = "a53916ca52f7a1af8f8f60c55099ea7f4c54e709" }
 k8s-mojo = { git = "https://github.com/magmalake/k8s.mojo", rev = "6cb83ce08e02234873f2d09c7501208eedb5589f" }
 iceberg-mojo = { git = "https://github.com/magmalake/iceberg.mojo", rev = "bb361f975f9f56d33218850a5f3d048202a85f02" }
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
@@ -322,6 +322,9 @@ test-run-token = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_run_t
 test-chaos-tables = { cmd = "CHAOS_SRC=tests/chaos_tables.mojo CHAOS_CHECK=1 scripts/with-postgres.sh tests/chaos.sh" }
 test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh" }
 test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh" }
+# A dataset's Data tab (#435): schema, partitions, rows, chart and download,
+# read by morca_maintain data, and public = false.
+test-dataview = { cmd = "scripts/with-postgres.sh tests/dataview.sh" }
 test-commits = { cmd = "tests/concurrent_commits.sh" }
 # Snapshot expiry: morca expire, morca_maintain and the scheduler's sweep.
 test-expire = { cmd = "scripts/with-postgres.sh tests/expire.sh" }
@@ -343,7 +346,7 @@ test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh" }
 # `morca worker` with no database, committing to a local warehouse.
 test-worker = { cmd = "scripts/with-postgres.sh tests/worker.sh" }
 # CI runs these three groups on runners of their own; test-data is all three.
-test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-replace", "test-replace-concurrent", "test-formal-retry", "test-run-token", "test-chaos-tables", "test-lineage", "test-commits", "test-expire", "test-taxi"] }
+test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-replace", "test-replace-concurrent", "test-formal-retry", "test-run-token", "test-chaos-tables", "test-lineage", "test-dataview", "test-commits", "test-expire", "test-taxi"] }
 test-data-sensors = { depends-on = ["build-shared", "test-sensors", "test-keys-per-run", "test-sensed-behind-live", "test-lineage-s3", "test-sensors-s3", "test-sample-s3", "test-worker"] }
 test-data-keyed = { depends-on = ["build-shared", "test-keyed", "test-keyed-backfills", "test-keyed-sensor", "test-keyed-names"] }
 test-data = { depends-on = ["test-data-tables", "test-data-sensors", "test-data-keyed"] }

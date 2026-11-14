@@ -841,6 +841,16 @@ def _migrations() -> List[List[String]]:
                 " NOT NULL"
             ),
         ],
+        # Datasets' settings from morca.toml (#435,
+        # morca._internal.dataset_config): whether visitors see a dataset's
+        # data. A new table: additive.
+        [
+            (
+                "CREATE TABLE orca.dataset_settings (name text PRIMARY KEY,"
+                " public boolean NOT NULL DEFAULT true, updated timestamptz"
+                " NOT NULL DEFAULT now())"
+            ),
+        ],
     ]
 
 

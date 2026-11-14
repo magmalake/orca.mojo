@@ -16,6 +16,7 @@ from morca._internal.config import (
     resolve,
 )
 from morca._internal.apps_config import apps_text
+from morca._internal.dataset_config import read_datasets
 from morca._internal.pool_config import NO_WAIT, read_pools
 
 comptime EXAMPLE = """[defaults]
@@ -623,6 +624,31 @@ memory_gb = 1.5
     _refused("[apps.ui]\n", "ui is one of the stack's own containers")
     _refused("[apps.Console]\n", "an app's name is lower-case")
     _refused("apps = 1\n", "is a key at the top")
+
+
+def test_datasets() raises:
+    # [datasets.<name>] (#435): public, quoted or two keys deep.
+    var f = ProjectConfig(
+        (
+            '[datasets."hindcast.t2m"]\npublic = false\n\n'
+            "[datasets.lake.raw]\npublic = true\n\n[datasets.lake.obs]\n"
+        ),
+        "morca.toml",
+    )
+    var ds = read_datasets(f.doc)
+    assert_equal(len(ds), 3)
+    assert_equal(ds[0].name, "hindcast.t2m")
+    assert_false(ds[0].public)
+    assert_equal(ds[1].name, "lake.raw")
+    assert_true(ds[1].public)
+    assert_equal(ds[2].name, "lake.obs")
+    assert_true(ds[2].public)
+    assert_equal(len(read_datasets(ProjectConfig("", "morca.toml").doc)), 0)
+    _refused('[datasets."a.b"]\npublic = "no"\n', "public is true or false")
+    _refused('[datasets."a.b"]\nhidden = true\n', "has no key hidden")
+    _refused("[datasets.raw]\npublic = false\n", "namespace.table")
+    _refused('[datasets."a.b.c"]\n', "namespace.table")
+    _refused("datasets = 1\n", "is a key at the top")
 
 
 def main() raises:

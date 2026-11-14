@@ -45,6 +45,7 @@ from morca._internal.html import Html, query_param, url_encode
 from morca._internal.json import quote
 from morca._internal.state import State
 from morca._internal.ui.coverage import COVERAGE_STYLE
+from morca._internal.ui.data_chart import CHART_STYLE
 from morca._internal.ui.layout import (
     AUTH_SLOT,
     HERE_SLOT,
@@ -167,7 +168,9 @@ def _stylesheet() raises -> Response:
     var resp = Response(
         status=200,
         reason="OK",
-        body=List[UInt8](String(STYLE, VIZ_STYLE, COVERAGE_STYLE).as_bytes()),
+        body=List[UInt8](
+            String(STYLE, VIZ_STYLE, COVERAGE_STYLE, CHART_STYLE).as_bytes()
+        ),
     )
     resp.headers.set("Content-Type", "text/css; charset=utf-8")
     return resp^
