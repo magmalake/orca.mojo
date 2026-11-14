@@ -244,8 +244,9 @@ jobs:
       # of this branch's, else main's (a pull request reads its base
       # branch's caches, never another's). actions/cache doesn't save over
       # an exact hit, which only a re-run of the same commit has.
-      # scripts/ci-cache.sh keeps only what the job read or wrote, so an
-      # entry doesn't grow with every commit (GitHub keeps 10 GB a repository).
+      # scripts/ci-cache.sh keeps only the files used in the last three
+      # days, so an entry doesn't grow with every commit (GitHub keeps 10 GB
+      # a repository).
       - if: runner.environment == 'github-hosted'
         id: mojo-cache
         uses: actions/cache/restore@v4
