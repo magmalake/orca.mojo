@@ -23,7 +23,7 @@
 # installs from Debian's mirrors, the same release as the runtime stage.
 FROM ghcr.io/prefix-dev/pixi:0.78.0-bookworm AS build
 ARG DISTA_REV=27e6e88df1b79fdc424314386a835d1d08b0db2a
-ARG K8S_REV=6cb83ce08e02234873f2d09c7501208eedb5589f
+ARG K8S_REV=8da116ec6a2e004d4df5b50ddbc44395c7bd3949
 ARG PIPELINES="examples/toy.mojo examples/fanout.mojo"
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
