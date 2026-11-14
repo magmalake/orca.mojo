@@ -229,7 +229,7 @@ jobs:
           # writing ~1 GB per environment kept the repository over GitHub's
           # 10 GB cap, which evicted main's entries: the only ones every PR can
           # read.
-          cache-write: true # TEMPORARY for #446's warm-cache run: back to ${{ github.event_name != 'pull_request' }}
+          cache-write: ${{ github.event_name != 'pull_request' }}
 
       # Mojo's compile cache (share/max/cache in the environment) starts
       # empty on GitHub's runners. Restored, it makes builds of code built
