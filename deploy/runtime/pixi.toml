@@ -17,4 +17,7 @@ preview = ["pixi-build"]
 
 [dependencies]
 mojo-compiler = "==1.2.0"
+# The full mojo package, for the llvm-symbolizer the image ships. flare_mlake
+# and json_mlake brought it in until they shipped as .mojoc packages.
+mojo = "==1.2.0"
 morca-mojo = { path = "../morca" }
