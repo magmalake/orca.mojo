@@ -1,0 +1,1 @@
+- **json_mlake 0.5.1 and flare_mlake 0.14.1**: the packages record their real versions, and flare.mojoc is built against json_mlake 0.5.1. (#456)

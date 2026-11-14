@@ -192,18 +192,18 @@ jobs:
           ref: f45e780a8de77278c140cee36904e46e93e0ca1c
           path: threads.mojo
       # morca ui's server, and the JSON library it imports, at the revisions
-      # mojoshelf published as flare_mlake 0.14.0 and json_mlake 0.5.0.
+      # mojoshelf published as flare_mlake 0.14.1 and json_mlake 0.5.1.
       - if: matrix.env == 'nightly'
         uses: actions/checkout@v4
         with:
           repository: magmalake/flare_mlake
-          ref: dc1012dafd3b6b32dfe83121d71c8f2fc58f0ffa
+          ref: b2c5823dc0f9ef95906978a9bdfda1d1ce505fa8
           path: flare_mlake
       - if: matrix.env == 'nightly'
         uses: actions/checkout@v4
         with:
           repository: magmalake/json_mlake
-          ref: 02d0c9611e7598331f2194927201f80a5fb231f8
+          ref: 27c05c1c0c2881abfb33ce8eefae4d44d8b602a9
           path: json_mlake
       # morca.sqlite_store's binding, at the revision mojoshelf published as
       # sqlite-mojo 0.3.5.

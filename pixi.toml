@@ -42,8 +42,8 @@ objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev 
 arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
 memory-region-mojo = { git = "https://github.com/magmalake/memory-region.mojo", rev = "40068c4f95ea659e9b78aa91ced45420b07e3e6e" }
 threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e780a8de77278c140cee36904e46e93e0ca1c" }
-flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "dc1012dafd3b6b32dfe83121d71c8f2fc58f0ffa" }
-json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "02d0c9611e7598331f2194927201f80a5fb231f8" }
+flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b2c5823dc0f9ef95906978a9bdfda1d1ce505fa8" }
+json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "27c05c1c0c2881abfb33ce8eefae4d44d8b602a9" }
 sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7b672c85580f4d8c5de855772bc972d535" }
 
 [package.build-dependencies]
@@ -61,8 +61,8 @@ objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev 
 arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
 memory-region-mojo = { git = "https://github.com/magmalake/memory-region.mojo", rev = "40068c4f95ea659e9b78aa91ced45420b07e3e6e" }
 threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e780a8de77278c140cee36904e46e93e0ca1c" }
-flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "dc1012dafd3b6b32dfe83121d71c8f2fc58f0ffa" }
-json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "02d0c9611e7598331f2194927201f80a5fb231f8" }
+flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b2c5823dc0f9ef95906978a9bdfda1d1ce505fa8" }
+json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "27c05c1c0c2881abfb33ce8eefae4d44d8b602a9" }
 sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7b672c85580f4d8c5de855772bc972d535" }
 
 
@@ -233,11 +233,11 @@ objectstore-mojo = { git = "https://github.com/magmalake/objectstore.mojo", rev 
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
 threads-mojo = { git = "https://github.com/magmalake/threads.mojo", rev = "f45e780a8de77278c140cee36904e46e93e0ca1c" }
 # `morca ui` serves its pages with flare. Pinned at the revision mojoshelf
-# published as flare_mlake 0.14.0, which pins threads at the revision above
-# and json_mlake at 0.5.0's revision; both ship as .mojoc packages, and
+# published as flare_mlake 0.14.1, which pins threads at the revision above
+# and json_mlake at 0.5.1's revision; both ship as .mojoc packages, and
 # flare builds its own native shims.
-flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "dc1012dafd3b6b32dfe83121d71c8f2fc58f0ffa" }
-json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "02d0c9611e7598331f2194927201f80a5fb231f8" }
+flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b2c5823dc0f9ef95906978a9bdfda1d1ce505fa8" }
+json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "27c05c1c0c2881abfb33ce8eefae4d44d8b602a9" }
 # morca.sqlite_store. Pinned at the revision mojoshelf published as
 # sqlite-mojo 0.3.5, which iceberg-mojo pins too (the data environment).
 sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7b672c85580f4d8c5de855772bc972d535" }
@@ -297,8 +297,8 @@ sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7
 postgres-mojo = { git = "https://github.com/magmalake/postgres.mojo", rev = "324b2bb61e2e80327654abecf70fd4b2defbc50d" }
 # The morca binary, which tests/lineage.sh builds for `morca lineage` and
 # `morca ui`, serves the UI with flare: the stable environment's pins.
-flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "dc1012dafd3b6b32dfe83121d71c8f2fc58f0ffa" }
-json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "02d0c9611e7598331f2194927201f80a5fb231f8" }
+flare_mlake = { git = "https://github.com/magmalake/flare_mlake", rev = "b2c5823dc0f9ef95906978a9bdfda1d1ce505fa8" }
+json_mlake = { git = "https://github.com/magmalake/json_mlake", rev = "27c05c1c0c2881abfb33ce8eefae4d44d8b602a9" }
 libcurl = ">=8,<9"
 libsqlite = ">=3.45,<4"
 libpq = ">=16,<19"
