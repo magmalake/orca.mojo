@@ -216,12 +216,20 @@ jobs:
           pixi-version: v0.78.0
           environments: ${{ matrix.env }}
           manifest-path: morca/pixi.toml
-          # No environment cache: installing it takes about 30 s on GitHub's
-          # runners, and its entry would be ~1.2 GB of the 10 GB GitHub keeps
-          # a repository, which the build caches below use better. A pixi of
-          # the job's own (setup-pixi won't replace one in sai's ~/.pixi/bin).
-          cache: false
+          # sai installs from the packages it keeps itself, with a pixi of
+          # the job's own (setup-pixi won't replace one in ~/.pixi/bin).
+          #
+          # On GitHub's runners the cached environment is what makes Mojo's
+          # compile cache hit: installing takes only ~30 s, but pixi builds
+          # the git dependencies again, and their new .mojopkg files miss
+          # every entry compiled against the old ones.
+          cache: ${{ runner.environment == 'github-hosted' }}
           pixi-bin-path: ${{ runner.temp }}/pixi/bin/pixi
+          # Only main and the nightly write the environment cache. Every PR
+          # writing ~1 GB per environment kept the repository over GitHub's
+          # 10 GB cap, which evicted main's entries: the only ones every PR can
+          # read.
+          cache-write: true # TEMPORARY for #446's warm-cache run: back to ${{ github.event_name != 'pull_request' }}
 
       # Mojo's compile cache (share/max/cache in the environment) starts
       # empty on GitHub's runners. Restored, it makes builds of code built
@@ -689,40 +697,14 @@ jobs:
           pixi-version: v0.78.0
           environments: rust
           manifest-path: morca/pixi.toml
-          # No environment cache, as for the test legs.
+          # No caches: a cached environment (~1.3 GB) and Mojo's and cargo's
+          # build caches (~0.4 GB) saved a minute of this job's ~6 (#446).
           cache: false
           pixi-bin-path: ${{ runner.temp }}/pixi/bin/pixi
-      # The build caches, as the test legs keep them, with cargo's target
-      # directory (build/cargo, the crates the tests compile).
-      - if: runner.environment == 'github-hosted'
-        id: mojo-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            morca/.pixi/envs/rust/share/max/cache
-            morca/build/.mojo-build
-            morca/build/cargo
-          key: mojo-${{ runner.os }}-rust-${{ hashFiles('morca/pixi.lock') }}-${{ github.sha }}
-          restore-keys: |
-            mojo-${{ runner.os }}-rust-${{ hashFiles('morca/pixi.lock') }}-
-            mojo-${{ runner.os }}-rust-
-      - if: runner.environment == 'github-hosted'
-        run: sh scripts/ci-cache.sh start .pixi/envs/rust/share/max/cache build/.mojo-build build/cargo
       - name: Rust workers
         run: pixi run -e rust test-rust-worker
       - name: Hindcast (examples/hindcast, on fixtures)
         run: pixi run -e rust test-hindcast
-      - if: ${{ !cancelled() && runner.environment == 'github-hosted' && steps.mojo-cache.outputs.cache-matched-key != steps.mojo-cache.outputs.cache-primary-key }}
-        name: Prune the build caches
-        run: sh scripts/ci-cache.sh end .pixi/envs/rust/share/max/cache build/.mojo-build build/cargo
-      - if: ${{ !cancelled() && runner.environment == 'github-hosted' && steps.mojo-cache.outputs.cache-matched-key != steps.mojo-cache.outputs.cache-primary-key }}
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            morca/.pixi/envs/rust/share/max/cache
-            morca/build/.mojo-build
-            morca/build/cargo
-          key: ${{ steps.mojo-cache.outputs.cache-primary-key }}
 
   # The tests that apply on macOS, on the Mac mini runner (m4-mini, an isolated
   # `ci` user; no Docker, no sudo), for the repo's own code only: a fork's
@@ -821,7 +803,7 @@ jobs:
   # the 10 GB GitHub keeps a repository. Pull requests' own entries go when
   # GitHub evicts them (a week unused, or the oldest first when full).
   cache-prune:
-    needs: [test, data, fuzz, rust-worker]
+    needs: [test, data, fuzz]
     if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
