@@ -19,8 +19,7 @@ cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 one_cluster_test
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC -D GRANTEE=plain tests/grants/grantee.mojo -o build/plain
+scripts/pipelines.sh plain
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/pool-ec2.log

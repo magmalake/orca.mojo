@@ -4,9 +4,9 @@ granted, which runs to start, and starting them. `dead` in these is SQL
 for a run whose process died, with the stale limit as the parameter
 `morca._internal.starting` says (`Scheduler._dead`)."""
 
-from postgres import Connection, Params, Transaction
+from postgres import Connection, Params, Transaction, is_retryable, sqlstate_of
 
-from morca._internal.db.live import behind_sql
+from morca._internal.db.live import behind_sql, ordered_runs
 from morca._internal.db.scheduler import RETRIED
 
 
@@ -28,6 +28,31 @@ def lock_pipeline(mut tx: Transaction, pipeline: String) raises:
         "SELECT name FROM orca.pipelines WHERE name = $1 FOR UPDATE",
         Params().text(pipeline),
     )
+
+
+def lock_runs(mut tx: Transaction, pipeline: String) raises:
+    """Locks, in `id` order (`ordered_runs`), the runs of `pipeline` a
+    scheduler pass may update: those queued, running or deferred, and
+    those failed with a retry due. A pass updates them over several
+    statements, so it takes them all at once first, after
+    `lock_pipeline`; a statement that updates several runs elsewhere
+    (cancelling, holding them for a worker) locks its own in `id` order
+    too, and waits for the pass rather than deadlocking with it."""
+    _ = tx.query(
+        (
+            "SELECT id FROM orca.runs WHERE pipeline = $1 AND (status IN"
+            " ('queued', 'running', 'deferred') OR (status = 'failed' AND"
+            " retry_at IS NOT NULL)) ORDER BY id FOR NO KEY UPDATE"
+        ),
+        Params().text(pipeline),
+    )
+
+
+def retryable(e: Error) -> Bool:
+    """True if Postgres ended a transaction for a deadlock (SQLSTATE
+    `40P01`) or a serialization failure (`40001`): it rolled back, and
+    the same transaction tried again may well commit."""
+    return is_retryable(sqlstate_of(e))
 
 
 def live_count(

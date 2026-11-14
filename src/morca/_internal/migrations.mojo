@@ -851,6 +851,17 @@ def _migrations() -> List[List[String]]:
                 " NOT NULL DEFAULT now())"
             ),
         ],
+        # A pool machine's worker image, and when the autoscaler began
+        # draining it for a newer one (#356). Additive: an older binary
+        # leaves both null, and its machines are replaced once idle.
+        [
+            "ALTER TABLE orca.pool_machines ADD COLUMN image text",
+            "ALTER TABLE orca.pool_machines ADD COLUMN draining timestamptz",
+        ],
+        # When a pipeline was retired (#427, `morca retire`): the scheduler
+        # starts none of its runs, and lists skip it; `morca register`
+        # clears it. Additive: an older binary neither reads nor writes it.
+        ["ALTER TABLE orca.pipelines ADD COLUMN retired timestamptz"],
         # A pipeline's priority from morca.toml (#421): the scheduler's
         # pass goes highest first. Additive: an older binary's INSERTs
         # leave it 0, and it starts pipelines by name, as it did.
@@ -887,7 +898,15 @@ def _floor_raisers() -> List[Int]:
     columns the binaries before it neither read nor write. A start they make
     leaves `request_source` and `request_runs` as an earlier start set them.
 
-    58 (`pipelines.priority`, #421) is additive: a column with a default,
+    58 (`pool_machines.image`, `draining`, #356) is additive: nullable
+    columns the binaries before it neither read nor write. A machine one of
+    them makes has no image recorded, so a newer autoscaler replaces it
+    once it's idle.
+    59 (`pipelines.retired`, #427) is additive: a nullable column the
+    binaries before it neither read nor write. While one overlaps a newer
+    one it would still start a retired pipeline's runs, but only the
+    instance that leads starts runs, and the newer one leads.
+    60 (`pipelines.priority`, #421) is additive: a column with a default,
     which the binaries before it neither read nor write; they start the
     pipelines by name, as they did, and a registration they make leaves it
     as it was.

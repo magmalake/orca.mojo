@@ -47,6 +47,7 @@ if [ -n "${MOJO_TARGET_CPU:-}" ]; then
     set -- "$@" --target-cpu "$MOJO_TARGET_CPU"
 fi
 if [ -z "$out" ] || [ "${MOJO_BUILD_CACHE:-1}" = 0 ]; then
+    [ -z "$out" ] || [ ! -L "$out" ] || rm -f "$out"
     exec mojo build "$@"
 fi
 
@@ -103,6 +104,8 @@ fi
 rm -f "$out.tmp.$$"
 
 start=$(date +%s)
+# A link at -o (scripts/pipelines.sh's) is replaced, not written through.
+[ -L "$out" ] && rm -f "$out"
 mojo build "$@"
 cp "$out" "$hit.tmp.$$"
 mv -f "$hit.tmp.$$" "$hit"

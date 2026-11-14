@@ -22,21 +22,17 @@ set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 mkdir -p build
-# shellcheck disable=SC2086
 c1=aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111
 c2=bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC -D MORCA_COMMIT=$c1 tests/outdated_pipeline.mojo -o build/longpoll-1 &
+# The pipeline at two commits (scripts/pipelines.sh --as), and morca.
+scripts/pipelines.sh --as longpoll-1 longpoll MORCA_COMMIT=$c1 &
 b1=$!
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC -D MORCA_COMMIT=$c2 tests/outdated_pipeline.mojo -o build/longpoll-2 &
-b3=$!
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 b2=$!
 wait "$b1"
 wait "$b2"
-wait "$b3"
+scripts/pipelines.sh --as longpoll-2 longpoll MORCA_COMMIT=$c2
 log=build/outdated.log
 : > "$log"
 rm -rf build/outdated-*.out build/outdated-stop

@@ -9,10 +9,8 @@ set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC tests/six_hourly.mojo -o build/six-hourly
+scripts/pipelines.sh toy
+scripts/pipelines.sh six-hourly
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 

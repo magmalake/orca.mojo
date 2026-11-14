@@ -167,6 +167,7 @@ def _start(
         sized = run_request(self.db, p, self.room.cpus)
     var tx = self.db.conn.begin()
     starting_db.lock_pipeline(tx, p.name)
+    starting_db.lock_runs(tx, p.name)
     # A run of a scheduler instance that's gone, whose heartbeat is
     # stale, is queued again whatever its trigger, as a dead worker's
     # is; one its live instance still holds isn't dead

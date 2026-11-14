@@ -51,6 +51,7 @@ from morca.civil import now
 from morca._internal.expiry import expirable, expire_argv, maintain_binary
 from morca._internal.lineage import Made, SnapshotRef, back, forward, latest
 from morca._internal.locate import locate
+from morca._internal.pause import retire
 from morca._internal.notify import (
     alert,
     configured as notify_configured,
@@ -152,6 +153,10 @@ comptime USAGE = """usage:
   morca rerun [--allow-append] <run> <step>
                                     (a new run, from that step on)
   morca pause|unpause <pipeline>     (the scheduler starts none of its runs)
+  morca retire <pipeline>            (no longer registered: none of its runs
+                                    start, and status leaves it out; its
+                                    runs and tables stay; morca register
+                                    brings it back)
   morca status [<pipeline>] [--json]
   morca config show [<pipeline>] [--json]
                 (how each runs, and where each value came from: code
@@ -519,6 +524,14 @@ def _command(args: List[String], target: String) raises -> Int:
         if o.refused:
             raise Error("morca: ", o.refused)
         print(cmd + "d", args[2])
+        return 0
+    if cmd == "retire" and len(args) == 3:
+        var db = State(url)
+        db.migrate()
+        var why = retire(db, args[2])
+        if why:
+            raise Error("morca: ", why)
+        print("retired", args[2])
         return 0
     if cmd == "tick" and len(args) == 2:
         var s = Scheduler(url)

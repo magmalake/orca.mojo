@@ -11,8 +11,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
+scripts/pipelines.sh toy
 log=build/db-blip.log
 : > "$log"
 q() { psql "$MORCA_DATABASE_URL" -Atc "$1"; }

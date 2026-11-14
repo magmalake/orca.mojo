@@ -11,13 +11,9 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
-# The pipelines and morca compile at once (scripts/mojo-build.sh).
-pids=
-for p in first second third compacts replacer; do
-    # shellcheck disable=SC2086
-    scripts/mojo-build.sh -I src $DEP_INC "tests/datasets/$p.mojo" -o "build/ds-$p" &
-    pids="$pids $!"
-done
+# The pipelines (scripts/pipelines.sh) and morca compile at once.
+scripts/pipelines.sh ds-first ds-second ds-third ds-compacts ds-replacer &
+pids=$!
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 for pid in $pids $!; do wait "$pid"; done

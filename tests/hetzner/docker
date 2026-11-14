@@ -33,7 +33,7 @@
 #
 # morca-stack check: the registrations are toy and manual1, binaries
 # /opt/morca/pipelines/<name>, paused as $FAKE/paused says; $FAKE/unregistered
-# makes there be none; an image listed in $FAKE/pre-rename has no
+# makes there be none, and $FAKE/retired's names are retired (morca retire); an image listed in $FAKE/pre-rename has no
 # /opt/morca/bin/morca (from before the rename, #384);
 # `exec scheduler test -x PATH` fails for a path listed
 # in $FAKE/no-binary; `morca start P K` queues run 70N (N counts them, in
@@ -92,6 +92,7 @@ case "$all" in
     *"coalesce(binary_path, '-')"*)
         [ ! -f "$FAKE/unregistered" ] || exit 0
         for p in manual1 toy; do
+            case "$all" in *"->>'retired' IS NULL"*) ! grep -qx "$p" "$FAKE/retired" 2> /dev/null || continue ;; esac
             if grep -qx "$p" "$FAKE/paused"; then pp=t; else pp=f; fi
             echo "$p /opt/morca/pipelines/$p $pp"
         done

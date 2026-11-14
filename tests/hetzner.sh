@@ -87,10 +87,12 @@
 #   is read after it, its relative names from its own folder; the first
 #   line names both; a missing HETZNER_LOCAL_ENV, or one that sets NAME,
 #   is refused;
+# - upgrade steps: a command several versions ask for runs once, for all
+#   their ids, and a failure fails them all (#343);
 # - morca-stack check: ok on a healthy stack, and FAIL naming what's wrong (a
 #   stopped container, an unhealthy UI, a scheduler-next left (a draining
 #   old scheduler is information, and an exited one apply removes), a pipeline
-#   whose binary isn't in the image, none registered, a canary run that
+#   whose binary isn't in the image (a retired one left out), none registered, a canary run that
 #   failed or didn't end in time); checked keeps the result, kind and tags;
 #   deploy.sh ends with it (hetzner.env's CANARY as --canary) and fails
 #   when it fails;
@@ -1204,7 +1206,11 @@ stack check > "$FAKE/out" 2>&1 || fail "check after apply removed an exited sche
 echo /opt/morca/pipelines/toy > "$FAKE/no-binary"
 why_="FAIL  pipelines: not in the scheduler's image: toy (/opt/morca/pipelines/toy)"
 check_fails
-rm "$FAKE/no-binary"
+# A retired pipeline (morca retire, #427) is left out.
+echo toy > "$FAKE/retired"
+stack check > "$FAKE/out" 2>&1 || { cat "$FAKE/out"; fail "check with the binary-less toy retired"; }
+has "check: ok    pipelines: 1 registered"
+rm "$FAKE/no-binary" "$FAKE/retired"
 touch "$FAKE/unregistered"
 why_="FAIL  pipelines: none registered"
 check_fails
@@ -1313,7 +1319,24 @@ grep -q "^upgrade \|^step " "$FAKE/docker.log" && fail "a rollback read or ran u
 # An image whose morca has no `morca upgrade`: no steps.
 touch "$FAKE/no-upgrade"
 deploy --yes 1.3.0 || fail "deploy.sh 1.3.0 of an image without morca upgrade"
-rm "$FAKE/no-upgrade" "$FAKE/steps"
+rm "$FAKE/no-upgrade"
+# A command several versions ask for (the same after trimming) runs once,
+# where it last comes, for all their ids; different ones each, in order; a
+# before one confirmed only with all its ids (#343).
+printf 'step\tr1\tafter\trun\tmorca backfill --rerun toy @all\nstep\tn1\tafter\trun\tmorca backfill toy 2026-11-01\nstep\tr2\tafter\trun\tmorca backfill --rerun toy @all \nstep\tb1\tbefore\trun\tmorca backfill toy 2026-11-02\nstep\tb2\tbefore\trun\tmorca backfill toy 2026-11-02\n' > "$FAKE/steps"
+: > "$FAKE/docker.log"
+deploy --yes --confirmed b1 1.3.1 || fail "deploy.sh 1.3.1 with shared steps"
+[ "$(grep '^step ' "$FAKE/docker.log" | sed 's/.* backfill //')" = "toy 2026-11-02
+toy 2026-11-01
+--rerun toy @all" ] || fail "the steps didn't each run once, in order: $(grep '^step ' "$FAKE/docker.log")"
+has "ran 'morca backfill toy 2026-11-02' for b1, b2"
+has "ran 'morca backfill --rerun toy @all' for r1, r2"
+# A failed shared step fails all its ids; a before one is confirmed by all of them.
+touch "$FAKE/step-fails"
+deploy --yes --confirmed b1,b2 1.3.2 && fail "a deploy whose shared step failed"
+has "\[b1,b2\] confirmed"
+has "upgrade steps failed: n1 r1 r2"
+rm "$FAKE/step-fails" "$FAKE/steps"
 # A dry run lists nothing and needs no confirmation.
 deploy --dry-run 1.4.0 || fail "deploy.sh --dry-run 1.4.0"
 has "morca-stack upgrade-steps --tag 1.4.0 --from <deployed> --when before"

@@ -68,8 +68,9 @@ struct PipelineRow(Copyable, Movable):
 def pipeline_rows(
     mut conn: Connection, name: String = ""
 ) raises -> List[PipelineRow]:
-    """Every registered pipeline, or the one named, with no next fire
-    (`morca._internal.views.pipelines` works that out)."""
+    """Every registered pipeline but the retired ones (#427), or the one
+    named, retired too, with no next fire (`morca._internal.views.pipelines`
+    works that out)."""
     var rows = conn.query(
         String(
             (
@@ -100,7 +101,8 @@ def pipeline_rows(
                 " AS sense_error_at FROM orca.pipelines p LEFT JOIN LATERAL"
                 " (SELECT id, status, partitions FROM orca.runs r WHERE"
                 " r.pipeline = p.name ORDER BY id DESC LIMIT 1) l ON true WHERE"
-                " ($1 = '' OR p.name = $1) ORDER BY p.name"
+                " ($1 = '' AND p.retired IS NULL OR p.name = $1) ORDER BY"
+                " p.name"
             ),
         ),
         Params().text(name),

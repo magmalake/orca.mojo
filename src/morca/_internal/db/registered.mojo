@@ -66,8 +66,9 @@ struct Registration(Copyable, Movable):
 def registrations(
     mut conn: Connection, only: String
 ) raises -> List[Registration]:
-    """Every pipeline registered with a binary, or the one named (empty for
-    every one): the highest `priority` first, then by name (#421)."""
+    """Every pipeline registered with a binary and not retired (#427), or
+    the one named (empty for every one): the highest `priority` first, then
+    by name (#421)."""
     var rows = conn.query(
         (
             "SELECT name, binary_path, registry_hash, coalesce(since, 0) AS"
@@ -116,8 +117,8 @@ def registrations(
             " coalesce((learned->>'memory_mb')::bigint, 0) AS"
             " learned_memory_mb, coalesce((learned->>'cpus')::bigint, 0) AS"
             " learned_cpus, priority FROM orca.pipelines WHERE binary_path IS"
-            " NOT NULL AND ($1 = '' OR name = $1) ORDER BY priority DESC,"
-            " name"
+            " NOT NULL AND retired IS NULL AND ($1 = '' OR name = $1) ORDER BY"
+            " priority DESC, name"
         ),
         Params().text(only),
     )
