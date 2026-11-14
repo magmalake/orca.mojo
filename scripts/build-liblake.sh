@@ -1,7 +1,7 @@
 #!/bin/sh
 # liblake, the lake lib-tin (#454): morca.tables' code, with iceberg,
 # parquet and objectstore, as one shared library behind a C ABI
-# (src/morca/_lake/lib.mojo is its root). morca.tables loads it at run time.
+# (src/morca/_lake/liblake.mojo is its root). morca.tables loads it at run time.
 #
 # Built with -g1, as the package builds it (pixi.toml), so a crash inside it
 # is symbolised: on Linux the .so keeps its line tables; on macOS `mojo
@@ -27,11 +27,11 @@ Darwin)
     # shellcheck disable=SC2086
     scripts/mojo-build.sh --emit shared-lib -g1 -I src $DEP_INC \
         -Xlinker -install_name -Xlinker @rpath/liblake.dylib \
-        src/morca/_lake/lib.mojo -o "$lib"
+        src/morca/_lake/liblake.mojo -o "$lib"
     ;;
 *)
     # shellcheck disable=SC2086
     scripts/mojo-build.sh --emit shared-lib -g1 -I src $DEP_INC \
-        src/morca/_lake/lib.mojo -o "$lib"
+        src/morca/_lake/liblake.mojo -o "$lib"
     ;;
 esac

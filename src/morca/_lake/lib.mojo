@@ -1,14 +1,10 @@
 """The lake lib-tin's library, liblake (#454): morca's Iceberg tables behind
-a C ABI. This file is the library's root, built by
-scripts/build-liblake.sh, roughly:
-
-    mojo build --emit shared-lib -g1 -I src $DEP_INC src/morca/_lake/lib.mojo
-
-`@export` only exports from the root module, so these are the library's
-symbols when it is built, and plain `abi("C")` functions when the wrapper
-imports this module in a build with `-D MORCA_LAKE_SOURCE=1`, which
-compiles the library into the program instead (the fallback, and what CI
-compares against).
+a C ABI. These `abi("C")` functions are its exports: `liblake.mojo`, the
+library's root, exports each under its name (scripts/build-liblake.sh), and
+the wrapper calls them directly in a build with `-D MORCA_LAKE_SOURCE=1`,
+which compiles the library into the program instead (the fallback, and
+what CI compares against). They carry no `@export` here: that would compile
+them into every program that imports the module.
 
 **Handles.** A table is the address of a heap `Table` (`lake_table_free`),
 a file writer of a heap `FileWriter`. Written files cross as bytes, iceberg's
@@ -165,12 +161,10 @@ def _scan_of(t: Table, o: _ScanOpts) raises -> TableScan:
 # ── version ─────────────────────────────────────────────────────────────────
 
 
-@export("lake_abi_version")
 def lake_abi_version() abi("C") -> UInt32:
     return ABI_VERSION
 
 
-@export("lake_free_text")
 def lake_free_text(p: Int) abi("C"):
     free_text(p)
 
@@ -178,7 +172,6 @@ def lake_free_text(p: Int) abi("C"):
 # ── tables ──────────────────────────────────────────────────────────────────
 
 
-@export("lake_load")
 def lake_load(loc: Int, n: Int, err: Int) abi("C") -> Int:
     """The table at a location, local or in object storage; 0 on error."""
     try:
@@ -193,7 +186,6 @@ def lake_load(loc: Int, n: Int, err: Int) abi("C") -> Int:
         return 0
 
 
-@export("lake_load_dataset")
 def lake_load_dataset(ds: Int, n: Int, err: Int) abi("C") -> Int:
     """`load_dataset`: no step, nothing checked; 0 on error."""
     try:
@@ -203,7 +195,6 @@ def lake_load_dataset(ds: Int, n: Int, err: Int) abi("C") -> Int:
         return 0
 
 
-@export("lake_table")
 def lake_table(host: Int, ds: Int, n: Int, err: Int) abi("C") -> Int:
     """`table`: a dataset the step declared; 0 on error."""
     try:
@@ -214,7 +205,6 @@ def lake_table(host: Int, ds: Int, n: Int, err: Int) abi("C") -> Int:
         return 0
 
 
-@export("lake_ensure_table")
 def lake_ensure_table(
     host: Int,
     ds: Int,
@@ -247,7 +237,6 @@ def lake_ensure_table(
         return 0
 
 
-@export("lake_table_free")
 def lake_table_free(h: Int) abi("C"):
     if h != 0:
         var p = _table(h)
@@ -255,12 +244,10 @@ def lake_table_free(h: Int) abi("C"):
         p.unsafe_free()
 
 
-@export("lake_table_copy")
 def lake_table_copy(h: Int) abi("C") -> Int:
     return _new_table(_table(h)[].copy())
 
 
-@export("lake_table_refresh")
 def lake_table_refresh(h: Int, err: Int) abi("C") -> Int32:
     """`Table.refresh`; 1 on error."""
     try:
@@ -271,7 +258,6 @@ def lake_table_refresh(h: Int, err: Int) abi("C") -> Int32:
         return 1
 
 
-@export("lake_table_meta")
 def lake_table_meta(h: Int, out_block: Int, err: Int) abi("C") -> Int32:
     """What `morca.tables.TableMeta` mirrors of the table's metadata, encoded
     in its order; 1 on error."""
@@ -323,7 +309,6 @@ def lake_table_meta(h: Int, out_block: Int, err: Int) abi("C") -> Int32:
 # ── reading ─────────────────────────────────────────────────────────────────
 
 
-@export("lake_pin")
 def lake_pin(host: Int, h: Int, out_id: Int, err: Int) abi("C") -> Int32:
     """What `scan(ctx, table)` reads: the step's pinned snapshot of the table,
     to `out_id`, or `SNAP_NONE` when it pinned the table empty; 1 on error."""
@@ -341,7 +326,6 @@ def lake_pin(host: Int, h: Int, out_id: Int, err: Int) abi("C") -> Int32:
         return 1
 
 
-@export("lake_scan")
 def lake_scan(
     h: Int, opts: Int, opts_n: Int, out_stream: Int, err: Int
 ) abi("C") -> Int32:
@@ -372,7 +356,6 @@ def lake_scan(
         return 1
 
 
-@export("lake_plan_files")
 def lake_plan_files(
     h: Int, opts: Int, opts_n: Int, out_block: Int, err: Int
 ) abi("C") -> Int32:
@@ -409,7 +392,6 @@ def lake_plan_files(
         return 1
 
 
-@export("lake_count")
 def lake_count(
     h: Int, opts: Int, opts_n: Int, out_n: Int, err: Int
 ) abi("C") -> Int32:
@@ -429,7 +411,6 @@ def lake_count(
         return 1
 
 
-@export("lake_empty_batch")
 def lake_empty_batch(
     schema: Int, schema_n: Int, out_array: Int, out_schema: Int, err: Int
 ) abi("C") -> Int32:
@@ -455,7 +436,6 @@ def lake_empty_batch(
         return 1
 
 
-@export("lake_concat")
 def lake_concat(
     n: Int, arrays: Int, schemas: Int, out_array: Int, out_schema: Int, err: Int
 ) abi("C") -> Int32:
@@ -495,12 +475,10 @@ def lake_concat(
 # ── writing ─────────────────────────────────────────────────────────────────
 
 
-@export("lake_find_commit")
 def lake_find_commit(host: Int, h: Int) abi("C") -> Int64:
     return tables.find_commit(Host(host), _table(h)[])
 
 
-@export("lake_append")
 def lake_append(
     host: Int, h: Int, n: Int, arrays: Int, schemas: Int, mode: Int, err: Int
 ) abi("C") -> Int64:
@@ -523,7 +501,6 @@ def lake_append(
         return -2
 
 
-@export("lake_append_files")
 def lake_append_files(
     host: Int, h: Int, files: Int, files_n: Int, mode: Int, err: Int
 ) abi("C") -> Int64:
@@ -543,7 +520,6 @@ def lake_append_files(
         return -2
 
 
-@export("lake_commit")
 def lake_commit(
     host: Int,
     h: Int,
@@ -572,7 +548,6 @@ def lake_commit(
         return -2
 
 
-@export("lake_write_files")
 def lake_write_files(
     h: Int, n: Int, arrays: Int, schemas: Int, out_block: Int, err: Int
 ) abi("C") -> Int32:
@@ -588,7 +563,6 @@ def lake_write_files(
         return 1
 
 
-@export("lake_writer_new")
 def lake_writer_new(h: Int, err: Int) abi("C") -> Int:
     """A `FileWriter` for the table; 0 on error."""
     try:
@@ -600,7 +574,6 @@ def lake_writer_new(h: Int, err: Int) abi("C") -> Int:
         return 0
 
 
-@export("lake_writer_write")
 def lake_writer_write(
     w: Int, n: Int, arrays: Int, schemas: Int, err: Int
 ) abi("C") -> Int32:
@@ -614,7 +587,6 @@ def lake_writer_write(
         return 1
 
 
-@export("lake_writer_finish")
 def lake_writer_finish(w: Int, out_block: Int) abi("C"):
     """The writer's entries, encoded, to `out_block`; frees the writer."""
     var p = _writer(w)
@@ -624,7 +596,6 @@ def lake_writer_finish(w: Int, out_block: Int) abi("C"):
     _give_files(out_block, files)
 
 
-@export("lake_writer_free")
 def lake_writer_free(w: Int) abi("C"):
     if w != 0:
         var p = _writer(w)
@@ -635,7 +606,6 @@ def lake_writer_free(w: Int) abi("C"):
 # ── written files ───────────────────────────────────────────────────────────
 
 
-@export("lake_files_info")
 def lake_files_info(
     files: Int, files_n: Int, out_block: Int, err: Int
 ) abi("C") -> Int32:
@@ -657,7 +627,6 @@ def lake_files_info(
         return 1
 
 
-@export("lake_files_concat")
 def lake_files_concat(
     a: Int, a_n: Int, b: Int, b_n: Int, out_block: Int, err: Int
 ) abi("C") -> Int32:
@@ -673,7 +642,6 @@ def lake_files_concat(
         return 1
 
 
-@export("lake_files_decode")
 def lake_files_decode(
     buf: Int, n: Int, pos: Int, out_block: Int, err: Int
 ) abi("C") -> Int32:
