@@ -218,6 +218,9 @@ daily = { cmd = "scripts/mojo-build.sh -I src $DEP_INC examples/daily.mojo -o bu
 # are packages, pinned at the revisions dista pins.
 [feature.stable.dependencies]
 mojo-compiler = "==1.2.0"
+# The full mojo package, for the llvm-symbolizer deploy/Dockerfile ships.
+# flare_mlake and json_mlake brought it in until they shipped as .mojoc.
+mojo = "==1.2.0"
 memory-region-mojo = { git = "https://github.com/magmalake/memory-region.mojo", rev = "40068c4f95ea659e9b78aa91ced45420b07e3e6e" }
 arrow-mlake-mojo = { git = "https://github.com/magmalake/arrow-mlake.mojo", rev = "178aae6e0da0dbe105f9cb02632a51cfd35b9dda" }
 # dista writes actor checkpoints through objectstore.
