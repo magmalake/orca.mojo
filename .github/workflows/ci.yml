@@ -12,8 +12,11 @@ on:
   workflow_dispatch:
 
 # A new push to a PR cancels its runs still going: only the latest commit's
-# results matter, and the old run's jobs held runners the org shares. Pushes
-# to main each run to the end (the group is the commit there).
+# results matter, and the old run's jobs held runners the org shares. A run
+# on main isn't cancelled as a whole (the group is the commit there): the
+# release workflow waits for the runtime image runtime-image-main pushes for
+# a release PR's merge commit. Only its long test jobs give way to a newer
+# push to main, each in a concurrency group of its own below.
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -56,11 +59,44 @@ jobs:
   # files), which no test, build or check reads: a prose-only PR skips every
   # other job, and `ci` still reports. Pushes, the nightly, runs by hand, and
   # a failure here all count as code.
+  #
+  # It also says where the Linux legs (test, rust-worker) run: the
+  # repository variable LINUX_RUNNER, a runner label or a JSON list of
+  # labels such as ["self-hosted","sai"], else GitHub's ubuntu-latest.
+  # NIGHTLY_LINUX_RUNNER, when set, is the nightly's and a run by hand's
+  # instead. A fork's pull request always runs on GitHub's runners: a
+  # self-hosted runner would run its code.
   changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       code: ${{ steps.files.outputs.code }}
+      linux: ${{ steps.runner.outputs.linux }}
     steps:
+      - id: runner
+        env:
+          LINUX: ${{ vars.LINUX_RUNNER }}
+          NIGHTLY: ${{ vars.NIGHTLY_LINUX_RUNNER }}
+          EVENT: ${{ github.event_name }}
+          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          choice=$LINUX
+          if [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ]; then
+            if [ -n "$NIGHTLY" ]; then choice=$NIGHTLY; fi
+          fi
+          if [ "$FORK" = true ] || [ -z "$choice" ]; then choice=ubuntu-latest; fi
+          case $choice in
+            '['*)
+              runs=$(printf '%s' "$choice" | jq -ce 'if type == "array" and length > 0 and all(.[]; type == "string") then . else error("not a list") end') || {
+                echo "::error::the runner variable isn't a JSON list of labels: $choice"
+                exit 1
+              } ;;
+            *) runs=$(jq -cn --arg r "$choice" '$r') ;;
+          esac
+          echo "linux=$runs" >> "$GITHUB_OUTPUT"
+          echo "The Linux legs run on $runs"
       - id: files
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,17 +110,21 @@ jobs:
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
-  # The Linux legs run on sai, the self-hosted runner (16 threads, a disk of
-  # its own), for this repository's own branches, main and the nightly: its
-  # builds are reused from earlier jobs there, which halves the executor's
-  # tests (#342). A pull request from a fork never runs there (the runner
-  # would run its code), so its legs run on GitHub's runners instead. No
-  # secrets, and the token can only read.
+  # The Linux legs run where `changes` says: GitHub's ubuntu-latest unless
+  # the LINUX_RUNNER variable names another (sai, the self-hosted runner,
+  # is ["self-hosted","sai"]). On GitHub's runners the environment and the
+  # build caches come from the Actions cache; on sai they stay on its disk.
+  # No secrets, and the token can only read.
   test:
-    name: ${{ matrix.env == 'default' && 'stable' || matrix.env }} / ${{ (matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 'sai' || matrix.os }} / ${{ matrix.shard }}
+    name: ${{ matrix.env == 'default' && 'stable' || matrix.env }} / ${{ matrix.os == 'ubuntu-latest' && 'linux' || matrix.os }} / ${{ matrix.shard }}
     needs: [changes, release]
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
-    runs-on: ${{ (matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted", "sai"]') || matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && fromJSON(needs.changes.outputs.linux || '"ubuntu-latest"') || matrix.os }}
+    # A newer push to main cancels this job of the older run (see the
+    # workflow's concurrency); elsewhere the group is this run's alone.
+    concurrency:
+      group: ci-${{ github.event_name == 'push' && 'main' || github.run_id }}-${{ github.job }}-${{ matrix.os }}-${{ matrix.env }}-${{ matrix.shard }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
     permissions:
       contents: read
     timeout-minutes: 45
@@ -92,7 +132,9 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
-        env: [default, nightly]
+        # The nightly Mojo leg runs on main, the nightly and by hand, not
+        # on pull requests.
+        env: ${{ fromJSON(github.event_name == 'pull_request' && '["default"]' || '["default", "nightly"]') }}
         # pixi.toml's three parts of `test`, each on a runner of its own.
         shard: [test-executor-core, test-executor-workers, test-scheduler-ui]
     defaults:
@@ -186,6 +228,11 @@ jobs:
           manifest-path: morca/pixi.toml
           # sai installs from the packages it keeps itself, with a pixi of
           # the job's own (setup-pixi won't replace one in ~/.pixi/bin).
+          #
+          # On GitHub's runners the cached environment is what makes Mojo's
+          # compile cache hit: installing takes only ~30 s, but pixi builds
+          # the git dependencies again, and their new .mojopkg files miss
+          # every entry compiled against the old ones.
           cache: ${{ runner.environment == 'github-hosted' }}
           pixi-bin-path: ${{ runner.temp }}/pixi/bin/pixi
           # Only main and the nightly write the environment cache. Every PR
@@ -195,22 +242,41 @@ jobs:
           cache-write: ${{ github.event_name != 'pull_request' }}
 
       # Mojo's compile cache (share/max/cache in the environment) starts
-      # empty in every job. Restored from main's last run, it makes builds of
-      # code main has built already 4-6x faster. It's content-addressed, so a
-      # stale entry is never used. Saved by main and the nightly, like the
-      # environment. build/.mojo-build goes with it: scripts/mojo-build.sh
-      # keys every binary on its sources and packages and copies an
-      # identical earlier build instead of compiling it (tens of MB; it
-      # prunes entries unused for two days itself). Keeping it halved
-      # test-executor on a warm runner (#342).
+      # empty on GitHub's runners. Restored, it makes builds of code built
+      # already 4-6x faster. It's content-addressed, so a stale entry is
+      # never used. build/.mojo-build goes with it: scripts/mojo-build.sh
+      # keys every binary on its sources, packages and CPU and copies an
+      # identical earlier build instead of compiling it (it prunes entries
+      # unused for two days itself). Keeping it halved test-executor on a
+      # warm runner (#342).
+      #
+      # Saved per commit, by pull requests too, and restored from the newest
+      # of this branch's, else main's (a pull request reads its base
+      # branch's caches, never another's). actions/cache doesn't save over
+      # an exact hit, which only a re-run of the same commit has.
+      # scripts/ci-cache.sh keeps only the files used in the last three
+      # days, so an entry doesn't grow with every commit (GitHub keeps 10 GB
+      # a repository).
+      #
+      # Mojo compiles for the host's CPU, and GitHub's runners differ (AMD
+      # EPYC 7763 and 9V74, Intel Xeon 6975P): built on one, nearly nothing
+      # served another. On them scripts/mojo-build.sh builds for x86-64-v3
+      # instead, which all three run.
+      - if: runner.environment == 'github-hosted' && runner.os == 'Linux'
+        run: echo "MOJO_TARGET_CPU=x86-64-v3" >> "$GITHUB_ENV"
       - if: runner.environment == 'github-hosted'
+        id: mojo-cache
         uses: actions/cache/restore@v4
         with:
           path: |
             morca/.pixi/envs/${{ matrix.env }}/share/max/cache
             morca/build/.mojo-build
-          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('morca/pixi.lock') }}-${{ github.run_id }}
-          restore-keys: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('morca/pixi.lock') }}-
+          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ env.MOJO_TARGET_CPU || 'host' }}-${{ hashFiles('morca/pixi.lock') }}-${{ github.sha }}
+          restore-keys: |
+            mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ env.MOJO_TARGET_CPU || 'host' }}-${{ hashFiles('morca/pixi.lock') }}-
+            mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ env.MOJO_TARGET_CPU || 'host' }}-
+      - if: runner.environment == 'github-hosted'
+        run: sh scripts/ci-cache.sh start .pixi/envs/${{ matrix.env }}/share/max/cache build/.mojo-build
 
       # On sai both caches stay on its disk instead, outside the checkout
       # (which starts clean), one pair per runner and environment. A runner
@@ -249,21 +315,21 @@ jobs:
             pixi run -e "$ENVNAME" "$TASK"
           fi
 
-      # Entries a week old go before saving, so the cache can't grow without
+      # On sai, entries a week old go, so the cache can't grow without
       # bound; one still in use is rebuilt once.
       - if: always() && runner.environment == 'self-hosted'
         name: Prune Mojo's compile cache
         run: flock -n -x "$CACHE_LOCK" find "$MAX_CACHE" -type f -mtime +7 -delete || echo "not pruned, a job is using the cache"
-      - if: always() && runner.environment == 'github-hosted' && github.event_name != 'pull_request'
+      - if: ${{ !cancelled() && runner.environment == 'github-hosted' && steps.mojo-cache.outputs.cache-matched-key != steps.mojo-cache.outputs.cache-primary-key }}
         name: Prune Mojo's compile cache
-        run: find .pixi/envs/${{ matrix.env }}/share/max/cache -type f -mtime +7 -delete || true
-      - if: always() && runner.environment == 'github-hosted' && github.event_name != 'pull_request'
+        run: sh scripts/ci-cache.sh end .pixi/envs/${{ matrix.env }}/share/max/cache build/.mojo-build
+      - if: ${{ !cancelled() && runner.environment == 'github-hosted' && steps.mojo-cache.outputs.cache-matched-key != steps.mojo-cache.outputs.cache-primary-key }}
         uses: actions/cache/save@v4
         with:
           path: |
             morca/.pixi/envs/${{ matrix.env }}/share/max/cache
             morca/build/.mojo-build
-          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ hashFiles('morca/pixi.lock') }}-${{ github.run_id }}
+          key: ${{ steps.mojo-cache.outputs.cache-primary-key }}
 
   # morca on a kind cluster (deploy/): the image, built with pixi inside
   # docker, the manifests, and the toy pipeline run by the scheduler's pod.
@@ -414,6 +480,7 @@ jobs:
             morca/build/.mojo-build
           key: mojo-${{ runner.os }}-fuzz-${{ hashFiles('morca/pixi.lock') }}-${{ github.run_id }}
           restore-keys: mojo-${{ runner.os }}-fuzz-${{ hashFiles('morca/pixi.lock') }}-
+      - run: sh scripts/ci-cache.sh start .pixi/envs/fuzz/share/max/cache build/.mojo-build
       - name: Fuzz
         run: FUZZ_RUNS=20000 pixi run -e fuzz fuzz
       - if: failure()
@@ -423,7 +490,7 @@ jobs:
           ls -R build/fuzz-crashes || true
       - if: always() && github.event_name != 'pull_request'
         name: Prune Mojo's compile cache
-        run: find .pixi/envs/fuzz/share/max/cache -type f -mtime +7 -delete || true
+        run: sh scripts/ci-cache.sh end .pixi/envs/fuzz/share/max/cache build/.mojo-build
       - if: always() && github.event_name != 'pull_request'
         uses: actions/cache/save@v4
         with:
@@ -490,6 +557,11 @@ jobs:
     if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
     name: data / ${{ matrix.group }}
     runs-on: ubuntu-latest
+    # A newer push to main cancels this job of the older run (see the
+    # workflow's concurrency); elsewhere the group is this run's alone.
+    concurrency:
+      group: ci-${{ github.event_name == 'push' && 'main' || github.run_id }}-${{ github.job }}-${{ matrix.group }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
     strategy:
       fail-fast: false
       matrix:
@@ -564,11 +636,12 @@ jobs:
             morca/build/.mojo-build
           key: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('morca/pixi.lock') }}-${{ github.run_id }}
           restore-keys: mojo-${{ runner.os }}-data-${{ matrix.group }}-${{ hashFiles('morca/pixi.lock') }}-
+      - run: sh scripts/ci-cache.sh start .pixi/envs/data/share/max/cache build/.mojo-build
       - name: The ${{ matrix.group }} tests
         run: pixi run -e data test-data-${{ matrix.group }}
       - if: always() && github.event_name != 'pull_request'
         name: Prune Mojo's compile cache
-        run: find .pixi/envs/data/share/max/cache -type f -mtime +7 -delete || true
+        run: sh scripts/ci-cache.sh end .pixi/envs/data/share/max/cache build/.mojo-build
       - if: always() && github.event_name != 'pull_request'
         uses: actions/cache/save@v4
         with:
@@ -582,13 +655,17 @@ jobs:
   # warehouse (tests/rust_worker.sh), then examples/hindcast over its
   # committed GRIB2 fixtures, offline (tests/hindcast.sh). In the rust
   # environment: the data environment's tins plus conda-forge's rust (cargo
-  # fetches crates; nothing fetches NOAA data). On sai for this
-  # repository's own branches, as the test legs are, and on GitHub's
-  # runners for a fork's. No secrets, and the token can only read.
+  # fetches crates; nothing fetches NOAA data). Where `changes` says, as
+  # the test legs are. No secrets, and the token can only read.
   rust-worker:
     needs: [changes, release]
     if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "sai"]') || 'ubuntu-latest' }}
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux || '"ubuntu-latest"') }}
+    # A newer push to main cancels this job of the older run (see the
+    # workflow's concurrency); elsewhere the group is this run's alone.
+    concurrency:
+      group: ci-${{ github.event_name == 'push' && 'main' || github.run_id }}-${{ github.job }}-rust
+      cancel-in-progress: ${{ github.event_name == 'push' }}
     permissions:
       contents: read
     timeout-minutes: 45
@@ -648,9 +725,10 @@ jobs:
           pixi-version: v0.78.0
           environments: rust
           manifest-path: morca/pixi.toml
-          cache: ${{ runner.environment == 'github-hosted' }}
+          # No caches: a cached environment (~1.3 GB) and Mojo's and cargo's
+          # build caches (~0.4 GB) saved a minute of this job's ~6 (#446).
+          cache: false
           pixi-bin-path: ${{ runner.temp }}/pixi/bin/pixi
-          cache-write: ${{ github.event_name != 'pull_request' }}
       - name: Rust workers
         run: pixi run -e rust test-rust-worker
       - name: Hindcast (examples/hindcast, on fixtures)
@@ -747,6 +825,33 @@ jobs:
             pixi run -e default "$t"
             echo "::endgroup::"
           done
+
+  # On main, the build caches each job saved before this run's go: a pull
+  # request restores main's newest, so the older ones only take room from
+  # the 10 GB GitHub keeps a repository. Pull requests' own entries go when
+  # GitHub evicts them (a week unused, or the oldest first when full).
+  cache-prune:
+    needs: [test, data, fuzz]
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh cache list --ref refs/heads/main --key mojo- --limit 1000 --sort created_at --order desc --json id,key \
+            --jq '.[] | "\(.id) \(.key)"' > caches
+          # A key is its job's prefix and a commit (or an older run's id).
+          seen=" "
+          while read -r id key; do
+            prefix=${key%-*}
+            case $seen in
+              *" $prefix "*) echo "delete $key"; gh cache delete "$id" || true ;;
+              *) seen="$seen$prefix "; echo "keep   $key" ;;
+            esac
+          done < caches
 
   # The one check to require: every Linux job above passed, or, for a
   # prose-only PR, was skipped. (macOS runs only on the nightly, which this
