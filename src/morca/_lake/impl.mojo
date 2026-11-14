@@ -664,8 +664,12 @@ def commit(
     var removing = _distinct(files.removed)
     var attempt = 0
     while True:
-        var result = prepare_commit(
-            table.io, table.metadata, operation, files.copy(), ctx.summary(loc)
+        var result = _prepare_commit(
+            table,
+            operation,
+            files.copy(),
+            ctx.summary(loc),
+            dataset if dataset else loc,
         )
         _check_removed(result, removing, dataset if dataset else loc)
         # Not if this process may have lost its run (`Ctx.fence`).
@@ -691,6 +695,26 @@ def commit(
         ctx.committed(loc, result.snapshot_id, dataset)
         _reload(table)
         return result.snapshot_id
+
+
+def _prepare_commit(
+    table: Table,
+    operation: String,
+    var files: FileChanges,
+    var summary: Dict[String, String],
+    name: String,
+) raises -> AppendResult:
+    """`prepare_commit`, its refusal of removals not in the current snapshot
+    (iceberg-mojo 0.12.0 checks that itself) naming the table."""
+    try:
+        return prepare_commit(
+            table.io, table.metadata, operation, files^, summary^
+        )
+    except e:
+        var why = String(e)
+        if "files to delete" in why:
+            raise Error("morca: the commit to ", name, " was refused: ", why)
+        raise e^
 
 
 def _distinct(paths: List[String]) -> Int:
@@ -963,8 +987,12 @@ def _commit_replace(
             var change = FileChanges()
             change.added_data = files.copy()
             change.removed = plan.removed.copy()
-            result = prepare_commit(
-                table.io, table.metadata, "overwrite", change^, summary^
+            result = _prepare_commit(
+                table,
+                "overwrite",
+                change^,
+                summary^,
+                dataset if dataset else loc,
             )
             _check_removed(
                 result, len(plan.removed), dataset if dataset else loc

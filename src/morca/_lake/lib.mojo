@@ -18,7 +18,7 @@ from std.memory.alloc import unsafe_alloc
 
 from arrow_mlake import AT_STRUCT, ArrayArena, ArrayData, ArrowType
 from arrow_mlake.carrow import ExportedArray, export_c
-from arrow_mlake.carrow_import import import_batch_c
+from arrow_mlake.carrow_import import ImportedArray
 from arrow_mlake.carrow_stream import export_stream_of
 from iceberg.catalog.filesystem import Table
 from iceberg.commit import FileChanges
@@ -76,47 +76,45 @@ def _fail(err: Int, e: Error):
         give_text(err, String(e))
 
 
-def _batches(
-    n: Int, arrays: Int, schemas: Int, schema: Schema
-) raises -> List[RecordBatch]:
-    """The `n` borrowed C batches, imported (copied), their columns given the
-    table's field ids by name: arrow_mlake's export doesn't write
-    `PARQUET:field_id` yet, and a writer matches columns by id.
+def _batches(n: Int, arrays: Int, schemas: Int) raises -> List[RecordBatch]:
+    """The `n` C batches the caller moved here, imported without copying
+    (arrow-mlake-mojo 0.3.0): their buffers stay where the caller's export
+    put them, and are released when the last batch over them dies. Their
+    columns carry `PARQUET:field_id`, which the writer matches by.
 
-    TODO(#454): arrow-mlake-mojo 0.3.0 (d2fc489) exports field ids and
-    imports without copying. Pin it once parquet-mojo, parquet-full-mojo,
-    iceberg-mojo and dista pin it too, then drop `_assign_ids` and the
-    copies in `morca.tables`' scans.
+    All `n` are taken before any is read, so on an error none is left for
+    the caller to release.
     """
-    var out = List[RecordBatch]()
+    var owned = List[ImportedArray]()
     for i in range(n):
-        var b = import_batch_c(get_int(arrays, 8 * i), get_int(schemas, 8 * i))
-        for r in b.roots.copy():
-            var name = b.arena.nodes[r].name.copy()
-            _assign_ids(b.arena, r, name, schema)
-        out.append(b^)
+        owned.append(
+            ImportedArray(get_int(arrays, 8 * i), get_int(schemas, 8 * i))
+        )
+    var out = List[RecordBatch]()
+    owned.reverse()
+    while len(owned) > 0:
+        out.append(owned.pop().into_batch())
     return out^
 
 
-def _assign_ids(mut arena: ArrayArena, node: Int, full: String, schema: Schema):
-    for k in range(len(schema.flat)):
-        if schema.flat[k].name == full:
-            arena.nodes[node].field_id = Int32(schema.flat[k].id)
-            break
-    var kids = arena.nodes[node].children.copy()
-    for c in kids:
-        _assign_ids(arena, c, String(full, ".", arena.nodes[c].name), schema)
-
-
-def _export_batch(b: RecordBatch) raises -> ExportedArray:
-    """A batch as one struct array, as a stream carries it."""
-    var arena = b.arena.copy()
+def _export_batch(var b: RecordBatch) raises -> ExportedArray:
+    """A batch as one struct array, as a stream carries it: its arena gets
+    the struct node, and the export copies the buffers once."""
     var st = ArrayData(ArrowType(AT_STRUCT), String())
     st.nullable = False
     st.length = b.num_rows
     st.children = b.roots.copy()
-    var root = arena.add(st^)
-    return export_c(arena, root)
+    var root = b.arena.add(st^)
+    return export_c(b.arena, root)
+
+
+def _export_all(var batches: List[RecordBatch]) raises -> List[ExportedArray]:
+    """`batches` exported in order, each given up as it goes."""
+    var out = List[ExportedArray]()
+    batches.reverse()
+    while len(batches) > 0:
+        out.append(_export_batch(batches.pop()))
+    return out^
 
 
 def _files_of(addr: Int, n: Int) raises -> List[DataFile]:
@@ -345,9 +343,7 @@ def lake_scan(
             batches = sc.to_batches_for_paths(o.paths)
         else:
             batches = sc.to_batches()
-        var exported = List[ExportedArray]()
-        for b in batches:
-            exported.append(_export_batch(b))
+        var exported = _export_all(batches^)
         if len(exported) > 0:
             put_int(out_stream, 0, export_stream_of(exported^))
         return 0
@@ -426,7 +422,7 @@ def lake_empty_batch(
                     b.arena, s.store, f.type, f.name, f.id, not f.required
                 )
             )
-        var ex = _export_batch(b)
+        var ex = _export_batch(b^)
         var pair = ex.into_raw()
         put_int(out_array, 0, pair[0])
         put_int(out_schema, 0, pair[1])
@@ -439,17 +435,16 @@ def lake_empty_batch(
 def lake_concat(
     n: Int, arrays: Int, schemas: Int, out_array: Int, out_schema: Int, err: Int
 ) abi("C") -> Int32:
-    """`n` borrowed C batches with the same columns as one, exported to the
+    """`n` C batches moved here with the same columns as one, exported to the
     out slots as `lake_empty_batch` does; 1 on error."""
     try:
         var out = RecordBatch()
-        for i in range(n):
-            var b = import_batch_c(
-                get_int(arrays, 8 * i), get_int(schemas, 8 * i)
-            )
+        var bs = _batches(n, arrays, schemas)
+        for i in range(len(bs)):
             if i == 0:
-                out = b^
+                out = bs[0].copy()
                 continue
+            ref b = bs[i]
             if b.num_columns() != out.num_columns():
                 raise Error(
                     "lake: batch ",
@@ -462,7 +457,7 @@ def lake_concat(
             for c in range(out.num_columns()):
                 concat_tree(out.arena, out.roots[c], b.arena, b.roots[c])
             out.num_rows += b.num_rows
-        var ex = _export_batch(out)
+        var ex = _export_batch(out^)
         var pair = ex.into_raw()
         put_int(out_array, 0, pair[0])
         put_int(out_schema, 0, pair[1])
@@ -483,11 +478,11 @@ def lake_append(
     host: Int, h: Int, n: Int, arrays: Int, schemas: Int, mode: Int, err: Int
 ) abi("C") -> Int64:
     """`append` (`MODE_BY_STEP`), or `replace_partitions` (`MODE_REPLACE`),
-    of `n` borrowed C batches. With no host, iceberg's own `Table.append`,
+    of `n` C batches moved here. With no host, iceberg's own `Table.append`,
     which nothing checks or records. -2 on error."""
     try:
         ref t = _table(h)[]
-        var bs = _batches(n, arrays, schemas, t.metadata.schema())
+        var bs = _batches(n, arrays, schemas)
         if host == 0:
             return t.append(bs)
         var ctx = Host(host)
@@ -551,11 +546,11 @@ def lake_commit(
 def lake_write_files(
     h: Int, n: Int, arrays: Int, schemas: Int, out_block: Int, err: Int
 ) abi("C") -> Int32:
-    """`write_files` of `n` borrowed C batches: the entries, encoded, to
+    """`write_files` of `n` C batches moved here: the entries, encoded, to
     `out_block`; 1 on error."""
     try:
         ref t = _table(h)[]
-        var bs = _batches(n, arrays, schemas, t.metadata.schema())
+        var bs = _batches(n, arrays, schemas)
         _give_files(out_block, tables.write_files(t, bs).files)
         return 0
     except e:
@@ -577,10 +572,10 @@ def lake_writer_new(h: Int, err: Int) abi("C") -> Int:
 def lake_writer_write(
     w: Int, n: Int, arrays: Int, schemas: Int, err: Int
 ) abi("C") -> Int32:
-    """`FileWriter.write` of `n` borrowed C batches; 1 on error."""
+    """`FileWriter.write` of `n` C batches moved here; 1 on error."""
     try:
         ref fw = _writer(w)[]
-        fw.write(_batches(n, arrays, schemas, fw.schema))
+        fw.write(_batches(n, arrays, schemas))
         return 0
     except e:
         _fail(err, e)
