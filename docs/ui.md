@@ -317,6 +317,61 @@ Instances (`#instances`, EC2), the Dista timeline (`#timeline`), Actions
 (`#tables`): the table snapshots each step read and wrote, linked to
 their lineage.
 
+## A dataset's data
+
+`/datasets/<name>` has two tabs: **Overview** (its place in the graph,
+the steps that write and read it, a rebuild, its snapshots) and **Data**
+(`?tab=data`), which shows the table itself, so an app's output tables
+need no UI of their own:
+
+- **Schema**: each column's field id, name, type, whether it's required
+  and its doc string, then the partition spec.
+- **Partitions**: one row per partition with its rows, data files, size
+  and the snapshot that last added a file to it, read from the manifests
+  without reading any data. A value of an identity partition links to its
+  rows.
+- **Rows**: 100 to a page, paged by `?cursor=`. Filters (`=`, `≠`, `<`,
+  `≤`, `>`, `≥`, `in`) on any column; on a partition's source column they
+  prune partitions and files before anything is read. A column picker, a
+  sort, and a snapshot picked from the list (the current one by default).
+- **Chart**: an x column and up to three numeric y columns, averaged or
+  summed for each x, drawn as a line or as bars.
+- **Download CSV**: the filtered (and sorted) rows, up to 100,000.
+
+The way there is on the pages people land on first: under each
+pipeline's name on the home page, `Data:` and the datasets it writes; on a
+pipeline's page, a line of what it writes and reads, and the Steps
+table's Reads and Writes; a Data column on `/datasets`; and on a run's
+Snapshots card, each snapshot it wrote or read, at that snapshot. A
+dataset with `public = false` has its links hidden from visitors.
+
+The same is JSON at `/datasets/<name>/data.json`, and the download is
+`/datasets/<name>/data.csv`; routes.mojo lists the parameters.
+
+The `morca` binary doesn't link iceberg, so the UI reads the table by
+running the project's `morca_maintain data` (beside `morca` in the image,
+or `MORCA_MAINTAIN`), at a lower CPU priority, and kills it 5 s past its
+time limit. The UI needs the warehouse settings the scheduler has
+(`MORCA_WAREHOUSE` and the `AWS_*` ones). A read stops at its limits and
+the page says which one stopped it:
+
+| Variable | Default | |
+|---|---|---|
+| `MORCA_DATA_PAGE_ROWS` | 100 | rows on a page, at most |
+| `MORCA_DATA_DOWNLOAD_ROWS` | 100000 | rows in a download |
+| `MORCA_DATA_SORT_ROWS` | 100000 | filtered rows a sort reads |
+| `MORCA_DATA_CHART_ROWS` | 100000 | filtered rows a chart reads |
+| `MORCA_DATA_SECONDS` | 20 | how long a read may take |
+| `MORCA_DATA_MEMORY_MB` | 256 | what a read may hold |
+
+Without a sort only the page's rows are read; a sort holds every filtered
+row it reads, so the memory limit is what bounds it. There is no SQL.
+
+Like every other page, the Data tab needs no login. A dataset whose
+`[datasets."<name>"]` table in morca.toml has `public = false`
+([morca.toml](morca-toml.md#datasets)) shows its data only to those
+logged in, once login is on; its Overview stays public.
+
 ## A snapshot's lineage
 
 `/datasets/<name>/snapshots/<id>` draws the snapshot's lineage: each box

@@ -23,6 +23,68 @@ def dataset_links(mut h: Html, names: List[String]):
         h.link(String("/datasets/", url_encode(names[i])), names[i])
 
 
+def data_href(name: String, snapshot: String = "") -> String:
+    """A dataset's Data tab (`morca._internal.ui.data`), at `snapshot` if
+    given."""
+    var href = String("/datasets/", url_encode(name), "?tab=data")
+    if snapshot:
+        href.write("&snapshot=", url_encode(snapshot))
+    return href^
+
+
+def data_link(
+    mut h: Html,
+    name: String,
+    private: List[String],
+    snapshot: String = "",
+    label: String = "data",
+):
+    """A link to a dataset's data, `label` its text; hidden from visitors
+    not logged in (`body.anon`) when the dataset isn't public."""
+    h.raw('<a class="data-link')
+    if name in private:
+        h.raw(" data-link--private")
+    h.raw('" href="')
+    h.text(data_href(name, snapshot))
+    h.raw('" title="')
+    h.text(name, "'s data")
+    if snapshot:
+        h.text(" at snapshot ", snapshot)
+    h.raw('">')
+    h.text(label)
+    h.raw("</a>")
+
+
+def datasets_with_data(mut h: Html, names: List[String], private: List[String]):
+    """Each dataset linked to its page, then to its data."""
+    for i in range(len(names)):
+        if i:
+            h.raw(", ")
+        h.link(String("/datasets/", url_encode(names[i])), names[i])
+        h.raw(" ")
+        data_link(h, names[i], private)
+
+
+def data_line(mut h: Html, names: List[String], private: List[String]):
+    """`Data: a · b`, each name a link straight to that dataset's data:
+    under a pipeline's name, the way to what it writes."""
+    if len(names) == 0:
+        return
+    var all_private = True
+    for n in names:
+        all_private = all_private and n in private
+    h.raw(
+        '<div class="data-line',
+        " data-link--private" if all_private else "",
+        '">Data: ',
+    )
+    for i in range(len(names)):
+        if i:
+            h.raw('<span class="data-line__sep"> · </span>')
+        data_link(h, names[i], private, label=names[i])
+    h.raw("</div>")
+
+
 def took_text(seconds: Int) -> String:
     """A duration as `42s`, `3m 07s` or `2h 05m`; empty for a negative one."""
     if seconds < 0:

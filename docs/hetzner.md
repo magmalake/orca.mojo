@@ -262,7 +262,8 @@ Instead of numbers that are wrong after a rescale, a pipeline can ask for a
 range with `cpus` and `memory_gb` and set `DISTA_WORKER_SLOTS = "auto"`: the
 scheduler then starts its run once the minimum fits beside the others' and
 grants it up to the maximum of what's left, so the next run after
-`rescale.sh up` is simply given more ([morca.toml](morca-toml.md#requests-and-grants)).
+`rescale.sh up` is simply given more, and dista sizes its workers to that
+grant, memory included ([morca.toml](morca-toml.md#auto-from-the-grant)).
 A pipeline's own `"auto"`, like `GHARCHIVE_PARALLEL`, needs its code to read
 the grant (`morca.auto_count`).
 

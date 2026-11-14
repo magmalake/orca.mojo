@@ -28,9 +28,11 @@ from morca._internal.ui.layout import (
     page_html,
 )
 from morca._internal.ui.machines import instances_html, machines_html
+from morca._internal.dataset_config import private_datasets
 from morca._internal.ui.parts import (
     TRIES,
     cancel_tell,
+    data_link,
     grant_facts,
     named_code_link,
     partitions_fact,
@@ -172,6 +174,7 @@ def run_html(mut db: State, v: RunView, view: String = "") raises -> String:
             "<th>Step</th><th>Partition</th><th>Read or wrote</th>",
             "<th>Table</th><th>Snapshot</th></tr></thead><tbody>",
         )
+        var private = private_datasets(db)
         for t in v.touches:
             h.raw("<tr>")
             h.cell(t.step)
@@ -197,6 +200,8 @@ def run_html(mut db: State, v: RunView, view: String = "") raises -> String:
                     ),
                     t.snapshot,
                 )
+                h.raw(" ")
+                data_link(h, t.dataset, private, snapshot=t.snapshot)
             else:
                 h.text(t.snapshot)
             h.raw("</td></tr>")

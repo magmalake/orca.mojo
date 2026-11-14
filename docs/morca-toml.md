@@ -42,6 +42,7 @@ hostname = "orca.mlake.dev"
 | `[pipelines.<name>]` | One pipeline's own values, by the name its `describe` gives. An empty table is allowed: the pipeline is then "in the file" and gets `[defaults]`. |
 | `[pools.<name>]` | A pool of workers morca grows and shrinks itself: [Worker pools](#worker-pools). |
 | `[apps.<name>]` | An app beside the UI and what it gets: [Apps](#apps). |
+| `[datasets."<name>"]` | A dataset's settings: whether visitors see its data. [Datasets](#datasets). |
 | `[stack]` | Reserved for `morca aws up`, which doesn't read it yet. It is accepted and not checked. |
 
 Any other table, and any key at the top level, is refused.
@@ -405,6 +406,20 @@ reads its own host's.
   `morca_admission_memory_pressure_held` on `/metrics`, labelled by `host`;
   and a line of `morca status`.
 
+### When a run counts as dead
+
+The scheduler takes a running run's process for dead when its heartbeat is
+too old, or, before its first beat, when the run was started too long ago.
+A dead run is queued again if its trigger retries (within `run_retries`),
+else it fails `interrupted: its process stopped`. A run on a machine or pod
+that starts slowly is taken for dead once the start grace runs out, so raise
+it there.
+
+| Variable | Default | |
+|---|---|---|
+| `MORCA_STALE_SECONDS` | 30 | how old a running run's heartbeat can be |
+| `MORCA_START_SECONDS` | the stale limit; 300 when `MORCA_RUNNER` is `kubernetes` or `ec2` | the grace before a run's first heartbeat |
+
 ### "auto" from the grant
 
 An `env` value `"auto"` is passed to the run as it is, for the pipeline to
@@ -414,12 +429,15 @@ memory_mb_each=1500)` reads a number as given, 16 when unset, and for
 pipeline keeps its per-unit estimate in its own code); without a grant,
 the host's cores.
 
-`DISTA_WORKER_SLOTS`, which dista reads as a number, is the exception: for
-`"auto"` morca gives the run the granted CPUs over its local dista workers
-(`MORCA_WORKERS`), at least 1, or `0` (dista's one per core) when the run
-has no CPU grant, as on EC2 and Kubernetes. Sizing slots by memory too, from
-each task's estimate, is dista's to do from `MORCA_GRANT_*`
-(magmalake/dista.mojo#123).
+`DISTA_WORKER_SLOTS = "auto"` is passed through the same way, and dista
+(0.5.0 on) sizes its workers from the grant: slots from `MORCA_GRANT_CPUS`
+and a memory budget from `MORCA_GRANT_MEMORY_MB`, divided among the run's
+local workers (`MORCA_WORKERS`), with the tasks in flight adapting to
+throughput and memory pressure (morca-dev/dista#123). A run cluster's
+worker on another host takes that host's whole grant; a run with no grant,
+as on EC2 and Kubernetes, gets a slot per core and no budget. A number, such
+as `"4"`, is passed as it is and works as before: that many slots, no
+budget, no adapting.
 
 ## Secrets without Secrets Manager
 
@@ -558,6 +576,26 @@ console memory_mb 1024
 console env CONSOLE_SEMANTIC=1
 console secret POSTHOG_KEY orca/posthog-key
 ```
+
+## Datasets
+
+A `[datasets."<namespace>.<table>"]` table holds a dataset's settings
+(`src/morca/_internal/dataset_config.mojo`). The name has a dot, so quote
+it, or write it two keys deep: `[datasets.hindcast.t2m]` is the same.
+
+```toml
+[datasets."hindcast.t2m"]
+public = false
+```
+
+| Key | Type | Default | What it is |
+|---|---|---|---|
+| `public` | boolean | `true` | `false`: the dataset's Data tab (`/datasets/<name>?tab=data`, `data.json` and `data.csv`; [the UI](ui.md#a-datasets-data)) is shown only to those logged in, once login is on. Its Overview, snapshots and lineage stay public. |
+
+`morca register` records the file's datasets and only those: a dataset
+the file no longer names is public again. `morca config check` checks the
+table: an unknown key, a `public` that isn't `true` or `false`, or a name
+that isn't `namespace.table` is refused.
 
 ## Worker pools
 

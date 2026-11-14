@@ -44,7 +44,6 @@ from morca._internal.resources import (
     Grant,
     Request,
     admit,
-    resolve_auto,
     run_env as grant_env,
 )
 from morca._internal.pressure import pressure_env
@@ -352,7 +351,7 @@ def _start(
                         p.binary,
                         p.workers,
                         new_code[i],
-                        resolve_auto(p.env),
+                        p.env.copy(),
                     )
                 )
                 print("started", p.name, "run", id, "on its cluster")
