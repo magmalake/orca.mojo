@@ -17,7 +17,7 @@ and is shown as such.
 """
 
 from std.os import getenv
-from std.sys import get_defined_string
+from std.sys import get_defined_int, get_defined_string
 
 
 def source_repo() -> String:
@@ -46,8 +46,16 @@ def is_hex(s: String) -> Bool:
 
 
 def source_dirty() -> Bool:
-    """Whether the tree it was built from had changes the commit lacks."""
-    comptime d = get_defined_string["MORCA_DIRTY", "0"]()
+    """Whether the tree it was built from had changes the commit lacks: the
+    define only. A build with `-D MORCA_TEST_SOURCE_ENV=1`, which only
+    scripts/pipelines.sh's test binary is, reads `MORCA_DIRTY` from the
+    environment too when the define isn't given; in any other build that
+    branch isn't compiled."""
+    comptime d = get_defined_string["MORCA_DIRTY", ""]()
+    comptime if get_defined_int["MORCA_TEST_SOURCE_ENV", 0]() == 1:
+        if d == "":
+            var e = getenv("MORCA_DIRTY")
+            return e != "0" and e != "" and e != "false"
     return d != "0" and d != "" and d != "false"
 
 

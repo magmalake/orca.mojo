@@ -12,7 +12,7 @@ A partition whose month is in MORCA_TOY_FAIL (e.g. `2024-02`) fails its
 `measure` step, to show the rest of the run carrying on; one in
 MORCA_TOY_CRASH aborts the process there, as a crash would (tests/crash.sh).
 MORCA_TOY_SLEEP makes
-every step take that many seconds, so tests/kill.sh has time to kill it.
+every step take that many seconds, so a test has time to kill it.
 """
 
 from std.os import abort, getenv

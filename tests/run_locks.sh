@@ -21,8 +21,7 @@ mkdir -p build
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 b1=$!
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy &
+scripts/pipelines.sh toy &
 b2=$!
 wait "$b1"
 wait "$b2"

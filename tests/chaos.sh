@@ -19,6 +19,11 @@
 # processes overlapping in time, the same total as an uninterrupted run, and
 # no process of the pipeline left behind. With CHAOS_CHECK=1 the binary's own
 # `check <run>` also runs (chaos_tables.mojo checks its Iceberg table).
+# Each seed's first interruption is a kill early in its run, and at least
+# one must have landed. Then, without CHAOS_CHECK, a failed run's `resume`
+# with other code is refused (exit 3, saying which code ran it) unless
+# --allow-new-code, which resumes it to the end (what tests/kill.sh checked
+# before it was folded in here, #447).
 #
 # Needs MORCA_DATABASE_URL and MORCA_PGDATA (pixi run test-chaos starts a
 # throwaway server), or MORCA_DATABASE_URL=sqlite:<path>, a file it starts
@@ -96,6 +101,7 @@ reap() {
     pids=()
 }
 
+all_kills=0
 for seed in ${CHAOS_SEEDS:-1 2 3}; do
     RANDOM=$seed
     export CHAOS_SEED=$seed
@@ -139,11 +145,24 @@ for seed in ${CHAOS_SEEDS:-1 2 3}; do
                 races=$((races + 1))
             fi
         fi
-        # Mostly kills, at 0.1-1.2 s; some server restarts; now and then the
-        # run is left alone until it ends.
+        # First a kill at 0.2-0.8 s, inside the run, so every seed has one
+        # (tests/kill.sh's check), then a server restart, so every seed has
+        # one of those too; after that mostly kills, at 0.1-1.9 s; some
+        # restarts; now and then the run is left alone until it ends.
         action=$((RANDOM % 10))
+        early=
+        if [ "$kills" = 0 ] && [ "$restarts" = 0 ]; then
+            action=0
+            early=1
+        elif [ "$restarts" = 0 ]; then
+            action=7
+        fi
         if [ "$action" -lt 7 ]; then
-            sleep "$((RANDOM % 2)).$((RANDOM % 9 + 1))"
+            if [ -n "$early" ]; then
+                sleep "0.$((RANDOM % 7 + 2))"
+            else
+                sleep "$((RANDOM % 2)).$((RANDOM % 9 + 1))"
+            fi
             if alive; then
                 kill -9 ${pids[@]+"${pids[@]}"} 2> /dev/null || true
                 kills=$((kills + 1))
@@ -189,8 +208,36 @@ for seed in ${CHAOS_SEEDS:-1 2 3}; do
         pgrep -fl "$bin" || true
         fail "processes of the pipeline were left behind"
     fi
+    all_kills=$((all_kills + kills))
     attempts=$(q "SELECT count(*) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $run")
     owners=$(q "SELECT count(DISTINCT a.host) FROM orca.attempts a JOIN orca.steps s ON s.id = a.step WHERE s.run = $run")
     echo "seed $seed: run $run done in $((SECONDS - started))s: $kills kills, $restarts $what, $resumes resumes ($races raced), $attempts attempts by $owners processes"
 done
+[ "$all_kills" -gt 0 ] || { echo "FAIL: no run was killed mid-way"; exit 1; }
+
+# Resuming with other code is refused unless asked for.
+if [ "${CHAOS_CHECK:-0}" != 1 ]; then
+    log=build/chaos-new-code.log
+    run=
+    fail() {
+        echo "FAIL (new code, run ${run:-?}): $*"
+        tail -40 "$log"
+        exit 1
+    }
+    CHAOS_FLAKY=100 CHAOS_NAP= "$bin" run --partitions "$months" > "$log" 2>&1 && fail "a run whose flaky step always fails succeeded"
+    run=$(sed -n 's/^run \([0-9][0-9]*\)$/\1/p' "$log" | head -1)
+    [ -n "$run" ] || fail "the failing run never started"
+    q "UPDATE orca.runs SET registry_hash = '0xdead' WHERE id = $run" > /dev/null
+    set +e
+    CHAOS_FLAKY=0 CHAOS_NAP= "$bin" resume "$run" > "$log" 2>&1
+    code=$?
+    set -e
+    [ "$code" -eq 3 ] || fail "resume with new code exited $code, not 3"
+    grep -q 'ran code 0xdead' "$log" || fail "resume with new code didn't say why"
+    CHAOS_FLAKY=0 CHAOS_NAP= "$bin" resume "$run" --allow-new-code > "$log" 2>&1 || fail "--allow-new-code didn't resume"
+    [ "$(q "SELECT status FROM orca.runs WHERE id = $run")" = succeeded ] || fail "not succeeded after --allow-new-code"
+    got=$(sed -n 's/.*TOTAL //p' "$log" | tail -1)
+    [ "$got" = "$want" ] || fail "total $got, not $want"
+    echo "new code: run $run's resume refused, then resumed with --allow-new-code"
+fi
 echo "ok   chaos"
