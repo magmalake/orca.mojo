@@ -10,8 +10,10 @@ map is its count, then its items). Rows are Arrow C Data Interface structs.
 **Who frees what.** The side that allocated: a buffer the library returns
 (through an out block, below) is freed with `lake_free_text`; a buffer a
 host callback returns is the host's and is valid until its next callback.
-A batch given to the library is borrowed for the call; a scan's
-`ArrowArrayStream` is the caller's to release.
+A batch given to the library is moved to it: the library imports it
+without copying and releases it, so the caller must not. A scan's
+`ArrowArrayStream` is the caller's to release; its batches import without
+copying too, and are released when the last of them dies.
 
 **Out blocks and errors.** An out block is two 8-byte heap slots, the
 address of a buffer and its length (`Slots`). A fallible export takes `err`,
@@ -28,9 +30,10 @@ library calls on the caller's thread, inside the call.
 
 from std.memory.alloc import unsafe_alloc
 
-comptime ABI_VERSION: UInt32 = 1
+comptime ABI_VERSION: UInt32 = 2
 """What `lake_abi_version()` returns. Bump it with any change to a signature,
-an encoding or the host block."""
+an encoding, the host block or who owns what. 2: batches given to the
+library are moved to it, not borrowed (arrow-mlake-mojo 0.3.0)."""
 
 # Host block slots, as byte offsets.
 comptime H_STATE = 0

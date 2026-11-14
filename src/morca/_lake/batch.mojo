@@ -100,10 +100,8 @@ struct BatchBuilder(Movable):
         _ = json^
         if rc != 0:
             raise take_error(a, err)
-        var owned = ImportedArray(arr[0], sch[0])
-        var b = owned.into_batch()
-        _ = owned^
-        self.arena = b.arena.copy()
+        var b = ImportedArray(arr[0], sch[0]).into_batch()
+        self.arena = b.arena.copy()  # its own memory: it grows
         self.roots = b.roots.copy()
         self.names = Dict[String, Int]()
         for r in self.roots:
@@ -295,10 +293,7 @@ def concat_batches(batches: List[RecordBatch]) raises -> RecordBatch:
     _ = ex^
     if rc != 0:
         raise take_error(a, err)
-    var owned = ImportedArray(arr[0], sch[0])
-    var b = owned.into_batch()
-    _ = owned^
-    return b^
+    return ImportedArray(arr[0], sch[0]).into_batch()
 
 
 def _check_rows(b: RecordBatch) raises:

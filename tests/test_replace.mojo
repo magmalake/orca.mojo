@@ -338,9 +338,10 @@ def test_a_commit_refuses_a_stale_removal() raises:
         _ = commit(late, t, "overwrite", change^)
     except e:
         refused = String(e)
+    # iceberg-mojo 0.12.0 refuses it itself; morca's own check is behind it.
     assert_true(
-        "1 of the 2 files this commit to db.s removes aren't in its current"
-        " snapshot"
+        "the commit to db.s was refused" in refused
+        and "1 of the 2 files this commit removes are not in the current snapshot"
         in refused,
         refused,
     )

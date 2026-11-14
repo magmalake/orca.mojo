@@ -536,23 +536,22 @@ def export_batch(b: RecordBatch) raises -> ExportedArray:
 
 
 struct Exported(Movable):
-    """Batches exported for one call: the arrays' and schemas' addresses as
-    two C arrays. Keep it alive until the call returns: its destructor
-    releases what the library didn't take (LIB-TINS.md §5, item 4)."""
+    """Batches exported for one call, as two C arrays of the arrays' and the
+    schemas' addresses. The call moves them to the library, which releases
+    them (ABI 2): nothing here does, and the two lists stay alive across the
+    call (LIB-TINS.md §5, item 4)."""
 
-    var batches: List[ExportedArray]
     var arrays: List[Int]
     var schemas: List[Int]
 
     def __init__(out self, batches: List[RecordBatch]) raises:
-        self.batches = List[ExportedArray]()
         self.arrays = List[Int]()
         self.schemas = List[Int]()
         for b in batches:
             var ex = export_batch(b)
-            self.arrays.append(ex.array)
-            self.schemas.append(ex.schema)
-            self.batches.append(ex^)
+            var pair = ex.into_raw()
+            self.arrays.append(pair[0])
+            self.schemas.append(pair[1])
 
     def n(self) -> Int:
         return len(self.arrays)
