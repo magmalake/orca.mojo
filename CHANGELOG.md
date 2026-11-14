@@ -2,39 +2,16 @@
 
 ## 0.28.0 - 2026-11-14
 
-- **Parquet files from Rust workers**: a worker can write Parquet itself and report each file (`ctx.add_file`), and `morca.rust_step` commits them with any streamed rows in one commit; see docs/rust-workers.md. (#PR)
-
-- **morca.toml in project images**: project.Dockerfile copies it to /opt/morca/morca.toml and sets MORCA_CONFIG. (#430)
-
-- **Backup prune is best effort**: a failed delete of an old dump warns instead of failing the backup; uploads are retried. (#431)
-
-- **Stopped scheduler ends its instance**: on SIGTERM an instance ends its row, so a check right after a deploy sees one leader. (#432)
-
-- **Pipeline priority**: `priority` in morca.toml orders starts across pipelines, and new runs go before fills (#433)
-
-- **dista 0.5.0 sizes workers from the grant**: `DISTA_WORKER_SLOTS = "auto"` now reaches dista as it is. (#PR)
-
-- **Dataset Data tab**: a dataset page shows its schema, partitions, rows and a quick chart. (#438)
-
-- **Scheduler instances show their image** on the Hetzner stack (`MORCA_IMAGE` in morca.env), and the dead-run limits are documented. (#439)
-
-- **Shared upgrade steps run once**: a command several versions in one deploy ask for runs once, for all their ids. (#441)
-
-- **`morca retire <pipeline>`**: the scheduler starts none of its runs and status and `morca-stack check` leave it out; `morca register` brings it back. (#442)
-
-- **No deadlocks on runs**: the scheduler and bulk updates lock runs in one order, and a deadlocked pass is retried. (#443)
-
-- **Pool machines follow deploys**: a machine of an old worker image takes no new runs and is replaced once idle. (#444)
-
-- **Faster CI**: the test pipelines build as one multi-call binary. (#448)
-
-- **Faster CI**: three tests folded into others, and the `-D` test pipelines into the multi-call binary. (#450)
-
-- **Runs yield the CPU to the scheduler**: a run's cgroup gets `cpu.weight` `MORCA_RUN_CPU_WEIGHT` (20) and `cpu.max` at its CPU grant, or without cgroups the run starts at `nice` `MORCA_RUN_NICE` (10), shown on Ops › Control and in `morca status`. (#451)
-
-- **json_mlake 0.5.0, flare_mlake 0.14.0 and k8s-mojo 0.1.3**: json and flare now install as precompiled .mojoc packages. (#452)
-
-- **json_mlake 0.5.1, flare_mlake 0.14.1 and k8s-mojo 0.1.4**: the packages record their real versions, and flare.mojoc is built against json_mlake 0.5.1. (#456)
+- **Pipeline priority:** `priority` in morca.toml orders starts across pipelines; new runs go before fills. (#433)
+- **Runs yield the CPU** to the scheduler, UI and Postgres: a low `cpu.weight`, or `nice` without cgroups. (#451)
+- **`morca retire <pipeline>`** stops a pipeline's runs; `morca register` brings it back. (#442)
+- **Dataset Data tab:** schema, partitions, rows and a quick chart. (#438)
+- **Parquet files from Rust workers** (`ctx.add_file`), committed with any streamed rows. (#429)
+- **Pool machines follow deploys:** old-image machines drain and are replaced. (#444)
+- **dista 0.5.0**, with `DISTA_WORKER_SLOTS = "auto"`. (#437)
+- **json and flare as precompiled .mojoc** (json_mlake 0.5.1, flare_mlake 0.14.1, k8s-mojo 0.1.4). (#452, #456)
+- **Fixes:** no deadlocks on runs (#443); shared upgrade steps run once (#441); a stopped scheduler ends its instance (#432); backup prune is best effort (#431); morca.toml in project images (#430); scheduler instances show their image (#439).
+- **Faster CI:** test pipelines as one multi-call binary, fewer overlapping tests. (#448, #450)
 
 ## 0.27.0 - 2026-11-13
 
