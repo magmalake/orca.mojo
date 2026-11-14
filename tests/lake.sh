@@ -63,7 +63,7 @@ if [ "$ext" = so ] && command -v addr2line > /dev/null 2>&1; then
     addr=$(nm "$LAKE_LIB" | awk '$3 == "lake_table" {print $1; exit}')
     [ -n "$addr" ] || fail "no lake_table in $LAKE_LIB"
     where=$(addr2line -e "$LAKE_LIB" "0x$addr")
-    echo "$where" | grep -q 'lib.mojo:[0-9]' \
+    echo "$where" | grep -q '_lake/liblake.mojo:[0-9]' \
         || fail "$LAKE_LIB's line tables don't name lake_table's line: $where"
     echo "ok   lake: liblake's line tables name its source ($where)"
 else
