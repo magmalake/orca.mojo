@@ -56,8 +56,7 @@ if ! writable; then
 fi
 
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC tests/cgroups/grower.mojo -o build/grower &
+scripts/pipelines.sh grower &
 b1=$!
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &

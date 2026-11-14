@@ -26,10 +26,7 @@ cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 one_cluster_test
 mkdir -p build
-for b in toy fanout daily; do
-    # shellcheck disable=SC2086
-    scripts/mojo-build.sh -I src $DEP_INC "examples/$b.mojo" -o "build/$b"
-done
+scripts/pipelines.sh toy fanout daily
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/placement.log

@@ -32,12 +32,9 @@ cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 one_cluster_test
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/daily.mojo -o build/daily
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/fanout.mojo -o build/fanout
+scripts/pipelines.sh daily
+scripts/pipelines.sh toy
+scripts/pipelines.sh fanout
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 

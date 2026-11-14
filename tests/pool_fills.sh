@@ -26,14 +26,12 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC tests/pool/fillwk.mojo -o build/fillwk &
+scripts/pipelines.sh fillwk &
 b1=$!
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca &
 b2=$!
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy &
+scripts/pipelines.sh toy &
 b3=$!
 wait "$b1"
 wait "$b2"

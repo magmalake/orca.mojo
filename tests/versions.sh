@@ -16,8 +16,7 @@ scripts/mojo-build.sh -I src $DEP_INC -D MORCA_SOURCE=$repo.git -D MORCA_COMMIT=
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC -D MORCA_SOURCE=git@github.com:morca-dev/morca.git -D MORCA_COMMIT=$c2 \
     -D MORCA_DIRTY=1 examples/toy.mojo -o build/toy-c2
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
+scripts/pipelines.sh toy
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 

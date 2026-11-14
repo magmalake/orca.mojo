@@ -190,9 +190,9 @@ test-db-blip = { cmd = "scripts/with-postgres.sh tests/db_blip.sh" }
 test-sense-errors = { cmd = "scripts/with-postgres.sh tests/sense_errors.sh" }
 test-defer = { cmd = "scripts/with-postgres.sh tests/defer.sh" }
 # The sampler (morca.sample): its parsing, then the binary on this machine.
-test-sample = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_sample.mojo -o build/test-sample && ./build/test-sample && tests/sample.sh" }
+test-sample = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_sample.mojo -o build/test-sample && ./build/test-sample && tests/sample.sh" }
 # A run's machines on its page (morca.metrics): peaks, warnings and charts.
-test-metrics = { cmd = "mkdir -p build && mojo build -I src $DEP_INC tests/test_metrics.mojo -o build/test-metrics && ./build/test-metrics" }
+test-metrics = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_metrics.mojo -o build/test-metrics && ./build/test-metrics" }
 # Needs docker, kind and kubectl; builds the image of deploy/Dockerfile.
 test-kind = { cmd = "tests/kind.sh" }
 # The binaries most tests share, built at once before the tests that copy

@@ -16,8 +16,7 @@ set -eu
 cd "$(dirname "$0")/.."
 . "$PWD/tests/port.sh"
 mkdir -p build
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC tests/defer_pipeline.mojo -o build/defer
+scripts/pipelines.sh defer
 # shellcheck disable=SC2086
 scripts/mojo-build.sh -I src $DEP_INC bin/scheduler.mojo -o build/morca
 log=build/defer.log
