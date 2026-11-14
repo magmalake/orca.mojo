@@ -1,1 +1,0 @@
-- **Faster CI**: three tests folded into others, and the `-D` test pipelines into the multi-call binary. (#450)

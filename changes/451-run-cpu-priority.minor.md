@@ -1,1 +1,0 @@
-- **Runs yield the CPU to the scheduler**: a run's cgroup gets `cpu.weight` `MORCA_RUN_CPU_WEIGHT` (20) and `cpu.max` at its CPU grant, or without cgroups the run starts at `nice` `MORCA_RUN_NICE` (10), shown on Ops › Control and in `morca status`. (#451)

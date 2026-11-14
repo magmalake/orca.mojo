@@ -1,1 +1,0 @@
-- **No deadlocks on runs**: the scheduler and bulk updates lock runs in one order, and a deadlocked pass is retried. (#443)

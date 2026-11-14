@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.28.0 - 2026-11-14
+
+- **Pipeline priority:** `priority` in morca.toml orders starts across pipelines; new runs go before fills. (#433)
+- **Runs yield the CPU** to the scheduler, UI and Postgres: a low `cpu.weight`, or `nice` without cgroups. (#451)
+- **`morca retire <pipeline>`** stops a pipeline's runs; `morca register` brings it back. (#442)
+- **Dataset Data tab:** schema, partitions, rows and a quick chart. (#438)
+- **Parquet files from Rust workers** (`ctx.add_file`), committed with any streamed rows. (#429)
+- **Pool machines follow deploys:** old-image machines drain and are replaced. (#444)
+- **dista 0.5.0**, with `DISTA_WORKER_SLOTS = "auto"`. (#437)
+- **json and flare as precompiled .mojoc** (json_mlake 0.5.1, flare_mlake 0.14.1, k8s-mojo 0.1.4). (#452, #456)
+- **Fixes:** no deadlocks on runs (#443); shared upgrade steps run once (#441); a stopped scheduler ends its instance (#432); backup prune is best effort (#431); morca.toml in project images (#430); scheduler instances show their image (#439).
+- **Faster CI:** test pipelines as one multi-call binary, fewer overlapping tests. (#448, #450)
+
 ## 0.27.0 - 2026-11-13
 
 - **Steps in Rust:** `morca.rust_step` and the `morca-worker` crate (docs/rust-workers.md). (#422)
