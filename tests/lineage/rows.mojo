@@ -1,13 +1,9 @@
 """What tests/lineage.sh's pipelines write: rows of (id, month)."""
 
-from iceberg.batch import ColumnBuilder, batch_of
-from iceberg.catalog.filesystem import Table
-from iceberg.schema import Schema
-from iceberg.values import Datum
 from parquet import RecordBatch
 
 from morca import Ctx
-from morca.tables import ensure_table, scan
+from morca.tables import BatchBuilder, Schema, Table, ensure_table, scan
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -17,13 +13,13 @@ comptime SCHEMA = (
 
 
 def rows(month: String, n: Int) raises -> List[RecordBatch]:
-    var schema = Schema.parse(SCHEMA)
-    var ids = ColumnBuilder.of(schema, 1)
-    var months = ColumnBuilder.of(schema, 2)
+    var b = BatchBuilder(Schema.parse(SCHEMA))
+    var ids = b.col("id")
+    var months = b.col("month")
     for i in range(n):
-        ids.add(Datum.long_(Int64(i)))
-        months.add(Datum.string_(month))
-    return [batch_of([ids^, months^])]
+        b.add_int(ids, Int64(i))
+        b.add_str(months, month)
+    return [b^.build()]
 
 
 def dataset(mut ctx: Ctx, name: String) raises -> Table:

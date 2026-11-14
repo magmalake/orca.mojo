@@ -6,11 +6,10 @@ from std.os import getenv, setenv
 from std.os.path import exists
 from std.testing import TestSuite, assert_equal, assert_true
 
-from iceberg.batch import ColumnBuilder, batch_of
-from iceberg.catalog.filesystem import FilesystemCatalog, Table
-from iceberg.schema import Schema
+from iceberg.catalog.filesystem import FilesystemCatalog
+from iceberg.catalog.filesystem import Table as IcebergTable
+from iceberg.schema import Schema as IcebergSchema
 from iceberg.util import now_ms
-from iceberg.values import Datum
 from parquet import RecordBatch
 from postgres import Connection, Params
 
@@ -28,7 +27,16 @@ from morca import (
     Step,
     parse_months,
 )
-from morca.tables import append, dataset_of, ensure_table, scan, table
+from morca.tables import (
+    BatchBuilder,
+    Schema,
+    Table,
+    append,
+    dataset_of,
+    ensure_table,
+    scan,
+    table,
+)
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -38,13 +46,13 @@ comptime SCHEMA = (
 
 
 def _rows(month: String, n: Int) raises -> List[RecordBatch]:
-    var schema = Schema.parse(SCHEMA)
-    var ids = ColumnBuilder.of(schema, 1)
-    var months = ColumnBuilder.of(schema, 2)
+    var b = BatchBuilder(Schema.parse(SCHEMA))
+    var ids = b.col("id")
+    var months = b.col("month")
     for i in range(n):
-        ids.add(Datum.long_(Int64(i)))
-        months.add(Datum.string_(month))
-    return [batch_of([ids^, months^])]
+        b.add_int(ids, Int64(i))
+        b.add_str(months, month)
+    return [b^.build()]
 
 
 def _count(t: Table) raises -> Int:
@@ -202,8 +210,8 @@ def _warehouse() raises -> FilesystemCatalog:
     _ = setenv("MORCA_TEST_WH", root)
     _ = setenv("MORCA_WAREHOUSE", root)
     var cat = FilesystemCatalog.local(root)
-    _ = cat.create_table("db", "out", Schema.parse(SCHEMA))
-    _ = cat.create_table("db", "src", Schema.parse(SCHEMA))
+    _ = cat.create_table("db", "out", IcebergSchema.parse(SCHEMA))
+    _ = cat.create_table("db", "src", IcebergSchema.parse(SCHEMA))
     return cat^
 
 
@@ -413,7 +421,8 @@ def test_ensure_table_adds_the_columns_the_table_lacks() raises:
     var res = _evolve_with(WIDER)
     assert_true(res.succeeded(), _error(res))
     assert_equal(res.output[Int]("evolve", "2024-01"), 2)
-    var t = _table("out")
+    # Read back with iceberg itself, not through the library.
+    var t = IcebergTable.load_local(String(getenv("MORCA_TEST_WH"), "/db/out"))
     var s = t.metadata.schema()
     assert_equal(s.schema_id, 1)
     assert_equal(s.find_by_name("note").id, 3)

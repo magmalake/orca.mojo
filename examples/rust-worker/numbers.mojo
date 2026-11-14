@@ -29,8 +29,6 @@ from std.os import abort, getenv
 from std.os.path import exists
 from std.sys import argv
 
-from iceberg.schema import Schema
-from iceberg.transforms import PartitionField, PartitionSpec, parse_transform
 from morca import (
     Ctx,
     Mapped,
@@ -42,7 +40,14 @@ from morca import (
     outdated,
 )
 from morca.rust_step import rust_step
-from morca.tables import ensure_table, load_dataset
+from morca.tables import (
+    PartitionField,
+    PartitionSpec,
+    Schema,
+    ensure_table,
+    load_dataset,
+    parse_transform,
+)
 
 from numbers_schema import NUMBERS_SCHEMA
 

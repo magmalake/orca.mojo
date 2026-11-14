@@ -18,15 +18,13 @@ environment, from the repository's root.
 from std.os import getenv, setenv
 from std.testing import assert_equal
 
-from iceberg.batch import ColumnBuilder, batch_of
-from iceberg.catalog.filesystem import FilesystemCatalog, Table
-from iceberg.schema import Schema
+from iceberg.catalog.filesystem import FilesystemCatalog
+from iceberg.schema import Schema as IcebergSchema
 from iceberg.util import now_ms
-from iceberg.values import Datum
 from parquet import RecordBatch
 
 from morca import Ctx
-from morca.tables import append
+from morca.tables import BatchBuilder, Schema, Table, append
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -39,12 +37,12 @@ comptime OTHER = "2024-02"
 
 
 def _rows(month: String, id: Int) raises -> List[RecordBatch]:
-    var schema = Schema.parse(SCHEMA)
-    var ids = ColumnBuilder.of(schema, 1)
-    var months = ColumnBuilder.of(schema, 2)
-    ids.add(Datum.long_(Int64(id)))
-    months.add(Datum.string_(month))
-    return [batch_of([ids^, months^])]
+    var b = BatchBuilder(Schema.parse(SCHEMA))
+    var ids = b.col("id")
+    var months = b.col("month")
+    b.add_int(ids, Int64(id))
+    b.add_str(months, month)
+    return [b^.build()]
 
 
 def _ctx(partition: String, attempt: Int, dataset: String) -> Ctx:
@@ -84,8 +82,8 @@ def _replay(name: String, events: String) raises -> String:
     """Replays `events` over a new table `db.<name>` and renders it."""
     var root = String(getenv("MORCA_WAREHOUSE"))
     var cat = FilesystemCatalog.local(root)
-    _ = cat.create_table("db", name, Schema.parse(SCHEMA))
-    var t = cat.load_table("db", name)
+    _ = cat.create_table("db", name, IcebergSchema.parse(SCHEMA))
+    var t = Table.load_local(String(root, "/db/", name))
     var dataset = String("db.", name)
     var attempt = 1
     var me = _ctx(MINE, attempt, dataset)

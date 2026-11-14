@@ -43,11 +43,6 @@ later.
 from std.os import getenv, setenv
 
 from dista import Seq
-from iceberg.catalog.filesystem import Table
-from iceberg.commit import OP_REPLACE, FileChanges
-from iceberg.nested import concat_tree
-from iceberg.scan import FileScanTask, TableScan
-from iceberg.write import WriteOptions, write_data_files
 from parquet import RecordBatch
 
 from morca import (
@@ -61,7 +56,19 @@ from morca import (
     Step,
     morca_main,
 )
-from morca.tables import append, commit, ensure_table, find_commit, scan
+from morca.tables import (
+    FileChanges,
+    FileScanTask,
+    Table,
+    TableScan,
+    append,
+    commit,
+    concat_batches,
+    ensure_table,
+    find_commit,
+    scan,
+    write_files,
+)
 from tlc import TLC_URL, download, read_month, schema, spec
 
 
@@ -130,25 +137,6 @@ def _partition(path: String) -> String:
     return String(path[byte=0:at]) if at >= 0 else String()
 
 
-def _read_one(s: TableScan, tasks: List[FileScanTask]) raises -> RecordBatch:
-    """The rows of `tasks`' files as one batch, read a file at a time so only
-    the batch and one file's rows are held at once."""
-    var out = RecordBatch()
-    var first = True
-    for t in tasks:
-        var batches = s.to_batches_for_tasks([t.copy()])
-        while len(batches) > 0:
-            var b = batches.pop(0)
-            if first:
-                out = b^
-                first = False
-                continue
-            for c in range(out.num_columns()):
-                concat_tree(out.arena, out.roots[c], b.arena, b.roots[c])
-            out.num_rows += b.num_rows
-    return out^
-
-
 def _files(s: TableScan) raises -> Tuple[Int, Int]:
     """How many data files the scan's snapshot has, and their rows."""
     var files = 0
@@ -194,18 +182,9 @@ def compact(mut ctx: Ctx, loads: Seq[Loaded]) raises -> Compacted:
         for g in range(len(groups)):
             if len(groups[g]) < 2:
                 continue
-            var one = _read_one(s, groups[g])
-            changes.added_data.extend(
-                write_data_files(
-                    table.io,
-                    m.location,
-                    [one^],
-                    m.schema(),
-                    m.spec(),
-                    m.default_sort_order_id,
-                    WriteOptions.from_properties(m.properties),
-                )
-            )
+            # The group's rows as one batch, so one file.
+            var one = concat_batches(s.to_batches_for_tasks(groups[g]))
+            changes.added_data.add(write_files(table, [one^]))
             for t in groups[g]:
                 changes.removed.append(t.data_file.file_path)
             ctx.log(String(parts[g], ": ", len(groups[g]), " files to 1"))
@@ -213,7 +192,7 @@ def compact(mut ctx: Ctx, loads: Seq[Loaded]) raises -> Compacted:
             var n = _files(s)
             ctx.log(String("nothing to compact: ", n[1], " rows"))
             return Compacted(m.current_snapshot_id, n[1], before, before)
-        id = commit(ctx, table, OP_REPLACE, changes^)
+        id = commit(ctx, table, "replace", changes^)
     var n = _files(table.scan().use_snapshot(id))
     var loaded = 0
     for i in range(len(loads)):

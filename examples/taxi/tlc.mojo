@@ -25,13 +25,13 @@ to 2098; `read_month` drops them, as taxibench does, and counts them.
 
 from iceberg.io import FileIO, join_path
 from iceberg.nested import filter_tree
-from iceberg.schema import Schema
-from iceberg.transforms import PartitionField, PartitionSpec, parse_transform
+from iceberg.schema import Schema as IcebergSchema
 from objectstore.http import HttpClient
 from parquet import ParquetReader, RecordBatch
 from parquet_full import AllCodecs
 
 from morca import Month
+from morca.tables import PartitionField, PartitionSpec, Schema, parse_transform
 
 comptime TLC_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data"
 """Where the TLC publishes the files, one per month."""
@@ -156,7 +156,7 @@ def _per_second(unit: Int) raises -> Int64:
     raise Error("taxi: unknown time unit ", unit)
 
 
-def _to_table_names(mut b: RecordBatch, s: Schema) raises:
+def _to_table_names(mut b: RecordBatch, s: IcebergSchema) raises:
     """Renames a column whose name matches a table column's but for case,
     `Airport_fee` to `airport_fee`."""
     var cols = s.columns()
@@ -219,7 +219,7 @@ struct MonthRows(Movable):
 def read_month(path: String, m: Month) raises -> MonthRows:
     """The file's rows picked up in month `m`, under the table's column
     names, in the reader's batches."""
-    var s = schema()
+    var s = IcebergSchema.parse(SCHEMA)
     var r = ParquetReader[AllCodecs].open(path)
     var out = MonthRows(List[RecordBatch](), 0, 0)
     while r.has_next():

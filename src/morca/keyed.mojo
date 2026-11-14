@@ -19,15 +19,15 @@ name the dataset doesn't have, so a typo doesn't make a run of nothing.
 links no iceberg.
 
 A keyed pipeline has no calendar, so `schedule=` and `fills=` don't compile
-with one (`Pipeline.check`). This module imports iceberg, so only binaries
-with a keyed pipeline build it.
+with one (`Pipeline.check`). It reads the keys through `morca.tables`
+(liblake), so only binaries with a keyed pipeline load the library.
 """
 
 from std.sys import stderr
 
 from morca.name import Name, parse_names, sort_texts
 from morca.partitions import Partitions
-from morca.tables import load_dataset
+from morca.tables import load_dataset, strings_of
 
 
 def _read_file(path: String) raises -> String:
@@ -117,30 +117,29 @@ struct Keyed[dataset_: StaticString, column_: StaticString](Partitions):
         if not t.metadata.has_current_snapshot:
             return (Int64(-1), List[String]())
         var id = t.metadata.current_snapshot_id
-        var res = (
-            t.scan().use_snapshot(id).select([String(Self.column_)]).to_table()
-        )
-        if res.num_columns() != 1:
-            raise Error(Self.dataset_, " has no column ", Self.column_)
+        var values = List[Optional[String]]()
+        var scan = t.scan().use_snapshot(id).select([String(Self.column_)])
+        for b in scan.to_batches():
+            values.extend(strings_of(b, String(Self.column_)))
         var seen = Dict[String, Bool]()
         var out = List[String]()
         var bad = List[String]()
         var n_bad = 0
-        for row in range(res.num_rows()):
-            var d = res.value(row, 0)
-            if not d.valid or d.s in seen:
+        for v in values:
+            if not v or v.value() in seen:
                 continue
-            seen[d.s] = True
+            var s = v.value()
+            seen[s] = True
             # Each must be a name, or it can't be a partition: one that
             # isn't is left out, and said, rather than stopping the rest.
             try:
-                _ = Name.parse(d.s)
+                _ = Name.parse(s)
             except e:
                 n_bad += 1
                 if len(bad) < 5:
                     bad.append(String(e))
                 continue
-            out.append(d.s)
+            out.append(s)
         if n_bad > 0:
             var why = String()
             for i in range(len(bad)):

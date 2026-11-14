@@ -19,13 +19,11 @@ from std.time import sleep
 
 from dista import Seq
 from dista.task import fnv1a64
-from iceberg.batch import ColumnBuilder, batch_of
-from iceberg.catalog.filesystem import FilesystemCatalog, Table
-from iceberg.schema import Schema
-from iceberg.values import Datum
+from iceberg.catalog.filesystem import FilesystemCatalog
+from iceberg.schema import Schema as IcebergSchema
 from parquet import RecordBatch
 from morca import Ctx, Gather, Mapped, Month, Pipeline, Step, morca_main
-from morca.tables import append, scan
+from morca.tables import BatchBuilder, Schema, Table, append, scan
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -45,13 +43,13 @@ def _out() raises -> Table:
 
 
 def _rows(month: String) raises -> List[RecordBatch]:
-    var schema = Schema.parse(SCHEMA)
-    var ids = ColumnBuilder.of(schema, 1)
-    var months = ColumnBuilder.of(schema, 2)
+    var b = BatchBuilder(Schema.parse(SCHEMA))
+    var ids = b.col("id")
+    var months = b.col("month")
     for i in range(3):
-        ids.add(Datum.long_(Int64(i)))
-        months.add(Datum.string_(month))
-    return [batch_of([ids^, months^])]
+        b.add_int(ids, Int64(i))
+        b.add_str(months, month)
+    return [b^.build()]
 
 
 def load(mut ctx: Ctx, m: Month) raises -> Int64:
@@ -107,7 +105,7 @@ def main() raises:
         if not root:
             raise Error("init needs CHAOS_WH")
         _ = FilesystemCatalog.local(root).create_table(
-            "db", "out", Schema.parse(SCHEMA)
+            "db", "out", IcebergSchema.parse(SCHEMA)
         )
         return
     if len(args) == 3 and String(args[1]) == "check":

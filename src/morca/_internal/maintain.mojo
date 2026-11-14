@@ -44,7 +44,7 @@ from iceberg.maintain import (
 )
 
 from morca._internal.dataread import data_main
-from morca.tables import load_dataset, table_defaults
+from morca._lake.impl import load_dataset, table_defaults
 
 
 comptime USAGE = """usage:

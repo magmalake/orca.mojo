@@ -37,8 +37,6 @@ from std.os import getenv
 from std.sys import argv
 
 from dista import Seq
-from iceberg.schema import Schema
-from iceberg.transforms import PartitionField, PartitionSpec, parse_transform
 from morca import (
     Cron,
     Ctx,
@@ -53,7 +51,17 @@ from morca import (
 )
 from morca.civil import days_from_civil, now
 from morca.rust_step import rust_step
-from morca.tables import append, ensure_table, load_dataset, scan, table
+from morca.tables import (
+    PartitionField,
+    PartitionSpec,
+    Schema,
+    append,
+    ensure_table,
+    load_dataset,
+    parse_transform,
+    scan,
+    table,
+)
 
 from skill import (
     CITIES_SCHEMA,
