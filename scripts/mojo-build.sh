@@ -16,6 +16,9 @@
 # - the CPU: mojo compiles for the host's, so a binary built on one runner
 #   can die with "Illegal instruction" on another (GitHub's runners differ).
 #   On Linux its model name and feature flags, on macOS its brand string.
+#   MOJO_TARGET_CPU (e.g. x86-64-v3) builds for that CPU instead, with
+#   --target-cpu, and the key names it rather than the host's: CI sets it
+#   so a binary built on one of GitHub's runners serves the others.
 #
 # A build that fails keeps nothing. Entries unused for two days are removed;
 # rm -rf build/.mojo-build clears them all. MOJO_BUILD_CACHE=0 always builds.
@@ -40,6 +43,9 @@ for a in "$@"; do
     esac
     prev=$a
 done
+if [ -n "${MOJO_TARGET_CPU:-}" ]; then
+    set -- "$@" --target-cpu "$MOJO_TARGET_CPU"
+fi
 if [ -z "$out" ] || [ "${MOJO_BUILD_CACHE:-1}" = 0 ]; then
     [ -z "$out" ] || [ ! -L "$out" ] || rm -f "$out"
     exec mojo build "$@"
@@ -71,7 +77,9 @@ key=$({
     done
     printf '%s\n' "${CONDA_PREFIX:-}"
     uname -m
-    if [ -r /proc/cpuinfo ]; then
+    if [ -n "${MOJO_TARGET_CPU:-}" ]; then
+        :
+    elif [ -r /proc/cpuinfo ]; then
         grep -m1 '^model name' /proc/cpuinfo || true
         grep -m1 -E '^(flags|Features)' /proc/cpuinfo || true
     else
