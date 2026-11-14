@@ -180,8 +180,9 @@ test-priority = { cmd = "scripts/with-postgres.sh tests/priority.sh" }
 test-pressure = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_pressure.mojo -o build/test-pressure && ./build/test-pressure && scripts/with-postgres.sh tests/pressure.sh" }
 test-usage = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_usage.mojo -o build/test-usage && ./build/test-usage && scripts/with-postgres.sh tests/usage.sh" }
 # Containment (morca.cgroup): the arithmetic, then on Linux a run killed for
-# its memory and retried bigger (skipped, saying why, without cgroups).
-test-cgroups = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_cgroup.mojo -o build/test-cgroup && ./build/test-cgroup && scripts/with-postgres.sh tests/cgroups.sh" }
+# its memory and retried bigger (skipped, saying why, without cgroups); then a
+# run at a lower nice with MORCA_CGROUPS=0 (tests/run_nice.sh, #229).
+test-cgroups = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_cgroup.mojo -o build/test-cgroup && ./build/test-cgroup && scripts/with-postgres.sh tests/cgroups.sh && scripts/with-postgres.sh tests/run_nice.sh" }
 test-aws = { cmd = "tests/aws.sh && tests/replace_control.sh" }
 test-lost-workers = { cmd = "scripts/with-postgres.sh tests/lost_workers.sh" }
 test-datasets = { cmd = "scripts/with-postgres.sh tests/datasets.sh" }

@@ -77,6 +77,7 @@ from morca._internal.cgroup import (
 )
 from morca._internal.cgroup import put as put_cgroup
 from morca._internal.cgroup import start_limit_mb
+from morca._internal.run_cpu import CpuKnobs
 from morca._internal.control import fetch_secret
 from morca._internal.http_store import Body, StateApi
 from morca._internal.logs import run_dir
@@ -344,13 +345,20 @@ struct Worker(Movable):
             if cg.limit_mb > 0:
                 try:
                     var made = self.cgroups.make(
-                        spec.run, spec.start, cg.limit_mb
+                        spec.run, spec.start, cg.limit_mb, spec.grant.cpus
                     )
                     cg.path = made[0]
                     cg.kill_mb = made[1]
                 except e:
                     print("morca worker: run", spec.run, "without a cgroup:", e)
-        var pid = spawn(argv, stage, env=env, group=True, cgroup=cg.path)
+        var pid = spawn(
+            argv,
+            stage,
+            env=env,
+            nice=self.cgroups.nice_for(cg.path),
+            group=True,
+            cgroup=cg.path,
+        )
         if cg.path:
             self.contained[pid] = cg^
         self.meters[pid] = Meter()
@@ -590,8 +598,15 @@ struct Worker(Movable):
                 flush=True,
             )
         self.room_mb = room.memory_mb
-        self.cgroups = Cgroups.setup(MemoryKnobs.from_env())
+        self.cgroups = Cgroups.setup(
+            MemoryKnobs.from_env(), CpuKnobs.from_env()
+        )
         print("morca worker: run cgroups", self.cgroups.why, flush=True)
+        print(
+            "morca worker: runs' CPU priority:",
+            self.cgroups.cpu_text(),
+            flush=True,
+        )
         self.unswept = self.cgroups.stale()
         var said = String()
         while True:

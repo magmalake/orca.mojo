@@ -447,7 +447,13 @@ def _start(
                 with open(stage, "a") as f:
                     f.write("--- start ", starts[i], "\n")
         var cg = self._contain(p, Int(id), starts[i], grant, False)
-        var pid = spawn(argv, stage, env=env, cgroup=cg.path)
+        var pid = spawn(
+            argv,
+            stage,
+            env=env,
+            nice=self.cgroups.nice_for(cg.path),
+            cgroup=cg.path,
+        )
         if cg.path:
             self._contained[pid] = cg^
         self._meters[pid] = Meter()
