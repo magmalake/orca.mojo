@@ -1,10 +1,9 @@
 """Writes three rows a month to lake.events, keeping two snapshots of history
 (tests/expire.sh)."""
 
-from iceberg.schema import Schema
 
 from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
-from morca.tables import append, ensure_table
+from morca.tables import Schema, append, ensure_table
 from rows import SCHEMA, rows
 
 

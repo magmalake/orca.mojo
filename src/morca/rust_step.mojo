@@ -3,10 +3,9 @@ proxy pipeline, whose record batches morca writes into the step's table,
 and whose own Parquet files it commits with them.
 
 ```mojo
-from iceberg.schema import Schema
 from morca import Ctx, Mapped, Month, Pipeline, Step, morca_main
 from morca.rust_step import rust_step
-from morca.tables import ensure_table
+from morca.tables import Schema, ensure_table
 
 comptime NUMBERS = "demo.numbers"
 comptime SCHEMA = "schemas/numbers.json"  # read by the worker too
@@ -77,10 +76,13 @@ directory goes with the call, whatever's in it.
 
 Not yet: a step's input stream (the worker gets none), several outputs,
 and Rust steps as dista tasks (`Mapped` over tasks); see
-docs/rust-workers.md. This module imports iceberg, like `morca.tables`.
+docs/rust-workers.md. This module compiles iceberg into the program: it
+writes the stream itself, rather than through liblake as `morca.tables`
+does.
 """
 
-from iceberg.catalog.filesystem import Table
+from iceberg.catalog.filesystem import Table as IcebergTable
+from iceberg.io import FileIO
 from iceberg.nested import ColumnTree, concat_tree, subtree_copy
 from iceberg.write import align_batch
 from arrow_mlake.carrow import CArrowSchema
@@ -91,13 +93,11 @@ from morca._internal.handover import outdated
 from morca._internal.rust_ffi import StopFn, WorkerCall, WorkerLib
 from morca._internal.rust_files import WorkerFiles
 from morca._internal.rust_schema import check_schema, prim_fits
-from morca.tables import (
-    DataFiles,
-    FileWriter,
-    append_files,
-    dataset_of,
-    find_commit,
-)
+from morca._lake.client import HostBlock
+from morca._lake.host import Host
+from morca._lake.impl import DataFiles, FileWriter, append_files, find_commit
+from morca._lake.names import dataset_of
+from morca.tables import Table
 
 comptime DEFAULT_FLUSH_BYTES = 64 * 1024 * 1024
 """About how much of the worker's output `rust_step` gathers into a file."""
@@ -134,9 +134,43 @@ def rust_step(
 ) raises -> RustRun:
     """Runs the Rust worker in `library` and commits what it streams to
     `table` in one snapshot (the module's doc says how)."""
+    var location = table.metadata.location
+    var ice = _load(location)
+    var host = HostBlock(ctx)
+    var run = _rust_step(
+        Host(host.addr),
+        ctx,
+        library,
+        ice,
+        params,
+        step_version,
+        stop_when,
+        flush_bytes,
+    )
+    _ = host^
     table.refresh()
-    if find_commit(ctx, table) >= 0:
-        var id = append_files(ctx, table, DataFiles())
+    return run^
+
+
+def _load(location: String) raises -> IcebergTable:
+    if "://" in location and not location.startswith("file://"):
+        return IcebergTable.load(location, FileIO())
+    return IcebergTable.load_local(String(location.removeprefix("file://")))
+
+
+def _rust_step(
+    var hctx: Host,
+    mut ctx: Ctx,
+    library: String,
+    mut table: IcebergTable,
+    params: String,
+    step_version: Int,
+    stop_when: StopFn,
+    flush_bytes: Int,
+) raises -> RustRun:
+    table.refresh()
+    if find_commit(hctx, table) >= 0:
+        var id = append_files(hctx, table, DataFiles())
         ctx.log(
             "the worker's output is committed already; it doesn't run again"
         )
@@ -234,7 +268,7 @@ def rust_step(
     files.add(DataFiles(own.files.copy()))
     rows += own.rows
     var n_files = len(files)
-    var id = append_files(ctx, table, files)
+    var id = append_files(hctx, table, files)
     ctx.log(
         String(
             "the Rust worker wrote ",

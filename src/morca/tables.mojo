@@ -4,7 +4,7 @@
 from morca.tables import append, scan
 
 def load(mut ctx: Ctx, raw: RawFile) raises -> Loaded:
-    var src = Table.load_local(raw.table)
+    var src = Table.load_local(raw.table)  # morca.tables.Table
     var batches = scan(ctx, src).to_batches()
     var dst = Table.load_local(OUT)
     var id = append(ctx, dst, transform(batches))
@@ -98,254 +98,328 @@ comptime LoadDay = Step[
 on every try: a removal planned before another writer replaced them
 would otherwise keep both writers' rows.
 
-This module imports iceberg, so only pipelines that use tables build it;
-`morca` itself doesn't.
+**liblake (#454).** This module is the thin side of the lake lib-tin: the
+work is done by `liblake`, a shared library the morca package ships in
+`lib/` (the image in `/opt/morca/lib`), with iceberg, parquet and
+objectstore compiled into it, so a pipeline's own build compiles none of
+them. It's loaded on first use (`morca._lake.client` says where it's
+found; `LAKE_LIB` names it). Rows cross as Arrow C Data, so batches are
+`parquet.RecordBatch` (`arrow_mlake`'s) as before. The types here are the
+library's handles and mirrors of iceberg's, under iceberg's names:
+
+- **`Table`** (`table`, `ensure_table`, `load_dataset`, `Table.load_local`)
+  holds the library's table; **`Table.metadata`** is a copy of what
+  pipelines read of iceberg's (`location`, `snapshots` and their
+  `summary`, `current_snapshot_id`, `properties`, `schema()`, ...),
+  taken when the table loads, refreshes or commits.
+- **`TableScan`** has `select`, `filter`, `use_snapshot`, `to_batches`,
+  `plan_files`, `to_batches_for_tasks` and `count`.
+- **`Schema`** and **`PartitionSpec`** are Iceberg JSON (`Schema.parse`).
+- **`BatchBuilder`** builds a batch of a schema's columns a value at a
+  time, in place of `iceberg.batch`'s builders.
+- **`DataFiles`** carries written entries in iceberg's own encoding, so a
+  dista task's bytes are what they were.
+
+`-D MORCA_LAKE_SOURCE=1` builds the library's code into the program
+instead, through the same functions: the old way, to compare against and
+to fall back on.
 """
-
-from std.os import getenv
-from std.random import random_float64
-from std.time import sleep
-
+from arrow_mlake.carrow_import import ImportedStream
 from dista import Codec
-from iceberg.append import AppendResult, prepare_append
-from iceberg.catalog.filesystem import FilesystemCatalog, Table
-from iceberg.commit import FileChanges, prepare_commit
-from iceberg.io import FileIO
-from iceberg.expressions import FieldSummary
-from iceberg.manifest import (
-    CONTENT_DATA,
-    DataFile,
-    ManifestFile,
-    decode_data_files,
-    encode_data_files,
-    read_manifest_io,
-    read_manifest_list_io,
-)
-from iceberg.metadata import TableMetadata
-from iceberg.scan import TableScan
-from iceberg.schema import Schema
-from iceberg.transforms import PartitionSpec
-from iceberg.update_schema import (
-    SchemaCommit,
-    UpdateSchema,
-    prepare_schema_update,
-)
-from iceberg.util import now_ms
-from iceberg.values import Datum, compare, datum_from_bytes_prim
-from iceberg.write import WriteOptions, _partition_key, write_data_files
 from parquet import RecordBatch
 
 from morca.ctx import Ctx
-from morca._internal.proc import absolute
+from morca._lake.abi import (
+    MODE_APPEND,
+    MODE_BY_STEP,
+    MODE_REPLACE,
+    SNAP_CURRENT,
+    SNAP_NONE,
+    Dec,
+    Enc,
+    Slots,
+)
+from morca._lake.client import (
+    Api,
+    Exported,
+    HostBlock,
+    api,
+    take_bytes,
+    take_error,
+)
+from morca._lake.batch import (
+    BatchBuilder,
+    column_of,
+    concat_batches,
+    ints_of,
+    strings_of,
+)
+from morca._lake.schema import (
+    PartitionField,
+    PartitionSpec,
+    Schema,
+    parse_transform,
+)
+from morca._lake.names import (
+    DAY_MS,
+    DEFAULT_HISTORY_DAYS,
+    dataset_of,
+    table_defaults,
+    warehouse,
+)
 
-comptime _COMMIT_RETRIES = 8
-"""How many times to reload and retry when another writer got there first."""
-
-
-def _backoff(attempt: Int):
-    """Waits before retry `attempt` (1, 2, ...) of a commit that clashed:
-    10 ms doubling with each, to 640 ms, times a random half to one and a
-    half. Two writers that both wrote the same metadata version both back
-    out (iceberg's filesystem catalog deletes both files), so retrying at
-    once can clash again and again; the random wait lets one get ahead.
-    Each process seeds `std.random` itself (`morca._internal.cli.seed_random`).
-    """
-    var base = 0.01 * Float64(1 << min(attempt - 1, 6))
-    sleep(base * random_float64(0.5, 1.5))
-
-
-def _reload(mut table: Table) raises:
-    """`table.refresh()`, tried again when the metadata file it chose is
-    gone: writers that clashed on a version delete the files they wrote, so
-    a reader that listed one a moment before finds it missing."""
-    var attempt = 0
-    while True:
-        try:
-            table.refresh()
-            return
-        except e:
-            attempt += 1
-            if attempt > _COMMIT_RETRIES:
-                raise Error(
-                    "morca: can't reload ", table.metadata.location, ": ", e
-                )
-            _backoff(attempt)
-
-
-def _load(cat: FilesystemCatalog, ns: String, name: String) raises -> Table:
-    """`cat.load_table`, tried again as `_reload` is."""
-    var attempt = 0
-    while True:
-        try:
-            return cat.load_table(ns, name)
-        except e:
-            attempt += 1
-            if attempt > _COMMIT_RETRIES:
-                raise Error("morca: can't load ", ns, ".", name, ": ", e)
-            _backoff(attempt)
+comptime CONTENT_DATA = 0
+"""`DataFile.content` of a data file; 1 and 2 are delete files."""
 
 
-def _landed(table: Table, snapshot_id: Int64) -> Bool:
-    """Whether a commit that raised is in `table` after all. With
-    iceberg-mojo 0.11.0 and earlier, another writer could load a clashing
-    writer's metadata file before it was deleted and commit on top of it,
-    so retrying appended the same rows twice (#164). That iceberg race
-    can also drop a commit that won, which this can't see; the fix is
-    iceberg.mojo#88."""
-    for s in table.metadata.snapshots:
-        if s.snapshot_id == snapshot_id:
-            return True
-    return False
+# ── metadata ────────────────────────────────────────────────────────────────
 
 
-def warehouse() -> String:
-    """`MORCA_WAREHOUSE`: the root datasets are found under, or empty."""
-    return getenv("MORCA_WAREHOUSE")
+@fieldwise_init
+struct Snapshot(Copyable, Movable):
+    """A snapshot, as `TableMeta.snapshots` lists it."""
+
+    var snapshot_id: Int64
+    var has_parent: Bool
+    var parent_snapshot_id: Int64
+    var sequence_number: Int64
+    var timestamp_ms: Int64
+    var manifest_list: String
+    var schema_id: Int
+    """-1 when the snapshot doesn't say."""
+    var summary: Dict[String, String]
 
 
-def _norm(path: String) raises -> String:
-    """A location without its trailing slashes; a local one absolute."""
-    var p = String(path.removeprefix("file://"))
-    while p.endswith("/") and p.byte_length() > 1:
-        var cut = String(p[byte = : p.byte_length() - 1])
-        p = cut^
-    if "://" in p:
-        return p^
-    return absolute(p)
+@fieldwise_init
+struct MetadataLogEntry(Copyable, Movable):
+    var timestamp_ms: Int64
+    var metadata_file: String
 
 
-def dataset_of(location: String) raises -> String:
-    """The dataset a table at `location` is, `namespace.table`, or empty if
-    it isn't directly under a namespace in the warehouse."""
-    var root = warehouse()
-    if not root:
-        return ""
-    var base = String(_norm(root), "/")
-    var loc = _norm(location)
-    if not loc.startswith(base):
-        return ""
-    var rel = loc[byte = base.byte_length() :]
-    var parts = rel.split("/")
-    if len(parts) != 2 or not parts[0] or not parts[1]:
-        return ""
-    return String(parts[0], ".", parts[1])
+struct TableMeta(Copyable, Movable):
+    """A copy of a table's metadata, as iceberg's `TableMetadata` names it,
+    for reading: changing it changes nothing in the table."""
+
+    var location: String
+    var format_version: Int
+    var table_uuid: String
+    var has_current_snapshot: Bool
+    var current_snapshot_id: Int64
+    var current_schema_id: Int
+    var default_spec_id: Int
+    var default_sort_order_id: Int
+    var last_updated_ms: Int64
+    var last_sequence_number: Int64
+    var properties: Dict[String, String]
+    var schemas: List[Schema]
+    var schema_ids: List[Int]
+    var partition_specs: List[PartitionSpec]
+    var spec_ids: List[Int]
+    var snapshots: List[Snapshot]
+    var metadata_log: List[MetadataLogEntry]
+
+    def __init__(out self):
+        self.location = String()
+        self.format_version = 2
+        self.table_uuid = String()
+        self.has_current_snapshot = False
+        self.current_snapshot_id = -1
+        self.current_schema_id = 0
+        self.default_spec_id = 0
+        self.default_sort_order_id = 0
+        self.last_updated_ms = 0
+        self.last_sequence_number = 0
+        self.properties = Dict[String, String]()
+        self.schemas = List[Schema]()
+        self.schema_ids = List[Int]()
+        self.partition_specs = List[PartitionSpec]()
+        self.spec_ids = List[Int]()
+        self.snapshots = List[Snapshot]()
+        self.metadata_log = List[MetadataLogEntry]()
+
+    def schema(self) raises -> Schema:
+        """The current schema."""
+        for k in range(len(self.schemas)):
+            if self.schema_ids[k] == self.current_schema_id:
+                return self.schemas[k].copy()
+        raise Error("morca: ", self.location, " has no current schema")
+
+    def spec(self) raises -> PartitionSpec:
+        """The default partition spec."""
+        for k in range(len(self.partition_specs)):
+            if self.spec_ids[k] == self.default_spec_id:
+                return self.partition_specs[k].copy()
+        raise Error("morca: ", self.location, " has no default spec")
+
+    def snapshot_by_id(self, id: Int64) raises -> Snapshot:
+        for s in self.snapshots:
+            if s.snapshot_id == id:
+                return s.copy()
+        raise Error("morca: ", self.location, " has no snapshot ", id)
+
+    def current_snapshot(self) raises -> Snapshot:
+        if not self.has_current_snapshot:
+            raise Error("morca: ", self.location, " has no snapshot")
+        return self.snapshot_by_id(self.current_snapshot_id)
+
+    def property_(self, key: String, default: String) -> String:
+        return self.properties.get(key, default)
 
 
-def _split(dataset: String) raises -> Tuple[String, String]:
-    var dot = dataset.rfind(".")
-    if dot <= 0 or dot == dataset.byte_length() - 1:
-        raise Error("morca: a dataset is named namespace.table, not ", dataset)
-    return (
-        String(dataset[byte=:dot]),
-        String(dataset[byte = dot + 1 :]),
-    )
-
-
-def _catalog() raises -> FilesystemCatalog:
-    """The warehouse's filesystem catalog: local, or in object storage
-    (`s3://bucket/prefix`, through objectstore, configured from the
-    `AWS_*` environment)."""
-    var root = warehouse()
-    if not root:
-        raise Error(
-            "morca: MORCA_WAREHOUSE isn't set, so datasets can't be found"
+def _meta_of(mut d: Dec) raises -> Tuple[TableMeta, String]:
+    var m = TableMeta()
+    m.location = d.str()
+    var metadata_location = d.str()
+    m.format_version = Int(d.int())
+    m.table_uuid = d.str()
+    m.has_current_snapshot = d.bool()
+    m.current_snapshot_id = d.int()
+    m.current_schema_id = Int(d.int())
+    m.default_spec_id = Int(d.int())
+    m.default_sort_order_id = Int(d.int())
+    m.last_updated_ms = d.int()
+    m.last_sequence_number = d.int()
+    m.properties = d.map()
+    for _ in range(Int(d.int())):
+        m.schema_ids.append(Int(d.int()))
+        m.schemas.append(Schema(d.str()))
+    for _ in range(Int(d.int())):
+        m.spec_ids.append(Int(d.int()))
+        m.partition_specs.append(PartitionSpec(d.str()))
+    for _ in range(Int(d.int())):
+        var id = d.int()
+        var has_parent = d.bool()
+        var parent = d.int()
+        var seq = d.int()
+        var ts = d.int()
+        var ml = d.str()
+        var sid = Int(d.int())
+        m.snapshots.append(
+            Snapshot(id, has_parent, parent, seq, ts, ml^, sid, d.map())
         )
-    if "://" in root and not root.startswith("file://"):
-        return FilesystemCatalog(String(root.rstrip("/")), FileIO())
-    return FilesystemCatalog.local(root)
+    for _ in range(Int(d.int())):
+        var ts = d.int()
+        m.metadata_log.append(MetadataLogEntry(ts, d.str()))
+    return (m^, metadata_location^)
+
+
+# ── tables ──────────────────────────────────────────────────────────────────
+
+
+struct Table(Copyable, Movable):
+    """A table the library holds (a handle), and a copy of its metadata.
+    Copies are tables of their own in the library."""
+
+    var handle: Int
+    var metadata: TableMeta
+    var metadata_location: String
+    var _api: Api
+
+    def __init__(out self, handle: Int, a: Api) raises:
+        self.handle = handle
+        self._api = a.copy()
+        self.metadata = TableMeta()
+        self.metadata_location = String()
+        self._mirror()
+
+    def __init__(out self, *, copy: Self):
+        self._api = copy._api.copy()
+        self.handle = copy._api.table_copy(copy.handle)
+        self.metadata = copy.metadata.copy()
+        self.metadata_location = copy.metadata_location.copy()
+
+    def __deinit__(deinit self):
+        self._api.table_free(self.handle)
+
+    def _mirror(mut self) raises:
+        """Takes the library's metadata again."""
+        var got = Slots()
+        var err = Slots()
+        if self._api.table_meta(self.handle, got.addr, err.addr) != 0:
+            raise take_error(self._api, err)
+        var b = take_bytes(self._api, got)
+        var d = Dec(Int(b.unsafe_ptr()), len(b))
+        var meta = _meta_of(d)
+        _ = b^
+        self.metadata = meta[0].copy()
+        self.metadata_location = meta[1].copy()
+
+    @staticmethod
+    def load(location: String) raises -> Table:
+        """The table at `location`, a directory or in object storage
+        (`s3://...`, configured from the `AWS_*` environment)."""
+        var a = api()
+        var err = Slots()
+        var h = a.load(
+            Int(location.unsafe_ptr()), location.byte_length(), err.addr
+        )
+        if h == 0:
+            raise take_error(a, err)
+        return Table(h, a)
+
+    @staticmethod
+    def load_local(location: String) raises -> Table:
+        return Table.load(location)
+
+    def refresh(mut self) raises:
+        """Takes the table's latest metadata."""
+        var err = Slots()
+        if self._api.table_refresh(self.handle, err.addr) != 0:
+            raise take_error(self._api, err)
+        self._mirror()
+
+    def scan(self) -> TableScan:
+        """A scan of the current snapshot: nothing pinned or checked (`scan`
+        is the step's)."""
+        return TableScan(self.copy(), SNAP_CURRENT)
+
+    def append(mut self, batches: List[RecordBatch]) raises -> Int64:
+        """Iceberg's own append, outside any step: nothing is checked or
+        recorded, and a retry appends again. Steps use `append`."""
+        var ex = Exported(batches)
+        var err = Slots()
+        var id = self._api.append(
+            0,
+            self.handle,
+            ex.n(),
+            ex.arrays_addr(),
+            ex.schemas_addr(),
+            MODE_APPEND,
+            err.addr,
+        )
+        _ = ex^  # released after the library has read them
+        if id == -2:
+            raise take_error(self._api, err)
+        self._mirror()
+        return id
 
 
 def load_dataset(dataset: String) raises -> Table:
     """A dataset's table, outside any step: nothing is checked or recorded.
     For reading what isn't a step's input, such as a keyed pipeline's keys
-    (`morca.keyed`)."""
-    var name = _split(dataset)
-    try:
-        return _catalog().load_table(name[0], name[1])
-    except e:
-        raise Error("morca: can't load ", dataset, ": ", e)
+    (`morca.keyed`), and for a dista task's `write_files`."""
+    var a = api()
+    var err = Slots()
+    var h = a.load_dataset(
+        Int(dataset.unsafe_ptr()), dataset.byte_length(), err.addr
+    )
+    if h == 0:
+        raise take_error(a, err)
+    return Table(h, a)
 
 
 def table(mut ctx: Ctx, dataset: String) raises -> Table:
     """The table of a dataset the step declared it reads or writes."""
-    if dataset not in ctx.declared_writes:
-        ctx.check_declared(dataset, write=False)
-    var name = _split(dataset)
-    return _load(_catalog(), name[0], name[1])
-
-
-comptime DAY_MS: Int64 = 86_400_000
-comptime DEFAULT_HISTORY_DAYS = 30
-"""How long a morca table keeps its snapshots by default."""
-
-
-def table_defaults() -> Dict[String, String]:
-    """The properties `ensure_table` gives every table it creates, and adds
-    to one that lacks them.
-
-    - `write.metadata.delete-after-commit.enabled=true` and
-      `write.metadata.previous-versions-max=100`: each commit deletes the
-      metadata files older than the last hundred, so `metadata/` stops
-      growing by one file per commit.
-    - `history.expire.max-snapshot-age-ms` (30 days): the history the
-      scheduler's expiry keeps (`morca expire`, `MORCA_EXPIRE_HOURS`). Its
-      presence is also what makes the scheduler expire the table at all;
-      a table morca didn't create keeps all its snapshots.
-    """
-    var d = Dict[String, String]()
-    d["write.metadata.delete-after-commit.enabled"] = "true"
-    d["write.metadata.previous-versions-max"] = "100"
-    d["history.expire.max-snapshot-age-ms"] = String(
-        DAY_MS * DEFAULT_HISTORY_DAYS
+    var a = api()
+    var host = HostBlock(ctx)
+    var err = Slots()
+    var h = a.table(
+        host.addr, Int(dataset.unsafe_ptr()), dataset.byte_length(), err.addr
     )
-    return d^
-
-
-def _wanted_properties(
-    have: Dict[String, String], given: Dict[String, String]
-) -> Dict[String, String]:
-    """What to set: the defaults a table lacks, and what `given` says
-    differently from it."""
-    var out = Dict[String, String]()
-    for e in table_defaults().items():
-        if e.key not in have and e.key not in given:
-            out[e.key] = e.value
-    for e in given.items():
-        if have.get(e.key, "\x00") != e.value:
-            out[e.key] = e.value
-    return out^
-
-
-def _settle_properties(
-    mut ctx: Ctx,
-    mut table: Table,
-    given: Dict[String, String],
-    dataset: String,
-) raises:
-    """Commits the properties `_wanted_properties` finds missing, reloading
-    and trying again when another writer commits first."""
-    var attempt = 0
-    while True:
-        var want = _wanted_properties(table.metadata.properties, given)
-        if len(want) == 0:
-            return
-        var m = table.metadata.copy()
-        var names = String()
-        for e in want.items():
-            m.properties[e.key] = e.value
-            names.write(", " if names else "", e.key, "=", e.value)
-        m.last_updated_ms = now_ms()
-        try:
-            table.commit_metadata(m^)
-        except e:
-            attempt += 1
-            if attempt > _COMMIT_RETRIES:
-                raise Error("morca: can't set ", dataset, "'s properties: ", e)
-            _backoff(attempt)
-            _reload(table)
-            continue
-        ctx.log(String("set ", dataset, " properties: ", names))
-        return
+    _ = host^
+    if h == 0:
+        raise take_error(a, err)
+    return Table(h, a)
 
 
 def ensure_table(
@@ -367,11 +441,10 @@ def ensure_table(
     It refuses, with the dataset in the message, what that can't do: a
     column whose type differs, a new column marked required, a required
     column `schema` leaves out, and a field id in `schema` that isn't the
-    id the table gave that column, since batches built from `schema` carry
-    its ids and a column is matched by id first. A new column's id should be
-    the next one up: the table numbers new fields from its highest id, in
-    the order `schema` lists them, a struct's fields after the struct.
-    `spec` is only used to create the table.
+    id the table gave that column. A new column's id should be the next one
+    up: the table numbers new fields from its highest id, in the order
+    `schema` lists them, a struct's fields after the struct. `spec` is only
+    used to create the table.
 
     `properties` are Iceberg table properties: a table is created with
     them on top of `table_defaults()`, and an existing one gets those it
@@ -379,138 +452,198 @@ def ensure_table(
     are as given). `history.expire.max-snapshot-age-ms` sets how much
     history the scheduler's expiry keeps.
     """
-    ctx.check_declared(dataset, write=True)
-    var name = _split(dataset)
-    var cat = _catalog()
-    if not cat.table_exists(name[0], name[1]):
-        var props = table_defaults()
-        for e in properties.items():
-            props[e.key] = e.value
-        try:
-            _ = cat.create_table(name[0], name[1], schema, spec, props^)
-        except e:
-            # Another run, started at the same time, created it first.
-            if not cat.table_exists(name[0], name[1]):
-                raise Error("morca: can't create ", dataset, ": ", e)
-    var t = _load(cat, name[0], name[1])
-    _evolve(ctx, t, schema, dataset)
-    _settle_properties(ctx, t, properties, dataset)
-    return t^
+    var a = api()
+    var s = schema.to_json()
+    var p = spec.to_json()
+    var props = Enc()
+    props.map(properties)
+    var host = HostBlock(ctx)
+    var err = Slots()
+    var h = a.ensure_table(
+        host.addr,
+        Int(dataset.unsafe_ptr()),
+        dataset.byte_length(),
+        Int(s.unsafe_ptr()),
+        s.byte_length(),
+        Int(p.unsafe_ptr()),
+        p.byte_length(),
+        props.addr(),
+        len(props),
+        err.addr,
+    )
+    _ = host^
+    _ = s^
+    _ = p^
+    _ = props^
+    if h == 0:
+        raise take_error(a, err)
+    return Table(h, a)
 
 
-def _named(s: Schema, name: String) -> Int:
-    """Position in `s.flat` of the field named exactly `name`, or -1."""
-    for k in range(len(s.flat)):
-        if s.flat[k].name == name:
-            return k
-    return -1
+# ── reading ─────────────────────────────────────────────────────────────────
 
 
-def _required_left_out(table: Schema, given: Schema) -> String:
-    """A required field of `table` that `given` leaves out, or "". A field
-    under a struct `given` leaves out as a whole doesn't count: the struct
-    is optional or it is reported itself."""
-    for k in range(len(table.flat)):
-        ref f = table.flat[k]
-        if not f.required or f.child_pos < 0:
-            continue
-        if _named(given, f.name) >= 0:
-            continue
-        if f.parent >= 0 and _named(given, table.flat[f.parent].name) < 0:
-            continue
-        return f.name
-    return ""
+@fieldwise_init
+struct DataFile(Copyable, Movable):
+    """What a data or delete file entry shows; the entry itself stays in the
+    library's encoding (`DataFiles`)."""
+
+    var file_path: String
+    var content: Int
+    var record_count: Int64
+    var file_size_in_bytes: Int64
+    var partition_key: String
+    """The partition's values, as iceberg keys them: equal for files of one
+    partition."""
 
 
-def _other_id(table: Schema, given: Schema) -> String:
-    """Why a field of `given` has another id in `table`, or ""."""
-    for k in range(len(given.flat)):
-        ref g = given.flat[k]
-        var at = _named(table, g.name)
-        if at >= 0 and table.flat[at].id != g.id:
-            return String(
-                "'",
-                g.name,
-                "' is field ",
-                table.flat[at].id,
-                " in the table but ",
-                g.id,
-                " in the schema given; give it id ",
-                table.flat[at].id,
-                ", or batches built from this schema land in the wrong",
-                " column",
-            )
-    return ""
+@fieldwise_init
+struct FileScanTask(Copyable, Movable):
+    """One data file a scan reads."""
+
+    var data_file: DataFile
+    var spec_id: Int
+    var residual: String
+    var start: Int64
+    var length: Int64
+    var delete_files: Int
+    """How many delete files apply to it."""
 
 
-def _evolve(
-    mut ctx: Ctx, mut table: Table, schema: Schema, dataset: String
-) raises:
-    """Adds to `table` what `schema` has and it lacks (see `ensure_table`),
-    reloading and trying again when another writer commits first."""
-    var attempt = 0
-    while True:
-        var before = table.metadata.schema()
-        var left_out = _required_left_out(before, schema)
-        if left_out:
-            raise Error(
-                "morca: ",
-                dataset,
-                " requires column '",
-                left_out,
-                "', which the schema given leaves out; a pipeline can add",
-                " columns or make them optional, not drop a required one",
-            )
-        var update = UpdateSchema()
-        update.union_by_name(schema)
-        var change: SchemaCommit
-        try:
-            change = prepare_schema_update(table.metadata, update)
-        except e:
-            raise Error(
-                "morca: ", dataset, " can't take the schema given: ", String(e)
-            )
-        # Checked against the schema the commit would make, so a schema
-        # with the wrong ids is refused before anything is committed.
-        var mismatch = _other_id(change.schema, schema)
-        if mismatch:
-            raise Error("morca: ", dataset, ": ", mismatch)
-        if change.changed:
-            try:
-                table.commit_metadata(change.metadata.copy())
-            except e:
-                attempt += 1
-                if attempt > _COMMIT_RETRIES:
-                    raise Error(
-                        "morca: can't commit ",
-                        dataset,
-                        "'s new schema (",
-                        attempt,
-                        " tries): ",
-                        e,
-                    )
-                _backoff(attempt)
-                _reload(table)
-                continue
-            var added = String("")
-            var n_added = 0
-            for f in change.schema.flat:
-                if _named(before, f.name) < 0:
-                    added += String(", " if n_added > 0 else "", f.name)
-                    n_added += 1
-            ctx.log(
-                String(
-                    "evolved ",
-                    dataset,
-                    " to schema ",
-                    change.schema.schema_id,
-                    ", adding ",
-                    n_added,
-                    " field(s): ",
-                    added,
+struct TableScan(Copyable, Movable):
+    """A scan of a table at one snapshot, as iceberg's `TableScan` builds one:
+    each method returns a new scan."""
+
+    var table: Table
+    var snapshot: Int64
+    """A snapshot id, `SNAP_CURRENT`, or `SNAP_NONE` for a table a step
+    pinned before it had a snapshot."""
+    var filter_dsl: String
+    var columns: List[String]
+
+    def __init__(out self, var table: Table, snapshot: Int64):
+        self.table = table^
+        self.snapshot = snapshot
+        self.filter_dsl = String()
+        self.columns = List[String]()
+
+    def use_snapshot(self, id: Int64) -> Self:
+        var s = self.copy()
+        s.snapshot = id
+        return s^
+
+    def filter(self, dsl: String) -> Self:
+        """Rows matching iceberg's filter DSL, e.g. `["=", "month", "x"]`."""
+        var s = self.copy()
+        s.filter_dsl = dsl.copy()
+        return s^
+
+    def select(self, var columns: List[String]) -> Self:
+        var s = self.copy()
+        s.columns = columns^
+        return s^
+
+    def has_any_snapshot(self) -> Bool:
+        if self.snapshot == SNAP_NONE:
+            return False
+        return self.snapshot >= 0 or self.table.metadata.has_current_snapshot
+
+    def _opts(self, paths: List[String]) -> Enc:
+        var e = Enc()
+        e.int(self.snapshot)
+        e.str(self.filter_dsl)
+        e.strs(self.columns)
+        e.strs(paths)
+        return e^
+
+    def to_batches_for_paths(
+        self, paths: List[String]
+    ) raises -> List[RecordBatch]:
+        ref a = self.table._api
+        var o = self._opts(paths)
+        var stream = Slots(1)
+        var err = Slots()
+        var rc = a.scan(
+            self.table.handle, o.addr(), len(o), stream.addr, err.addr
+        )
+        _ = o^
+        if rc != 0:
+            raise take_error(a, err)
+        var out = List[RecordBatch]()
+        if stream[0] == 0:
+            return out^
+        var s = ImportedStream(stream[0])
+        while True:
+            var b = s.next()
+            if not b:
+                break
+            out.append(b.take())
+        return out^
+
+    def to_batches(self) raises -> List[RecordBatch]:
+        """The rows, as batches."""
+        return self.to_batches_for_paths(List[String]())
+
+    def to_batches_for_tasks(
+        self, tasks: List[FileScanTask]
+    ) raises -> List[RecordBatch]:
+        """The rows of tasks `plan_files` returned."""
+        var paths = List[String]()
+        for t in tasks:
+            paths.append(t.data_file.file_path)
+        if len(paths) == 0:
+            return List[RecordBatch]()
+        return self.to_batches_for_paths(paths)
+
+    def plan_files(self) raises -> List[FileScanTask]:
+        ref a = self.table._api
+        var o = self._opts(List[String]())
+        var got = Slots()
+        var err = Slots()
+        var rc = a.plan_files(
+            self.table.handle, o.addr(), len(o), got.addr, err.addr
+        )
+        _ = o^
+        if rc != 0:
+            raise take_error(a, err)
+        var b = take_bytes(a, got)
+        var d = Dec(Int(b.unsafe_ptr()), len(b))
+        var tasks = List[FileScanTask]()
+        for _ in range(Int(d.int())):
+            var path = d.str()
+            var content = Int(d.int())
+            var records = d.int()
+            var size = d.int()
+            var spec_id = Int(d.int())
+            var key = d.str()
+            var residual = d.str()
+            var start = d.int()
+            var length = d.int()
+            var deletes = Int(d.int())
+            tasks.append(
+                FileScanTask(
+                    DataFile(path^, content, records, size, key^),
+                    spec_id,
+                    residual^,
+                    start,
+                    length,
+                    deletes,
                 )
             )
-        return
+        _ = b^
+        return tasks^
+
+    def count(self) raises -> Int64:
+        """How many rows the scan returns."""
+        ref a = self.table._api
+        var o = self._opts(List[String]())
+        var n = Slots(1)
+        var err = Slots()
+        var rc = a.count(self.table.handle, o.addr(), len(o), n.addr, err.addr)
+        _ = o^
+        if rc != 0:
+            raise take_error(a, err)
+        return Int64(n[0])
 
 
 def scan(mut ctx: Ctx, table: Table) raises -> TableScan:
@@ -519,16 +652,15 @@ def scan(mut ctx: Ctx, table: Table) raises -> TableScan:
     A table that had no snapshot when it was first read stays empty for the
     step: the scan sees no files even if some were committed since.
     """
-    var m = table.metadata.copy()
-    var dataset = dataset_of(m.location)
-    ctx.check_declared(dataset, write=False)
-    var current = m.current_snapshot_id if m.has_current_snapshot else -1
-    var id = ctx.pin(m.location, current, dataset)
-    if id < 0:
-        m.has_current_snapshot = False
-        m.current_snapshot_id = -1
-        return TableScan(m^, table.io.copy())
-    return table.scan().use_snapshot(id)
+    ref a = table._api
+    var host = HostBlock(ctx)
+    var id = Slots(1)
+    var err = Slots()
+    var rc = a.pin(host.addr, table.handle, id.addr, err.addr)
+    _ = host^
+    if rc != 0:
+        raise take_error(a, err)
+    return TableScan(table.copy(), Int64(id[0]))
 
 
 def find_commit(ctx: Ctx, table: Table) -> Int64:
@@ -539,40 +671,115 @@ def find_commit(ctx: Ctx, table: Table) -> Int64:
     before committing them, such as a compaction, checks it first, so a retry
     of an attempt that committed doesn't write the files again.
     """
-    var loc = table.metadata.location
-    for s in table.metadata.snapshots:
-        if ctx.made(loc, s.summary):
-            return s.snapshot_id
-    return -1
+    var host = HostBlock(ctx)
+    var id = table._api.find_commit(host.addr, table.handle)
+    _ = host^
+    return id
+
+
+# ── written files ───────────────────────────────────────────────────────────
 
 
 struct DataFiles(Codec, Copyable, Movable, Sized):
     """Data file entries, written but not committed, as a dista task returns
-    them: `encode`/`decode` are iceberg's `encode_data_files` /
-    `decode_data_files`, which carry every field of each entry."""
+    them: `encode` writes iceberg's `encode_data_files` bytes, as before the
+    lib-tin, and `decode` reads them."""
 
-    var files: List[DataFile]
+    var bytes: List[UInt8]
+    """iceberg's encoding of the entries; empty for none."""
 
     def __init__(out self):
-        self.files = List[DataFile]()
+        self.bytes = List[UInt8]()
 
-    def __init__(out self, var files: List[DataFile]):
-        self.files = files^
+    def __init__(out self, var bytes: List[UInt8]):
+        self.bytes = bytes^
 
     def __len__(self) -> Int:
-        return len(self.files)
+        if len(self.bytes) < 8:
+            return 0
+        try:
+            var d = Dec(Int(self.bytes.unsafe_ptr()), len(self.bytes))
+            return Int(d.int())
+        except:
+            return 0
 
-    def add(mut self, other: DataFiles):
+    def add(mut self, other: DataFiles) raises:
         """Appends `other`'s entries, e.g. from another task."""
-        for f in other.files:
-            self.files.append(f.copy())
+        if len(other.bytes) == 0:
+            return
+        if len(self.bytes) == 0:
+            self.bytes = other.bytes.copy()
+            return
+        var a = api()
+        var got = Slots()
+        var err = Slots()
+        var rc = a.files_concat(
+            Int(self.bytes.unsafe_ptr()),
+            len(self.bytes),
+            Int(other.bytes.unsafe_ptr()),
+            len(other.bytes),
+            got.addr,
+            err.addr,
+        )
+        if rc != 0:
+            raise take_error(a, err)
+        self.bytes = take_bytes(a, got)
+
+    def files(self) raises -> List[DataFile]:
+        """What each entry shows."""
+        var out = List[DataFile]()
+        if len(self.bytes) == 0:
+            return out^
+        var a = api()
+        var buf = Slots()
+        var err = Slots()
+        if (
+            a.files_info(
+                Int(self.bytes.unsafe_ptr()),
+                len(self.bytes),
+                buf.addr,
+                err.addr,
+            )
+            != 0
+        ):
+            raise take_error(a, err)
+        var b = take_bytes(a, buf)
+        var d = Dec(Int(b.unsafe_ptr()), len(b))
+        for _ in range(Int(d.int())):
+            var p = d.str()
+            var content = Int(d.int())
+            var records = d.int()
+            var size = d.int()
+            out.append(DataFile(p^, content, records, size, d.str()))
+        _ = b^
+        return out^
 
     def encode(self, mut out: List[UInt8]):
-        encode_data_files(self.files, out)
+        if len(self.bytes) == 0:
+            for _ in range(8):  # a count of none, as iceberg writes it
+                out.append(0)
+            return
+        out.extend(Span(self.bytes))
 
     @staticmethod
     def decode(buf: Span[UInt8, _], mut pos: Int) raises -> Self:
-        return Self(decode_data_files(buf, pos))
+        var a = api()
+        var at = Slots(1)
+        Pointer[Int, MutUntrackedOrigin](unsafe_from_address=at.addr)[] = pos
+        var got = Slots()
+        var err = Slots()
+        if (
+            a.files_decode(
+                Int(buf.unsafe_ptr()), len(buf), at.addr, got.addr, err.addr
+            )
+            != 0
+        ):
+            raise take_error(a, err)
+        pos = at[0]
+        var b = take_bytes(a, got)
+        if len(b) == 8 and Self(b.copy()).__len__() == 0:
+            return Self()
+        return Self(b^)
 
 
 struct FileWriter(Movable):
@@ -585,51 +792,31 @@ struct FileWriter(Movable):
     seen, and `append_files` commits the entries all the same.
     """
 
-    var io: FileIO
-    var location: String
-    var schema: Schema
-    var spec: PartitionSpec
-    var sort_order_id: Int
-    var options: WriteOptions
-    var files: DataFiles
+    var handle: Int
     var rows: Int
     """The rows written so far."""
+    var _api: Api
 
     def __init__(out self, table: Table) raises:
-        self.io = table.io.copy()
-        self.location = table.metadata.location
-        self.schema = table.metadata.schema()
-        self.spec = table.metadata.spec()
-        self.sort_order_id = table.metadata.default_sort_order_id
-        self.options = WriteOptions.from_properties(table.metadata.properties)
-        self.files = DataFiles()
+        self._api = table._api.copy()
+        var err = Slots()
+        self.handle = self._api.writer_new(table.handle, err.addr)
         self.rows = 0
+        if self.handle == 0:
+            raise take_error(self._api, err)
 
     def write(mut self, batches: List[RecordBatch]) raises:
         """Writes `batches`: a file per partition they hold."""
         for b in batches:
             self.rows += b.num_rows
-        var written: List[DataFile]
-        try:
-            written = write_data_files(
-                self.io,
-                self.location,
-                batches,
-                self.schema,
-                self.spec,
-                self.sort_order_id,
-                self.options,
-            )
-        except e:
-            var name = dataset_of(self.location)
-            raise Error(
-                "morca: can't write data files for ",
-                name if name else self.location,
-                ": ",
-                e,
-            )
-        for i in range(len(written)):
-            self.files.files.append(written[i].copy())
+        var ex = Exported(batches)
+        var err = Slots()
+        var rc = self._api.writer_write(
+            self.handle, ex.n(), ex.arrays_addr(), ex.schemas_addr(), err.addr
+        )
+        _ = ex^
+        if rc != 0:
+            raise take_error(self._api, err)
 
     def put(mut self, var batch: RecordBatch) raises:
         """Writes one batch."""
@@ -639,7 +826,12 @@ struct FileWriter(Movable):
 
     def finish(deinit self) -> DataFiles:
         """The entries of every file written."""
-        return self.files^
+        var got = Slots()
+        self._api.writer_finish(self.handle, got.addr)
+        return DataFiles(take_bytes(self._api, got))
+
+    def __deinit__(deinit self):
+        self._api.writer_free(self.handle)
 
 
 def write_files(table: Table, batches: List[RecordBatch]) raises -> DataFiles:
@@ -647,24 +839,69 @@ def write_files(table: Table, batches: List[RecordBatch]) raises -> DataFiles:
     and returns their entries, for `append_files` to commit, here or in
     another process. Nothing is checked or recorded: it's for a dista task,
     which has no `Ctx`, with the table from `load_dataset`."""
-    var w = FileWriter(table)
-    w.write(batches)
-    return w^.finish()
+    ref a = table._api
+    var ex = Exported(batches)
+    var got = Slots()
+    var err = Slots()
+    var rc = a.write_files(
+        table.handle,
+        ex.n(),
+        ex.arrays_addr(),
+        ex.schemas_addr(),
+        got.addr,
+        err.addr,
+    )
+    _ = ex^
+    if rc != 0:
+        raise take_error(a, err)
+    return DataFiles(take_bytes(a, got))
 
 
-def _found(mut ctx: Ctx, mut table: Table) raises -> Int64:
-    """What `append`, `append_files` and `commit` do first: reload `table`,
-    refuse a dataset the step didn't declare in `writes=`, and return the
-    snapshot an earlier attempt committed (recorded again), or -1."""
-    _reload(table)
-    var loc = table.metadata.location
-    var dataset = dataset_of(loc)
-    ctx.check_declared(dataset, write=True)
-    var found = find_commit(ctx, table)
-    if found >= 0:
-        ctx.log(String("found its commit ", found, " to ", loc))
-        ctx.committed(loc, found, dataset)
-    return found
+struct FileChanges(Copyable, Defaultable, Movable):
+    """What one snapshot adds and what it takes away: data and delete files
+    already written (`write_files`), and the paths of files it removes."""
+
+    var added_data: DataFiles
+    var added_deletes: DataFiles
+    var removed: List[String]
+
+    def __init__(out self):
+        self.added_data = DataFiles()
+        self.added_deletes = DataFiles()
+        self.removed = List[String]()
+
+    def is_empty(self) -> Bool:
+        return (
+            len(self.added_data) == 0
+            and len(self.added_deletes) == 0
+            and len(self.removed) == 0
+        )
+
+
+# ── committing ──────────────────────────────────────────────────────────────
+
+
+def _append(
+    mut ctx: Ctx, mut table: Table, batches: List[RecordBatch], mode: Int
+) raises -> Int64:
+    var ex = Exported(batches)
+    var host = HostBlock(ctx)
+    var err = Slots()
+    var id = table._api.append(
+        host.addr,
+        table.handle,
+        ex.n(),
+        ex.arrays_addr(),
+        ex.schemas_addr(),
+        mode,
+        err.addr,
+    )
+    _ = host^
+    _ = ex^
+    if id == -2:
+        raise take_error(table._api, err)
+    table._mirror()
+    return id
 
 
 def append(
@@ -675,47 +912,46 @@ def append(
 
     To a dataset the step declared in `replaces=`, it's `replace_partitions`:
     the partitions the rows land in lose what earlier runs left there."""
-    return _append(ctx, table, batches, ctx.replaces(_dataset(table)))
+    return _append(ctx, table, batches, MODE_BY_STEP)
 
 
-def _dataset(table: Table) -> String:
-    try:
-        return dataset_of(table.metadata.location)
-    except:
-        return ""
-
-
-def _append(
-    mut ctx: Ctx, mut table: Table, batches: List[RecordBatch], replace: Bool
+def replace_partitions(
+    mut ctx: Ctx, mut table: Table, batches: List[RecordBatch]
 ) raises -> Int64:
-    var found = _found(ctx, table)
-    if found >= 0:
-        return found
-    var files: List[DataFile]
-    try:
-        files = write_data_files(
-            table.io,
-            table.metadata.location,
-            batches,
-            table.metadata.schema(),
-            table.metadata.spec(),
-            table.metadata.default_sort_order_id,
-            WriteOptions.from_properties(table.metadata.properties),
-        )
-    except e:
-        raise Error(
-            "morca: can't write data files for ",
-            dataset_of(table.metadata.location),
-            ": ",
-            e,
-        )
-    if replace:
-        return _commit_replace(ctx, table, files^)
-    return _commit_append(ctx, table, files^)
+    """Writes `batches` to `table` as one snapshot that also removes the
+    files earlier runs left in the partitions the rows land in, and returns
+    its ID, or the snapshot an earlier attempt of this step committed.
+
+    What `append` does to a dataset the step declared in `replaces=`; this
+    is for a table outside the warehouse, or a step that replaces one table
+    and appends to another it declares in `writes=`. The module doc says
+    what a replace removes, and when it refuses.
+    """
+    return _append(ctx, table, batches, MODE_REPLACE)
+
+
+def _append_files(
+    mut ctx: Ctx, mut table: Table, files: DataFiles, mode: Int
+) raises -> Int64:
+    var host = HostBlock(ctx)
+    var err = Slots()
+    var id = table._api.append_files(
+        host.addr,
+        table.handle,
+        Int(files.bytes.unsafe_ptr()),
+        len(files.bytes),
+        mode,
+        err.addr,
+    )
+    _ = host^
+    if id == -2:
+        raise take_error(table._api, err)
+    table._mirror()
+    return id
 
 
 def append_files(
-    mut ctx: Ctx, mut table: Table, files: List[DataFile]
+    mut ctx: Ctx, mut table: Table, files: DataFiles
 ) raises -> Int64:
     """Commits data files already written, here or on a worker
     (`write_files`), to `table` as one `append` snapshot and returns its ID,
@@ -730,71 +966,15 @@ def append_files(
     To a dataset the step declared in `replaces=`, it's
     `replace_partition_files`.
     """
-    return _append_files(ctx, table, files, ctx.replaces(_dataset(table)))
+    return _append_files(ctx, table, files, MODE_BY_STEP)
 
 
-def _append_files(
-    mut ctx: Ctx, mut table: Table, files: List[DataFile], replace: Bool
-) raises -> Int64:
-    for f in files:
-        if f.content != CONTENT_DATA:
-            raise Error(
-                "morca: append_files takes data files, and ",
-                f.file_path,
-                " is a delete file (content ",
-                f.content,
-                "); commit it with morca.tables.commit",
-            )
-    var found = _found(ctx, table)
-    if found >= 0:
-        return found
-    if replace:
-        return _commit_replace(ctx, table, files.copy())
-    return _commit_append(ctx, table, files.copy())
-
-
-def append_files(
+def replace_partition_files(
     mut ctx: Ctx, mut table: Table, files: DataFiles
 ) raises -> Int64:
-    """`append_files` of the entries a task returned."""
-    return append_files(ctx, table, files.files)
-
-
-def _commit_append(
-    mut ctx: Ctx, mut table: Table, var files: List[DataFile]
-) raises -> Int64:
-    """Commits `files` to `table` as an `append` with this step's summary,
-    reloading and trying again when another writer commits first."""
-    var loc = table.metadata.location
-    var dataset = dataset_of(loc)
-    var attempt = 0
-    while True:
-        var result = prepare_append(
-            table.io, table.metadata, files.copy(), ctx.summary(loc)
-        )
-        # Not if this process may have lost its run (`Ctx.fence`).
-        ctx.fence()
-        try:
-            table.commit(result)
-        except e:
-            attempt += 1
-            if attempt > _COMMIT_RETRIES:
-                raise Error(
-                    "morca: can't commit to ",
-                    dataset,
-                    " (",
-                    attempt,
-                    " tries): ",
-                    e,
-                )
-            _backoff(attempt)
-            _reload(table)
-            # A commit that landed after all is done, not tried again.
-            if not _landed(table, result.snapshot_id):
-                continue
-        ctx.committed(loc, result.snapshot_id, dataset)
-        _reload(table)
-        return result.snapshot_id
+    """`replace_partitions` of data files already written, here or on a
+    worker (`write_files`), as `append_files` commits them."""
+    return _append_files(ctx, table, files, MODE_REPLACE)
 
 
 def commit(
@@ -814,352 +994,24 @@ def commit(
     read it, and the commit raises, committing nothing, rather than remove
     the rest and keep both writers' rows. The step's retry plans the change
     again. (`replace_partitions` plans it again itself on each try.)"""
-    var found = _found(ctx, table)
-    if found >= 0:
-        return found
-    var loc = table.metadata.location
-    var dataset = dataset_of(loc)
-    var removing = _distinct(files.removed)
-    var attempt = 0
-    while True:
-        var result = prepare_commit(
-            table.io, table.metadata, operation, files.copy(), ctx.summary(loc)
-        )
-        _check_removed(result, removing, dataset if dataset else loc)
-        # Not if this process may have lost its run (`Ctx.fence`).
-        ctx.fence()
-        try:
-            table.commit(result)
-        except e:
-            attempt += 1
-            if attempt > _COMMIT_RETRIES:
-                raise Error(
-                    "morca: can't commit to ",
-                    dataset,
-                    " (",
-                    attempt,
-                    " tries): ",
-                    e,
-                )
-            _backoff(attempt)
-            _reload(table)
-            # A commit that landed after all is done, not tried again.
-            if not _landed(table, result.snapshot_id):
-                continue
-        ctx.committed(loc, result.snapshot_id, dataset)
-        _reload(table)
-        return result.snapshot_id
-
-
-def _distinct(paths: List[String]) -> Int:
-    var seen = Dict[String, Bool]()
-    for p in paths:
-        seen[p] = True
-    return len(seen)
-
-
-def _summary_int(s: Dict[String, String], key: String) -> Int:
-    try:
-        return Int(s.get(key, "0"))
-    except:
-        return 0
-
-
-def _check_removed(result: AppendResult, removing: Int, name: String) raises:
-    """Raises unless the prepared commit removes all `removing` files: the
-    ones it doesn't find aren't in the snapshot it was planned on."""
-    if removing == 0:
-        return
-    ref m = result.metadata
-    var s = m.snapshots[len(m.snapshots) - 1].summary.copy()
-    var found = _summary_int(s, "deleted-data-files") + _summary_int(
-        s, "removed-delete-files"
+    var e = Enc()
+    e.bytes(Span(files.added_data.bytes))
+    e.bytes(Span(files.added_deletes.bytes))
+    e.strs(files.removed)
+    var host = HostBlock(ctx)
+    var err = Slots()
+    var id = table._api.commit(
+        host.addr,
+        table.handle,
+        Int(operation.unsafe_ptr()),
+        operation.byte_length(),
+        e.addr(),
+        len(e),
+        err.addr,
     )
-    if found < removing:
-        raise Error(
-            "morca: ",
-            removing - found,
-            " of the ",
-            removing,
-            " files this commit to ",
-            name,
-            " removes aren't in its current snapshot: another writer removed",
-            " or replaced them since they were read. Nothing was committed;",
-            " plan the change again (the step's retry does)",
-        )
-
-
-# ── replacing partitions ─────────────────────────────────────────────────────
-
-
-def replace_partitions(
-    mut ctx: Ctx, mut table: Table, batches: List[RecordBatch]
-) raises -> Int64:
-    """Writes `batches` to `table` as one snapshot that also removes the
-    files earlier runs left in the partitions the rows land in, and returns
-    its ID, or the snapshot an earlier attempt of this step committed.
-
-    What `append` does to a dataset the step declared in `replaces=`; this
-    is for a table outside the warehouse, or a step that replaces one table
-    and appends to another it declares in `writes=`.
-
-    - The run's first commit to a partition is an `overwrite` that removes
-      every data and delete file in it that this run didn't commit, and
-      adds the new files. Later commits of the run to the partition find
-      only its own files there and append; files of this run, from any of
-      its steps and attempts, are never removed.
-    - The partitions are those of the new files under the table's current
-      spec: no rows replace nothing. Files written under an older spec are
-      left alone. An unpartitioned table is one partition: the run replaces
-      the whole table.
-    - What to remove is planned against the snapshot each try commits on
-      top of, again on every retry after another writer committed first.
-    - A file in a partition being replaced that another writer committed
-      after this run's first commit to the table means two writers are
-      replacing (or writing) the partition at once. The commit raises,
-      committing nothing, so only one of them keeps its rows: the other's
-      attempt fails, and a rerun of it once the first has finished replaces
-      the partition again.
-
-    The snapshot's summary has `orca.replaced-files` and
-    `orca.replaced-records`: the data files and rows it removed.
-    """
-    return _append(ctx, table, batches, True)
-
-
-def replace_partition_files(
-    mut ctx: Ctx, mut table: Table, files: List[DataFile]
-) raises -> Int64:
-    """`replace_partitions` of data files already written, here or on a
-    worker (`write_files`), as `append_files` commits them."""
-    return _append_files(ctx, table, files, True)
-
-
-def replace_partition_files(
-    mut ctx: Ctx, mut table: Table, files: DataFiles
-) raises -> Int64:
-    """`replace_partition_files` of the entries a task returned."""
-    return _append_files(ctx, table, files.files, True)
-
-
-struct _Replaced(Movable):
-    """What a replace removes: the paths, and the data files and rows."""
-
-    var removed: List[String]
-    var files: Int
-    var records: Int64
-
-    def __init__(out self):
-        self.removed = List[String]()
-        self.files = 0
-        self.records = 0
-
-
-def _within(
-    sums: List[FieldSummary],
-    spec: PartitionSpec,
-    ptype: Schema,
-    value: List[Datum],
-) raises -> Bool:
-    """Whether a manifest with partition summaries `sums` may hold files of
-    the partition `value`."""
-    if len(value) != len(spec.fields) or len(sums) != len(spec.fields):
-        return True
-    for k in range(len(spec.fields)):
-        ref sum = sums[k]
-        ref v = value[k]
-        if not v.valid:
-            if not sum.contains_null:
-                return False
-            continue
-        if not sum.has_lower or not sum.has_upper:
-            return False
-        ref tn = ptype.store.nodes[
-            ptype.find_field(spec.fields[k].field_id).type
-        ]
-        var lo = datum_from_bytes_prim(
-            tn.prim, tn.precision, tn.scale, tn.length, sum.lower_bound
-        )
-        var hi = datum_from_bytes_prim(
-            tn.prim, tn.precision, tn.scale, tn.length, sum.upper_bound
-        )
-        if compare(lo, v) > 0 or compare(hi, v) < 0:
-            return False
-    return True
-
-
-def _may_hold(
-    mf: ManifestFile,
-    spec: PartitionSpec,
-    ptype: Schema,
-    values: List[List[Datum]],
-) -> Bool:
-    """Whether manifest `mf` may hold files of any of the partitions
-    `values`, by its partition summaries: the others aren't read."""
-    if len(spec.fields) == 0 or not mf.has_partitions:
-        return True
-    try:
-        for v in values:
-            if _within(mf.partitions, spec, ptype, v):
-                return True
-        return False
-    except:
-        return True
-
-
-def _by_whom(m: TableMetadata, at: Int) -> String:
-    """Who committed snapshot `at` (an index into `m.snapshots`)."""
-    if at < 0:
-        return "a snapshot no longer in the table's history"
-    ref s = m.snapshots[at].summary
-    var run = s.get("orca.run")
-    if run:
-        return String(
-            "run ",
-            run.value(),
-            " of ",
-            s.get("orca.pipeline", "?"),
-            ", step ",
-            s.get("orca.step", "?"),
-        )
-    return String("snapshot ", m.snapshots[at].snapshot_id, ", not morca's")
-
-
-def _plan_replace(
-    ctx: Ctx, table: Table, added: List[DataFile]
-) raises -> _Replaced:
-    """The files a replace adding `added` removes from `table`'s current
-    snapshot (see `replace_partitions`), or raises if another writer is
-    writing one of its partitions."""
-    var out = _Replaced()
-    ref m = table.metadata
-    if not m.has_current_snapshot or len(added) == 0:
-        return out^
-    var current = m.current_snapshot()
-    if current.manifest_list == "":
-        return out^
-    var spec = m.spec()
-    var ptype = spec.partition_type(m.schema())
-    var keys = Dict[String, Bool]()
-    var values = List[List[Datum]]()
-    for f in added:
-        var k = _partition_key(f.partition)
-        if k not in keys:
-            keys[k] = True
-            values.append(f.partition.copy())
-    # This run's snapshots, and where its first one is in the history.
-    var loc = m.location
-    var mine = Dict[Int64, Bool]()
-    for c in ctx.commits:
-        if c.table == loc:
-            mine[c.snapshot_id] = True
-    var index = Dict[Int64, Int]()
-    var first_mine = -1
-    for i in range(len(m.snapshots)):
-        ref s = m.snapshots[i]
-        index[s.snapshot_id] = i
-        if ctx.same_run(s.summary):
-            mine[s.snapshot_id] = True
-        if s.snapshot_id in mine and first_mine < 0:
-            first_mine = i
-    var name = dataset_of(loc)
-    for mf in read_manifest_list_io(table.io, current.manifest_list):
-        if mf.partition_spec_id != spec.spec_id:
-            continue
-        if not _may_hold(mf, spec, ptype, values):
-            continue
-        var manifest = read_manifest_io(table.io, mf.manifest_path, mf)
-        for e in manifest.entries:
-            if not e.is_live():
-                continue
-            if _partition_key(e.data_file.partition) not in keys:
-                continue
-            if e.snapshot_id in mine:
-                continue
-            var at = index.get(e.snapshot_id, -1)
-            if first_mine >= 0 and at > first_mine:
-                raise Error(
-                    "morca: another writer is writing a partition of ",
-                    name if name else loc,
-                    " that this run replaces: ",
-                    _by_whom(m, at),
-                    " committed ",
-                    e.data_file.file_path,
-                    " after this run's first commit to it. Nothing was",
-                    " committed; rerun once the other has finished",
-                )
-            out.removed.append(e.data_file.file_path)
-            if e.data_file.content == CONTENT_DATA:
-                out.files += 1
-                out.records += e.data_file.record_count
-    return out^
-
-
-def _commit_replace(
-    mut ctx: Ctx, mut table: Table, var files: List[DataFile]
-) raises -> Int64:
-    """Commits `files` to `table` replacing their partitions (see
-    `replace_partitions`), planned again and tried again when another writer
-    commits first."""
-    var loc = table.metadata.location
-    var dataset = dataset_of(loc)
-    var attempt = 0
-    while True:
-        # Planned against the snapshot this try builds on, never one an
-        # earlier try saw: a stale list of files would leave another
-        # writer's rows beside these.
-        var plan = _plan_replace(ctx, table, files)
-        var summary = ctx.summary(loc)
-        summary["orca.replaced-files"] = String(plan.files)
-        summary["orca.replaced-records"] = String(plan.records)
-        var result: AppendResult
-        if len(plan.removed) == 0:
-            result = prepare_append(
-                table.io, table.metadata, files.copy(), summary^
-            )
-        else:
-            var change = FileChanges()
-            change.added_data = files.copy()
-            change.removed = plan.removed.copy()
-            result = prepare_commit(
-                table.io, table.metadata, "overwrite", change^, summary^
-            )
-            _check_removed(
-                result, len(plan.removed), dataset if dataset else loc
-            )
-        # Not if this process may have lost its run (`Ctx.fence`).
-        ctx.fence()
-        try:
-            table.commit(result)
-        except e:
-            attempt += 1
-            if attempt > _COMMIT_RETRIES:
-                raise Error(
-                    "morca: can't commit to ",
-                    dataset,
-                    " (",
-                    attempt,
-                    " tries): ",
-                    e,
-                )
-            _backoff(attempt)
-            _reload(table)
-            # A commit that landed after all is done, not tried again.
-            if not _landed(table, result.snapshot_id):
-                continue
-        ctx.committed(loc, result.snapshot_id, dataset)
-        if len(plan.removed) > 0:
-            ctx.log(
-                String(
-                    "replaced ",
-                    plan.files,
-                    " files (",
-                    plan.records,
-                    " rows) of ",
-                    dataset if dataset else loc,
-                    " that earlier runs committed, in snapshot ",
-                    result.snapshot_id,
-                )
-            )
-        _reload(table)
-        return result.snapshot_id
+    _ = host^
+    _ = e^
+    if id == -2:
+        raise take_error(table._api, err)
+    table._mirror()
+    return id

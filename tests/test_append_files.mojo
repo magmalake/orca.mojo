@@ -14,13 +14,15 @@ from std.testing import assert_equal, assert_true
 
 from dista import ObjectRef, Task3
 from dista.codec import decode, encode
-from iceberg.batch import ColumnBuilder, batch_of
-from iceberg.catalog.filesystem import FilesystemCatalog, Table
+from iceberg.catalog.filesystem import FilesystemCatalog
 from iceberg.io import FileIO
-from iceberg.manifest import CONTENT_POSITION_DELETES
-from iceberg.schema import Schema
+from iceberg.manifest import (
+    CONTENT_POSITION_DELETES,
+    decode_data_files,
+    encode_data_files,
+)
+from iceberg.schema import Schema as IcebergSchema
 from iceberg.util import now_ms
-from iceberg.values import Datum
 from parquet import RecordBatch
 from postgres import Connection, Params
 
@@ -37,8 +39,11 @@ from morca import (
     parse_months,
 )
 from morca.tables import (
+    BatchBuilder,
     DataFiles,
     FileWriter,
+    Schema,
+    Table,
     append_files,
     find_commit,
     load_dataset,
@@ -62,13 +67,13 @@ def _pid() -> Int:
 
 
 def _rows(month: String, start: Int, n: Int) raises -> List[RecordBatch]:
-    var schema = Schema.parse(SCHEMA)
-    var ids = ColumnBuilder.of(schema, 1)
-    var months = ColumnBuilder.of(schema, 2)
+    var b = BatchBuilder(Schema.parse(SCHEMA))
+    var ids = b.col("id")
+    var months = b.col("month")
     for i in range(n):
-        ids.add(Datum.long_(Int64(start + i)))
-        months.add(Datum.string_(month))
-    return [batch_of([ids^, months^])]
+        b.add_int(ids, Int64(start + i))
+        b.add_str(months, month)
+    return [b^.build()]
 
 
 struct Written(Copyable, Movable):
@@ -158,8 +163,13 @@ def delete_file(mut ctx: Ctx, m: Month) raises -> Int64:
     """Hands append_files a delete file."""
     var t = table(ctx, "db.deletes")
     var files = write_files(t, _rows(String(m), 0, 1))
-    files.files[0].content = CONTENT_POSITION_DELETES
-    return append_files(ctx, t, files)
+    # The entry made a delete file, with iceberg itself.
+    var pos = 0
+    var entries = decode_data_files(Span(files.bytes), pos)
+    entries[0].content = CONTENT_POSITION_DELETES
+    var bytes = List[UInt8]()
+    encode_data_files(entries, bytes)
+    return append_files(ctx, t, DataFiles(bytes^))
 
 
 comptime LoadA = Step[
@@ -225,7 +235,7 @@ def _error(res: RunResult) -> String:
 
 def test_a_resumed_step_doesnt_append_its_files_twice(runtime: Int) raises:
     var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
-    _ = cat.create_table("db", "a", Schema.parse(SCHEMA))
+    _ = cat.create_table("db", "a", IcebergSchema.parse(SCHEMA))
     var store = _store("append_files_resume")
     var months = parse_months("2024-01..2024-02")
     _ = setenv("MORCA_TEST_DIE", "always")
@@ -277,7 +287,7 @@ def test_a_resumed_step_doesnt_append_its_files_twice(runtime: Int) raises:
 
 def test_a_retried_step_doesnt_append_its_files_twice(runtime: Int) raises:
     var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
-    _ = cat.create_table("db", "b", Schema.parse(SCHEMA))
+    _ = cat.create_table("db", "b", IcebergSchema.parse(SCHEMA))
     var store = _store("append_files_retry")
     _ = setenv("MORCA_TEST_DIE", "once")
     var res = RetryB.execute(
@@ -301,7 +311,7 @@ def test_a_retried_step_doesnt_append_its_files_twice(runtime: Int) raises:
 
 def test_append_files_checks_the_declaration() raises:
     var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
-    _ = cat.create_table("db", "undeclared", Schema.parse(SCHEMA))
+    _ = cat.create_table("db", "undeclared", IcebergSchema.parse(SCHEMA))
     var res = Undeclareds.run(parse_months("2024-01"))
     assert_equal(
         _error(res),
@@ -315,7 +325,7 @@ def test_append_files_checks_the_declaration() raises:
 
 def test_append_files_refuses_a_delete_file() raises:
     var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
-    _ = cat.create_table("db", "deletes", Schema.parse(SCHEMA))
+    _ = cat.create_table("db", "deletes", IcebergSchema.parse(SCHEMA))
     var res = DeleteFiles.run(parse_months("2024-01"))
     assert_true("append_files takes data files" in _error(res), _error(res))
     assert_equal(len(_table("deletes").metadata.snapshots), 0)
@@ -323,7 +333,8 @@ def test_append_files_refuses_a_delete_file() raises:
 
 def test_data_files_cross_dista_inside_a_struct() raises:
     var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
-    var t = cat.create_table("db", "codec", Schema.parse(SCHEMA))
+    _ = cat.create_table("db", "codec", IcebergSchema.parse(SCHEMA))
+    var t = _table("codec")
     var w = Written(write_files(t, _rows("2024-01", 0, 5)), 5, 7)
     var bytes = List[UInt8]()
     encode(w, bytes)
@@ -333,11 +344,10 @@ def test_data_files_cross_dista_inside_a_struct() raises:
     assert_equal(back.rows, 5)
     assert_equal(back.pid, 7)
     assert_equal(len(back.files), 1)
-    assert_equal(back.files.files[0].file_path, w.files.files[0].file_path)
-    assert_equal(back.files.files[0].record_count, 5)
-    assert_equal(
-        len(back.files.files[0].metrics), len(w.files.files[0].metrics)
-    )
+    assert_equal(back.files.files()[0].file_path, w.files.files()[0].file_path)
+    assert_equal(back.files.files()[0].record_count, 5)
+    # Every field of the entry crosses: the bytes are iceberg's own.
+    assert_true(back.files.bytes == w.files.bytes, "the entry's bytes")
 
 
 def main() raises:

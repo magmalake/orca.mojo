@@ -14,15 +14,13 @@ from std.os import getenv
 from std.sys import argv
 from std.time import sleep
 
-from iceberg.batch import ColumnBuilder, batch_of
 from iceberg.catalog.filesystem import FilesystemCatalog
-from iceberg.schema import Schema
+from iceberg.schema import Schema as IcebergSchema
 from iceberg.transforms import PartitionField, PartitionSpec, parse_transform
-from iceberg.values import Datum
 from parquet import RecordBatch
 
 from morca import Ctx, Mapped, Month, Monthly, Pipeline, Step, morca_main
-from morca.tables import append, load_dataset, table
+from morca.tables import BatchBuilder, Schema, append, load_dataset, table
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -34,13 +32,13 @@ comptime COMMITS = 3
 
 
 def _rows(month: String, start: Int) raises -> List[RecordBatch]:
-    var schema = Schema.parse(SCHEMA)
-    var ids = ColumnBuilder.of(schema, 1)
-    var months = ColumnBuilder.of(schema, 2)
+    var b = BatchBuilder(Schema.parse(SCHEMA))
+    var ids = b.col("id")
+    var months = b.col("month")
     for i in range(ROWS):
-        ids.add(Datum.long_(Int64(start + i)))
-        months.add(Datum.string_(month))
-    return [batch_of([ids^, months^])]
+        b.add_int(ids, Int64(start + i))
+        b.add_str(months, month)
+    return [b^.build()]
 
 
 def load(mut ctx: Ctx, m: Month) raises -> Int64:
@@ -64,7 +62,7 @@ def main() raises:
         _ = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE")).create_table(
             "lake",
             "w",
-            Schema.parse(SCHEMA),
+            IcebergSchema.parse(SCHEMA),
             PartitionSpec(
                 0,
                 [

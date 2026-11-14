@@ -32,6 +32,43 @@ name = "morca"
 # The dependencies' .mojoc files, which their packages install there.
 extra-args = ["-I", "$PREFIX/lib/mojo"]
 
+# liblake (#454), the library morca.tables loads, beside the package's
+# .mojoc in lib/: built from src/morca/_lake/lib.mojo with line tables (-g1)
+# for a CPU every machine of the platform has (an image's binaries are
+# built for the same), named for the platform. pixi-build-mojo writes a
+# bin to $PREFIX/bin/<name>, hence the `../lib/`. The line tables ship: in
+# the .so on Linux, in the .dSYM `mojo build` writes beside it on macOS.
+
+[package.build.target.linux-64.config.pkg]
+path = "src/morca"
+name = "morca"
+extra-args = ["-I", "$PREFIX/lib/mojo"]
+
+[[package.build.target.linux-64.config.bins]]
+name = "../lib/liblake.so"
+path = "src/morca/_lake/lib.mojo"
+extra-args = ["--emit", "shared-lib", "-g1", "--target-cpu", "x86-64-v3", "-I", "src", "-I", "$PREFIX/lib/mojo"]
+
+[package.build.target.linux-aarch64.config.pkg]
+path = "src/morca"
+name = "morca"
+extra-args = ["-I", "$PREFIX/lib/mojo"]
+
+[[package.build.target.linux-aarch64.config.bins]]
+name = "../lib/liblake.so"
+path = "src/morca/_lake/lib.mojo"
+extra-args = ["--emit", "shared-lib", "-g1", "--target-cpu", "neoverse-n1", "-I", "src", "-I", "$PREFIX/lib/mojo"]
+
+[package.build.target.osx-arm64.config.pkg]
+path = "src/morca"
+name = "morca"
+extra-args = ["-I", "$PREFIX/lib/mojo"]
+
+[[package.build.target.osx-arm64.config.bins]]
+name = "../lib/liblake.dylib"
+path = "src/morca/_lake/lib.mojo"
+extra-args = ["--emit", "shared-lib", "-g1", "--target-cpu", "apple-m1", "-I", "src", "-I", "$PREFIX/lib/mojo", "-Xlinker", "-install_name", "-Xlinker", "@rpath/liblake.dylib"]
+
 [package.host-dependencies]
 mojo-compiler = "==1.2.0"
 dista-mojo = { git = "https://github.com/morca-dev/dista", rev = "a53916ca52f7a1af8f8f60c55099ea7f4c54e709" }
@@ -50,7 +87,9 @@ sqlite-mojo = { git = "https://github.com/magmalake/sqlite.mojo", rev = "0d76aa7
 mojo-compiler = "==1.2.0"
 
 [package.run-dependencies]
-mojo-compiler = ">=1.2.0,<2"
+# Exactly the compiler liblake was built with: the library and the program
+# share Mojo's runtime (LIB-TINS.md §5, item 10).
+mojo-compiler = "==1.2.0"
 libpq = ">=16,<19"
 libsqlite = ">=3.45,<4"
 dista-mojo = { git = "https://github.com/morca-dev/dista", rev = "a53916ca52f7a1af8f8f60c55099ea7f4c54e709" }
@@ -307,54 +346,76 @@ postgresql = ">=16,<19"
 [feature.data.activation.env]
 DEP_INC = "-I ../dista.mojo/src -I ../k8s.mojo/src -I ../memory-region.mojo/src -I ../arrow-mlake.mojo/src -I ../parquet.mojo/src -I ../parquet.mojo/full/src -I ../threads.mojo/src -I ../threads.mojo/compat -I ../thrift.mojo/src -I ../hashes.mojo/src -I ../snappy.mojo/src -I ../deflate.mojo/src -I ../avro.mojo/src -I ../roaring.mojo/src -I ../objectstore.mojo/src -I ../zstd.mojo/src -I ../lz4.mojo/src -I ../brotli.mojo/src -I ../sqlite.mojo -I ../postgres.mojo/src -I ../iceberg.mojo/src"
 
+# morca.tables loads liblake (#454), which the tests build into build/
+# (scripts/build-liblake.sh); LAKE_LIB names it, so a binary copied
+# elsewhere finds it too.
+[feature.data.target.osx-arm64.activation.env]
+LAKE_LIB = "$PIXI_PROJECT_ROOT/build/liblake.dylib"
+
+[feature.data.target.linux-64.activation.env]
+LAKE_LIB = "$PIXI_PROJECT_ROOT/build/liblake.so"
+
+[feature.data.target.linux-aarch64.activation.env]
+LAKE_LIB = "$PIXI_PROJECT_ROOT/build/liblake.so"
+
 [feature.data.tasks]
 # morca, which most of these tests run, built once (scripts/mojo-build.sh).
-build-shared = { cmd = "scripts/build-shared.sh morca" }
-test-tables = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_tables.mojo -o build/test-tables && scripts/with-postgres.sh ./build/test-tables" }
+build-shared = { cmd = "scripts/build-shared.sh morca", depends-on = ["build-liblake"] }
+# liblake, which morca.tables loads (#454); every test below needs it.
+build-liblake = { cmd = "scripts/build-liblake.sh" }
+test-tables = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_tables.mojo -o build/test-tables && scripts/with-postgres.sh ./build/test-tables", depends-on = ["build-liblake"] }
 # Data files written in dista tasks, committed once by the step (append_files).
-test-append-files = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_append_files.mojo -o build/test-append-files && scripts/with-postgres.sh ./build/test-append-files" }
+test-append-files = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_append_files.mojo -o build/test-append-files && scripts/with-postgres.sh ./build/test-append-files", depends-on = ["build-liblake"] }
 # Steps that replace their partitions (replaces=, replace_partitions): reruns,
 # retries, runs racing over one partition, and stale removals.
-test-replace = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_replace.mojo -o build/test-replace && scripts/with-postgres.sh ./build/test-replace" }
-test-replace-concurrent = { cmd = "tests/replace_concurrent.sh" }
+test-replace = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_replace.mojo -o build/test-replace && scripts/with-postgres.sh ./build/test-replace", depends-on = ["build-liblake"] }
+test-replace-concurrent = { cmd = "tests/replace_concurrent.sh", depends-on = ["build-liblake"] }
 # The Lean model of a retried step (formal/) against morca.tables.append, on
 # the event sequences in formal/difftest/retry.cases.
-test-formal-retry = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_formal_retry.mojo -o build/test-formal-retry && ./build/test-formal-retry" }
+test-formal-retry = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_formal_retry.mojo -o build/test-formal-retry && ./build/test-formal-retry", depends-on = ["build-liblake"] }
 # A run's commits told from those of another run with its number, by the
 # run's token (#292).
-test-run-token = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_run_token.mojo -o build/test-run-token && ./build/test-run-token" }
-test-chaos-tables = { cmd = "CHAOS_SRC=tests/chaos_tables.mojo CHAOS_CHECK=1 scripts/with-postgres.sh tests/chaos.sh" }
-test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh" }
-test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh" }
+test-run-token = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_run_token.mojo -o build/test-run-token && ./build/test-run-token", depends-on = ["build-liblake"] }
+# liblake itself (#454): ABI and missing-library refusals, an iceberg error
+# crossing to the step's log as it would compiled in, and its line tables.
+test-lake = { cmd = "tests/lake.sh", depends-on = ["build-liblake"] }
+# test-tables with liblake's code compiled in (-D MORCA_LAKE_SOURCE=1), the
+# fallback: both builds must pass.
+test-tables-source = { cmd = "scripts/mojo-build.sh -D MORCA_LAKE_SOURCE=1 -I src $DEP_INC tests/test_tables.mojo -o build/test-tables-source && scripts/with-postgres.sh ./build/test-tables-source" }
+# morca.tables' BatchBuilder and column accessors, and a table outside any step.
+test-lake-batch = { cmd = "scripts/mojo-build.sh -I src $DEP_INC tests/test_lake_batch.mojo -o build/test-lake-batch && ./build/test-lake-batch", depends-on = ["build-liblake"] }
+test-chaos-tables = { cmd = "CHAOS_SRC=tests/chaos_tables.mojo CHAOS_CHECK=1 scripts/with-postgres.sh tests/chaos.sh", depends-on = ["build-liblake"] }
+test-taxi = { cmd = "scripts/with-postgres.sh tests/taxi.sh", depends-on = ["build-liblake"] }
+test-lineage = { cmd = "scripts/with-postgres.sh tests/lineage.sh", depends-on = ["build-liblake"] }
 # A dataset's Data tab (#435): schema, partitions, rows, chart and download,
 # read by morca_maintain data, and public = false.
-test-dataview = { cmd = "scripts/with-postgres.sh tests/dataview.sh" }
-test-commits = { cmd = "tests/concurrent_commits.sh" }
+test-dataview = { cmd = "scripts/with-postgres.sh tests/dataview.sh", depends-on = ["build-liblake"] }
+test-commits = { cmd = "tests/concurrent_commits.sh", depends-on = ["build-liblake"] }
 # Snapshot expiry: morca expire, morca_maintain and the scheduler's sweep.
-test-expire = { cmd = "scripts/with-postgres.sh tests/expire.sh" }
-test-sensors = { cmd = "scripts/with-postgres.sh tests/sensors.sh" }
+test-expire = { cmd = "scripts/with-postgres.sh tests/expire.sh", depends-on = ["build-liblake"] }
+test-sensors = { cmd = "scripts/with-postgres.sh tests/sensors.sh", depends-on = ["build-liblake"] }
 # keys_per_run for sensors and fills (#240), over tests/sensors.
-test-keys-per-run = { cmd = "scripts/with-postgres.sh tests/keys_per_run.sh" }
+test-keys-per-run = { cmd = "scripts/with-postgres.sh tests/keys_per_run.sh", depends-on = ["build-liblake"] }
 # A snapshot sensed while a run of its partition is live (#139).
-test-sensed-behind-live = { cmd = "scripts/with-postgres.sh tests/sensed_behind_live.sh" }
+test-sensed-behind-live = { cmd = "scripts/with-postgres.sh tests/sensed_behind_live.sh", depends-on = ["build-liblake"] }
 # The same two over MinIO: the warehouse and logs in object storage.
-test-lineage-s3 = { cmd = "MORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/lineage.sh" }
-test-sensors-s3 = { cmd = "MORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/sensors.sh" }
+test-lineage-s3 = { cmd = "MORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/lineage.sh", depends-on = ["build-liblake"] }
+test-sensors-s3 = { cmd = "MORCA_TEST_S3=1 scripts/with-minio.sh scripts/with-postgres.sh tests/sensors.sh", depends-on = ["build-liblake"] }
 # The sampler's lines uploaded to the bucket while it runs and when it ends.
-test-sample-s3 = { cmd = "MORCA_TEST_S3=1 scripts/with-minio.sh tests/sample.sh" }
-test-keyed = { cmd = "scripts/with-postgres.sh tests/keyed.sh" }
-test-keyed-backfills = { cmd = "scripts/with-postgres.sh tests/keyed_backfills.sh" }
-test-keyed-sensor = { cmd = "scripts/with-postgres.sh tests/keyed_sensor.sh" }
-test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh" }
+test-sample-s3 = { cmd = "MORCA_TEST_S3=1 scripts/with-minio.sh tests/sample.sh", depends-on = ["build-liblake"] }
+test-keyed = { cmd = "scripts/with-postgres.sh tests/keyed.sh", depends-on = ["build-liblake"] }
+test-keyed-backfills = { cmd = "scripts/with-postgres.sh tests/keyed_backfills.sh", depends-on = ["build-liblake"] }
+test-keyed-sensor = { cmd = "scripts/with-postgres.sh tests/keyed_sensor.sh", depends-on = ["build-liblake"] }
+test-keyed-names = { cmd = "scripts/with-postgres.sh tests/keyed_names.sh", depends-on = ["build-liblake"] }
 # Remote workers (morca.worker, orca.workers): morca ui, the scheduler and an
 # `morca worker` with no database, committing to a local warehouse.
-test-worker = { cmd = "scripts/with-postgres.sh tests/worker.sh" }
+test-worker = { cmd = "scripts/with-postgres.sh tests/worker.sh", depends-on = ["build-liblake"] }
 # CI runs these three groups on runners of their own; test-data is all three.
-test-data-tables = { depends-on = ["build-shared", "test-tables", "test-append-files", "test-replace", "test-replace-concurrent", "test-formal-retry", "test-run-token", "test-chaos-tables", "test-lineage", "test-dataview", "test-commits", "test-expire", "test-taxi"] }
+test-data-tables = { depends-on = ["build-shared", "test-tables", "test-tables-source", "test-lake", "test-lake-batch", "test-append-files", "test-replace", "test-replace-concurrent", "test-formal-retry", "test-run-token", "test-chaos-tables", "test-lineage", "test-dataview", "test-commits", "test-expire", "test-taxi"] }
 test-data-sensors = { depends-on = ["build-shared", "test-sensors", "test-keys-per-run", "test-sensed-behind-live", "test-lineage-s3", "test-sensors-s3", "test-sample-s3", "test-worker"] }
 test-data-keyed = { depends-on = ["build-shared", "test-keyed", "test-keyed-backfills", "test-keyed-sensor", "test-keyed-names"] }
 test-data = { depends-on = ["test-data-tables", "test-data-sensors", "test-data-keyed"] }
-taxi = { cmd = "scripts/mojo-build.sh -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi" }
+taxi = { cmd = "scripts/mojo-build.sh -I src -I examples/taxi $DEP_INC examples/taxi/taxi.mojo -o build/taxi", depends-on = ["build-liblake"] }
 
 # Rust workers (docs/rust-workers.md): the morca-worker crate's tests, and
 # examples/rust-worker, a worker and its proxy pipeline, over a local
@@ -364,8 +425,8 @@ taxi = { cmd = "scripts/mojo-build.sh -I src -I examples/taxi $DEP_INC examples/
 rust = ">=1.85"
 
 [feature.rust.tasks]
-test-rust-worker = { cmd = "tests/rust_worker.sh" }
-test-hindcast = { cmd = "tests/hindcast.sh" }
+test-rust-worker = { cmd = "tests/rust_worker.sh", depends-on = ["build-liblake"] }
+test-hindcast = { cmd = "tests/hindcast.sh", depends-on = ["build-liblake"] }
 
 # MinIO for the tests over object storage (scripts/with-minio.sh). conda-forge
 # builds it for these two platforms only.

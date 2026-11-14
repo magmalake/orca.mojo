@@ -12,15 +12,13 @@ Over a local Iceberg table each, with a `Ctx` per attempt as
 from std.os import getenv, setenv
 from std.testing import assert_equal
 
-from iceberg.batch import ColumnBuilder, batch_of
-from iceberg.catalog.filesystem import FilesystemCatalog, Table
-from iceberg.schema import Schema
+from iceberg.catalog.filesystem import FilesystemCatalog
+from iceberg.schema import Schema as IcebergSchema
 from iceberg.util import now_ms
-from iceberg.values import Datum
 from parquet import RecordBatch
 
 from morca import Ctx
-from morca.tables import append
+from morca.tables import BatchBuilder, Schema, Table, append
 
 comptime SCHEMA = (
     '{"schema-id":0,"type":"struct","fields":['
@@ -31,18 +29,18 @@ comptime KEY = "2024-01"
 
 
 def _rows(id: Int) raises -> List[RecordBatch]:
-    var schema = Schema.parse(SCHEMA)
-    var ids = ColumnBuilder.of(schema, 1)
-    var months = ColumnBuilder.of(schema, 2)
-    ids.add(Datum.long_(Int64(id)))
-    months.add(Datum.string_(KEY))
-    return [batch_of([ids^, months^])]
+    var b = BatchBuilder(Schema.parse(SCHEMA))
+    var ids = b.col("id")
+    var months = b.col("month")
+    b.add_int(ids, Int64(id))
+    b.add_str(months, KEY)
+    return [b^.build()]
 
 
 def _create(name: String) raises -> Table:
     var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
-    _ = cat.create_table("db", name, Schema.parse(SCHEMA))
-    return cat.load_table("db", name)
+    _ = cat.create_table("db", name, IcebergSchema.parse(SCHEMA))
+    return Table.load_local(String(getenv("MORCA_WAREHOUSE"), "/db/", name))
 
 
 def _ctx(name: String, attempt: Int, token: String) -> Ctx:

@@ -16,14 +16,17 @@ Values are in kelvin, so an error is one in °C too.
 
 from std.math import cos, floor, pi, sqrt
 
-from iceberg.batch import ColumnBuilder, batch_of
-from iceberg.scan import TableScan
-from iceberg.schema import Schema
-from iceberg.transforms import PartitionField, PartitionSpec, parse_transform
-from iceberg.values import Datum
 from parquet import RecordBatch
 
 from morca.civil import Civil
+from morca.tables import (
+    BatchBuilder,
+    PartitionField,
+    PartitionSpec,
+    Schema,
+    TableScan,
+    parse_transform,
+)
 
 comptime NI = 360
 """Longitudes, 0°E to 359°E."""
@@ -213,21 +216,19 @@ def score(forecast: Field, analysis: Field) raises -> Skill:
 struct Scores(Movable):
     """The rows the scoring step writes, gathered before one commit each."""
 
-    var skill_schema: Schema
-    var cities_schema: Schema
-    var skill: List[ColumnBuilder]
-    var city: List[ColumnBuilder]
+    var skill: BatchBuilder
+    var city: BatchBuilder
+    var sk: List[Int]
+    """`skill`'s columns, in the schema's order."""
+    var ci: List[Int]
+    """`city`'s columns, in the schema's order."""
     var rows: Int
 
     def __init__(out self) raises:
-        self.skill_schema = Schema.parse(SKILL_SCHEMA)
-        self.cities_schema = Schema.parse(CITIES_SCHEMA)
-        self.skill = List[ColumnBuilder]()
-        self.city = List[ColumnBuilder]()
-        for i in range(1, 8):
-            self.skill.append(ColumnBuilder.of(self.skill_schema, i))
-        for i in range(1, 10):
-            self.city.append(ColumnBuilder.of(self.cities_schema, i))
+        self.skill = BatchBuilder(Schema.parse(SKILL_SCHEMA))
+        self.city = BatchBuilder(Schema.parse(CITIES_SCHEMA))
+        self.sk = self.skill.roots.copy()
+        self.ci = self.city.roots.copy()
         self.rows = 0
 
     def add(
@@ -239,31 +240,31 @@ struct Scores(Movable):
         analysis: Field,
     ) raises -> Skill:
         var s = score(forecast, analysis)
-        self.skill[0].add_int(valid_day)
-        self.skill[1].add_int(cycle_day)
-        self.skill[2].add_int(Int64(lead))
-        self.skill[3].add_int(Int64(s.points))
-        self.skill[4].add_float(s.bias)
-        self.skill[5].add_float(s.mae)
-        self.skill[6].add_float(s.rmse)
+        self.skill.add_int(self.sk[0], valid_day)
+        self.skill.add_int(self.sk[1], cycle_day)
+        self.skill.add_int(self.sk[2], Int64(lead))
+        self.skill.add_int(self.sk[3], Int64(s.points))
+        self.skill.add_float(self.sk[4], s.bias)
+        self.skill.add_float(self.sk[5], s.mae)
+        self.skill.add_float(self.sk[6], s.rmse)
         self.rows += 1
         for c in cities():
             var p = point_of(c.lat, c.lon)
             if not forecast.has(p) or not analysis.has(p):
                 continue
-            self.city[0].add_int(valid_day)
-            self.city[1].add_int(cycle_day)
-            self.city[2].add_int(Int64(lead))
-            self.city[3].add(Datum.string_(c.name))
-            self.city[4].add_float(lat_of(p))
-            self.city[5].add_float(lon_of(p))
-            self.city[6].add_float(forecast.t[p])
-            self.city[7].add_float(analysis.t[p])
-            self.city[8].add_float(forecast.t[p] - analysis.t[p])
+            self.city.add_int(self.ci[0], valid_day)
+            self.city.add_int(self.ci[1], cycle_day)
+            self.city.add_int(self.ci[2], Int64(lead))
+            self.city.add_str(self.ci[3], c.name)
+            self.city.add_float(self.ci[4], lat_of(p))
+            self.city.add_float(self.ci[5], lon_of(p))
+            self.city.add_float(self.ci[6], forecast.t[p])
+            self.city.add_float(self.ci[7], analysis.t[p])
+            self.city.add_float(self.ci[8], forecast.t[p] - analysis.t[p])
         return s^
 
     def skill_batches(mut self) raises -> List[RecordBatch]:
-        return [batch_of(self.skill)]
+        return [self.skill.batch()]
 
     def city_batches(mut self) raises -> List[RecordBatch]:
-        return [batch_of(self.city)]
+        return [self.city.batch()]

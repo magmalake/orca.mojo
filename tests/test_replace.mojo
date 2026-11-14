@@ -12,13 +12,10 @@ from std.os import getenv, setenv
 from std.os.path import exists
 from std.testing import assert_equal, assert_true
 
-from iceberg.batch import ColumnBuilder, batch_of
-from iceberg.catalog.filesystem import FilesystemCatalog, Table
-from iceberg.commit import FileChanges
-from iceberg.schema import Schema
+from iceberg.catalog.filesystem import FilesystemCatalog
+from iceberg.schema import Schema as IcebergSchema
 from iceberg.transforms import PartitionField, PartitionSpec, parse_transform
 from iceberg.util import now_ms
-from iceberg.values import Datum
 from parquet import RecordBatch
 
 from morca import (
@@ -33,6 +30,10 @@ from morca import (
     parse_months,
 )
 from morca.tables import (
+    BatchBuilder,
+    FileChanges,
+    Schema,
+    Table,
     append,
     append_files,
     commit,
@@ -68,18 +69,18 @@ def _spec() -> PartitionSpec:
 
 
 def _rows(month: String, start: Int, n: Int) raises -> List[RecordBatch]:
-    var schema = Schema.parse(SCHEMA)
-    var ids = ColumnBuilder.of(schema, 1)
-    var months = ColumnBuilder.of(schema, 2)
+    var b = BatchBuilder(Schema.parse(SCHEMA))
+    var ids = b.col("id")
+    var months = b.col("month")
     for i in range(n):
-        ids.add(Datum.long_(Int64(start + i)))
-        months.add(Datum.string_(month))
-    return [batch_of([ids^, months^])]
+        b.add_int(ids, Int64(start + i))
+        b.add_str(months, month)
+    return [b^.build()]
 
 
 def _create(name: String) raises:
     var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
-    _ = cat.create_table("db", name, Schema.parse(SCHEMA), _spec())
+    _ = cat.create_table("db", name, IcebergSchema.parse(SCHEMA), _spec())
 
 
 def _table(name: String) raises -> Table:
@@ -273,7 +274,7 @@ def _ctx(run: Int, dataset: String) -> Ctx:
 def test_two_runs_replacing_one_partition_keep_one_runs_rows() raises:
     _create("c")
     var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
-    var t = cat.load_table("db", "c")
+    var t = _table("c")
     # An earlier run's January.
     var old = _ctx(9000, "db.c")
     _ = replace_partitions(old, t, _rows("2024-01", 9000, ROWS))
@@ -307,7 +308,7 @@ def test_a_commit_refuses_a_stale_removal() raises:
     its files isn't committed over the rest."""
     _create("s")
     var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
-    var t = cat.load_table("db", "s")
+    var t = _table("s")
     var first = _ctx(9101, "db.s")
     _ = replace_partitions(first, t, _rows("2024-01", 1000, ROWS))
     _ = replace_partitions(first, t, _rows("2024-01", 1000 + ROWS, ROWS))
@@ -329,9 +330,7 @@ def test_a_commit_refuses_a_stale_removal() raises:
         "replace_race", 9103, "load", "2024-01", declared_writes=["db.s"]
     )
     var change = FileChanges()
-    change.added_data = write_files(
-        _table("s"), _rows("2024-01", 3000, ROWS)
-    ).files.copy()
+    change.added_data = write_files(_table("s"), _rows("2024-01", 3000, ROWS))
     change.removed = stale.copy()
     var snapshots = len(_table("s").metadata.snapshots)
     var refused = String()
@@ -358,8 +357,8 @@ def _expected_n(base: Int, n: Int) -> List[Int64]:
 
 def test_an_unpartitioned_table_is_replaced_whole() raises:
     var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
-    _ = cat.create_table("db", "u", Schema.parse(SCHEMA))
-    var t = cat.load_table("db", "u")
+    _ = cat.create_table("db", "u", IcebergSchema.parse(SCHEMA))
+    var t = _table("u")
     var one = _ctx(9201, "db.u")
     _ = replace_partitions(one, t, _rows("2024-01", 1000, ROWS))
     _ = replace_partitions(one, t, _rows("2024-02", 1000 + ROWS, ROWS))
@@ -372,7 +371,7 @@ def test_append_to_a_replaced_dataset_replaces() raises:
     """`append` and `append_files` replace for a dataset in `replaces=`."""
     _create("d")
     var cat = FilesystemCatalog.local(getenv("MORCA_WAREHOUSE"))
-    var t = cat.load_table("db", "d")
+    var t = _table("d")
     var one = _ctx(9301, "db.d")
     _ = append(one, t, _rows("2024-01", 1000, ROWS))
     var two = _ctx(9302, "db.d")

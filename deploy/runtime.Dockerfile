@@ -54,7 +54,10 @@ RUN for b in /out/bin/*; do objcopy --compress-debug-sections=zlib "$b" || exit 
 # what it links. Stripped of their symbol tables. Not conda's libpsl, which
 # brings ICU (36 MB) and which libcurl alone links: the image has Debian's
 # libpsl5. Not libsqlite3 either, which links ICU too: the image runs on
-# Postgres. OpenSSL stays conda's: libcurl and libpq need 3.2.
+# Postgres. OpenSSL stays conda's: libcurl and libpq need 3.2. And liblake,
+# which morca.tables loads (#454), from morca-mojo's lib/: not stripped,
+# its line tables compressed like the binaries', so a crash inside it is
+# symbolised.
 RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib /out/libexec \
     && cp -L $env/bin/llvm-symbolizer /out/libexec/ \
     && loaded=$(ls $env/lib/libpq.so.5 $env/lib/libflare_*.so $env/lib/lib*mojo*.so 2>/dev/null) \
@@ -63,7 +66,9 @@ RUN env=/src/project/.pixi/envs/default && mkdir -p /out/lib /out/libexec \
         | sort -u | xargs -r cp -L -t /out/lib \
     && cp -L -t /out/lib $loaded \
     && ln -s libpq.so.5 /out/lib/libpq.so \
-    && for f in /out/lib/*; do [ -L "$f" ] || strip --strip-unneeded "$f" || exit 1; done
+    && for f in /out/lib/*; do [ -L "$f" ] || strip --strip-unneeded "$f" || exit 1; done \
+    && cp -L $env/lib/liblake.so /out/lib/ \
+    && objcopy --compress-debug-sections=zlib /out/lib/liblake.so
 
 # git, for pipelines that clone or fetch (mojo-census's mojo_history and
 # mojo_versions): only the `git` binary (every builtin) and

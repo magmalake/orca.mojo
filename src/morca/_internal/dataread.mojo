@@ -44,7 +44,7 @@ from iceberg.manifest import (
 
 from morca._internal.dataask import DataAsk, columns_of, iso_ms, parse_ask
 from morca._internal.datarows import chart_json, csv_json, rows_json
-from morca.tables import load_dataset
+from morca._lake.impl import load_dataset
 
 comptime SNAPSHOTS_SHOWN = 100
 comptime PARTITIONS_SHOWN = 1000
