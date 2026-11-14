@@ -86,6 +86,7 @@ from morca._internal.secrets import (
     secret_problem,
 )
 from morca._internal.apps_config import AppConfig, apps_problem, read_apps
+from morca._internal.dataset_config import datasets_problem
 from morca._internal.pool_config import read_pools
 from morca._internal.toml import (
     BOOLEAN,
@@ -737,8 +738,8 @@ struct ProjectConfig(Movable):
                     top,
                     (
                         "is a key at the top; the file has [defaults],"
-                        " [pipelines.<name>], [pools.<name>], [apps.<name>]"
-                        " and [stack]"
+                        " [pipelines.<name>], [pools.<name>], [apps.<name>],"
+                        " [datasets.<name>] and [stack]"
                     ),
                 )
             if top == "defaults":
@@ -772,6 +773,12 @@ struct ProjectConfig(Movable):
                 if why:
                     var w = why.value().copy()
                     self._fail(w.path, w.table, w.msg)
+            elif top == "datasets":
+                # Datasets' settings (morca.dataset_config).
+                var why = datasets_problem(self.doc)
+                if why:
+                    var w = why.value().copy()
+                    self._fail(w.path, w.table, w.msg)
             elif top != "stack":
                 # [stack] is for `morca aws up`, which doesn't read it yet.
                 self._fail(
@@ -779,8 +786,8 @@ struct ProjectConfig(Movable):
                     String("[", toml_key(top), "]"),
                     (
                         "isn't a table morca knows: [defaults],"
-                        " [pipelines.<name>], [pools.<name>], [apps.<name>]"
-                        " or [stack]"
+                        " [pipelines.<name>], [pools.<name>], [apps.<name>],"
+                        " [datasets.<name>] or [stack]"
                     ),
                 )
 

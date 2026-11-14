@@ -230,9 +230,10 @@ struct Capture(Copyable, Movable):
     """Its exit code once it has ended, else -1."""
 
     @staticmethod
-    def start(argv: List[String]) raises -> Capture:
+    def start(argv: List[String], nice: Int = 0) raises -> Capture:
         """Starts `argv` (`argv[0]` looked up on `PATH`), its stdout to a
-        new file under `TMPDIR`, its stderr shared with this process."""
+        new file under `TMPDIR`, its stderr shared with this process; `nice`
+        lowers its CPU priority."""
         if len(argv) == 0:
             raise Error("capture: no program")
         var what = String()
@@ -260,6 +261,10 @@ struct Capture(Copyable, Movable):
             raise Error("capture: fork failed for ", what)
         if pid == 0:
             _ = external_call["setpgid", c_int](c_int(0), c_int(0))
+            if nice > 0:
+                _ = external_call["setpriority", c_int](
+                    c_int(0), c_int(0), c_int(nice)
+                )
             var f = external_call["fopen", Int](
                 path_c.unsafe_ptr(), mode.unsafe_ptr()
             )
@@ -326,12 +331,13 @@ struct Capture(Copyable, Movable):
 
 
 def capture(
-    argv: List[String], timeout: Float64 = 0
+    argv: List[String], timeout: Float64 = 0, nice: Int = 0
 ) raises -> Tuple[Int, String]:
     """Runs `argv` to the end and returns its exit code and standard output.
     With a `timeout` (seconds), a command still going then is killed, with
-    what it started, and this raises saying so."""
-    var c = Capture.start(argv)
+    what it started, and this raises saying so. `nice` lowers its CPU
+    priority."""
+    var c = Capture.start(argv, nice)
     while not c.ended():
         if timeout > 0 and c.seconds() > timeout:
             c.kill()
