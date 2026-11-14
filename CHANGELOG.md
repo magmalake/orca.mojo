@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.29.0 - 2026-11-14
+
+- **liblake, the first lib-tin:** `morca.tables` runs in a prebuilt shared library shipped with the package, so pipelines no longer compile iceberg and parquet. Build batches with `morca.tables.BatchBuilder` instead of `iceberg.batch`; `-D MORCA_LAKE_SOURCE=1` builds the old way. (#457)
+- **arrow-mlake 0.3.0**, with parquet 0.14.0, iceberg 0.12.0 and dista 0.5.1: field ids cross to liblake, and batches cross without copying. (#459)
+
 ## 0.28.0 - 2026-11-14
 
 - **Pipeline priority:** `priority` in morca.toml orders starts across pipelines; new runs go before fills. (#433)
