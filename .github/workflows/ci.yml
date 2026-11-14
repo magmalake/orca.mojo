@@ -248,20 +248,12 @@ jobs:
       # days, so an entry doesn't grow with every commit (GitHub keeps 10 GB
       # a repository).
       #
-      # The key names the CPU: Mojo compiles for the host's, and
-      # mojo-build.sh keys on it, so an entry from a runner with another
-      # CPU (GitHub's differ) would miss nearly everything.
-      - if: runner.environment == 'github-hosted'
-        id: cpu
-        run: |
-          if [ -r /proc/cpuinfo ]; then
-            grep -m1 '^model name' /proc/cpuinfo || true
-            id=$({ grep -m1 '^model name' /proc/cpuinfo; grep -m1 -E '^(flags|Features)' /proc/cpuinfo; } | sha256sum | cut -c1-12)
-          else
-            sysctl -n machdep.cpu.brand_string
-            id=$(sysctl -n machdep.cpu.brand_string | shasum -a 256 | cut -c1-12)
-          fi
-          echo "id=$id" >> "$GITHUB_OUTPUT"
+      # Mojo compiles for the host's CPU, and GitHub's runners differ (AMD
+      # EPYC 7763 and 9V74, Intel Xeon 6975P): built on one, nearly nothing
+      # served another. On them scripts/mojo-build.sh builds for x86-64-v3
+      # instead, which all three run.
+      - if: runner.environment == 'github-hosted' && runner.os == 'Linux'
+        run: echo "MOJO_TARGET_CPU=x86-64-v3" >> "$GITHUB_ENV"
       - if: runner.environment == 'github-hosted'
         id: mojo-cache
         uses: actions/cache/restore@v4
@@ -269,10 +261,10 @@ jobs:
           path: |
             morca/.pixi/envs/${{ matrix.env }}/share/max/cache
             morca/build/.mojo-build
-          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ steps.cpu.outputs.id }}-${{ hashFiles('morca/pixi.lock') }}-${{ github.sha }}
+          key: mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ env.MOJO_TARGET_CPU || 'host' }}-${{ hashFiles('morca/pixi.lock') }}-${{ github.sha }}
           restore-keys: |
-            mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ steps.cpu.outputs.id }}-${{ hashFiles('morca/pixi.lock') }}-
-            mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ steps.cpu.outputs.id }}-
+            mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ env.MOJO_TARGET_CPU || 'host' }}-${{ hashFiles('morca/pixi.lock') }}-
+            mojo-${{ runner.os }}-${{ matrix.env }}-${{ matrix.shard }}-${{ env.MOJO_TARGET_CPU || 'host' }}-
       - if: runner.environment == 'github-hosted'
         run: sh scripts/ci-cache.sh start .pixi/envs/${{ matrix.env }}/share/max/cache build/.mojo-build
 
