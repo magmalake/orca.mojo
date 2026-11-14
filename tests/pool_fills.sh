@@ -236,7 +236,8 @@ until_ 20 "toy's run $rt wasn't claimed behind fillwk's queue: $(q "SELECT pipel
     is "SELECT starts FROM orca.runs WHERE id = $rt" 1
 is "SELECT count(*) FROM orca.runs WHERE pipeline = 'fillwk' AND status = 'running'" 1 \
     || fail "fillwk over its max_runs: $(q "SELECT id, status FROM orca.runs WHERE pipeline = 'fillwk' AND status = 'running'")"
-q "UPDATE orca.runs SET status = 'cancelled' WHERE pipeline = 'fillwk' AND status = 'queued'" > /dev/null
+# In id order, as the scheduler's pass locks them (#440).
+q "UPDATE orca.runs SET status = 'cancelled' WHERE id IN (SELECT id FROM orca.runs WHERE pipeline = 'fillwk' AND status = 'queued' ORDER BY id FOR UPDATE)" > /dev/null
 rm -f "$hold"
 until_ 60 "toy's run $rt didn't succeed: $(q "SELECT status, error FROM orca.runs WHERE id = $rt")" \
     is "SELECT status FROM orca.runs WHERE id = $rt" succeeded

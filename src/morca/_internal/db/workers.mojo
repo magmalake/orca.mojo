@@ -5,7 +5,7 @@ died, with the stale limit as `$2`."""
 
 from postgres import Connection, Params, Transaction
 
-from morca._internal.db.live import behind_sql
+from morca._internal.db.live import behind_sql, ordered_runs
 from morca._internal.db.run_cluster import MEMBER_GRANTS_SQL, MEMBER_MB_SQL
 
 
@@ -202,14 +202,19 @@ def hold_for_pressure(
     a worker of the pool, say nothing, or say memory pressure on the same
     worker (ending `suffix`), say `held` instead."""
     _ = conn.execute(
-        (
-            "UPDATE orca.runs r SET held = $2 FROM orca.pipelines p WHERE"
-            " p.name = r.pipeline AND p.placement = $1 AND r.status ="
-            " 'queued' AND r.trigger <> 'fill' AND (r.held IS NULL OR"
-            " starts_with(r.held, 'held: waiting for a worker of pool ')"
-            " OR (starts_with(r.held, 'waiting: memory pressure ') AND"
-            " right(r.held, length($3)) = $3)) AND r.held IS DISTINCT FROM"
-            " $2"
+        String(
+            "UPDATE orca.runs SET held = $2 WHERE ",
+            ordered_runs(
+                (
+                    "p.name = r.pipeline AND p.placement = $1 AND r.status ="
+                    " 'queued' AND r.trigger <> 'fill' AND (r.held IS NULL OR"
+                    " starts_with(r.held, 'held: waiting for a worker of pool"
+                    " ') OR (starts_with(r.held, 'waiting: memory pressure ')"
+                    " AND right(r.held, length($3)) = $3)) AND r.held IS"
+                    " DISTINCT FROM $2"
+                ),
+                "orca.runs r JOIN orca.pipelines p ON p.name = r.pipeline",
+            ),
         ),
         Params().text(placement).text(held).text(suffix),
     )
@@ -221,11 +226,16 @@ def unhold_pressure(
     """Has the queued runs placed `placement` that say memory pressure on
     the worker (ending `suffix`) say `held` instead."""
     _ = conn.execute(
-        (
-            "UPDATE orca.runs r SET held = $2 FROM orca.pipelines p WHERE"
-            " p.name = r.pipeline AND p.placement = $1 AND r.status = 'queued'"
-            " AND starts_with(r.held, 'waiting: memory pressure ') AND"
-            " right(r.held, length($3)) = $3"
+        String(
+            "UPDATE orca.runs SET held = $2 WHERE ",
+            ordered_runs(
+                (
+                    "p.placement = $1 AND r.status = 'queued' AND"
+                    " starts_with(r.held, 'waiting: memory pressure ') AND"
+                    " right(r.held, length($3)) = $3"
+                ),
+                "orca.runs r JOIN orca.pipelines p ON p.name = r.pipeline",
+            ),
         ),
         Params().text(placement).text(held).text(suffix),
     )
@@ -310,9 +320,12 @@ def hold_queued(
 ) raises:
     """Has `pipeline`'s queued fill runs, or its others, say `why`."""
     _ = conn.execute(
-        (
-            "UPDATE orca.runs SET held = $2 WHERE pipeline = $1 AND"
-            " status = 'queued' AND (trigger = 'fill') = $3"
+        String(
+            "UPDATE orca.runs SET held = $2 WHERE ",
+            ordered_runs(
+                "pipeline = $1 AND status = 'queued' AND (trigger = 'fill') ="
+                " $3 AND held IS DISTINCT FROM $2"
+            ),
         ),
         Params().text(pipeline).text(why).bool(fill),
     )

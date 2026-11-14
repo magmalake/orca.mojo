@@ -5,6 +5,7 @@ second): what each registered pipeline is due, started.
 from std.time import perf_counter_ns
 from std.os import remove
 import morca._internal.db.scheduler as scheduler_db
+import morca._internal.db.starting as starting_db
 from morca._internal.alerts import failed_runs
 from morca._internal.notify import configured as notify_configured
 from morca._internal.logs import publish
@@ -26,7 +27,7 @@ from morca._internal.sensing import (
     _sense,
     _sensed,
 )
-from morca._internal.registered import registered
+from morca._internal.registered import Registered, registered
 
 
 def tick(mut self: Scheduler, now: Int64) raises:
@@ -208,7 +209,31 @@ def tick(mut self: Scheduler, now: Int64) raises:
                 _ = failed_runs(self.db, p.name, p.run_retries, _RETRIED)
             except e:
                 print("morca: can't alert on", p.name, "failures:", e)
-        _start(self, p, now)
+        _start_again(self, p, now)
         # After its other runs, so a fill never takes their place.
         if p.fill.all:
-            _start(self, p, now, fill=True)
+            _start_again(self, p, now, fill=True)
+
+
+comptime _START_TRIES = 3
+"""How many times a tick tries a pipeline's start pass that Postgres ends
+for a deadlock (#440)."""
+
+
+def _start_again(
+    mut self: Scheduler, p: Registered, now: Int64, fill: Bool = False
+) raises:
+    """`_start`, tried again, up to `_START_TRIES` times in all, when
+    Postgres ends its transaction for a deadlock or a serialization
+    failure (`starting_db.retryable`): the transaction rolled back, and
+    the next try reads what is there now."""
+    var tries = 1
+    while True:
+        try:
+            _start(self, p, now, fill)
+            return
+        except e:
+            if tries >= _START_TRIES or not starting_db.retryable(e):
+                raise e^
+            tries += 1
+            print("morca: pipeline", p.name, "start pass tried again:", e)

@@ -35,6 +35,7 @@ def _requeue_for_workers(
     var waiting = String("held: waiting for a worker of pool ", pool)
     var tx = self.db.conn.begin()
     starting_db.lock_pipeline(tx, p.name)
+    starting_db.lock_runs(tx, p.name)
     var lost = _requeue_lost(self, tx, p, dead, waiting)
     self._end_dead(tx, p, dead)
     # One behind an older live run of its keys says which; a worker
@@ -160,6 +161,7 @@ def _fill_for_workers(
     var waiting = String("held: waiting for a worker of pool ", pool)
     var tx = self.db.conn.begin()
     starting_db.lock_pipeline(tx, p.name)
+    starting_db.lock_runs(tx, p.name)
     # A gone worker's fill runs first, as the other pass does, so they
     # are queued again with why (and an audit row), not as merely dead:
     # the tick's passes run a moment apart, and either may see them first.
