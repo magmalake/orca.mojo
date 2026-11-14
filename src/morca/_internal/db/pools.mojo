@@ -50,18 +50,53 @@ def delete_pools_but(mut tx: Transaction, keep: String) raises -> List[String]:
     return gone^
 
 
-def booting_machine(mut conn: Connection, worker: Int) raises -> Bool:
-    """Whether worker token `worker` is one the pool autoscaler made, for a
-    machine that's still live."""
+def booting_machine(
+    mut conn: Connection, worker: Int
+) raises -> Optional[String]:
+    """The worker image of the live machine worker token `worker` was made
+    for by the pool autoscaler, empty if its row has none (made before
+    #356); None if the token isn't such a machine's."""
     var rows = conn.query(
         (
-            "SELECT w.created_by FROM orca.workers w JOIN orca.pool_machines m"
-            " ON m.worker = w.id WHERE w.id = $1 AND m.ended IS NULL AND"
-            " w.created_by LIKE 'pool:%'"
+            "SELECT coalesce(m.image, '') AS image FROM orca.workers w JOIN"
+            " orca.pool_machines m ON m.worker = w.id WHERE w.id = $1 AND"
+            " m.ended IS NULL AND w.created_by LIKE 'pool:%'"
         ),
         Params().int64(Int64(worker)),
     )
-    return len(rows) > 0
+    if len(rows) == 0:
+        return None
+    return rows.row(0).text("image")
+
+
+def draining(mut conn: Connection, worker: Int) raises -> String:
+    """The image of the live pool machine of worker token `worker` if the
+    autoscaler is draining it (`drain`), so the worker is given no more
+    runs; empty if it isn't (or the token is no machine's)."""
+    var rows = conn.query(
+        (
+            "SELECT coalesce(image, '(none recorded)') AS image FROM"
+            " orca.pool_machines WHERE worker = $1 AND ended IS NULL AND"
+            " draining IS NOT NULL"
+        ),
+        Params().int64(Int64(worker)),
+    )
+    if len(rows) == 0:
+        return ""
+    return rows.row(0).text("image")
+
+
+def drain(mut conn: Connection, id: Int, on: Bool) raises:
+    """Starts draining machine `id` (its worker is given no more runs, and
+    it's removed once idle), or stops, unless it's so already."""
+    _ = conn.execute(
+        (
+            "UPDATE orca.pool_machines SET draining = CASE WHEN $2 THEN"
+            " coalesce(draining, now()) END WHERE id = $1 AND ended IS NULL"
+            " AND (draining IS NULL) = $2"
+        ),
+        Params().int64(Int64(id)).bool(on),
+    )
 
 
 # ── the autoscaler (`morca._internal.pool_scale`) ──────────────────────────────────────
@@ -126,6 +161,9 @@ struct LiveMachine(Copyable, Movable):
     var busy: Bool
     var idle_for: Float64
     """Seconds since it was last seen idle, from when; -1 if it isn't."""
+    var image: String
+    """The worker image it was made to run; empty if its row has none."""
+    var draining: Bool
 
 
 def live_machines(
@@ -143,9 +181,11 @@ def live_machines(
             " orca.runs r WHERE r.worker = m.worker AND r.status = 'running')"
             " OR EXISTS (SELECT 1 FROM orca.run_members rm WHERE rm.worker ="
             " m.worker AND rm.ended IS NULL)) AS busy, coalesce(extract(epoch"
-            " FROM now() - m.idle_since)::float8, -1) AS idle_for FROM"
-            " orca.pool_machines m LEFT JOIN orca.workers w ON w.id = m.worker"
-            " WHERE m.pool = $1 AND m.ended IS NULL ORDER BY m.id"
+            " FROM now() - m.idle_since)::float8, -1) AS idle_for,"
+            " coalesce(m.image, '') AS image, m.draining IS NOT NULL AS"
+            " draining FROM orca.pool_machines m LEFT JOIN orca.workers w ON"
+            " w.id = m.worker WHERE m.pool = $1 AND m.ended IS NULL ORDER BY"
+            " m.id"
         ),
         Params().text(pool),
     ):
@@ -160,6 +200,8 @@ def live_machines(
                 r.float64("silent"),
                 r.bool("busy"),
                 r.float64("idle_for"),
+                r.text("image"),
+                r.bool("draining"),
             )
         )
     return out^
@@ -398,15 +440,16 @@ def add_machine(
     provider_id: String,
     address: String,
     worker: Int,
+    image: String,
 ) raises:
-    """Records a machine made for `pool` (empty `arch` or `address` for
-    unknown)."""
+    """Records a machine made for `pool` to run worker image `image`
+    (empty `arch` or `address` for unknown)."""
     _ = conn.execute(
         (
             "INSERT INTO orca.pool_machines (id, pool, provider, name,"
-            " server_type, arch, location, provider_id, address, worker)"
-            " VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $7, $8,"
-            " nullif($9, ''), $10)"
+            " server_type, arch, location, provider_id, address, worker,"
+            " image) VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $7, $8,"
+            " nullif($9, ''), $10, nullif($11, ''))"
         ),
         Params()
         .int64(Int64(id))
@@ -418,5 +461,6 @@ def add_machine(
         .text(location)
         .text(provider_id)
         .text(address)
-        .int64(Int64(worker)),
+        .int64(Int64(worker))
+        .text(image),
     )

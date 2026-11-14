@@ -5,7 +5,7 @@ The script (`boot_script`, the machine's cloud-init user data) holds one
 secret, the machine's own worker token, which morca revokes when it removes
 the machine. With it the machine asks the UI for the rest, over TLS:
 `boot_answer` gives the worker image (`MORCA_WORKER_IMAGE`, the server's
-own), the login to pull it (`morca._internal.registry`), and the variables a worker
+own, as the autoscaler recorded it when it made the machine), the login to pull it (`morca._internal.registry`), and the variables a worker
 needs to reach the bucket (`MORCA_WAREHOUSE`, `MORCA_LOGS`, the `AWS_*`
 ones), as the UI's own environment has them. It answers only a token the
 autoscaler made for a machine that's live, so a token someone made with
@@ -184,12 +184,18 @@ def boot_answer(mut db: State, worker: Int) raises -> String:
     """The UI's answer to a machine's `/api/worker/boot`, for worker token
     `worker`: what its script needs, as JSON. Raises (the UI answers 403)
     for a token the autoscaler didn't make, or whose machine isn't live."""
-    if not pools_db.booting_machine(db.conn, worker):
+    var machine = pools_db.booting_machine(db.conn, worker)
+    if not machine:
         raise Error(
             "morca: this token isn't one the pool autoscaler made for a live",
             " machine",
         )
-    var image = getenv(WORKER_IMAGE)
+    # The image the autoscaler made it for (#356), which it compares with
+    # its own to replace the machine after a deploy; the UI's for a machine
+    # made before morca recorded it.
+    var image = machine.value()
+    if not image:
+        image = getenv(WORKER_IMAGE)
     if not image:
         raise Error("morca: the UI has no ", WORKER_IMAGE, " to give")
     var env = String()
