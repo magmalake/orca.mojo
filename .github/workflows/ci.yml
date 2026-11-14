@@ -12,8 +12,11 @@ on:
   workflow_dispatch:
 
 # A new push to a PR cancels its runs still going: only the latest commit's
-# results matter, and the old run's jobs held runners the org shares. Pushes
-# to main each run to the end (the group is the commit there).
+# results matter, and the old run's jobs held runners the org shares. A run
+# on main isn't cancelled as a whole (the group is the commit there): the
+# release workflow waits for the runtime image runtime-image-main pushes for
+# a release PR's merge commit. Only its long test jobs give way to a newer
+# push to main, each in a concurrency group of its own below.
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -117,6 +120,11 @@ jobs:
     needs: [changes, release]
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
     runs-on: ${{ matrix.os == 'ubuntu-latest' && fromJSON(needs.changes.outputs.linux || '"ubuntu-latest"') || matrix.os }}
+    # A newer push to main cancels this job of the older run (see the
+    # workflow's concurrency); elsewhere the group is this run's alone.
+    concurrency:
+      group: ci-${{ github.event_name == 'push' && 'main' || github.run_id }}-${{ github.job }}-${{ matrix.os }}-${{ matrix.env }}-${{ matrix.shard }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
     permissions:
       contents: read
     timeout-minutes: 45
@@ -124,7 +132,9 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
-        env: [default, nightly]
+        # The nightly Mojo leg runs on main, the nightly and by hand, not
+        # on pull requests.
+        env: ${{ fromJSON(github.event_name == 'pull_request' && '["default"]' || '["default", "nightly"]') }}
         # pixi.toml's three parts of `test`, each on a runner of its own.
         shard: [test-executor-core, test-executor-workers, test-scheduler-ui]
     defaults:
@@ -547,6 +557,11 @@ jobs:
     if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
     name: data / ${{ matrix.group }}
     runs-on: ubuntu-latest
+    # A newer push to main cancels this job of the older run (see the
+    # workflow's concurrency); elsewhere the group is this run's alone.
+    concurrency:
+      group: ci-${{ github.event_name == 'push' && 'main' || github.run_id }}-${{ github.job }}-${{ matrix.group }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
     strategy:
       fail-fast: false
       matrix:
@@ -646,6 +661,11 @@ jobs:
     needs: [changes, release]
     if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.code != 'false' && needs.release.outputs.release_only != 'true' }}
     runs-on: ${{ fromJSON(needs.changes.outputs.linux || '"ubuntu-latest"') }}
+    # A newer push to main cancels this job of the older run (see the
+    # workflow's concurrency); elsewhere the group is this run's alone.
+    concurrency:
+      group: ci-${{ github.event_name == 'push' && 'main' || github.run_id }}-${{ github.job }}-rust
+      cancel-in-progress: ${{ github.event_name == 'push' }}
     permissions:
       contents: read
     timeout-minutes: 45
