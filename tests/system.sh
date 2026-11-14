@@ -53,8 +53,7 @@ PY
 total_lines() { cat "$MORCA_LOGS"/control/*.jsonl 2> /dev/null | wc -l | tr -d ' '; }
 
 # Runs, for the counts on /metrics.
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC examples/toy.mojo -o build/toy
+scripts/pipelines.sh toy
 MORCA_NOW=2024-01-15T00:00Z ./build/morca register ./build/toy >> "$log" 2>&1 || fail "register"
 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 || fail "the first run"
 MORCA_TOY_FAIL=2024-01 ./build/toy run --partitions 2024-01 >> "$log" 2>&1 && fail "the second run didn't fail"

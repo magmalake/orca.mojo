@@ -31,8 +31,12 @@ src=${CHAOS_SRC:-tests/chaos_pipeline.mojo}
 # By its full path, so the check for processes left behind (pgrep) sees
 # only this checkout's, not another job's on the same machine.
 bin=$PWD/build/$(basename "$src" .mojo)
-# shellcheck disable=SC2086
-scripts/mojo-build.sh -I src $DEP_INC "$src" -o "$bin"
+if [ "$src" = tests/chaos_pipeline.mojo ]; then
+    scripts/pipelines.sh chaos_pipeline
+else
+    # shellcheck disable=SC2086
+    scripts/mojo-build.sh -I src $DEP_INC "$src" -o "$bin"
+fi
 
 export MORCA_STALE_SECONDS=1
 export MORCA_WORKERS=2
