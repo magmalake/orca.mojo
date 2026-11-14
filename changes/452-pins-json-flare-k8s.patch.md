@@ -1,0 +1,1 @@
+- **json_mlake 0.5.0, flare_mlake 0.14.0 and k8s-mojo 0.1.3**: json and flare now install as precompiled .mojoc packages. (#452)
