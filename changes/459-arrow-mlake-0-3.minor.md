@@ -1,1 +1,0 @@
-- **arrow-mlake-mojo 0.3.0**: morca moves to it with parquet-mojo 0.14.0, iceberg-mojo 0.12.0 and dista-mojo 0.5.1, so field ids cross to liblake in the batches and scans import without copying (liblake ABI 2). (#PR)
