@@ -40,10 +40,10 @@ starts (`resolve_request`); without one, no request of that resource.
 0 and the maximum given (0 for none).
 
 **`"auto"` in `env`.** An `env` value `"auto"` is passed to the run as it
-is, for the pipeline to size itself from the grant (`auto_count`), except
-`DISTA_WORKER_SLOTS`, which dista reads as a number: morca gives it the
-grant's CPUs over the run's local dista workers (`MORCA_WORKERS`), at least
-1, or 0 (dista's one per core) for a run without a CPU grant.
+is, for the pipeline to size itself from the grant (`auto_count`).
+`DISTA_WORKER_SLOTS = "auto"` too: dista (0.5.0 on) sizes each worker from
+`MORCA_GRANT_*`, dividing the grant among a local run's workers, and
+without a grant takes a slot per core.
 """
 
 from std.os import getenv
@@ -502,51 +502,16 @@ def admit(
     return (out^, String())
 
 
-def _workers_of(env: List[String]) -> Int:
-    """`MORCA_WORKERS` among `env`'s `NAME=value`s, else this process's
-    (default 4), the local dista workers a run forks."""
-    var text = getenv("MORCA_WORKERS", "4")
-    for e in env:
-        if e.startswith("MORCA_WORKERS="):
-            text = String(e[byte = String("MORCA_WORKERS=").byte_length() :])
-    try:
-        return max(Int(text), 1)
-    except:
-        return 1
-
-
 def run_env(
     env: List[Tuple[String, String]], g: Grant, extra: List[String] = []
 ) -> List[String]:
-    """A start's `NAME=value`s: the pipeline's `env`, with
-    `DISTA_WORKER_SLOTS = "auto"` made a number from `g` (its CPUs over the
-    local workers that `extra` or this process's `MORCA_WORKERS` gives, or 0
-    for none), then `g`'s variables, then `extra`."""
+    """A start's `NAME=value`s: the pipeline's `env` as it is (`auto`
+    included), then `g`'s variables, then `extra`."""
     var out = List[String]()
     for kv in env:
-        if kv[0] == "DISTA_WORKER_SLOTS" and kv[1] == AUTO:
-            var n = 0
-            if g.cpus > 0:
-                n = max(g.cpus // _workers_of(extra), 1)
-            out.append(String(kv[0], "=", n))
-        else:
-            out.append(String(kv[0], "=", kv[1]))
+        out.append(String(kv[0], "=", kv[1]))
     out.extend(g.env())
     out.extend(extra.copy())
-    return out^
-
-
-def resolve_auto(
-    env: List[Tuple[String, String]]
-) -> List[Tuple[String, String]]:
-    """`env` with `DISTA_WORKER_SLOTS = "auto"` as 0, dista's one per core,
-    for the runners that grant nothing (EC2, Kubernetes)."""
-    var out = List[Tuple[String, String]]()
-    for kv in env:
-        if kv[0] == "DISTA_WORKER_SLOTS" and kv[1] == AUTO:
-            out.append((kv[0], String("0")))
-        else:
-            out.append(kv)
     return out^
 
 

@@ -25,7 +25,9 @@ from morca._internal.system import (
 )
 from morca._internal.ui.coverage import coverage_href
 from morca._internal.ui.layout import IDLE_EVERY, LIVE_EVERY, page_html
-from morca._internal.ui.parts import pause_button
+from morca._internal.dataset_config import private_datasets
+from morca._internal.lineage import flows
+from morca._internal.ui.parts import data_line, pause_button
 from morca._internal.ui.recent import recent_list
 from morca._internal.ui.viz import gantt_panel, gantt_tabs
 from morca._internal.views.code import pipeline_srcs
@@ -93,16 +95,32 @@ def _srcs(mut db: State, ps: List[PipelineRow]) -> Dict[String, String]:
     return pipeline_srcs(db, names)
 
 
+def _writes(mut db: State) raises -> Dict[String, List[String]]:
+    """Each pipeline's datasets it writes, as declared."""
+    var out = Dict[String, List[String]]()
+    for f in flows(db):
+        if f.writes:
+            if f.pipeline not in out:
+                out[f.pipeline] = List[String]()
+            if f.dataset not in out[f.pipeline]:
+                out[f.pipeline].append(f.dataset)
+    return out^
+
+
 def _home_pipelines(
     mut h: Html,
+    mut db: State,
     ps: List[PipelineRow],
     covs: List[Optional[Coverage]],
     srcs: Dict[String, String],
-):
+) raises:
     """The home page's table of pipelines: after each name its state at a
     glance (coverage, running and queued runs), then its partitions,
     schedule, next and last runs. A pipeline's name shows its declaration
-    on hover (`data-src`, the page's `_PEEK`), at the registered code."""
+    on hover (`data-src`, the page's `_PEEK`), at the registered code;
+    under it, a link to the data of each dataset it writes."""
+    var writes = _writes(db)
+    var private = private_datasets(db)
     h.raw(
         '<section class="card"><div class="scroll"><table><thead><tr>',
         '<th>Pipeline</th><th class="num">Coverage</th>',
@@ -127,6 +145,9 @@ def _home_pipelines(
             h.raw(" ")
             h.status("paused")
         pause_button(h, p.name, p.paused)
+        var w = writes.get(p.name)
+        if w:
+            data_line(h, w.value(), private)
         h.raw("</td>")
         _coverage_cell(h, p, covs[i])
         # The counts as badges, lit while they're not zero.
@@ -171,7 +192,7 @@ def home_pipelines(mut db: State) raises -> Page:
     run is queued or running, else `IDLE_EVERY`."""
     var ps = pipeline_rows(db)
     var h = Html()
-    _home_pipelines(h, ps, _coverages(db, ps), _srcs(db, ps))
+    _home_pipelines(h, db, ps, _coverages(db, ps), _srcs(db, ps))
     return Page(
         200,
         String(),
@@ -248,7 +269,7 @@ def home(mut db: State) raises -> Page:
             LIVE_EVERY if live else IDLE_EVERY,
             '">',
         )
-        _home_pipelines(h, ps, covs, _srcs(db, ps))
+        _home_pipelines(h, db, ps, covs, _srcs(db, ps))
         h.raw("</div>")
         gantt_panel(h)
     h.raw(

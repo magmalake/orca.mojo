@@ -841,6 +841,16 @@ def _migrations() -> List[List[String]]:
                 " NOT NULL"
             ),
         ],
+        # Datasets' settings from morca.toml (#435,
+        # morca._internal.dataset_config): whether visitors see a dataset's
+        # data. A new table: additive.
+        [
+            (
+                "CREATE TABLE orca.dataset_settings (name text PRIMARY KEY,"
+                " public boolean NOT NULL DEFAULT true, updated timestamptz"
+                " NOT NULL DEFAULT now())"
+            ),
+        ],
         # A pool machine's worker image, and when the autoscaler began
         # draining it for a newer one (#356). Additive: an older binary
         # leaves both null, and its machines are replaced once idle.
@@ -877,7 +887,7 @@ def _floor_raisers() -> List[Int]:
     columns the binaries before it neither read nor write. A start they make
     leaves `request_source` and `request_runs` as an earlier start set them.
 
-    57 (`pool_machines.image`, `draining`, #356) is additive: nullable
+    58 (`pool_machines.image`, `draining`, #356) is additive: nullable
     columns the binaries before it neither read nor write. A machine one of
     them makes has no image recorded, so a newer autoscaler replaces it
     once it's idle.

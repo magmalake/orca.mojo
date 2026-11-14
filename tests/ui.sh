@@ -1053,7 +1053,7 @@ echo "$row" | grep -qF 'wrap_r1</a>, <a href="/pipelines/wrap_r2">' || fail "the
 css=$(curl -fsS "$base/static/morca.css")
 echo "$css" | grep -qF 'td.names { white-space: normal; max-width: 22rem; }' || fail "td.names doesn't wrap within a maximum width"
 echo "$css" | grep -qF 'td.names a { white-space: nowrap; }' || fail "a name in td.names can break"
-html /pipelines/wrap_r1 | grep -qF '<td class="names"><a href="/datasets/wrap.in">wrap.in</a></td><td class="names"></td>' \
+html /pipelines/wrap_r1 | grep -qF '<td class="names"><a href="/datasets/wrap.in">wrap.in</a> <a class="data-link" href="/datasets/wrap.in?tab=data" title="wrap.in&#39;s data">data</a></td><td class="names"></td>' \
     || fail "the pipeline's Reads and Writes cells aren't class names"
 echo "ok   long Read by lists wrap between names"
 kill "$pid"
