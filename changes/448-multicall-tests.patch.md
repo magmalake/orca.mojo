@@ -1,1 +1,0 @@
-- **Faster CI**: the test pipelines build as one multi-call binary. (#448)

@@ -1,1 +1,0 @@
-- **dista 0.5.0 sizes workers from the grant**: `DISTA_WORKER_SLOTS = "auto"` now reaches dista as it is. (#PR)
