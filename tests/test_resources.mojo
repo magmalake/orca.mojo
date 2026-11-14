@@ -1,5 +1,6 @@
 """Requests, admission and grants (morca.resources): the parsing, what fits,
-the grants and the reason a run waits, and `auto`."""
+the grants and the reason a run waits, and `auto` (passed through to
+dista, #436)."""
 
 from std.os import setenv, unsetenv
 from std.testing import (
@@ -23,9 +24,9 @@ from morca._internal.resources import (
     host_room,
     parse_cpus,
     parse_memory_gb,
-    resolve_auto,
     run_env,
 )
+from morca._internal.worker_cluster import worker_slots
 
 
 def test_parse_cpus() raises:
@@ -177,23 +178,38 @@ def test_run_env() raises:
         ("GHARCHIVE_PARALLEL", "auto"),
         ("X", "1"),
     ]
+    # auto reaches dista as it is, beside the grant it sizes itself from.
     var got = run_env(env, Grant(8, 4096), ["MORCA_WORKERS=2"])
     assert_equal(len(got), 6)
-    assert_equal(got[0], "DISTA_WORKER_SLOTS=4")
+    assert_equal(got[0], "DISTA_WORKER_SLOTS=auto")
     assert_equal(got[1], "GHARCHIVE_PARALLEL=auto")
     assert_equal(got[2], "X=1")
     assert_equal(got[3], "MORCA_GRANT_CPUS=8")
     assert_equal(got[4], "MORCA_GRANT_MEMORY_MB=4096")
     assert_equal(got[5], "MORCA_WORKERS=2")
     got = run_env(env, Grant(1, 0), ["MORCA_WORKERS=4"])
-    assert_equal(got[0], "DISTA_WORKER_SLOTS=1")
+    assert_equal(got[0], "DISTA_WORKER_SLOTS=auto")
     assert_equal(len(got), 5)
     got = run_env(env, Grant.none())
-    assert_equal(got[0], "DISTA_WORKER_SLOTS=0")
+    assert_equal(got[0], "DISTA_WORKER_SLOTS=auto")
     assert_equal(len(got), 3)
-    var plain = resolve_auto(env)
-    assert_equal(plain[0][1], "0")
-    assert_equal(plain[1][1], "auto")
+    # A number stays that number, grant or not.
+    var fixed: List[Tuple[String, String]] = [("DISTA_WORKER_SLOTS", "4")]
+    got = run_env(fixed, Grant(8, 4096), ["MORCA_WORKERS=2"])
+    assert_equal(got[0], "DISTA_WORKER_SLOTS=4")
+    got = run_env(fixed, Grant.none())
+    assert_equal(got[0], "DISTA_WORKER_SLOTS=4")
+    assert_equal(len(got), 1)
+
+
+def test_worker_slots() raises:
+    """A run cluster's dista worker: auto when the run asks for it, else the
+    grant's CPUs morca gives it."""
+    var auto_env: List[String] = ["X=1", "DISTA_WORKER_SLOTS=auto"]
+    assert_equal(worker_slots(auto_env, 3), "DISTA_WORKER_SLOTS=auto")
+    var fixed: List[String] = ["DISTA_WORKER_SLOTS=4"]
+    assert_equal(worker_slots(fixed, 3), "DISTA_WORKER_SLOTS=3")
+    assert_equal(worker_slots(List[String](), 0), "DISTA_WORKER_SLOTS=0")
 
 
 def test_auto_count() raises:

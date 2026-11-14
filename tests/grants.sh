@@ -9,8 +9,8 @@
 #   go one after the other, the one waiting held saying why;
 # - with narrow at 1..2 GB they run at once;
 # - each start's grant reaches its process (MORCA_GRANT_*, DISTA_WORKER_SLOTS
-#   = "auto" as a number, morca.auto_count) and is recorded on the run, its
-#   page and its JSON;
+#   = "auto" as it is, for dista to size itself, morca.auto_count) and is
+#   recorded on the run, its page and its JSON;
 # - plain, with no request, is started as before: with no check, no grant,
 #   while wide waits for more memory than the host has, which the
 #   pipeline's page, the run's and their JSON say;
@@ -172,7 +172,7 @@ is "SELECT request_cpus || ' ' || request_memory_gb || ' ' || grant_cpus || ' ' 
     || fail "wide's run: $(q "SELECT request_cpus, request_memory_gb, grant_cpus, grant_memory_mb FROM orca.runs WHERE id = $w1")"
 is "SELECT coalesce(request_cpus, '-') || ' ' || request_memory_gb || ' ' || coalesce(grant_cpus, 0) || ' ' || grant_memory_mb FROM orca.runs WHERE id = $n1" "- 5 0 5120" \
     || fail "narrow's run: $(q "SELECT request_cpus, request_memory_gb, grant_cpus, grant_memory_mb FROM orca.runs WHERE id = $n1")"
-printf 'MORCA_GRANT_CPUS=3\nMORCA_GRANT_MEMORY_MB=6144\nDISTA_WORKER_SLOTS=3\nGRANTEE_PARALLEL=3\n' > build/grants-want.out
+printf 'MORCA_GRANT_CPUS=3\nMORCA_GRANT_MEMORY_MB=6144\nDISTA_WORKER_SLOTS=auto\nGRANTEE_PARALLEL=3\n' > build/grants-want.out
 cmp -s build/grants-want.out "$out/wide-2024-01.env" || fail "wide's process got: $(cat "$out/wide-2024-01.env")"
 printf 'MORCA_GRANT_CPUS=-\nMORCA_GRANT_MEMORY_MB=5120\nDISTA_WORKER_SLOTS=-\nGRANTEE_PARALLEL=16\n' > build/grants-want.out
 cmp -s build/grants-want.out "$out/narrow-2024-01.env" || fail "narrow's process got: $(cat "$out/narrow-2024-01.env")"
@@ -340,7 +340,7 @@ until_ 60 "wide's run didn't succeed on the worker: $(q "SELECT id, status, erro
     is "SELECT status FROM orca.runs WHERE id = $w4" succeeded
 is "SELECT placement || ' ' || grant_cpus || ' ' || grant_memory_mb FROM orca.runs WHERE id = $w4" "worker:g 3 6144" \
     || fail "wide's run on the worker: $(q "SELECT placement, grant_cpus, grant_memory_mb FROM orca.runs WHERE id = $w4")"
-printf 'MORCA_GRANT_CPUS=3\nMORCA_GRANT_MEMORY_MB=6144\nDISTA_WORKER_SLOTS=3\nGRANTEE_PARALLEL=3\n' > build/grants-want.out
+printf 'MORCA_GRANT_CPUS=3\nMORCA_GRANT_MEMORY_MB=6144\nDISTA_WORKER_SLOTS=auto\nGRANTEE_PARALLEL=3\n' > build/grants-want.out
 cmp -s build/grants-want.out "$out/wide-2024-04.env" || fail "wide's process on the worker got: $(cat "$out/wide-2024-04.env")"
 echo "ok   a worker admits a run against its own host, and passes the grant"
 echo "grants: ok"
